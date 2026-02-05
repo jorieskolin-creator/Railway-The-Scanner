@@ -129,7 +129,8 @@ class ScanRequest(BaseModel):
 
 @app.post("/admin/seed-finland-100")
 async def seed_database(background_tasks: BackgroundTasks):
-    background_tasks.add_task(run_batch_seed, real_xray_mode=False)
+    # Updated to real_xray_mode=True to ensure full scan
+    background_tasks.add_task(run_batch_seed, real_xray_mode=True)
     return {"status": "Batch Seeding Initiated", "message": "Processing Finland Top 100 in background. Check back in 30 seconds."}
 
 @app.post("/scan")

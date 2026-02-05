@@ -59,40 +59,30 @@ def scrape_homepage_text(url: str):
         print(f"  -> Scrape exception for {url}: {str(e)[:50]}... Using fallback.")
         return GENERIC_FALLBACK_TEXT
 
-def run_batch_seed(real_xray_mode=False):
+def run_batch_seed(real_xray_mode=True):
     """
-    Iterates through the Top 100 list.
-    User has confirmed 10,000 query quota. We will scan all 100 companies.
-    Total Queries: ~1800.
+    Iterates through the entire company list.
+    No artificial limits imposed.
     """
-    print(f"Starting Batch Seed for {len(TOP_100_COMPANIES)} companies...")
+    total_count = len(TOP_100_COMPANIES)
+    print(f"Starting Batch Seed for {total_count} companies (Full Scan Mode)...")
     
     storage = BlobStorage()
     dashboard_data = []
     
-    # User confirmed 10k quota, so we scan everyone.
-    REAL_XRAY_LIMIT = 100
-    
     for i, company in enumerate(TOP_100_COMPANIES):
-        print(f"[{i+1}/{len(TOP_100_COMPANIES)}] Processing {company['name']}...")
+        print(f"[{i+1}/{total_count}] Processing {company['name']} ({company['url']})...")
         
         # 1. Scanner 1: REAL Scraping (Intent)
         scraped_text = scrape_homepage_text(company['url'])
         intent_results = analyze_intent(scraped_text)
         
-        # 2. Scanner 2: Reality Check
-        if i < REAL_XRAY_LIMIT:
-             print("   -> Running Live X-Ray Search...")
-             reality_results = x_ray_search(company['name'], company['url'])
-        else:
-             print("   -> Simulating Reality (Limit Reached)...")
-             sim_score = random.randint(30, 85)
-             reality_results = {
-                 "score": sim_score,
-                 "checklist": [],
-                 "links": [{"title": "Simulated Reality Data", "url": "#", "source": "System"}],
-                 "is_simulated": True
-             }
+        # 2. Scanner 2: Reality Check (Always Real)
+        # Only print details if we are actually scanning
+        if real_xray_mode:
+            print(f"   -> Running Live X-Ray Search for {company['name']}...")
+        
+        reality_results = x_ray_search(company['name'], company['url'])
             
         # 3. Calculate Gap
         gap = intent_results["score"] - reality_results["score"]
@@ -109,12 +99,13 @@ def run_batch_seed(real_xray_mode=False):
             "evidence_links": reality_results["links"],
             "summary_text": f"Analysis for {company['name']}. Intent Score: {intent_results['score']}. Reality Score: {reality_results['score']}. Gap: {gap}.",
             "lastUpdated": datetime.utcnow().isoformat(),
-            "is_simulated": reality_results.get("is_simulated", False)
+            "is_simulated": False
         }
         
         dashboard_data.append(entry)
         
-        # Be nice to the servers
+        # Small delay to ensure we don't hit aggressive rate limits on the site scraping side
+        # Google API handles QPS internally, but good citizenship for target sites.
         time.sleep(0.1)
 
     # 5. Save to Blob
