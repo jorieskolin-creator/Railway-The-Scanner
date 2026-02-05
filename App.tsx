@@ -1,11 +1,11 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'https://esm.sh/react@18.2.0';
 import { AnalysisResult, ScannerInputData } from './types.ts';
 import { generateMockDashboardData, runMockScanner } from './services/mockScannerService.ts';
 import { TruthMatrix } from './components/TruthMatrix.tsx';
 import { CompanyModal } from './components/CompanyModal.tsx';
 import { ScannerInput } from './components/ScannerInput.tsx';
-import { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, Play } from 'lucide-react';
+import { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, Play } from 'https://esm.sh/lucide-react@0.344.0?deps=react@18.2.0';
 
 const App: React.FC = () => {
   const [data, setData] = useState<AnalysisResult[]>([]);

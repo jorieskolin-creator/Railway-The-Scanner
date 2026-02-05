@@ -1,7 +1,7 @@
 
-import React from 'react';
+import React from 'https://esm.sh/react@18.2.0';
 import { AnalysisResult } from '../types.ts';
-import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Cell, Label } from 'recharts';
+import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Cell, Label } from 'https://esm.sh/recharts@2.12.3?deps=react@18.2.0,react-dom@18.2.0';
 
 interface TruthMatrixProps {
   data: AnalysisResult[];

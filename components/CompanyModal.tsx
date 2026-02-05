@@ -1,8 +1,8 @@
 
-import React, { useState } from 'react';
+import React, { useState } from 'https://esm.sh/react@18.2.0';
 import { AnalysisResult } from '../types.ts';
 import { CompanySummary } from './CompanySummary.tsx';
-import { X, RefreshCw, Calendar, Clock, Loader2 } from 'lucide-react';
+import { X, RefreshCw, Calendar, Clock, Loader2 } from 'https://esm.sh/lucide-react@0.344.0?deps=react@18.2.0';
 import { runMockScanner } from '../services/mockScannerService.ts';
 
 interface CompanyModalProps {

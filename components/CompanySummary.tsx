@@ -1,8 +1,8 @@
 
-import React from 'react';
+import React from 'https://esm.sh/react@18.2.0';
 import { AnalysisResult } from '../types.ts';
-import { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Tooltip } from 'recharts';
-import { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash } from 'lucide-react';
+import { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Tooltip } from 'https://esm.sh/recharts@2.12.3?deps=react@18.2.0,react-dom@18.2.0';
+import { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash } from 'https://esm.sh/lucide-react@0.344.0?deps=react@18.2.0';
 
 interface CompanySummaryProps {
   data: AnalysisResult;

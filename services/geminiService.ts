@@ -1,5 +1,6 @@
-import { GoogleGenAI } from "@google/genai";
-import { AnalysisResult } from '../types';
+
+import { GoogleGenAI } from "https://esm.sh/@google/genai@0.1.1";
+import { AnalysisResult } from '../types.ts';
 
 const getGeminiClient = () => {
     const apiKey = process.env.API_KEY;
