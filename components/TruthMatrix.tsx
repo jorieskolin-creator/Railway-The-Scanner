@@ -1,7 +1,7 @@
 
-import React from 'https://esm.sh/react@18.2.0';
-import { AnalysisResult } from '../types.ts';
-import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Cell, Label } from 'https://esm.sh/recharts@2.12.3?deps=react@18.2.0,react-dom@18.2.0';
+import React from 'react';
+import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Cell, Label } from 'recharts';
+import { AnalysisResult } from '../types';
 
 interface TruthMatrixProps {
   data: AnalysisResult[];
@@ -29,7 +29,7 @@ const CustomTooltip = ({ active, payload }: any) => {
   return null;
 };
 
-export const TruthMatrix: React.FC<TruthMatrixProps> = ({ data, onSelectCompany }) => {
+const TruthMatrix: React.FC<TruthMatrixProps> = ({ data, onSelectCompany }) => {
   return (
     <div className="w-full h-[350px] relative overflow-hidden">
       <ResponsiveContainer width="100%" height="100%">
@@ -95,3 +95,5 @@ export const TruthMatrix: React.FC<TruthMatrixProps> = ({ data, onSelectCompany 
     </div>
   );
 };
+
+export default TruthMatrix;

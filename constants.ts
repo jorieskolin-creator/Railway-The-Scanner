@@ -1,8 +1,7 @@
 
-import { Scanner1Category, Scanner2Category } from './types.ts';
+import { Scanner1Category, Scanner2Category } from './types';
 
-// SCANNER 1: Narrative/Intent Keywords
-export const INTENT_KEYWORDS: Record<Scanner1Category, { good: string[], bad: string[] }> = {
+export const INTENT_KEYWORDS = {
   [Scanner1Category.OperatingModel]: {
     good: [
       "Service Areas", "Value Streams", "Stream-aligned", "Distributed Authority", "Sense and Respond",
@@ -101,8 +100,7 @@ export const INTENT_KEYWORDS: Record<Scanner1Category, { good: string[], bad: st
   }
 };
 
-// SCANNER 2: Evidence/Reality Queries
-export const REALITY_QUERIES: Record<Scanner2Category, string[]> = {
+export const REALITY_QUERIES = {
   [Scanner2Category.OperatingModel]: [
     '("Scrum Master" OR "Product Owner" OR "Agile Coach")', 
     '("P&L responsibility" AND "team level")', 

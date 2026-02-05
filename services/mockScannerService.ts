@@ -1,6 +1,6 @@
 
-import { AnalysisResult, ScannerInputData, ScannerCategoryScore, Scanner1Category, Scanner2Category } from '../types.ts';
-import { INTENT_KEYWORDS, REALITY_QUERIES } from '../constants.ts';
+import { ScannerInputData, AnalysisResult, ScannerCategoryScore, Scanner1Category, Scanner2Category } from '../types';
+import { INTENT_KEYWORDS, REALITY_QUERIES } from '../constants';
 
 const runScannerOne = (text: string): { score: number, breakdown: ScannerCategoryScore[] } => {
   const breakdown: ScannerCategoryScore[] = [];

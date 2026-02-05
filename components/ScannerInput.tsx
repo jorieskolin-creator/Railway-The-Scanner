@@ -1,13 +1,13 @@
 
-import React, { useState } from 'https://esm.sh/react@18.2.0';
-import { ScannerInputData } from '../types.ts';
-import { Search, FileText, Globe, Zap, ArrowRight, CornerDownLeft } from 'https://esm.sh/lucide-react@0.344.0?deps=react@18.2.0';
+import React, { useState } from 'react';
+import { Search, FileText, Globe, Zap, ArrowRight, CornerDownLeft } from 'lucide-react';
+import { ScannerInputData } from '../types';
 
 interface ScannerInputProps {
   onScan: (data: ScannerInputData) => void;
 }
 
-export const ScannerInput: React.FC<ScannerInputProps> = ({ onScan }) => {
+const ScannerInput: React.FC<ScannerInputProps> = ({ onScan }) => {
   const [companyName, setCompanyName] = useState('');
   const [companyUrl, setCompanyUrl] = useState('');
   const [reportText, setReportText] = useState('');
@@ -116,3 +116,5 @@ export const ScannerInput: React.FC<ScannerInputProps> = ({ onScan }) => {
     </div>
   );
 };
+
+export default ScannerInput;

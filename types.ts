@@ -2,7 +2,7 @@
 export interface ScannerInputData {
   companyName: string;
   companyUrl: string;
-  reportText: string; // Text to be analyzed by Scanner 1
+  reportText: string; 
 }
 
 export interface EvidenceLink {
@@ -13,21 +13,20 @@ export interface EvidenceLink {
 
 export interface ScannerCategoryScore {
   name: string;
-  score: number; // 0-100 (normalized)
+  score: number;
   goodCount: number;
   badCount: number;
 }
 
 export interface AnalysisResult {
-  id: string; // Unique ID for list keys
+  id: string; 
   companyName: string;
-  intent_score: number; // 0-100
-  reality_score: number; // 0-100
-  reality_gap: number; // Intent - Reality
+  intent_score: number;
+  reality_score: number;
+  reality_gap: number; 
   evidence_links: EvidenceLink[];
   summary_text: string;
-  lastUpdated: string; // ISO Date string
-  // Detailed breakdown for visualization
+  lastUpdated: string; 
   intent_breakdown: ScannerCategoryScore[];
   reality_checklist: {
     category: string;
@@ -46,7 +45,6 @@ export enum Scanner1Category {
   AIReadiness = "AI Readiness"
 }
 
-// Updated to mirror Scanner 1 for "Reality Gap" calculation (Page 14 of PDF)
 export enum Scanner2Category {
   OperatingModel = "Operating Model",
   ServicePortfolio = "Service Portfolio",

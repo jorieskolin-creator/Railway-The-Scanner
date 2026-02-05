@@ -1,9 +1,9 @@
 
-import React, { useState } from 'https://esm.sh/react@18.2.0';
-import { AnalysisResult } from '../types.ts';
-import { CompanySummary } from './CompanySummary.tsx';
-import { X, RefreshCw, Calendar, Clock, Loader2 } from 'https://esm.sh/lucide-react@0.344.0?deps=react@18.2.0';
-import { runMockScanner } from '../services/mockScannerService.ts';
+import React, { useState } from 'react';
+import { X, RefreshCw, Calendar, Clock, Loader2 as Loader2Icon } from 'lucide-react';
+import { AnalysisResult } from '../types';
+import CompanySummary from './CompanySummary';
+import { runMockScanner } from '../services/mockScannerService';
 
 interface CompanyModalProps {
   company: AnalysisResult | null;
@@ -12,7 +12,7 @@ interface CompanyModalProps {
   onUpdate: (updatedCompany: AnalysisResult) => void;
 }
 
-export const CompanyModal: React.FC<CompanyModalProps> = ({ company, isOpen, onClose, onUpdate }) => {
+const CompanyModal: React.FC<CompanyModalProps> = ({ company, isOpen, onClose, onUpdate }) => {
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   if (!isOpen || !company) return null;
@@ -108,7 +108,7 @@ export const CompanyModal: React.FC<CompanyModalProps> = ({ company, isOpen, onC
           >
             {isRefreshing ? (
               <>
-                <Loader2 className="animate-spin" size={16} />
+                <Loader2Icon className="animate-spin" size={16} />
                 Running Real-time Diagnostics...
               </>
             ) : (
@@ -123,3 +123,5 @@ export const CompanyModal: React.FC<CompanyModalProps> = ({ company, isOpen, onC
     </div>
   );
 };
+
+export default CompanyModal;

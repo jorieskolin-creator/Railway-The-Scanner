@@ -39,16 +39,16 @@ app.mount("/services", StaticFiles(directory="../services"), name="services")
 
 # Serve individual source files required by the browser
 @app.get("/App.tsx")
-async def get_app_tsx(): return FileResponse("../App.tsx")
+async def get_app_tsx(): return FileResponse("../App.tsx", media_type="application/javascript")
 
 @app.get("/index.tsx")
-async def get_index_tsx(): return FileResponse("../index.tsx")
+async def get_index_tsx(): return FileResponse("../index.tsx", media_type="application/javascript")
 
 @app.get("/types.ts")
-async def get_types_ts(): return FileResponse("../types.ts")
+async def get_types_ts(): return FileResponse("../types.ts", media_type="application/javascript")
 
 @app.get("/constants.ts")
-async def get_constants_ts(): return FileResponse("../constants.ts")
+async def get_constants_ts(): return FileResponse("../constants.ts", media_type="application/javascript")
 
 # Serve the main HTML entry point at root
 @app.get("/")

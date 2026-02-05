@@ -1,12 +1,13 @@
 
-import { GoogleGenAI } from "https://esm.sh/@google/genai@0.1.1";
-import { AnalysisResult } from '../types.ts';
+import { GoogleGenAI } from "@google/genai";
+import { AnalysisResult } from '../types';
 
 const getGeminiClient = () => {
+    // API Key must be obtained exclusively from process.env.API_KEY per guidelines
     const apiKey = process.env.API_KEY;
+    
     if (!apiKey) {
-      console.error("API Key not found. Please ensure process.env.API_KEY is set.");
-      // In a real app, handle this gracefully. For this demo, it might crash if called.
+      console.warn("API Key not found in env.");
       return null;
     }
     return new GoogleGenAI({ apiKey });

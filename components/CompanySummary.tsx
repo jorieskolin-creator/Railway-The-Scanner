@@ -1,14 +1,14 @@
 
-import React from 'https://esm.sh/react@18.2.0';
-import { AnalysisResult } from '../types.ts';
-import { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Tooltip } from 'https://esm.sh/recharts@2.12.3?deps=react@18.2.0,react-dom@18.2.0';
-import { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash } from 'https://esm.sh/lucide-react@0.344.0?deps=react@18.2.0';
+import React from 'react';
+import { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Tooltip as RechartsTooltip } from 'recharts';
+import { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash } from 'lucide-react';
+import { AnalysisResult } from '../types';
 
 interface CompanySummaryProps {
   data: AnalysisResult;
 }
 
-export const CompanySummary: React.FC<CompanySummaryProps> = ({ data }) => {
+const CompanySummary: React.FC<CompanySummaryProps> = ({ data }) => {
   const gapColor = data.reality_gap > 20 ? '#ef4444' : data.reality_gap < -20 ? '#f59e0b' : '#10b981';
   
   const radarData = data.intent_breakdown.map(item => ({
@@ -79,7 +79,7 @@ export const CompanySummary: React.FC<CompanySummaryProps> = ({ data }) => {
                 <PolarAngleAxis dataKey="subject" tick={{ fill: '#94a3b8', fontSize: 11, fontWeight: 500 }} />
                 <PolarRadiusAxis angle={30} domain={[0, 100]} tick={false} axisLine={false} />
                 <Radar name="Intent" dataKey="A" stroke="#818cf8" strokeWidth={2} fill="#6366f1" fillOpacity={0.3} />
-                <Tooltip 
+                <RechartsTooltip 
                     contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', color: '#f1f5f9', borderRadius: '8px' }}
                     itemStyle={{ color: '#818cf8' }}
                 />
@@ -145,3 +145,5 @@ export const CompanySummary: React.FC<CompanySummaryProps> = ({ data }) => {
     </div>
   );
 };
+
+export default CompanySummary;
