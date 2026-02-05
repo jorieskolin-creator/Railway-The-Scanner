@@ -7,11 +7,36 @@ class BlobStorage:
     def __init__(self):
         # API_URL: The Vercel API endpoint for commands (Put/List). 
         # DO NOT change this to your public bucket URL.
-        self.token = os.environ.get("BLOB_READ_WRITE_TOKEN")
         self.api_url = "https://blob.vercel-storage.com"
         
-        # User provided Public URL (optional fallback)
-        self.public_base_url = os.environ.get("VITE_BLOB_URL") or os.environ.get("BLOB_URL")
+        # 1. Clean and load the Token
+        raw_token = os.environ.get("BLOB_READ_WRITE_TOKEN", "")
+        self.token = self._clean_env_var(raw_token)
+        
+        # 2. Clean and load the Public URL
+        raw_url = os.environ.get("VITE_BLOB_URL") or os.environ.get("BLOB_URL") or ""
+        self.public_base_url = self._clean_env_var(raw_url)
+
+    def _clean_env_var(self, value: str):
+        """
+        Helper to fix common copy-paste errors in Railway variables.
+        Example Input: 'BLOB_TOKEN="vercel_blob_rw_123"'
+        Example Output: 'vercel_blob_rw_123'
+        """
+        if not value:
+            return ""
+        
+        # If user pasted "KEY=VALUE", take the VALUE part
+        if "=" in value:
+            try:
+                # Split on the first equals sign only
+                parts = value.split("=", 1)
+                value = parts[1]
+            except:
+                pass
+        
+        # Remove whitespace and quotes
+        return value.strip().strip('"').strip("'")
 
     def _get_headers(self):
         return {
@@ -24,7 +49,7 @@ class BlobStorage:
         Uploads a JSON object to Vercel Blob.
         """
         if not self.token:
-            print("Warning: BLOB_READ_WRITE_TOKEN not set. Skipping upload.")
+            print("CRITICAL: BLOB_READ_WRITE_TOKEN not set (or empty after cleaning). Upload skipped.")
             return None
 
         try:
@@ -100,18 +125,39 @@ class BlobStorage:
     def debug_list_files(self):
         """
         Returns the raw list of files or error details for debugging.
+        Checks both API access (Token) and Public URL access.
         """
         debug_info = {
             "config": {
                 "has_token": bool(self.token),
+                # Mask token for security in logs, show first 4 chars
+                "token_prefix": self.token[:4] + "..." if self.token else "None",
                 "api_url": self.api_url,
                 "public_base_url": self.public_base_url
-            }
+            },
+            "read_access": {},
+            "write_access": {}
         }
 
+        # 1. Check Read Access via Public URL
+        if self.public_base_url:
+            try:
+                test_url = f"{self.public_base_url.rstrip('/')}/dashboard_data.json"
+                r = requests.head(test_url)
+                # 404 is technically "success" for connectivity, just means file missing.
+                # 403 or ConnectionError means bad URL.
+                debug_info["read_access"]["public_url_status"] = r.status_code
+                debug_info["read_access"]["file_exists"] = (r.status_code == 200)
+                debug_info["read_access"]["message"] = "Public URL reachable" if r.status_code in [200, 404] else "Public URL unreachable"
+            except Exception as e:
+                debug_info["read_access"]["error"] = str(e)
+        else:
+            debug_info["read_access"]["message"] = "No VITE_BLOB_URL configured"
+
+        # 2. Check Write Access via Token
         if not self.token:
-            debug_info["status"] = "error"
-            debug_info["message"] = "BLOB_READ_WRITE_TOKEN is missing"
+            debug_info["status"] = "partial_configuration"
+            debug_info["write_access"]["message"] = "BLOB_READ_WRITE_TOKEN missing. Uploads disabled."
             return debug_info
 
         try:
@@ -119,9 +165,11 @@ class BlobStorage:
             debug_info["http_code"] = response.status_code
             if response.status_code == 200:
                 debug_info["status"] = "success"
+                debug_info["write_access"]["message"] = "Token valid. Write access enabled."
                 debug_info["files"] = response.json().get("blobs", [])
             else:
                 debug_info["status"] = "api_error"
+                debug_info["write_access"]["message"] = "Token invalid or API error."
                 debug_info["response"] = response.text
         except Exception as e:
             debug_info["status"] = "exception"

@@ -1,6 +1,6 @@
 
 const { useState, useEffect } = window.React;
-const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, Play, RefreshCw } = (window as any).Lucide;
+const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, Play, RefreshCw, CheckCircle2, AlertTriangle, Cloud } = (window as any).Lucide;
 
 // Components & Services from Window
 const TruthMatrix = (window as any).TruthMatrix;
@@ -19,6 +19,28 @@ const App = () => {
   const [isScanning, setIsScanning] = useState(false);
   const [isSeeding, setIsSeeding] = useState(false);
   const [sortConfig, setSortConfig] = useState({ key: 'reality_gap', direction: 'desc' });
+  const [systemStatus, setSystemStatus] = useState({ online: false, storage: false, google: false, ai: false });
+
+  // Check Backend Health & Config
+  useEffect(() => {
+    const checkHealth = async () => {
+        try {
+            const res = await fetch('/api/health');
+            if (res.ok) {
+                const json = await res.json();
+                setSystemStatus({
+                    online: true,
+                    storage: json.config_status?.has_blob_token || false,
+                    google: json.config_status?.has_google_search_key || false,
+                    ai: json.config_status?.has_gemini_key || false
+                });
+            }
+        } catch (e) {
+            console.warn("Backend health check failed", e);
+        }
+    };
+    checkHealth();
+  }, []);
 
   // Function to load data from backend
   const fetchRealData = async () => {
@@ -177,6 +199,17 @@ const App = () => {
               </h1>
               <span className="text-[10px] text-indigo-200 tracking-[0.15em] uppercase font-medium">Finland Top 100 Index</span>
             </div>
+            
+            {/* System Status Indicator */}
+            <div className="hidden md:flex items-center gap-2 ml-4 px-2 py-1 rounded-full bg-black/20 border border-white/5">
+                <div className={`flex items-center gap-1.5 text-[9px] uppercase font-bold ${systemStatus.storage ? 'text-emerald-400' : 'text-slate-500'}`}>
+                    <Database size={10} /> {systemStatus.storage ? 'DB Online' : 'DB Offline'}
+                </div>
+                <div className="w-px h-3 bg-white/10"></div>
+                <div className={`flex items-center gap-1.5 text-[9px] uppercase font-bold ${systemStatus.google ? 'text-cyan-400' : 'text-slate-500'}`}>
+                    <Search size={10} /> {systemStatus.google ? 'X-Ray Active' : 'X-Ray Sim'}
+                </div>
+            </div>
           </div>
           
           <div className="flex items-center gap-4 w-full max-w-md ml-4 justify-end">
@@ -209,12 +242,25 @@ const App = () => {
           </div>
         </div>
         
-        {isMockData && !loading && (
-          <div className="w-full bg-indigo-950/80 border-b border-indigo-500/30 backdrop-blur-sm">
+        {/* Connection Warning Banner */}
+        {(!systemStatus.online || !systemStatus.storage) && !loading && (
+          <div className="w-full bg-amber-900/40 border-b border-amber-500/20 backdrop-blur-sm">
+             <div className="max-w-7xl mx-auto px-4 py-1.5 flex items-center justify-between">
+                <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider font-mono text-amber-200">
+                    <AlertTriangle size={12} className="text-amber-400" />
+                    <span>Database Not Connected - Using Simulation Mode</span>
+                </div>
+             </div>
+          </div>
+        )}
+
+        {/* Empty State / Seeding Banner */}
+        {systemStatus.storage && data.length === 0 && !loading && (
+          <div className="w-full bg-indigo-900/40 border-b border-indigo-500/20 backdrop-blur-sm">
              <div className="max-w-7xl mx-auto px-4 py-1.5 flex items-center justify-between">
                 <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider font-mono text-indigo-200">
-                    <Database size={12} className="text-cyan-400 animate-pulse" />
-                    <span>Database Empty / Unreachable (Using Simulation)</span>
+                    <Cloud size={12} className="text-indigo-400" />
+                    <span>Database Empty</span>
                 </div>
                 <button 
                     onClick={handleBatchSeed}
@@ -222,7 +268,7 @@ const App = () => {
                     className="flex items-center gap-2 px-3 py-1 bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-300 text-[10px] font-bold uppercase rounded border border-cyan-500/50 transition-all"
                 >
                     {isSeeding ? <Loader2 size={10} className="animate-spin" /> : <Play size={10} fill="currentColor" />}
-                    Initialize Finland Top 100 Database
+                    Initialize Finland Top 100
                 </button>
              </div>
           </div>
@@ -362,7 +408,9 @@ const App = () => {
                    <h3 className="text-xl font-bold text-white tracking-tight">Diagnostic Engine Running</h3>
                    <div className="space-y-2 mt-4 text-left border-l-2 border-slate-700 pl-4 py-1">
                     <p className="text-xs text-cyan-400 font-mono animate-pulse">>> Parsing Narrative Vectors</p>
-                    <p className="text-xs text-emerald-400 font-mono animate-pulse delay-75">>> Interrogating Reality (X-Ray)</p>
+                    <p className="text-xs text-emerald-400 font-mono animate-pulse delay-75">
+                        {systemStatus.google ? '>> Interrogating Global Grid (X-Ray API)' : '>> Interrogating Reality (Simulating X-Ray)'}
+                    </p>
                    </div>
                  </div>
                </div>

@@ -20,9 +20,19 @@ from seed_manager import run_batch_seed
 
 print("Starting Adaptability Scanner Backend...", flush=True)
 
+# Helper for cleaning env vars
+def clean_env_var(value):
+    if not value: return ""
+    if "=" in value:
+        try: value = value.split("=", 1)[1]
+        except: pass
+    return value.strip().strip('"').strip("'")
+
 # Log Environment Config
-blob_token = os.environ.get("BLOB_READ_WRITE_TOKEN")
-blob_url_var = os.environ.get("VITE_BLOB_URL")
+blob_token = clean_env_var(os.environ.get("BLOB_READ_WRITE_TOKEN"))
+blob_url_var = clean_env_var(os.environ.get("VITE_BLOB_URL"))
+gemini_key = clean_env_var(os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY"))
+
 print(f"Config Check: Token Exists? {bool(blob_token)}")
 print(f"Config Check: VITE_BLOB_URL? {blob_url_var if blob_url_var else 'Not Set'}")
 
@@ -61,7 +71,18 @@ async def read_root():
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "Adaptability Scanner API Online", "timestamp": datetime.utcnow().isoformat()}
+    # Re-read and clean to give accurate status
+    token = clean_env_var(os.environ.get("BLOB_READ_WRITE_TOKEN"))
+    return {
+        "status": "Adaptability Scanner API Online", 
+        "timestamp": datetime.utcnow().isoformat(),
+        "config_status": {
+            "has_blob_token": bool(token),
+            "token_starts_with": token[:4] if token else None,
+            "has_gemini_key": bool(clean_env_var(os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY"))),
+            "has_google_search_key": bool(clean_env_var(os.environ.get("GOOGLE_API_KEY")))
+        }
+    }
 
 # --- DATA ROUTES ---
 
@@ -109,7 +130,8 @@ async def run_scan(request: ScanRequest):
         
         # 2. AI Synthesis
         summary = "AI Summary Unavailable (Config Error)"
-        api_key = os.environ.get("API_KEY") or os.environ.get("GEMINI_API_KEY")
+        # Use cleaner logic
+        api_key = clean_env_var(os.environ.get("API_KEY") or os.environ.get("GEMINI_API_KEY"))
         
         if api_key:
             try:
@@ -171,10 +193,14 @@ async def run_scan(request: ScanRequest):
                 if index > -1: current_db[index] = result_data
                 else: current_db.append(result_data)
                 
-                storage.upload_json(BLOB_FILENAME, current_db)
+                # UPLOAD
+                upload_url = storage.upload_json(BLOB_FILENAME, current_db)
+                if not upload_url:
+                    result_data["persistence_warning"] = "Warning: Data was analyzed but NOT saved to database (Missing BLOB_READ_WRITE_TOKEN)."
 
             except Exception as e:
                 print(f"Persistence Failed: {e}")
+                result_data["persistence_warning"] = f"Warning: Database error: {str(e)}"
         
         return {"success": True, "data": result_data}
 
