@@ -205,6 +205,7 @@ async def run_scan(request: ScanRequest):
             "reality_score": reality_results["score"],
             "reality_gap": gap,
             "intent_breakdown": intent_results["breakdown"],
+            "metrics": intent_results.get("metrics", {}), # Pass Friction/Vibrancy
             "reality_checklist": reality_results["checklist"],
             "evidence_links": reality_results["links"],
             "summary_text": summary,

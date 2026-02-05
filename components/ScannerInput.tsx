@@ -1,5 +1,4 @@
-
-const { useState } = window.React;
+const { useState } = (window as any).React;
 const { Search, FileText, Globe, Zap } = (window as any).Lucide;
 
 const ScannerInput = ({ onScan }) => {

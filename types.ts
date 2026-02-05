@@ -20,6 +20,13 @@ interface ScannerCategoryScore {
   badCount: number;
 }
 
+interface ScannerMetrics {
+  friction_index: number;
+  vibrancy_score: number;
+  total_good_mentions: number;
+  total_bad_mentions: number;
+}
+
 interface AnalysisResult {
   id: string; 
   companyName: string;
@@ -30,6 +37,7 @@ interface AnalysisResult {
   summary_text: string;
   lastUpdated: string; 
   intent_breakdown: ScannerCategoryScore[];
+  metrics?: ScannerMetrics;
   reality_checklist: {
     category: string;
     found: boolean;

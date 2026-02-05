@@ -1,5 +1,4 @@
-
-const { useState } = window.React;
+const { useState } = (window as any).React;
 const { X, RefreshCw, Calendar, Clock, Loader2: Loader2Icon } = (window as any).Lucide;
 
 // Components & Services from Window

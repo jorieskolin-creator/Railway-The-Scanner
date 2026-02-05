@@ -1,6 +1,6 @@
 
 const { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Tooltip: RechartsTooltip } = (window as any).Recharts;
-const { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash, RefreshCw, XCircle, Search } = (window as any).Lucide;
+const { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash, RefreshCw, XCircle, Search, Zap, Scale } = (window as any).Lucide;
 
 const CompanySummary = ({ data }) => {
   const gapColor = data.reality_gap > 20 ? '#ef4444' : data.reality_gap < -20 ? '#f59e0b' : '#10b981';
@@ -10,6 +10,14 @@ const CompanySummary = ({ data }) => {
     A: item.score,
     fullMark: 100,
   }));
+
+  // Safely access metrics (might be missing in old seed data)
+  const metrics = data.metrics || { friction_index: 0, vibrancy_score: 0, total_good_mentions: 0, total_bad_mentions: 0 };
+  
+  // Friction Logic: High (>0.5) is bad.
+  const frictionPercentage = Math.round(metrics.friction_index * 100);
+  const frictionColor = frictionPercentage > 60 ? 'text-rose-400' : frictionPercentage > 30 ? 'text-amber-400' : 'text-emerald-400';
+  const frictionLabel = frictionPercentage > 60 ? 'Battleground' : frictionPercentage > 30 ? 'Conflicted' : 'Coherent';
 
   return (
     <div className="space-y-8">
@@ -35,6 +43,43 @@ const CompanySummary = ({ data }) => {
             {data.reality_gap > 0 ? `+${data.reality_gap}` : data.reality_gap}
           </span>
           <span className="text-xs text-slate-400 mt-2 font-mono">Intent minus Reality</span>
+        </div>
+      </div>
+
+      {/* NEW SECTION: METRICS FROM SCANNER 1 */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="bg-white/5 p-4 rounded-xl border border-white/10 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+                <div className="p-2 bg-slate-800 rounded-lg text-slate-400">
+                    <Scale size={20} />
+                </div>
+                <div>
+                    <h4 className="text-xs text-slate-400 font-bold uppercase tracking-wider">Friction Index</h4>
+                    <p className={`text-lg font-bold ${frictionColor}`}>{frictionLabel} ({frictionPercentage}%)</p>
+                </div>
+            </div>
+            <div className="text-right">
+                <span className="text-[10px] text-slate-500 block">Good Signals: {metrics.total_good_mentions}</span>
+                <span className="text-[10px] text-slate-500 block">Bad Signals: {metrics.total_bad_mentions}</span>
+            </div>
+        </div>
+
+        <div className="bg-white/5 p-4 rounded-xl border border-white/10 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+                <div className="p-2 bg-slate-800 rounded-lg text-slate-400">
+                    <Zap size={20} />
+                </div>
+                <div>
+                    <h4 className="text-xs text-slate-400 font-bold uppercase tracking-wider">Vibrancy Score</h4>
+                    <p className="text-lg font-bold text-cyan-400">{metrics.vibrancy_score}/100</p>
+                </div>
+            </div>
+            <div className="text-right">
+                <span className="text-[10px] text-slate-500 block">Signal Intensity</span>
+                <div className="w-16 h-1.5 bg-slate-700 rounded-full mt-1">
+                    <div className="h-full bg-cyan-500 rounded-full" style={{ width: `${metrics.vibrancy_score}%` }}></div>
+                </div>
+            </div>
         </div>
       </div>
 

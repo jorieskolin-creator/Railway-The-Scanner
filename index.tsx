@@ -1,11 +1,10 @@
-
 // App and ReactDOM are global
 const rootElement = document.getElementById('root');
 if (!rootElement) {
   throw new Error("Could not find root element to mount to");
 }
 
-const React = window.React;
+const React = (window as any).React;
 const ReactDOM = (window as any).ReactDOM;
 
 if (!ReactDOM) {

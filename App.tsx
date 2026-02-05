@@ -1,5 +1,4 @@
-
-const { useState, useEffect } = window.React;
+const { useState, useEffect } = (window as any).React;
 
 // --- ICON SAFETY LAYER ---
 // Wraps Lucide access so accessing an undefined icon returns a Null component instead of crashing
