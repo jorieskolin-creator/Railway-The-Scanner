@@ -89,6 +89,7 @@ class BlobStorage:
         """
         self.token = self._load_token()
         timestamp = int(time.time()) # Cache buster
+        print(f"Storage: Cache busting enabled (ts={timestamp})")
         
         # --- Strategy 1: API List ---
         if self.token:

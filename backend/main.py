@@ -19,7 +19,7 @@ from storage import BlobStorage
 from seed_manager import run_batch_seed, scrape_homepage_text
 from finland_list import TOP_100_COMPANIES
 
-print("Starting Adaptability Scanner Backend...", flush=True)
+print("Starting Adaptability Scanner Backend (v2.0)...", flush=True)
 
 # Helper for cleaning env vars
 def clean_env_var(value):
@@ -41,6 +41,12 @@ print(f"Config Check: VITE_BLOB_URL? {blob_url_var if blob_url_var else 'Not Set
 print(f"Config Check: Gemini/AI Key? {bool(gemini_key)}")
 print(f"Config Check: Google Search Key? {bool(google_key)}")
 print(f"Config Check: Search Engine ID? {bool(cx_id)}")
+
+if not google_key or not cx_id:
+    print("WARNING: Google Search keys missing. Reality Scans will return 0 score.")
+
+if not gemini_key:
+    print("WARNING: Gemini API Key missing. Summaries will be unavailable.")
 
 app = FastAPI()
 
