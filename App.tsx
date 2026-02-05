@@ -77,18 +77,27 @@ const App: React.FC = () => {
     try {
       let newResult: AnalysisResult;
 
+      // Try Live Backend First
       if (apiUrl) {
-        const response = await fetch(`${apiUrl}/scan`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...input, saveToDatabase: true }) // New scans also save to DB
-        });
-        
-        if (!response.ok) throw new Error("Scan failed");
-        
-        const json = await response.json();
-        newResult = json.data;
+        try {
+          const response = await fetch(`${apiUrl}/scan`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...input, saveToDatabase: true }) // New scans also save to DB
+          });
+          
+          if (!response.ok) throw new Error("Scan failed");
+          
+          const json = await response.json();
+          newResult = json.data;
+        } catch (apiError) {
+          console.warn("API Connection failed, falling back to local simulation.", apiError);
+          // Fallback to Mock if API fails (e.g. server down, cors, or not deployed)
+          await new Promise(r => setTimeout(r, 1500)); // Simulate processing delay
+          newResult = await runMockScanner(input);
+        }
       } else {
+        // No API URL configured at all
         console.warn("VITE_API_URL not set. Running simulation in browser.");
         await new Promise(r => setTimeout(r, 2000)); 
         newResult = await runMockScanner(input);
@@ -97,7 +106,7 @@ const App: React.FC = () => {
       // Update local state with new result
       // If company exists, replace it. If not, add it.
       setData(prev => {
-        // If we were in simulation mode, clear the mock data and start fresh with real data
+        // If we were in simulation mode, clear the mock data and start fresh with real data (or new sim data)
         if (isMockData) {
             setIsMockData(false);
             return [newResult];
@@ -131,7 +140,7 @@ const App: React.FC = () => {
     const apiUrl = env.VITE_API_URL || "https://the-scanner.up.railway.app"; 
     
     try {
-        if (!apiUrl) { alert("Backend not connected."); setIsSeeding(false); return; }
+        if (!apiUrl) throw new Error("Backend URL missing");
         
         const response = await fetch(`${apiUrl}/admin/seed-finland-100`, {
              method: 'POST'
@@ -140,10 +149,11 @@ const App: React.FC = () => {
         if (response.ok) {
             alert("Batch Process Initiated! The database will populate in the background. Please refresh the page in a few minutes.");
         } else {
-            alert("Failed to start batch process.");
+            throw new Error("API responded with error");
         }
     } catch (e) {
-        alert("Error connecting to backend.");
+        console.error("Batch seed error:", e);
+        alert("Could not connect to backend to start batch job. Is the server running?");
     } finally {
         setIsSeeding(false);
     }

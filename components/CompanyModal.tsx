@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { AnalysisResult } from '../types';
 import { CompanySummary } from './CompanySummary';
 import { X, RefreshCw, Calendar, Clock, Loader2 } from 'lucide-react';
+import { runMockScanner } from '../services/mockScannerService';
 
 interface CompanyModalProps {
   company: AnalysisResult | null;
@@ -20,17 +21,10 @@ export const CompanyModal: React.FC<CompanyModalProps> = ({ company, isOpen, onC
     
     // Safely access API URL with Fallback
     const env = (import.meta as any).env || {};
+    // Use the environment variable, but valid checking happens in try/catch
     const apiUrl = env.VITE_API_URL || "https://the-scanner.up.railway.app";
 
     try {
-      if (!apiUrl) {
-         // Should not happen with fallback, but good safety
-         await new Promise(resolve => setTimeout(resolve, 2000));
-         alert("Backend not connected. Simulation only.");
-         setIsRefreshing(false);
-         return;
-      }
-
       // We need to send text for the scan. 
       // Since we are refreshing an existing JSON entry, we might not have the original text.
       // We will send a generic text or reuse existing if available in a real app. 
@@ -42,6 +36,7 @@ export const CompanyModal: React.FC<CompanyModalProps> = ({ company, isOpen, onC
         saveToDatabase: true // CRITICAL: Tells backend to update the Blob
       };
 
+      // Attempt Live Fetch
       const response = await fetch(`${apiUrl}/scan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -57,8 +52,29 @@ export const CompanyModal: React.FC<CompanyModalProps> = ({ company, isOpen, onC
       onUpdate(updatedData);
       
     } catch (error) {
-      console.error("Refresh Error", error);
-      alert("Failed to refresh database.");
+      console.warn("Backend unavailable (Failed to fetch). Falling back to Simulation Mode.", error);
+      
+      // FALLBACK: Run local simulation if backend is down
+      try {
+        await new Promise(resolve => setTimeout(resolve, 1500)); // Fake network delay
+        
+        const mockResult = await runMockScanner({
+          companyName: company.companyName,
+          companyUrl: "",
+          reportText: "Simulation fallback text for refresh."
+        });
+        
+        // Preserve the original ID so it updates the correct row
+        mockResult.id = company.id;
+        mockResult.lastUpdated = new Date().toISOString();
+        mockResult.summary_text = `(Simulated Refresh) ${mockResult.summary_text}`;
+        
+        onUpdate(mockResult);
+        alert("Backend unreachable. Performed local simulation refresh.");
+      } catch (simError) {
+        console.error("Simulation failed", simError);
+        alert("Failed to refresh analysis.");
+      }
     } finally {
       setIsRefreshing(false);
     }

@@ -4,57 +4,53 @@ import requests
 import random
 from urllib.parse import urlparse
 
-# Query Definitions (Mirrors constants.ts and PDF X-Ray Logic)
+# Query Definitions (Optimized for Restricted Google CSE)
+# These queries target specific high-authority domains that users can manually whitelist.
+# REQUIRED WHITELIST IN GOOGLE CSE:
+# - linkedin.com
+# - glassdoor.com
+# - github.com
+# - kauppalehti.fi
+# - duunitori.fi
+
 QUERIES = {
     "Operating Model": [
         {'q': 'site:linkedin.com/jobs "Company Name" AND ("Scrum Master" OR "Product Owner" OR "Agile Coach")', 'intent': 'Job Titles (Agile)'},
         {'q': 'site:linkedin.com/jobs "Company Name" AND ("P&L responsibility" AND "team level")', 'intent': 'Micro-Enterprise Test'},
-        {'q': '"Company Name" AND ("Stream-aligned" OR "end-to-end ownership")', 'intent': 'Stream-Aligned Test'},
+        {'q': 'site:linkedin.com "Company Name" AND ("Stream-aligned" OR "end-to-end ownership")', 'intent': 'Stream-Aligned Test'},
         {'q': 'site:linkedin.com/jobs "Company Name" AND ("Platform Product Manager" OR "Golden Path")', 'intent': 'Platform Test'}
     ],
     "Service Portfolio": [
-        {'q': '"Company Name" AND ("ARR" OR "Recurring Revenue" OR "SaaS") filetype:pdf', 'intent': 'Modern Revenue'},
-        {'q': 'site:[domain] "API Documentation" OR "Developer Portal"', 'intent': 'Platform Indicator'},
-        {'q': 'site:[domain] "Pricing" AND ("Subscription" OR "License")', 'intent': 'Pricing Model'},
-        {'q': '"Company Name" "Financial Results" AND "Segment Reporting" filetype:pdf', 'intent': 'Revenue breakdown'}
+        {'q': 'site:linkedin.com "Company Name" AND ("ARR" OR "Recurring Revenue" OR "SaaS")', 'intent': 'Modern Revenue'},
+        {'q': 'site:github.com "Company Name" AND ("API" OR "SDK" OR "Developer")', 'intent': 'Developer Ecosystem'},
+        {'q': 'site:linkedin.com "Company Name" AND ("Subscription Model" OR "Licensing")', 'intent': 'Pricing Model'},
+        {'q': 'site:kauppalehti.fi "Company Name" AND "Financial Results" AND "Segment"', 'intent': 'Revenue breakdown'}
     ],
     "Values": [
         {'q': 'site:glassdoor.com "Company Name" AND ("Micromanagement" OR "Surveillance")', 'intent': 'Trust Test (Negative)'},
-        {'q': 'site:[domain] "Unlimited PTO" OR "Remote First"', 'intent': 'Trust Test (Positive)'},
-        {'q': 'site:[domain] "Post-mortem" OR "Learning from failure"', 'intent': 'Psych Safety'},
-        {'q': 'site:[domain] "Code of Conduct" AND ("Whistleblower" OR "Ethics")', 'intent': 'Governance'}
+        {'q': 'site:linkedin.com/jobs "Company Name" AND ("Unlimited PTO" OR "Remote First")', 'intent': 'Trust Test (Positive)'},
+        {'q': 'site:linkedin.com "Company Name" AND ("Post-mortem" OR "Learning from failure")', 'intent': 'Psych Safety'},
+        {'q': 'site:linkedin.com "Company Name" AND "Code of Conduct" AND ("Whistleblower" OR "Ethics")', 'intent': 'Governance'}
     ],
     "Strategy": [
-        {'q': '"Company Name" AND ("Strategy 2025" OR "Vision 2030")', 'intent': 'Future focus'},
-        {'q': '"Company Name" AND ("Acquisition" OR "Divestment") site:kauppalehti.fi', 'intent': 'Action'},
-        {'q': '"Company Name" AND "Digital Transformation" AND "Revenue"', 'intent': 'Value Narrative'},
-        {'q': '"Company Name" AND ("Budget Variance" OR "Compliance")', 'intent': 'Budget Test (Negative)'}
+        {'q': 'site:linkedin.com "Company Name" AND ("Strategy 2025" OR "Vision 2030")', 'intent': 'Future focus'},
+        {'q': 'site:kauppalehti.fi "Company Name" AND ("Acquisition" OR "Divestment")', 'intent': 'Action'},
+        {'q': 'site:kauppalehti.fi "Company Name" AND "Digital Transformation" AND "Revenue"', 'intent': 'Value Narrative'},
+        {'q': 'site:linkedin.com "Company Name" AND ("Budget Variance" OR "Compliance")', 'intent': 'Budget Test (Negative)'}
     ],
     "Business Model": [
-        {'q': 'site:[domain] "App Store" OR "Marketplace"', 'intent': 'Ecosystem'},
-        {'q': 'site:[domain] "Pricing" AND ("Freemium" OR "Usage-based")', 'intent': 'Modern Pricing'},
-        {'q': 'site:[domain] "API Key" OR "SDK"', 'intent': 'Tech Platform'},
-        {'q': '"Company Name" AND ("Partner Program" OR "Ecosystem")', 'intent': 'Network Effects'}
+        {'q': 'site:linkedin.com "Company Name" AND ("App Store" OR "Marketplace")', 'intent': 'Ecosystem'},
+        {'q': 'site:linkedin.com "Company Name" AND ("Freemium" OR "Usage-based")', 'intent': 'Modern Pricing'},
+        {'q': 'site:github.com "Company Name" AND "API Key"', 'intent': 'Tech Platform'},
+        {'q': 'site:linkedin.com "Company Name" AND "Partner Program"', 'intent': 'Network Effects'}
     ],
     "AI Readiness": [
         {'q': 'site:linkedin.com/jobs "Company Name" AND ("Azure" OR "AWS" OR "Google Cloud")', 'intent': 'Cloud Foundation'},
         {'q': 'site:linkedin.com/jobs "Company Name" AND ("Data Mesh" OR "Data Product Owner")', 'intent': 'Data Arch'},
         {'q': 'site:duunitori.fi "Company Name" AND ("Python" OR "Machine Learning" OR "LLM")', 'intent': 'Tech Skills'},
-        {'q': 'site:[domain] "Tech Radar" OR "Engineering Blog"', 'intent': 'Engineering Culture'}
+        {'q': 'site:linkedin.com "Company Name" AND ("Tech Radar" OR "Engineering Blog")', 'intent': 'Engineering Culture'}
     ]
 }
-
-def get_domain(url):
-    """Extracts domain from url (e.g., https://www.nokia.com -> nokia.com)"""
-    if not url: return None
-    try:
-        parsed = urlparse(url)
-        domain = parsed.netloc or parsed.path
-        if domain.startswith("www."):
-            return domain[4:]
-        return domain
-    except:
-        return None
 
 def x_ray_search(company_name: str, company_url: str = None):
     api_key = os.environ.get("GOOGLE_API_KEY")
@@ -72,26 +68,18 @@ def x_ray_search(company_name: str, company_url: str = None):
         print("Running in SIMULATION MODE for Reality Scanner.")
         return run_simulation_mode(company_name)
 
-    # Extract domain for site-specific search
-    target_domain = get_domain(company_url) if company_url else "linkedin.com" # Fallback domain
-
     for category, query_list in QUERIES.items():
         for item in query_list:
             total_checks += 1
             raw_query = item['q']
             intent_label = item['intent']
             
-            # Dynamic String Replacement for X-Ray
-            # We replace "Company Name" and [domain] placeholders with actual values
+            # Simple Replacement: Only Company Name is needed now
+            # We removed the dependency on dynamic 'site:[domain]' to support Restricted CSEs
             search_query = raw_query.replace('"Company Name"', f'"{company_name}"')
-            if target_domain:
-                search_query = search_query.replace('site:[domain]', f'site:{target_domain}')
-            else:
-                # If no domain provided, remove the site: operator logic or fallback to broad search
-                search_query = search_query.replace('site:[domain]', f'"{company_name}"')
-
-            # Append "Finland" for geo-specificity if it looks like a broad search
-            if "site:" not in search_query and "Finland" not in search_query:
+            
+            # Append "Finland" context if searching generic global sites, unless domain is already .fi
+            if "linkedin.com" in search_query or "glassdoor.com" in search_query or "github.com" in search_query:
                 search_query += " Finland"
             
             url = f"https://www.googleapis.com/customsearch/v1?key={api_key}&cx={cx_id}&q={search_query}"
@@ -116,7 +104,7 @@ def x_ray_search(company_name: str, company_url: str = None):
                 
                 checklist.append({
                     "category": category,
-                    "query": intent_label, # Display the intent (e.g., "Job Titles") not the raw query
+                    "query": intent_label,
                     "found": found
                 })
                 
