@@ -182,13 +182,14 @@ async def run_scan(request: ScanRequest):
                 """
                 
                 try:
+                    # UPDATED MODEL TO GEMINI 3 FLASH
                     response = client.models.generate_content(
-                        model='gemini-2.0-flash',
+                        model='gemini-3-flash-preview',
                         contents=prompt
                     )
                     if response.text: summary = response.text
                 except Exception as e:
-                    print(f"Gemini 2.0 Flash Error: {e}")
+                    print(f"Gemini 3 Flash Error: {e}")
 
             except Exception as e:
                 print(f"Gemini Client Error: {e}")

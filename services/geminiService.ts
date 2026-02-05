@@ -42,8 +42,9 @@ const getGeminiClient = () => {
   `;
 
   try {
+    // UPGRADE: Using gemini-3-flash-preview for latest reasoning capabilities
     const response = await ai.models.generateContent({
-      model: 'gemini-2.0-flash',
+      model: 'gemini-3-flash-preview',
       contents: prompt,
     });
     
