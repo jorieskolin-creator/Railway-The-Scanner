@@ -34,6 +34,7 @@ export interface AnalysisResult {
     found: boolean;
     query: string;
   }[];
+  is_simulated?: boolean;
 }
 
 export enum Scanner1Category {

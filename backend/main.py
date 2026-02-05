@@ -1,3 +1,4 @@
+
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -108,7 +109,8 @@ async def run_scan(request: ScanRequest):
             "reality_checklist": reality_results["checklist"],
             "evidence_links": reality_results["links"],
             "summary_text": summary,
-            "lastUpdated": new_timestamp
+            "lastUpdated": new_timestamp,
+            "is_simulated": reality_results.get("is_simulated", False)
         }
         
         # 6. Persistence Logic (The "Refresh Database" Feature)

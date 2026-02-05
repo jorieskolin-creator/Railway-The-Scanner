@@ -1,7 +1,7 @@
 import React from 'react';
 import { AnalysisResult } from '../types';
 import { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Tooltip } from 'recharts';
-import { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash } from 'lucide-react';
 
 interface CompanySummaryProps {
   data: AnalysisResult;
@@ -19,6 +19,20 @@ export const CompanySummary: React.FC<CompanySummaryProps> = ({ data }) => {
   return (
     <div className="space-y-8">
       
+      {/* Simulation Warning */}
+      {data.is_simulated && (
+        <div className="bg-amber-500/10 border border-amber-500/40 rounded-lg p-3 flex items-start gap-3">
+            <ServerCrash className="text-amber-500 shrink-0 mt-0.5" size={18} />
+            <div>
+                <h4 className="text-amber-400 text-sm font-bold">Simulated Reality Data</h4>
+                <p className="text-amber-200/70 text-xs mt-1">
+                    The Reality Scanner could not access Google Search API (Config Restriction). 
+                    Scores shown are projected estimates, not live X-Ray evidence.
+                </p>
+            </div>
+        </div>
+      )}
+
       {/* Top Cards: Scores */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-white/5 backdrop-blur-md p-6 rounded-2xl border border-white/10 flex flex-col items-center justify-center relative group overflow-hidden">

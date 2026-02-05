@@ -133,7 +133,8 @@ def x_ray_search(company_name: str, company_url: str = None):
     return {
         "score": int(score),
         "checklist": checklist,
-        "links": evidence_links
+        "links": evidence_links,
+        "is_simulated": False
     }
 
 def run_simulation_mode(company_name):
@@ -174,5 +175,6 @@ def run_simulation_mode(company_name):
     return {
         "score": int(score),
         "checklist": checklist,
-        "links": evidence_links
+        "links": evidence_links,
+        "is_simulated": True
     }
