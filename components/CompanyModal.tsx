@@ -1,3 +1,4 @@
+
 const { useState } = (window as any).React;
 const { X, RefreshCw, Calendar, Clock, Loader2: Loader2Icon } = (window as any).Lucide;
 
@@ -15,9 +16,11 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate }) => {
 
     try {
       // Send empty reportText to trigger backend Auto-Scrape
+      // CRITICAL UPDATE: We now send companyUrl if it exists in the saved data.
+      // This allows custom companies (not in the Top 100 list) to be re-scraped correctly.
       const payload = {
         companyName: company.companyName,
-        companyUrl: "", 
+        companyUrl: company.companyUrl || "", 
         reportText: "", 
         saveToDatabase: true
       };

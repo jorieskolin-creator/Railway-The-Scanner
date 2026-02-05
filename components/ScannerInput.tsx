@@ -1,5 +1,6 @@
+
 const { useState } = (window as any).React;
-const { Search, FileText, Globe, Zap } = (window as any).Lucide;
+const { Search, FileText, Globe, Zap, Link } = (window as any).Lucide;
 
 const ScannerInput = ({ onScan }) => {
   const [companyName, setCompanyName] = useState('');
@@ -8,23 +9,37 @@ const ScannerInput = ({ onScan }) => {
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (!companyName || !reportText) {
-      alert("Please provide at least a Company Name and some Narrative Text.");
+    
+    // VALIDATION LOGIC:
+    // 1. Company Name is always required.
+    // 2. We need EITHER a URL (to auto-scrape) OR Text (to analyze manually).
+    if (!companyName) {
+      alert("Company Name is required.");
       return;
     }
+
+    if (!companyUrl && !reportText) {
+      alert("Please provide EITHER a Domain URL (for auto-scanning) OR paste Narrative Text manually.");
+      return;
+    }
+
     onScan({ companyName, companyUrl, reportText });
   };
 
   const loadSampleData = () => {
     setCompanyName("Metsä Group");
     setCompanyUrl("https://www.metsagroup.com");
+    setReportText(""); // clear text to demonstrate auto-scrape if desired, or fill it
+    // For specific demo purposes, we can leave text empty to test auto-scrape
+    // or fill it to test manual. Let's fill it for the "Legacy" demo to ensure a specific result.
     setReportText("We are committed to functional silos and strict command chains. Our strategy focuses on cost-cutting and maintaining our legacy assets.");
   };
 
   const loadAdaptiveData = () => {
     setCompanyName("Wärtsilä Oyj");
     setCompanyUrl("https://www.wartsila.com");
-    setReportText(`We organize around Value Streams with Stream-aligned teams that have Distributed Authority. Our platform strategy leverages an API-First approach for the energy market.`);
+    // Leave empty to demonstrate Auto-Scrape capability
+    setReportText(""); 
   };
 
   return (
@@ -38,10 +53,10 @@ const ScannerInput = ({ onScan }) => {
         </div>
         <div className="flex gap-2 text-xs">
            <button type="button" onClick={loadSampleData} className="px-3 py-1.5 rounded bg-white/5 hover:bg-rose-500/10 hover:text-rose-300 border border-transparent hover:border-rose-500/30 transition-all text-slate-400 font-mono text-[10px]">
-            LOAD "LEGACY"
+            LOAD "LEGACY" (MANUAL TEXT)
           </button>
            <button type="button" onClick={loadAdaptiveData} className="px-3 py-1.5 rounded bg-white/5 hover:bg-emerald-500/10 hover:text-emerald-300 border border-transparent hover:border-emerald-500/30 transition-all text-slate-400 font-mono text-[10px]">
-            LOAD "ADAPTIVE"
+            LOAD "ADAPTIVE" (AUTO-SCAN)
           </button>
         </div>
       </div>
@@ -66,36 +81,48 @@ const ScannerInput = ({ onScan }) => {
           </div>
           
           <div className="space-y-2">
-            <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500">Domain URL</label>
-            <input
-              type="url"
-              value={companyUrl}
-              onChange={(e) => setCompanyUrl(e.target.value)}
-              placeholder="https://company.fi"
-              className="w-full px-4 py-3 bg-black/20 border border-white/10 rounded-lg text-white placeholder-slate-600 focus:ring-1 focus:ring-cyan-500/50 focus:border-cyan-500/50 outline-none transition-all font-medium text-sm"
-            />
+            <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500">Domain URL (Recommended)</label>
+            <div className="relative group">
+                <input
+                  type="url"
+                  value={companyUrl}
+                  onChange={(e) => setCompanyUrl(e.target.value)}
+                  placeholder="https://company.fi"
+                  className="w-full pl-10 pr-4 py-3 bg-black/20 border border-white/10 rounded-lg text-white placeholder-slate-600 focus:ring-1 focus:ring-cyan-500/50 focus:border-cyan-500/50 outline-none transition-all font-medium text-sm"
+                />
+                <div className="absolute left-3 top-3.5 text-slate-600 group-focus-within:text-cyan-400 transition-colors">
+                    <Link size={16} />
+                </div>
+            </div>
           </div>
         </div>
 
         <div className="space-y-2">
-          <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 flex justify-between">
+          <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 flex justify-between items-center">
             <span>Narrative Input (Intent)</span>
-            <span className="text-slate-600 font-normal normal-case tracking-normal">Paste Annual Report / Strategy Page</span>
+            {companyUrl ? (
+                <span className="text-emerald-400 font-normal normal-case tracking-normal flex items-center gap-1">
+                    <Zap size={10} /> Auto-Scrape Enabled (Leave empty to scan website)
+                </span>
+            ) : (
+                <span className="text-rose-400 font-normal normal-case tracking-normal">
+                    * Required if no URL provided
+                </span>
+            )}
           </label>
           <div className="relative group">
              <textarea
               value={reportText}
               onChange={(e) => setReportText(e.target.value)}
-              placeholder="Paste text here to analyze for 'Intent' keywords..."
-              className="w-full pl-10 pr-4 py-3 h-32 bg-black/20 border border-white/10 rounded-lg text-white placeholder-slate-600 focus:ring-1 focus:ring-cyan-500/50 focus:border-cyan-500/50 outline-none transition-all resize-none font-mono text-xs leading-relaxed custom-scrollbar"
-              required
+              placeholder={companyUrl ? "Leave empty to automatically scrape the homepage and Strategy pages..." : "Paste Annual Report, Strategy Text, or 'About Us' content here..."}
+              className={`w-full pl-10 pr-4 py-3 h-32 bg-black/20 border rounded-lg text-white placeholder-slate-600 focus:ring-1 focus:ring-cyan-500/50 focus:border-cyan-500/50 outline-none transition-all resize-none font-mono text-xs leading-relaxed custom-scrollbar ${companyUrl ? 'border-emerald-500/20' : 'border-white/10'}`}
             />
             <div className="absolute left-3 top-3.5 text-slate-600 group-focus-within:text-cyan-400 transition-colors">
               <FileText size={16} />
             </div>
           </div>
           <p className="text-[10px] text-slate-500 border-l-2 border-slate-700 pl-2">
-            Engine will parse for <span className="text-cyan-400 font-bold">300+ markers</span> across 6 dimensions of organizational design.
+            Scanner 1 will analyze this text (or scraped content) for <span className="text-cyan-400 font-bold">300+ markers</span> across 6 dimensions.
           </p>
         </div>
 

@@ -56,7 +56,7 @@ def scrape_homepage_text(url: str):
             return GENERIC_FALLBACK_TEXT
             
     except Exception as e:
-        print(f"  -> Scrape exception for {url}: {str(e)[:50]}... Using fallback.")
+        print(f"  -> Scrape exception for {url}: {str(e)[:50]}")
         return GENERIC_FALLBACK_TEXT
 
 def run_batch_seed(real_xray_mode=True):
@@ -78,7 +78,6 @@ def run_batch_seed(real_xray_mode=True):
         intent_results = analyze_intent(scraped_text)
         
         # 2. Scanner 2: Reality Check (Always Real)
-        # Only print details if we are actually scanning
         if real_xray_mode:
             print(f"   -> Running Live X-Ray Search for {company['name']}...")
         
@@ -91,10 +90,12 @@ def run_batch_seed(real_xray_mode=True):
         entry = {
             "id": str(uuid.uuid4()),
             "companyName": company["name"],
+            "companyUrl": company["url"], # SAVE THE URL PERSISTENTLY
             "intent_score": intent_results["score"],
             "reality_score": reality_results["score"],
             "reality_gap": gap,
             "intent_breakdown": intent_results["breakdown"],
+            "metrics": intent_results.get("metrics", {}),
             "reality_checklist": reality_results["checklist"],
             "evidence_links": reality_results["links"],
             "summary_text": f"Analysis for {company['name']}. Intent Score: {intent_results['score']}. Reality Score: {reality_results['score']}. Gap: {gap}.",
@@ -105,7 +106,6 @@ def run_batch_seed(real_xray_mode=True):
         dashboard_data.append(entry)
         
         # Small delay to ensure we don't hit aggressive rate limits on the site scraping side
-        # Google API handles QPS internally, but good citizenship for target sites.
         time.sleep(0.1)
 
     # 5. Save to Blob

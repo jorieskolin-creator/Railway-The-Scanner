@@ -139,18 +139,17 @@ async def run_scan(request: ScanRequest):
         # 1. AUTO-SCRAPE LOGIC
         # If reportText is empty (from Refresh button) or too short, we scrape the site.
         target_text = request.reportText
+        target_url = request.companyUrl
         
+        # If URL is missing, try to find it in the Top 100 list
+        if not target_url:
+            for c in TOP_100_COMPANIES:
+                if c['name'].lower() == request.companyName.lower():
+                    target_url = c['url']
+                    break
+
         if not target_text or len(target_text) < 100:
             print(f"Report text missing/short for {request.companyName}. Attempting to scrape...")
-            
-            # Try to find URL
-            target_url = request.companyUrl
-            if not target_url:
-                # Lookup in Top 100 List
-                for c in TOP_100_COMPANIES:
-                    if c['name'].lower() == request.companyName.lower():
-                        target_url = c['url']
-                        break
             
             if target_url:
                 print(f"Scraping {target_url}...")
@@ -162,7 +161,7 @@ async def run_scan(request: ScanRequest):
 
         # 2. Run Analysis
         intent_results = analyze_intent(target_text)
-        reality_results = x_ray_search(request.companyName, request.companyUrl)
+        reality_results = x_ray_search(request.companyName, target_url)
         gap = intent_results["score"] - reality_results["score"]
         
         # 3. AI Synthesis
@@ -201,11 +200,12 @@ async def run_scan(request: ScanRequest):
         result_data = {
             "id": result_id,
             "companyName": request.companyName,
+            "companyUrl": target_url, # SAVE THE URL PERSISTENTLY
             "intent_score": intent_results["score"],
             "reality_score": reality_results["score"],
             "reality_gap": gap,
             "intent_breakdown": intent_results["breakdown"],
-            "metrics": intent_results.get("metrics", {}), # Pass Friction/Vibrancy metrics
+            "metrics": intent_results.get("metrics", {}), # Pass Friction/Vibrancy
             "reality_checklist": reality_results["checklist"],
             "evidence_links": reality_results["links"],
             "summary_text": summary,

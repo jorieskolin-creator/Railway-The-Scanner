@@ -30,6 +30,7 @@ interface ScannerMetrics {
 interface AnalysisResult {
   id: string; 
   companyName: string;
+  companyUrl?: string; // Optional field for persistence
   intent_score: number;
   reality_score: number;
   reality_gap: number; 
