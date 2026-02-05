@@ -80,13 +80,7 @@ async def run_scan(request: ScanRequest):
         if api_key:
             try:
                 genai.configure(api_key=api_key)
-                # Use Gemini 3 Flash Preview for text tasks as per coding guidelines
-                try:
-                    model = genai.GenerativeModel('gemini-3-flash-preview')
-                except:
-                    # Fallback to 1.5 Pro if 3.0 is not yet available in the Python SDK region
-                    model = genai.GenerativeModel('gemini-1.5-pro')
-
+                
                 prompt = f"""
                 Analyze {request.companyName} (Finland Top 100 Context).
                 Intent Score: {intent_results["score"]}/100.
@@ -97,11 +91,27 @@ async def run_scan(request: ScanRequest):
                 Write a concise executive summary (max 3 sentences) diagnosing their adaptability.
                 Mention if they are "Silent Executors" or practicing "Theater".
                 """
-                ai_res = model.generate_content(prompt)
-                if ai_res.text:
-                    summary = ai_res.text
+
+                # Robust Model Selection Logic
+                try:
+                    # Attempt 1: Gemini 3 Flash Preview
+                    model = genai.GenerativeModel('gemini-3-flash-preview')
+                    ai_res = model.generate_content(prompt)
+                    if ai_res.text:
+                        summary = ai_res.text
+                except Exception as e:
+                    print(f"Gemini 3 Flash Preview unavailable ({str(e)}). Falling back to 1.5 Flash.")
+                    # Attempt 2: Gemini 1.5 Flash (Reliable Fallback)
+                    try:
+                        model = genai.GenerativeModel('gemini-1.5-flash')
+                        ai_res = model.generate_content(prompt)
+                        if ai_res.text:
+                            summary = ai_res.text
+                    except Exception as fallback_error:
+                         summary = f"AI Analysis failed: {str(fallback_error)}"
+
             except Exception as e:
-                print(f"Gemini Error: {e}")
+                print(f"Gemini Config Error: {e}")
                 summary = f"AI Analysis failed: {str(e)}"
 
         # 5. Construct Result Object
