@@ -5,9 +5,20 @@ if (!rootElement) {
   throw new Error("Could not find root element to mount to");
 }
 
-const { createRoot } = (window as any).ReactDOM;
-const { StrictMode } = window.React;
+const React = window.React;
+const ReactDOM = (window as any).ReactDOM;
+
+if (!ReactDOM) {
+    throw new Error("Global ReactDOM is undefined. Check index.html imports.");
+}
+
+const { createRoot } = ReactDOM;
+const { StrictMode } = React;
 const App = (window as any).App;
+
+if (!createRoot) {
+     throw new Error("createRoot is undefined in ReactDOM.");
+}
 
 const root = createRoot(rootElement);
 root.render(

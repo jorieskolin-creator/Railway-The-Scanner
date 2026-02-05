@@ -32,7 +32,6 @@
     
     <!-- Initialize Globals and Load App -->
     <script type="module">
-      // IMPORTS: Explicitly pin deps to ensure singleton React instance
       import React from 'https://esm.sh/react@18.2.0';
       import { createRoot } from 'https://esm.sh/react-dom@18.2.0/client?deps=react@18.2.0';
       import * as Lucide from 'https://esm.sh/lucide-react@0.344.0?deps=react@18.2.0';
@@ -46,7 +45,9 @@
       window.Recharts = Recharts;
       window.GoogleGenAI = GoogleGenAI;
 
-      console.log("Globals initialized. ReactDOM is:", window.ReactDOM);
+      // Debugging
+      console.log("React initialized:", !!window.React);
+      console.log("ReactDOM initialized:", !!window.ReactDOM);
 
       // 2. Define App Scripts in dependency order
       const scripts = [
@@ -86,8 +87,12 @@
         }
       }
 
-      // Start loading
-      loadScripts(scripts);
+      // Start loading only if dependencies are ready
+      if (window.ReactDOM && window.ReactDOM.createRoot) {
+          loadScripts(scripts);
+      } else {
+          console.error("Critical: ReactDOM not loaded properly. Aborting script loading.");
+      }
     </script>
 <script type="importmap">
 {
