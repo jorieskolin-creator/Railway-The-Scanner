@@ -1,5 +1,5 @@
 
-// Types are stripped by Babel, but Enums and Interfaces need to handle scope.
+// Types are stripped by Babel, but we need to ensure the runtime code (assignments) exists.
 
 interface ScannerInputData {
   companyName: string;
@@ -39,20 +39,25 @@ interface AnalysisResult {
 }
 
 // Attach Enums to window so they are available globally
-(window as any).Scanner1Category = {
-  OperatingModel: "Operating Model",
-  ServicePortfolio: "Service Portfolio",
-  Values: "Values",
-  Strategy: "Strategy",
-  BusinessModel: "Business Model",
-  AIReadiness: "AI Readiness"
-};
+// We use a simple object check to prevent overwriting if somehow loaded twice
+if (!(window as any).Scanner1Category) {
+    (window as any).Scanner1Category = {
+      OperatingModel: "Operating Model",
+      ServicePortfolio: "Service Portfolio",
+      Values: "Values",
+      Strategy: "Strategy",
+      BusinessModel: "Business Model",
+      AIReadiness: "AI Readiness"
+    };
+}
 
-(window as any).Scanner2Category = {
-  OperatingModel: "Operating Model",
-  ServicePortfolio: "Service Portfolio",
-  Values: "Values",
-  Strategy: "Strategy",
-  BusinessModel: "Business Model",
-  AIReadiness: "AI Readiness"
-};
+if (!(window as any).Scanner2Category) {
+    (window as any).Scanner2Category = {
+      OperatingModel: "Operating Model",
+      ServicePortfolio: "Service Portfolio",
+      Values: "Values",
+      Strategy: "Strategy",
+      BusinessModel: "Business Model",
+      AIReadiness: "AI Readiness"
+    };
+}

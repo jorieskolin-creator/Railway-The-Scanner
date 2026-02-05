@@ -38,11 +38,13 @@
       import * as Recharts from 'https://esm.sh/recharts@2.12.3?deps=react@18.2.0,react-dom@18.2.0';
       import { GoogleGenAI } from 'https://esm.sh/@google/genai';
 
-      // 1. Set Globals
+      // 1. Set Globals and Normalize Modules
       window.React = React;
       window.ReactDOM = { createRoot };
-      window.Lucide = Lucide;
-      window.Recharts = Recharts;
+      
+      // Handle ESM modules that might export via 'default' or named exports
+      window.Lucide = Lucide.default || Lucide;
+      window.Recharts = Recharts.default || Recharts;
       window.GoogleGenAI = GoogleGenAI;
       
       // Polyfill process.env for geminiService.ts
@@ -52,8 +54,8 @@
       console.log("Globals initialized:", {
         React: !!window.React,
         ReactDOM: !!window.ReactDOM,
-        Lucide: !!window.Lucide,
-        Recharts: !!window.Recharts,
+        LucideKeys: Object.keys(window.Lucide).length,
+        RechartsKeys: Object.keys(window.Recharts).length,
         GoogleGenAI: !!window.GoogleGenAI
       });
 
@@ -85,14 +87,13 @@
               filename: url,
             }).code;
 
-            // Execute in IIFE (Immediately Invoked Function Expression)
-            // We use string concatenation instead of template literals to avoid issues 
-            // if the source code contains backticks.
+            // Execute in IIFE using string concatenation
             const script = document.createElement('script');
-            script.textContent = "(function() { try { \n" + js + "\n } catch(e) { console.error('Error executing " + url + ":', e); window.LAST_ERROR = e; } })();";
+            script.textContent = "(function() { try { \n" + js + "\n } catch(e) { console.error('Error executing " + url + ":', e); window.LAST_ERROR = e; document.body.innerHTML += '<div style=\"color:red;padding:10px;background:rgba(0,0,0,0.8);position:fixed;top:0;left:0;z-index:9999\">Error in " + url + ": ' + e.message + '</div>'; } })();";
             document.body.appendChild(script);
           } catch (error) {
             console.error(`Error loading script ${url}:`, error);
+            document.body.innerHTML += `<div style="color:red;padding:10px;background:rgba(0,0,0,0.8);position:fixed;top:50px;left:0;z-index:9999">Failed to load ${url}: ${error.message}</div>`;
           }
         }
       }

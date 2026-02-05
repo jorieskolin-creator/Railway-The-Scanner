@@ -1,6 +1,15 @@
 
 // Access Enums from Global Window
-const { Scanner1Category, Scanner2Category } = (window as any);
+const Globals = (window as any);
+const Scanner1Category = Globals.Scanner1Category || {
+  OperatingModel: "Operating Model",
+  ServicePortfolio: "Service Portfolio",
+  Values: "Values",
+  Strategy: "Strategy",
+  BusinessModel: "Business Model",
+  AIReadiness: "AI Readiness"
+};
+const Scanner2Category = Globals.Scanner2Category || Scanner1Category;
 
 (window as any).INTENT_KEYWORDS = {
   [Scanner1Category.OperatingModel]: {
