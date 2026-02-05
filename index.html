@@ -3,9 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Adaptability Scanner</title>
+    <title>Adaptability Scanner | Forensic Suite</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <script type="importmap">
     {
       "imports": {
@@ -21,16 +21,19 @@
     <style>
       body {
         font-family: 'Inter', sans-serif;
-        background-color: #030712; /* gray-950 */
+        background-color: #1e1b4b; /* Indigo 950 - Lighter than Slate 950 */
         color: #f8fafc;
+        overflow-x: hidden;
       }
       
-      /* Subtle Grid Background */
-      .bg-grid-pattern {
-        background-image: linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-                          linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
-        background-size: 40px 40px;
-        mask-image: radial-gradient(ellipse at center, black 40%, transparent 80%);
+      /* Smooth ambient mesh gradient animation */
+      @keyframes pulse-glow {
+        0%, 100% { opacity: 0.6; transform: scale(1); }
+        50% { opacity: 0.9; transform: scale(1.15); }
+      }
+      
+      .animate-pulse-glow {
+        animation: pulse-glow 12s ease-in-out infinite;
       }
 
       /* Custom Scrollbar */
@@ -39,18 +42,19 @@
         height: 8px;
       }
       ::-webkit-scrollbar-track {
-        background: #0f172a; 
+        background: #1e1b4b; 
       }
       ::-webkit-scrollbar-thumb {
-        background: #334155; 
+        background: #4f46e5; 
         border-radius: 4px;
+        border: 2px solid #1e1b4b;
       }
       ::-webkit-scrollbar-thumb:hover {
-        background: #475569; 
+        background: #6366f1; 
       }
     </style>
   </head>
-  <body class="bg-[#030712] text-slate-100 antialiased selection:bg-indigo-500/30 selection:text-indigo-200">
+  <body class="bg-[#1e1b4b] text-slate-100 antialiased selection:bg-cyan-500/30 selection:text-cyan-200">
     <div id="root"></div>
   </body>
 </html>
