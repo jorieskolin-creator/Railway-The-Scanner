@@ -9,13 +9,16 @@ class BlobStorage:
         # DO NOT change this to your public bucket URL.
         self.api_url = "https://blob.vercel-storage.com"
         
-        # 1. Clean and load the Token
-        raw_token = os.environ.get("BLOB_READ_WRITE_TOKEN", "")
-        self.token = self._clean_env_var(raw_token)
+        # Initial load
+        self.token = self._load_token()
         
-        # 2. Clean and load the Public URL
+        # Clean and load the Public URL
         raw_url = os.environ.get("VITE_BLOB_URL") or os.environ.get("BLOB_URL") or ""
         self.public_base_url = self._clean_env_var(raw_url)
+
+    def _load_token(self):
+        raw_token = os.environ.get("BLOB_READ_WRITE_TOKEN", "")
+        return self._clean_env_var(raw_token)
 
     def _clean_env_var(self, value: str):
         """
@@ -39,6 +42,8 @@ class BlobStorage:
         return value.strip().strip('"').strip("'")
 
     def _get_headers(self):
+        # Ensure we always use the freshest token
+        self.token = self._load_token()
         return {
             "authorization": f"Bearer {self.token}",
             "x-api-version": "1"
@@ -48,6 +53,9 @@ class BlobStorage:
         """
         Uploads a JSON object to Vercel Blob.
         """
+        # Reload token to be sure
+        self.token = self._load_token()
+        
         if not self.token:
             print("CRITICAL: BLOB_READ_WRITE_TOKEN not set (or empty after cleaning). Upload skipped.")
             return None
@@ -78,6 +86,7 @@ class BlobStorage:
         Strategy 1: Ask Vercel API to list files and find the latest one.
         Strategy 2: If API fails, try downloading directly from VITE_BLOB_URL.
         """
+        self.token = self._load_token()
         
         # --- Strategy 1: API List ---
         if self.token:
@@ -127,6 +136,8 @@ class BlobStorage:
         Returns the raw list of files or error details for debugging.
         Checks both API access (Token) and Public URL access.
         """
+        self.token = self._load_token()
+        
         debug_info = {
             "config": {
                 "has_token": bool(self.token),

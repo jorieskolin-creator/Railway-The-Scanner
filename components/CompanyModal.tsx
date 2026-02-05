@@ -4,7 +4,6 @@ const { X, RefreshCw, Calendar, Clock, Loader2: Loader2Icon } = (window as any).
 
 // Components & Services from Window
 const CompanySummary = (window as any).CompanySummary;
-const { runMockScanner } = (window as any);
 
 const CompanyModal = ({ company, isOpen, onClose, onUpdate }) => {
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -35,22 +34,8 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate }) => {
       onUpdate(json.data);
       
     } catch (error) {
-      console.warn("Backend unavailable. Falling back to Simulation.", error);
-      try {
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        const mockResult = await runMockScanner({
-          companyName: company.companyName,
-          companyUrl: "",
-          reportText: "Simulation fallback text for refresh."
-        });
-        mockResult.id = company.id;
-        mockResult.lastUpdated = new Date().toISOString();
-        mockResult.summary_text = `(Simulated Refresh) ${mockResult.summary_text}`;
-        onUpdate(mockResult);
-        alert("Backend unreachable. Performed local simulation refresh.");
-      } catch (simError) {
-        alert("Failed to refresh analysis.");
-      }
+      console.error("Refresh Error:", error);
+      alert("Failed to connect to the backend scanner. Please check your connection.");
     } finally {
       setIsRefreshing(false);
     }

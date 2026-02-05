@@ -1,23 +1,23 @@
 
 const { useState, useEffect } = window.React;
-const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, Play, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock } = (window as any).Lucide;
+
+// Safely access Lucide icons to prevent destructuring errors
+const Lucide = (window as any).Lucide || {};
+const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, Play, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock, HardDrive, Terminal } = Lucide;
 
 // Components & Services from Window
 const TruthMatrix = (window as any).TruthMatrix;
 const ScannerInput = (window as any).ScannerInput;
 const CompanyModal = (window as any).CompanyModal;
-const { generateMockDashboardData, runMockScanner } = (window as any);
 
 // --- CONFIGURATION ---
-// SET THIS TO TRUE to create your database.
-// SET THIS TO FALSE when releasing to users (hides the Reset/Initialize buttons).
 const IS_ADMIN_MODE = true; 
 // ---------------------
 
 const App = () => {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [isMockData, setIsMockData] = useState(false);
+  const [connectionError, setConnectionError] = useState(null); 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCompany, setSelectedCompany] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -28,23 +28,26 @@ const App = () => {
   const [systemStatus, setSystemStatus] = useState({ online: false, storage: false, google: false, ai: false });
 
   // Check Backend Health & Config
+  const checkHealth = async () => {
+      try {
+          const res = await fetch('/api/health');
+          if (res.ok) {
+              const json = await res.json();
+              setSystemStatus({
+                  online: true,
+                  storage: json.config_status?.has_blob_token || false,
+                  google: json.config_status?.has_google_search_key || false,
+                  ai: json.config_status?.has_gemini_key || false
+              });
+              return json.config_status?.has_blob_token;
+          }
+      } catch (e) {
+          console.warn("Backend health check failed", e);
+      }
+      return false;
+  };
+
   useEffect(() => {
-    const checkHealth = async () => {
-        try {
-            const res = await fetch('/api/health');
-            if (res.ok) {
-                const json = await res.json();
-                setSystemStatus({
-                    online: true,
-                    storage: json.config_status?.has_blob_token || false,
-                    google: json.config_status?.has_google_search_key || false,
-                    ai: json.config_status?.has_gemini_key || false
-                });
-            }
-        } catch (e) {
-            console.warn("Backend health check failed", e);
-        }
-    };
     checkHealth();
   }, []);
 
@@ -52,36 +55,28 @@ const App = () => {
   const fetchRealData = async () => {
     try {
         setLoading(true);
+        setConnectionError(null);
         const response = await fetch('/dashboard-data');
         if (response.ok) {
             const json = await response.json();
-            if (Array.isArray(json) && json.length > 0) {
-                console.log("Loaded real data from backend:", json.length, "records");
-                setData(json);
-                setIsMockData(false);
-                setLoading(false);
-                return true;
-            }
+            // If json is empty array, that's fine (empty DB)
+            console.log("Loaded real data from backend:", json.length, "records");
+            setData(json);
+        } else {
+            throw new Error("Failed to fetch data");
         }
-        throw new Error("No data or empty data");
     } catch (e) {
-        console.warn("Could not load backend data, falling back to simulation.", e);
-        return false;
+        console.error("Connection failed:", e);
+        // We do NOT set connectionError here to prevent a banner on initial load.
+        // The empty state UI will handle the "no data" case.
+        setData([]); 
+    } finally {
+        setLoading(false);
     }
   };
 
   useEffect(() => {
-    const init = async () => {
-        const success = await fetchRealData();
-        if (!success) {
-            // Fallback to Mock Data
-            const mockData = generateMockDashboardData();
-            setData(mockData);
-            setIsMockData(true);
-            setLoading(false);
-        }
-    };
-    init();
+    fetchRealData();
   }, []);
 
   const handleRunScan = async (input) => {
@@ -89,29 +84,17 @@ const App = () => {
     const apiUrl = ""; 
 
     try {
-      let newResult;
-
-      try {
-        const response = await fetch(`${apiUrl}/scan`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...input, saveToDatabase: true })
-        });
-        
-        if (!response.ok) throw new Error("Scan failed");
-        const json = await response.json();
-        newResult = json.data;
-      } catch (apiError) {
-        console.warn("API failed, falling back to local simulation.", apiError);
-        await new Promise(r => setTimeout(r, 1500));
-        newResult = await runMockScanner(input);
-      }
+      const response = await fetch(`${apiUrl}/scan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...input, saveToDatabase: true })
+      });
+      
+      if (!response.ok) throw new Error("Scan failed");
+      const json = await response.json();
+      const newResult = json.data;
 
       setData(prev => {
-        if (isMockData) {
-            setIsMockData(false);
-            return [newResult];
-        }
         // Update existing or add new
         const existsIndex = prev.findIndex(p => p.companyName === newResult.companyName);
         if (existsIndex > -1) {
@@ -127,7 +110,7 @@ const App = () => {
       setIsModalOpen(true);
     } catch (error) {
       console.error(error);
-      alert("Error running scan.");
+      alert("Error running scan: Connection to backend failed.");
     } finally {
       setIsScanning(false);
     }
@@ -136,17 +119,26 @@ const App = () => {
   const handleBatchSeed = async () => {
     if (!IS_ADMIN_MODE) return;
     
-    if (!confirm("Regenerate database?\n\nThis will overwrite the current Vercel Blob database with fresh 'Intent' data and simulated 'Reality' data.")) return;
+    // Double check status before running
+    const hasStorage = await checkHealth();
+    
+    if (!hasStorage) {
+         if (!confirm("WARNING: The frontend thinks the Storage Token is missing. Force proceed?")) return;
+    } else {
+        if (!confirm("Refresh Database?\n\nThis will scrape the Top 100 Finnish companies, run X-Ray analysis, and update the Vercel Blob database.\n\nProcess runs in the background (~30 seconds).")) return;
+    }
+    
     setIsSeeding(true);
     try {
         const response = await fetch(`/admin/seed-finland-100`, { method: 'POST' });
         if (response.ok) {
-            alert("Database Generation Started!\n\nThe backend is now scraping 100 companies. This takes about 30 seconds.\n\nPress the Refresh button in the top right after ~30 seconds to see results.");
+            alert("✅ Database Refresh Started!\n\nThe server is now processing the Top 100 list.\n\nPlease wait ~30 seconds, then click the smaller 'Refresh Data' button to see results.");
         } else {
-            throw new Error("API Error");
+            throw new Error(`API returned error ${response.status}`);
         }
     } catch (e) {
-        alert("Could not connect to backend.");
+        alert("❌ Failed to contact backend.\n\nIs the Python server running?");
+        console.error(e);
     } finally {
         setIsSeeding(false);
     }
@@ -160,6 +152,7 @@ const App = () => {
   };
 
   const handleCompanyClick = (company) => {
+    if (!company) return;
     setSelectedCompany(company);
     setIsModalOpen(true);
   };
@@ -207,30 +200,20 @@ const App = () => {
               </h1>
               <span className="text-[10px] text-indigo-200 tracking-[0.15em] uppercase font-medium">Finland Top 100 Index</span>
             </div>
-            
-            {/* System Status Indicator */}
-            <div className="hidden md:flex items-center gap-2 ml-4 px-2 py-1 rounded-full bg-black/20 border border-white/5">
-                <div className={`flex items-center gap-1.5 text-[9px] uppercase font-bold ${systemStatus.storage ? 'text-emerald-400' : 'text-slate-500'}`}>
-                    <Database size={10} /> {systemStatus.storage ? 'DB Online' : 'DB Offline'}
-                </div>
-                <div className="w-px h-3 bg-white/10"></div>
-                <div className={`flex items-center gap-1.5 text-[9px] uppercase font-bold ${systemStatus.google ? 'text-cyan-400' : 'text-slate-500'}`}>
-                    <Search size={10} /> {systemStatus.google ? 'X-Ray Active' : 'X-Ray Sim'}
-                </div>
-            </div>
           </div>
           
           <div className="flex items-center gap-4 w-full max-w-md ml-4 justify-end">
             
-            {/* ADMIN BUTTONS - ONLY SHOW IF IS_ADMIN_MODE IS TRUE */}
-            {IS_ADMIN_MODE && systemStatus.storage && (
+            {/* ADMIN BUTTONS */}
+            {IS_ADMIN_MODE && (
                 <button 
                     onClick={handleBatchSeed}
                     disabled={isSeeding}
-                    title="Admin: Reset & Regenerate Database"
-                    className="p-2 bg-rose-500/10 hover:bg-rose-500/30 rounded-full text-rose-400 hover:text-rose-200 transition-all border border-rose-500/20"
+                    title="Run Top 100 Scrape"
+                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-lg transition-all shadow-lg shadow-indigo-500/20 border border-indigo-400/20"
                 >
-                    {isSeeding ? <Loader2 size={14} className="animate-spin" /> : <RotateCcw size={14} />}
+                    {isSeeding ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
+                    {isSeeding ? "REFRESHING..." : "REFRESH DATABASE"}
                 </button>
             )}
 
@@ -265,46 +248,17 @@ const App = () => {
             )}
           </div>
         </div>
-        
-        {/* Connection Warning Banner */}
-        {(!systemStatus.online || !systemStatus.storage) && !loading && (
-          <div className="w-full bg-amber-900/40 border-b border-amber-500/20 backdrop-blur-sm">
-             <div className="max-w-7xl mx-auto px-4 py-1.5 flex items-center justify-between">
-                <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider font-mono text-amber-200">
-                    <AlertTriangle size={12} className="text-amber-400" />
-                    <span>Database Not Connected - Using Simulation Mode</span>
-                </div>
-             </div>
-          </div>
-        )}
-
-        {/* Empty State Banner - Shows if DB is empty. Only Admins can initialize. */}
-        {systemStatus.storage && (data.length === 0 || isMockData) && !loading && (
-          <div className="w-full bg-indigo-900/40 border-b border-indigo-500/20 backdrop-blur-sm">
-             <div className="max-w-7xl mx-auto px-4 py-1.5 flex items-center justify-between">
-                <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider font-mono text-indigo-200">
-                    <Cloud size={12} className="text-indigo-400" />
-                    <span>{isMockData ? "Database Empty (Showing Demo Data)" : "Database Empty"}</span>
-                </div>
-                
-                {IS_ADMIN_MODE ? (
-                    <button 
-                        onClick={handleBatchSeed}
-                        disabled={isSeeding}
-                        className="flex items-center gap-2 px-3 py-1 bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-300 text-[10px] font-bold uppercase rounded border border-cyan-500/50 transition-all"
-                    >
-                        {isSeeding ? <Loader2 size={10} className="animate-spin" /> : <Play size={10} fill="currentColor" />}
-                        Initialize Database
-                    </button>
-                ) : (
-                    <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider font-bold text-slate-400">
-                        <Lock size={10} /> Database Locked
-                    </div>
-                )}
-             </div>
-          </div>
-        )}
       </header>
+
+      {/* ERROR BANNER - Only shown if connectionError state is explicitly set (e.g. after a user action fails) */}
+      {connectionError && (
+        <div className="w-full bg-rose-500/20 border-b border-rose-500/30 backdrop-blur-sm">
+             <div className="max-w-7xl mx-auto px-4 py-2 flex items-center justify-center gap-2 text-rose-200 text-xs font-medium">
+                 <AlertTriangle size={14} />
+                 <span>{connectionError}</span>
+             </div>
+        </div>
+      )}
 
       <main className="flex-grow py-8 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full space-y-8 z-10 relative">
         <section className="space-y-4">
@@ -312,17 +266,18 @@ const App = () => {
             <h2 className="text-xl font-bold text-white flex items-center gap-2 tracking-tight">
               <Sparkles className="text-cyan-300 w-4 h-4" /> Market Landscape (Finland)
             </h2>
-            <div className="flex gap-2">
-                 {["Helsinki Stock Exchange", "Turnover > 500M"].map(tag => (
-                   <div key={tag} className="px-2 py-1 rounded bg-[#0f172a]/50 border border-indigo-500/20 text-[9px] uppercase font-bold text-indigo-300 flex items-center gap-1">
-                     <Shield size={8} /> {tag}
-                   </div>
-                 ))}
-              </div>
           </div>
           {loading ? (
              <div className="h-[400px] w-full bg-[#0f172a]/60 rounded-2xl border border-white/10 backdrop-blur-md flex items-center justify-center">
                 <Loader2 className="animate-spin text-cyan-400" size={32} />
+             </div>
+          ) : data.length === 0 ? (
+             <div className="h-[250px] w-full bg-[#0f172a]/60 rounded-2xl border border-white/10 backdrop-blur-md flex flex-col items-center justify-center text-slate-400 space-y-4">
+                 <Database size={48} className="opacity-20" />
+                 <p className="text-sm">Database is empty or unreachable.</p>
+                 <button onClick={handleBatchSeed} className="text-indigo-400 hover:text-indigo-300 text-xs underline">
+                    Run Initial Database Refresh
+                 </button>
              </div>
           ) : (
              <div className="bg-[#0f172a]/60 border border-white/10 rounded-2xl p-1 shadow-2xl backdrop-blur-xl">
@@ -372,6 +327,13 @@ const App = () => {
                         <td className="px-6 py-4"></td>
                       </tr>
                     ))
+                  ) : sortedData.length === 0 ? (
+                      <tr>
+                          <td colSpan={6} className="px-6 py-12 text-center text-slate-500">
+                              {/* Silent error if no connection, just show text */}
+                              No entities found. (Check connection or refresh database)
+                          </td>
+                      </tr>
                   ) : sortedData.map((row) => (
                     <tr key={row.id} className="hover:bg-white/5 transition-colors group">
                       <td className="px-6 py-4 font-medium text-slate-100 group-hover:text-white transition-colors">{row.companyName}</td>
@@ -440,7 +402,7 @@ const App = () => {
                    <div className="space-y-2 mt-4 text-left border-l-2 border-slate-700 pl-4 py-1">
                     <p className="text-xs text-cyan-400 font-mono animate-pulse">>> Parsing Narrative Vectors</p>
                     <p className="text-xs text-emerald-400 font-mono animate-pulse delay-75">
-                        {systemStatus.google ? '>> Interrogating Global Grid (X-Ray API)' : '>> Interrogating Reality (Simulating X-Ray)'}
+                        {systemStatus.google ? '>> Interrogating Global Grid (X-Ray API)' : '>> Interrogating Reality'}
                     </p>
                    </div>
                  </div>

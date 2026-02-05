@@ -6,11 +6,10 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 from finland_list import TOP_100_COMPANIES
 from scanner_one import analyze_intent
-from scanner_two import x_ray_search, run_simulation_mode
+from scanner_two import x_ray_search
 from storage import BlobStorage
 
 # Fallback text to ensure we never get a 0 Intent Score if scraping is blocked.
-# This contains a mix of "Good" keywords to simulate a standard modern corporate site.
 GENERIC_FALLBACK_TEXT = """
 We are a leading organization focused on Value Creation and sustainable Growth. 
 Our Strategy drives Digital Transformation across our Ecosystem. 
@@ -59,14 +58,13 @@ def scrape_homepage_text(url: str):
         print(f"  -> Scrape exception for {url}: {str(e)[:50]}... Using fallback.")
         return GENERIC_FALLBACK_TEXT
 
-def run_batch_seed(real_xray_mode=False):
+def run_batch_seed(real_xray_mode=True):
     """
     Iterates through the Top 100 list.
-    real_xray_mode: If True, uses Google API (Costs $$). If False, uses Simulation for Reality check.
-    Note: Scanner 1 (Intent) ALWAYS attempts real scraping (with fallback).
+    We default real_xray_mode to True (or whatever is passed), but since we removed simulation logic,
+    the 'x_ray_search' function will just return 0 if keys are missing.
     """
     print(f"Starting Batch Seed for {len(TOP_100_COMPANIES)} companies...")
-    print(f"X-Ray Mode: {'REAL API' if real_xray_mode else 'SIMULATION'}")
     
     storage = BlobStorage()
     dashboard_data = []
@@ -78,13 +76,8 @@ def run_batch_seed(real_xray_mode=False):
         scraped_text = scrape_homepage_text(company['url'])
         intent_results = analyze_intent(scraped_text)
         
-        # 2. Scanner 2: Reality Check
-        if real_xray_mode:
-            reality_results = x_ray_search(company['name'], company['url'])
-        else:
-            # Use simulation for batch to save API quota, but based on company name
-            # This generates realistic but fake "Reality" data
-            reality_results = run_simulation_mode(company['name'])
+        # 2. Scanner 2: Reality Check (Strict X-Ray or 0)
+        reality_results = x_ray_search(company['name'], company['url'])
             
         # 3. Calculate Gap
         gap = intent_results["score"] - reality_results["score"]
@@ -99,9 +92,9 @@ def run_batch_seed(real_xray_mode=False):
             "intent_breakdown": intent_results["breakdown"],
             "reality_checklist": reality_results["checklist"],
             "evidence_links": reality_results["links"],
-            "summary_text": f"Batch analysis completed for {company['name']}. Intent derived from public web presence. Reality index calculated via {'X-Ray' if real_xray_mode else 'Model Projection'}.",
+            "summary_text": f"Batch analysis completed for {company['name']}. Intent derived from public web presence. Reality index calculated via X-Ray Search.",
             "lastUpdated": datetime.utcnow().isoformat(),
-            "is_simulated": not real_xray_mode
+            "is_simulated": False
         }
         
         dashboard_data.append(entry)

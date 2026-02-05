@@ -1,9 +1,7 @@
 
 import os
 import requests
-import random
 import re
-import hashlib
 from urllib.parse import urlparse
 
 # REFINED QUERIES FOR FINNISH MARKET INTELLIGENCE
@@ -73,11 +71,16 @@ def x_ray_search(company_name: str, company_url: str = None):
     total_checks = 0
     passed_checks = 0
     
-    # Fallback to Simulation Mode if keys are missing
+    # If keys are missing, we DO NOT simulate. We return 0.
     if not api_key or not cx_id:
         print("Warning: Google API credentials (GOOGLE_API_KEY, CX_ENGINE_ID) missing.")
-        print("Running in SIMULATION MODE for Reality Scanner.")
-        return run_simulation_mode(company_name)
+        # Return empty/zero result.
+        return {
+            "score": 0,
+            "checklist": [],
+            "links": [{"title": "Scanner Configuration Error", "url": "#", "source": "API Keys Missing"}],
+            "is_simulated": False
+        }
 
     for category, query_list in QUERIES.items():
         for item in query_list:
@@ -97,14 +100,8 @@ def x_ray_search(company_name: str, company_url: str = None):
             try:
                 res = requests.get(url)
                 
-                # CRITICAL UPDATE: Check specific status codes
-                # If 429 (Quota) or 403 (Permission), abort real scan to avoid crashing or false zeros
-                if res.status_code in [403, 429]:
-                    print(f"Google API Error {res.status_code}. Quota exceeded or billing disabled. Switching to Simulation.")
-                    return run_simulation_mode(company_name)
-                
+                # If 429 (Quota) or 403 (Permission), we assume failure for this specific check, not whole system crash
                 if res.status_code != 200:
-                    # Other errors (500, etc), just log and count as not found
                     print(f"Search API Error {res.status_code} for {intent_label}")
                     checklist.append({"category": category, "query": intent_label, "found": False})
                     continue
@@ -147,56 +144,5 @@ def x_ray_search(company_name: str, company_url: str = None):
         "score": int(score),
         "checklist": checklist,
         "links": evidence_links,
-        "is_simulated": False # We ran the real API, so this is REAL data, even if score is 0.
-    }
-
-def run_simulation_mode(company_name):
-    """
-    Generates deterministic simulation data based on company name.
-    """
-    checklist = []
-    evidence_links = []
-    total_checks = 0
-    passed_checks = 0
-
-    print(f"Simulating reality check for {company_name}...")
-    
-    # Use Company Name to seed the random number generator
-    seed_val = int(hashlib.sha256(company_name.encode('utf-8')).hexdigest(), 16) % 10**8
-    rng = random.Random(seed_val)
-
-    for category, query_list in QUERIES.items():
-        for item in query_list:
-            total_checks += 1
-            # Randomly "find" evidence to create score variance
-            found = rng.choice([True, False, True, False, True]) 
-            
-            checklist.append({
-                "category": category,
-                "query": item['intent'],
-                "found": found
-            })
-
-            if found:
-                passed_checks += 1
-                mock_source = "Google Search"
-                domains = re.findall(r'site:([\w\.]+)', item['q'])
-                if domains:
-                    mock_source = rng.choice(domains)
-                
-                evidence_links.append({
-                    "title": f"{item['intent']} found for {company_name}",
-                    "url": "#",
-                    "source": mock_source 
-                })
-
-    score = 0
-    if total_checks > 0:
-        score = (passed_checks / total_checks) * 100
-        
-    return {
-        "score": int(score),
-        "checklist": checklist,
-        "links": evidence_links,
-        "is_simulated": True
+        "is_simulated": False
     }
