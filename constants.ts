@@ -1,7 +1,7 @@
 
-import { Scanner1Category, Scanner2Category } from './types';
+import { Scanner1Category, Scanner2Category } from './types.ts';
 
-// SCANNER 1: Narrative/Intent Keywords (Full 25/25 List from PDF)
+// SCANNER 1: Narrative/Intent Keywords
 export const INTENT_KEYWORDS: Record<Scanner1Category, { good: string[], bad: string[] }> = {
   [Scanner1Category.OperatingModel]: {
     good: [
@@ -101,42 +101,42 @@ export const INTENT_KEYWORDS: Record<Scanner1Category, { good: string[], bad: st
   }
 };
 
-// SCANNER 2: Evidence/Reality Queries (Aligned with PDF X-Ray Logic)
+// SCANNER 2: Evidence/Reality Queries
 export const REALITY_QUERIES: Record<Scanner2Category, string[]> = {
   [Scanner2Category.OperatingModel]: [
-    '("Scrum Master" OR "Product Owner" OR "Agile Coach")', // Job Titles (Agile)
-    '("P&L responsibility" AND "team level")', // Micro-Enterprise Test
-    '"Stream-aligned" OR "end-to-end ownership"', // Stream-Aligned Test
-    '"Platform Product Manager" OR "Golden Path"' // Platform Test
+    '("Scrum Master" OR "Product Owner" OR "Agile Coach")', 
+    '("P&L responsibility" AND "team level")', 
+    '"Stream-aligned" OR "end-to-end ownership"', 
+    '"Platform Product Manager" OR "Golden Path"'
   ],
   [Scanner2Category.ServicePortfolio]: [
-    '"ARR" OR "Recurring Revenue" OR "SaaS"', // Modern Revenue
-    '"API Documentation" OR "Developer Portal"', // Platform Indicator
-    '"Subscription" OR "License"', // Pricing Model
-    '"Financial Results" AND "Segment Reporting"' // Revenue breakdown
+    '"ARR" OR "Recurring Revenue" OR "SaaS"', 
+    '"API Documentation" OR "Developer Portal"', 
+    '"Subscription" OR "License"', 
+    '"Financial Results" AND "Segment Reporting"'
   ],
   [Scanner2Category.Values]: [
-    '"Micromanagement" OR "Surveillance"', // Trust Test (Negative)
-    '"Unlimited PTO" OR "Remote First"', // Trust Test (Positive)
-    '"Post-mortem" OR "Learning from failure"', // Psych Safety
-    '"Whistleblower" OR "Code of Conduct"' // Governance
+    '"Micromanagement" OR "Surveillance"', 
+    '"Unlimited PTO" OR "Remote First"', 
+    '"Post-mortem" OR "Learning from failure"', 
+    '"Whistleblower" OR "Code of Conduct"'
   ],
   [Scanner2Category.Strategy]: [
-    '"Strategy 2025" OR "Vision 2030"', // Future focus
-    '"Acquisition" OR "Divestment"', // Action
-    '"Digital Transformation" OR "AI" AND "Revenue"', // Value Narrative
-    '"Budget Variance" OR "Compliance"' // Budget Test (Negative)
+    '"Strategy 2025" OR "Vision 2030"', 
+    '"Acquisition" OR "Divestment"', 
+    '"Digital Transformation" OR "AI" AND "Revenue"', 
+    '"Budget Variance" OR "Compliance"'
   ],
   [Scanner2Category.BusinessModel]: [
-    '"App Store" OR "Marketplace"', // Ecosystem
-    '"Freemium" OR "Usage-based"', // Modern Pricing
-    '"API Key" OR "SDK"', // Tech Platform
-    '"Partner Program" OR "Ecosystem"' // Network Effects
+    '"App Store" OR "Marketplace"', 
+    '"Freemium" OR "Usage-based"', 
+    '"API Key" OR "SDK"', 
+    '"Partner Program" OR "Ecosystem"'
   ],
   [Scanner2Category.AIReadiness]: [
-    '"Azure" OR "AWS" OR "Google Cloud"', // Cloud Foundation
-    '"Data Mesh" OR "Data Product Owner"', // Data Arch
-    '"Python" OR "Machine Learning" OR "LLM"', // Tech Skills
-    '"Tech Radar" OR "Engineering Blog"' // Engineering Culture
+    '"Azure" OR "AWS" OR "Google Cloud"', 
+    '"Data Mesh" OR "Data Product Owner"', 
+    '"Python" OR "Machine Learning" OR "LLM"', 
+    '"Tech Radar" OR "Engineering Blog"'
   ]
 };

@@ -1,47 +1,32 @@
 
-import { AnalysisResult, ScannerInputData, ScannerCategoryScore, Scanner1Category, Scanner2Category } from '../types';
-import { INTENT_KEYWORDS, REALITY_QUERIES } from '../constants';
+import { AnalysisResult, ScannerInputData, ScannerCategoryScore, Scanner1Category, Scanner2Category } from '../types.ts';
+import { INTENT_KEYWORDS, REALITY_QUERIES } from '../constants.ts';
 
-/**
- * Simulates Scanner 1: Keyword counting in text
- */
 const runScannerOne = (text: string): { score: number, breakdown: ScannerCategoryScore[] } => {
   const breakdown: ScannerCategoryScore[] = [];
-  
-  // PDF Thresholds
   const GOOD_THRESHOLD = 3;
   const BAD_THRESHOLD = 1;
 
-  // Process each category
   (Object.keys(INTENT_KEYWORDS) as Scanner1Category[]).forEach(category => {
     const { good, bad } = INTENT_KEYWORDS[category];
-    
     let uniqueGoodFound = 0;
     let uniqueBadFound = 0;
-
     const lowerText = text.toLowerCase();
 
     good.forEach(word => {
-      // Escape special characters for regex
       const escapedWord = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); 
       const count = (lowerText.match(new RegExp(`\\b${escapedWord.toLowerCase()}\\b`, "g")) || []).length;
-      if (count >= GOOD_THRESHOLD) {
-        uniqueGoodFound++;
-      }
+      if (count >= GOOD_THRESHOLD) uniqueGoodFound++;
     });
 
     bad.forEach(word => {
       const escapedWord = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const count = (lowerText.match(new RegExp(`\\b${escapedWord.toLowerCase()}\\b`, "g")) || []).length;
-      if (count >= BAD_THRESHOLD) {
-        uniqueBadFound++;
-      }
+      if (count >= BAD_THRESHOLD) uniqueBadFound++;
     });
 
-    // Net Modernization Score Logic: (Good Matches - Bad Matches) / 25
     const netResult = uniqueGoodFound - uniqueBadFound;
     let catScore = 0;
-    
     if (netResult > 0) {
         catScore = (netResult / 25) * 100;
         if (catScore > 100) catScore = 100;
@@ -55,7 +40,6 @@ const runScannerOne = (text: string): { score: number, breakdown: ScannerCategor
     });
   });
 
-  // Global score is average of category scores
   const totalScore = breakdown.reduce((acc, curr) => acc + curr.score, 0);
   const globalScore = totalScore / breakdown.length;
 
@@ -65,9 +49,6 @@ const runScannerOne = (text: string): { score: number, breakdown: ScannerCategor
   };
 };
 
-/**
- * Simulates Scanner 2: Google Search X-Ray
- */
 const runScannerTwo = async (companyName: string): Promise<{ score: number, checklist: any[], links: any[] }> => {
   const checklist: { category: string; found: boolean; query: string }[] = [];
   const links: { title: string; url: string; source: string }[] = [];
@@ -79,7 +60,6 @@ const runScannerTwo = async (companyName: string): Promise<{ score: number, chec
     const queries = REALITY_QUERIES[category];
     queries.forEach((query, index) => {
       totalChecks++;
-      
       const isSimulatedHit = Math.random() > 0.4; 
 
       checklist.push({
@@ -126,9 +106,6 @@ export const runMockScanner = async (input: ScannerInputData): Promise<AnalysisR
   };
 };
 
-/**
- * FINLAND TOP 100 DATASET (Turnover based)
- */
 const FINNISH_COMPANIES = [
   "Nokia Oyj", "Neste Oyj", "Kone Oyj", "UPM-Kymmene Oyj", "Stora Enso Oyj",
   "Kesko Oyj", "Sampo Oyj", "Fortum Oyj", "Metso Oyj", "Wärtsilä Oyj",
@@ -140,23 +117,19 @@ const FINNISH_COMPANIES = [
 
 export const generateMockDashboardData = (): AnalysisResult[] => {
   return FINNISH_COMPANIES.map((name, idx) => {
-    // Randomize scores to fill quadrants based on company archetype stereotypes (Simulated)
     let intent = Math.floor(Math.random() * 60) + 20; 
     let reality = Math.floor(Math.random() * 60) + 20;
     
-    // Tech/Modern Bias (Nokia, Elisa, Tietoevry, Rovio)
     if (["Nokia Oyj", "Elisa Oyj", "Tietoevry Oyj", "Rovio Entertainment", "Vaisala Oyj"].includes(name)) {
-        intent = Math.floor(Math.random() * 30) + 60; // 60-90
-        reality = Math.floor(Math.random() * 30) + 60; // 60-90
+        intent = Math.floor(Math.random() * 30) + 60;
+        reality = Math.floor(Math.random() * 30) + 60;
     }
 
-    // Heavy Industry Bias (Stora Enso, UPM, Outokumpu) - Often High Intent (Sustainability), Lower Agility Reality
     if (["Stora Enso Oyj", "UPM-Kymmene Oyj", "Outokumpu Oyj", "Neste Oyj"].includes(name)) {
-        intent = Math.floor(Math.random() * 20) + 70; // High Intent
-        reality = Math.floor(Math.random() * 40) + 30; // Mixed Reality
+        intent = Math.floor(Math.random() * 20) + 70;
+        reality = Math.floor(Math.random() * 40) + 30;
     }
     
-    // Traditional/Retail Bias (Kesko, Tokmanni)
     if (["Kesko Oyj", "Tokmanni Group", "Olvi Oyj"].includes(name)) {
         intent = Math.floor(Math.random() * 40) + 30;
         reality = Math.floor(Math.random() * 40) + 30;

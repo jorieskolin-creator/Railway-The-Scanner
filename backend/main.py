@@ -1,6 +1,8 @@
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional, List
 import os
@@ -13,14 +15,12 @@ import google.generativeai as genai
 from scanner_one import analyze_intent
 from scanner_two import x_ray_search
 from storage import BlobStorage
-from seed_manager import run_batch_seed # Import the batch processor
+from seed_manager import run_batch_seed
 
-# Explicit startup log
 print("Starting Adaptability Scanner Backend...", flush=True)
 
 app = FastAPI()
 
-# Enable CORS for Vercel Frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
@@ -32,55 +32,60 @@ app.add_middleware(
 storage = BlobStorage()
 BLOB_FILENAME = "dashboard_data.json"
 
+# --- STATIC FILE SERVING FOR FRONTEND ---
+# Serve specific directories for React components and logic
+app.mount("/components", StaticFiles(directory="../components"), name="components")
+app.mount("/services", StaticFiles(directory="../services"), name="services")
+
+# Serve individual source files required by the browser
+@app.get("/App.tsx")
+async def get_app_tsx(): return FileResponse("../App.tsx")
+
+@app.get("/index.tsx")
+async def get_index_tsx(): return FileResponse("../index.tsx")
+
+@app.get("/types.ts")
+async def get_types_ts(): return FileResponse("../types.ts")
+
+@app.get("/constants.ts")
+async def get_constants_ts(): return FileResponse("../constants.ts")
+
+# Serve the main HTML entry point at root
+@app.get("/")
+async def read_root():
+    return FileResponse("../index.html")
+
+# Move the API Status check to a dedicated endpoint
+@app.get("/api/health")
+def health_check():
+    return {"status": "Adaptability Scanner API Online", "timestamp": datetime.utcnow().isoformat()}
+
+# --- API ROUTES ---
+
 class ScanRequest(BaseModel):
     companyName: str
     companyUrl: Optional[str] = None
     reportText: str
-    saveToDatabase: Optional[bool] = False # Flag to trigger Blob persistence
-
-@app.get("/")
-def read_root():
-    # This route satisfies the Railway Healthcheck when path is set to "/"
-    return {"status": "Adaptability Scanner API Online"}
-
-@app.get("/health")
-def health_check():
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+    saveToDatabase: Optional[bool] = False
 
 @app.post("/admin/seed-finland-100")
 async def seed_database(background_tasks: BackgroundTasks):
-    """
-    Triggers the batch processing of the Top 100 list.
-    Runs in background to prevent timeout.
-    """
-    # Check if a secret key is provided to prevent public abuse (Optional, simplified here)
-    # In production, check for a header like 'X-Admin-Key'
-    
-    background_tasks.add_task(run_batch_seed, real_xray_mode=False) # Default to Sim X-Ray to save money
-    return {"status": "Batch Seeding Initiated", "message": "Processing Finland Top 100 in background. Check Blob Storage in ~2 minutes."}
+    background_tasks.add_task(run_batch_seed, real_xray_mode=False)
+    return {"status": "Batch Seeding Initiated", "message": "Processing Finland Top 100 in background."}
 
 @app.post("/scan")
 async def run_scan(request: ScanRequest):
     try:
-        # 1. Run Scanner 1 (Intent)
         intent_results = analyze_intent(request.reportText)
-        
-        # 2. Run Scanner 2 (Reality) - This is the "Live" check
-        # Updated to pass the company URL for domain-specific X-Ray
         reality_results = x_ray_search(request.companyName, request.companyUrl)
-        
-        # 3. Calculate Gap
         gap = intent_results["score"] - reality_results["score"]
         
-        # 4. Generate AI Summary using Gemini
         summary = "AI Summary Unavailable (Config Error)"
-        # Use API_KEY as per standard guidelines, fallback to GEMINI_API_KEY if needed
         api_key = os.environ.get("API_KEY") or os.environ.get("GEMINI_API_KEY")
         
         if api_key:
             try:
                 genai.configure(api_key=api_key)
-                
                 prompt = f"""
                 Analyze {request.companyName} (Finland Top 100 Context).
                 Intent Score: {intent_results["score"]}/100.
@@ -91,30 +96,23 @@ async def run_scan(request: ScanRequest):
                 Write a concise executive summary (max 3 sentences) diagnosing their adaptability.
                 Mention if they are "Silent Executors" or practicing "Theater".
                 """
-
-                # Robust Model Selection Logic
                 try:
-                    # Attempt 1: Gemini 3 Flash Preview
                     model = genai.GenerativeModel('gemini-3-flash-preview')
                     ai_res = model.generate_content(prompt)
-                    if ai_res.text:
-                        summary = ai_res.text
+                    if ai_res.text: summary = ai_res.text
                 except Exception as e:
-                    print(f"Gemini 3 Flash Preview unavailable ({str(e)}). Falling back to 1.5 Flash.")
-                    # Attempt 2: Gemini 1.5 Flash (Reliable Fallback)
+                    print(f"Gemini 3 Flash unavailable. Fallback to 1.5 Flash. Error: {e}")
                     try:
                         model = genai.GenerativeModel('gemini-1.5-flash')
                         ai_res = model.generate_content(prompt)
-                        if ai_res.text:
-                            summary = ai_res.text
-                    except Exception as fallback_error:
-                         summary = f"AI Analysis failed: {str(fallback_error)}"
+                        if ai_res.text: summary = ai_res.text
+                    except Exception as fb_err:
+                         summary = f"AI Analysis failed: {str(fb_err)}"
 
             except Exception as e:
-                print(f"Gemini Config Error: {e}")
+                print(f"Gemini Error: {e}")
                 summary = f"AI Analysis failed: {str(e)}"
 
-        # 5. Construct Result Object
         new_timestamp = datetime.utcnow().isoformat()
         result_id = str(uuid.uuid4())
         
@@ -132,50 +130,20 @@ async def run_scan(request: ScanRequest):
             "is_simulated": reality_results.get("is_simulated", False)
         }
         
-        # 6. Persistence Logic (The "Refresh Database" Feature)
         if request.saveToDatabase:
-            print(f"Persisting update for {request.companyName} to Blob...")
+            print(f"Persisting update for {request.companyName}...")
             try:
-                # A. Get current master list
                 current_db = []
                 blob_url = os.environ.get("VITE_BLOB_URL") 
-                
-                if not blob_url:
-                    print("CRITICAL ERROR: VITE_BLOB_URL is missing in Railway Variables.")
-                else:
-                    # Fix URL if user forgot filename
+                if blob_url:
                     if not blob_url.endswith("json"):
-                         if blob_url.endswith("/"):
-                             blob_url = f"{blob_url}{BLOB_FILENAME}"
-                         else:
-                             blob_url = f"{blob_url}/{BLOB_FILENAME}"
-
+                         blob_url = f"{blob_url}{BLOB_FILENAME}" if blob_url.endswith("/") else f"{blob_url}/{BLOB_FILENAME}"
                     try:
-                        print(f"Fetching current DB from: {blob_url}")
                         r = requests.get(blob_url)
-                        
-                        if r.status_code == 200:
-                            current_db = r.json()
-                        elif r.status_code == 404:
-                            # CRITICAL FIX: Handle empty database (first run)
-                            print(f"DATABASE INITIALIZATION: {BLOB_FILENAME} not found. Creating for the first time.")
-                            current_db = [] 
-                        else:
-                            print(f"Failed to fetch existing DB. Status: {r.status_code}")
-                            # SAFETY CHECK: If status is not 404 and not 200, do not overwrite.
-                            # We abort the save to prevent data loss.
-                            raise Exception(f"Aborting Save: Cannot confirm existing DB state (Status {r.status_code})")
-                            
-                    except Exception as fetch_err:
-                        print(f"Could not fetch existing DB (Network Error): {fetch_err}")
-                        if "Aborting Save" in str(fetch_err):
-                             raise fetch_err
-                        # Only default to empty if it was a connection error on FIRST run logic, otherwise safer to crash than overwrite
-                        # For this prototype, we will allow overwrite on connection error if we assume it's first run.
-                        # But 404 is the explicit "Empty" signal.
-                        # current_db = [] 
+                        if r.status_code == 200: current_db = r.json()
+                        elif r.status_code == 404: current_db = [] 
+                    except Exception: pass 
 
-                # B. Update or Append
                 index = -1
                 for i, item in enumerate(current_db):
                     if item.get("companyName", "").lower() == request.companyName.lower():
@@ -183,28 +151,15 @@ async def run_scan(request: ScanRequest):
                         result_data["id"] = item.get("id", result_id) 
                         break
                 
-                if index > -1:
-                    current_db[index] = result_data
-                    print(f"Updated existing record for {request.companyName}")
-                else:
-                    current_db.append(result_data)
-                    print(f"Appended new record for {request.companyName}")
+                if index > -1: current_db[index] = result_data
+                else: current_db.append(result_data)
                 
-                # C. Upload back to Blob
-                new_url = storage.upload_json(BLOB_FILENAME, current_db)
-                if new_url:
-                    print(f"Database updated successfully. URL: {new_url}")
-                else:
-                    print("Database update failed (Upload error).")
+                storage.upload_json(BLOB_FILENAME, current_db)
 
             except Exception as e:
                 print(f"Persistence Failed: {e}")
-                # We continue to return the result to the user even if saving failed
         
-        return {
-            "success": True,
-            "data": result_data
-        }
+        return {"success": True, "data": result_data}
 
     except Exception as e:
         print(f"Server Error: {str(e)}")

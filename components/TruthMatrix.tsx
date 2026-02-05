@@ -1,5 +1,6 @@
+
 import React from 'react';
-import { AnalysisResult } from '../types';
+import { AnalysisResult } from '../types.ts';
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Cell, Label } from 'recharts';
 
 interface TruthMatrixProps {
@@ -16,12 +17,9 @@ const CustomTooltip = ({ active, payload }: any) => {
         <div className="grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[10px] uppercase tracking-wider">
             <span className="text-slate-500">Intent</span>
             <span className="text-cyan-400 text-right">{data.intent_score}</span>
-            
             <span className="text-slate-500">Reality</span>
             <span className="text-emerald-400 text-right">{data.reality_score}</span>
-            
             <div className="col-span-2 h-px bg-white/10 my-1"></div>
-            
             <span className="text-slate-500">Gap</span>
             <span className={`text-right ${data.reality_gap > 20 ? 'text-rose-400' : 'text-slate-300'}`}>{data.reality_gap}</span>
         </div>
@@ -61,13 +59,11 @@ export const TruthMatrix: React.FC<TruthMatrixProps> = ({ data, onSelectCompany 
           />
           <Tooltip content={<CustomTooltip />} cursor={{ strokeDasharray: '3 3', stroke: '#cbd5e1' }} />
           
-          {/* Quadrant Backgrounds (Very Subtle) */}
           <ReferenceArea x1={0} x2={50} y1={50} y2={100} fill="#3b82f6" fillOpacity={0.02} />
           <ReferenceArea x1={50} x2={100} y1={50} y2={100} fill="#10b981" fillOpacity={0.02} />
           <ReferenceArea x1={0} x2={50} y1={0} y2={50} fill="#64748b" fillOpacity={0.02} />
           <ReferenceArea x1={50} x2={100} y1={0} y2={50} fill="#f59e0b" fillOpacity={0.02} />
 
-          {/* Labels */}
           <ReferenceArea x1={5} x2={45} y1={90} y2={98} stroke="none" fill="none">
              <Label value="SILENT DOERS" position="center" fill="#60a5fa" fontSize={12} fontWeight={800} opacity={0.3} letterSpacing="0.05em" />
           </ReferenceArea>
@@ -83,10 +79,10 @@ export const TruthMatrix: React.FC<TruthMatrixProps> = ({ data, onSelectCompany 
               <Cell 
                 key={`cell-${index}`} 
                 fill={
-                  entry.reality_score >= 50 && entry.intent_score >= 50 ? '#10b981' : // Green
-                  entry.reality_score < 50 && entry.intent_score >= 50 ? '#f59e0b' : // Yellow
-                  entry.reality_score >= 50 && entry.intent_score < 50 ? '#3b82f6' : // Blue
-                  '#94a3b8' // Slate
+                  entry.reality_score >= 50 && entry.intent_score >= 50 ? '#10b981' :
+                  entry.reality_score < 50 && entry.intent_score >= 50 ? '#f59e0b' :
+                  entry.reality_score >= 50 && entry.intent_score < 50 ? '#3b82f6' :
+                  '#94a3b8'
                 }
                 stroke="#0f172a"
                 strokeWidth={1}

@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { ScannerInputData } from '../types';
+import { ScannerInputData } from '../types.ts';
 import { Search, FileText, Globe, Zap, ArrowRight, CornerDownLeft } from 'lucide-react';
 
 interface ScannerInputProps {

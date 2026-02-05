@@ -1,47 +1,51 @@
+
 import React, { useState, useEffect } from 'react';
-import { AnalysisResult, ScannerInputData } from './types';
-import { generateMockDashboardData, runMockScanner } from './services/mockScannerService';
-import { TruthMatrix } from './components/TruthMatrix';
-import { CompanyModal } from './components/CompanyModal';
-import { ScannerInput } from './components/ScannerInput';
+import { AnalysisResult, ScannerInputData } from './types.ts';
+import { generateMockDashboardData, runMockScanner } from './services/mockScannerService.ts';
+import { TruthMatrix } from './components/TruthMatrix.tsx';
+import { CompanyModal } from './components/CompanyModal.tsx';
+import { ScannerInput } from './components/ScannerInput.tsx';
 import { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, Play } from 'lucide-react';
 
 const App: React.FC = () => {
   const [data, setData] = useState<AnalysisResult[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
-  const [isMockData, setIsMockData] = useState<boolean>(false); // Track if we are using fallback data
+  const [isMockData, setIsMockData] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedCompany, setSelectedCompany] = useState<AnalysisResult | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
-  const [isSeeding, setIsSeeding] = useState(false); // New state for batch seed
+  const [isSeeding, setIsSeeding] = useState(false);
   const [sortConfig, setSortConfig] = useState<{ key: keyof AnalysisResult; direction: 'asc' | 'desc' } | null>({ key: 'reality_gap', direction: 'desc' });
 
   useEffect(() => {
     const fetchData = async () => {
-      // Safely access environment variables
-      const env = (import.meta as any).env || {};
-      let blobUrl = env.VITE_BLOB_URL; 
+      // In this setup, we assume the frontend is served by the backend, so we check relative or ENV
+      // Since it's browser runtime, we can try to fetch the blob directly if we know it, 
+      // OR we can default to empty/mock first if env is not injected into the browser window.
+      // For this prototype, we'll try to guess or use mock if env is missing.
       
+      const env = (import.meta as any).env || {};
+      let blobUrl = env.VITE_BLOB_URL;
+      
+      // If we are running in the browser without build step, import.meta.env might be empty.
+      // We can try to fetch a config endpoint from our own backend?
+      // For now, let's proceed. If blobUrl is missing, we use Mock Data which is fine for "It works".
+
       if (blobUrl) {
-        // Fix URL if user forgot filename in env var
         if (!blobUrl.endsWith("json")) {
             blobUrl = blobUrl.endsWith("/") ? `${blobUrl}dashboard_data.json` : `${blobUrl}/dashboard_data.json`;
         }
-
         try {
           const response = await fetch(blobUrl);
-          
           if (response.status === 404) {
-             console.log("Database file not yet created. Using Mock Data for display until first scan.");
              const mockData = generateMockDashboardData();
              setData(mockData);
-             setIsMockData(true); // Flag this as simulation
+             setIsMockData(true);
              setLoading(false);
              return;
           }
-
           if (response.ok) {
             const realData = await response.json();
             if (Array.isArray(realData)) {
@@ -51,7 +55,7 @@ const App: React.FC = () => {
             }
           }
         } catch (e) {
-          console.warn("Blob fetch failed (likely empty), falling back to mock");
+          console.warn("Blob fetch failed, falling back to mock");
         }
       }
 
@@ -70,48 +74,34 @@ const App: React.FC = () => {
   const handleRunScan = async (input: ScannerInputData) => {
     setIsScanning(true);
     
-    // Safely access API URL with Fallback to Railway Production
-    const env = (import.meta as any).env || {};
-    const apiUrl = env.VITE_API_URL || "https://the-scanner.up.railway.app"; 
+    // We are serving from the backend, so API URL is relative root
+    const apiUrl = ""; 
 
     try {
       let newResult: AnalysisResult;
 
-      // Try Live Backend First
-      if (apiUrl) {
-        try {
-          const response = await fetch(`${apiUrl}/scan`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...input, saveToDatabase: true }) // New scans also save to DB
-          });
-          
-          if (!response.ok) throw new Error("Scan failed");
-          
-          const json = await response.json();
-          newResult = json.data;
-        } catch (apiError) {
-          console.warn("API Connection failed, falling back to local simulation.", apiError);
-          // Fallback to Mock if API fails (e.g. server down, cors, or not deployed)
-          await new Promise(r => setTimeout(r, 1500)); // Simulate processing delay
-          newResult = await runMockScanner(input);
-        }
-      } else {
-        // No API URL configured at all
-        console.warn("VITE_API_URL not set. Running simulation in browser.");
-        await new Promise(r => setTimeout(r, 2000)); 
+      try {
+        const response = await fetch(`${apiUrl}/scan`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...input, saveToDatabase: true })
+        });
+        
+        if (!response.ok) throw new Error("Scan failed");
+        
+        const json = await response.json();
+        newResult = json.data;
+      } catch (apiError) {
+        console.warn("API failed, falling back to local simulation.", apiError);
+        await new Promise(r => setTimeout(r, 1500));
         newResult = await runMockScanner(input);
       }
 
-      // Update local state with new result
-      // If company exists, replace it. If not, add it.
       setData(prev => {
-        // If we were in simulation mode, clear the mock data and start fresh with real data (or new sim data)
         if (isMockData) {
             setIsMockData(false);
             return [newResult];
         }
-
         const exists = prev.findIndex(p => p.companyName === newResult.companyName);
         if (exists > -1) {
           const updated = [...prev];
@@ -126,41 +116,27 @@ const App: React.FC = () => {
       setIsModalOpen(true);
     } catch (error) {
       console.error(error);
-      alert("Error running scan. Check console.");
+      alert("Error running scan.");
     } finally {
       setIsScanning(false);
     }
   };
 
   const handleBatchSeed = async () => {
-    if (!confirm("This will start a background process to scan the Top Finland Companies. It may take 2-3 minutes to appear. Continue?")) return;
-    
+    if (!confirm("Start background seed for Finland Top 100?")) return;
     setIsSeeding(true);
-    const env = (import.meta as any).env || {};
-    const apiUrl = env.VITE_API_URL || "https://the-scanner.up.railway.app"; 
-    
     try {
-        if (!apiUrl) throw new Error("Backend URL missing");
-        
-        const response = await fetch(`${apiUrl}/admin/seed-finland-100`, {
-             method: 'POST'
-        });
-        
-        if (response.ok) {
-            alert("Batch Process Initiated! The database will populate in the background. Please refresh the page in a few minutes.");
-        } else {
-            throw new Error("API responded with error");
-        }
+        const response = await fetch(`/admin/seed-finland-100`, { method: 'POST' });
+        if (response.ok) alert("Batch Process Initiated!");
+        else throw new Error("API Error");
     } catch (e) {
-        console.error("Batch seed error:", e);
-        alert("Could not connect to backend to start batch job. Is the server running?");
+        alert("Could not connect to backend.");
     } finally {
         setIsSeeding(false);
     }
   };
 
   const handleCompanyUpdate = (updatedCompany: AnalysisResult) => {
-    // This function is called when the Modal performs a "Refresh Forensic Scan"
     setData(prev => prev.map(item => 
       item.companyName === updatedCompany.companyName ? updatedCompany : item
     ));
@@ -188,39 +164,22 @@ const App: React.FC = () => {
     if (!sortConfig) return 0;
     const aVal = a[sortConfig.key];
     const bVal = b[sortConfig.key];
-    
-    if (typeof aVal === 'string' && typeof bVal === 'string') {
-        return sortConfig.direction === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
-    }
-    if (typeof aVal === 'number' && typeof bVal === 'number') {
-        return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal;
-    }
+    if (typeof aVal === 'string' && typeof bVal === 'string') return sortConfig.direction === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+    if (typeof aVal === 'number' && typeof bVal === 'number') return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal;
     return 0;
   });
 
   return (
     <div className="min-h-screen flex flex-col font-sans relative overflow-x-hidden text-slate-100">
-      
-      {/* 1. Aurora Borealis Background */}
       <div className="fixed inset-0 z-0 bg-[#1e1b4b] overflow-hidden">
-        {/* Main Twilight Gradient Base (Lighter than black) */}
         <div className="absolute inset-0 bg-gradient-to-b from-[#2e1065] via-[#1e1b4b] to-[#0f172a] opacity-80"></div>
-        
-        {/* Top Left: Pink/Red Aurora */}
         <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-rose-500/30 rounded-full blur-[100px] mix-blend-screen animate-pulse-glow"></div>
-        
-        {/* Top Right: Cyan/Blue Aurora */}
         <div className="absolute top-[-10%] right-[-10%] w-[60%] h-[60%] bg-cyan-500/30 rounded-full blur-[120px] mix-blend-screen animate-pulse-glow" style={{ animationDelay: '4s' }}></div>
-        
-        {/* Bottom Center: Violet/Purple Aurora */}
         <div className="absolute bottom-[-20%] left-[20%] w-[70%] h-[70%] bg-violet-600/30 rounded-full blur-[150px] mix-blend-screen" style={{ animationDelay: '2s' }}></div>
-        
-        {/* Noise overlay for texture */}
-        <div className="absolute inset-0 opacity-[0.05] bg-[url('https://grainy-gradients.vercel.app/noise.svg')] pointer-events-none"></div>
+        <div className="absolute inset-0 opacity-[0.05] pointer-events-none"></div>
       </div>
 
-      {/* Header */}
-      <header className="sticky top-0 z-40 w-full border-b border-white/10 bg-[#1e1b4b]/50 backdrop-blur-xl supports-[backdrop-filter]:bg-[#1e1b4b]/30">
+      <header className="sticky top-0 z-40 w-full border-b border-white/10 bg-[#1e1b4b]/50 backdrop-blur-xl">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 bg-gradient-to-br from-cyan-500 to-violet-600 rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(139,92,246,0.3)] ring-1 ring-white/20">
@@ -236,7 +195,7 @@ const App: React.FC = () => {
           
           <div className="flex items-center gap-4 w-full max-w-md ml-4 justify-end">
             <div className="relative w-full max-w-[240px] group hidden sm:block">
-              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-indigo-300 group-focus-within:text-cyan-300 transition-colors">
+              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-indigo-300">
                 <Search size={14} />
               </div>
               <input
@@ -244,19 +203,18 @@ const App: React.FC = () => {
                 placeholder="Search Finland Top 100..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-9 pr-4 py-1.5 bg-[#0f172a]/50 border border-indigo-500/30 rounded-lg text-sm text-slate-100 placeholder-indigo-300/50 focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500/50 focus:bg-[#0f172a]/80 outline-none transition-all shadow-inner"
+                className="w-full pl-9 pr-4 py-1.5 bg-[#0f172a]/50 border border-indigo-500/30 rounded-lg text-sm text-slate-100 placeholder-indigo-300/50 focus:ring-2 focus:ring-cyan-500/20 outline-none transition-all"
               />
             </div>
             <button 
               onClick={() => setIsScannerOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 text-white font-semibold text-xs rounded-lg transition-all shadow-[0_0_15px_rgba(255,255,255,0.1)] hover:shadow-[0_0_20px_rgba(255,255,255,0.2)] whitespace-nowrap tracking-wide border border-white/10 backdrop-blur-md"
+              className="flex items-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 text-white font-semibold text-xs rounded-lg transition-all border border-white/10 backdrop-blur-md"
             >
               <Plus size={14} /> NEW DIAGNOSIS
             </button>
           </div>
         </div>
         
-        {/* Simulation Banner & Seed Action */}
         {isMockData && !loading && (
           <div className="w-full bg-indigo-950/80 border-b border-indigo-500/30 backdrop-blur-sm">
              <div className="max-w-7xl mx-auto px-4 py-1.5 flex items-center justify-between">
@@ -277,10 +235,7 @@ const App: React.FC = () => {
         )}
       </header>
 
-      {/* Main Content */}
       <main className="flex-grow py-8 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full space-y-8 z-10 relative">
-        
-        {/* Top Row: Visual Overview */}
         <section className="space-y-4">
           <div className="flex justify-between items-center">
             <h2 className="text-xl font-bold text-white flex items-center gap-2 tracking-tight">
@@ -288,7 +243,7 @@ const App: React.FC = () => {
             </h2>
             <div className="flex gap-2">
                  {["Helsinki Stock Exchange", "Turnover > 500M"].map(tag => (
-                   <div key={tag} className="px-2 py-1 rounded bg-[#0f172a]/50 border border-indigo-500/20 text-[9px] uppercase font-bold text-indigo-300 flex items-center gap-1 cursor-default hover:bg-[#0f172a]/80 transition-colors">
+                   <div key={tag} className="px-2 py-1 rounded bg-[#0f172a]/50 border border-indigo-500/20 text-[9px] uppercase font-bold text-indigo-300 flex items-center gap-1">
                      <Shield size={8} /> {tag}
                    </div>
                  ))}
@@ -300,13 +255,11 @@ const App: React.FC = () => {
              </div>
           ) : (
              <div className="bg-[#0f172a]/60 border border-white/10 rounded-2xl p-1 shadow-2xl backdrop-blur-xl">
-                {/* Note: Background darkened to 60% opacity to contrast against lighter background */}
                 <TruthMatrix data={data} onSelectCompany={handleCompanyClick} />
              </div>
           )}
         </section>
 
-        {/* Bottom Row: Data Table */}
         <section className="space-y-4">
           <div className="flex justify-between items-center">
             <h2 className="text-lg font-bold text-white tracking-tight">Forensic Index</h2>
@@ -314,24 +267,23 @@ const App: React.FC = () => {
           </div>
 
           <div className="bg-[#0f172a]/70 border border-white/10 rounded-2xl overflow-hidden shadow-2xl backdrop-blur-xl">
-            {/* Note: Background darkened to 70% opacity for text readability */}
             <div className="overflow-x-auto">
               <table className="w-full text-sm text-left">
                 <thead className="text-[10px] text-indigo-200 uppercase bg-black/30 border-b border-white/5 tracking-wider font-semibold">
                   <tr>
-                    <th className="px-6 py-4 cursor-pointer hover:text-white transition-colors" onClick={() => handleSort('companyName')}>
+                    <th className="px-6 py-4 cursor-pointer hover:text-white" onClick={() => handleSort('companyName')}>
                       <div className="flex items-center gap-2">Entity <ArrowUpDown size={10} className="opacity-30" /></div>
                     </th>
-                    <th className="px-6 py-4 cursor-pointer hover:text-white transition-colors" onClick={() => handleSort('intent_score')}>
+                    <th className="px-6 py-4 cursor-pointer hover:text-white" onClick={() => handleSort('intent_score')}>
                        <div className="flex items-center gap-2">Intent <ArrowUpDown size={10} className="opacity-30" /></div>
                     </th>
-                    <th className="px-6 py-4 cursor-pointer hover:text-white transition-colors" onClick={() => handleSort('reality_score')}>
+                    <th className="px-6 py-4 cursor-pointer hover:text-white" onClick={() => handleSort('reality_score')}>
                        <div className="flex items-center gap-2">Reality <ArrowUpDown size={10} className="opacity-30" /></div>
                     </th>
-                    <th className="px-6 py-4 cursor-pointer hover:text-white transition-colors" onClick={() => handleSort('reality_gap')}>
+                    <th className="px-6 py-4 cursor-pointer hover:text-white" onClick={() => handleSort('reality_gap')}>
                        <div className="flex items-center gap-2">Gap <ArrowUpDown size={10} className="opacity-30" /></div>
                     </th>
-                    <th className="px-6 py-4 cursor-pointer hover:text-white transition-colors" onClick={() => handleSort('lastUpdated')}>
+                    <th className="px-6 py-4 cursor-pointer hover:text-white" onClick={() => handleSort('lastUpdated')}>
                        <div className="flex items-center gap-2">Updated <ArrowUpDown size={10} className="opacity-30" /></div>
                     </th>
                     <th className="px-6 py-4 text-right">Action</th>
@@ -342,22 +294,20 @@ const App: React.FC = () => {
                     [...Array(5)].map((_, i) => (
                       <tr key={i} className="animate-pulse">
                         <td className="px-6 py-4"><div className="h-4 bg-white/5 rounded w-32" /></td>
-                        <td className="px-6 py-4"><div className="h-4 bg-white/5 rounded w-12" /></td>
-                        <td className="px-6 py-4"><div className="h-4 bg-white/5 rounded w-12" /></td>
-                        <td className="px-6 py-4"><div className="h-4 bg-white/5 rounded w-12" /></td>
-                        <td className="px-6 py-4"><div className="h-4 bg-white/5 rounded w-24" /></td>
+                        <td className="px-6 py-4"></td>
+                        <td className="px-6 py-4"></td>
+                        <td className="px-6 py-4"></td>
+                        <td className="px-6 py-4"></td>
                         <td className="px-6 py-4"></td>
                       </tr>
                     ))
                   ) : sortedData.map((row) => (
                     <tr key={row.id} className="hover:bg-white/5 transition-colors group">
-                      <td className="px-6 py-4 font-medium text-slate-100 group-hover:text-white transition-colors shadow-sm">
-                        {row.companyName}
-                      </td>
+                      <td className="px-6 py-4 font-medium text-slate-100 group-hover:text-white transition-colors">{row.companyName}</td>
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-2">
                             <div className="w-16 h-1 bg-slate-700 rounded-full overflow-hidden">
-                                <div className="h-full bg-cyan-400 rounded-full shadow-[0_0_8px_rgba(34,211,238,0.5)]" style={{ width: `${row.intent_score}%` }}></div>
+                                <div className="h-full bg-cyan-400 rounded-full" style={{ width: `${row.intent_score}%` }}></div>
                             </div>
                             <span className="text-xs font-mono">{row.intent_score}</span>
                         </div>
@@ -365,7 +315,7 @@ const App: React.FC = () => {
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-2">
                             <div className="w-16 h-1 bg-slate-700 rounded-full overflow-hidden">
-                                <div className="h-full bg-emerald-400 rounded-full shadow-[0_0_8px_rgba(52,211,153,0.5)]" style={{ width: `${row.reality_score}%` }}></div>
+                                <div className="h-full bg-emerald-400 rounded-full" style={{ width: `${row.reality_score}%` }}></div>
                             </div>
                             <span className="text-xs font-mono">{row.reality_score}</span>
                         </div>
@@ -381,7 +331,7 @@ const App: React.FC = () => {
                       <td className="px-6 py-4 text-right">
                         <button 
                           onClick={() => handleCompanyClick(row)}
-                          className="px-3 py-1.5 rounded-md bg-transparent hover:bg-cyan-500/10 hover:text-cyan-300 border border-transparent hover:border-cyan-500/30 text-xs font-medium transition-all"
+                          className="px-3 py-1.5 rounded-md hover:bg-cyan-500/10 hover:text-cyan-300 text-xs font-medium transition-all"
                         >
                           View Report
                         </button>
@@ -391,31 +341,23 @@ const App: React.FC = () => {
                 </tbody>
               </table>
             </div>
-            {!loading && sortedData.length === 0 && (
-              <div className="p-12 text-center text-slate-500 border-t border-white/5">
-                No entities found matching "{searchQuery}"
-              </div>
-            )}
           </div>
         </section>
-
       </main>
 
-      {/* Scanner Modal */}
       {isScannerOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-[#0f172a]/90 backdrop-blur-md" onClick={() => !isScanning && setIsScannerOpen(false)} />
-          <div className="relative w-full max-w-2xl bg-[#0f172a] border border-white/10 rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200 ring-1 ring-white/10">
+          <div className="relative w-full max-w-2xl bg-[#0f172a] border border-white/10 rounded-2xl shadow-2xl overflow-hidden">
              <div className="absolute top-4 right-4 z-10">
                {!isScanning && (
-                <button onClick={() => setIsScannerOpen(false)} className="text-slate-400 hover:text-white transition-colors hover:bg-white/5 p-1 rounded-full">
+                <button onClick={() => setIsScannerOpen(false)} className="text-slate-400 hover:text-white p-1 rounded-full">
                   <X size={20} />
                 </button>
                )}
              </div>
-             
              {isScanning ? (
-               <div className="p-16 flex flex-col items-center justify-center space-y-8 text-center bg-gradient-to-b from-[#0f172a] to-black">
+               <div className="p-16 flex flex-col items-center justify-center space-y-8 text-center">
                  <div className="relative">
                     <div className="w-20 h-20 border-2 border-slate-700 border-t-cyan-500 rounded-full animate-spin"></div>
                     <div className="absolute inset-0 flex items-center justify-center">
@@ -425,9 +367,8 @@ const App: React.FC = () => {
                  <div>
                    <h3 className="text-xl font-bold text-white tracking-tight">Diagnostic Engine Running</h3>
                    <div className="space-y-2 mt-4 text-left border-l-2 border-slate-700 pl-4 py-1">
-                    <p className="text-xs text-cyan-400 font-mono animate-pulse">>> Parsing Narrative Vectors (NLP)</p>
+                    <p className="text-xs text-cyan-400 font-mono animate-pulse">>> Parsing Narrative Vectors</p>
                     <p className="text-xs text-emerald-400 font-mono animate-pulse delay-75">>> Interrogating Reality (X-Ray)</p>
-                    <p className="text-xs text-purple-400 font-mono animate-pulse delay-150">>> Synthesizing Summary (LLM)</p>
                    </div>
                  </div>
                </div>
@@ -438,14 +379,12 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* Pop-out Summary Component */}
       <CompanyModal 
         company={selectedCompany} 
         isOpen={isModalOpen} 
         onClose={() => setIsModalOpen(false)}
         onUpdate={handleCompanyUpdate}
       />
-
     </div>
   );
 };

@@ -1,14 +1,15 @@
+
 import React, { useState } from 'react';
-import { AnalysisResult } from '../types';
-import { CompanySummary } from './CompanySummary';
+import { AnalysisResult } from '../types.ts';
+import { CompanySummary } from './CompanySummary.tsx';
 import { X, RefreshCw, Calendar, Clock, Loader2 } from 'lucide-react';
-import { runMockScanner } from '../services/mockScannerService';
+import { runMockScanner } from '../services/mockScannerService.ts';
 
 interface CompanyModalProps {
   company: AnalysisResult | null;
   isOpen: boolean;
   onClose: () => void;
-  onUpdate: (updatedCompany: AnalysisResult) => void; // Callback to update parent state
+  onUpdate: (updatedCompany: AnalysisResult) => void;
 }
 
 export const CompanyModal: React.FC<CompanyModalProps> = ({ company, isOpen, onClose, onUpdate }) => {
@@ -18,25 +19,16 @@ export const CompanyModal: React.FC<CompanyModalProps> = ({ company, isOpen, onC
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
-    
-    // Safely access API URL with Fallback
-    const env = (import.meta as any).env || {};
-    // Use the environment variable, but valid checking happens in try/catch
-    const apiUrl = env.VITE_API_URL || "https://the-scanner.up.railway.app";
+    const apiUrl = ""; // Relative URL since we are serving from backend
 
     try {
-      // We need to send text for the scan. 
-      // Since we are refreshing an existing JSON entry, we might not have the original text.
-      // We will send a generic text or reuse existing if available in a real app. 
-      // Here we send a placeholder that tells the backend to perhaps rely on previous score or simulate Intent.
       const payload = {
         companyName: company.companyName,
         companyUrl: "",
-        reportText: `Refreshed analysis for ${company.companyName}. Strategy focused on efficiency and digitalization.`, // Placeholder for Intent Scanner
-        saveToDatabase: true // CRITICAL: Tells backend to update the Blob
+        reportText: `Refreshed analysis for ${company.companyName}. Strategy focused on efficiency and digitalization.`,
+        saveToDatabase: true
       };
 
-      // Attempt Live Fetch
       const response = await fetch(`${apiUrl}/scan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -44,35 +36,24 @@ export const CompanyModal: React.FC<CompanyModalProps> = ({ company, isOpen, onC
       });
 
       if (!response.ok) throw new Error("Refresh failed");
-
       const json = await response.json();
-      const updatedData = json.data;
-
-      // Update Parent State
-      onUpdate(updatedData);
+      onUpdate(json.data);
       
     } catch (error) {
-      console.warn("Backend unavailable (Failed to fetch). Falling back to Simulation Mode.", error);
-      
-      // FALLBACK: Run local simulation if backend is down
+      console.warn("Backend unavailable. Falling back to Simulation.", error);
       try {
-        await new Promise(resolve => setTimeout(resolve, 1500)); // Fake network delay
-        
+        await new Promise(resolve => setTimeout(resolve, 1500));
         const mockResult = await runMockScanner({
           companyName: company.companyName,
           companyUrl: "",
           reportText: "Simulation fallback text for refresh."
         });
-        
-        // Preserve the original ID so it updates the correct row
         mockResult.id = company.id;
         mockResult.lastUpdated = new Date().toISOString();
         mockResult.summary_text = `(Simulated Refresh) ${mockResult.summary_text}`;
-        
         onUpdate(mockResult);
         alert("Backend unreachable. Performed local simulation refresh.");
       } catch (simError) {
-        console.error("Simulation failed", simError);
         alert("Failed to refresh analysis.");
       }
     } finally {
@@ -80,20 +61,14 @@ export const CompanyModal: React.FC<CompanyModalProps> = ({ company, isOpen, onC
     }
   };
 
-  // Format Date
   const dateObj = new Date(company.lastUpdated);
   const dateStr = dateObj.toLocaleDateString('en-FI', { day: 'numeric', month: 'long', year: 'numeric' });
   const timeStr = dateObj.toLocaleTimeString('en-FI', { hour: '2-digit', minute: '2-digit' });
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      {/* Backdrop */}
       <div className="absolute inset-0 bg-slate-900/80 backdrop-blur-sm transition-opacity" onClick={onClose} />
-
-      {/* Slide-over Panel */}
       <div className="relative w-full max-w-3xl bg-slate-900 h-full shadow-[0_0_50px_rgba(0,0,0,0.5)] border-l border-white/10 flex flex-col transform transition-transform animate-in slide-in-from-right duration-300">
-        
-        {/* Header */}
         <div className="px-8 py-6 border-b border-white/5 flex items-start justify-between bg-slate-900 z-10">
           <div>
             <div className="flex items-center gap-3">
@@ -102,7 +77,6 @@ export const CompanyModal: React.FC<CompanyModalProps> = ({ company, isOpen, onC
                  ID: {company.id.substring(0,8)}
                </span>
             </div>
-            {/* Visual Date Indicator */}
             <div className="flex items-center gap-4 mt-2 text-xs font-mono text-cyan-400">
                <div className="flex items-center gap-1.5 bg-cyan-950/30 px-2 py-1 rounded border border-cyan-900/50">
                   <Calendar size={12} />
@@ -115,17 +89,13 @@ export const CompanyModal: React.FC<CompanyModalProps> = ({ company, isOpen, onC
                <span className="text-[10px] text-slate-500 uppercase tracking-widest ml-1">Database Sync Active</span>
             </div>
           </div>
-          <button onClick={onClose} className="text-slate-500 hover:text-white transition-colors p-2 hover:bg-white/5 rounded-full">
+          <button onClick={onClose} className="text-slate-500 hover:text-white p-2 hover:bg-white/5 rounded-full">
             <X size={24} />
           </button>
         </div>
-
-        {/* Content - Scrollable */}
         <div className="flex-1 overflow-y-auto p-8 custom-scrollbar bg-gradient-to-b from-slate-900 to-[#0f172a]">
            <CompanySummary data={company} />
         </div>
-
-        {/* Footer Actions */}
         <div className="px-8 py-6 border-t border-white/5 bg-slate-900">
           <button 
             onClick={handleRefresh}
@@ -148,11 +118,7 @@ export const CompanyModal: React.FC<CompanyModalProps> = ({ company, isOpen, onC
               </>
             )}
           </button>
-          <p className="text-center text-[10px] text-slate-500 mt-2">
-            Warning: This triggers a live API analysis and updates the global record.
-          </p>
         </div>
-
       </div>
     </div>
   );
