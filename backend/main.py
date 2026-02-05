@@ -74,16 +74,17 @@ async def run_scan(request: ScanRequest):
         
         # 4. Generate AI Summary using Gemini
         summary = "AI Summary Unavailable (Config Error)"
-        api_key = os.environ.get("GEMINI_API_KEY")
+        # Use API_KEY as per standard guidelines, fallback to GEMINI_API_KEY if needed
+        api_key = os.environ.get("API_KEY") or os.environ.get("GEMINI_API_KEY")
         
         if api_key:
             try:
                 genai.configure(api_key=api_key)
-                # Use Gemini 2.0 Flash for faster, smarter reasoning
+                # Use Gemini 3 Flash Preview for text tasks as per coding guidelines
                 try:
-                    model = genai.GenerativeModel('gemini-2.0-flash-exp')
+                    model = genai.GenerativeModel('gemini-3-flash-preview')
                 except:
-                    # Fallback to Pro if Experimental is not available in region
+                    # Fallback to 1.5 Pro if 3.0 is not yet available in the Python SDK region
                     model = genai.GenerativeModel('gemini-1.5-pro')
 
                 prompt = f"""
