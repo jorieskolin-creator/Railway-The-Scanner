@@ -102,6 +102,7 @@ CATEGORIES = {
 }
 
 # Negation terms based on PDF Page 10 ("Negative Look-around")
+# These negate the penalty if found immediately before a "Bad" word.
 NEGATION_TERMS = ["eliminate", "remove", "avoid", "anti", "reduce", "less", "no", "not", "without", "free from", "versus", "vs"]
 
 def is_negated(text_window):
@@ -110,6 +111,7 @@ def is_negated(text_window):
     """
     lower_window = text_window.lower()
     for term in NEGATION_TERMS:
+        # Simple inclusion check. Could be enhanced with regex boundaries for strictness.
         if term in lower_window:
             return True
     return False
@@ -136,37 +138,40 @@ def analyze_intent(text: str):
         for word in keywords["good"]:
             pattern = r'\b' + re.escape(word.lower()) + r'\b'
             matches = list(re.finditer(pattern, lower_text))
+            
+            # PDF Logic: 3 mentions needed to count as a "Signal" (Threshold)
             if len(matches) >= GOOD_THRESHOLD:
                 unique_good_found += 1
-                total_good_matches += len(matches) # Add total volume
-            elif len(matches) > 0:
-                # Still add volume even if threshold not met for "unique" scoring
-                total_good_matches += len(matches) 
+            
+            # For Vibrancy/Friction, we count ALL volume, not just unique signals
+            total_good_matches += len(matches)
             
         # 2. Count Bad Signals with NEGATIVE LOOK-AROUND (Page 10)
         for word in keywords["bad"]:
             pattern = r'\b' + re.escape(word.lower()) + r'\b'
             matches = list(re.finditer(pattern, lower_text))
             
-            valid_bad_count = 0
+            valid_bad_occurrences_for_word = 0
+            
             for match in matches:
-                # Context Window: Check 50 characters before the match
+                # Context Window: Check ~50 characters (approx 5-10 words) before the match
                 start_index = max(0, match.start() - 50)
                 preceding_text = lower_text[start_index:match.start()]
                 
                 if not is_negated(preceding_text):
-                    valid_bad_count += 1
+                    valid_bad_occurrences_for_word += 1
                 else:
-                    # Debug: print(f"Ignored negated bad word: {word} (Context: {preceding_text})")
+                    # Logic Trap Avoided: "We will eliminate bureaucracy" -> Not counted as Bad.
                     pass
 
-            if valid_bad_count >= BAD_THRESHOLD:
+            if valid_bad_occurrences_for_word >= BAD_THRESHOLD:
                 unique_bad_found += 1
             
-            total_bad_matches += valid_bad_count
+            total_bad_matches += valid_bad_occurrences_for_word
 
         # 3. Calculate "Net Modernization Score" (Page 10 Formula)
         # Score = (Good Matches - Bad Matches) / Total Items (25)
+        # Note: Using Unique Counts for the Category Score, but Total Volume for Friction/Vibrancy
         net_result = unique_good_found - unique_bad_found
         
         if net_result < 0:
@@ -190,24 +195,23 @@ def analyze_intent(text: str):
 
     # B. Friction Index (Page 14)
     # Formula: 1 - (|Good - Bad| / (Good + Bad))
-    # Measures confusion/conflict in the organization.
+    # Measures confusion/conflict.
+    # 0.0 = Coherent (All Good or All Bad)
+    # 1.0 = High Friction (50/50 Split)
     denominator = total_good_matches + total_bad_matches
     if denominator == 0:
-        friction_index = 0.0 # No data, no friction
+        friction_index = 0.0 # No signals = No friction
     else:
-        # Calculate raw ratio
         ratio = abs(total_good_matches - total_bad_matches) / denominator
         friction_index = 1.0 - ratio 
-        # Result: 0.0 (Coherent) to 1.0 (High Friction/Conflicted)
-        
-        # NOTE: PDF says "1.0 means perfect 50/50 friction". 
-        # So Higher Number = Higher Friction (Bad).
 
     # C. Vibrancy Score (Page 15)
     # Formula: Total Matches / Total Word Count
-    # Measures signal intensity.
+    # Measures signal intensity. Does the company care?
     vibrancy_raw = denominator / total_words
-    # Normalize: Assuming > 5% keyword density is very high (100)
+    
+    # Normalize: Assuming > 5% keyword density is "Maximum Vibrancy" (100)
+    # This is a heuristic calibration.
     vibrancy_score = (vibrancy_raw / 0.05) * 100 
     if vibrancy_score > 100: vibrancy_score = 100
 

@@ -14,9 +14,14 @@ const CompanySummary = ({ data }) => {
   // Safely access metrics (might be missing in old seed data)
   const metrics = data.metrics || { friction_index: 0, vibrancy_score: 0, total_good_mentions: 0, total_bad_mentions: 0 };
   
-  // Friction Logic: High (>0.5) is bad.
+  // Friction Logic: 
+  // PDF: "A score of 1.0 means perfect 50/50 friction" (High/Bad). "0.0 means one side dominates" (Low/Good).
   const frictionPercentage = Math.round(metrics.friction_index * 100);
+  
+  // Color scale: Low friction is Green, High friction is Red
   const frictionColor = frictionPercentage > 60 ? 'text-rose-400' : frictionPercentage > 30 ? 'text-amber-400' : 'text-emerald-400';
+  
+  // Labels per PDF logic
   const frictionLabel = frictionPercentage > 60 ? 'Battleground' : frictionPercentage > 30 ? 'Conflicted' : 'Coherent';
 
   return (
