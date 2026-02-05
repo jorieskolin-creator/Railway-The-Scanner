@@ -20,9 +20,14 @@ if (!createRoot) {
      throw new Error("createRoot is undefined in ReactDOM.");
 }
 
-const root = createRoot(rootElement);
-root.render(
-  <StrictMode>
-    <App />
-  </StrictMode>
-);
+if (!App) {
+    console.error("CRITICAL: App component not found. It implies App.tsx failed to execute.");
+    rootElement.innerHTML = '<div style="color: #ef4444; padding: 20px; font-family: monospace;">Fatal Error: App component failed to load. Check console for syntax errors.</div>';
+} else {
+    const root = createRoot(rootElement);
+    root.render(
+      <StrictMode>
+        <App />
+      </StrictMode>
+    );
+}

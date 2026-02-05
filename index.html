@@ -77,9 +77,19 @@
               filename: url,
             }).code;
 
-            // Execute
+            // Execute in IIFE (Immediately Invoked Function Expression)
+            // This creates a local scope for each file, preventing "const" collisions
+            // (e.g. "Identifier 'useState' has already been declared")
             const script = document.createElement('script');
-            script.textContent = js;
+            script.textContent = `
+              (function() {
+                try {
+                  ${js}
+                } catch(e) {
+                  console.error("Error executing ${url}:", e);
+                }
+              })();
+            `;
             document.body.appendChild(script);
           } catch (error) {
             console.error(`Error loading script ${url}:`, error);
