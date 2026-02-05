@@ -1,12 +1,18 @@
 
 const { useState, useEffect } = window.React;
-const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, Play, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw } = (window as any).Lucide;
+const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, Play, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock } = (window as any).Lucide;
 
 // Components & Services from Window
 const TruthMatrix = (window as any).TruthMatrix;
 const ScannerInput = (window as any).ScannerInput;
 const CompanyModal = (window as any).CompanyModal;
 const { generateMockDashboardData, runMockScanner } = (window as any);
+
+// --- CONFIGURATION ---
+// SET THIS TO TRUE to create your database.
+// SET THIS TO FALSE when releasing to users (hides the Reset/Initialize buttons).
+const IS_ADMIN_MODE = true; 
+// ---------------------
 
 const App = () => {
   const [data, setData] = useState([]);
@@ -128,12 +134,14 @@ const App = () => {
   };
 
   const handleBatchSeed = async () => {
-    if (!confirm("Are you sure you want to Regenerate the entire database?\n\nThis will overwrite existing data for Finland Top 100 with fresh analysis.")) return;
+    if (!IS_ADMIN_MODE) return;
+    
+    if (!confirm("Regenerate database?\n\nThis will overwrite the current Vercel Blob database with fresh 'Intent' data and simulated 'Reality' data.")) return;
     setIsSeeding(true);
     try {
         const response = await fetch(`/admin/seed-finland-100`, { method: 'POST' });
         if (response.ok) {
-            alert("Database Generation Started!\n\nThe backend is now scraping and analyzing 100 companies. This takes about 30 seconds.\n\nPress the Refresh button in the top right after ~30 seconds to see results.");
+            alert("Database Generation Started!\n\nThe backend is now scraping 100 companies. This takes about 30 seconds.\n\nPress the Refresh button in the top right after ~30 seconds to see results.");
         } else {
             throw new Error("API Error");
         }
@@ -213,12 +221,14 @@ const App = () => {
           </div>
           
           <div className="flex items-center gap-4 w-full max-w-md ml-4 justify-end">
-            {systemStatus.storage && (
+            
+            {/* ADMIN BUTTONS - ONLY SHOW IF IS_ADMIN_MODE IS TRUE */}
+            {IS_ADMIN_MODE && systemStatus.storage && (
                 <button 
                     onClick={handleBatchSeed}
                     disabled={isSeeding}
-                    title="Reset & Regenerate Database"
-                    className="p-2 bg-white/5 hover:bg-rose-500/20 rounded-full text-slate-400 hover:text-rose-400 transition-all border border-transparent hover:border-rose-500/30"
+                    title="Admin: Reset & Regenerate Database"
+                    className="p-2 bg-rose-500/10 hover:bg-rose-500/30 rounded-full text-rose-400 hover:text-rose-200 transition-all border border-rose-500/20"
                 >
                     {isSeeding ? <Loader2 size={14} className="animate-spin" /> : <RotateCcw size={14} />}
                 </button>
@@ -244,12 +254,15 @@ const App = () => {
                 className="w-full pl-9 pr-4 py-1.5 bg-[#0f172a]/50 border border-indigo-500/30 rounded-lg text-sm text-slate-100 placeholder-indigo-300/50 focus:ring-2 focus:ring-cyan-500/20 outline-none transition-all"
               />
             </div>
-            <button 
-              onClick={() => setIsScannerOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 text-white font-semibold text-xs rounded-lg transition-all border border-white/10 backdrop-blur-md"
-            >
-              <Plus size={14} /> NEW DIAGNOSIS
-            </button>
+            
+            {IS_ADMIN_MODE && (
+              <button 
+                onClick={() => setIsScannerOpen(true)}
+                className="flex items-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 text-white font-semibold text-xs rounded-lg transition-all border border-white/10 backdrop-blur-md"
+              >
+                <Plus size={14} /> NEW DIAGNOSIS
+              </button>
+            )}
           </div>
         </div>
         
@@ -265,22 +278,29 @@ const App = () => {
           </div>
         )}
 
-        {/* Empty State Banner (Only if really empty) */}
+        {/* Empty State Banner - Shows if DB is empty. Only Admins can initialize. */}
         {systemStatus.storage && (data.length === 0 || isMockData) && !loading && (
           <div className="w-full bg-indigo-900/40 border-b border-indigo-500/20 backdrop-blur-sm">
              <div className="max-w-7xl mx-auto px-4 py-1.5 flex items-center justify-between">
                 <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider font-mono text-indigo-200">
                     <Cloud size={12} className="text-indigo-400" />
-                    <span>{isMockData ? "Viewing Simulation Data (Database Empty)" : "Database Empty"}</span>
+                    <span>{isMockData ? "Database Empty (Showing Demo Data)" : "Database Empty"}</span>
                 </div>
-                <button 
-                    onClick={handleBatchSeed}
-                    disabled={isSeeding}
-                    className="flex items-center gap-2 px-3 py-1 bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-300 text-[10px] font-bold uppercase rounded border border-cyan-500/50 transition-all"
-                >
-                    {isSeeding ? <Loader2 size={10} className="animate-spin" /> : <Play size={10} fill="currentColor" />}
-                    Initialize Finland Top 100
-                </button>
+                
+                {IS_ADMIN_MODE ? (
+                    <button 
+                        onClick={handleBatchSeed}
+                        disabled={isSeeding}
+                        className="flex items-center gap-2 px-3 py-1 bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-300 text-[10px] font-bold uppercase rounded border border-cyan-500/50 transition-all"
+                    >
+                        {isSeeding ? <Loader2 size={10} className="animate-spin" /> : <Play size={10} fill="currentColor" />}
+                        Initialize Database
+                    </button>
+                ) : (
+                    <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider font-bold text-slate-400">
+                        <Lock size={10} /> Database Locked
+                    </div>
+                )}
              </div>
           </div>
         )}

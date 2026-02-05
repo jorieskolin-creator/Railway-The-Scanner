@@ -16,7 +16,8 @@ from google.genai import types
 from scanner_one import analyze_intent
 from scanner_two import x_ray_search
 from storage import BlobStorage
-from seed_manager import run_batch_seed
+from seed_manager import run_batch_seed, scrape_homepage_text
+from finland_list import TOP_100_COMPANIES
 
 print("Starting Adaptability Scanner Backend...", flush=True)
 
@@ -123,14 +124,37 @@ async def seed_database(background_tasks: BackgroundTasks):
 @app.post("/scan")
 async def run_scan(request: ScanRequest):
     try:
-        # 1. Run Analysis
-        intent_results = analyze_intent(request.reportText)
+        # 1. AUTO-SCRAPE LOGIC
+        # If reportText is empty (from Refresh button) or too short, we scrape the site.
+        target_text = request.reportText
+        
+        if not target_text or len(target_text) < 100:
+            print(f"Report text missing/short for {request.companyName}. Attempting to scrape...")
+            
+            # Try to find URL
+            target_url = request.companyUrl
+            if not target_url:
+                # Lookup in Top 100 List
+                for c in TOP_100_COMPANIES:
+                    if c['name'].lower() == request.companyName.lower():
+                        target_url = c['url']
+                        break
+            
+            if target_url:
+                print(f"Scraping {target_url}...")
+                target_text = scrape_homepage_text(target_url)
+            else:
+                # Fallback if we can't find a URL
+                print("No URL found. Using generic fallback.")
+                target_text = scrape_homepage_text(None) # Returns generic text
+
+        # 2. Run Analysis
+        intent_results = analyze_intent(target_text)
         reality_results = x_ray_search(request.companyName, request.companyUrl)
         gap = intent_results["score"] - reality_results["score"]
         
-        # 2. AI Synthesis
+        # 3. AI Synthesis
         summary = "AI Summary Unavailable (Config Error)"
-        # Use cleaner logic
         api_key = clean_env_var(os.environ.get("API_KEY") or os.environ.get("GEMINI_API_KEY"))
         
         if api_key:
@@ -158,7 +182,7 @@ async def run_scan(request: ScanRequest):
             except Exception as e:
                 print(f"Gemini Client Error: {e}")
 
-        # 3. Construct Result
+        # 4. Construct Result
         new_timestamp = datetime.utcnow().isoformat()
         result_id = str(uuid.uuid4())
         
@@ -176,11 +200,10 @@ async def run_scan(request: ScanRequest):
             "is_simulated": reality_results.get("is_simulated", False)
         }
         
-        # 4. Save to Database
+        # 5. Save to Database
         if request.saveToDatabase:
             print(f"Persisting update for {request.companyName}...")
             try:
-                # Fetch current DB -> Update -> Upload
                 current_db = storage.retrieve_latest_data(BLOB_FILENAME) or []
                 
                 index = -1
@@ -193,7 +216,6 @@ async def run_scan(request: ScanRequest):
                 if index > -1: current_db[index] = result_data
                 else: current_db.append(result_data)
                 
-                # UPLOAD
                 upload_url = storage.upload_json(BLOB_FILENAME, current_db)
                 if not upload_url:
                     result_data["persistence_warning"] = "Warning: Data was analyzed but NOT saved to database (Missing BLOB_READ_WRITE_TOKEN)."

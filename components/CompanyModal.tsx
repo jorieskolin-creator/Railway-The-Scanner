@@ -16,10 +16,11 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate }) => {
     const apiUrl = ""; // Relative URL since we are serving from backend
 
     try {
+      // Send empty reportText to trigger backend Auto-Scrape
       const payload = {
         companyName: company.companyName,
-        companyUrl: "",
-        reportText: `Refreshed analysis for ${company.companyName}. Strategy focused on efficiency and digitalization.`,
+        companyUrl: "", 
+        reportText: "", 
         saveToDatabase: true
       };
 

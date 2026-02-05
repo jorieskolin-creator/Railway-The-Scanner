@@ -89,9 +89,6 @@ def x_ray_search(company_name: str, company_url: str = None):
             search_query = raw_query.replace('"Company Name"', f'"{company_name}"')
             
             # Context Logic:
-            # If the query is strictly looking at global sites (linkedin, glassdoor), add "Finland" to context.
-            # If the query is already looking at .fi sites (kauppalehti.fi, duunitori.fi), do NOT add "Finland"
-            # as it might limit results too much if the content is in Finnish.
             if ".fi" not in search_query:
                  search_query += " Finland"
             
@@ -99,6 +96,19 @@ def x_ray_search(company_name: str, company_url: str = None):
             
             try:
                 res = requests.get(url)
+                
+                # CRITICAL UPDATE: Check specific status codes
+                # If 429 (Quota) or 403 (Permission), abort real scan to avoid crashing or false zeros
+                if res.status_code in [403, 429]:
+                    print(f"Google API Error {res.status_code}. Quota exceeded or billing disabled. Switching to Simulation.")
+                    return run_simulation_mode(company_name)
+                
+                if res.status_code != 200:
+                    # Other errors (500, etc), just log and count as not found
+                    print(f"Search API Error {res.status_code} for {intent_label}")
+                    checklist.append({"category": category, "query": intent_label, "found": False})
+                    continue
+
                 data = res.json()
                 
                 # Logic: If totalResults > 0, we consider it evidence found
@@ -122,19 +132,12 @@ def x_ray_search(company_name: str, company_url: str = None):
                 })
                 
             except Exception as e:
-                print(f"Search API Error for {intent_label}: {e}")
+                print(f"Search Exception for {intent_label}: {e}")
                 checklist.append({
                     "category": category,
                     "query": intent_label,
                     "found": False
                 })
-
-    # HEURISTIC CHECK: 
-    # If we get 0 results for a major company, the API might be blocking our requests
-    # or the CSE configuration might be rejecting the specific 'site:' parameters.
-    if passed_checks == 0 and total_checks > 0:
-        print(f"CRITICAL: 0/{total_checks} Reality Checks passed. Fallback to simulation.")
-        return run_simulation_mode(company_name)
 
     score = 0
     if total_checks > 0:
@@ -144,14 +147,12 @@ def x_ray_search(company_name: str, company_url: str = None):
         "score": int(score),
         "checklist": checklist,
         "links": evidence_links,
-        "is_simulated": False
+        "is_simulated": False # We ran the real API, so this is REAL data, even if score is 0.
     }
 
 def run_simulation_mode(company_name):
     """
     Generates deterministic simulation data based on company name.
-    This ensures that if you re-scan the same company in simulation mode, 
-    you get the same result (consistency), rather than random noise.
     """
     checklist = []
     evidence_links = []
@@ -161,15 +162,13 @@ def run_simulation_mode(company_name):
     print(f"Simulating reality check for {company_name}...")
     
     # Use Company Name to seed the random number generator
-    # This makes the "simulation" consistent for the same input
     seed_val = int(hashlib.sha256(company_name.encode('utf-8')).hexdigest(), 16) % 10**8
     rng = random.Random(seed_val)
 
     for category, query_list in QUERIES.items():
         for item in query_list:
             total_checks += 1
-            # Randomly "find" evidence to create score variance (biased slightly positive for realism)
-            # 60% chance of finding evidence in simulation
+            # Randomly "find" evidence to create score variance
             found = rng.choice([True, False, True, False, True]) 
             
             checklist.append({
@@ -180,9 +179,6 @@ def run_simulation_mode(company_name):
 
             if found:
                 passed_checks += 1
-                
-                # Extract a domain from the query string to make the fake link look real
-                # e.g. "site:kauppalehti.fi" -> "kauppalehti.fi"
                 mock_source = "Google Search"
                 domains = re.findall(r'site:([\w\.]+)', item['q'])
                 if domains:
