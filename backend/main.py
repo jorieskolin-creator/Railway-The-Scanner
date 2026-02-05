@@ -33,9 +33,14 @@ def clean_env_var(value):
 blob_token = clean_env_var(os.environ.get("BLOB_READ_WRITE_TOKEN"))
 blob_url_var = clean_env_var(os.environ.get("VITE_BLOB_URL"))
 gemini_key = clean_env_var(os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY"))
+google_key = clean_env_var(os.environ.get("GOOGLE_API_KEY"))
+cx_id = clean_env_var(os.environ.get("CX_ENGINE_ID"))
 
-print(f"Config Check: Token Exists? {bool(blob_token)}")
+print(f"Config Check: Storage Token? {bool(blob_token)}")
 print(f"Config Check: VITE_BLOB_URL? {blob_url_var if blob_url_var else 'Not Set'}")
+print(f"Config Check: Gemini/AI Key? {bool(gemini_key)}")
+print(f"Config Check: Google Search Key? {bool(google_key)}")
+print(f"Config Check: Search Engine ID? {bool(cx_id)}")
 
 app = FastAPI()
 

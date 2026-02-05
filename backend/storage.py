@@ -2,6 +2,7 @@
 import os
 import requests
 import json
+import time
 
 class BlobStorage:
     def __init__(self):
@@ -87,6 +88,7 @@ class BlobStorage:
         Strategy 2: If API fails, try downloading directly from VITE_BLOB_URL.
         """
         self.token = self._load_token()
+        timestamp = int(time.time()) # Cache buster
         
         # --- Strategy 1: API List ---
         if self.token:
@@ -105,7 +107,10 @@ class BlobStorage:
                     if matches:
                         target_url = matches[0]["url"]
                         print(f"Strategy 1 (API): Found file at {target_url}")
-                        data_response = requests.get(target_url)
+                        
+                        # Add cache buster to the read request
+                        data_response = requests.get(f"{target_url}?t={timestamp}")
+                        
                         if data_response.status_code == 200:
                             return data_response.json()
             except Exception as e:
@@ -119,7 +124,9 @@ class BlobStorage:
             print(f"Strategy 2 (Direct): Trying {direct_url}")
             
             try:
-                direct_response = requests.get(direct_url)
+                # Add cache buster
+                direct_response = requests.get(f"{direct_url}?t={timestamp}")
+                
                 if direct_response.status_code == 200:
                     print("Strategy 2 (Direct): Success!")
                     return direct_response.json()
