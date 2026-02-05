@@ -51,9 +51,9 @@ const App: React.FC = () => {
   const handleRunScan = async (input: ScannerInputData) => {
     setIsScanning(true);
     
-    // Safely access API URL
+    // Safely access API URL with Fallback to Railway Production
     const env = (import.meta as any).env || {};
-    const apiUrl = env.VITE_API_URL; 
+    const apiUrl = env.VITE_API_URL || "https://the-scanner.up.railway.app"; 
 
     try {
       let newResult: AnalysisResult;

@@ -44,7 +44,8 @@ async def run_scan(request: ScanRequest):
         intent_results = analyze_intent(request.reportText)
         
         # 2. Run Scanner 2 (Reality) - This is the "Live" check
-        reality_results = x_ray_search(request.companyName)
+        # Updated to pass the company URL for domain-specific X-Ray
+        reality_results = x_ray_search(request.companyName, request.companyUrl)
         
         # 3. Calculate Gap
         gap = intent_results["score"] - reality_results["score"]
@@ -56,8 +57,12 @@ async def run_scan(request: ScanRequest):
         if api_key:
             try:
                 genai.configure(api_key=api_key)
-                # Use Gemini 3 Flash Preview as per latest guidelines
-                model = genai.GenerativeModel('gemini-3-flash-preview')
+                # Attempt to use the preview model, fallback to flash if unavailable in region/tier
+                try:
+                    model = genai.GenerativeModel('gemini-1.5-flash')
+                except:
+                    model = genai.GenerativeModel('gemini-pro')
+
                 prompt = f"""
                 Analyze {request.companyName} (Finland Top 100 Context).
                 Intent Score: {intent_results["score"]}/100.
@@ -100,11 +105,16 @@ async def run_scan(request: ScanRequest):
                 current_db = []
                 blob_url = os.environ.get("VITE_BLOB_URL") 
                 
-                if blob_url:
+                if not blob_url:
+                    print("CRITICAL ERROR: VITE_BLOB_URL is missing in Railway Variables.")
+                    print("The app cannot read the existing database to append the new record.")
+                else:
                     try:
                         r = requests.get(blob_url)
                         if r.status_code == 200:
                             current_db = r.json()
+                        else:
+                            print(f"Failed to fetch existing DB from {blob_url}. Status: {r.status_code}")
                     except Exception as fetch_err:
                         print(f"Could not fetch existing DB: {fetch_err}")
 
@@ -125,7 +135,10 @@ async def run_scan(request: ScanRequest):
                 
                 # C. Upload back to Blob
                 new_url = storage.upload_json(BLOB_FILENAME, current_db)
-                print(f"Database updated. URL: {new_url}")
+                if new_url:
+                    print(f"Database updated. URL: {new_url}")
+                else:
+                    print("Database update failed (Upload error).")
 
             except Exception as e:
                 print(f"Persistence Failed: {e}")

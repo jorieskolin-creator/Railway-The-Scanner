@@ -1,6 +1,7 @@
 import os
 import requests
 import random
+from urllib.parse import urlparse
 
 # Query Definitions
 QUERIES = {
@@ -18,7 +19,19 @@ QUERIES = {
     ]
 }
 
-def x_ray_search(company_name: str):
+def get_domain(url):
+    """Extracts domain from url (e.g., https://www.nokia.com -> nokia.com)"""
+    if not url: return None
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc or parsed.path
+        if domain.startswith("www."):
+            return domain[4:]
+        return domain
+    except:
+        return None
+
+def x_ray_search(company_name: str, company_url: str = None):
     api_key = os.environ.get("GOOGLE_API_KEY")
     cx_id = os.environ.get("CX_ENGINE_ID")
     
@@ -34,19 +47,22 @@ def x_ray_search(company_name: str):
         print("Running in SIMULATION MODE for Reality Scanner.")
         return run_simulation_mode(company_name)
 
-    # NOTE: "Sites to search" (e.g., linkedin.com, indeed.com, duunitori.fi) 
-    # must be configured directly in the Google Programmable Search Engine console.
-    # The 'Search the entire web' option is disabled, so the engine inherently 
-    # filters to those added sites. We do not need to force 'site:' operators here.
+    # Extract domain for site-specific search
+    target_domain = get_domain(company_url)
 
     for category, query_list in QUERIES.items():
         for query in query_list:
             total_checks += 1
             
-            # Construct Search Term
-            # We explicitly add "Finland" to ensure geographical relevance within the allowed sites
-            # configured in the Google Console.
-            search_term = f'"{company_name}" "{query}" Finland'
+            # Smart Query Construction:
+            # 1. Search the company name + query + Finland (Broad search on the sources defined in Console)
+            # 2. OR Search directly on their own domain if provided (Deep search)
+            
+            if target_domain:
+                # E.g. (site:nokia.com "Data Mesh") OR ("Nokia" "Data Mesh" Finland)
+                search_term = f'(site:{target_domain} "{query}") OR ("{company_name}" "{query}" Finland)'
+            else:
+                search_term = f'"{company_name}" "{query}" Finland'
             
             url = f"https://www.googleapis.com/customsearch/v1?key={api_key}&cx={cx_id}&q={search_term}"
             

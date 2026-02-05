@@ -18,13 +18,13 @@ export const CompanyModal: React.FC<CompanyModalProps> = ({ company, isOpen, onC
   const handleRefresh = async () => {
     setIsRefreshing(true);
     
-    // Safely access API URL
+    // Safely access API URL with Fallback
     const env = (import.meta as any).env || {};
-    const apiUrl = env.VITE_API_URL;
+    const apiUrl = env.VITE_API_URL || "https://the-scanner.up.railway.app";
 
     try {
       if (!apiUrl) {
-         // Simulation Mode if no API
+         // Should not happen with fallback, but good safety
          await new Promise(resolve => setTimeout(resolve, 2000));
          alert("Backend not connected. Simulation only.");
          setIsRefreshing(false);
