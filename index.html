@@ -44,10 +44,18 @@
       window.Lucide = Lucide;
       window.Recharts = Recharts;
       window.GoogleGenAI = GoogleGenAI;
+      
+      // Polyfill process.env for geminiService.ts
+      window.process = { env: { API_KEY: '' } };
 
       // Debugging
-      console.log("React initialized:", !!window.React);
-      console.log("ReactDOM initialized:", !!window.ReactDOM);
+      console.log("Globals initialized:", {
+        React: !!window.React,
+        ReactDOM: !!window.ReactDOM,
+        Lucide: !!window.Lucide,
+        Recharts: !!window.Recharts,
+        GoogleGenAI: !!window.GoogleGenAI
+      });
 
       // 2. Define App Scripts in dependency order
       const scripts = [
@@ -81,7 +89,7 @@
             // We use string concatenation instead of template literals to avoid issues 
             // if the source code contains backticks.
             const script = document.createElement('script');
-            script.textContent = "(function() { try { \n" + js + "\n } catch(e) { console.error('Error executing " + url + ":', e); } })();";
+            script.textContent = "(function() { try { \n" + js + "\n } catch(e) { console.error('Error executing " + url + ":', e); window.LAST_ERROR = e; } })();";
             document.body.appendChild(script);
           } catch (error) {
             console.error(`Error loading script ${url}:`, error);
@@ -90,10 +98,11 @@
       }
 
       // Start loading only if dependencies are ready
-      if (window.ReactDOM && window.ReactDOM.createRoot) {
+      if (window.ReactDOM && window.ReactDOM.createRoot && window.React && window.Lucide) {
           loadScripts(scripts);
       } else {
-          console.error("Critical: ReactDOM not loaded properly. Aborting script loading.");
+          console.error("Critical: Global dependencies (React, ReactDOM, Lucide) not loaded. Aborting.");
+          document.body.innerHTML = "<div style='color:red; padding:20px'>Critical Error: Failed to load dependencies from CDN. Check internet connection or console.</div>";
       }
     </script>
   <script type="importmap">

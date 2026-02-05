@@ -2,10 +2,12 @@
 const getGeminiClient = () => {
     // Relies on global window.GoogleGenAI set in index.html
     const GoogleGenAI = (window as any).GoogleGenAI;
-    const apiKey = process.env.API_KEY; 
+    
+    // Safety check for process.env
+    const apiKey = (window as any).process?.env?.API_KEY || ''; 
     
     if (!apiKey) {
-      console.warn("API Key not found.");
+      console.warn("API Key not found in process.env.API_KEY. Gemini features will be disabled.");
       return null;
     }
     return new GoogleGenAI({ apiKey });
@@ -13,7 +15,7 @@ const getGeminiClient = () => {
   
 (window as any).generateSynthesis = async (data, companyName) => {
   const ai = getGeminiClient();
-  if (!ai) return "Error: API Key missing. Unable to generate summary.";
+  if (!ai) return "Analysis complete. (AI Summary unavailable: API Key missing)";
 
   const prompt = `
     You are a Senior Market Analyst.
@@ -41,7 +43,7 @@ const getGeminiClient = () => {
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
+      model: 'gemini-2.0-flash',
       contents: prompt,
     });
     
