@@ -40,7 +40,12 @@ class ScanRequest(BaseModel):
 
 @app.get("/")
 def read_root():
+    # This route satisfies the Railway Healthcheck when path is set to "/"
     return {"status": "Adaptability Scanner API Online"}
+
+@app.get("/health")
+def health_check():
+    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
 
 @app.post("/admin/seed-finland-100")
 async def seed_database(background_tasks: BackgroundTasks):

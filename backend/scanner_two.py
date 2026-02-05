@@ -3,6 +3,7 @@ import os
 import requests
 import random
 import re
+import hashlib
 from urllib.parse import urlparse
 
 # REFINED QUERIES FOR FINNISH MARKET INTELLIGENCE
@@ -148,7 +149,9 @@ def x_ray_search(company_name: str, company_url: str = None):
 
 def run_simulation_mode(company_name):
     """
-    Generates realistic looking data using the specific domains provided by the user.
+    Generates deterministic simulation data based on company name.
+    This ensures that if you re-scan the same company in simulation mode, 
+    you get the same result (consistency), rather than random noise.
     """
     checklist = []
     evidence_links = []
@@ -156,12 +159,18 @@ def run_simulation_mode(company_name):
     passed_checks = 0
 
     print(f"Simulating reality check for {company_name}...")
+    
+    # Use Company Name to seed the random number generator
+    # This makes the "simulation" consistent for the same input
+    seed_val = int(hashlib.sha256(company_name.encode('utf-8')).hexdigest(), 16) % 10**8
+    rng = random.Random(seed_val)
 
     for category, query_list in QUERIES.items():
         for item in query_list:
             total_checks += 1
             # Randomly "find" evidence to create score variance (biased slightly positive for realism)
-            found = random.choice([True, False, True]) 
+            # 60% chance of finding evidence in simulation
+            found = rng.choice([True, False, True, False, True]) 
             
             checklist.append({
                 "category": category,
@@ -177,7 +186,7 @@ def run_simulation_mode(company_name):
                 mock_source = "Google Search"
                 domains = re.findall(r'site:([\w\.]+)', item['q'])
                 if domains:
-                    mock_source = random.choice(domains)
+                    mock_source = rng.choice(domains)
                 
                 evidence_links.append({
                     "title": f"{item['intent']} found for {company_name}",
