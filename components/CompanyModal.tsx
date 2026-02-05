@@ -1,8 +1,8 @@
 
 import React, { useState } from 'react';
 import { X, RefreshCw, Calendar, Clock, Loader2 as Loader2Icon } from 'lucide-react';
-import { AnalysisResult } from '../types';
 import CompanySummary from './CompanySummary';
+import { AnalysisResult } from '../types';
 import { runMockScanner } from '../services/mockScannerService';
 
 interface CompanyModalProps {

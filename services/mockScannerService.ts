@@ -1,5 +1,5 @@
 
-import { ScannerInputData, AnalysisResult, ScannerCategoryScore, Scanner1Category, Scanner2Category } from '../types';
+import { Scanner1Category, Scanner2Category, ScannerCategoryScore, ScannerInputData, AnalysisResult } from '../types';
 import { INTENT_KEYWORDS, REALITY_QUERIES } from '../constants';
 
 const runScannerOne = (text: string): { score: number, breakdown: ScannerCategoryScore[] } => {
@@ -115,30 +115,6 @@ const FINNISH_COMPANIES = [
   "Fiskars Group", "Vaisala Oyj", "Olvi Oyj", "Ponsse Oyj", "Revenio Group"
 ];
 
-export const generateMockDashboardData = (): AnalysisResult[] => {
-  return FINNISH_COMPANIES.map((name, idx) => {
-    let intent = Math.floor(Math.random() * 60) + 20; 
-    let reality = Math.floor(Math.random() * 60) + 20;
-    
-    if (["Nokia Oyj", "Elisa Oyj", "Tietoevry Oyj", "Rovio Entertainment", "Vaisala Oyj"].includes(name)) {
-        intent = Math.floor(Math.random() * 30) + 60;
-        reality = Math.floor(Math.random() * 30) + 60;
-    }
-
-    if (["Stora Enso Oyj", "UPM-Kymmene Oyj", "Outokumpu Oyj", "Neste Oyj"].includes(name)) {
-        intent = Math.floor(Math.random() * 20) + 70;
-        reality = Math.floor(Math.random() * 40) + 30;
-    }
-    
-    if (["Kesko Oyj", "Tokmanni Group", "Olvi Oyj"].includes(name)) {
-        intent = Math.floor(Math.random() * 40) + 30;
-        reality = Math.floor(Math.random() * 40) + 30;
-    }
-
-    return createMockResult(name, intent, reality);
-  });
-};
-
 const createMockResult = (name: string, intent: number, reality: number): AnalysisResult => {
   const gap = intent - reality;
   return {
@@ -163,4 +139,28 @@ const createMockResult = (name: string, intent: number, reality: number): Analys
     ],
     reality_checklist: []
   };
+};
+
+export const generateMockDashboardData = (): AnalysisResult[] => {
+  return FINNISH_COMPANIES.map((name, idx) => {
+    let intent = Math.floor(Math.random() * 60) + 20; 
+    let reality = Math.floor(Math.random() * 60) + 20;
+    
+    if (["Nokia Oyj", "Elisa Oyj", "Tietoevry Oyj", "Rovio Entertainment", "Vaisala Oyj"].includes(name)) {
+        intent = Math.floor(Math.random() * 30) + 60;
+        reality = Math.floor(Math.random() * 30) + 60;
+    }
+
+    if (["Stora Enso Oyj", "UPM-Kymmene Oyj", "Outokumpu Oyj", "Neste Oyj"].includes(name)) {
+        intent = Math.floor(Math.random() * 20) + 70;
+        reality = Math.floor(Math.random() * 40) + 30;
+    }
+    
+    if (["Kesko Oyj", "Tokmanni Group", "Olvi Oyj"].includes(name)) {
+        intent = Math.floor(Math.random() * 40) + 30;
+        reality = Math.floor(Math.random() * 40) + 30;
+    }
+
+    return createMockResult(name, intent, reality);
+  });
 };

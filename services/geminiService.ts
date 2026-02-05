@@ -1,11 +1,9 @@
 
 import { GoogleGenAI } from "@google/genai";
-import { AnalysisResult } from '../types';
+import { AnalysisResult } from "../types";
 
 const getGeminiClient = () => {
-    // API Key must be obtained exclusively from process.env.API_KEY per guidelines
     const apiKey = process.env.API_KEY;
-    
     if (!apiKey) {
       console.warn("API Key not found in env.");
       return null;

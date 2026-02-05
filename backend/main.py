@@ -10,7 +10,8 @@ import uuid
 import json
 import requests
 from datetime import datetime
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 from scanner_one import analyze_intent
 from scanner_two import x_ray_search
@@ -85,7 +86,7 @@ async def run_scan(request: ScanRequest):
         
         if api_key:
             try:
-                genai.configure(api_key=api_key)
+                client = genai.Client(api_key=api_key)
                 prompt = f"""
                 Analyze {request.companyName} (Finland Top 100 Context).
                 Intent Score: {intent_results["score"]}/100.
@@ -96,21 +97,20 @@ async def run_scan(request: ScanRequest):
                 Write a concise executive summary (max 3 sentences) diagnosing their adaptability.
                 Mention if they are "Silent Executors" or practicing "Theater".
                 """
+                
                 try:
-                    model = genai.GenerativeModel('gemini-3-flash-preview')
-                    ai_res = model.generate_content(prompt)
-                    if ai_res.text: summary = ai_res.text
+                    # Using the new SDK syntax
+                    response = client.models.generate_content(
+                        model='gemini-2.0-flash',
+                        contents=prompt
+                    )
+                    if response.text: summary = response.text
                 except Exception as e:
-                    print(f"Gemini 3 Flash unavailable. Fallback to 1.5 Flash. Error: {e}")
-                    try:
-                        model = genai.GenerativeModel('gemini-1.5-flash')
-                        ai_res = model.generate_content(prompt)
-                        if ai_res.text: summary = ai_res.text
-                    except Exception as fb_err:
-                         summary = f"AI Analysis failed: {str(fb_err)}"
+                    print(f"Gemini 2.0 Flash Error: {e}")
+                    summary = f"AI Analysis failed: {str(e)}"
 
             except Exception as e:
-                print(f"Gemini Error: {e}")
+                print(f"Gemini Client Error: {e}")
                 summary = f"AI Analysis failed: {str(e)}"
 
         new_timestamp = datetime.utcnow().isoformat()
