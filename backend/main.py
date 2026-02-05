@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
@@ -12,6 +12,7 @@ import google.generativeai as genai
 from scanner_one import analyze_intent
 from scanner_two import x_ray_search
 from storage import BlobStorage
+from seed_manager import run_batch_seed # Import the batch processor
 
 app = FastAPI()
 
@@ -37,6 +38,18 @@ class ScanRequest(BaseModel):
 def read_root():
     return {"status": "Adaptability Scanner API Online"}
 
+@app.post("/admin/seed-finland-100")
+async def seed_database(background_tasks: BackgroundTasks):
+    """
+    Triggers the batch processing of the Top 100 list.
+    Runs in background to prevent timeout.
+    """
+    # Check if a secret key is provided to prevent public abuse (Optional, simplified here)
+    # In production, check for a header like 'X-Admin-Key'
+    
+    background_tasks.add_task(run_batch_seed, real_xray_mode=False) # Default to Sim X-Ray to save money
+    return {"status": "Batch Seeding Initiated", "message": "Processing Finland Top 100 in background. Check Blob Storage in ~2 minutes."}
+
 @app.post("/scan")
 async def run_scan(request: ScanRequest):
     try:
@@ -57,11 +70,12 @@ async def run_scan(request: ScanRequest):
         if api_key:
             try:
                 genai.configure(api_key=api_key)
-                # Attempt to use the preview model, fallback to flash if unavailable in region/tier
+                # Use Gemini 2.0 Flash for faster, smarter reasoning
                 try:
-                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    model = genai.GenerativeModel('gemini-2.0-flash-exp')
                 except:
-                    model = genai.GenerativeModel('gemini-pro')
+                    # Fallback to Pro if Experimental is not available in region
+                    model = genai.GenerativeModel('gemini-1.5-pro')
 
                 prompt = f"""
                 Analyze {request.companyName} (Finland Top 100 Context).
@@ -107,21 +121,43 @@ async def run_scan(request: ScanRequest):
                 
                 if not blob_url:
                     print("CRITICAL ERROR: VITE_BLOB_URL is missing in Railway Variables.")
-                    print("The app cannot read the existing database to append the new record.")
                 else:
+                    # Fix URL if user forgot filename
+                    if not blob_url.endswith("json"):
+                         if blob_url.endswith("/"):
+                             blob_url = f"{blob_url}{BLOB_FILENAME}"
+                         else:
+                             blob_url = f"{blob_url}/{BLOB_FILENAME}"
+
                     try:
+                        print(f"Fetching current DB from: {blob_url}")
                         r = requests.get(blob_url)
+                        
                         if r.status_code == 200:
                             current_db = r.json()
+                        elif r.status_code == 404:
+                            # CRITICAL FIX: Handle empty database (first run)
+                            print(f"DATABASE INITIALIZATION: {BLOB_FILENAME} not found. Creating for the first time.")
+                            current_db = [] 
                         else:
-                            print(f"Failed to fetch existing DB from {blob_url}. Status: {r.status_code}")
+                            print(f"Failed to fetch existing DB. Status: {r.status_code}")
+                            # SAFETY CHECK: If status is not 404 and not 200, do not overwrite.
+                            # We abort the save to prevent data loss.
+                            raise Exception(f"Aborting Save: Cannot confirm existing DB state (Status {r.status_code})")
+                            
                     except Exception as fetch_err:
-                        print(f"Could not fetch existing DB: {fetch_err}")
+                        print(f"Could not fetch existing DB (Network Error): {fetch_err}")
+                        if "Aborting Save" in str(fetch_err):
+                             raise fetch_err
+                        # Only default to empty if it was a connection error on FIRST run logic, otherwise safer to crash than overwrite
+                        # For this prototype, we will allow overwrite on connection error if we assume it's first run.
+                        # But 404 is the explicit "Empty" signal.
+                        # current_db = [] 
 
                 # B. Update or Append
                 index = -1
                 for i, item in enumerate(current_db):
-                    if item.get("companyName").lower() == request.companyName.lower():
+                    if item.get("companyName", "").lower() == request.companyName.lower():
                         index = i
                         result_data["id"] = item.get("id", result_id) 
                         break
@@ -136,12 +172,13 @@ async def run_scan(request: ScanRequest):
                 # C. Upload back to Blob
                 new_url = storage.upload_json(BLOB_FILENAME, current_db)
                 if new_url:
-                    print(f"Database updated. URL: {new_url}")
+                    print(f"Database updated successfully. URL: {new_url}")
                 else:
                     print("Database update failed (Upload error).")
 
             except Exception as e:
                 print(f"Persistence Failed: {e}")
+                # We continue to return the result to the user even if saving failed
         
         return {
             "success": True,

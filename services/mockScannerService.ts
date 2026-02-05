@@ -1,3 +1,4 @@
+
 import { AnalysisResult, ScannerInputData, ScannerCategoryScore, Scanner1Category, Scanner2Category } from '../types';
 import { INTENT_KEYWORDS, REALITY_QUERIES } from '../constants';
 
@@ -6,50 +7,57 @@ import { INTENT_KEYWORDS, REALITY_QUERIES } from '../constants';
  */
 const runScannerOne = (text: string): { score: number, breakdown: ScannerCategoryScore[] } => {
   const breakdown: ScannerCategoryScore[] = [];
-  let totalGood = 0;
-  let totalBad = 0;
+  
+  // PDF Thresholds
+  const GOOD_THRESHOLD = 3;
+  const BAD_THRESHOLD = 1;
 
   // Process each category
   (Object.keys(INTENT_KEYWORDS) as Scanner1Category[]).forEach(category => {
     const { good, bad } = INTENT_KEYWORDS[category];
     
-    let goodCount = 0;
-    let badCount = 0;
+    let uniqueGoodFound = 0;
+    let uniqueBadFound = 0;
 
     const lowerText = text.toLowerCase();
 
     good.forEach(word => {
-      const count = (lowerText.match(new RegExp(word.toLowerCase(), "g")) || []).length;
-      goodCount += count;
+      // Escape special characters for regex
+      const escapedWord = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); 
+      const count = (lowerText.match(new RegExp(`\\b${escapedWord.toLowerCase()}\\b`, "g")) || []).length;
+      if (count >= GOOD_THRESHOLD) {
+        uniqueGoodFound++;
+      }
     });
 
     bad.forEach(word => {
-      const count = (lowerText.match(new RegExp(word.toLowerCase(), "g")) || []).length;
-      badCount += count;
+      const escapedWord = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const count = (lowerText.match(new RegExp(`\\b${escapedWord.toLowerCase()}\\b`, "g")) || []).length;
+      if (count >= BAD_THRESHOLD) {
+        uniqueBadFound++;
+      }
     });
 
-    let catScore = 50;
-    const total = goodCount + badCount;
-    if (total > 0) {
-      catScore = (goodCount / total) * 100;
+    // Net Modernization Score Logic: (Good Matches - Bad Matches) / 25
+    const netResult = uniqueGoodFound - uniqueBadFound;
+    let catScore = 0;
+    
+    if (netResult > 0) {
+        catScore = (netResult / 25) * 100;
+        if (catScore > 100) catScore = 100;
     }
 
     breakdown.push({
       name: category,
       score: Math.round(catScore),
-      goodCount,
-      badCount
+      goodCount: uniqueGoodFound,
+      badCount: uniqueBadFound
     });
-
-    totalGood += goodCount;
-    totalBad += badCount;
   });
 
-  let globalScore = 50;
-  const globalTotal = totalGood + totalBad;
-  if (globalTotal > 0) {
-    globalScore = (totalGood / globalTotal) * 100;
-  }
+  // Global score is average of category scores
+  const totalScore = breakdown.reduce((acc, curr) => acc + curr.score, 0);
+  const globalScore = totalScore / breakdown.length;
 
   return {
     score: Math.round(globalScore),

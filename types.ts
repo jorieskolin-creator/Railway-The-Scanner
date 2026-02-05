@@ -1,3 +1,4 @@
+
 export interface ScannerInputData {
   companyName: string;
   companyUrl: string;
@@ -44,9 +45,12 @@ export enum Scanner1Category {
   AIReadiness = "AI Readiness"
 }
 
+// Updated to mirror Scanner 1 for "Reality Gap" calculation (Page 14 of PDF)
 export enum Scanner2Category {
-  AdaptiveOperatingModel = "Adaptive Operating Model",
-  StrategyFinance = "Strategy & Finance",
-  HumanCentricity = "Human-Centricity",
-  AIDataReadiness = "AI & Data Readiness"
+  OperatingModel = "Operating Model",
+  ServicePortfolio = "Service Portfolio",
+  Values = "Values",
+  Strategy = "Strategy",
+  BusinessModel = "Business Model",
+  AIReadiness = "AI Readiness"
 }

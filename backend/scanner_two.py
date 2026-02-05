@@ -1,21 +1,46 @@
+
 import os
 import requests
 import random
 from urllib.parse import urlparse
 
-# Query Definitions
+# Query Definitions (Mirrors constants.ts and PDF X-Ray Logic)
 QUERIES = {
-    "Adaptive Operating Model": [
-        "Stream-aligned teams", "Micro-enterprises", "Platform Engineering", "Distributed Authority"
+    "Operating Model": [
+        {'q': 'site:linkedin.com/jobs "Company Name" AND ("Scrum Master" OR "Product Owner" OR "Agile Coach")', 'intent': 'Job Titles (Agile)'},
+        {'q': 'site:linkedin.com/jobs "Company Name" AND ("P&L responsibility" AND "team level")', 'intent': 'Micro-Enterprise Test'},
+        {'q': '"Company Name" AND ("Stream-aligned" OR "end-to-end ownership")', 'intent': 'Stream-Aligned Test'},
+        {'q': 'site:linkedin.com/jobs "Company Name" AND ("Platform Product Manager" OR "Golden Path")', 'intent': 'Platform Test'}
     ],
-    "Strategy & Finance": [
-        "Rolling Forecast", "Beyond Budgeting", "Dynamic Allocation", "Relative Targets"
+    "Service Portfolio": [
+        {'q': '"Company Name" AND ("ARR" OR "Recurring Revenue" OR "SaaS") filetype:pdf', 'intent': 'Modern Revenue'},
+        {'q': 'site:[domain] "API Documentation" OR "Developer Portal"', 'intent': 'Platform Indicator'},
+        {'q': 'site:[domain] "Pricing" AND ("Subscription" OR "License")', 'intent': 'Pricing Model'},
+        {'q': '"Company Name" "Financial Results" AND "Segment Reporting" filetype:pdf', 'intent': 'Revenue breakdown'}
     ],
-    "Human-Centricity": [
-        "Psychological Safety", "Blameless Post-Mortem", "Salary Transparency", "Self-Management"
+    "Values": [
+        {'q': 'site:glassdoor.com "Company Name" AND ("Micromanagement" OR "Surveillance")', 'intent': 'Trust Test (Negative)'},
+        {'q': 'site:[domain] "Unlimited PTO" OR "Remote First"', 'intent': 'Trust Test (Positive)'},
+        {'q': 'site:[domain] "Post-mortem" OR "Learning from failure"', 'intent': 'Psych Safety'},
+        {'q': 'site:[domain] "Code of Conduct" AND ("Whistleblower" OR "Ethics")', 'intent': 'Governance'}
     ],
-    "AI & Data Readiness": [
-        "Data Mesh", "Data Product Owner", "Automated Governance", "MLOps"
+    "Strategy": [
+        {'q': '"Company Name" AND ("Strategy 2025" OR "Vision 2030")', 'intent': 'Future focus'},
+        {'q': '"Company Name" AND ("Acquisition" OR "Divestment") site:kauppalehti.fi', 'intent': 'Action'},
+        {'q': '"Company Name" AND "Digital Transformation" AND "Revenue"', 'intent': 'Value Narrative'},
+        {'q': '"Company Name" AND ("Budget Variance" OR "Compliance")', 'intent': 'Budget Test (Negative)'}
+    ],
+    "Business Model": [
+        {'q': 'site:[domain] "App Store" OR "Marketplace"', 'intent': 'Ecosystem'},
+        {'q': 'site:[domain] "Pricing" AND ("Freemium" OR "Usage-based")', 'intent': 'Modern Pricing'},
+        {'q': 'site:[domain] "API Key" OR "SDK"', 'intent': 'Tech Platform'},
+        {'q': '"Company Name" AND ("Partner Program" OR "Ecosystem")', 'intent': 'Network Effects'}
+    ],
+    "AI Readiness": [
+        {'q': 'site:linkedin.com/jobs "Company Name" AND ("Azure" OR "AWS" OR "Google Cloud")', 'intent': 'Cloud Foundation'},
+        {'q': 'site:linkedin.com/jobs "Company Name" AND ("Data Mesh" OR "Data Product Owner")', 'intent': 'Data Arch'},
+        {'q': 'site:duunitori.fi "Company Name" AND ("Python" OR "Machine Learning" OR "LLM")', 'intent': 'Tech Skills'},
+        {'q': 'site:[domain] "Tech Radar" OR "Engineering Blog"', 'intent': 'Engineering Culture'}
     ]
 }
 
@@ -48,23 +73,28 @@ def x_ray_search(company_name: str, company_url: str = None):
         return run_simulation_mode(company_name)
 
     # Extract domain for site-specific search
-    target_domain = get_domain(company_url)
+    target_domain = get_domain(company_url) if company_url else "linkedin.com" # Fallback domain
 
     for category, query_list in QUERIES.items():
-        for query in query_list:
+        for item in query_list:
             total_checks += 1
+            raw_query = item['q']
+            intent_label = item['intent']
             
-            # Smart Query Construction:
-            # 1. Search the company name + query + Finland (Broad search on the sources defined in Console)
-            # 2. OR Search directly on their own domain if provided (Deep search)
-            
+            # Dynamic String Replacement for X-Ray
+            # We replace "Company Name" and [domain] placeholders with actual values
+            search_query = raw_query.replace('"Company Name"', f'"{company_name}"')
             if target_domain:
-                # E.g. (site:nokia.com "Data Mesh") OR ("Nokia" "Data Mesh" Finland)
-                search_term = f'(site:{target_domain} "{query}") OR ("{company_name}" "{query}" Finland)'
+                search_query = search_query.replace('site:[domain]', f'site:{target_domain}')
             else:
-                search_term = f'"{company_name}" "{query}" Finland'
+                # If no domain provided, remove the site: operator logic or fallback to broad search
+                search_query = search_query.replace('site:[domain]', f'"{company_name}"')
+
+            # Append "Finland" for geo-specificity if it looks like a broad search
+            if "site:" not in search_query and "Finland" not in search_query:
+                search_query += " Finland"
             
-            url = f"https://www.googleapis.com/customsearch/v1?key={api_key}&cx={cx_id}&q={search_term}"
+            url = f"https://www.googleapis.com/customsearch/v1?key={api_key}&cx={cx_id}&q={search_query}"
             
             try:
                 res = requests.get(url)
@@ -77,24 +107,24 @@ def x_ray_search(company_name: str, company_url: str = None):
                     passed_checks += 1
                     
                     # Capture the first link as evidence
-                    item = data["items"][0]
+                    result_item = data["items"][0]
                     evidence_links.append({
-                        "title": item.get("title", "Evidence Source"),
-                        "url": item.get("link", "#"),
-                        "source": item.get("displayLink", "Google Search")
+                        "title": f"{intent_label}: {result_item.get('title', 'Evidence Source')}",
+                        "url": result_item.get("link", "#"),
+                        "source": result_item.get("displayLink", "Google Search")
                     })
                 
                 checklist.append({
                     "category": category,
-                    "query": query,
+                    "query": intent_label, # Display the intent (e.g., "Job Titles") not the raw query
                     "found": found
                 })
                 
             except Exception as e:
-                print(f"Search API Error for {query}: {e}")
+                print(f"Search API Error for {intent_label}: {e}")
                 checklist.append({
                     "category": category,
-                    "query": query,
+                    "query": intent_label,
                     "found": False
                 })
 
@@ -120,21 +150,21 @@ def run_simulation_mode(company_name):
     print(f"Simulating reality check for {company_name}...")
 
     for category, query_list in QUERIES.items():
-        for query in query_list:
+        for item in query_list:
             total_checks += 1
             # Randomly "find" evidence to create score variance
             found = random.choice([True, False, False]) # 33% chance of finding evidence
             
             checklist.append({
                 "category": category,
-                "query": query,
+                "query": item['intent'],
                 "found": found
             })
 
             if found:
                 passed_checks += 1
                 evidence_links.append({
-                    "title": f"{company_name} - {query} (Simulated Result)",
+                    "title": f"{item['intent']} found for {company_name} (Simulated)",
                     "url": "#",
                     "source": "Simulated Search Match"
                 })

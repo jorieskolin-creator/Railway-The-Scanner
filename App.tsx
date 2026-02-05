@@ -4,43 +4,62 @@ import { generateMockDashboardData, runMockScanner } from './services/mockScanne
 import { TruthMatrix } from './components/TruthMatrix';
 import { CompanyModal } from './components/CompanyModal';
 import { ScannerInput } from './components/ScannerInput';
-import { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield } from 'lucide-react';
+import { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, Play } from 'lucide-react';
 
 const App: React.FC = () => {
   const [data, setData] = useState<AnalysisResult[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [isMockData, setIsMockData] = useState<boolean>(false); // Track if we are using fallback data
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedCompany, setSelectedCompany] = useState<AnalysisResult | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
+  const [isSeeding, setIsSeeding] = useState(false); // New state for batch seed
   const [sortConfig, setSortConfig] = useState<{ key: keyof AnalysisResult; direction: 'asc' | 'desc' } | null>({ key: 'reality_gap', direction: 'desc' });
 
   useEffect(() => {
     const fetchData = async () => {
       // Safely access environment variables
       const env = (import.meta as any).env || {};
-      const blobUrl = env.VITE_BLOB_URL; 
+      let blobUrl = env.VITE_BLOB_URL; 
       
       if (blobUrl) {
+        // Fix URL if user forgot filename in env var
+        if (!blobUrl.endsWith("json")) {
+            blobUrl = blobUrl.endsWith("/") ? `${blobUrl}dashboard_data.json` : `${blobUrl}/dashboard_data.json`;
+        }
+
         try {
           const response = await fetch(blobUrl);
+          
+          if (response.status === 404) {
+             console.log("Database file not yet created. Using Mock Data for display until first scan.");
+             const mockData = generateMockDashboardData();
+             setData(mockData);
+             setIsMockData(true); // Flag this as simulation
+             setLoading(false);
+             return;
+          }
+
           if (response.ok) {
             const realData = await response.json();
-            setData(realData);
-            setLoading(false);
-            return;
+            if (Array.isArray(realData)) {
+                setData(realData);
+                setLoading(false);
+                return;
+            }
           }
         } catch (e) {
-          console.error("Failed to fetch Blob data, falling back to mock", e);
+          console.warn("Blob fetch failed (likely empty), falling back to mock");
         }
       }
 
       // Fallback
-      console.warn("Using Mock Data");
       setTimeout(() => {
         const mockData = generateMockDashboardData();
         setData(mockData);
+        setIsMockData(true);
         setLoading(false);
       }, 1000);
     };
@@ -78,6 +97,12 @@ const App: React.FC = () => {
       // Update local state with new result
       // If company exists, replace it. If not, add it.
       setData(prev => {
+        // If we were in simulation mode, clear the mock data and start fresh with real data
+        if (isMockData) {
+            setIsMockData(false);
+            return [newResult];
+        }
+
         const exists = prev.findIndex(p => p.companyName === newResult.companyName);
         if (exists > -1) {
           const updated = [...prev];
@@ -95,6 +120,32 @@ const App: React.FC = () => {
       alert("Error running scan. Check console.");
     } finally {
       setIsScanning(false);
+    }
+  };
+
+  const handleBatchSeed = async () => {
+    if (!confirm("This will start a background process to scan the Top Finland Companies. It may take 2-3 minutes to appear. Continue?")) return;
+    
+    setIsSeeding(true);
+    const env = (import.meta as any).env || {};
+    const apiUrl = env.VITE_API_URL || "https://the-scanner.up.railway.app"; 
+    
+    try {
+        if (!apiUrl) { alert("Backend not connected."); setIsSeeding(false); return; }
+        
+        const response = await fetch(`${apiUrl}/admin/seed-finland-100`, {
+             method: 'POST'
+        });
+        
+        if (response.ok) {
+            alert("Batch Process Initiated! The database will populate in the background. Please refresh the page in a few minutes.");
+        } else {
+            alert("Failed to start batch process.");
+        }
+    } catch (e) {
+        alert("Error connecting to backend.");
+    } finally {
+        setIsSeeding(false);
     }
   };
 
@@ -194,6 +245,26 @@ const App: React.FC = () => {
             </button>
           </div>
         </div>
+        
+        {/* Simulation Banner & Seed Action */}
+        {isMockData && !loading && (
+          <div className="w-full bg-indigo-950/80 border-b border-indigo-500/30 backdrop-blur-sm">
+             <div className="max-w-7xl mx-auto px-4 py-1.5 flex items-center justify-between">
+                <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider font-mono text-indigo-200">
+                    <Database size={12} className="text-cyan-400 animate-pulse" />
+                    <span>Database Empty (Simulation Mode)</span>
+                </div>
+                <button 
+                    onClick={handleBatchSeed}
+                    disabled={isSeeding}
+                    className="flex items-center gap-2 px-3 py-1 bg-cyan-600/20 hover:bg-cyan-600/40 text-cyan-300 text-[10px] font-bold uppercase rounded border border-cyan-500/50 transition-all"
+                >
+                    {isSeeding ? <Loader2 size={10} className="animate-spin" /> : <Play size={10} fill="currentColor" />}
+                    Initialize Finland Top 100 Database
+                </button>
+             </div>
+          </div>
+        )}
       </header>
 
       {/* Main Content */}

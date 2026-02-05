@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { ScannerInputData } from '../types';
 import { Search, FileText, Globe, Zap, ArrowRight, CornerDownLeft } from 'lucide-react';
@@ -100,7 +101,7 @@ export const ScannerInput: React.FC<ScannerInputProps> = ({ onScan }) => {
             </div>
           </div>
           <p className="text-[10px] text-slate-500 border-l-2 border-slate-700 pl-2">
-            Engine will parse for 50+ keywords across 6 dimensions of organizational design.
+            Engine will parse for <span className="text-cyan-400 font-bold">300+ markers</span> across 6 dimensions of organizational design.
           </p>
         </div>
 
