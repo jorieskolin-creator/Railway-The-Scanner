@@ -1,6 +1,6 @@
 
 const { useState, useEffect } = window.React;
-const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, Play } = (window as any).Lucide;
+const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, Play, RefreshCw } = (window as any).Lucide;
 
 // Components & Services from Window
 const TruthMatrix = (window as any).TruthMatrix;
@@ -20,18 +20,40 @@ const App = () => {
   const [isSeeding, setIsSeeding] = useState(false);
   const [sortConfig, setSortConfig] = useState({ key: 'reality_gap', direction: 'desc' });
 
-  useEffect(() => {
-    const fetchData = async () => {
-      // Fallback to Mock Data directly
-      setTimeout(() => {
-        const mockData = generateMockDashboardData();
-        setData(mockData);
-        setIsMockData(true);
-        setLoading(false);
-      }, 1000);
-    };
+  // Function to load data from backend
+  const fetchRealData = async () => {
+    try {
+        setLoading(true);
+        const response = await fetch('/dashboard-data');
+        if (response.ok) {
+            const json = await response.json();
+            if (Array.isArray(json) && json.length > 0) {
+                console.log("Loaded real data from backend:", json.length, "records");
+                setData(json);
+                setIsMockData(false);
+                setLoading(false);
+                return true;
+            }
+        }
+        throw new Error("No data or empty data");
+    } catch (e) {
+        console.warn("Could not load backend data, falling back to simulation.", e);
+        return false;
+    }
+  };
 
-    fetchData();
+  useEffect(() => {
+    const init = async () => {
+        const success = await fetchRealData();
+        if (!success) {
+            // Fallback to Mock Data
+            const mockData = generateMockDashboardData();
+            setData(mockData);
+            setIsMockData(true);
+            setLoading(false);
+        }
+    };
+    init();
   }, []);
 
   const handleRunScan = async (input) => {
@@ -62,10 +84,11 @@ const App = () => {
             setIsMockData(false);
             return [newResult];
         }
-        const exists = prev.findIndex(p => p.companyName === newResult.companyName);
-        if (exists > -1) {
+        // Update existing or add new
+        const existsIndex = prev.findIndex(p => p.companyName === newResult.companyName);
+        if (existsIndex > -1) {
           const updated = [...prev];
-          updated[exists] = newResult;
+          updated[existsIndex] = newResult;
           return updated;
         }
         return [newResult, ...prev];
@@ -83,12 +106,15 @@ const App = () => {
   };
 
   const handleBatchSeed = async () => {
-    if (!confirm("Start background seed for Finland Top 100?")) return;
+    if (!confirm("Start background seed for Finland Top 100? This triggers a backend process.")) return;
     setIsSeeding(true);
     try {
         const response = await fetch(`/admin/seed-finland-100`, { method: 'POST' });
-        if (response.ok) alert("Batch Process Initiated!");
-        else throw new Error("API Error");
+        if (response.ok) {
+            alert("Batch Process Initiated! The database is populating in the background.\n\nWait 10-20 seconds, then press the small Refresh button in the header.");
+        } else {
+            throw new Error("API Error");
+        }
     } catch (e) {
         alert("Could not connect to backend.");
     } finally {
@@ -154,6 +180,14 @@ const App = () => {
           </div>
           
           <div className="flex items-center gap-4 w-full max-w-md ml-4 justify-end">
+            <button 
+                onClick={fetchRealData} 
+                title="Refresh Data from Server"
+                className="p-2 bg-white/5 hover:bg-white/10 rounded-full text-indigo-300 transition-all border border-transparent hover:border-indigo-500/30"
+            >
+                <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+            </button>
+
             <div className="relative w-full max-w-[240px] group hidden sm:block">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-indigo-300">
                 <Search size={14} />
@@ -180,7 +214,7 @@ const App = () => {
              <div className="max-w-7xl mx-auto px-4 py-1.5 flex items-center justify-between">
                 <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider font-mono text-indigo-200">
                     <Database size={12} className="text-cyan-400 animate-pulse" />
-                    <span>Database Empty (Simulation Mode)</span>
+                    <span>Database Empty / Unreachable (Using Simulation)</span>
                 </div>
                 <button 
                     onClick={handleBatchSeed}

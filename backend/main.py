@@ -34,11 +34,9 @@ storage = BlobStorage()
 BLOB_FILENAME = "dashboard_data.json"
 
 # --- STATIC FILE SERVING FOR FRONTEND ---
-# Serve specific directories for React components and logic
 app.mount("/components", StaticFiles(directory="../components"), name="components")
 app.mount("/services", StaticFiles(directory="../services"), name="services")
 
-# Serve individual source files required by the browser
 @app.get("/App.tsx")
 async def get_app_tsx(): return FileResponse("../App.tsx", media_type="application/javascript")
 
@@ -51,17 +49,38 @@ async def get_types_ts(): return FileResponse("../types.ts", media_type="applica
 @app.get("/constants.ts")
 async def get_constants_ts(): return FileResponse("../constants.ts", media_type="application/javascript")
 
-# Serve the main HTML entry point at root
 @app.get("/")
 async def read_root():
     return FileResponse("../index.html")
 
-# Move the API Status check to a dedicated endpoint
 @app.get("/api/health")
 def health_check():
     return {"status": "Adaptability Scanner API Online", "timestamp": datetime.utcnow().isoformat()}
 
-# --- API ROUTES ---
+# --- DATA ROUTES ---
+
+@app.get("/dashboard-data")
+async def get_dashboard_data():
+    """
+    Retrieves the current database state from Vercel Blob.
+    Used by Frontend to hydrate the dashboard.
+    """
+    try:
+        data = storage.retrieve_latest_data(BLOB_FILENAME)
+        return data
+    except Exception as e:
+        print(f"Error retrieving data: {e}")
+        return []
+
+@app.get("/admin/debug-storage")
+async def debug_storage():
+    """
+    DEBUG ENDPOINT: Checks connection to Vercel Blob and lists files.
+    Use this to verify if data is actually being stored.
+    """
+    return storage.debug_list_files()
+
+# --- ACTION ROUTES ---
 
 class ScanRequest(BaseModel):
     companyName: str
@@ -72,15 +91,17 @@ class ScanRequest(BaseModel):
 @app.post("/admin/seed-finland-100")
 async def seed_database(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_batch_seed, real_xray_mode=False)
-    return {"status": "Batch Seeding Initiated", "message": "Processing Finland Top 100 in background."}
+    return {"status": "Batch Seeding Initiated", "message": "Processing Finland Top 100 in background. Check back in 30 seconds."}
 
 @app.post("/scan")
 async def run_scan(request: ScanRequest):
     try:
+        # 1. Run Analysis
         intent_results = analyze_intent(request.reportText)
         reality_results = x_ray_search(request.companyName, request.companyUrl)
         gap = intent_results["score"] - reality_results["score"]
         
+        # 2. AI Synthesis
         summary = "AI Summary Unavailable (Config Error)"
         api_key = os.environ.get("API_KEY") or os.environ.get("GEMINI_API_KEY")
         
@@ -95,11 +116,9 @@ async def run_scan(request: ScanRequest):
                 Verified Evidence: {', '.join([l['title'] for l in reality_results['links'][:3]])}
                 
                 Write a concise executive summary (max 3 sentences) diagnosing their adaptability.
-                Mention if they are "Silent Executors" or practicing "Theater".
                 """
                 
                 try:
-                    # Using the new SDK syntax
                     response = client.models.generate_content(
                         model='gemini-2.0-flash',
                         contents=prompt
@@ -107,12 +126,11 @@ async def run_scan(request: ScanRequest):
                     if response.text: summary = response.text
                 except Exception as e:
                     print(f"Gemini 2.0 Flash Error: {e}")
-                    summary = f"AI Analysis failed: {str(e)}"
 
             except Exception as e:
                 print(f"Gemini Client Error: {e}")
-                summary = f"AI Analysis failed: {str(e)}"
 
+        # 3. Construct Result
         new_timestamp = datetime.utcnow().isoformat()
         result_id = str(uuid.uuid4())
         
@@ -130,20 +148,13 @@ async def run_scan(request: ScanRequest):
             "is_simulated": reality_results.get("is_simulated", False)
         }
         
+        # 4. Save to Database
         if request.saveToDatabase:
             print(f"Persisting update for {request.companyName}...")
             try:
-                current_db = []
-                blob_url = os.environ.get("VITE_BLOB_URL") 
-                if blob_url:
-                    if not blob_url.endswith("json"):
-                         blob_url = f"{blob_url}{BLOB_FILENAME}" if blob_url.endswith("/") else f"{blob_url}/{BLOB_FILENAME}"
-                    try:
-                        r = requests.get(blob_url)
-                        if r.status_code == 200: current_db = r.json()
-                        elif r.status_code == 404: current_db = [] 
-                    except Exception: pass 
-
+                # Fetch current DB -> Update -> Upload
+                current_db = storage.retrieve_latest_data(BLOB_FILENAME) or []
+                
                 index = -1
                 for i, item in enumerate(current_db):
                     if item.get("companyName", "").lower() == request.companyName.lower():
