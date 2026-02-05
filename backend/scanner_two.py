@@ -2,15 +2,6 @@ import os
 import requests
 import random
 
-# Configuration: Define exactly where we look for evidence
-# The code uses 'site:' operators to force Google to only look here.
-SEARCH_SOURCES = [
-    "linkedin.com/jobs",
-    "indeed.com",
-    "boards.greenhouse.io",
-    "jobs.lever.co"
-]
-
 # Query Definitions
 QUERIES = {
     "Adaptive Operating Model": [
@@ -43,17 +34,19 @@ def x_ray_search(company_name: str):
         print("Running in SIMULATION MODE for Reality Scanner.")
         return run_simulation_mode(company_name)
 
-    # Pre-calculate the site string: "site:linkedin.com OR site:indeed.com ..."
-    # This acts as the strict filter for the Google Search Engine
-    sites_query = " OR ".join([f"site:{s}" for s in SEARCH_SOURCES])
+    # NOTE: "Sites to search" (e.g., linkedin.com, indeed.com, duunitori.fi) 
+    # must be configured directly in the Google Programmable Search Engine console.
+    # The 'Search the entire web' option is disabled, so the engine inherently 
+    # filters to those added sites. We do not need to force 'site:' operators here.
 
     for category, query_list in QUERIES.items():
         for query in query_list:
             total_checks += 1
             
             # Construct Search Term
-            # Format: (site:A OR site:B) "CompanyName" "QueryTerm"
-            search_term = f'({sites_query}) "{company_name}" "{query}"'
+            # We explicitly add "Finland" to ensure geographical relevance within the allowed sites
+            # configured in the Google Console.
+            search_term = f'"{company_name}" "{query}" Finland'
             
             url = f"https://www.googleapis.com/customsearch/v1?key={api_key}&cx={cx_id}&q={search_term}"
             

@@ -62,7 +62,7 @@ const App: React.FC = () => {
         const response = await fetch(`${apiUrl}/scan`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(input)
+          body: JSON.stringify({ ...input, saveToDatabase: true }) // New scans also save to DB
         });
         
         if (!response.ok) throw new Error("Scan failed");
@@ -75,7 +75,18 @@ const App: React.FC = () => {
         newResult = await runMockScanner(input);
       }
 
-      setData(prev => [newResult, ...prev]);
+      // Update local state with new result
+      // If company exists, replace it. If not, add it.
+      setData(prev => {
+        const exists = prev.findIndex(p => p.companyName === newResult.companyName);
+        if (exists > -1) {
+          const updated = [...prev];
+          updated[exists] = newResult;
+          return updated;
+        }
+        return [newResult, ...prev];
+      });
+
       setIsScannerOpen(false);
       setSelectedCompany(newResult);
       setIsModalOpen(true);
@@ -85,6 +96,14 @@ const App: React.FC = () => {
     } finally {
       setIsScanning(false);
     }
+  };
+
+  const handleCompanyUpdate = (updatedCompany: AnalysisResult) => {
+    // This function is called when the Modal performs a "Refresh Forensic Scan"
+    setData(prev => prev.map(item => 
+      item.companyName === updatedCompany.companyName ? updatedCompany : item
+    ));
+    setSelectedCompany(updatedCompany);
   };
 
   const handleCompanyClick = (company: AnalysisResult) => {
@@ -342,7 +361,8 @@ const App: React.FC = () => {
       <CompanyModal 
         company={selectedCompany} 
         isOpen={isModalOpen} 
-        onClose={() => setIsModalOpen(false)} 
+        onClose={() => setIsModalOpen(false)}
+        onUpdate={handleCompanyUpdate}
       />
 
     </div>

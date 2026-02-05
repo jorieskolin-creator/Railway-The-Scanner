@@ -1,9 +1,11 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 import os
 import uuid
+import json
+import requests
 from datetime import datetime
 import google.generativeai as genai
 
@@ -16,22 +18,20 @@ app = FastAPI()
 # Enable CORS for Vercel Frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # In production, replace "*" with your Vercel URL
+    allow_origins=["*"], 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 storage = BlobStorage()
+BLOB_FILENAME = "dashboard_data.json"
 
 class ScanRequest(BaseModel):
     companyName: str
     companyUrl: Optional[str] = None
     reportText: str
-
-class AnalysisResponse(BaseModel):
-    success: bool
-    data: dict
+    saveToDatabase: Optional[bool] = False # Flag to trigger Blob persistence
 
 @app.get("/")
 def read_root():
@@ -43,7 +43,7 @@ async def run_scan(request: ScanRequest):
         # 1. Run Scanner 1 (Intent)
         intent_results = analyze_intent(request.reportText)
         
-        # 2. Run Scanner 2 (Reality)
+        # 2. Run Scanner 2 (Reality) - This is the "Live" check
         reality_results = x_ray_search(request.companyName)
         
         # 3. Calculate Gap
@@ -56,14 +56,17 @@ async def run_scan(request: ScanRequest):
         if api_key:
             try:
                 genai.configure(api_key=api_key)
-                # Note: 'gemini-1.5-flash' is the model name.
-                model = genai.GenerativeModel('gemini-1.5-flash')
+                # Use Gemini 3 Flash Preview as per latest guidelines
+                model = genai.GenerativeModel('gemini-3-flash-preview')
                 prompt = f"""
-                Analyze {request.companyName}.
+                Analyze {request.companyName} (Finland Top 100 Context).
                 Intent Score: {intent_results["score"]}/100.
                 Reality Score: {reality_results["score"]}/100.
                 Gap: {gap}.
-                Write a 3 sentence executive summary diagnosing their adaptability.
+                Verified Evidence: {', '.join([l['title'] for l in reality_results['links'][:3]])}
+                
+                Write a concise executive summary (max 3 sentences) diagnosing their adaptability.
+                Mention if they are "Silent Executors" or practicing "Theater".
                 """
                 ai_res = model.generate_content(prompt)
                 if ai_res.text:
@@ -73,7 +76,9 @@ async def run_scan(request: ScanRequest):
                 summary = f"AI Analysis failed: {str(e)}"
 
         # 5. Construct Result Object
+        new_timestamp = datetime.utcnow().isoformat()
         result_id = str(uuid.uuid4())
+        
         result_data = {
             "id": result_id,
             "companyName": request.companyName,
@@ -84,11 +89,46 @@ async def run_scan(request: ScanRequest):
             "reality_checklist": reality_results["checklist"],
             "evidence_links": reality_results["links"],
             "summary_text": summary,
-            "lastUpdated": datetime.utcnow().isoformat()
+            "lastUpdated": new_timestamp
         }
         
-        # 6. Update Master Dashboard JSON in Blob
-        # For this prototype, we return data to frontend immediately
+        # 6. Persistence Logic (The "Refresh Database" Feature)
+        if request.saveToDatabase:
+            print(f"Persisting update for {request.companyName} to Blob...")
+            try:
+                # A. Get current master list
+                current_db = []
+                blob_url = os.environ.get("VITE_BLOB_URL") 
+                
+                if blob_url:
+                    try:
+                        r = requests.get(blob_url)
+                        if r.status_code == 200:
+                            current_db = r.json()
+                    except Exception as fetch_err:
+                        print(f"Could not fetch existing DB: {fetch_err}")
+
+                # B. Update or Append
+                index = -1
+                for i, item in enumerate(current_db):
+                    if item.get("companyName").lower() == request.companyName.lower():
+                        index = i
+                        result_data["id"] = item.get("id", result_id) 
+                        break
+                
+                if index > -1:
+                    current_db[index] = result_data
+                    print(f"Updated existing record for {request.companyName}")
+                else:
+                    current_db.append(result_data)
+                    print(f"Appended new record for {request.companyName}")
+                
+                # C. Upload back to Blob
+                new_url = storage.upload_json(BLOB_FILENAME, current_db)
+                print(f"Database updated. URL: {new_url}")
+
+            except Exception as e:
+                print(f"Persistence Failed: {e}")
         
         return {
             "success": True,

@@ -41,7 +41,7 @@ export const generateSynthesis = async (data: AnalysisResult, companyName: strin
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-latest',
+      model: 'gemini-3-flash-preview',
       contents: prompt,
     });
     
