@@ -13,28 +13,6 @@ const CompanySummary = ({ data }) => {
 
   return (
     <div className="space-y-8">
-      {data.is_simulated && (
-        <div className="bg-amber-500/10 border border-amber-500/40 rounded-lg p-4 flex items-start gap-4 animate-in slide-in-from-top-2">
-            <div className="p-2 bg-amber-500/20 rounded-full shrink-0">
-                <ServerCrash className="text-amber-500" size={20} />
-            </div>
-            <div>
-                <h4 className="text-amber-400 text-sm font-bold flex items-center gap-2">
-                    Simulated Reality Data
-                    <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-[10px] uppercase border border-amber-500/30">Batch Mode</span>
-                </h4>
-                <p className="text-amber-200/80 text-xs mt-1 leading-relaxed">
-                    This record was generated using <strong>Simulation Mode</strong> to preserve your API quota. 
-                    The "Reality Score" is a projection, not verified evidence.
-                </p>
-                <div className="mt-2 flex items-center gap-2 text-[10px] text-amber-300 font-mono">
-                    <RefreshCw size={10} />
-                    <span>To get real data, click the "Refresh Forensic Scan" button at the bottom.</span>
-                </div>
-            </div>
-        </div>
-      )}
-
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-white/5 backdrop-blur-md p-6 rounded-2xl border border-white/10 flex flex-col items-center justify-center relative group overflow-hidden">
           <div className="absolute inset-0 bg-indigo-500/10 opacity-0 group-hover:opacity-100 transition-opacity"></div>
