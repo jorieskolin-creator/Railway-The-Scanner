@@ -144,13 +144,13 @@ const App: React.FC = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 bg-gradient-to-br from-cyan-500 to-violet-600 rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(139,92,246,0.3)] ring-1 ring-white/20">
-              <span className="text-white font-bold text-sm">M</span>
+              <span className="text-white font-bold text-sm">FI</span>
             </div>
             <div className="flex flex-col">
               <h1 className="font-bold text-base tracking-tight text-white hidden sm:block">
                 Adaptability<span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-violet-300">Scanner</span>
               </h1>
-              <span className="text-[10px] text-indigo-200 tracking-[0.15em] uppercase font-medium">Forensic Suite V2.1</span>
+              <span className="text-[10px] text-indigo-200 tracking-[0.15em] uppercase font-medium">Finland Top 100 Index</span>
             </div>
           </div>
           
@@ -161,7 +161,7 @@ const App: React.FC = () => {
               </div>
               <input
                 type="text"
-                placeholder="Search landscape..."
+                placeholder="Search Finland Top 100..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="w-full pl-9 pr-4 py-1.5 bg-[#0f172a]/50 border border-indigo-500/30 rounded-lg text-sm text-slate-100 placeholder-indigo-300/50 focus:ring-2 focus:ring-cyan-500/20 focus:border-cyan-500/50 focus:bg-[#0f172a]/80 outline-none transition-all shadow-inner"
@@ -184,10 +184,10 @@ const App: React.FC = () => {
         <section className="space-y-4">
           <div className="flex justify-between items-center">
             <h2 className="text-xl font-bold text-white flex items-center gap-2 tracking-tight">
-              <Sparkles className="text-cyan-300 w-4 h-4" /> Market Landscape
+              <Sparkles className="text-cyan-300 w-4 h-4" /> Market Landscape (Finland)
             </h2>
             <div className="flex gap-2">
-                 {["Ephemeral", "Local-First"].map(tag => (
+                 {["Helsinki Stock Exchange", "Turnover > 500M"].map(tag => (
                    <div key={tag} className="px-2 py-1 rounded bg-[#0f172a]/50 border border-indigo-500/20 text-[9px] uppercase font-bold text-indigo-300 flex items-center gap-1 cursor-default hover:bg-[#0f172a]/80 transition-colors">
                      <Shield size={8} /> {tag}
                    </div>

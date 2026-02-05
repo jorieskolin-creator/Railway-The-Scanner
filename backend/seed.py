@@ -9,15 +9,15 @@ MOCK_TEXT_BAD = "We value Command and Control. Our Strategy is Cost-cutting. We 
 MOCK_TEXT_GOOD = "We use Stream-aligned teams and Distributed Authority. Our North Star is Value Creation."
 
 def seed_data():
-    print("Starting Seed Process...")
+    print("Starting Seed Process (Finland Top 100)...")
     storage = BlobStorage()
     
     companies = [
-        {"name": "LegacyCorp", "text": MOCK_TEXT_BAD, "r_score": 20},
-        {"name": "AdaptiveFlow", "text": MOCK_TEXT_GOOD, "r_score": 85},
-        {"name": "GreenWash Inc", "text": MOCK_TEXT_GOOD, "r_score": 25}, # High Intent, Low Reality
-        {"name": "SilentExecutors", "text": MOCK_TEXT_BAD, "r_score": 75}, # Low Intent, High Reality
-        {"name": "AverageJoes", "text": "A mix of Cost-cutting and Growth.", "r_score": 50}
+        {"name": "Kesko Oyj", "text": "We operate in strict silos to maximize efficiency.", "r_score": 40},
+        {"name": "Nokia Oyj", "text": "We are a technology leader using cloud-native value streams.", "r_score": 85},
+        {"name": "Fortum Oyj", "text": "We are committed to renewable energy and transparency, but rely on heavy assets.", "r_score": 60}, 
+        {"name": "Neste Oyj", "text": "Innovation is our core, we are transforming towards a sustainable future.", "r_score": 75}, 
+        {"name": "Metso Oyj", "text": "Optimizing industrial processes through digital transformation.", "r_score": 50}
     ]
     
     dashboard_data = []
@@ -40,7 +40,7 @@ def seed_data():
             "intent_breakdown": intent["breakdown"],
             "reality_checklist": [],
             "evidence_links": [],
-            "summary_text": f"Seeded analysis for {c['name']}. Gap: {gap}",
+            "summary_text": f"Seeded analysis for {c['name']} (FI). Gap: {gap}",
             "lastUpdated": datetime.utcnow().isoformat()
         }
         dashboard_data.append(entry)

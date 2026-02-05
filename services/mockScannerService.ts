@@ -19,7 +19,6 @@ const runScannerOne = (text: string): { score: number, breakdown: ScannerCategor
     const lowerText = text.toLowerCase();
 
     good.forEach(word => {
-      // Simple occurrence check (in a real app, use regex for exact word boundary)
       const count = (lowerText.match(new RegExp(word.toLowerCase(), "g")) || []).length;
       goodCount += count;
     });
@@ -29,8 +28,6 @@ const runScannerOne = (text: string): { score: number, breakdown: ScannerCategor
       badCount += count;
     });
 
-    // Calculate category score (simple ratio normalized to 0-100)
-    // Avoid division by zero. If no words found, neutral 50.
     let catScore = 50;
     const total = goodCount + badCount;
     if (total > 0) {
@@ -48,7 +45,6 @@ const runScannerOne = (text: string): { score: number, breakdown: ScannerCategor
     totalBad += badCount;
   });
 
-  // Calculate Global Intent Score
   let globalScore = 50;
   const globalTotal = totalGood + totalBad;
   if (globalTotal > 0) {
@@ -87,8 +83,8 @@ const runScannerTwo = async (companyName: string): Promise<{ score: number, chec
       if (isSimulatedHit) {
         passedChecks++;
         links.push({
-          title: `${companyName} - ${query} | Careers`,
-          url: `https://www.google.com/search?q=${encodeURIComponent(`site:linkedin.com OR site:indeed.com "${companyName}" "${query}"`)}`,
+          title: `${companyName} - ${query} | Careers Finland`,
+          url: `https://www.google.com/search?q=${encodeURIComponent(`site:linkedin.com "${companyName}" "${query}" Finland`)}`,
           source: "Simulated Search Result"
         });
       }
@@ -123,37 +119,39 @@ export const runMockScanner = async (input: ScannerInputData): Promise<AnalysisR
 };
 
 /**
- * Generates bulk mock data for the dashboard
+ * FINLAND TOP 100 DATASET (Turnover based)
  */
-export const generateMockDashboardData = (): AnalysisResult[] => {
-  const companies = [
-    "TechGlobal Inc", "FutureFlow", "Legacy Bank", "OldSchool Mfg", 
-    "AgileStream", "DataMinds", "CloudNative Co", "Bureaucracy Ltd",
-    "InnovateX", "GreenWash Energy", "TrueBuilders", "HyperScale",
-    "SlowCorp", "FastTrack", "Mediocre Systems", "Visionary AI"
-  ];
+const FINNISH_COMPANIES = [
+  "Nokia Oyj", "Neste Oyj", "Kone Oyj", "UPM-Kymmene Oyj", "Stora Enso Oyj",
+  "Kesko Oyj", "Sampo Oyj", "Fortum Oyj", "Metso Oyj", "Wärtsilä Oyj",
+  "Valmet Oyj", "Huhtamäki Oyj", "Orion Oyj", "Elisa Oyj", "Kemira Oyj",
+  "Cargotec Oyj", "Tietoevry Oyj", "YIT Oyj", "Outokumpu Oyj", "Sanoma Oyj",
+  "Finnair Oyj", "Kojamo Oyj", "Tokmanni Group", "Caverion Oyj", "Rovio Entertainment",
+  "Fiskars Group", "Vaisala Oyj", "Olvi Oyj", "Ponsse Oyj", "Revenio Group"
+];
 
-  return companies.map((name, idx) => {
-    // Randomize scores to fill quadrants
-    const intent = Math.floor(Math.random() * 80) + 10;
-    const reality = Math.floor(Math.random() * 80) + 10;
+export const generateMockDashboardData = (): AnalysisResult[] => {
+  return FINNISH_COMPANIES.map((name, idx) => {
+    // Randomize scores to fill quadrants based on company archetype stereotypes (Simulated)
+    let intent = Math.floor(Math.random() * 60) + 20; 
+    let reality = Math.floor(Math.random() * 60) + 20;
     
-    // Bias some data points for realism
-    // Greenwasher
-    if (name.includes("GreenWash") || name.includes("Future")) {
-      return createMockResult(name, 85, 20);
+    // Tech/Modern Bias (Nokia, Elisa, Tietoevry, Rovio)
+    if (["Nokia Oyj", "Elisa Oyj", "Tietoevry Oyj", "Rovio Entertainment", "Vaisala Oyj"].includes(name)) {
+        intent = Math.floor(Math.random() * 30) + 60; // 60-90
+        reality = Math.floor(Math.random() * 30) + 60; // 60-90
     }
-    // Silent Doer
-    if (name.includes("True") || name.includes("Builders")) {
-      return createMockResult(name, 30, 80);
+
+    // Heavy Industry Bias (Stora Enso, UPM, Outokumpu) - Often High Intent (Sustainability), Lower Agility Reality
+    if (["Stora Enso Oyj", "UPM-Kymmene Oyj", "Outokumpu Oyj", "Neste Oyj"].includes(name)) {
+        intent = Math.floor(Math.random() * 20) + 70; // High Intent
+        reality = Math.floor(Math.random() * 40) + 30; // Mixed Reality
     }
-    // Frontrunner
-    if (name.includes("Agile") || name.includes("Native")) {
-      return createMockResult(name, 88, 85);
-    }
-    // Legacy
-    if (name.includes("Legacy") || name.includes("Old")) {
-      return createMockResult(name, 25, 20);
+    
+    // Traditional/Retail Bias (Kesko, Tokmanni)
+    if (["Kesko Oyj", "Tokmanni Group", "Olvi Oyj"].includes(name)) {
+        intent = Math.floor(Math.random() * 40) + 30;
+        reality = Math.floor(Math.random() * 40) + 30;
     }
 
     return createMockResult(name, intent, reality);
@@ -169,16 +167,16 @@ const createMockResult = (name: string, intent: number, reality: number): Analys
     reality_score: reality,
     reality_gap: gap,
     evidence_links: reality > 40 ? [
-      { title: `${name} - Senior Platform Engineer`, url: "#", source: "Careers Page" },
-      { title: `${name} Tech Blog - Data Mesh`, url: "#", source: "Medium" }
+      { title: `${name} - Senior Platform Engineer`, url: "#", source: "Careers Finland" },
+      { title: `${name} Annual Report 2023`, url: "#", source: "Investor Relations" }
     ] : [],
-    summary_text: `Automated analysis for ${name} indicates a ${gap > 10 ? 'significant' : 'moderate'} gap between stated intent and operational reality.`,
+    summary_text: `Automated analysis for ${name} indicates a ${gap > 10 ? 'significant' : 'moderate'} gap between stated intent and operational reality within the Finnish market context.`,
     lastUpdated: new Date(Date.now() - Math.floor(Math.random() * 1000000000)).toISOString(),
     intent_breakdown: [
       { name: "Strategy", score: intent, goodCount: 5, badCount: 2 },
-      { name: "Ops Model", score: intent - 5, goodCount: 4, badCount: 3 },
+      { name: "Ops Model", score: Math.max(0, intent - 10), goodCount: 4, badCount: 3 },
       { name: "Values", score: intent + 5, goodCount: 6, badCount: 1 },
-      { name: "AI Readiness", score: Math.max(0, intent - 10), goodCount: 2, badCount: 2 },
+      { name: "AI Readiness", score: Math.max(0, intent - 15), goodCount: 2, badCount: 2 },
       { name: "Service Portfolio", score: intent, goodCount: 5, badCount: 2 },
       { name: "Business Model", score: intent, goodCount: 5, badCount: 2 }
     ],

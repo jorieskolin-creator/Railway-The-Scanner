@@ -21,15 +21,15 @@ export const ScannerInput: React.FC<ScannerInputProps> = ({ onScan }) => {
   };
 
   const loadSampleData = () => {
-    setCompanyName("LegacyCorp");
-    setCompanyUrl("https://legacy.example.com");
-    setReportText("We value Command and Control structures. Our Strategy is focused on Cost-cutting and defending our core Monolith assets.");
+    setCompanyName("Metsä Group");
+    setCompanyUrl("https://www.metsagroup.com");
+    setReportText("We are committed to functional silos and strict command chains. Our strategy focuses on cost-cutting and maintaining our legacy assets.");
   };
 
   const loadAdaptiveData = () => {
-    setCompanyName("AdaptiveFlow");
-    setCompanyUrl("https://adaptiveflow.example.com");
-    setReportText(`We organize around Value Streams with Stream-aligned teams that have Distributed Authority. Our platform strategy leverages an API-First approach.`);
+    setCompanyName("Wärtsilä Oyj");
+    setCompanyUrl("https://www.wartsila.com");
+    setReportText(`We organize around Value Streams with Stream-aligned teams that have Distributed Authority. Our platform strategy leverages an API-First approach for the energy market.`);
   };
 
   return (
@@ -39,7 +39,7 @@ export const ScannerInput: React.FC<ScannerInputProps> = ({ onScan }) => {
             <h3 className="font-bold text-lg text-white flex items-center gap-2 tracking-tight">
             <Zap className="text-cyan-400" size={18} /> Configure Diagnosis
             </h3>
-            <p className="text-[10px] text-slate-400 mt-1 uppercase tracking-widest font-semibold">Forensic Parameters</p>
+            <p className="text-[10px] text-slate-400 mt-1 uppercase tracking-widest font-semibold">Forensic Parameters (Finland Top 100)</p>
         </div>
         <div className="flex gap-2 text-xs">
            <button type="button" onClick={loadSampleData} className="px-3 py-1.5 rounded bg-white/5 hover:bg-rose-500/10 hover:text-rose-300 border border-transparent hover:border-rose-500/30 transition-all text-slate-400 font-mono text-[10px]">
@@ -54,13 +54,13 @@ export const ScannerInput: React.FC<ScannerInputProps> = ({ onScan }) => {
       <form onSubmit={handleSubmit} className="p-8 space-y-6">
         <div className="grid md:grid-cols-2 gap-6">
           <div className="space-y-2">
-            <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500">Target Entity</label>
+            <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500">Target Entity (FI)</label>
             <div className="relative group">
               <input
                 type="text"
                 value={companyName}
                 onChange={(e) => setCompanyName(e.target.value)}
-                placeholder="e.g. Acme Corp"
+                placeholder="e.g. Kone, Neste, UPM"
                 className="w-full pl-10 pr-4 py-3 bg-black/20 border border-white/10 rounded-lg text-white placeholder-slate-600 focus:ring-1 focus:ring-cyan-500/50 focus:border-cyan-500/50 outline-none transition-all font-medium text-sm"
                 required
               />
@@ -76,7 +76,7 @@ export const ScannerInput: React.FC<ScannerInputProps> = ({ onScan }) => {
               type="url"
               value={companyUrl}
               onChange={(e) => setCompanyUrl(e.target.value)}
-              placeholder="https://example.com"
+              placeholder="https://company.fi"
               className="w-full px-4 py-3 bg-black/20 border border-white/10 rounded-lg text-white placeholder-slate-600 focus:ring-1 focus:ring-cyan-500/50 focus:border-cyan-500/50 outline-none transition-all font-medium text-sm"
             />
           </div>
