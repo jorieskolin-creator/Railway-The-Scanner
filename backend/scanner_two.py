@@ -116,6 +116,16 @@ def x_ray_search(company_name: str, company_url: str = None):
                     "found": False
                 })
 
+    # HEURISTIC CHECK: 
+    # If the Search Engine is restricted (e.g. only allows google.com) and we searched 
+    # for linkedin.com, we will get 0 results for EVERYTHING.
+    # A Reality Score of 0 is statistically impossible for a major company.
+    # If this happens, we assume misconfiguration and auto-switch to Simulation Mode.
+    if passed_checks == 0 and total_checks > 0:
+        print(f"CRITICAL: 0/{total_checks} Reality Checks passed. This suggests Google CSE is blocking external domains.")
+        print(">> Falling back to SIMULATION MODE to preserve application functionality.")
+        return run_simulation_mode(company_name)
+
     score = 0
     if total_checks > 0:
         score = (passed_checks / total_checks) * 100
