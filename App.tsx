@@ -1,9 +1,17 @@
 
 const { useState, useEffect } = window.React;
 
-// Safely access Lucide icons to prevent destructuring errors
-const Lucide = (window as any).Lucide || {};
-const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, Play, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock, HardDrive, Terminal } = Lucide;
+// --- ICON SAFETY LAYER ---
+// Wraps Lucide access so accessing an undefined icon returns a Null component instead of crashing
+const LucideRaw = (window as any).Lucide || {};
+const Icons = new Proxy(LucideRaw, {
+    get: (target, prop) => {
+        if (prop in target) return target[prop];
+        return () => null; // Return generic empty component if icon missing
+    }
+});
+
+const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, Play, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock, HardDrive, Terminal } = Icons;
 
 // Components & Services from Window
 const TruthMatrix = (window as any).TruthMatrix;
