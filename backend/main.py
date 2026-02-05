@@ -15,6 +15,9 @@ from scanner_two import x_ray_search
 from storage import BlobStorage
 from seed_manager import run_batch_seed # Import the batch processor
 
+# Explicit startup log
+print("Starting Adaptability Scanner Backend...", flush=True)
+
 app = FastAPI()
 
 # Enable CORS for Vercel Frontend
