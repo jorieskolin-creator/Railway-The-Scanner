@@ -1,6 +1,6 @@
 
 const { useState, useEffect } = window.React;
-const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, Play, RefreshCw, CheckCircle2, AlertTriangle, Cloud } = (window as any).Lucide;
+const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, Play, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw } = (window as any).Lucide;
 
 // Components & Services from Window
 const TruthMatrix = (window as any).TruthMatrix;
@@ -128,12 +128,12 @@ const App = () => {
   };
 
   const handleBatchSeed = async () => {
-    if (!confirm("Start background seed for Finland Top 100? This triggers a backend process.")) return;
+    if (!confirm("Are you sure you want to Regenerate the entire database?\n\nThis will overwrite existing data for Finland Top 100 with fresh analysis.")) return;
     setIsSeeding(true);
     try {
         const response = await fetch(`/admin/seed-finland-100`, { method: 'POST' });
         if (response.ok) {
-            alert("Batch Process Initiated! The database is populating in the background.\n\nWait 10-20 seconds, then press the small Refresh button in the header.");
+            alert("Database Generation Started!\n\nThe backend is now scraping and analyzing 100 companies. This takes about 30 seconds.\n\nPress the Refresh button in the top right after ~30 seconds to see results.");
         } else {
             throw new Error("API Error");
         }
@@ -213,6 +213,17 @@ const App = () => {
           </div>
           
           <div className="flex items-center gap-4 w-full max-w-md ml-4 justify-end">
+            {systemStatus.storage && (
+                <button 
+                    onClick={handleBatchSeed}
+                    disabled={isSeeding}
+                    title="Reset & Regenerate Database"
+                    className="p-2 bg-white/5 hover:bg-rose-500/20 rounded-full text-slate-400 hover:text-rose-400 transition-all border border-transparent hover:border-rose-500/30"
+                >
+                    {isSeeding ? <Loader2 size={14} className="animate-spin" /> : <RotateCcw size={14} />}
+                </button>
+            )}
+
             <button 
                 onClick={fetchRealData} 
                 title="Refresh Data from Server"
@@ -254,13 +265,13 @@ const App = () => {
           </div>
         )}
 
-        {/* Empty State / Seeding Banner */}
-        {systemStatus.storage && data.length === 0 && !loading && (
+        {/* Empty State Banner (Only if really empty) */}
+        {systemStatus.storage && (data.length === 0 || isMockData) && !loading && (
           <div className="w-full bg-indigo-900/40 border-b border-indigo-500/20 backdrop-blur-sm">
              <div className="max-w-7xl mx-auto px-4 py-1.5 flex items-center justify-between">
                 <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider font-mono text-indigo-200">
                     <Cloud size={12} className="text-indigo-400" />
-                    <span>Database Empty</span>
+                    <span>{isMockData ? "Viewing Simulation Data (Database Empty)" : "Database Empty"}</span>
                 </div>
                 <button 
                     onClick={handleBatchSeed}
