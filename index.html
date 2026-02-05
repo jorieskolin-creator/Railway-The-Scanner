@@ -78,18 +78,10 @@
             }).code;
 
             // Execute in IIFE (Immediately Invoked Function Expression)
-            // This creates a local scope for each file, preventing "const" collisions
-            // (e.g. "Identifier 'useState' has already been declared")
+            // We use string concatenation instead of template literals to avoid issues 
+            // if the source code contains backticks.
             const script = document.createElement('script');
-            script.textContent = `
-              (function() {
-                try {
-                  ${js}
-                } catch(e) {
-                  console.error("Error executing ${url}:", e);
-                }
-              })();
-            `;
+            script.textContent = "(function() { try { \n" + js + "\n } catch(e) { console.error('Error executing " + url + ":', e); } })();";
             document.body.appendChild(script);
           } catch (error) {
             console.error(`Error loading script ${url}:`, error);
