@@ -5,10 +5,13 @@ import json
 
 class BlobStorage:
     def __init__(self):
-        # This generic URL is CORRECT for the Vercel Blob API. 
-        # The Token directs requests to your specific bucket.
+        # API_URL: The Vercel API endpoint for commands (Put/List). 
+        # DO NOT change this to your public bucket URL.
         self.token = os.environ.get("BLOB_READ_WRITE_TOKEN")
         self.api_url = "https://blob.vercel-storage.com"
+        
+        # User provided Public URL (optional fallback)
+        self.public_base_url = os.environ.get("VITE_BLOB_URL") or os.environ.get("BLOB_URL")
 
     def _get_headers(self):
         return {
@@ -26,6 +29,7 @@ class BlobStorage:
 
         try:
             # Vercel Blob API: PUT /<filename>
+            # This requires the generic API URL, not the specific bucket URL
             response = requests.put(
                 f"{self.api_url}/{filename}",
                 headers=self._get_headers(),
@@ -45,62 +49,82 @@ class BlobStorage:
 
     def retrieve_latest_data(self, filename_match="dashboard_data.json"):
         """
-        Lists files in the Blob store, finds the one matching the filename,
-        and downloads its content.
+        Attempts to find the data file.
+        Strategy 1: Ask Vercel API to list files and find the latest one.
+        Strategy 2: If API fails, try downloading directly from VITE_BLOB_URL.
         """
-        if not self.token:
-            print("Blob Token missing.")
-            return []
+        
+        # --- Strategy 1: API List ---
+        if self.token:
+            try:
+                list_response = requests.get(
+                    self.api_url,
+                    headers=self._get_headers()
+                )
+                
+                if list_response.status_code == 200:
+                    blobs = list_response.json().get("blobs", [])
+                    # Find closest match.
+                    matches = [b for b in blobs if filename_match in b.get("pathname", "")]
+                    matches.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
+                    
+                    if matches:
+                        target_url = matches[0]["url"]
+                        print(f"Strategy 1 (API): Found file at {target_url}")
+                        data_response = requests.get(target_url)
+                        if data_response.status_code == 200:
+                            return data_response.json()
+            except Exception as e:
+                print(f"Strategy 1 (API) failed: {e}")
 
-        try:
-            # 1. List files
-            list_response = requests.get(
-                self.api_url,
-                headers=self._get_headers()
-            )
+        # --- Strategy 2: Direct URL Fallback ---
+        if self.public_base_url:
+            # Clean up URL (remove trailing slash)
+            base = self.public_base_url.rstrip("/")
+            direct_url = f"{base}/{filename_match}"
+            print(f"Strategy 2 (Direct): Trying {direct_url}")
             
-            if list_response.status_code != 200:
-                print(f"Failed to list blobs: {list_response.text}")
-                return []
-                
-            blobs = list_response.json().get("blobs", [])
-            
-            # Find closest match.
-            matches = [b for b in blobs if filename_match in b.get("pathname", "")]
-            matches.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
-            
-            if not matches:
-                print("No database file found in Blob storage.")
-                return []
-            
-            target_url = matches[0]["url"]
-            print(f"Fetching database from: {target_url}")
-            
-            # 2. Download content
-            data_response = requests.get(target_url)
-            if data_response.status_code == 200:
-                return data_response.json()
-            else:
-                print(f"Failed to download blob content: {data_response.status_code}")
-                return []
-                
-        except Exception as e:
-            print(f"Blob Retrieval Exception: {e}")
-            return []
+            try:
+                direct_response = requests.get(direct_url)
+                if direct_response.status_code == 200:
+                    print("Strategy 2 (Direct): Success!")
+                    return direct_response.json()
+                else:
+                    print(f"Strategy 2 (Direct): Failed with {direct_response.status_code}")
+            except Exception as e:
+                print(f"Strategy 2 (Direct) Exception: {e}")
+
+        print("All retrieval strategies failed. Returning empty list.")
+        return []
 
     def debug_list_files(self):
         """
         Returns the raw list of files or error details for debugging.
         """
+        debug_info = {
+            "config": {
+                "has_token": bool(self.token),
+                "api_url": self.api_url,
+                "public_base_url": self.public_base_url
+            }
+        }
+
         if not self.token:
-            return {"status": "error", "message": "BLOB_READ_WRITE_TOKEN is missing from environment variables."}
+            debug_info["status"] = "error"
+            debug_info["message"] = "BLOB_READ_WRITE_TOKEN is missing"
+            return debug_info
 
         try:
             response = requests.get(self.api_url, headers=self._get_headers())
-            return {
-                "status": "success" if response.status_code == 200 else "error",
-                "http_code": response.status_code,
-                "response_body": response.json() if response.status_code == 200 else response.text
-            }
+            debug_info["http_code"] = response.status_code
+            if response.status_code == 200:
+                debug_info["status"] = "success"
+                debug_info["files"] = response.json().get("blobs", [])
+            else:
+                debug_info["status"] = "api_error"
+                debug_info["response"] = response.text
         except Exception as e:
-            return {"status": "exception", "message": str(e)}
+            debug_info["status"] = "exception"
+            debug_info["message"] = str(e)
+            
+        return debug_info

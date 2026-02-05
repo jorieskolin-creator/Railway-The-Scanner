@@ -20,6 +20,12 @@ from seed_manager import run_batch_seed
 
 print("Starting Adaptability Scanner Backend...", flush=True)
 
+# Log Environment Config
+blob_token = os.environ.get("BLOB_READ_WRITE_TOKEN")
+blob_url_var = os.environ.get("VITE_BLOB_URL")
+print(f"Config Check: Token Exists? {bool(blob_token)}")
+print(f"Config Check: VITE_BLOB_URL? {blob_url_var if blob_url_var else 'Not Set'}")
+
 app = FastAPI()
 
 app.add_middleware(
