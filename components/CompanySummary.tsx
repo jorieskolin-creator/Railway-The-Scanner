@@ -1,6 +1,6 @@
 
 const { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Tooltip: RechartsTooltip } = (window as any).Recharts;
-const { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash, RefreshCw } = (window as any).Lucide;
+const { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash, RefreshCw, XCircle, Search } = (window as any).Lucide;
 
 const CompanySummary = ({ data }) => {
   const gapColor = data.reality_gap > 20 ? '#ef4444' : data.reality_gap < -20 ? '#f59e0b' : '#10b981';
@@ -95,7 +95,7 @@ const CompanySummary = ({ data }) => {
         <div className="bg-white/5 p-6 rounded-2xl border border-white/10 backdrop-blur-md flex flex-col">
           <h3 className="text-lg font-bold text-white mb-6 flex items-center gap-2">
             <span className="w-1 h-6 bg-emerald-500 rounded-full"></span>
-            Verified Evidence
+            Forensic Findings
           </h3>
           
           <div className="flex-grow overflow-y-auto max-h-[300px] pr-2 space-y-3 custom-scrollbar">
@@ -122,26 +122,44 @@ const CompanySummary = ({ data }) => {
              ) : (
                <div className="flex flex-col items-center justify-center h-full text-slate-600 border-2 border-dashed border-white/5 rounded-xl">
                  <AlertTriangle size={32} className="mb-2 opacity-50" />
-                 <p className="text-sm">No positive evidence found via X-Ray search.</p>
+                 <p className="text-sm">No specific evidence returned.</p>
                </div>
              )}
           </div>
           
           <div className="mt-6 pt-4 border-t border-white/10">
-            <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">X-Ray Checklist</h4>
-            <div className="grid grid-cols-2 gap-3">
-              {data.reality_checklist.slice(0, 6).map((item, idx) => (
-                <div key={idx} className="flex items-center gap-2 text-xs text-slate-400">
-                  {item.found ? (
-                    <CheckCircle size={14} className="text-emerald-500 shrink-0 shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
-                  ) : (
-                    <div className="w-3.5 h-3.5 rounded-full border border-slate-700 bg-slate-800/50 shrink-0" />
-                  )}
-                  <span className={item.found ? 'text-slate-200' : 'opacity-60'}>
-                    {item.category.split(" ")[0]}...
-                  </span>
-                </div>
-              ))}
+            <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
+                <Search size={12} />
+                Methodology Checklist
+            </h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {data.reality_checklist && data.reality_checklist.slice(0, 8).map((item, idx) => {
+                 // Determine Icon and Color based on Found status AND Sentiment
+                 // Positive Found = Green Check
+                 // Negative Found = Red Alert (Warning)
+                 // Not Found = Gray Circle
+                 let icon = <div className="w-3.5 h-3.5 rounded-full border border-slate-700 bg-slate-800/50 shrink-0" />;
+                 let textColor = "opacity-60";
+                 
+                 if (item.found) {
+                     if (item.sentiment === 'negative') {
+                         icon = <AlertTriangle size={14} className="text-rose-500 shrink-0" />;
+                         textColor = "text-rose-300";
+                     } else {
+                         icon = <CheckCircle size={14} className="text-emerald-500 shrink-0" />;
+                         textColor = "text-emerald-300";
+                     }
+                 }
+
+                 return (
+                    <div key={idx} className={`flex items-center gap-2 text-xs text-slate-400 p-1.5 rounded bg-black/20 border border-transparent ${item.found ? 'bg-white/5 border-white/5' : ''}`}>
+                      {icon}
+                      <span className={`${textColor} truncate`}>
+                        {item.query || item.category} 
+                      </span>
+                    </div>
+                 );
+              })}
             </div>
           </div>
         </div>

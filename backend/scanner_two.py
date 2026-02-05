@@ -4,144 +4,190 @@ import requests
 import re
 from urllib.parse import urlparse
 
-# REFINED QUERIES FOR FINNISH MARKET INTELLIGENCE
-# These queries specifically target the high-authority domains you have whitelisted:
-# Jobs: linkedin.com, duunitori.fi, oikotie.fi, thehub.io, indeed.com
-# News: tivi.fi, kauppalehti.fi, talouselama.fi, tekniikkatalous.fi
-# Tech: github.com, stackoverflow.com, medium.com
+# --- FORENSIC METHODOLOGY CONFIGURATION ---
 
-QUERIES = {
-    "Operating Model": [
-        # Look for agile/modern roles across all major job boards
-        {'q': '(site:linkedin.com/jobs OR site:duunitori.fi OR site:oikotie.fi OR site:thehub.io) "Company Name" AND ("Scrum Master" OR "Product Owner" OR "Agile Coach")', 'intent': 'Agile Roles (Recruitment)'},
-        # Look for evidence of team autonomy
-        {'q': '(site:linkedin.com OR site:thehub.io OR site:medium.com) "Company Name" AND ("Stream-aligned" OR "Autonomous teams" OR "Micro-enterprises")', 'intent': 'Team Structure'},
-        # Look for culture descriptions
-        {'q': '(site:glassdoor.com OR site:indeed.com) "Company Name" AND ("Flat hierarchy" OR "Distributed authority" OR "Self-organization")', 'intent': 'Org Structure Evidence'}
-    ],
-    "Service Portfolio": [
-        # Business model validation via financial news
-        {'q': '(site:kauppalehti.fi OR site:talouselama.fi OR site:tivi.fi) "Company Name" AND ("SaaS" OR "Recurring Revenue" OR "Platform Economy")', 'intent': 'Business Model News'},
-        # Tech ecosystem checks
-        {'q': '(site:github.com OR site:thehub.io) "Company Name" AND ("API" OR "SDK" OR "Developer Portal")', 'intent': 'Developer Ecosystem'},
-        # Investment news regarding ecosystems
-        {'q': '(site:kauppalehti.fi OR site:talouselama.fi) "Company Name" AND "Investment" AND ("Startup" OR "Ecosystem")', 'intent': 'Ecosystem Investment'}
-    ],
-    "Values": [
-        # Employee sentiment on global platforms
-        {'q': 'site:glassdoor.com "Company Name" AND ("Micromanagement" OR "Bureaucracy" OR "Politics")', 'intent': 'Negative Sentiment Check'},
-        # Modern work perks
-        {'q': '(site:linkedin.com OR site:duunitori.fi OR site:oikotie.fi) "Company Name" AND ("Remote First" OR "Hybrid" OR "Flexible hours")', 'intent': 'Modern Work Policy'},
-        # Culture blog posts
-        {'q': '(site:medium.com OR site:linkedin.com) "Company Name" AND ("Post-mortem" OR "Psychological Safety" OR "Failure culture")', 'intent': 'Culture Blog Posts'}
-    ],
-    "Strategy": [
-        # Strategic vision in financial press
-        {'q': '(site:kauppalehti.fi OR site:talouselama.fi) "Company Name" AND ("Strategy 2025" OR "Transformation" OR "Vision")', 'intent': 'Strategic Vision'},
-        # Tech strategy specific news
-        {'q': '(site:tivi.fi OR site:tekniikkatalous.fi) "Company Name" AND ("Digital Transformation" OR "Modernization" OR "Cloud migration")', 'intent': 'Tech Strategy News'},
-        # Negative signals (layoffs, cost cutting)
-        {'q': '(site:kauppalehti.fi OR site:talouselama.fi) "Company Name" AND ("Cost cutting" OR "YT-neuvottelut" OR "Layoffs" OR "Savings")', 'intent': 'Defensive Strategy (Negative)'}
-    ],
-    "Business Model": [
-        # Platform/Marketplace evidence
-        {'q': '(site:tivi.fi OR site:linkedin.com) "Company Name" AND ("Marketplace" OR "Platform Business" OR "App Store")', 'intent': 'Platform Business'},
-        # Shift to services
-        {'q': '(site:kauppalehti.fi OR site:talouselama.fi) "Company Name" AND ("Service Business" OR "Recurring" OR "Subscription")', 'intent': 'Service Shift'},
-        # Open source contribution
-        {'q': 'site:github.com "Company Name"', 'intent': 'Open Innovation'}
-    ],
-    "AI Readiness": [
-        # Hiring for AI/Data roles
-        {'q': '(site:duunitori.fi OR site:oikotie.fi OR site:linkedin.com) "Company Name" AND ("Data Engineer" OR "MLOps" OR "AI Specialist" OR "Data Mesh")', 'intent': 'AI Hiring'},
-        # Tech stack news
-        {'q': '(site:tivi.fi OR site:tekniikkatalous.fi) "Company Name" AND ("Generative AI" OR "Cloud Native" OR "Azure" OR "AWS")', 'intent': 'Tech Stack News'},
-        # Evidence of engineering output
-        {'q': '(site:github.com OR site:stackoverflow.com OR site:medium.com) "Company Name" AND ("Python" OR "Kubernetes" OR "React")', 'intent': 'Modern Tech Stack'}
+# Queries are now strictly typed:
+# 'positive': Finding this INCREASES Reality Score (Evidence of Adaptability)
+# 'negative': Finding this DECREASES Reality Score (Evidence of Legacy/Toxicity)
+
+def get_forensic_queries(company_name, domain):
+    return [
+        # --- 1. OPERATING MODEL (RenDanHeYi & Team Topologies) ---
+        {
+            "category": "Operating Model",
+            "sentiment": "positive", 
+            "label": "Micro-Enterprise Structure",
+            "q": f'site:linkedin.com/jobs "{company_name}" "P&L responsibility" "team level" -Director -VP'
+        },
+        {
+            "category": "Operating Model",
+            "sentiment": "positive",
+            "label": "Stream-Aligned Teams",
+            "q": f'site:{domain} "stream-aligned" OR "value stream" OR "end-to-end ownership"'
+        },
+        {
+            "category": "Operating Model",
+            "sentiment": "positive",
+            "label": "Platform Engineering (Golden Path)",
+            "q": f'site:linkedin.com/jobs "{company_name}" "platform product manager" OR "internal developer platform" OR "golden path"'
+        },
+
+        # --- 2. STRATEGY & FINANCE (Beyond Budgeting) ---
+        {
+            "category": "Strategy",
+            "sentiment": "negative", # BAD SIGNAL
+            "label": "Rigid Budget Compliance",
+            "q": f'filetype:pdf site:{domain} "annual budget" AND ("variance analysis" OR "compliance" OR "enforcement")'
+        },
+        {
+            "category": "Strategy",
+            "sentiment": "positive",
+            "label": "Rolling Forecasts",
+            "q": f'site:linkedin.com/jobs "{company_name}" "rolling forecast" "driver-based" -budget'
+        },
+
+        # --- 3. VALUES (Culture & Agency) ---
+        {
+            "category": "Values",
+            "sentiment": "negative", # BAD SIGNAL
+            "label": "Digital Taylorism (Micromanagement)",
+            "q": f'site:glassdoor.com/reviews "{company_name}" "micromanagement" OR "tracking" OR "surveillance"'
+        },
+        {
+            "category": "Values",
+            "sentiment": "positive",
+            "label": "High Trust Policies (PTO/Remote)",
+            "q": f'site:{domain} "unlimited PTO" OR "remote first" OR "asynchronous"'
+        },
+        {
+            "category": "Values",
+            "sentiment": "positive",
+            "label": "Blameless Culture (Post-Mortems)",
+            "q": f'site:{domain} "post-mortem" OR "incident report" OR "learning from failure"'
+        },
+
+        # --- 4. AI READINESS (Data Mesh & Narrative) ---
+        {
+            "category": "AI Readiness",
+            "sentiment": "positive",
+            "label": "Data Mesh (Domain Ownership)",
+            "q": f'site:linkedin.com/jobs "{company_name}" "data product owner" OR "domain data" -centralized'
+        },
+        {
+            "category": "AI Readiness",
+            "sentiment": "negative", # BAD SIGNAL
+            "label": "AI Efficiency Narrative (Cost Cutting)",
+            "q": f'site:{domain} "AI" AND ("headcount" OR "cost savings" OR "efficiency")'
+        },
+         {
+            "category": "AI Readiness",
+            "sentiment": "positive",
+            "label": "AI Growth Narrative (New Business)",
+            "q": f'site:{domain} "AI" AND ("new business model" OR "revenue growth" OR "innovation")'
+        }
     ]
-}
+
+def get_clean_domain(url):
+    """
+    Extracts 'nokia.com' from 'https://www.nokia.com/about-us'
+    """
+    if not url: return ""
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc
+        # Remove www.
+        if domain.startswith("www."):
+            domain = domain[4:]
+        return domain
+    except:
+        return ""
 
 def x_ray_search(company_name: str, company_url: str = None):
     api_key = os.environ.get("GOOGLE_API_KEY")
     cx_id = os.environ.get("CX_ENGINE_ID")
     
+    # Validation
+    if not api_key or not cx_id:
+        print("Warning: Google API credentials missing. Returning 0 score.")
+        return { "score": 0, "checklist": [], "links": [], "is_simulated": False }
+
+    # 1. Prepare Domain context
+    domain = get_clean_domain(company_url)
+    if not domain:
+        # Fallback if no URL provided: try to guess or use broad search
+        domain = f"{company_name.replace(' ', '').lower()}.com"
+        
+    queries = get_forensic_queries(company_name, domain)
+    
     checklist = []
     evidence_links = []
     
-    total_checks = 0
-    passed_checks = 0
+    # SCORING MODEL
+    # Start at Neutral (50).
+    # Positive hits pull score UP.
+    # Negative hits pull score DOWN.
+    current_score = 50 
     
-    # If keys are missing, we DO NOT simulate. We return 0.
-    if not api_key or not cx_id:
-        print("Warning: Google API credentials (GOOGLE_API_KEY, CX_ENGINE_ID) missing.")
-        # Return empty/zero result.
-        return {
-            "score": 0,
-            "checklist": [],
-            "links": [{"title": "Scanner Configuration Error", "url": "#", "source": "API Keys Missing"}],
-            "is_simulated": False
-        }
+    # Weighting: How much does a "Smoking Gun" move the needle?
+    IMPACT_WEIGHT = 7 
 
-    for category, query_list in QUERIES.items():
-        for item in query_list:
-            total_checks += 1
-            raw_query = item['q']
-            intent_label = item['intent']
-            
-            # Insert Company Name
-            search_query = raw_query.replace('"Company Name"', f'"{company_name}"')
-            
-            # Context Logic:
-            if ".fi" not in search_query:
-                 search_query += " Finland"
-            
-            url = f"https://www.googleapis.com/customsearch/v1?key={api_key}&cx={cx_id}&q={search_query}"
-            
-            try:
-                res = requests.get(url)
-                
-                # If 429 (Quota) or 403 (Permission), we assume failure for this specific check, not whole system crash
-                if res.status_code != 200:
-                    print(f"Search API Error {res.status_code} for {intent_label}")
-                    checklist.append({"category": category, "query": intent_label, "found": False})
-                    continue
+    print(f"   [Forensic Scan] Target: {company_name} | Domain: {domain}")
 
+    for item in queries:
+        raw_query = item['q']
+        sentiment = item['sentiment']
+        label = item['label']
+        category = item['category']
+        
+        # Build API URL
+        # We append "Finland" context if searching generic sites, but respecting strict site: operators
+        # Actually, the user's queries are very specific, so we run them AS IS.
+        
+        url = f"https://www.googleapis.com/customsearch/v1?key={api_key}&cx={cx_id}&q={raw_query}"
+        
+        try:
+            res = requests.get(url)
+            found = False
+            link_data = None
+            
+            if res.status_code == 200:
                 data = res.json()
-                
-                # Logic: If totalResults > 0, we consider it evidence found
-                found = False
                 if "items" in data and len(data["items"]) > 0:
                     found = True
-                    passed_checks += 1
-                    
-                    # Capture the first link as evidence
-                    result_item = data["items"][0]
-                    evidence_links.append({
-                        "title": f"{intent_label}: {result_item.get('title', 'Evidence Source')}",
-                        "url": result_item.get("link", "#"),
-                        "source": result_item.get("displayLink", "Google Search")
-                    })
-                
-                checklist.append({
-                    "category": category,
-                    "query": intent_label,
-                    "found": found
-                })
-                
-            except Exception as e:
-                print(f"Search Exception for {intent_label}: {e}")
-                checklist.append({
-                    "category": category,
-                    "query": intent_label,
-                    "found": False
-                })
+                    result = data["items"][0]
+                    link_data = {
+                        "title": f"[{sentiment.upper()}] {label}: {result.get('title')}",
+                        "url": result.get('link'),
+                        "source": result.get('displayLink'),
+                        "snippet": result.get('snippet', '')
+                    }
+                    evidence_links.append(link_data)
+            
+            # Update Score based on Sentiment
+            if found:
+                if sentiment == "positive":
+                    current_score += IMPACT_WEIGHT
+                    # print(f"      + Hit: {label} (Score +{IMPACT_WEIGHT})")
+                elif sentiment == "negative":
+                    current_score -= IMPACT_WEIGHT
+                    # print(f"      - Hit: {label} (Score -{IMPACT_WEIGHT})")
+            
+            checklist.append({
+                "category": category,
+                "query": label, # Display the human-readable label, not the raw query string
+                "found": found,
+                "sentiment": sentiment
+            })
+            
+        except Exception as e:
+            print(f"      Err: {str(e)[:50]}")
+            checklist.append({"category": category, "query": label, "found": False, "sentiment": "neutral"})
 
-    score = 0
-    if total_checks > 0:
-        score = (passed_checks / total_checks) * 100
+    # Clamp Score 0-100
+    final_score = max(0, min(100, current_score))
 
     return {
-        "score": int(score),
+        "score": int(final_score),
         "checklist": checklist,
         "links": evidence_links,
         "is_simulated": False

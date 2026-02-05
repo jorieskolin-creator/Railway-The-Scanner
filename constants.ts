@@ -110,41 +110,26 @@ const Scanner2Category = Globals.Scanner2Category || Scanner1Category;
   }
 };
 
+// UPDATED TO MATCH FORENSIC METHODOLOGY
+// Each query is now an object: { label, sentiment, query_string }
 (window as any).REALITY_QUERIES = {
   [Scanner2Category.OperatingModel]: [
-    '("Scrum Master" OR "Product Owner" OR "Agile Coach")', 
-    '("P&L responsibility" AND "team level")', 
-    '"Stream-aligned" OR "end-to-end ownership"', 
-    '"Platform Product Manager" OR "Golden Path"'
-  ],
-  [Scanner2Category.ServicePortfolio]: [
-    '"ARR" OR "Recurring Revenue" OR "SaaS"', 
-    '"API Documentation" OR "Developer Portal"', 
-    '"Subscription" OR "License"', 
-    '"Financial Results" AND "Segment Reporting"'
-  ],
-  [Scanner2Category.Values]: [
-    '"Micromanagement" OR "Surveillance"', 
-    '"Unlimited PTO" OR "Remote First"', 
-    '"Post-mortem" OR "Learning from failure"', 
-    '"Whistleblower" OR "Code of Conduct"'
+    { label: "Micro-Enterprise Test (P&L)", sentiment: "positive", q: '"P&L responsibility" AND "team level" -Director -VP' },
+    { label: "Stream-Aligned Test", sentiment: "positive", q: '"stream-aligned" OR "value stream" OR "end-to-end ownership"' },
+    { label: "Platform Engineering Test", sentiment: "positive", q: '"platform product manager" OR "internal developer platform" OR "golden path"' }
   ],
   [Scanner2Category.Strategy]: [
-    '"Strategy 2025" OR "Vision 2030"', 
-    '"Acquisition" OR "Divestment"', 
-    '"Digital Transformation" OR "AI" AND "Revenue"', 
-    '"Budget Variance" OR "Compliance"'
+    { label: "Budget Rigidity Test", sentiment: "negative", q: 'filetype:pdf "annual budget" AND ("variance analysis" OR "compliance")' },
+    { label: "Rolling Forecast Test", sentiment: "positive", q: '"rolling forecast" AND "driver-based" -budget' }
   ],
-  [Scanner2Category.BusinessModel]: [
-    '"App Store" OR "Marketplace"', 
-    '"Freemium" OR "Usage-based"', 
-    '"API Key" OR "SDK"', 
-    '"Partner Program" OR "Ecosystem"'
+  [Scanner2Category.Values]: [
+    { label: "Digital Taylorism Test", sentiment: "negative", q: 'site:glassdoor.com "micromanagement" OR "surveillance"' },
+    { label: "Trust Proxy (PTO/Remote)", sentiment: "positive", q: '"unlimited PTO" OR "remote first" OR "asynchronous"' },
+    { label: "Psychological Safety Test", sentiment: "positive", q: '"post-mortem" OR "incident report" OR "learning from failure"' }
   ],
   [Scanner2Category.AIReadiness]: [
-    '"Azure" OR "AWS" OR "Google Cloud"', 
-    '"Data Mesh" OR "Data Product Owner"', 
-    '"Python" OR "Machine Learning" OR "LLM"', 
-    '"Tech Radar" OR "Engineering Blog"'
+    { label: "Data Mesh Test", sentiment: "positive", q: '"data product owner" OR "domain data" -centralized' },
+    { label: "Efficiency Narrative (AI Washing)", sentiment: "negative", q: '"AI" AND ("headcount" OR "cost savings" OR "efficiency")' },
+    { label: "Growth Narrative", sentiment: "positive", q: '"AI" AND ("new business model" OR "revenue growth" OR "innovation")' }
   ]
 };

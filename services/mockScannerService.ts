@@ -53,36 +53,44 @@ const runScannerTwo = async (companyName) => {
   const checklist = [];
   const links = [];
   
-  let totalChecks = 0;
-  let passedChecks = 0;
-
+  let scoreAccumulator = 50; // Start Neutral
+  
   Object.keys(REALITY_QUERIES).forEach(category => {
     const queries = REALITY_QUERIES[category];
-    queries.forEach((query, index) => {
-      totalChecks++;
-      const isSimulatedHit = Math.random() > 0.4; 
+    
+    // Safety check if REALITY_QUERIES is structured differently
+    if (!Array.isArray(queries)) return;
+
+    queries.forEach((item) => {
+      const { label, sentiment, q } = item;
+      
+      // Simulate Hit Chance
+      const isSimulatedHit = Math.random() > 0.5; 
 
       checklist.push({
         category,
-        query,
-        found: isSimulatedHit
+        query: label, // Use the human readable label
+        found: isSimulatedHit,
+        sentiment: sentiment
       });
 
       if (isSimulatedHit) {
-        passedChecks++;
+        if (sentiment === 'positive') scoreAccumulator += 7;
+        if (sentiment === 'negative') scoreAccumulator -= 7;
+
         links.push({
-          title: `${companyName} - ${query} | Careers Finland`,
-          url: `https://www.google.com/search?q=${encodeURIComponent(`site:linkedin.com "${companyName}" "${query}" Finland`)}`,
-          source: "Simulated Search Result"
+          title: `[${sentiment.toUpperCase()}] ${label}: Evidence Found`,
+          url: `https://www.google.com/search?q=${encodeURIComponent(`site:linkedin.com "${companyName}" ${q}`)}`,
+          source: "Simulated X-Ray"
         });
       }
     });
   });
 
-  const score = Math.round((passedChecks / totalChecks) * 100);
+  const finalScore = Math.max(0, Math.min(100, scoreAccumulator));
 
   return {
-    score,
+    score: finalScore,
     checklist,
     links
   };
@@ -102,7 +110,8 @@ const runScannerTwo = async (companyName) => {
     reality_checklist: realityAnalysis.checklist,
     evidence_links: realityAnalysis.links,
     summary_text: "Pending AI Synthesis...",
-    lastUpdated: new Date().toISOString()
+    lastUpdated: new Date().toISOString(),
+    is_simulated: true
   };
 };
 
@@ -124,9 +133,11 @@ const createMockResult = (name, intent, reality) => {
     reality_score: reality,
     reality_gap: gap,
     evidence_links: reality > 40 ? [
-      { title: `${name} - Senior Platform Engineer`, url: "#", source: "Careers Finland" },
-      { title: `${name} Annual Report 2023`, url: "#", source: "Investor Relations" }
-    ] : [],
+      { title: `[POSITIVE] Platform Engineering Test: Jobs Found`, url: "#", source: "Simulated X-Ray" },
+      { title: `[POSITIVE] Rolling Forecast Test: Annual Report`, url: "#", source: "Simulated X-Ray" }
+    ] : [
+       { title: `[NEGATIVE] Budget Rigidity Test: Variance Analysis Found`, url: "#", source: "Simulated X-Ray" } 
+    ],
     summary_text: `Automated analysis for ${name} indicates a ${gap > 10 ? 'significant' : 'moderate'} gap between stated intent and operational reality within the Finnish market context.`,
     lastUpdated: new Date(Date.now() - Math.floor(Math.random() * 1000000000)).toISOString(),
     intent_breakdown: [
@@ -137,7 +148,12 @@ const createMockResult = (name, intent, reality) => {
       { name: "Service Portfolio", score: intent, goodCount: 5, badCount: 2 },
       { name: "Business Model", score: intent, goodCount: 5, badCount: 2 }
     ],
-    reality_checklist: []
+    reality_checklist: [
+        { category: "Operating Model", query: "Micro-Enterprise Test", found: reality > 50, sentiment: 'positive' },
+        { category: "Values", query: "Digital Taylorism Test", found: reality < 40, sentiment: 'negative' },
+        { category: "Strategy", query: "Rolling Forecast Test", found: reality > 60, sentiment: 'positive' }
+    ],
+    is_simulated: true
   };
 };
 
