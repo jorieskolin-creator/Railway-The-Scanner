@@ -1,16 +1,9 @@
 
-import React from 'react';
-import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Cell, Label } from 'recharts';
-import { AnalysisResult } from '../types';
+const { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Cell, Label } = (window as any).Recharts;
 
-interface TruthMatrixProps {
-  data: AnalysisResult[];
-  onSelectCompany: (company: AnalysisResult) => void;
-}
-
-const CustomTooltip = ({ active, payload }: any) => {
+const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] }) => {
   if (active && payload && payload.length) {
-    const data = payload[0].payload as AnalysisResult;
+    const data = payload[0].payload;
     return (
       <div className="bg-[#020617]/90 backdrop-blur border border-slate-700/50 p-3 rounded-lg shadow-2xl text-xs text-white">
         <p className="font-bold text-sm mb-2 text-white">{data.companyName}</p>
@@ -29,7 +22,7 @@ const CustomTooltip = ({ active, payload }: any) => {
   return null;
 };
 
-const TruthMatrix: React.FC<TruthMatrixProps> = ({ data, onSelectCompany }) => {
+const TruthMatrix = ({ data, onSelectCompany }) => {
   return (
     <div className="w-full h-[350px] relative overflow-hidden">
       <ResponsiveContainer width="100%" height="100%">
@@ -74,7 +67,7 @@ const TruthMatrix: React.FC<TruthMatrixProps> = ({ data, onSelectCompany }) => {
              <Label value="THEATER" position="center" fill="#fbbf24" fontSize={12} fontWeight={800} opacity={0.3} letterSpacing="0.05em" />
           </ReferenceArea>
 
-          <Scatter name="Companies" data={data} onClick={(node) => onSelectCompany(node.payload as AnalysisResult)} cursor="pointer">
+          <Scatter name="Companies" data={data} onClick={(node) => onSelectCompany(node.payload)} cursor="pointer">
             {data.map((entry, index) => (
               <Cell 
                 key={`cell-${index}`} 
@@ -96,4 +89,4 @@ const TruthMatrix: React.FC<TruthMatrixProps> = ({ data, onSelectCompany }) => {
   );
 };
 
-export default TruthMatrix;
+(window as any).TruthMatrix = TruthMatrix;

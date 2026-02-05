@@ -1,18 +1,13 @@
 
-import React, { useState } from 'react';
-import { Search, FileText, Globe, Zap } from 'lucide-react';
-import { ScannerInputData } from '../types';
+const { useState } = window.React;
+const { Search, FileText, Globe, Zap } = (window as any).Lucide;
 
-interface ScannerInputProps {
-  onScan: (data: ScannerInputData) => void;
-}
-
-const ScannerInput: React.FC<ScannerInputProps> = ({ onScan }) => {
+const ScannerInput = ({ onScan }) => {
   const [companyName, setCompanyName] = useState('');
   const [companyUrl, setCompanyUrl] = useState('');
   const [reportText, setReportText] = useState('');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = (e) => {
     e.preventDefault();
     if (!companyName || !reportText) {
       alert("Please provide at least a Company Name and some Narrative Text.");
@@ -117,4 +112,4 @@ const ScannerInput: React.FC<ScannerInputProps> = ({ onScan }) => {
   );
 };
 
-export default ScannerInput;
+(window as any).ScannerInput = ScannerInput;

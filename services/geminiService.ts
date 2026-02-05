@@ -1,17 +1,17 @@
 
-import { GoogleGenAI } from "@google/genai";
-import { AnalysisResult } from "../types";
-
 const getGeminiClient = () => {
-    const apiKey = process.env.API_KEY;
+    // Relies on global window.GoogleGenAI set in index.html
+    const GoogleGenAI = (window as any).GoogleGenAI;
+    const apiKey = process.env.API_KEY; 
+    
     if (!apiKey) {
-      console.warn("API Key not found in env.");
+      console.warn("API Key not found.");
       return null;
     }
     return new GoogleGenAI({ apiKey });
   };
   
-export const generateSynthesis = async (data: AnalysisResult, companyName: string): Promise<string> => {
+(window as any).generateSynthesis = async (data, companyName) => {
   const ai = getGeminiClient();
   if (!ai) return "Error: API Key missing. Unable to generate summary.";
 

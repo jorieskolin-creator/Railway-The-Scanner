@@ -1,65 +1,28 @@
 
-import React, { useState, useEffect } from 'react';
-import { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, Play } from 'lucide-react';
-import TruthMatrix from './components/TruthMatrix';
-import CompanyModal from './components/CompanyModal';
-import ScannerInput from './components/ScannerInput';
-import { generateMockDashboardData, runMockScanner } from './services/mockScannerService';
-import { AnalysisResult, ScannerInputData } from './types';
+const { useState, useEffect } = window.React;
+const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, Play } = (window as any).Lucide;
 
-const App: React.FC = () => {
-  const [data, setData] = useState<AnalysisResult[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [isMockData, setIsMockData] = useState<boolean>(false);
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [selectedCompany, setSelectedCompany] = useState<AnalysisResult | null>(null);
+// Components & Services from Window
+const TruthMatrix = (window as any).TruthMatrix;
+const ScannerInput = (window as any).ScannerInput;
+const CompanyModal = (window as any).CompanyModal;
+const { generateMockDashboardData, runMockScanner } = (window as any);
+
+const App = () => {
+  const [data, setData] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [isMockData, setIsMockData] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCompany, setSelectedCompany] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [isSeeding, setIsSeeding] = useState(false);
-  const [sortConfig, setSortConfig] = useState<{ key: keyof AnalysisResult; direction: 'asc' | 'desc' } | null>({ key: 'reality_gap', direction: 'desc' });
+  const [sortConfig, setSortConfig] = useState({ key: 'reality_gap', direction: 'desc' });
 
   useEffect(() => {
     const fetchData = async () => {
-      // In this setup, we assume the frontend is served by the backend, so we check relative or ENV
-      // Since it's browser runtime, we can try to fetch the blob directly if we know it, 
-      // OR we can default to empty/mock first if env is not injected into the browser window.
-      // For this prototype, we'll try to guess or use mock if env is missing.
-      
-      const env = (import.meta as any).env || {};
-      let blobUrl = env.VITE_BLOB_URL;
-      
-      // If we are running in the browser without build step, import.meta.env might be empty.
-      // We can try to fetch a config endpoint from our own backend?
-      // For now, let's proceed. If blobUrl is missing, we use Mock Data which is fine for "It works".
-
-      if (blobUrl) {
-        if (!blobUrl.endsWith("json")) {
-            blobUrl = blobUrl.endsWith("/") ? `${blobUrl}dashboard_data.json` : `${blobUrl}/dashboard_data.json`;
-        }
-        try {
-          const response = await fetch(blobUrl);
-          if (response.status === 404) {
-             const mockData = generateMockDashboardData();
-             setData(mockData);
-             setIsMockData(true);
-             setLoading(false);
-             return;
-          }
-          if (response.ok) {
-            const realData = await response.json();
-            if (Array.isArray(realData)) {
-                setData(realData);
-                setLoading(false);
-                return;
-            }
-          }
-        } catch (e) {
-          console.warn("Blob fetch failed, falling back to mock");
-        }
-      }
-
-      // Fallback
+      // Fallback to Mock Data directly
       setTimeout(() => {
         const mockData = generateMockDashboardData();
         setData(mockData);
@@ -71,14 +34,12 @@ const App: React.FC = () => {
     fetchData();
   }, []);
 
-  const handleRunScan = async (input: ScannerInputData) => {
+  const handleRunScan = async (input) => {
     setIsScanning(true);
-    
-    // We are serving from the backend, so API URL is relative root
     const apiUrl = ""; 
 
     try {
-      let newResult: AnalysisResult;
+      let newResult;
 
       try {
         const response = await fetch(`${apiUrl}/scan`, {
@@ -88,7 +49,6 @@ const App: React.FC = () => {
         });
         
         if (!response.ok) throw new Error("Scan failed");
-        
         const json = await response.json();
         newResult = json.data;
       } catch (apiError) {
@@ -136,20 +96,20 @@ const App: React.FC = () => {
     }
   };
 
-  const handleCompanyUpdate = (updatedCompany: AnalysisResult) => {
+  const handleCompanyUpdate = (updatedCompany) => {
     setData(prev => prev.map(item => 
       item.companyName === updatedCompany.companyName ? updatedCompany : item
     ));
     setSelectedCompany(updatedCompany);
   };
 
-  const handleCompanyClick = (company: AnalysisResult) => {
+  const handleCompanyClick = (company) => {
     setSelectedCompany(company);
     setIsModalOpen(true);
   };
 
-  const handleSort = (key: keyof AnalysisResult) => {
-    let direction: 'asc' | 'desc' = 'desc';
+  const handleSort = (key) => {
+    let direction = 'desc';
     if (sortConfig && sortConfig.key === key && sortConfig.direction === 'desc') {
       direction = 'asc';
     }
@@ -389,4 +349,4 @@ const App: React.FC = () => {
   );
 };
 
-export default App;
+(window as any).App = App;

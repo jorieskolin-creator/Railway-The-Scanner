@@ -1,18 +1,12 @@
 
-import React, { useState } from 'react';
-import { X, RefreshCw, Calendar, Clock, Loader2 as Loader2Icon } from 'lucide-react';
-import CompanySummary from './CompanySummary';
-import { AnalysisResult } from '../types';
-import { runMockScanner } from '../services/mockScannerService';
+const { useState } = window.React;
+const { X, RefreshCw, Calendar, Clock, Loader2: Loader2Icon } = (window as any).Lucide;
 
-interface CompanyModalProps {
-  company: AnalysisResult | null;
-  isOpen: boolean;
-  onClose: () => void;
-  onUpdate: (updatedCompany: AnalysisResult) => void;
-}
+// Components & Services from Window
+const CompanySummary = (window as any).CompanySummary;
+const { runMockScanner } = (window as any);
 
-const CompanyModal: React.FC<CompanyModalProps> = ({ company, isOpen, onClose, onUpdate }) => {
+const CompanyModal = ({ company, isOpen, onClose, onUpdate }) => {
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   if (!isOpen || !company) return null;
@@ -124,4 +118,4 @@ const CompanyModal: React.FC<CompanyModalProps> = ({ company, isOpen, onClose, o
   );
 };
 
-export default CompanyModal;
+(window as any).CompanyModal = CompanyModal;

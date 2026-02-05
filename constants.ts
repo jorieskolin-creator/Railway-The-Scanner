@@ -1,7 +1,8 @@
 
-import { Scanner1Category, Scanner2Category } from './types';
+// Access Enums from Global Window
+const { Scanner1Category, Scanner2Category } = (window as any);
 
-export const INTENT_KEYWORDS = {
+(window as any).INTENT_KEYWORDS = {
   [Scanner1Category.OperatingModel]: {
     good: [
       "Service Areas", "Value Streams", "Stream-aligned", "Distributed Authority", "Sense and Respond",
@@ -100,7 +101,7 @@ export const INTENT_KEYWORDS = {
   }
 };
 
-export const REALITY_QUERIES = {
+(window as any).REALITY_QUERIES = {
   [Scanner2Category.OperatingModel]: [
     '("Scrum Master" OR "Product Owner" OR "Agile Coach")', 
     '("P&L responsibility" AND "team level")', 

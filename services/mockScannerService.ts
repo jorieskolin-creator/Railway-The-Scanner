@@ -1,25 +1,25 @@
 
-import { Scanner1Category, Scanner2Category, ScannerCategoryScore, ScannerInputData, AnalysisResult } from '../types';
-import { INTENT_KEYWORDS, REALITY_QUERIES } from '../constants';
+// Dependencies from window
+const { INTENT_KEYWORDS, REALITY_QUERIES } = (window as any);
 
-const runScannerOne = (text: string): { score: number, breakdown: ScannerCategoryScore[] } => {
-  const breakdown: ScannerCategoryScore[] = [];
+const runScannerOne = (text) => {
+  const breakdown = [];
   const GOOD_THRESHOLD = 3;
   const BAD_THRESHOLD = 1;
 
-  (Object.keys(INTENT_KEYWORDS) as Scanner1Category[]).forEach(category => {
+  Object.keys(INTENT_KEYWORDS).forEach(category => {
     const { good, bad } = INTENT_KEYWORDS[category];
     let uniqueGoodFound = 0;
     let uniqueBadFound = 0;
     const lowerText = text.toLowerCase();
 
-    good.forEach(word => {
+    good.forEach((word) => {
       const escapedWord = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); 
       const count = (lowerText.match(new RegExp(`\\b${escapedWord.toLowerCase()}\\b`, "g")) || []).length;
       if (count >= GOOD_THRESHOLD) uniqueGoodFound++;
     });
 
-    bad.forEach(word => {
+    bad.forEach((word) => {
       const escapedWord = word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const count = (lowerText.match(new RegExp(`\\b${escapedWord.toLowerCase()}\\b`, "g")) || []).length;
       if (count >= BAD_THRESHOLD) uniqueBadFound++;
@@ -49,14 +49,14 @@ const runScannerOne = (text: string): { score: number, breakdown: ScannerCategor
   };
 };
 
-const runScannerTwo = async (companyName: string): Promise<{ score: number, checklist: any[], links: any[] }> => {
-  const checklist: { category: string; found: boolean; query: string }[] = [];
-  const links: { title: string; url: string; source: string }[] = [];
+const runScannerTwo = async (companyName) => {
+  const checklist = [];
+  const links = [];
   
   let totalChecks = 0;
   let passedChecks = 0;
 
-  (Object.keys(REALITY_QUERIES) as Scanner2Category[]).forEach(category => {
+  Object.keys(REALITY_QUERIES).forEach(category => {
     const queries = REALITY_QUERIES[category];
     queries.forEach((query, index) => {
       totalChecks++;
@@ -88,7 +88,7 @@ const runScannerTwo = async (companyName: string): Promise<{ score: number, chec
   };
 };
 
-export const runMockScanner = async (input: ScannerInputData): Promise<AnalysisResult> => {
+(window as any).runMockScanner = async (input) => {
   const intentAnalysis = runScannerOne(input.reportText);
   const realityAnalysis = await runScannerTwo(input.companyName);
 
@@ -115,7 +115,7 @@ const FINNISH_COMPANIES = [
   "Fiskars Group", "Vaisala Oyj", "Olvi Oyj", "Ponsse Oyj", "Revenio Group"
 ];
 
-const createMockResult = (name: string, intent: number, reality: number): AnalysisResult => {
+const createMockResult = (name, intent, reality) => {
   const gap = intent - reality;
   return {
     id: Math.random().toString(36).substr(2, 9),
@@ -141,7 +141,7 @@ const createMockResult = (name: string, intent: number, reality: number): Analys
   };
 };
 
-export const generateMockDashboardData = (): AnalysisResult[] => {
+(window as any).generateMockDashboardData = () => {
   return FINNISH_COMPANIES.map((name, idx) => {
     let intent = Math.floor(Math.random() * 60) + 20; 
     let reality = Math.floor(Math.random() * 60) + 20;

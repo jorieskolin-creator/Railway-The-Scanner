@@ -1,24 +1,26 @@
 
-export interface ScannerInputData {
+// Types are stripped by Babel, but Enums and Interfaces need to handle scope.
+
+interface ScannerInputData {
   companyName: string;
   companyUrl: string;
   reportText: string; 
 }
 
-export interface EvidenceLink {
+interface EvidenceLink {
   title: string;
   url: string;
   source: string;
 }
 
-export interface ScannerCategoryScore {
+interface ScannerCategoryScore {
   name: string;
   score: number;
   goodCount: number;
   badCount: number;
 }
 
-export interface AnalysisResult {
+interface AnalysisResult {
   id: string; 
   companyName: string;
   intent_score: number;
@@ -36,20 +38,21 @@ export interface AnalysisResult {
   is_simulated?: boolean;
 }
 
-export enum Scanner1Category {
-  OperatingModel = "Operating Model",
-  ServicePortfolio = "Service Portfolio",
-  Values = "Values",
-  Strategy = "Strategy",
-  BusinessModel = "Business Model",
-  AIReadiness = "AI Readiness"
-}
+// Attach Enums to window so they are available globally
+(window as any).Scanner1Category = {
+  OperatingModel: "Operating Model",
+  ServicePortfolio: "Service Portfolio",
+  Values: "Values",
+  Strategy: "Strategy",
+  BusinessModel: "Business Model",
+  AIReadiness: "AI Readiness"
+};
 
-export enum Scanner2Category {
-  OperatingModel = "Operating Model",
-  ServicePortfolio = "Service Portfolio",
-  Values = "Values",
-  Strategy = "Strategy",
-  BusinessModel = "Business Model",
-  AIReadiness = "AI Readiness"
-}
+(window as any).Scanner2Category = {
+  OperatingModel: "Operating Model",
+  ServicePortfolio: "Service Portfolio",
+  Values: "Values",
+  Strategy: "Strategy",
+  BusinessModel: "Business Model",
+  AIReadiness: "AI Readiness"
+};

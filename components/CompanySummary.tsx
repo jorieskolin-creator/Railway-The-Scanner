@@ -1,14 +1,8 @@
 
-import React from 'react';
-import { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Tooltip as RechartsTooltip } from 'recharts';
-import { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash } from 'lucide-react';
-import { AnalysisResult } from '../types';
+const { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Tooltip: RechartsTooltip } = (window as any).Recharts;
+const { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash } = (window as any).Lucide;
 
-interface CompanySummaryProps {
-  data: AnalysisResult;
-}
-
-const CompanySummary: React.FC<CompanySummaryProps> = ({ data }) => {
+const CompanySummary = ({ data }) => {
   const gapColor = data.reality_gap > 20 ? '#ef4444' : data.reality_gap < -20 ? '#f59e0b' : '#10b981';
   
   const radarData = data.intent_breakdown.map(item => ({
@@ -146,4 +140,4 @@ const CompanySummary: React.FC<CompanySummaryProps> = ({ data }) => {
   );
 };
 
-export default CompanySummary;
+(window as any).CompanySummary = CompanySummary;
