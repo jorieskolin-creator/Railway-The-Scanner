@@ -143,7 +143,7 @@ def x_ray_search(company_name: str, company_url: str = None):
             "is_simulated": True 
         }
 
-    # --- REAL MODE ---
+    # --- REAL MODE (OPTIMIZED FOR FINLAND) ---
     current_score = 50 
     IMPACT_WEIGHT = 7 
 
@@ -155,22 +155,27 @@ def x_ray_search(company_name: str, company_url: str = None):
         label = item['label']
         category = item['category']
         
-        # USE PARAMS FOR SAFE ENCODING
+        # USE PARAMS FOR SAFE ENCODING & LOCALIZATION
         params = {
             'key': api_key,
             'cx': cx_id,
             'q': raw_query,
-            'num': 1 # We only need to know if 1 exists
+            'num': 3,                 # Fetch 3 results to increase hit rate
+            'gl': 'fi',               # Geolocation: Finland
+            'lr': 'lang_en|lang_fi',  # Language: English OR Finnish
+            'safe': 'active'
         }
         
         try:
-            res = requests.get("https://www.googleapis.com/customsearch/v1", params=params, timeout=5)
+            # Note: We use the REST API endpoint directly
+            res = requests.get("https://www.googleapis.com/customsearch/v1", params=params, timeout=10)
             found = False
             
             if res.status_code == 200:
                 data = res.json()
                 if "items" in data and len(data["items"]) > 0:
                     found = True
+                    # Just take the first result for the evidence link
                     result = data["items"][0]
                     evidence_links.append({
                         "title": f"{label}",
