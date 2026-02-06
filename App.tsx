@@ -346,9 +346,9 @@ const App = () => {
                     <thead className="text-[10px] text-indigo-200 uppercase bg-black/30 border-b border-white/5">
                       <tr>
                         <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('companyName')}>Entity</th>
-                        <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('intent_score')}>Intent</th>
+                        <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('intent_score')}>Ambition</th>
                         <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('reality_score')}>Reality</th>
-                        <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('reality_gap')}>Gap</th>
+                        <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('reality_gap')}>Delta</th>
                         <th className="px-6 py-4">Action</th>
                       </tr>
                     </thead>
@@ -359,7 +359,9 @@ const App = () => {
                           <td className="px-6 py-4">{row.intent_score}</td>
                           <td className="px-6 py-4">{row.reality_score}</td>
                           <td className="px-6 py-4 font-mono text-xs">
-                             <span className={row.reality_gap > 20 ? 'text-rose-400' : 'text-slate-400'}>{row.reality_gap}</span>
+                             <span className={row.reality_gap > 15 ? 'text-rose-400' : row.reality_gap < -15 ? 'text-cyan-400' : 'text-emerald-400'}>
+                                {row.reality_gap > 0 ? '+' : ''}{row.reality_gap}
+                             </span>
                           </td>
                           <td className="px-6 py-4">
                             <button onClick={() => handleCompanyClick(row)} className="text-cyan-400 hover:text-cyan-300 text-xs font-medium">View Report</button>

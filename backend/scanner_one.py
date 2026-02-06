@@ -1,3 +1,4 @@
+
 import re
 
 # Keyword Definitions (Mirrors constants.ts)
@@ -274,16 +275,20 @@ def analyze_intent(text: str):
     if total_words == 0: total_words = 1 
 
     # --- ADAPTIVE SENSITIVITY ---
+    # CALIBRATION FIX: 
+    # Previously, divisor was 25.0, then 6.0.
+    # New divisor is 4.0. This means a Net Score of 4 = 100%.
+    # This aggressively maps companies with coherent narratives to the right side.
     is_short_text = total_words < 400
     
     if is_short_text:
         GOOD_THRESHOLD = 1
         BAD_THRESHOLD = 1
-        NORMALIZATION_DIVISOR = 5.0 
+        NORMALIZATION_DIVISOR = 2.0 
     else:
         GOOD_THRESHOLD = 3
         BAD_THRESHOLD = 1
-        NORMALIZATION_DIVISOR = 25.0
+        NORMALIZATION_DIVISOR = 4.0 # Optimized for Forensic Clarity
 
     lower_text = text.lower()
 
@@ -342,11 +347,11 @@ def analyze_intent(text: str):
             
             total_bad_matches += valid_bad_occurrences_for_word
 
-        # 3. Calculate Score with FRICTION WEIGHTING
-        # UPGRADE: Bad signals weigh more (1.5x) than good signals.
-        # This prevents "Keyword Stuffing" where a company mentions "Agile" 50 times 
-        # but also mentions "Micromanagement" 5 times.
-        FRICTION_WEIGHT = 2.0
+        # 3. Calculate AMBITION (Score with High Friction Penalty)
+        # UPGRADE: Bad signals weigh drastically more (3.0x) than good signals.
+        # This transforms the score from "Volume of Intent" to "Ambition Clarity".
+        # If a company contradicts itself (high friction), the Ambition Score collapses.
+        FRICTION_WEIGHT = 3.0
         
         net_result = unique_good_found - (unique_bad_found * FRICTION_WEIGHT)
         

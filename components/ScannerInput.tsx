@@ -132,7 +132,7 @@ const ScannerInput = ({ onScan }) => {
 
         <div className="space-y-2">
           <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 flex justify-between items-center">
-            <span>Narrative Input (Intent)</span>
+            <span>Narrative Input (Ambition Source)</span>
             {companyUrl && !urlError ? (
                 <span className="text-emerald-400 font-normal normal-case tracking-normal flex items-center gap-1">
                     <Zap size={10} /> Auto-Scrape Enabled (Leave empty to scan website)

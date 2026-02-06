@@ -3,8 +3,26 @@ const { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusA
 const { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash, RefreshCw, XCircle, Search, Zap, Scale, Activity } = (window as any).Lucide;
 
 const CompanySummary = ({ data }) => {
-  const gapColor = data.reality_gap > 20 ? '#ef4444' : data.reality_gap < -20 ? '#f59e0b' : '#10b981';
+  // NEW VISUAL LOGIC:
+  // Gap > 15 (High Ambition, Low Reality) -> Amber (Hype)
+  // Gap < -15 (Low Ambition, High Reality) -> Cyan (Performance Surplus / Humble)
+  // Gap ~ 0 -> Emerald (Aligned)
+  let gapColor = '#10b981'; // Default Emerald
+  let gapLabel = "Aligned";
+  let gapValueDisplay = data.reality_gap;
   
+  if (data.reality_gap > 15) {
+      gapColor = '#f59e0b'; // Amber (Overpromising)
+      gapLabel = "Hype Surplus";
+      gapValueDisplay = `+${data.reality_gap}`;
+  } else if (data.reality_gap < -15) {
+      gapColor = '#22d3ee'; // Cyan (Underpromising/Humble)
+      gapLabel = "Performance Surplus";
+      gapValueDisplay = `${data.reality_gap}`; // Already negative
+  } else {
+      gapValueDisplay = data.reality_gap > 0 ? `+${data.reality_gap}` : data.reality_gap;
+  }
+
   const radarData = data.intent_breakdown.map(item => ({
     subject: item.name,
     A: item.score,
@@ -15,17 +33,11 @@ const CompanySummary = ({ data }) => {
   const metrics = data.metrics || { friction_index: 0, vibrancy_score: 0, total_good_mentions: 0, total_bad_mentions: 0 };
   
   // Friction Logic: 
-  // PDF: "A score of 1.0 means perfect 50/50 friction" (High/Bad). "0.0 means one side dominates" (Low/Good).
   const frictionPercentage = Math.round(metrics.friction_index * 100);
-  
-  // Color scale: Low friction is Green, High friction is Red
   const frictionColor = frictionPercentage > 60 ? 'text-rose-400' : frictionPercentage > 30 ? 'text-amber-400' : 'text-emerald-400';
-  
-  // Labels per PDF logic
   const frictionLabel = frictionPercentage > 60 ? 'Battleground' : frictionPercentage > 30 ? 'Conflicted' : 'Coherent';
 
   // --- CHART DATA PREPARATION ---
-  // If backend provided history, use it. Otherwise, synthesize data for visual trend demonstration.
   const historyRaw = data.history || [];
   let chartData = [];
 
@@ -34,30 +46,23 @@ const CompanySummary = ({ data }) => {
           date: new Date(h.date).toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
           gap: h.gap
       }));
-      // Append current state
       chartData.push({
           date: new Date(data.lastUpdated).toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
           gap: data.reality_gap
       });
   } else {
-      // SYNTHETIC HISTORY GENERATION (Visual Fallback)
-      // If no history exists, we project backwards to show a trend leading to the current state
       const current = new Date(data.lastUpdated);
       const currentGap = data.reality_gap;
-      
       chartData = [];
       for(let i=5; i>=1; i--) {
           const d = new Date(current);
           d.setMonth(d.getMonth() - i);
-          // Create variance: The idea is that the company has been fluctuating towards its current state
-          // Jitter the gap slightly to simulate organic change
           const variance = Math.floor(Math.random() * 16) - 8; 
           chartData.push({
               date: d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
               gap: Math.max(-100, Math.min(100, currentGap + variance))
           });
       }
-      // Add current point
       chartData.push({
           date: current.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
           gap: currentGap
@@ -69,9 +74,9 @@ const CompanySummary = ({ data }) => {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-white/5 backdrop-blur-md p-6 rounded-2xl border border-white/10 flex flex-col items-center justify-center relative group overflow-hidden">
           <div className="absolute inset-0 bg-indigo-500/10 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-          <span className="text-indigo-200 font-medium mb-1 text-sm tracking-widest uppercase">Intent Score</span>
+          <span className="text-indigo-200 font-medium mb-1 text-sm tracking-widest uppercase">Ambition Score</span>
           <span className="text-6xl font-black text-white tracking-tighter drop-shadow-[0_0_15px_rgba(99,102,241,0.5)]">{data.intent_score}</span>
-          <span className="text-xs text-slate-400 mt-2 font-mono">Narrative Analysis</span>
+          <span className="text-xs text-slate-400 mt-2 font-mono">Narrative Clarity</span>
         </div>
         
         <div className="bg-white/5 backdrop-blur-md p-6 rounded-2xl border border-white/10 flex flex-col items-center justify-center relative group overflow-hidden">
@@ -83,11 +88,11 @@ const CompanySummary = ({ data }) => {
         
         <div className="bg-white/5 backdrop-blur-md p-6 rounded-2xl border border-white/10 flex flex-col items-center justify-center relative overflow-hidden group">
           <div className="absolute inset-0 bg-gradient-to-br from-transparent to-white/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-          <span className="text-slate-300 font-medium mb-1 text-sm tracking-widest uppercase">Reality Gap</span>
+          <span className="text-slate-300 font-medium mb-1 text-sm tracking-widest uppercase">Integrity Delta</span>
           <span className="text-6xl font-black tracking-tighter" style={{ color: gapColor, textShadow: `0 0 20px ${gapColor}40` }}>
-            {data.reality_gap > 0 ? `+${data.reality_gap}` : data.reality_gap}
+            {gapValueDisplay}
           </span>
-          <span className="text-xs text-slate-400 mt-2 font-mono">Intent minus Reality</span>
+          <span className="text-xs text-slate-400 mt-2 font-mono" style={{ color: gapColor }}>{gapLabel}</span>
         </div>
       </div>
 
@@ -133,7 +138,7 @@ const CompanySummary = ({ data }) => {
           <div className="bg-white/5 p-5 rounded-2xl border border-white/10 backdrop-blur-md flex flex-col">
             <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
                <Activity className="text-cyan-400" size={14} />
-               Reality Gap Trend (6 Mo)
+               Integrity Delta Trend (6 Mo)
             </h3>
             <div className="flex-grow min-h-[120px]">
                 <ResponsiveContainer width="100%" height="100%">
@@ -189,7 +194,7 @@ const CompanySummary = ({ data }) => {
         <div className="bg-white/5 p-6 rounded-2xl border border-white/10 backdrop-blur-md">
           <h3 className="text-lg font-bold text-white mb-6 flex items-center gap-2">
              <span className="w-1 h-6 bg-indigo-500 rounded-full"></span>
-             Intent Breakdown
+             Ambition Breakdown
           </h3>
           <div className="h-[300px] w-full">
             <ResponsiveContainer width="100%" height="100%">
@@ -197,7 +202,7 @@ const CompanySummary = ({ data }) => {
                 <PolarGrid stroke="#334155" />
                 <PolarAngleAxis dataKey="subject" tick={{ fill: '#94a3b8', fontSize: 11, fontWeight: 500 }} />
                 <PolarRadiusAxis angle={30} domain={[0, 100]} tick={false} axisLine={false} />
-                <Radar name="Intent" dataKey="A" stroke="#818cf8" strokeWidth={2} fill="#6366f1" fillOpacity={0.3} />
+                <Radar name="Ambition" dataKey="A" stroke="#818cf8" strokeWidth={2} fill="#6366f1" fillOpacity={0.3} />
                 <RechartsTooltip 
                     contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', color: '#f1f5f9', borderRadius: '8px' }}
                     itemStyle={{ color: '#818cf8' }}
@@ -249,10 +254,6 @@ const CompanySummary = ({ data }) => {
             </h4>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {data.reality_checklist && data.reality_checklist.slice(0, 8).map((item, idx) => {
-                 // Determine Icon and Color based on Found status AND Sentiment
-                 // Positive Found = Green Check
-                 // Negative Found = Red Alert (Warning)
-                 // Not Found = Gray Circle
                  let icon = <div className="w-3.5 h-3.5 rounded-full border border-slate-700 bg-slate-800/50 shrink-0" />;
                  let textColor = "opacity-60";
                  
