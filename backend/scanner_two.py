@@ -1,4 +1,3 @@
-
 import os
 import json
 import time
@@ -33,15 +32,14 @@ def get_clean_domain(url):
 def x_ray_search(company_name: str, company_url: str = None):
     """
     Performs a Forensic X-Ray Scan using Gemini with Google Search Grounding.
-    This replaces the old 'Custom Search Engine' (CSE) which was too restricted.
     
-    Now, Gemini acts as the investigator:
-    1. It uses the native 'google_search' tool (searching the whole web).
-    2. It looks for specific forensic signals (Micromanagement, Agile, etc.).
-    3. It returns a structured JSON report.
+    ARCHITECTURAL CHANGE:
+    - Removed 'CX_ENGINE_ID' (Legacy Custom Search).
+    - Now uses Gemini's native 'google_search' tool.
+    - This automatically searches the ENTIRE WEB (Glassdoor, Reddit, News, etc.).
     """
     
-    # We now only need the Gemini Key. CSE_ID and GOOGLE_API_KEY are no longer bottlenecks.
+    # Only GEMINI_API_KEY is required now.
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
     
     checklist = []
@@ -53,7 +51,7 @@ def x_ray_search(company_name: str, company_url: str = None):
     print(f"   [Forensic Scan] Target: {company_name} (Search Term: {search_name})")
 
     if not api_key:
-        print("   [Scanner 2] CRITICAL: No API_KEY found. Returning empty results.")
+        print("   [Scanner 2] CRITICAL: No GEMINI_API_KEY found. Using simulation fallback.")
         return { "score": 50, "checklist": [], "links": [], "is_simulated": True }
 
     try:
