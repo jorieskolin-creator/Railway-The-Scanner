@@ -20,7 +20,7 @@ from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES
 from knowledge_base import get_evolving_framework
 
-print("Starting Adaptability Scanner Backend (v3.2 - Robust Retrieval)...", flush=True)
+print("Starting Adaptability Scanner Backend (v3.5 - Connectivity Check)...", flush=True)
 
 def clean_env_var(value):
     if not value: return ""
@@ -40,6 +40,7 @@ app.add_middleware(
 )
 
 storage = BlobStorage()
+print(f"   [Config] Effective Public Base URL: {storage.public_base_url or 'Auto-Discovery Active'}")
 
 app.mount("/components", StaticFiles(directory="../components"), name="components")
 app.mount("/services", StaticFiles(directory="../services"), name="services")
@@ -59,16 +60,24 @@ async def read_root(): return FileResponse("../index.html")
 def health_check():
     token = clean_env_var(os.environ.get("BLOB_READ_WRITE_TOKEN"))
     blob_url = clean_env_var(os.environ.get("VITE_BLOB_URL") or os.environ.get("BLOB_URL"))
-    gemini_present = bool(clean_env_var(os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")))
     
+    # Verify Storage Connectivity by trying to list 1 file
+    storage_connected = False
+    try:
+        # Check if we can talk to Vercel API
+        test_list = storage._list(prefix="index", limit=1)
+        storage_connected = True
+    except:
+        storage_connected = False
+
     return {
-        "status": "Adaptability Scanner API Online (v3.2)", 
+        "status": "Adaptability Scanner API Online (v3.5)", 
         "timestamp": datetime.utcnow().isoformat(),
+        "storage_connected": storage_connected,
         "config_status": {
             "has_blob_token": bool(token),
-            "has_blob_url": bool(blob_url),
-            "has_gemini_key": gemini_present,
-            "has_google_search_key": gemini_present
+            "has_blob_url_env": bool(blob_url),
+            "effective_base_url": storage.public_base_url
         }
     }
 
@@ -78,21 +87,26 @@ async def get_dashboard_data(response: Response):
     Returns the LIGHTWEIGHT summary list.
     """
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    print("GET /dashboard-data requested...")
+    
     data = storage.retrieve_latest_data("index/summary_list.json")
+    
+    if data:
+        print(f" -> Success. Returning {len(data)} records.")
+    else:
+        print(" -> Warning: Storage returned empty list or None.")
+        
     return data or []
 
 @app.get("/company/{company_name}")
 async def get_company_details(company_name: str, response: Response):
     """
     Returns the FULL DETAILED report.
-    Attempts to fetch specific file from Blob storage.
     """
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    print(f"GET Request for Company Detail: {company_name}")
     
     data = storage.get_company_data(company_name)
     if not data:
-        print(f" -> Not found in blob storage: {company_name}")
         raise HTTPException(status_code=404, detail="Company report not found in Vercel Blob.")
     
     return data

@@ -11,9 +11,14 @@ class BlobStorage:
     def __init__(self):
         self.api_url = "https://blob.vercel-storage.com"
         self.token = self._load_token()
-        # Ensure we catch multiple naming conventions for the URL
+        
+        # 1. Try to get URL from Env
         raw_url = os.environ.get("VITE_BLOB_URL") or os.environ.get("BLOB_URL") or ""
         self.public_base_url = self._clean_env_var(raw_url)
+        
+        # 2. If missing, Auto-Discover it
+        if not self.public_base_url and self.token:
+            self.public_base_url = self._discover_base_url()
 
     def _load_token(self):
         raw_token = os.environ.get("BLOB_READ_WRITE_TOKEN", "")
@@ -32,6 +37,48 @@ class BlobStorage:
             "authorization": f"Bearer {self.token}",
             "x-api-version": "1"
         }
+
+    def _discover_base_url(self):
+        """
+        Self-Healing: If BLOB_URL is missing, list 1 file to find the store's public domain.
+        """
+        print("   [Storage] BLOB_URL env var missing. Attempting auto-discovery via API...")
+        try:
+            # List 1 item to get its URL
+            resp = requests.get(f"{self.api_url}?limit=1", headers=self._get_headers())
+            if resp.status_code == 200:
+                data = resp.json()
+                blobs = data.get("blobs", [])
+                if blobs:
+                    # Example: https://storeid.public.blob.vercel-storage.com/folder/file.json
+                    sample_url = blobs[0].get("url")
+                    if sample_url:
+                        # Extract https://storeid.public.blob.vercel-storage.com
+                        parts = sample_url.split("/")
+                        # parts[0] = https:, parts[1] = '', parts[2] = domain
+                        base = f"{parts[0]}//{parts[2]}"
+                        print(f"   [Storage] Auto-discovery Success. Base URL: {base}")
+                        return base
+        except Exception as e:
+            print(f"   [Storage] Auto-discovery failed: {e}")
+        
+        print("   [Storage] Could not determine Base URL. Reads will fail.")
+        return ""
+
+    def _list(self, prefix, limit=10):
+        """
+        List files in the blob store matching a prefix.
+        """
+        try:
+            params = {"prefix": prefix, "limit": limit}
+            resp = requests.get(self.api_url, headers=self._get_headers(), params=params)
+            if resp.status_code == 200:
+                return resp.json().get("blobs", [])
+            else:
+                print(f"   [Storage Error] List failed: {resp.text}")
+        except Exception as e:
+            print(f"   [Storage Exception] _list failed: {e}")
+        return []
 
     # --- LOW LEVEL API WRAPPERS ---
 
@@ -79,50 +126,42 @@ class BlobStorage:
         return clean.strip('_')
 
     def save_company_data(self, company_name, full_data):
-        """
-        Saves the detailed analysis to specific file: companies/nokia_oyj.json
-        Returns the PUBLIC URL of the saved file.
-        """
         filename = f"companies/{self.sanitize_filename(company_name)}.json"
         return self._put(filename, full_data)
 
     def get_company_data(self, company_name):
         """
-        Retrieves the individual heavy file.
+        Retrieves company data by searching for the file prefix.
+        This handles Vercel's random suffixes (e.g. nokia_oyj-AbCd.json).
         """
-        if not self.public_base_url:
-            print("   [Storage Error] BLOB_URL env var is missing! Cannot read files.")
-            return None
-
-        filename = f"companies/{self.sanitize_filename(company_name)}.json"
-        base = self.public_base_url.rstrip("/")
-        url = f"{base}/{filename}"
+        clean_name = self.sanitize_filename(company_name)
+        prefix = f"companies/{clean_name}"
         
-        return self._get(url)
+        # 1. Search for the file via API (this avoids the suffix guessing game)
+        blobs = self._list(prefix=prefix, limit=5)
+        
+        if not blobs:
+            print(f"   [Storage] No file found for prefix: {prefix}")
+            return None
+            
+        # 2. Sort by date desc to get latest
+        blobs.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
+        target_url = blobs[0].get("url")
+        
+        print(f"   [Storage] Found company file: {target_url}")
+        return self._get(target_url)
 
     def save_global_index_direct(self, full_list):
-        """
-        Overwrites the entire index file.
-        """
         return self._put("index/summary_list.json", full_list)
 
     def update_global_index(self, summary_entry):
-        """
-        Updates 'index/summary_list.json' with a single entry.
-        """
-        index_filename = "index/summary_list.json"
-        
-        current_index = []
-        if self.public_base_url:
-             base = self.public_base_url.rstrip("/")
-             url = f"{base}/{index_filename}"
-             fetched = self._get(url)
-             if fetched: current_index = fetched
+        # First, find the latest index file
+        latest_data = self.retrieve_latest_data()
+        current_index = latest_data if latest_data else []
         
         found = False
         for i, item in enumerate(current_index):
             if item["companyName"] == summary_entry["companyName"]:
-                # Update existing entry
                 current_index[i] = summary_entry
                 found = True
                 break
@@ -130,13 +169,27 @@ class BlobStorage:
         if not found:
             current_index.append(summary_entry)
             
-        self._put(index_filename, current_index)
-        return current_index
+        return self._put("index/summary_list.json", current_index)
 
-    def retrieve_latest_data(self, filename_match="index/summary_list.json"):
-        if self.public_base_url:
-            base = self.public_base_url.rstrip("/")
-            url = f"{base}/{filename_match}"
-            data = self._get(url)
-            if data: return data
-        return []
+    def retrieve_latest_data(self, filename_prefix="index/summary_list"):
+        """
+        Robustly finds the latest index file by listing the directory,
+        ignoring Vercel's random suffixes.
+        """
+        print(f"   [Storage] Finding latest data for prefix: {filename_prefix}")
+        
+        # 1. Use the LIST API to find matches
+        blobs = self._list(filename_prefix)
+        
+        if not blobs:
+            print("   [Storage] No index files found via List API.")
+            return []
+            
+        # 2. Sort by uploadedAt (descending) to get the newest
+        blobs.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
+        
+        latest_url = blobs[0].get("url")
+        print(f"   [Storage] Latest Index found: {latest_url}")
+        
+        # 3. Fetch content
+        return self._get(latest_url)

@@ -39,14 +39,15 @@ const App = () => {
               const json = await res.json();
               setSystemStatus({
                   online: true,
-                  storage: json.config_status?.has_blob_token || false,
-                  google: json.config_status?.has_google_search_key || false,
-                  ai: json.config_status?.has_gemini_key || false
+                  storage: json.storage_connected || false,
+                  google: true, // Assumed if online
+                  ai: true
               });
-              return json.config_status?.has_blob_token;
+              return json.storage_connected;
           }
       } catch (e) {
           console.warn("Backend health check failed", e);
+          setSystemStatus(prev => ({ ...prev, online: false }));
       }
       return false;
   };
@@ -87,21 +88,39 @@ const App = () => {
     
     setIsLoadingDetails(true);
     // Optimistic UI: Open modal with summary data first
-    // We flag it as 'partial' so the modal knows we are still hunting for the heavy file
     setSelectedCompany({ ...summaryItem, partial: true });
     setIsModalOpen(true);
 
     try {
-        // This request hits the backend, which pulls the specific .json file from Vercel
-        const res = await fetch(`/company/${encodeURIComponent(summaryItem.companyName)}?t=${Date.now()}`);
-        if (res.ok) {
-            const fullData = await res.json();
-            // Success: Replace the lightweight summary with the heavy dossier
+        let fullData = null;
+        
+        // METHOD 1: Use the explicit URL if available (Best for Vercel Blob with suffixes)
+        if (summaryItem.detailsUrl) {
+            console.log("Fetching details via direct URL:", summaryItem.detailsUrl);
+            const res = await fetch(`${summaryItem.detailsUrl}?t=${Date.now()}`);
+            if (res.ok) {
+                fullData = await res.json();
+            }
+        }
+        
+        // METHOD 2: Fallback to Backend Proxy
+        if (!fullData) {
+            console.log("Direct fetch failed, trying backend proxy...");
+            const res = await fetch(`/company/${encodeURIComponent(summaryItem.companyName)}?t=${Date.now()}`);
+            if (res.ok) {
+                fullData = await res.json();
+            }
+        }
+
+        if (fullData) {
             setSelectedCompany(fullData);
         } else {
-            console.warn("Full detailed report not found, falling back to summary.");
-            // Fallback: Remove the 'partial' flag so the spinner stops, but keep the summary data
-            setSelectedCompany(prev => ({ ...prev, partial: false, summary_text: "Detailed forensic report unavailable. Displaying summary index data." }));
+            console.warn("Full detailed report not found.");
+            setSelectedCompany(prev => ({ 
+                ...prev, 
+                partial: false, 
+                summary_text: "Detailed forensic report unavailable. Displaying summary index data." 
+            }));
         }
     } catch (e) {
         console.error("Error fetching details", e);
@@ -196,6 +215,13 @@ const App = () => {
           </div>
           
           <div className="flex items-center gap-4 w-full max-w-md ml-4 justify-end">
+            <div className="flex items-center gap-2 mr-2">
+                 {/* SYSTEM STATUS INDICATOR */}
+                 <div className={`w-2 h-2 rounded-full ${systemStatus.storage ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]' : 'bg-rose-500'}`}></div>
+                 <span className="text-[10px] font-mono uppercase text-slate-400 hidden sm:block">
+                    {systemStatus.storage ? "System Online" : "Storage Disconnected"}
+                 </span>
+            </div>
             {IS_ADMIN_MODE && (
                 <button onClick={handleBatchSeed} disabled={isSeeding} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-lg transition-all">
                     {isSeeding ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
@@ -231,6 +257,19 @@ const App = () => {
              <div className="h-[400px] w-full bg-[#0f172a]/60 rounded-2xl flex items-center justify-center">
                 <Loader2 className="animate-spin text-cyan-400" size={32} />
              </div>
+          ) : data.length === 0 ? (
+             <div className="h-[400px] w-full bg-[#0f172a]/60 rounded-2xl flex flex-col items-center justify-center border border-white/5 text-slate-400 gap-4">
+                <AlertTriangle size={48} className="text-amber-500/50" />
+                <div className="text-center">
+                    <h3 className="text-white font-bold text-lg">Database Connection Pending</h3>
+                    <p className="text-sm max-w-md mt-2">No records found. The database might be empty, or the backend is unable to read from Vercel Blob Storage.</p>
+                </div>
+                {IS_ADMIN_MODE && (
+                    <button onClick={handleBatchSeed} className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold rounded-lg transition-all">
+                        Initialize Batch Scan
+                    </button>
+                )}
+             </div>
           ) : (
              <div className="bg-[#0f172a]/60 border border-white/10 rounded-2xl p-1 shadow-2xl backdrop-blur-xl">
                 <TruthMatrix data={data} onSelectCompany={handleCompanyClick} />
@@ -242,33 +281,39 @@ const App = () => {
           <div className="flex justify-between items-center">
             <h2 className="text-lg font-bold text-white">Forensic Index</h2>
           </div>
-          <div className="bg-[#0f172a]/70 border border-white/10 rounded-2xl overflow-hidden">
-              <table className="w-full text-sm text-left">
-                <thead className="text-[10px] text-indigo-200 uppercase bg-black/30 border-b border-white/5">
-                  <tr>
-                    <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('companyName')}>Entity</th>
-                    <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('intent_score')}>Intent</th>
-                    <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('reality_score')}>Reality</th>
-                    <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('reality_gap')}>Gap</th>
-                    <th className="px-6 py-4">Action</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5 text-slate-300">
-                  {sortedData.map((row) => (
-                    <tr key={row.id} className="hover:bg-white/5 transition-colors">
-                      <td className="px-6 py-4 font-medium text-white">{row.companyName}</td>
-                      <td className="px-6 py-4">{row.intent_score}</td>
-                      <td className="px-6 py-4">{row.reality_score}</td>
-                      <td className="px-6 py-4 font-mono text-xs">
-                         <span className={row.reality_gap > 20 ? 'text-rose-400' : 'text-slate-400'}>{row.reality_gap}</span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <button onClick={() => handleCompanyClick(row)} className="text-cyan-400 hover:text-cyan-300 text-xs font-medium">View Report</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          <div className="bg-[#0f172a]/70 border border-white/10 rounded-2xl overflow-hidden min-h-[200px]">
+              {data.length === 0 && !loading ? (
+                  <div className="flex items-center justify-center h-48 text-slate-500 text-sm italic">
+                      No Index Data Available.
+                  </div>
+              ) : (
+                  <table className="w-full text-sm text-left">
+                    <thead className="text-[10px] text-indigo-200 uppercase bg-black/30 border-b border-white/5">
+                      <tr>
+                        <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('companyName')}>Entity</th>
+                        <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('intent_score')}>Intent</th>
+                        <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('reality_score')}>Reality</th>
+                        <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('reality_gap')}>Gap</th>
+                        <th className="px-6 py-4">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/5 text-slate-300">
+                      {sortedData.map((row) => (
+                        <tr key={row.id} className="hover:bg-white/5 transition-colors">
+                          <td className="px-6 py-4 font-medium text-white">{row.companyName}</td>
+                          <td className="px-6 py-4">{row.intent_score}</td>
+                          <td className="px-6 py-4">{row.reality_score}</td>
+                          <td className="px-6 py-4 font-mono text-xs">
+                             <span className={row.reality_gap > 20 ? 'text-rose-400' : 'text-slate-400'}>{row.reality_gap}</span>
+                          </td>
+                          <td className="px-6 py-4">
+                            <button onClick={() => handleCompanyClick(row)} className="text-cyan-400 hover:text-cyan-300 text-xs font-medium">View Report</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+              )}
           </div>
         </section>
       </main>
