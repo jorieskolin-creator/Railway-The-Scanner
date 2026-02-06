@@ -1,8 +1,8 @@
 
 import re
 
-# Keyword Definitions (Mirrors constants.ts and PDF Reference)
-# UPDATED: Now includes Finnish (FI) translations for bilingual support.
+# Keyword Definitions (Mirrors constants.ts)
+# INCLUDES FINNISH (FI) TRANSLATIONS
 CATEGORIES = {
     "Operating Model": {
         "good": [
@@ -13,9 +13,9 @@ CATEGORIES = {
             "Zero Distance", "Communities of Practice", "Transparency", "Human-centric", "End-to-End Responsibility"
         ],
         "good_fi": [
-            "arvovirta", "itseohjautuvuus", "matala hierarkia", "kokeilukulttuuri", "asiakaslähtöisyys",
-            "ketterä", "tiimimalli", "vastuun jakaminen", "psykologinen turvallisuus", "poikkitoiminnallinen",
-            "oppiva organisaatio", "palvelumuotoilu", "onnistumisen edellytykset"
+            "arvovirta", "itseohjautuvuu", "matala hierarkia", "kokeilukulttuuri", "asiakaslähtöisy",
+            "ketterä", "tiimimalli", "vastuun jakami", "psykologinen turvallisuu", "poikkitoiminnalli",
+            "oppiva organisaatio", "palvelumuotoilu", "onnistumisen edellytyk"
         ],
         "bad": [
             "Functional Silos", "Command and Control", "Digital Taylorism", "Handovers", "Resource Efficiency",
@@ -25,9 +25,9 @@ CATEGORIES = {
             "Spot Optimization", "Ticket-based", "Information Asymmetry", "Need to Know", "Predictability"
         ],
         "bad_fi": [
-            "siilot", "poteroituminen", "käskyttäminen", "hierarkia", "mikromanagerointi",
-            "byrokratia", "hyväksyntäketju", "vesiputousmalli", "kankeus", "siiloutuminen",
-            "suorituskeskeisyys", "kontrollointi", "ylhäältä alas", "jäykkä"
+            "siilo", "poteroitumi", "käskyttämi", "hierarkia", "mikromanagerointi",
+            "byrokratia", "hyväksyntäketju", "vesiputousmalli", "kankeus", "siiloutumi",
+            "suorituskeskeisy", "kontrollointi", "ylhäältä alas", "jäykkä"
         ]
     },
     "Service Portfolio": {
@@ -39,8 +39,8 @@ CATEGORIES = {
             "Interoperability", "Digital Twin", "Solution-oriented", "Lifetime Value", "Frictionless"
         ],
         "good_fi": [
-            "jatkuva laskutus", "alustatalous", "ekosysteemi", "skaalautuvuus", "käyttäjälähtöinen",
-            "pilvipohjainen", "datapohjainen", "itsepalvelu", "modulaarinen", "toistuvaislaskutus"
+            "jatkuva laskutus", "alustatalous", "ekosysteemi", "skaalautuvuu", "käyttäjälähtöi",
+            "pilvipohjai", "datapohjai", "itsepalvelu", "modulaari", "toistuvaislaskutus"
         ],
         "bad": [
             "Legacy", "Monolith", "On-premise", "Customization", "Project-based",
@@ -50,8 +50,8 @@ CATEGORIES = {
             "Discontinued", "Cost-plus Pricing", "Bloatware", "Version 1.0", "Cannibalization"
         ],
         "bad_fi": [
-            "vanhentunut", "räätälöity", "projektiluontoinen", "kertakauppa", "ylläpitoraskas",
-            "toimittajaloukku", "järjestelmäriippuvuus", "monoliitti", "paikallinen asennus", "lisenssipohjainen"
+            "vanhentu", "räätälöity", "projektiluontoi", "kertakauppa", "ylläpitoraskas",
+            "toimittajaloukku", "järjestelmäriippuvuu", "monoliitti", "paikallinen asennus", "lisenssipohjai"
         ]
     },
     "Values": {
@@ -63,9 +63,9 @@ CATEGORIES = {
             "Sustainability", "Experimentation", "Fun", "Human-centric", "Servant Leadership"
         ],
         "good_fi": [
-            "luottamus", "avoimuus", "läpinäkyvyys", "rohkeus", "oppiminen", "yhteistyö",
-            "tarkoitusperäisyys", "sopeutumiskyky", "vastuullisuus", "monimuotoisuus", "palaute",
-            "kasvun asenne", "kestävä kehitys", "ihmisläheisyys"
+            "luottamus", "avoimuus", "läpinäkyvyys", "rohkeus", "oppimi", "yhteistyö",
+            "tarkoitusperäisy", "sopeutumiskyky", "vastuullisuu", "monimuotoisuu", "palaute",
+            "kasvun asenne", "kestävä kehitys", "ihmisläheisy"
         ],
         "bad": [
             "Secrecy", "Fear", "Blame", "Control", "Compliance",
@@ -75,9 +75,9 @@ CATEGORIES = {
             "Command", "Ego", "Short-termism", "Exploitation", "Distrust"
         ],
         "bad_fi": [
-            "salailu", "pelko", "syyttely", "kontrolli", "sokea totteleminen",
-            "valtapeli", "muutosvastarinta", "ylimielisyys", "rangaistus", "kilpailuhenkisyys",
-            "epäluottamus", "lyhytnäköisyys", "hyväksikäyttö"
+            "salailu", "pelko", "syyttely", "kontrolli", "sokea tottelemi",
+            "valtapeli", "muutosvastarinta", "ylimielisy", "rangaistus", "kilpailuhenkisy",
+            "epäluottamus", "lyhytnäköisy", "hyväksikäyttö"
         ]
     },
     "Strategy": {
@@ -90,7 +90,7 @@ CATEGORIES = {
         ],
         "good_fi": [
             "pohjantähti", "arvonluonti", "digitaalinen transformaatio", "kasvu", "visio",
-            "asiakaskeskeisyys", "innovaatio", "tulevaisuudenkestävä", "erottautuminen", "kestävyys",
+            "asiakaskeskei", "innovaatio", "tulevaisuudenkestävä", "erottautumi", "kestävyys",
             "suunnanmuutos", "toimeenpano"
         ],
         "bad": [
@@ -101,8 +101,8 @@ CATEGORIES = {
             "Bureaucratic", "Complacent", "Opaque", "Incremental", "Project-based"
         ],
         "bad_fi": [
-            "kulukuri", "säästöt", "leikkaukset", "yt-neuvottelut", "lyhytnäköinen", "staattinen",
-            "reagoiva", "budjettiohjattu", "ylhäältä saneltu", "riskin välttäminen", "kilpailijakeskeinen",
+            "kulukuri", "säästöt", "leikkaukset", "yt-neuvottelut", "lyhytnäköi", "staattinen",
+            "reagoiva", "budjettiohjattu", "ylhäältä saneltu", "riskin välttämi", "kilpailijakeskei",
             "tehokkuusajattelu"
         ]
     },
@@ -115,7 +115,7 @@ CATEGORIES = {
             "Lifetime Value", "Circular Economy", "Membership", "Flywheel", "Value Co-creation"
         ],
         "good_fi": [
-            "alusta", "verkostovaikutus", "palvelullistaminen", "yhteisö", "jakamistalous",
+            "alusta", "verkostovaikutus", "palvelullistami", "yhteisö", "jakamistalous",
             "skaalautuva", "kumppaniverkosto", "kiertotalous", "jäsenyys"
         ],
         "bad": [
@@ -126,8 +126,8 @@ CATEGORIES = {
             "Arbitrage", "Unsustainable", "Predatory", "Analog", "Dependent"
         ],
         "bad_fi": [
-            "välikädet", "omaisuuserät", "suljettu järjestelmä", "lineaarinen", "tapahtumapohjainen",
-            "piilokulut", "kestämätön", "analoginen", "riippuvainen"
+            "välikädet", "omaisuuserät", "suljettu järjestelmä", "lineaarinen", "tapahtumapohjai",
+            "piilokulut", "kestämätön", "analoginen", "riippuvai"
         ]
     },
     "AI Readiness": {
@@ -139,8 +139,8 @@ CATEGORIES = {
             "Serverless", "Agile IT", "Citizen Developer", "Data Governance", "Augmented"
         ],
         "good_fi": [
-            "pilvi", "koneoppiminen", "automaatio", "reaaliaikainen", "ennakoiva",
-            "tietoturva", "integraatio", "algoritmi", "älykäs", "tiedolla johtaminen"
+            "pilvi", "koneoppimi", "automaatio", "reaaliaikai", "ennakoiva",
+            "tietoturva", "integraatio", "algoritmi", "älykäs", "tiedolla johtami"
         ],
         "bad": [
             "Legacy", "On-premise", "Siloed Data", "Manual Process", "Spreadsheet",
@@ -151,13 +151,12 @@ CATEGORIES = {
         ],
         "bad_fi": [
             "vanha järjestelmä", "siiloutunut data", "manuaalinen", "taulukkolaskenta", "tietomurto",
-            "katkos", "tekninen velka", "paperi", "hajanainen", "tietosuojaongelma"
+            "katkos", "tekninen velka", "paperi", "hajanai", "tietosuojaongelma"
         ]
     }
 }
 
 # Negation terms based on PDF Page 10 ("Negative Look-around")
-# Included Finnish negation terms
 NEGATION_TERMS = [
     "eliminate", "remove", "avoid", "anti", "reduce", "less", "no", "not", "without", "free from", "versus", "vs",
     "ei", "älä", "ilman", "poista", "vältä", "vähennä", "kiellä", "lopeta"
@@ -169,7 +168,6 @@ def is_negated(text_window):
     """
     lower_window = text_window.lower()
     for term in NEGATION_TERMS:
-        # Simple inclusion check. Could be enhanced with regex boundaries for strictness.
         if term in lower_window:
             return True
     return False
@@ -180,7 +178,7 @@ def analyze_intent(text: str):
     total_good_matches = 0
     total_bad_matches = 0
     total_words = len(text.split())
-    if total_words == 0: total_words = 1 # Avoid div by zero
+    if total_words == 0: total_words = 1 
 
     # --- ADAPTIVE SENSITIVITY ---
     is_short_text = total_words < 400
@@ -200,13 +198,24 @@ def analyze_intent(text: str):
         unique_good_found = 0
         unique_bad_found = 0
         
-        # Merge English and Finnish keywords for processing
+        # Merge English and Finnish lists
         good_list = keywords["good"] + keywords.get("good_fi", [])
         bad_list = keywords["bad"] + keywords.get("bad_fi", [])
 
         # 1. Count Good Signals
         for word in good_list:
-            pattern = r'\b' + re.escape(word.lower()) + r'\b'
+            # FIX: Morphological Matching for Finnish
+            # English uses strict boundary \bword\b
+            # Finnish uses prefix boundary \bword (allows suffixes like -ssa, -lla, -t, -yys)
+            is_finnish = word in keywords.get("good_fi", [])
+            
+            if is_finnish:
+                # Match start of word, allow characters after
+                pattern = r'\b' + re.escape(word.lower())
+            else:
+                # Strict match for English to avoid false positives (e.g. "is" matching "island")
+                pattern = r'\b' + re.escape(word.lower()) + r'\b'
+                
             matches = list(re.finditer(pattern, lower_text))
             
             if len(matches) >= GOOD_THRESHOLD:
@@ -214,29 +223,33 @@ def analyze_intent(text: str):
             
             total_good_matches += len(matches)
             
-        # 2. Count Bad Signals with NEGATIVE LOOK-AROUND
+        # 2. Count Bad Signals
         for word in bad_list:
-            pattern = r'\b' + re.escape(word.lower()) + r'\b'
+            is_finnish = word in keywords.get("bad_fi", [])
+            
+            if is_finnish:
+                pattern = r'\b' + re.escape(word.lower())
+            else:
+                pattern = r'\b' + re.escape(word.lower()) + r'\b'
+                
             matches = list(re.finditer(pattern, lower_text))
             
             valid_bad_occurrences_for_word = 0
             
             for match in matches:
-                # Context Window: Check ~50 characters (approx 5-10 words) before the match
+                # Context Window: Check ~50 chars before match
                 start_index = max(0, match.start() - 50)
                 preceding_text = lower_text[start_index:match.start()]
                 
                 if not is_negated(preceding_text):
                     valid_bad_occurrences_for_word += 1
-                else:
-                    pass
 
             if valid_bad_occurrences_for_word >= BAD_THRESHOLD:
                 unique_bad_found += 1
             
             total_bad_matches += valid_bad_occurrences_for_word
 
-        # 3. Calculate "Net Modernization Score"
+        # 3. Calculate Score
         net_result = unique_good_found - unique_bad_found
         
         if net_result < 0:
