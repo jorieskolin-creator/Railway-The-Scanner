@@ -8,8 +8,8 @@ from urllib.parse import urlparse
 # --- FORENSIC METHODOLOGY CONFIGURATION ---
 
 def get_forensic_queries(company_name, domain):
-    # UPGRADE: INTEGRATED "SMOKING GUN" TABLE
-    # Includes Finnish translations for local context.
+    # UPGRADE: INTEGRATED "SMOKING GUN" TABLE + FINNISH NUANCE
+    # Added "Kapulanvaihto" (Handoffs) and "Portinvartijuus" (Gatekeeping)
     return [
         # 1. OPERATING MODEL: Autonomy vs Control
         {
@@ -22,9 +22,9 @@ def get_forensic_queries(company_name, domain):
         {
             "category": "Operating Model",
             "sentiment": "negative",
-            "label": "Silos (Turf Wars)",
-            # Table Source: "Throwing over the wall", "Turf wars", "Not my job"
-            "q": f'"{company_name}" AND ("throwing over the wall" OR "turf war" OR "reviirikiista" OR "siiloutuminen" OR "silo mentality")'
+            "label": "Silos (Handoffs)",
+            # Added "kapulanvaihto" and "portinvartijuus"
+            "q": f'"{company_name}" AND ("throwing over the wall" OR "turf war" OR "reviirikiista" OR "siiloutuminen" OR "kapulanvaihto" OR "portinvartijuus")'
         },
 
         # 2. STRATEGY: Agile vs Waterfall
@@ -33,13 +33,13 @@ def get_forensic_queries(company_name, domain):
             "sentiment": "negative",
             "label": "Fake Agile (Zombie Scrum)",
             # Table Source: "Fake Agile", "Zombie Scrum", "Mini-waterfall"
-            "q": f'"{company_name}" AND ("fake agile" OR "zombie scrum" OR "agile in name only" OR "mini-waterfall" OR "vesiputous")'
+            "q": f'"{company_name}" AND ("fake agile" OR "zombie scrum" OR "agile in name only" OR "mini-waterfall" OR "vesiputous" OR "kertarysäys")'
         },
         {
             "category": "Strategy",
             "sentiment": "positive",
             "label": "Adaptability (Rolling Forecasts)",
-            "q": f'"{company_name}" AND ("rolling forecast" OR "rullaava ennuste" OR "beyond budgeting" OR "jatkuva suunnittelu")'
+            "q": f'"{company_name}" AND ("rolling forecast" OR "rullaava ennuste" OR "beyond budgeting" OR "jatkuva suunnittelu" OR "havainnoi ja reagoi")'
         },
 
         # 3. PORTFOLIO: Value vs Activity
@@ -57,7 +57,7 @@ def get_forensic_queries(company_name, domain):
             "sentiment": "negative",
             "label": "Blame Culture (Fear)",
             # Table Source: "Blame culture", "Bus factor", "Scapegoating"
-            "q": f'"{company_name}" AND ("blame culture" OR "syyttelykulttuuri" OR "scapegoat" OR "syntipukki" OR "bus factor" OR "thrown under the bus")'
+            "q": f'"{company_name}" AND ("blame culture" OR "syyttelykulttuuri" OR "scapegoat" OR "syntipukki" OR "bus factor" OR "pelolla johtaminen")'
         },
         {
             "category": "Values",
