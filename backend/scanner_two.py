@@ -8,74 +8,72 @@ from urllib.parse import urlparse
 # --- FORENSIC METHODOLOGY CONFIGURATION ---
 
 def get_forensic_queries(company_name, domain):
-    # UPDATED: Included Finnish translations (OR operator) to catch local signals
-    # on sites like Kauppalehti, Talouselämä, and Oikotie.
     return [
         {
             "category": "Operating Model",
             "sentiment": "positive", 
             "label": "Micro-Enterprise Structure",
-            "q": f'"{company_name}" AND ("P&L responsibility" OR "tulosvastuu" OR "micro-enterprises" OR "tiimitaso")'
+            "q": f'"{company_name}" "P&L responsibility" AND "team level"'
         },
         {
             "category": "Operating Model",
             "sentiment": "positive",
             "label": "Stream-Aligned Teams",
-            "q": f'"{company_name}" AND ("stream-aligned" OR "virtaustehokkuus" OR "value stream" OR "arvovirta")'
+            "q": f'"{company_name}" "stream-aligned" OR "value stream management" OR "end-to-end teams"'
         },
         {
             "category": "Operating Model",
             "sentiment": "positive",
             "label": "Platform Engineering (Golden Path)",
-            "q": f'"{company_name}" AND ("platform engineering" OR "internal developer platform" OR "alustakehitys" OR "golden path")'
+            "q": f'"{company_name}" "platform engineering" OR "internal developer platform" OR "golden path"'
         },
         {
             "category": "Strategy",
             "sentiment": "negative", # BAD SIGNAL
             "label": "Rigid Budget Compliance",
-            "q": f'"{company_name}" AND ("budget adherence" OR "budjettikuri" OR "budget compliance" OR "variance analysis")'
+            "q": f'"{company_name}" "budget adherence" OR "budget compliance" OR "variance analysis"'
         },
         {
             "category": "Strategy",
             "sentiment": "positive",
             "label": "Rolling Forecasts",
-            "q": f'"{company_name}" AND ("rolling forecast" OR "rullaava ennuste" OR "beyond budgeting")'
+            "q": f'"{company_name}" "rolling forecast" OR "beyond budgeting" OR "dynamic allocation"'
         },
         {
             "category": "Values",
             "sentiment": "negative", # BAD SIGNAL
             "label": "Digital Taylorism (Micromanagement)",
-            "q": f'"{company_name}" AND ("micromanagement" OR "mikromanagerointi" OR "surveillance" OR "kytätä")'
+            "q": f'"{company_name}" "micromanagement" OR "surveillance" OR "time tracking software"'
         },
         {
             "category": "Values",
             "sentiment": "positive",
             "label": "High Trust Policies (PTO/Remote)",
-            "q": f'"{company_name}" AND ("unlimited PTO" OR "remote first" OR "etätyö" OR "flexible hours" OR "joustava työaika")'
+            "q": f'"{company_name}" "unlimited PTO" OR "remote first" OR "flexible hours"'
         },
         {
             "category": "Values",
             "sentiment": "positive",
             "label": "Blameless Culture (Post-Mortems)",
-            "q": f'"{company_name}" AND ("blameless" OR "post-mortem" OR "psychological safety" OR "psykologinen turvallisuus" OR "virheistä oppiminen")'
+            "q": f'"{company_name}" "blameless post-mortem" OR "psychological safety"'
         },
         {
             "category": "AI Readiness",
             "sentiment": "positive",
             "label": "Data Mesh (Domain Ownership)",
-            "q": f'"{company_name}" AND ("data mesh" OR "data product" OR "datatuote" OR "domain ownership" OR "dataomistajuus")'
+            "q": f'"{company_name}" "data mesh" OR "data product" OR "domain ownership"'
         },
         {
             "category": "AI Readiness",
             "sentiment": "negative", # BAD SIGNAL
             "label": "AI Efficiency Narrative (Cost Cutting)",
-            "q": f'"{company_name}" "AI" AND ("headcount" OR "henkilöstövähennys" OR "cost savings" OR "säästöt" OR "layoffs" OR "muutosneuvottelut")'
+            "q": f'"{company_name}" "AI" AND ("headcount reduction" OR "cost savings" OR "layoffs")'
         },
          {
             "category": "AI Readiness",
             "sentiment": "positive",
             "label": "AI Growth Narrative (New Business)",
-            "q": f'"{company_name}" "AI" AND ("new revenue" OR "uusi liiketoiminta" OR "innovation" OR "innovaatio")'
+            "q": f'"{company_name}" "AI" AND ("new revenue" OR "new business model" OR "innovation")'
         }
     ]
 
