@@ -74,11 +74,11 @@ def scrape_homepage_text(url: str, company_name: str = "Unknown"):
     if not url: return get_deterministic_fallback(company_name)
     
     try:
-        # UPDATED HEADERS: explicitly ask for English AND Finnish
+        # UPDATED HEADERS: explicitly ask for Finnish (fi) then English (en)
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9,fi;q=0.8' 
+            'Accept-Language': 'fi-FI,fi;q=0.9,en-US;q=0.8,en;q=0.7' 
         }
         
         response = requests.get(url, headers=headers, timeout=6)
