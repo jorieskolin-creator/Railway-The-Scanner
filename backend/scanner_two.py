@@ -1,109 +1,23 @@
 
 import os
-import requests
-import re
-import time
 import json
+import time
 from urllib.parse import urlparse
 from google import genai
+from google.genai import types
 from knowledge_base import get_evolving_framework
 
 # --- HELPER: IMPROVE SEARCH RECALL ---
 def clean_company_name_for_search(name):
     """
     Removes legal suffixes to ensure Google Search finds natural language discussions.
-    Example: "Nokia Oyj" -> "Nokia"
-    Example: "Kesko Oyj" -> "Kesko"
     """
-    # Case insensitive removal of common suffixes
     clean = name
     suffixes = [" Oyj", " Abp", " Oy", " Ltd", " Plc", " Corporation", " Group", " Inc"]
-    
     for s in suffixes:
         if clean.lower().endswith(s.lower()):
             clean = clean[:-len(s)].strip()
-            
     return clean
-
-# --- FORENSIC METHODOLOGY CONFIGURATION ---
-
-def get_forensic_queries(company_name, domain):
-    # Use the conversational name for better search hits
-    search_name = clean_company_name_for_search(company_name)
-    
-    return [
-        # 1. OPERATING MODEL
-        {
-            "category": "Operating Model",
-            "sentiment": "negative",
-            "label": "Surveillance (Digital Taylorism)",
-            "q": f'"{search_name}" AND ("micromanagement" OR "mikromanagerointi" OR "tracking software" OR "mouse movers" OR "time doctor" OR "kyttääminen")'
-        },
-        {
-            "category": "Operating Model",
-            "sentiment": "negative",
-            "label": "Silos (Handoffs)",
-            "q": f'"{search_name}" AND ("throwing over the wall" OR "turf war" OR "reviirikiista" OR "siiloutuminen" OR "kapulanvaihto" OR "portinvartijuus")'
-        },
-
-        # 2. STRATEGY
-        {
-            "category": "Strategy",
-            "sentiment": "negative",
-            "label": "Fake Agile (Zombie Scrum)",
-            "q": f'"{search_name}" AND ("fake agile" OR "zombie scrum" OR "agile in name only" OR "mini-waterfall" OR "vesiputous" OR "kertarysäys")'
-        },
-        {
-            "category": "Strategy",
-            "sentiment": "positive",
-            "label": "Adaptability (Rolling Forecasts)",
-            "q": f'"{search_name}" AND ("rolling forecast" OR "rullaava ennuste" OR "beyond budgeting" OR "jatkuva suunnittelu" OR "havainnoi ja reagoi")'
-        },
-
-        # 3. SERVICE PORTFOLIO
-        {
-            "category": "Service Portfolio",
-            "sentiment": "negative",
-            "label": "Feature Factory",
-            "q": f'"{search_name}" AND ("feature factory" OR "ominaisuustehdas" OR "vanity metrics" OR "output over outcome" OR "success theater")'
-        },
-
-        # 4. VALUES / CULTURE
-        {
-            "category": "Values",
-            "sentiment": "negative",
-            "label": "Blame Culture (Fear)",
-            "q": f'"{search_name}" AND ("blame culture" OR "syyttelykulttuuri" OR "scapegoat" OR "syntipukki" OR "bus factor" OR "pelolla johtaminen")'
-        },
-        {
-            "category": "Values",
-            "sentiment": "positive",
-            "label": "Psychological Safety",
-            "q": f'"{search_name}" AND ("psychological safety" OR "psykologinen turvallisuus" OR "blameless post-mortem" OR "uskallus epäonnistua")'
-        },
-
-        # 5. STRATEGY / DECISION MAKING
-        {
-            "category": "Strategy", 
-            "sentiment": "negative",
-            "label": "HiPPO (Ego-Driven)",
-            "q": f'"{search_name}" AND ("HiPPO" OR "highest paid person" OR "executive whim" OR "top-down" OR "ylhäältä saneltu")'
-        },
-
-        # 6. AI READINESS
-        {
-            "category": "AI Readiness",
-            "sentiment": "negative",
-            "label": "Pilot Purgatory",
-            "q": f'"{search_name}" AND ("pilot purgatory" OR "endless PoC" OR "shiny object" OR "solution looking for a problem" OR "ratkaisu etsii ongelmaa")'
-        },
-        {
-            "category": "AI Readiness",
-            "sentiment": "negative",
-            "label": "Legacy Inertia (Excel Hell)",
-            "q": f'"{search_name}" AND ("Excel hell" OR "Excel-helvetti" OR "manual reporting" OR "käsin raportointi" OR "legacy systems")'
-        }
-    ]
 
 def get_clean_domain(url):
     if not url: return ""
@@ -116,133 +30,164 @@ def get_clean_domain(url):
     except:
         return ""
 
-def verify_evidence_with_ai(company_name, potential_evidence):
+def x_ray_search(company_name: str, company_url: str = None):
     """
-    Step 2 Intelligence Layer:
-    Uses Gemini 3 Flash to read search snippets and determine if they are
-    CONTEXTUALLY relevant based on the Knowledge Base.
-    """
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-    if not api_key or not potential_evidence:
-        return 0, [] 
+    Performs a Forensic X-Ray Scan using Gemini with Google Search Grounding.
+    This replaces the old 'Custom Search Engine' (CSE) which was too restricted.
     
+    Now, Gemini acts as the investigator:
+    1. It uses the native 'google_search' tool (searching the whole web).
+    2. It looks for specific forensic signals (Micromanagement, Agile, etc.).
+    3. It returns a structured JSON report.
+    """
+    
+    # We now only need the Gemini Key. CSE_ID and GOOGLE_API_KEY are no longer bottlenecks.
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
+    
+    checklist = []
+    raw_findings = []
+    base_score = 50
+    is_simulated = False
+    
+    search_name = clean_company_name_for_search(company_name)
+    print(f"   [Forensic Scan] Target: {company_name} (Search Term: {search_name})")
+
+    if not api_key:
+        print("   [Scanner 2] CRITICAL: No API_KEY found. Returning empty results.")
+        return { "score": 50, "checklist": [], "links": [], "is_simulated": True }
+
     try:
         client = genai.Client(api_key=api_key)
         
-        # Load Knowledge Base
-        knowledge_context = get_evolving_framework()
-
-        evidence_json = json.dumps(potential_evidence, indent=2)
-
+        # We ask Gemini to do the heavy lifting: Search AND Categorize in one go.
+        # This saves 10+ HTTP calls and uses the full Google Index.
         prompt = f"""
-        You are the Forensic Investigator (Scanner 2).
+        INVESTIGATE the company "{search_name}" using Google Search.
         
-        ## THE RULEBOOK (Knowledge Base)
-        Use these definitions to judge the evidence:
-        {knowledge_context}
+        Look for recent employee reviews (Glassdoor, Reddit, Blind), news articles, and blogs.
+        Specifically verify these 5 FORENSIC HYPOTHESES:
 
-        ## THE EVIDENCE
-        I searched for signals of "Bad" (Old Way) or "Good" (Modern Way) behavior for: {company_name}.
-        Here are the search results (snippets).
-        
-        {evidence_json}
+        1. "Surveillance": Is there evidence of micromanagement or time-tracking software?
+        2. "Silos": Are there complaints about bureaucracy, handovers, or turf wars?
+        3. "Fake Agile": Do people call it "Zombie Scrum", "Waterfall", or "Agile in Name Only"?
+        4. "Fear Culture": Is there a "Blame Culture" or lack of psychological safety?
+        5. "Legacy Inertia": Are there complaints about old systems, "Excel Hell", or manual reporting?
 
-        ## YOUR TASK
-        1. Read each snippet carefully.
-        2. Decide if the context truly matches the behavior label.
-           - Example Match: "Employees complain about micromanagement" -> Matches "Surveillance".
-           - Example Mismatch: "We wrote a blog post about how to AVOID micromanagement" -> Does NOT match "Surveillance".
-        3. Assign a score (-10 to +10) for the whole set.
-           - Negative score = Evidence of "Bad/Old Way" found.
-           - Positive score = Evidence of "Good/Modern Way" found.
-           - Zero = No credible evidence found.
-        
-        Return JSON: {{ "total_adjustment_score": number }}
+        Also look for POSITIVE signals (e.g., "Autonomy", "Psychological Safety", "Modern Tech Stack").
+
+        RETURN STRICT JSON ONLY:
+        {{
+            "findings": [
+                {{
+                    "category": "Operating Model",
+                    "label": "Surveillance",
+                    "found": boolean,
+                    "sentiment": "negative" or "positive" or "neutral",
+                    "snippet": "Direct quote or summary of what was found...",
+                    "title": "Title of source",
+                    "url": "URL of source"
+                }}
+            ],
+            "reality_score_adjustment": (integer between -30 and +30 based on evidence balance)
+        }}
         """
 
-        # FIX: Changed generateContent (JS) to generate_content (Python)
+        # Use Gemini 2.5 Flash as it robustly supports the Google Search tool
         response = client.models.generate_content(
-            model='gemini-3-flash-preview', 
+            model='gemini-2.5-flash',
             contents=prompt,
+            config={
+                'tools': [{'google_search': {}}],
+                'response_mime_type': 'application/json'
+            }
+        )
+        
+        # Parse the result
+        if response.text:
+            data = json.loads(response.text)
+            
+            # Extract Findings
+            findings = data.get("findings", [])
+            for f in findings:
+                # Add to checklist for UI
+                checklist.append({
+                    "category": f.get("category", "General"),
+                    "query": f.get("label", "Signal"),
+                    "found": f.get("found", False),
+                    "sentiment": f.get("sentiment", "neutral")
+                })
+                
+                # Add to links if found
+                if f.get("found") and f.get("url"):
+                    raw_findings.append({
+                        "title": f.get("title", "Evidence Found"),
+                        "snippet": f.get("snippet", ""),
+                        "url": f.get("url", ""),
+                        "source": get_clean_domain(f.get("url", ""))
+                    })
+            
+            # Calculate Score
+            adjustment = data.get("reality_score_adjustment", 0)
+            final_score = max(0, min(100, base_score + adjustment))
+            
+            print(f"   [Scanner 2] Google Search Successful. Found {len(raw_findings)} items. Adj: {adjustment}")
+            
+            return {
+                "score": int(final_score),
+                "checklist": checklist,
+                "links": raw_findings,
+                "is_simulated": False # This was a REAL search
+            }
+
+    except Exception as e:
+        print(f"   [Scanner 2] Google Search Tool Failed: {e}")
+        # Fallthrough to Simulation
+
+    # --- FALLBACK: AI SIMULATION ---
+    # If the Search Tool fails (e.g. model overloaded), we fall back to knowledge-base simulation
+    print(f"   [Scanner 2] Engaging AI Simulation for {company_name} (Fallback)...")
+    is_simulated = True
+    
+    try:
+        client = genai.Client(api_key=api_key)
+        sim_prompt = f"""
+        You are a Forensic Data Generator.
+        I cannot access live search results for {company_name}.
+        
+        Based on your internal knowledge base about {company_name} (industry reputation, typical operating model):
+        Generate 3 REALISTIC 'Search Snippets' that represent the likely operational reality.
+        
+        Return JSON:
+        {{
+            "findings": [
+                {{
+                    "title": "Realistic Forum Post Title",
+                    "snippet": "Realistic text...",
+                    "url": "https://glassdoor.com/...",
+                    "sentiment": "negative" or "positive"
+                }}
+            ],
+            "score": (Estimated Reality Score 0-100)
+        }}
+        """
+        
+        response = client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=sim_prompt,
             config={'response_mime_type': 'application/json'}
         )
         
-        result = json.loads(response.text)
-        score = int(result.get("total_adjustment_score", 0))
+        sim_data = json.loads(response.text)
         
-        return score, potential_evidence
+        return {
+            "score": sim_data.get("score", 50),
+            "checklist": [
+                {"category": "Simulation", "query": "Historical Data", "found": True, "sentiment": "neutral"}
+            ],
+            "links": sim_data.get("findings", []),
+            "is_simulated": True
+        }
 
     except Exception as e:
-        print(f"      [Scanner 2 AI Context Check Failed]: {e}")
-        return 0, potential_evidence
-
-def x_ray_search(company_name: str, company_url: str = None):
-    api_key = os.environ.get("GOOGLE_API_KEY")
-    cx_id = os.environ.get("CX_ENGINE_ID")
-    
-    domain = get_clean_domain(company_url)
-    queries = get_forensic_queries(company_name, domain)
-    checklist = []
-    
-    raw_findings = [] 
-    
-    if not api_key or not cx_id:
-        return { "score": 0, "checklist": [], "links": [], "is_simulated": False }
-
-    base_score = 50 
-    print(f"   [Forensic Scan] Target: {company_name}")
-
-    # Rate limiting for Google Search API
-    for item in queries:
-        time.sleep(1.2) 
-
-        params = {
-            'key': api_key, 'cx': cx_id, 'q': item['q'],
-            'num': 2, 'gl': 'fi', 'lr': 'lang_en|lang_fi', 'safe': 'active'
-        }
-        
-        try:
-            res = requests.get("https://www.googleapis.com/customsearch/v1", params=params, timeout=10)
-            found = False
-            
-            if res.status_code == 200:
-                data = res.json()
-                if "items" in data and len(data["items"]) > 0:
-                    found = True
-                    result = data["items"][0]
-                    
-                    raw_findings.append({
-                        "category": item['category'],
-                        "label": item['label'],
-                        "expected_sentiment": item['sentiment'],
-                        "title": result.get('title'),
-                        "snippet": result.get('snippet', ''),
-                        "url": result.get('link'),
-                        "source": result.get('displayLink')
-                    })
-
-            checklist.append({
-                "category": item['category'],
-                "query": item['label'],
-                "found": found,
-                "sentiment": item['sentiment']
-            })
-            
-        except Exception as e:
-            print(f"      [Exception] {str(e)[:50]}")
-            checklist.append({"category": item['category'], "query": item['label'], "found": False, "sentiment": "neutral"})
-
-    # --- INTELLIGENCE LAYER ---
-    print(f"   [Scanner 2] Contextualizing {len(raw_findings)} findings via Knowledge Base...")
-    
-    ai_adjustment, verified_links = verify_evidence_with_ai(company_name, raw_findings)
-    
-    final_score = max(0, min(100, base_score + ai_adjustment))
-    print(f"   [Scanner 2] AI Context Verdict: {ai_adjustment}. Final Reality Score: {final_score}")
-
-    return {
-        "score": int(final_score),
-        "checklist": checklist,
-        "links": raw_findings,
-        "is_simulated": False
-    }
+        print(f"   [Scanner 2] Simulation Failed: {e}")
+        return { "score": 50, "checklist": [], "links": [], "is_simulated": True }
