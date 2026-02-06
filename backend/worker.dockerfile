@@ -18,8 +18,5 @@ COPY . /app
 # Switch to backend directory to run the server
 WORKDIR /app/backend
 
-# Expose port 8080
-EXPOSE 8080
-
-# Run FastAPI
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+# Run FastAPI using the PORT environment variable (defaulting to 8080)
+CMD sh -c "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"
