@@ -20,7 +20,7 @@ from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES
 from knowledge_base import get_evolving_framework
 
-print("Starting Adaptability Scanner Backend (v2.2 Native Search)...", flush=True)
+print("Starting Adaptability Scanner Backend (v3.0 File-Per-Company Arch)...", flush=True)
 
 def clean_env_var(value):
     if not value: return ""
@@ -44,7 +44,6 @@ app.add_middleware(
 )
 
 storage = BlobStorage()
-BLOB_FILENAME = "dashboard_data.json"
 
 app.mount("/components", StaticFiles(directory="../components"), name="components")
 app.mount("/services", StaticFiles(directory="../services"), name="services")
@@ -66,7 +65,7 @@ def health_check():
     gemini_present = bool(clean_env_var(os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")))
     
     return {
-        "status": "Adaptability Scanner API Online", 
+        "status": "Adaptability Scanner API Online (v3.0)", 
         "timestamp": datetime.utcnow().isoformat(),
         "config_status": {
             "has_blob_token": bool(token),
@@ -77,11 +76,27 @@ def health_check():
 
 @app.get("/dashboard-data")
 async def get_dashboard_data(response: Response):
-    # CRITICAL: Prevent caching of the JSON data to ensure live updates from Vercel are seen immediately.
+    """
+    Returns the LIGHTWEIGHT summary list for the landing page table/graph.
+    """
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
-    return storage.retrieve_latest_data(BLOB_FILENAME)
+    
+    # We load "index/summary_list.json"
+    data = storage.retrieve_latest_data("index/summary_list.json")
+    return data or []
+
+@app.get("/company/{company_name}")
+async def get_company_details(company_name: str, response: Response):
+    """
+    Returns the FULL DETAILED report for a specific company.
+    """
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    data = storage.get_company_data(company_name)
+    if not data:
+        raise HTTPException(status_code=404, detail="Company report not found")
+    return data
 
 class ScanRequest(BaseModel):
     companyName: str
@@ -117,65 +132,55 @@ async def run_scan(request: ScanRequest):
         reality_results = x_ray_search(request.companyName, target_url)
         gap = intent_results["score"] - reality_results["score"]
         
-        # --- STEP 3: SYNTHESIS (The AI Judge) ---
+        # --- STEP 3: SYNTHESIS ---
         summary = "AI Summary Unavailable"
         api_key = clean_env_var(os.environ.get("API_KEY") or os.environ.get("GEMINI_API_KEY"))
         
         if api_key:
             try:
                 client = genai.Client(api_key=api_key)
-                
                 intent_narrative = json.dumps(intent_results["breakdown"])
                 evidence_list = ', '.join([f"{l['title']}: {l.get('snippet', '')}" for l in reality_results['links'][:4]])
                 knowledge_context = get_evolving_framework()
 
                 prompt = f"""
-                ### STEP 3: SYNTHESIS & REPORTING
-                
-                You are the Chief Forensic Analyst.
-                
-                ## THE KNOWLEDGE BASE (Guideline)
-                {knowledge_context}
-
-                ## THE DATA
+                ### SYNTHESIS
                 Target: {request.companyName}
-                Intent Score: {intent_results["score"]}/100
-                Reality Score: {reality_results["score"]}/100
-                Gap: {gap}
+                Intent: {intent_results["score"]}, Reality: {reality_results["score"]}, Gap: {gap}
+                Knowledge Base: {knowledge_context}
+                Evidence: {evidence_list}
+                Intent Data: {intent_narrative}
 
-                Intent Breakdown: {intent_narrative}
-                Evidence Context: {evidence_list}
-
-                ## YOUR TASK
-                Create a high-precision Executive Summary (max 100 words).
-                1. Classify the company using the Knowledge Base archetypes.
-                2. Explain the gap using specific terms (e.g. "Digital Taylorism", "Flow").
-                3. Cite specific evidence found by Scanner 2.
+                Task: Write a 100-word forensic executive summary.
                 """
                 
-                # Use Gemini 3 Pro Preview for High Quality Synthesis as requested
                 try:
-                    response = client.models.generate_content(
-                        model='gemini-3-pro-preview',
-                        contents=prompt
-                    )
+                    response = client.models.generate_content(model='gemini-3-pro-preview', contents=prompt)
                     if response.text: summary = response.text
-                except Exception as e:
-                    print(f"Gemini Pro failed, falling back to Flash: {e}")
-                    response = client.models.generate_content(
-                        model='gemini-3-flash-preview',
-                        contents=prompt
-                    )
+                except:
+                    response = client.models.generate_content(model='gemini-3-flash-preview', contents=prompt)
                     if response.text: summary = response.text
 
             except Exception as e:
                 print(f"Gemini Error: {e}")
 
-        # 4. Result Construction
         new_timestamp = datetime.utcnow().isoformat()
         result_id = str(uuid.uuid4())
         
-        result_data = {
+        # 1. Construct FULL DATA (Heavy)
+        # Check if we have history to preserve
+        history = []
+        existing_data = storage.get_company_data(request.companyName)
+        if existing_data:
+            history = existing_data.get("history", [])
+            # Add current state to history
+            history.append({
+                "date": existing_data.get("lastUpdated"),
+                "gap": existing_data.get("reality_gap", 0)
+            })
+            if len(history) > 12: history = history[-12:] # Keep last 12 scans
+
+        full_data = {
             "id": result_id,
             "companyName": request.companyName,
             "companyUrl": target_url, 
@@ -188,44 +193,28 @@ async def run_scan(request: ScanRequest):
             "evidence_links": reality_results["links"],
             "summary_text": summary,
             "lastUpdated": new_timestamp,
+            "history": history,
             "is_simulated": reality_results.get("is_simulated", False)
         }
         
-        # 5. Persist to Vercel Blob (Step 3 Requirement)
-        if request.saveToDatabase:
-            try:
-                current_db = storage.retrieve_latest_data(BLOB_FILENAME) or []
-                
-                index = -1
-                for i, item in enumerate(current_db):
-                    if item.get("companyName", "").lower() == request.companyName.lower():
-                        index = i
-                        result_data["id"] = item.get("id", result_id) 
-                        break
-                
-                if index > -1: 
-                    existing_record = current_db[index]
-                    history = existing_record.get("history", [])
-                    snapshot = {
-                        "date": existing_record.get("lastUpdated"),
-                        "gap": existing_record.get("reality_gap", 0),
-                        "reality_score": existing_record.get("reality_score", 0),
-                        "intent_score": existing_record.get("intent_score", 0)
-                    }
-                    if snapshot["date"]: history.append(snapshot)
-                    if len(history) > 10: history = history[-10:]
-                    result_data["history"] = history
-                    current_db[index] = result_data
-                else: 
-                    result_data["history"] = []
-                    current_db.append(result_data)
-                
-                storage.upload_json(BLOB_FILENAME, current_db)
-
-            except Exception as e:
-                print(f"Persistence Failed: {e}")
+        # 2. Construct SUMMARY DATA (Lightweight)
+        summary_entry = {
+            "id": result_id,
+            "companyName": request.companyName,
+            "intent_score": intent_results["score"],
+            "reality_score": reality_results["score"],
+            "reality_gap": gap,
+            "lastUpdated": new_timestamp
+        }
         
-        return {"success": True, "data": result_data}
+        # 3. SAVE (Atomic Operations)
+        if request.saveToDatabase:
+            # Save detail file
+            storage.save_company_data(request.companyName, full_data)
+            # Update index file
+            storage.update_global_index(summary_entry)
+        
+        return {"success": True, "data": full_data}
 
     except Exception as e:
         print(f"Server Error: {str(e)}")

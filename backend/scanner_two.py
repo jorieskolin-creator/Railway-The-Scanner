@@ -35,13 +35,7 @@ def x_ray_search(company_name: str, company_url: str = None):
     SCANNER 2: THE REALITY CHECK (External Evidence)
     
     This function performs the Forensic Scan.
-    CRITICAL: It is strictly prohibited from using the company's own website as a source.
-    
-    APPROVED SOURCES (STRICT ALLOWLIST):
-    1. Tech/Code: StackOverflow, GitHub.
-    2. Thought Leadership: Medium.
-    3. FI Financial News: Tekniikka&Talous, Talouselämä, Kauppalehti, Tivi.
-    4. Employee Voice: Glassdoor, Indeed, The Hub, Oikotie, Duunitori, LinkedIn.
+    It now uses the '4 Juries' methodology for deep validation.
     """
     
     # Only GEMINI_API_KEY is required now.
@@ -63,58 +57,54 @@ def x_ray_search(company_name: str, company_url: str = None):
         client = genai.Client(api_key=api_key)
         
         # We craft a prompt that forces the model to look at the "Jury" of sources
-        # DOMAIN ALLOWLIST ENFORCED HERE
+        # UPGRADE: Added Architectural, Strategic, Community, and Academic juries.
         prompt = f"""
         Perform a FORENSIC INVESTIGATION on "{search_name}".
         
         SEARCH STRATEGY (STRICT - APPROVED SOURCES ONLY):
-        Do NOT read the company's own website.
-        Look ONLY at evidence from these specific domain groups (The "Standardized Tribunal"):
+        Do NOT read the company's own marketing pages.
+        Look ONLY at evidence from these specific 'JURIES' (The Standardized Tribunal):
 
-        1. TECHNICAL COMMUNITIES (The Tech Jury):
-           - *.stackoverflow.com
-           - *.github.com
+        1. THE ARCHITECTURAL JURY (Tech Reality):
+           - Search for Developer Portals: `site:developer.*` OR `site:api.*` related to {search_name}.
+           - Search for Status Pages: `site:status.*` (Transparency test).
+           - Sources: *.github.com, developer.{search_name.lower().replace(' ', '')}.com
 
-        2. FINNISH FINANCIAL & TECH NEWS (The Press Jury):
-           - *.tekniikkatalous.fi
-           - *.talouselama.fi
-           - *.kauppalehti.fi
-           - *.tivi.fi
+        2. THE STRATEGIC JURY (Investor Truth):
+           - Search for Capital Markets Day (CMD) PDFs. 
+           - Query: `filetype:pdf "{search_name}" "Capital Markets Day" strategy`
+           - Query: `filetype:pdf "{search_name}" "Risk Management" rigid`
 
-        3. EMPLOYEE VOICE & RECRUITMENT (The People Jury):
-           - *.glassdoor.com
-           - *.thehub.io
-           - *.indeed.com
-           - *.oikotie.fi
-           - *.duunitori.fi
-           - *.linkedin.com
-           
-        4. THOUGHT LEADERSHIP:
-           - *.medium.com
+        3. THE COMMUNITY JURY (Culture & Reputation):
+           - Finnish Tech Events: "ScanAgile", "DevOps Finland", "Mimmit koodaa".
+           - Unfiltered Voice: `site:reddit.com`, `site:teamblind.com`.
+           - Recruitment: `site:thehub.io`, `site:glassdoor.com`.
+
+        4. THE ACADEMIC JURY (Deep Audits):
+           - Finnish Thesis Database (Public Audits): `site:theseus.fi "{search_name}"`.
+           - Look for titles like "Agile Transformation at...", "Challenges in...".
 
         VERIFY THESE 5 HYPOTHESES:
         1. "Surveillance": Is there micromanagement, time-tracking, or low trust?
         2. "Silos": Are there complaints about bureaucracy, "turf wars", or heavy handovers?
         3. "Fake Agile": Do employees call it "Waterfall", "Zombie Scrum", or "Agile in Name Only"?
-        4. "Fear Culture": Is there a blame culture, fear of failure, or layoffs handled poorly?
-        5. "Legacy Inertia": Are there complaints about "Excel Hell", old systems, or manual work?
-
-        Also look for POSITIVE signals (e.g. "Autonomy", "Great Culture", "Modern Tech", "Open Source contributions").
+        4. "Platform Thinking": Do they have a public API/Dev portal? (If yes -> High Reality Score).
+        5. "Legacy Inertia": Are there academic theses describing failed transformations?
 
         RETURN STRICT JSON:
         {{
             "findings": [
                 {{
-                    "category": "Operating Model",
-                    "label": "Surveillance",
+                    "category": "Operating Model" | "Strategy" | "Technology" | "Culture",
+                    "label": "Brief Label (e.g. 'Public Dev Portal Found')",
                     "found": boolean,
-                    "sentiment": "negative" or "positive" or "neutral",
+                    "sentiment": "negative" or "positive",
                     "snippet": "Quote finding...",
-                    "title": "Source Title (e.g. 'Talouselämä Article')",
+                    "title": "Source Title (e.g. 'Theseus Thesis: Agile Failures')",
                     "url": "URL of the source"
                 }}
             ],
-            "reality_score_adjustment": (integer between -30 and +30 based on evidence balance)
+            "reality_score_adjustment": (integer between -40 and +40 based on evidence balance)
         }}
         """
 

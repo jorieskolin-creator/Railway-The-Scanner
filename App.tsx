@@ -1,42 +1,37 @@
 
 const { useState, useEffect } = (window as any).React;
 
-// --- ICON SAFETY LAYER ---
-// Wraps Lucide access so accessing an undefined icon returns a Null component instead of crashing
 const LucideRaw = (window as any).Lucide || {};
 const Icons = new Proxy(LucideRaw, {
     get: (target, prop) => {
         if (prop in target) return target[prop];
-        return () => null; // Return generic empty component if icon missing
+        return () => null;
     }
 });
 
 const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, Play, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock, HardDrive, Terminal } = Icons;
 
-// Components & Services from Window
 const TruthMatrix = (window as any).TruthMatrix;
 const ScannerInput = (window as any).ScannerInput;
 const CompanyModal = (window as any).CompanyModal;
 
-// --- CONFIGURATION ---
 const IS_ADMIN_MODE = true; 
-// ---------------------
 
 const App = () => {
-  const [data, setData] = useState([]);
+  const [data, setData] = useState([]); // Lightweight Summary Data
   const [loading, setLoading] = useState(true);
   const [connectionError, setConnectionError] = useState(null); 
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedCompany, setSelectedCompany] = useState(null);
+  const [selectedCompany, setSelectedCompany] = useState(null); // Full Detailed Data
+  const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [isSeeding, setIsSeeding] = useState(false);
-  const [lastSynced, setLastSynced] = useState(null); // New state for visual feedback
+  const [lastSynced, setLastSynced] = useState(null);
   const [sortConfig, setSortConfig] = useState({ key: 'reality_gap', direction: 'desc' });
   const [systemStatus, setSystemStatus] = useState({ online: false, storage: false, google: false, ai: false });
 
-  // Check Backend Health & Config
   const checkHealth = async () => {
       try {
           const res = await fetch('/api/health');
@@ -60,49 +55,22 @@ const App = () => {
     checkHealth();
   }, []);
 
-  // --- CRITICAL FIX: SYNC MODAL WITH DATA ---
-  // If the global 'data' updates (e.g. via Refresh), find the currently selected company
-  // in the new list and update 'selectedCompany' so the Modal reflects the changes instantly.
-  useEffect(() => {
-    if (selectedCompany && data.length > 0) {
-        const freshRecord = data.find(c => c.companyName === selectedCompany.companyName);
-        if (freshRecord) {
-            // Check if timestamp or scores differ before updating to prevent loops
-            if (freshRecord.lastUpdated !== selectedCompany.lastUpdated || 
-                freshRecord.reality_score !== selectedCompany.reality_score) {
-                console.log("Syncing Modal with fresh data for:", freshRecord.companyName);
-                setSelectedCompany(freshRecord);
-            }
-        }
-    }
-  }, [data, selectedCompany]);
-
-  // Function to load data from backend
-  const fetchRealData = async () => {
+  // Fetch LIGHTWEIGHT Summary Data
+  const fetchSummaryData = async () => {
     try {
         setLoading(true);
         setConnectionError(null);
-        // Add cache busting timestamp to URL to prevent browser caching
-        const response = await fetch(`/dashboard-data?t=${Date.now()}`, {
-            headers: { 
-              'Cache-Control': 'no-cache, no-store, must-revalidate',
-              'Pragma': 'no-cache'
-            }
-        });
-        
+        const response = await fetch(`/dashboard-data?t=${Date.now()}`);
         if (response.ok) {
             const json = await response.json();
-            // If json is empty array, that's fine (empty DB)
-            console.log("Loaded real data from backend:", json.length, "records");
+            console.log("Loaded summary data:", json.length, "records");
             setData(json);
             setLastSynced(new Date().toLocaleTimeString('en-US', { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }));
         } else {
-            throw new Error("Failed to fetch data");
+            throw new Error("Failed to fetch summary data");
         }
     } catch (e) {
-        console.error("Connection failed:", e);
-        // We do NOT set connectionError here to prevent a banner on initial load.
-        // The empty state UI will handle the "no data" case.
+        console.error(e);
         setData([]); 
     } finally {
         setLoading(false);
@@ -110,15 +78,38 @@ const App = () => {
   };
 
   useEffect(() => {
-    fetchRealData();
+    fetchSummaryData();
   }, []);
+
+  // Fetch DETAILED Data for a specific company
+  const handleCompanyClick = async (summaryItem) => {
+    if (!summaryItem) return;
+    
+    setIsLoadingDetails(true);
+    // Open modal with summary data first (better UX than waiting)
+    // We add a 'partial: true' flag so the Modal knows it might be missing deep data
+    setSelectedCompany({ ...summaryItem, partial: true });
+    setIsModalOpen(true);
+
+    try {
+        const res = await fetch(`/company/${encodeURIComponent(summaryItem.companyName)}?t=${Date.now()}`);
+        if (res.ok) {
+            const fullData = await res.json();
+            setSelectedCompany(fullData);
+        } else {
+            console.error("Failed to load details");
+        }
+    } catch (e) {
+        console.error("Error fetching details", e);
+    } finally {
+        setIsLoadingDetails(false);
+    }
+  };
 
   const handleRunScan = async (input) => {
     setIsScanning(true);
-    const apiUrl = ""; 
-
     try {
-      const response = await fetch(`${apiUrl}/scan`, {
+      const response = await fetch(`/scan`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...input, saveToDatabase: true })
@@ -128,23 +119,15 @@ const App = () => {
       const json = await response.json();
       const newResult = json.data;
 
-      setData(prev => {
-        // Update existing or add new
-        const existsIndex = prev.findIndex(p => p.companyName === newResult.companyName);
-        if (existsIndex > -1) {
-          const updated = [...prev];
-          updated[existsIndex] = newResult;
-          return updated;
-        }
-        return [newResult, ...prev];
-      });
-
+      // Update Summary List Local State
+      fetchSummaryData(); // Refresh the list from server to be safe
+      
       setIsScannerOpen(false);
-      setSelectedCompany(newResult);
+      setSelectedCompany(newResult); // The scan result IS the full data
       setIsModalOpen(true);
     } catch (error) {
       console.error(error);
-      alert("Error running scan: Connection to backend failed.");
+      alert("Error running scan.");
     } finally {
       setIsScanning(false);
     }
@@ -152,50 +135,24 @@ const App = () => {
 
   const handleBatchSeed = async () => {
     if (!IS_ADMIN_MODE) return;
-    
-    // Double check status before running
-    const hasStorage = await checkHealth();
-    
-    if (!hasStorage) {
-         if (!confirm("WARNING: The frontend thinks the Storage Token is missing. Force proceed?")) return;
-    } else {
-        if (!confirm("Refresh Database?\n\nThis will scrape the Top 100 Finnish companies, run X-Ray analysis, and update the Vercel Blob database.\n\nProcess runs in the background (~30 seconds).")) return;
-    }
+    if (!confirm("Start Batch Refresh? This will reset the Index.")) return;
     
     setIsSeeding(true);
     try {
         const response = await fetch(`/admin/seed-finland-100`, { method: 'POST' });
         if (response.ok) {
-            alert("✅ Database Refresh Started!\n\nThe server is now processing the Top 100 list.\n\nPlease wait ~30 seconds, then click the smaller 'Refresh Data' button to see results.");
-        } else {
-            throw new Error(`API returned error ${response.status}`);
+            alert("✅ Batch Refresh Started in Background.");
         }
     } catch (e) {
-        alert("❌ Failed to contact backend.\n\nIs the Python server running?");
-        console.error(e);
+        alert("❌ Error");
     } finally {
         setIsSeeding(false);
     }
   };
 
-  const handleCompanyUpdate = (updatedCompany) => {
-    setData(prev => prev.map(item => 
-      item.companyName === updatedCompany.companyName ? updatedCompany : item
-    ));
-    setSelectedCompany(updatedCompany);
-  };
-
-  const handleCompanyClick = (company) => {
-    if (!company) return;
-    setSelectedCompany(company);
-    setIsModalOpen(true);
-  };
-
   const handleSort = (key) => {
     let direction = 'desc';
-    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'desc') {
-      direction = 'asc';
-    }
+    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'desc') direction = 'asc';
     setSortConfig({ key, direction });
   };
 
@@ -216,20 +173,17 @@ const App = () => {
     <div className="min-h-screen flex flex-col font-sans relative overflow-x-hidden text-slate-100">
       <div className="fixed inset-0 z-0 bg-[#1e1b4b] overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-b from-[#2e1065] via-[#1e1b4b] to-[#0f172a] opacity-80"></div>
-        <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-rose-500/30 rounded-full blur-[100px] mix-blend-screen animate-pulse-glow"></div>
-        <div className="absolute top-[-10%] right-[-10%] w-[60%] h-[60%] bg-cyan-500/30 rounded-full blur-[120px] mix-blend-screen animate-pulse-glow" style={{ animationDelay: '4s' }}></div>
-        <div className="absolute bottom-[-20%] left-[20%] w-[70%] h-[70%] bg-violet-600/30 rounded-full blur-[150px] mix-blend-screen" style={{ animationDelay: '2s' }}></div>
         <div className="absolute inset-0 opacity-[0.05] pointer-events-none"></div>
       </div>
 
       <header className="sticky top-0 z-40 w-full border-b border-white/10 bg-[#1e1b4b]/50 backdrop-blur-xl">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-gradient-to-br from-cyan-500 to-violet-600 rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(139,92,246,0.3)] ring-1 ring-white/20">
+            <div className="w-8 h-8 bg-gradient-to-br from-cyan-500 to-violet-600 rounded-lg flex items-center justify-center">
               <span className="text-white font-bold text-sm">FI</span>
             </div>
             <div className="flex flex-col">
-              <h1 className="font-bold text-base tracking-tight text-white hidden sm:block">
+              <h1 className="font-bold text-base text-white hidden sm:block">
                 Adaptability<span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-300 to-violet-300">Scanner</span>
               </h1>
               <span className="text-[10px] text-indigo-200 tracking-[0.15em] uppercase font-medium">Finland Top 100 Index</span>
@@ -237,54 +191,23 @@ const App = () => {
           </div>
           
           <div className="flex items-center gap-4 w-full max-w-md ml-4 justify-end">
-            
-            {/* ADMIN BUTTONS */}
             {IS_ADMIN_MODE && (
-                <button 
-                    onClick={handleBatchSeed}
-                    disabled={isSeeding}
-                    title="Run Top 100 Scrape"
-                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-lg transition-all shadow-lg shadow-indigo-500/20 border border-indigo-400/20"
-                >
+                <button onClick={handleBatchSeed} disabled={isSeeding} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-lg transition-all">
                     {isSeeding ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
                     {isSeeding ? "REFRESHING..." : "REFRESH DATABASE"}
                 </button>
             )}
-
             <div className="flex items-center gap-2">
-                {lastSynced && (
-                    <div className="hidden sm:flex flex-col items-end mr-2">
-                        <span className="text-[9px] text-slate-400 uppercase tracking-widest">Local Fetch</span>
-                        <span className="text-[10px] text-cyan-300/90 font-mono">{lastSynced}</span>
-                    </div>
-                )}
-                <button 
-                    onClick={fetchRealData} 
-                    title="Refresh Data from Server"
-                    className="p-2 bg-white/5 hover:bg-white/10 rounded-full text-indigo-300 transition-all border border-transparent hover:border-indigo-500/30 active:scale-95"
-                >
-                    <RefreshCw size={14} className={loading ? "animate-spin text-cyan-400" : ""} />
+                {lastSynced && <span className="text-[10px] text-cyan-300/70 font-mono hidden sm:block">{lastSynced}</span>}
+                <button onClick={fetchSummaryData} className="p-2 bg-white/5 rounded-full hover:bg-white/10">
+                    <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
                 </button>
             </div>
-
-            <div className="relative w-full max-w-[240px] group hidden sm:block">
-              <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-indigo-300">
-                <Search size={14} />
-              </div>
-              <input
-                type="text"
-                placeholder="Search Finland Top 100..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-9 pr-4 py-1.5 bg-[#0f172a]/50 border border-indigo-500/30 rounded-lg text-sm text-slate-100 placeholder-indigo-300/50 focus:ring-2 focus:ring-cyan-500/20 outline-none transition-all"
-              />
+            <div className="relative w-full max-w-[240px] hidden sm:block">
+              <input type="text" placeholder="Search..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full pl-4 pr-4 py-1.5 bg-[#0f172a]/50 border border-indigo-500/30 rounded-lg text-sm text-slate-100" />
             </div>
-            
             {IS_ADMIN_MODE && (
-              <button 
-                onClick={() => setIsScannerOpen(true)}
-                className="flex items-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 text-white font-semibold text-xs rounded-lg transition-all border border-white/10 backdrop-blur-md"
-              >
+              <button onClick={() => setIsScannerOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-white/10 rounded-lg text-xs font-bold">
                 <Plus size={14} /> NEW DIAGNOSIS
               </button>
             )}
@@ -292,34 +215,16 @@ const App = () => {
         </div>
       </header>
 
-      {/* ERROR BANNER - Only shown if connectionError state is explicitly set (e.g. after a user action fails) */}
-      {connectionError && (
-        <div className="w-full bg-rose-500/20 border-b border-rose-500/30 backdrop-blur-sm">
-             <div className="max-w-7xl mx-auto px-4 py-2 flex items-center justify-center gap-2 text-rose-200 text-xs font-medium">
-                 <AlertTriangle size={14} />
-                 <span>{connectionError}</span>
-             </div>
-        </div>
-      )}
-
       <main className="flex-grow py-8 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full space-y-8 z-10 relative">
         <section className="space-y-4">
           <div className="flex justify-between items-center">
-            <h2 className="text-xl font-bold text-white flex items-center gap-2 tracking-tight">
-              <Sparkles className="text-cyan-300 w-4 h-4" /> Market Landscape (Finland)
+            <h2 className="text-xl font-bold text-white flex items-center gap-2">
+              <Sparkles className="text-cyan-300 w-4 h-4" /> Market Landscape
             </h2>
           </div>
           {loading ? (
-             <div className="h-[400px] w-full bg-[#0f172a]/60 rounded-2xl border border-white/10 backdrop-blur-md flex items-center justify-center">
+             <div className="h-[400px] w-full bg-[#0f172a]/60 rounded-2xl flex items-center justify-center">
                 <Loader2 className="animate-spin text-cyan-400" size={32} />
-             </div>
-          ) : data.length === 0 ? (
-             <div className="h-[250px] w-full bg-[#0f172a]/60 rounded-2xl border border-white/10 backdrop-blur-md flex flex-col items-center justify-center text-slate-400 space-y-4">
-                 <Database size={48} className="opacity-20" />
-                 <p className="text-sm">Database is empty or unreachable.</p>
-                 <button onClick={handleBatchSeed} className="text-indigo-400 hover:text-indigo-300 text-xs underline">
-                    Run Initial Database Refresh
-                 </button>
              </div>
           ) : (
              <div className="bg-[#0f172a]/60 border border-white/10 rounded-2xl p-1 shadow-2xl backdrop-blur-xl">
@@ -330,137 +235,69 @@ const App = () => {
 
         <section className="space-y-4">
           <div className="flex justify-between items-center">
-            <h2 className="text-lg font-bold text-white tracking-tight">Forensic Index</h2>
-            <span className="text-[10px] font-mono text-indigo-200 uppercase tracking-wider bg-[#0f172a]/50 px-2 py-1 rounded border border-indigo-500/20">{filteredData.length} Entities</span>
+            <h2 className="text-lg font-bold text-white">Forensic Index</h2>
           </div>
-
-          <div className="bg-[#0f172a]/70 border border-white/10 rounded-2xl overflow-hidden shadow-2xl backdrop-blur-xl">
-            <div className="overflow-x-auto">
+          <div className="bg-[#0f172a]/70 border border-white/10 rounded-2xl overflow-hidden">
               <table className="w-full text-sm text-left">
-                <thead className="text-[10px] text-indigo-200 uppercase bg-black/30 border-b border-white/5 tracking-wider font-semibold">
+                <thead className="text-[10px] text-indigo-200 uppercase bg-black/30 border-b border-white/5">
                   <tr>
-                    <th className="px-6 py-4 cursor-pointer hover:text-white" onClick={() => handleSort('companyName')}>
-                      <div className="flex items-center gap-2">Entity <ArrowUpDown size={10} className="opacity-30" /></div>
-                    </th>
-                    <th className="px-6 py-4 cursor-pointer hover:text-white" onClick={() => handleSort('intent_score')}>
-                       <div className="flex items-center gap-2">Intent <ArrowUpDown size={10} className="opacity-30" /></div>
-                    </th>
-                    <th className="px-6 py-4 cursor-pointer hover:text-white" onClick={() => handleSort('reality_score')}>
-                       <div className="flex items-center gap-2">Reality <ArrowUpDown size={10} className="opacity-30" /></div>
-                    </th>
-                    <th className="px-6 py-4 cursor-pointer hover:text-white" onClick={() => handleSort('reality_gap')}>
-                       <div className="flex items-center gap-2">Gap <ArrowUpDown size={10} className="opacity-30" /></div>
-                    </th>
-                    <th className="px-6 py-4 cursor-pointer hover:text-white" onClick={() => handleSort('lastUpdated')}>
-                       <div className="flex items-center gap-2">Updated <ArrowUpDown size={10} className="opacity-30" /></div>
-                    </th>
-                    <th className="px-6 py-4 text-right">Action</th>
+                    <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('companyName')}>Entity</th>
+                    <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('intent_score')}>Intent</th>
+                    <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('reality_score')}>Reality</th>
+                    <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('reality_gap')}>Gap</th>
+                    <th className="px-6 py-4">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5 text-slate-300">
-                  {loading ? (
-                    [...Array(5)].map((_, i) => (
-                      <tr key={i} className="animate-pulse">
-                        <td className="px-6 py-4"><div className="h-4 bg-white/5 rounded w-32" /></td>
-                        <td className="px-6 py-4"></td>
-                        <td className="px-6 py-4"></td>
-                        <td className="px-6 py-4"></td>
-                        <td className="px-6 py-4"></td>
-                        <td className="px-6 py-4"></td>
-                      </tr>
-                    ))
-                  ) : sortedData.length === 0 ? (
-                      <tr>
-                          <td colSpan={6} className="px-6 py-12 text-center text-slate-500">
-                              {/* Silent error if no connection, just show text */}
-                              No entities found. (Check connection or refresh database)
-                          </td>
-                      </tr>
-                  ) : sortedData.map((row) => (
-                    <tr key={row.id} className="hover:bg-white/5 transition-colors group">
-                      <td className="px-6 py-4 font-medium text-slate-100 group-hover:text-white transition-colors">{row.companyName}</td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-2">
-                            <div className="w-16 h-1 bg-slate-700 rounded-full overflow-hidden">
-                                <div className="h-full bg-cyan-400 rounded-full" style={{ width: `${row.intent_score}%` }}></div>
-                            </div>
-                            <span className="text-xs font-mono">{row.intent_score}</span>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-2">
-                            <div className="w-16 h-1 bg-slate-700 rounded-full overflow-hidden">
-                                <div className="h-full bg-emerald-400 rounded-full" style={{ width: `${row.reality_score}%` }}></div>
-                            </div>
-                            <span className="text-xs font-mono">{row.reality_score}</span>
-                        </div>
-                      </td>
+                  {sortedData.map((row) => (
+                    <tr key={row.id} className="hover:bg-white/5 transition-colors">
+                      <td className="px-6 py-4 font-medium text-white">{row.companyName}</td>
+                      <td className="px-6 py-4">{row.intent_score}</td>
+                      <td className="px-6 py-4">{row.reality_score}</td>
                       <td className="px-6 py-4 font-mono text-xs">
-                        <span className={`${row.reality_gap > 20 ? 'text-rose-400 font-bold' : row.reality_gap < -20 ? 'text-amber-400' : 'text-slate-400'}`}>
-                          {row.reality_gap > 0 ? '+' : ''}{row.reality_gap}
-                        </span>
+                         <span className={row.reality_gap > 20 ? 'text-rose-400' : 'text-slate-400'}>{row.reality_gap}</span>
                       </td>
-                      <td className="px-6 py-4 text-xs font-mono text-slate-500">
-                        {new Date(row.lastUpdated).toLocaleDateString()}
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        <button 
-                          onClick={() => handleCompanyClick(row)}
-                          className="px-3 py-1.5 rounded-md hover:bg-cyan-500/10 hover:text-cyan-300 text-xs font-medium transition-all"
-                        >
-                          View Report
-                        </button>
+                      <td className="px-6 py-4">
+                        <button onClick={() => handleCompanyClick(row)} className="text-cyan-400 hover:text-cyan-300 text-xs font-medium">View Report</button>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            </div>
           </div>
         </section>
       </main>
 
       {isScannerOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-[#0f172a]/90 backdrop-blur-md" onClick={() => !isScanning && setIsScannerOpen(false)} />
-          <div className="relative w-full max-w-2xl bg-[#0f172a] border border-white/10 rounded-2xl shadow-2xl overflow-hidden">
-             <div className="absolute top-4 right-4 z-10">
-               {!isScanning && (
-                <button onClick={() => setIsScannerOpen(false)} className="text-slate-400 hover:text-white p-1 rounded-full">
-                  <X size={20} />
-                </button>
-               )}
-             </div>
-             {isScanning ? (
-               <div className="p-16 flex flex-col items-center justify-center space-y-8 text-center">
-                 <div className="relative">
-                    <div className="w-20 h-20 border-2 border-slate-700 border-t-cyan-500 rounded-full animate-spin"></div>
-                    <div className="absolute inset-0 flex items-center justify-center">
-                        <Activity className="text-cyan-400 animate-pulse" size={24} />
-                    </div>
-                 </div>
-                 <div>
-                   <h3 className="text-xl font-bold text-white tracking-tight">Diagnostic Engine Running</h3>
-                   <div className="space-y-2 mt-4 text-left border-l-2 border-slate-700 pl-4 py-1">
-                    <p className="text-xs text-cyan-400 font-mono animate-pulse">>> Parsing Narrative Vectors</p>
-                    <p className="text-xs text-emerald-400 font-mono animate-pulse delay-75">
-                        {systemStatus.google ? '>> Interrogating Global Grid (X-Ray API)' : '>> Interrogating Reality'}
-                    </p>
+           <div className="absolute inset-0 bg-black/90 backdrop-blur-sm" onClick={() => !isScanning && setIsScannerOpen(false)} />
+           <div className="relative w-full max-w-2xl bg-[#0f172a] border border-white/10 rounded-2xl shadow-2xl overflow-hidden z-10">
+               {isScanning ? (
+                   <div className="p-16 flex flex-col items-center justify-center">
+                       <Loader2 className="animate-spin text-cyan-400 mb-4" size={32} />
+                       <p className="text-white">Scanning...</p>
                    </div>
-                 </div>
-               </div>
-             ) : (
-               <ScannerInput onScan={handleRunScan} />
-             )}
-          </div>
+               ) : (
+                    <>
+                        <div className="absolute top-2 right-2">
+                            <button onClick={() => setIsScannerOpen(false)}><X className="text-white" /></button>
+                        </div>
+                        <ScannerInput onScan={handleRunScan} />
+                    </>
+               )}
+           </div>
         </div>
       )}
 
       <CompanyModal 
         company={selectedCompany} 
         isOpen={isModalOpen} 
+        isLoading={isLoadingDetails}
         onClose={() => setIsModalOpen(false)}
-        onUpdate={handleCompanyUpdate}
+        onUpdate={(updated) => {
+            setSelectedCompany(updated);
+            fetchSummaryData();
+        }}
       />
     </div>
   );
