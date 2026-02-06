@@ -8,73 +8,86 @@ from urllib.parse import urlparse
 # --- FORENSIC METHODOLOGY CONFIGURATION ---
 
 def get_forensic_queries(company_name, domain):
-    # UPDATED: Included Finnish terms (e.g., 'tulosvastuu', 'mikromanagerointi', 'yt-neuvottelut')
+    # UPGRADE: INTEGRATED "SMOKING GUN" TABLE
+    # Includes Finnish translations for local context.
     return [
+        # 1. OPERATING MODEL: Autonomy vs Control
         {
             "category": "Operating Model",
-            "sentiment": "positive", 
-            "label": "Micro-Enterprise Structure",
-            "q": f'"{company_name}" AND ("P&L responsibility" OR "tulosvastuu" OR "profit center")'
+            "sentiment": "negative",
+            "label": "Surveillance (Digital Taylorism)",
+            # Table Source: "Micromanagement", "Tracking software", "Mouse movements"
+            "q": f'"{company_name}" AND ("micromanagement" OR "mikromanagerointi" OR "tracking software" OR "mouse movers" OR "time doctor" OR "kyttääminen")'
         },
         {
             "category": "Operating Model",
-            "sentiment": "positive",
-            "label": "Stream-Aligned Teams",
-            "q": f'"{company_name}" AND ("stream-aligned" OR "arvovirta" OR "value stream")'
+            "sentiment": "negative",
+            "label": "Silos (Turf Wars)",
+            # Table Source: "Throwing over the wall", "Turf wars", "Not my job"
+            "q": f'"{company_name}" AND ("throwing over the wall" OR "turf war" OR "reviirikiista" OR "siiloutuminen" OR "silo mentality")'
         },
+
+        # 2. STRATEGY: Agile vs Waterfall
         {
-            "category": "Operating Model",
-            "sentiment": "positive",
-            "label": "Platform Engineering",
-            "q": f'"{company_name}" AND ("platform engineering" OR "internal developer platform" OR "kehitysalusta")'
+            "category": "Strategy",
+            "sentiment": "negative",
+            "label": "Fake Agile (Zombie Scrum)",
+            # Table Source: "Fake Agile", "Zombie Scrum", "Mini-waterfall"
+            "q": f'"{company_name}" AND ("fake agile" OR "zombie scrum" OR "agile in name only" OR "mini-waterfall" OR "vesiputous")'
         },
         {
             "category": "Strategy",
-            "sentiment": "negative", # BAD SIGNAL
-            "label": "Rigid Budget Compliance",
-            "q": f'"{company_name}" AND ("budget adherence" OR "budget compliance" OR "budjettikuri" OR "variance analysis")'
-        },
-        {
-            "category": "Strategy",
             "sentiment": "positive",
-            "label": "Rolling Forecasts",
-            "q": f'"{company_name}" AND ("rolling forecast" OR "rullaava ennuste" OR "beyond budgeting")'
+            "label": "Adaptability (Rolling Forecasts)",
+            "q": f'"{company_name}" AND ("rolling forecast" OR "rullaava ennuste" OR "beyond budgeting" OR "jatkuva suunnittelu")'
+        },
+
+        # 3. PORTFOLIO: Value vs Activity
+        {
+            "category": "Service Portfolio", # Mapped to Service/Product Portfolio
+            "sentiment": "negative",
+            "label": "Feature Factory",
+            # Table Source: "Feature factory", "Vanity metrics", "Output over outcome"
+            "q": f'"{company_name}" AND ("feature factory" OR "ominaisuustehdas" OR "vanity metrics" OR "output over outcome" OR "success theater")'
+        },
+
+        # 4. CULTURE: Safety vs Fear
+        {
+            "category": "Values",
+            "sentiment": "negative",
+            "label": "Blame Culture (Fear)",
+            # Table Source: "Blame culture", "Bus factor", "Scapegoating"
+            "q": f'"{company_name}" AND ("blame culture" OR "syyttelykulttuuri" OR "scapegoat" OR "syntipukki" OR "bus factor" OR "thrown under the bus")'
         },
         {
             "category": "Values",
-            "sentiment": "negative", # BAD SIGNAL
-            "label": "Digital Taylorism (Micromanagement)",
-            "q": f'"{company_name}" AND ("micromanagement" OR "mikromanagerointi" OR "kyttääminen" OR "surveillance")'
-        },
-        {
-            "category": "Values",
             "sentiment": "positive",
-            "label": "High Trust Policies",
-            "q": f'"{company_name}" AND ("unlimited PTO" OR "joustava työaika" OR "remote first" OR "etätyö")'
+            "label": "Psychological Safety",
+            "q": f'"{company_name}" AND ("psychological safety" OR "psykologinen turvallisuus" OR "blameless post-mortem" OR "uskallus epäonnistua")'
         },
+
+        # 5. DECISION MAKING: Data vs Ego
         {
-            "category": "Values",
-            "sentiment": "positive",
-            "label": "Blameless Culture",
-            "q": f'"{company_name}" AND ("blameless" OR "post-mortem" OR "psykologinen turvallisuus" OR "psychological safety")'
+            "category": "Strategy", # Mapped to Strategy/Decision Making
+            "sentiment": "negative",
+            "label": "HiPPO (Ego-Driven)",
+            # Table Source: "HiPPO", "Executive whim", "Top-down"
+            "q": f'"{company_name}" AND ("HiPPO" OR "highest paid person" OR "executive whim" OR "top-down" OR "ylhäältä saneltu")'
+        },
+
+        # 6. AI READINESS: Strategic vs Tactical
+        {
+            "category": "AI Readiness",
+            "sentiment": "negative",
+            "label": "Pilot Purgatory",
+            # Table Source: "Pilot purgatory", "Shiny object", "Solution looking for a problem"
+            "q": f'"{company_name}" AND ("pilot purgatory" OR "endless PoC" OR "shiny object" OR "solution looking for a problem" OR "ratkaisu etsii ongelmaa")'
         },
         {
             "category": "AI Readiness",
-            "sentiment": "positive",
-            "label": "Data Mesh (Domain Ownership)",
-            "q": f'"{company_name}" AND ("data mesh" OR "data product" OR "datatuote")'
-        },
-        {
-            "category": "AI Readiness",
-            "sentiment": "negative", # BAD SIGNAL
-            "label": "Cost Cutting Narrative",
-            "q": f'"{company_name}" AND ("AI" OR "tekoäly") AND ("headcount reduction" OR "layoffs" OR "muutosneuvottelut" OR "yt-neuvottelut" OR "säästöt")'
-        },
-         {
-            "category": "AI Readiness",
-            "sentiment": "positive",
-            "label": "Growth Narrative",
-            "q": f'"{company_name}" AND ("AI" OR "tekoäly") AND ("new revenue" OR "uutta liiketoimintaa" OR "innovation" OR "innovaatio")'
+            "sentiment": "negative",
+            "label": "Legacy Inertia (Excel Hell)",
+            "q": f'"{company_name}" AND ("Excel hell" OR "Excel-helvetti" OR "manual reporting" OR "käsin raportointi" OR "legacy systems")'
         }
     ]
 
@@ -91,10 +104,12 @@ def get_clean_domain(url):
 
 def get_simulated_score(company_name):
     """
-    Generates a consistent Reality Score (0-100) based on the company name.
+    Generates a consistent Reality Score based on the company name to avoid
+    the 'flat 50' issue when API keys are missing.
     """
     hash_val = int(hashlib.sha256(company_name.encode('utf-8')).hexdigest(), 16)
-    base_score = 30 + (hash_val % 60) 
+    # Range 20 to 80
+    base_score = 20 + (hash_val % 61) 
     return base_score
 
 def x_ray_search(company_name: str, company_url: str = None):
@@ -107,13 +122,20 @@ def x_ray_search(company_name: str, company_url: str = None):
     evidence_links = []
     
     # --- SIMULATION MODE ---
+    # Triggered if keys missing OR keys invalid
     if not api_key or not cx_id:
         print(f"   [X-Ray] No API Keys. Simulating for {company_name}")
         simulated_score = get_simulated_score(company_name)
         
         for item in queries:
+            # Deterministic simulation based on name + query label
             item_hash = int(hashlib.sha256((company_name + item['label']).encode('utf-8')).hexdigest(), 16)
-            is_found = (item_hash % 100) < 40 
+            
+            # Probability of finding evidence based on company score
+            if item['sentiment'] == 'positive':
+                is_found = (item_hash % 100) < simulated_score
+            else:
+                is_found = (item_hash % 100) > simulated_score
             
             checklist.append({
                 "category": item['category'],
@@ -124,7 +146,7 @@ def x_ray_search(company_name: str, company_url: str = None):
             
             if is_found:
                 evidence_links.append({
-                    "title": f"[{item['sentiment'].upper()}] Evidence of {item['label']}",
+                    "title": f"[{item['sentiment'].upper()}] {item['label']} (Simulated)",
                     "url": "#",
                     "source": "Simulated Forensic Search",
                     "snippet": f"Simulated detection of {item['label']} for {company_name}."
