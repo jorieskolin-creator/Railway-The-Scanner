@@ -1,3 +1,4 @@
+
 const { useState, useEffect } = (window as any).React;
 
 // --- ICON SAFETY LAYER ---
@@ -241,8 +242,17 @@ const App = () => {
                 placeholder="Search Finland Top 100..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-9 pr-4 py-1.5 bg-[#0f172a]/50 border border-indigo-500/30 rounded-lg text-sm text-slate-100 placeholder-indigo-300/50 focus:ring-2 focus:ring-cyan-500/20 outline-none transition-all"
+                className="w-full pl-9 pr-8 py-1.5 bg-[#0f172a]/50 border border-indigo-500/30 rounded-lg text-sm text-slate-100 placeholder-indigo-300/50 focus:ring-2 focus:ring-cyan-500/20 outline-none transition-all"
               />
+              {/* Clear Search Icon Inside Input */}
+              {searchQuery && (
+                <button 
+                  onClick={() => setSearchQuery('')}
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-400 hover:text-white"
+                >
+                  <X size={14} />
+                </button>
+              )}
             </div>
             
             {IS_ADMIN_MODE && (
@@ -295,7 +305,17 @@ const App = () => {
 
         <section className="space-y-4">
           <div className="flex justify-between items-center">
-            <h2 className="text-lg font-bold text-white tracking-tight">Forensic Index</h2>
+            <div className="flex items-center gap-4">
+                <h2 className="text-lg font-bold text-white tracking-tight">Forensic Index</h2>
+                {searchQuery && (
+                    <button
+                        onClick={() => setSearchQuery('')}
+                        className="flex items-center gap-1.5 px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-rose-300 bg-rose-500/10 border border-rose-500/20 rounded-md hover:bg-rose-500/20 hover:text-rose-200 transition-all shadow-lg shadow-rose-900/20 animate-in fade-in zoom-in duration-200"
+                    >
+                        <X size={12} /> Clear Search: "{searchQuery}"
+                    </button>
+                )}
+            </div>
             <span className="text-[10px] font-mono text-indigo-200 uppercase tracking-wider bg-[#0f172a]/50 px-2 py-1 rounded border border-indigo-500/20">{filteredData.length} Entities</span>
           </div>
 
