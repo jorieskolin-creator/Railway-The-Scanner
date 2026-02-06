@@ -1,4 +1,5 @@
 
+
 // Access Enums from Global Window
 const Globals = (window as any);
 const Scanner1Category = Globals.Scanner1Category || {
@@ -110,26 +111,26 @@ const Scanner2Category = Globals.Scanner2Category || Scanner1Category;
   }
 };
 
-// UPDATED TO MATCH FORENSIC METHODOLOGY
-// Each query is now an object: { label, sentiment, query_string }
+// UPDATED TO MATCH FORENSIC METHODOLOGY (Enhanced Narrative Queries)
 (window as any).REALITY_QUERIES = {
   [Scanner2Category.OperatingModel]: [
-    { label: "Micro-Enterprise Test (P&L)", sentiment: "positive", q: '"P&L responsibility" AND "team level" -Director -VP' },
-    { label: "Stream-Aligned Test", sentiment: "positive", q: '"stream-aligned" OR "value stream" OR "end-to-end ownership"' },
-    { label: "Platform Engineering Test", sentiment: "positive", q: '"platform product manager" OR "internal developer platform" OR "golden path"' }
+    { label: "Surveillance (Digital Taylorism)", sentiment: "negative", q: '...' },
+    { label: "Silos (Turf Wars)", sentiment: "negative", q: '...' }
   ],
   [Scanner2Category.Strategy]: [
-    { label: "Budget Rigidity Test", sentiment: "negative", q: 'filetype:pdf "annual budget" AND ("variance analysis" OR "compliance")' },
-    { label: "Rolling Forecast Test", sentiment: "positive", q: '"rolling forecast" AND "driver-based" -budget' }
+    { label: "Fake Agile (Zombie Scrum)", sentiment: "negative", q: '...' },
+    { label: "Adaptability (Rolling Forecasts)", sentiment: "positive", q: '...' },
+    { label: "HiPPO (Ego-Driven)", sentiment: "negative", q: '...' }
+  ],
+  [Scanner2Category.ServicePortfolio]: [
+    { label: "Feature Factory", sentiment: "negative", q: '...' }
   ],
   [Scanner2Category.Values]: [
-    { label: "Digital Taylorism Test", sentiment: "negative", q: 'site:glassdoor.com "micromanagement" OR "surveillance"' },
-    { label: "Trust Proxy (PTO/Remote)", sentiment: "positive", q: '"unlimited PTO" OR "remote first" OR "asynchronous"' },
-    { label: "Psychological Safety Test", sentiment: "positive", q: '"post-mortem" OR "incident report" OR "learning from failure"' }
+    { label: "Blame Culture (Fear)", sentiment: "negative", q: '...' },
+    { label: "Psychological Safety", sentiment: "positive", q: '...' }
   ],
   [Scanner2Category.AIReadiness]: [
-    { label: "Data Mesh Test", sentiment: "positive", q: '"data product owner" OR "domain data" -centralized' },
-    { label: "Efficiency Narrative (AI Washing)", sentiment: "negative", q: '"AI" AND ("headcount" OR "cost savings" OR "efficiency")' },
-    { label: "Growth Narrative", sentiment: "positive", q: '"AI" AND ("new business model" OR "revenue growth" OR "innovation")' }
+    { label: "Pilot Purgatory", sentiment: "negative", q: '...' },
+    { label: "Legacy Inertia (Excel Hell)", sentiment: "negative", q: '...' }
   ]
 };
