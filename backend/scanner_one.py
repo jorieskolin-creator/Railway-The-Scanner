@@ -2,6 +2,7 @@
 import re
 
 # Keyword Definitions (Mirrors constants.ts and PDF Reference)
+# UPDATED: Now includes Finnish (FI) translations for bilingual support.
 CATEGORIES = {
     "Operating Model": {
         "good": [
@@ -11,12 +12,22 @@ CATEGORIES = {
             "Launch-and-Learn", "Fluid", "Network of Teams", "Enabling Leadership", "Cognitive Load",
             "Zero Distance", "Communities of Practice", "Transparency", "Human-centric", "End-to-End Responsibility"
         ],
+        "good_fi": [
+            "arvovirta", "itseohjautuvuus", "matala hierarkia", "kokeilukulttuuri", "asiakaslähtöisyys",
+            "ketterä", "tiimimalli", "vastuun jakaminen", "psykologinen turvallisuus", "poikkitoiminnallinen",
+            "oppiva organisaatio", "palvelumuotoilu", "onnistumisen edellytykset"
+        ],
         "bad": [
             "Functional Silos", "Command and Control", "Digital Taylorism", "Handovers", "Resource Efficiency",
             "Approval Chain", "Micromanagement", "Output-driven", "Rigid", "Bureaucracy",
             "Gatekeeping", "Waterfall", "Order-taker", "Compliance-driven", "Siloed Data",
             "HiPPO", "Standardization", "Big Bang", "Utilization Rate", "Legacy Thinking",
             "Spot Optimization", "Ticket-based", "Information Asymmetry", "Need to Know", "Predictability"
+        ],
+        "bad_fi": [
+            "siilot", "poteroituminen", "käskyttäminen", "hierarkia", "mikromanagerointi",
+            "byrokratia", "hyväksyntäketju", "vesiputousmalli", "kankeus", "siiloutuminen",
+            "suorituskeskeisyys", "kontrollointi", "ylhäältä alas", "jäykkä"
         ]
     },
     "Service Portfolio": {
@@ -27,12 +38,20 @@ CATEGORIES = {
             "Value Proposition", "Feedback Loop", "MVP", "Consumption-based", "Self-service",
             "Interoperability", "Digital Twin", "Solution-oriented", "Lifetime Value", "Frictionless"
         ],
+        "good_fi": [
+            "jatkuva laskutus", "alustatalous", "ekosysteemi", "skaalautuvuus", "käyttäjälähtöinen",
+            "pilvipohjainen", "datapohjainen", "itsepalvelu", "modulaarinen", "toistuvaislaskutus"
+        ],
         "bad": [
             "Legacy", "Monolith", "On-premise", "Customization", "Project-based",
             "One-off Sales", "Maintenance-heavy", "Vendor Lock-in", "Siloed Data", "Hardware-centric",
             "Manual Updates", "Consulting-heavy", "End-of-Life", "Fragmented", "Feature Factory",
             "Complexity", "Static", "Commoditized", "Proprietary", "License-based",
             "Discontinued", "Cost-plus Pricing", "Bloatware", "Version 1.0", "Cannibalization"
+        ],
+        "bad_fi": [
+            "vanhentunut", "räätälöity", "projektiluontoinen", "kertakauppa", "ylläpitoraskas",
+            "toimittajaloukku", "järjestelmäriippuvuus", "monoliitti", "paikallinen asennus", "lisenssipohjainen"
         ]
     },
     "Values": {
@@ -43,12 +62,22 @@ CATEGORIES = {
             "Diversity", "Innovation", "Feedback", "Growth Mindset", "Integrity",
             "Sustainability", "Experimentation", "Fun", "Human-centric", "Servant Leadership"
         ],
+        "good_fi": [
+            "luottamus", "avoimuus", "läpinäkyvyys", "rohkeus", "oppiminen", "yhteistyö",
+            "tarkoitusperäisyys", "sopeutumiskyky", "vastuullisuus", "monimuotoisuus", "palaute",
+            "kasvun asenne", "kestävä kehitys", "ihmisläheisyys"
+        ],
         "bad": [
             "Secrecy", "Fear", "Blame", "Control", "Compliance",
             "Hierarchy", "Silos", "Micromanagement", "Obedience", "Politics",
             "Status Quo", "Risk-averse", "Arrogance", "Bureaucracy", "Rigidity",
             "Greed", "Exclusion", "Punishment", "Competitiveness", "Opacity",
             "Command", "Ego", "Short-termism", "Exploitation", "Distrust"
+        ],
+        "bad_fi": [
+            "salailu", "pelko", "syyttely", "kontrolli", "sokea totteleminen",
+            "valtapeli", "muutosvastarinta", "ylimielisyys", "rangaistus", "kilpailuhenkisyys",
+            "epäluottamus", "lyhytnäköisyys", "hyväksikäyttö"
         ]
     },
     "Strategy": {
@@ -59,12 +88,22 @@ CATEGORIES = {
             "Outcome-based", "Sustainability", "Disruption", "Blue Ocean", "Pivot",
             "Horizon 1/2/3", "Focus", "Alignment", "Execution", "Emergent"
         ],
+        "good_fi": [
+            "pohjantähti", "arvonluonti", "digitaalinen transformaatio", "kasvu", "visio",
+            "asiakaskeskeisyys", "innovaatio", "tulevaisuudenkestävä", "erottautuminen", "kestävyys",
+            "suunnanmuutos", "toimeenpano"
+        ],
         "bad": [
             "Cost-cutting", "Defensive", "Short-term", "Static", "Reactive",
             "Generic", "Status Quo", "Siloed", "Unclear", "Budget-driven",
             "Top-down", "Rigid", "Risk-averse", "Legacy-focused", "Competitor-obsessed",
             "Shareholder-only", "Volume-based", "Efficiency-only", "Drifting", "Fragmented",
             "Bureaucratic", "Complacent", "Opaque", "Incremental", "Project-based"
+        ],
+        "bad_fi": [
+            "kulukuri", "säästöt", "leikkaukset", "yt-neuvottelut", "lyhytnäköinen", "staattinen",
+            "reagoiva", "budjettiohjattu", "ylhäältä saneltu", "riskin välttäminen", "kilpailijakeskeinen",
+            "tehokkuusajattelu"
         ]
     },
     "Business Model": {
@@ -75,12 +114,20 @@ CATEGORIES = {
             "Community", "User-generated Content", "Open Source", "Partner Network", "Dynamic Pricing",
             "Lifetime Value", "Circular Economy", "Membership", "Flywheel", "Value Co-creation"
         ],
+        "good_fi": [
+            "alusta", "verkostovaikutus", "palvelullistaminen", "yhteisö", "jakamistalous",
+            "skaalautuva", "kumppaniverkosto", "kiertotalous", "jäsenyys"
+        ],
         "bad": [
             "Pipeline", "One-off Sales", "Middlemen", "Rent-seeking", "Asset-heavy",
             "Commodity", "Closed System", "Linear", "Transactional", "Cost-plus",
             "Ad-driven", "Brick-and-mortar", "Intermediary", "Manual", "High Friction",
             "Locked-in", "Inventory-heavy", "Time-based", "Project-based", "Hidden Fees",
             "Arbitrage", "Unsustainable", "Predatory", "Analog", "Dependent"
+        ],
+        "bad_fi": [
+            "välikädet", "omaisuuserät", "suljettu järjestelmä", "lineaarinen", "tapahtumapohjainen",
+            "piilokulut", "kestämätön", "analoginen", "riippuvainen"
         ]
     },
     "AI Readiness": {
@@ -91,19 +138,30 @@ CATEGORIES = {
             "Python", "Algorithm", "Digital Twin", "Smart", "Self-healing",
             "Serverless", "Agile IT", "Citizen Developer", "Data Governance", "Augmented"
         ],
+        "good_fi": [
+            "pilvi", "koneoppiminen", "automaatio", "reaaliaikainen", "ennakoiva",
+            "tietoturva", "integraatio", "algoritmi", "älykäs", "tiedolla johtaminen"
+        ],
         "bad": [
             "Legacy", "On-premise", "Siloed Data", "Manual Process", "Spreadsheet",
             "Mainframe", "Monolith", "Security Breach", "Downtime", "Batch Processing",
             "Technical Debt", "Paper-based", "Disconnected", "Proprietary", "Fragmented",
             "Unstructured Data", "Shadow IT", "Waterfall", "Cost Center", "Outdated",
             "Manual Entry", "Black Box", "Vulnerable", "Rigid", "Offline"
+        ],
+        "bad_fi": [
+            "vanha järjestelmä", "siiloutunut data", "manuaalinen", "taulukkolaskenta", "tietomurto",
+            "katkos", "tekninen velka", "paperi", "hajanainen", "tietosuojaongelma"
         ]
     }
 }
 
 # Negation terms based on PDF Page 10 ("Negative Look-around")
-# These negate the penalty if found immediately before a "Bad" word.
-NEGATION_TERMS = ["eliminate", "remove", "avoid", "anti", "reduce", "less", "no", "not", "without", "free from", "versus", "vs"]
+# Included Finnish negation terms
+NEGATION_TERMS = [
+    "eliminate", "remove", "avoid", "anti", "reduce", "less", "no", "not", "without", "free from", "versus", "vs",
+    "ei", "älä", "ilman", "poista", "vältä", "vähennä", "kiellä", "lopeta"
+]
 
 def is_negated(text_window):
     """
@@ -125,20 +183,15 @@ def analyze_intent(text: str):
     if total_words == 0: total_words = 1 # Avoid div by zero
 
     # --- ADAPTIVE SENSITIVITY ---
-    # If the text is short (< 400 words, likely just Meta Descriptions or light About pages),
-    # we lower the threshold and normalize the score differently to avoid "Zero Score" issues.
     is_short_text = total_words < 400
     
     if is_short_text:
         GOOD_THRESHOLD = 1
         BAD_THRESHOLD = 1
-        # In short text, we expect fewer total signals. 
-        # A divisor of 5.0 means finding ~5 keywords yields 100% score for that category.
         NORMALIZATION_DIVISOR = 5.0 
     else:
         GOOD_THRESHOLD = 3
         BAD_THRESHOLD = 1
-        # Standard methodology from PDF: 25 items per category normalized to 100.
         NORMALIZATION_DIVISOR = 25.0
 
     lower_text = text.lower()
@@ -147,20 +200,22 @@ def analyze_intent(text: str):
         unique_good_found = 0
         unique_bad_found = 0
         
+        # Merge English and Finnish keywords for processing
+        good_list = keywords["good"] + keywords.get("good_fi", [])
+        bad_list = keywords["bad"] + keywords.get("bad_fi", [])
+
         # 1. Count Good Signals
-        for word in keywords["good"]:
+        for word in good_list:
             pattern = r'\b' + re.escape(word.lower()) + r'\b'
             matches = list(re.finditer(pattern, lower_text))
             
-            # Use Adaptive Threshold
             if len(matches) >= GOOD_THRESHOLD:
                 unique_good_found += 1
             
-            # For Vibrancy/Friction, we count ALL volume, not just unique signals
             total_good_matches += len(matches)
             
         # 2. Count Bad Signals with NEGATIVE LOOK-AROUND
-        for word in keywords["bad"]:
+        for word in bad_list:
             pattern = r'\b' + re.escape(word.lower()) + r'\b'
             matches = list(re.finditer(pattern, lower_text))
             
@@ -181,8 +236,7 @@ def analyze_intent(text: str):
             
             total_bad_matches += valid_bad_occurrences_for_word
 
-        # 3. Calculate "Net Modernization Score" (Page 10 Formula)
-        # Score = (Good Matches - Bad Matches) / Normalization Factor
+        # 3. Calculate "Net Modernization Score"
         net_result = unique_good_found - unique_bad_found
         
         if net_result < 0:
@@ -199,26 +253,19 @@ def analyze_intent(text: str):
         })
 
     # --- AGGREGATE METRICS ---
-
-    # A. Global Adaptability Score
     total_score = sum([c["score"] for c in breakdown])
     global_score = total_score / len(CATEGORIES)
 
-    # B. Friction Index (Page 14)
-    # Formula: 1 - (|Good - Bad| / (Good + Bad))
+    # Friction Index
     denominator = total_good_matches + total_bad_matches
     if denominator == 0:
-        friction_index = 0.0 # No signals = No friction
+        friction_index = 0.0
     else:
         ratio = abs(total_good_matches - total_bad_matches) / denominator
         friction_index = 1.0 - ratio 
 
-    # C. Vibrancy Score (Page 15)
-    # Formula: Total Matches / Total Word Count
-    # Measures signal intensity. Does the company care?
+    # Vibrancy Score
     vibrancy_raw = denominator / total_words
-    
-    # Normalize: Assuming > 5% keyword density is "Maximum Vibrancy" (100)
     vibrancy_score = (vibrancy_raw / 0.05) * 100 
     if vibrancy_score > 100: vibrancy_score = 100
 
