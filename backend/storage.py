@@ -271,3 +271,23 @@ class BlobStorage:
         
         # 3. Fetch content
         return self._get(latest_url)
+        
+    def nuke_everything(self):
+        """
+        DANGEROUS: Deletes ALL files in the blob storage.
+        Used to reset the database when scaling logic changes.
+        """
+        print("   [Storage] INITIATING COMPLETE DATABASE WIPE...")
+        count = 0
+        while True:
+            # Fetch in batches
+            blobs = self._list(prefix="", limit=500)
+            if not blobs:
+                break
+                
+            for b in blobs:
+                self._delete(b['url'])
+                count += 1
+                
+        print(f"   [Storage] Wipe Complete. Deleted {count} files.")
+        return count

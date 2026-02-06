@@ -20,7 +20,7 @@ from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES
 from knowledge_base import get_evolving_framework
 
-print("Starting Adaptability Scanner Backend (v3.6 - Prefix Fix)...", flush=True)
+print("Starting Adaptability Scanner Backend (v3.7 - Reset Capable)...", flush=True)
 
 def clean_env_var(value):
     if not value: return ""
@@ -131,6 +131,14 @@ async def seed_fast(background_tasks: BackgroundTasks):
     """
     background_tasks.add_task(run_batch_seed, real_xray_mode=True, limit=3)
     return {"status": "Quick Calibration Initiated", "message": "Scanning top 3 companies (Nokia, Kone, Neste)..."}
+
+@app.post("/admin/reset-database")
+async def reset_database():
+    """
+    WIPES ALL DATA. Used when changing math models (e.g. 4-point scale).
+    """
+    count = storage.nuke_everything()
+    return {"status": "Database Wiped", "deleted_count": count}
 
 @app.post("/scan")
 async def run_scan(request: ScanRequest):

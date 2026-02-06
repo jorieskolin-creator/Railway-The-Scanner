@@ -9,7 +9,7 @@ const Icons = new Proxy(LucideRaw, {
     }
 });
 
-const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, Play, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock, HardDrive, Terminal } = Icons;
+const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, Play, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock, HardDrive, Terminal, Trash2 } = Icons;
 
 const TruthMatrix = (window as any).TruthMatrix;
 const ScannerInput = (window as any).ScannerInput;
@@ -29,6 +29,7 @@ const App = () => {
   const [isScanning, setIsScanning] = useState(false);
   const [isSeeding, setIsSeeding] = useState(false);
   const [isFastSeeding, setIsFastSeeding] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
   const [lastSynced, setLastSynced] = useState(null);
   const [sortConfig, setSortConfig] = useState({ key: 'reality_gap', direction: 'desc' });
   const [systemStatus, setSystemStatus] = useState({ online: false, storage: false, google: false, ai: false });
@@ -214,6 +215,27 @@ const App = () => {
     }
   };
 
+  const handleResetDatabase = async () => {
+      if (!IS_ADMIN_MODE) return;
+      const confirmText = prompt("⚠️ DANGER ZONE ⚠️\n\nThis will permanently delete ALL data files and the index from the database.\n\nType 'DELETE' to confirm:");
+      if (confirmText !== 'DELETE') return;
+
+      setIsResetting(true);
+      try {
+          const response = await fetch(`/admin/reset-database`, { method: 'POST' });
+          if (response.ok) {
+              alert("✅ Database Wiped Clean. All old files deleted.");
+              setData([]);
+          } else {
+              alert("❌ Reset failed.");
+          }
+      } catch(e) {
+          alert("❌ Connection error.");
+      } finally {
+          setIsResetting(false);
+      }
+  };
+
   const handleSort = (key) => {
     let direction = 'desc';
     if (sortConfig && sortConfig.key === key && sortConfig.direction === 'desc') direction = 'asc';
@@ -264,11 +286,15 @@ const App = () => {
             </div>
             {IS_ADMIN_MODE && (
                 <>
-                <button onClick={handleFastSeed} disabled={isFastSeeding || isSeeding} className="hidden lg:flex items-center gap-2 px-3 py-2 bg-emerald-900/40 hover:bg-emerald-800/60 border border-emerald-500/20 text-emerald-300 font-semibold text-[10px] rounded-lg transition-all">
+                <button onClick={handleResetDatabase} disabled={isResetting || isSeeding} className="hidden lg:flex items-center gap-2 px-3 py-2 bg-rose-950/40 hover:bg-rose-900/60 border border-rose-500/20 text-rose-300 font-semibold text-[10px] rounded-lg transition-all group">
+                    {isResetting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} className="group-hover:text-rose-200" />}
+                    {isResetting ? "PURGING..." : "RESET & PURGE DB"}
+                </button>
+                <button onClick={handleFastSeed} disabled={isFastSeeding || isSeeding || isResetting} className="hidden lg:flex items-center gap-2 px-3 py-2 bg-emerald-900/40 hover:bg-emerald-800/60 border border-emerald-500/20 text-emerald-300 font-semibold text-[10px] rounded-lg transition-all">
                     {isFastSeeding ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
                     {isFastSeeding ? "CALIBRATING..." : "QUICK TEST (3)"}
                 </button>
-                <button onClick={handleBatchSeed} disabled={isSeeding || isFastSeeding} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-lg transition-all">
+                <button onClick={handleBatchSeed} disabled={isSeeding || isFastSeeding || isResetting} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-lg transition-all">
                     {isSeeding ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
                     {isSeeding ? "SCANNING 100..." : "REFRESH DB"}
                 </button>
