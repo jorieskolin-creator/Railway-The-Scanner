@@ -8,72 +8,73 @@ from urllib.parse import urlparse
 # --- FORENSIC METHODOLOGY CONFIGURATION ---
 
 def get_forensic_queries(company_name, domain):
+    # UPDATED: Included Finnish terms (e.g., 'tulosvastuu', 'mikromanagerointi', 'yt-neuvottelut')
     return [
         {
             "category": "Operating Model",
             "sentiment": "positive", 
             "label": "Micro-Enterprise Structure",
-            "q": f'"{company_name}" "P&L responsibility" AND "team level"'
+            "q": f'"{company_name}" AND ("P&L responsibility" OR "tulosvastuu" OR "profit center")'
         },
         {
             "category": "Operating Model",
             "sentiment": "positive",
             "label": "Stream-Aligned Teams",
-            "q": f'"{company_name}" "stream-aligned" OR "value stream management" OR "end-to-end teams"'
+            "q": f'"{company_name}" AND ("stream-aligned" OR "arvovirta" OR "value stream")'
         },
         {
             "category": "Operating Model",
             "sentiment": "positive",
-            "label": "Platform Engineering (Golden Path)",
-            "q": f'"{company_name}" "platform engineering" OR "internal developer platform" OR "golden path"'
+            "label": "Platform Engineering",
+            "q": f'"{company_name}" AND ("platform engineering" OR "internal developer platform" OR "kehitysalusta")'
         },
         {
             "category": "Strategy",
             "sentiment": "negative", # BAD SIGNAL
             "label": "Rigid Budget Compliance",
-            "q": f'"{company_name}" "budget adherence" OR "budget compliance" OR "variance analysis"'
+            "q": f'"{company_name}" AND ("budget adherence" OR "budget compliance" OR "budjettikuri" OR "variance analysis")'
         },
         {
             "category": "Strategy",
             "sentiment": "positive",
             "label": "Rolling Forecasts",
-            "q": f'"{company_name}" "rolling forecast" OR "beyond budgeting" OR "dynamic allocation"'
+            "q": f'"{company_name}" AND ("rolling forecast" OR "rullaava ennuste" OR "beyond budgeting")'
         },
         {
             "category": "Values",
             "sentiment": "negative", # BAD SIGNAL
             "label": "Digital Taylorism (Micromanagement)",
-            "q": f'"{company_name}" "micromanagement" OR "surveillance" OR "time tracking software"'
+            "q": f'"{company_name}" AND ("micromanagement" OR "mikromanagerointi" OR "kyttääminen" OR "surveillance")'
         },
         {
             "category": "Values",
             "sentiment": "positive",
-            "label": "High Trust Policies (PTO/Remote)",
-            "q": f'"{company_name}" "unlimited PTO" OR "remote first" OR "flexible hours"'
+            "label": "High Trust Policies",
+            "q": f'"{company_name}" AND ("unlimited PTO" OR "joustava työaika" OR "remote first" OR "etätyö")'
         },
         {
             "category": "Values",
             "sentiment": "positive",
-            "label": "Blameless Culture (Post-Mortems)",
-            "q": f'"{company_name}" "blameless post-mortem" OR "psychological safety"'
+            "label": "Blameless Culture",
+            "q": f'"{company_name}" AND ("blameless" OR "post-mortem" OR "psykologinen turvallisuus" OR "psychological safety")'
         },
         {
             "category": "AI Readiness",
             "sentiment": "positive",
             "label": "Data Mesh (Domain Ownership)",
-            "q": f'"{company_name}" "data mesh" OR "data product" OR "domain ownership"'
+            "q": f'"{company_name}" AND ("data mesh" OR "data product" OR "datatuote")'
         },
         {
             "category": "AI Readiness",
             "sentiment": "negative", # BAD SIGNAL
-            "label": "AI Efficiency Narrative (Cost Cutting)",
-            "q": f'"{company_name}" "AI" AND ("headcount reduction" OR "cost savings" OR "layoffs")'
+            "label": "Cost Cutting Narrative",
+            "q": f'"{company_name}" AND ("AI" OR "tekoäly") AND ("headcount reduction" OR "layoffs" OR "muutosneuvottelut" OR "yt-neuvottelut" OR "säästöt")'
         },
          {
             "category": "AI Readiness",
             "sentiment": "positive",
-            "label": "AI Growth Narrative (New Business)",
-            "q": f'"{company_name}" "AI" AND ("new revenue" OR "new business model" OR "innovation")'
+            "label": "Growth Narrative",
+            "q": f'"{company_name}" AND ("AI" OR "tekoäly") AND ("new revenue" OR "uutta liiketoimintaa" OR "innovation" OR "innovaatio")'
         }
     ]
 
@@ -91,14 +92,9 @@ def get_clean_domain(url):
 def get_simulated_score(company_name):
     """
     Generates a consistent Reality Score (0-100) based on the company name.
-    Used when API keys are missing to create a realistic-looking distribution.
     """
-    # Create a consistent integer from the name
     hash_val = int(hashlib.sha256(company_name.encode('utf-8')).hexdigest(), 16)
-    
-    # We want a distribution that is slightly weighted towards 40-70 (the "average" corp)
-    # but with some outliers.
-    base_score = 30 + (hash_val % 60) # 30 to 90 range
+    base_score = 30 + (hash_val % 60) 
     return base_score
 
 def x_ray_search(company_name: str, company_url: str = None):
@@ -115,11 +111,9 @@ def x_ray_search(company_name: str, company_url: str = None):
         print(f"   [X-Ray] No API Keys. Simulating for {company_name}")
         simulated_score = get_simulated_score(company_name)
         
-        # Fake checklist generation
         for item in queries:
-            # Deterministic found status
             item_hash = int(hashlib.sha256((company_name + item['label']).encode('utf-8')).hexdigest(), 16)
-            is_found = (item_hash % 100) < 40 # 40% chance to find any specific item
+            is_found = (item_hash % 100) < 40 
             
             checklist.append({
                 "category": item['category'],
@@ -139,11 +133,11 @@ def x_ray_search(company_name: str, company_url: str = None):
         return { 
             "score": simulated_score, 
             "checklist": checklist, 
-            "links": evidence_links[:5], # Limit links
+            "links": evidence_links[:5], 
             "is_simulated": True 
         }
 
-    # --- REAL MODE (OPTIMIZED FOR FINLAND) ---
+    # --- REAL MODE (BILINGUAL) ---
     current_score = 50 
     IMPACT_WEIGHT = 7 
 
@@ -155,19 +149,17 @@ def x_ray_search(company_name: str, company_url: str = None):
         label = item['label']
         category = item['category']
         
-        # USE PARAMS FOR SAFE ENCODING & LOCALIZATION
         params = {
             'key': api_key,
             'cx': cx_id,
             'q': raw_query,
-            'num': 3,                 # Fetch 3 results to increase hit rate
+            'num': 3,
             'gl': 'fi',               # Geolocation: Finland
             'lr': 'lang_en|lang_fi',  # Language: English OR Finnish
             'safe': 'active'
         }
         
         try:
-            # Note: We use the REST API endpoint directly
             res = requests.get("https://www.googleapis.com/customsearch/v1", params=params, timeout=10)
             found = False
             
@@ -175,7 +167,6 @@ def x_ray_search(company_name: str, company_url: str = None):
                 data = res.json()
                 if "items" in data and len(data["items"]) > 0:
                     found = True
-                    # Just take the first result for the evidence link
                     result = data["items"][0]
                     evidence_links.append({
                         "title": f"{label}",
@@ -184,8 +175,7 @@ def x_ray_search(company_name: str, company_url: str = None):
                         "snippet": result.get('snippet', '')
                     })
             else:
-                # Log specific error for debugging (e.g., 403 Quota, 400 Bad Request)
-                print(f"      [API ERROR] {res.status_code}: {res.text[:100]}")
+                print(f"      [API ERROR] {res.status_code}")
             
             if found:
                 if sentiment == "positive":
