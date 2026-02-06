@@ -20,7 +20,7 @@ from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES
 from knowledge_base import get_evolving_framework
 
-print("Starting Adaptability Scanner Backend (v3.0 File-Per-Company Arch)...", flush=True)
+print("Starting Adaptability Scanner Backend (v3.1 Final)...", flush=True)
 
 def clean_env_var(value):
     if not value: return ""
@@ -29,7 +29,6 @@ def clean_env_var(value):
         except: pass
     return value.strip().strip('"').strip("'")
 
-# Log Environment Config
 blob_token = clean_env_var(os.environ.get("BLOB_READ_WRITE_TOKEN"))
 gemini_key = clean_env_var(os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY"))
 
@@ -65,7 +64,7 @@ def health_check():
     gemini_present = bool(clean_env_var(os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")))
     
     return {
-        "status": "Adaptability Scanner API Online (v3.0)", 
+        "status": "Adaptability Scanner API Online (v3.1)", 
         "timestamp": datetime.utcnow().isoformat(),
         "config_status": {
             "has_blob_token": bool(token),
@@ -83,14 +82,13 @@ async def get_dashboard_data(response: Response):
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
     
-    # We load "index/summary_list.json"
     data = storage.retrieve_latest_data("index/summary_list.json")
     return data or []
 
 @app.get("/company/{company_name}")
 async def get_company_details(company_name: str, response: Response):
     """
-    Returns the FULL DETAILED report for a specific company.
+    Returns the FULL DETAILED report for a specific company from Vercel Blob.
     """
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     data = storage.get_company_data(company_name)
@@ -106,11 +104,21 @@ class ScanRequest(BaseModel):
 
 @app.post("/admin/seed-finland-100")
 async def seed_database(background_tasks: BackgroundTasks):
+    """
+    BATCH REFRESH: Updates all 100 companies in the index + individual files.
+    """
     background_tasks.add_task(run_batch_seed, real_xray_mode=True)
     return {"status": "Batch Seeding Initiated", "message": "Processing Finland Top 100 in background."}
 
 @app.post("/scan")
 async def run_scan(request: ScanRequest):
+    """
+    REAL FORENSIC SCAN:
+    1. Scrapes the defined sources (Scanner 1).
+    2. Runs the Tribunal Search (Scanner 2).
+    3. Synthesizes via Gemini.
+    4. Saves to Database (if requested), adding new companies to the index AND saving their individual file.
+    """
     try:
         # --- STEP 1: SCANNER 1 (Intent) ---
         target_text = request.reportText
@@ -123,12 +131,14 @@ async def run_scan(request: ScanRequest):
                     break
 
         if not target_text or len(target_text) < 100:
+            # THIS CALLS THE UPDATED SCRAPER WITH "JOB ADS", "SERVICES", ETC.
             if target_url: target_text = scrape_strategic_content(target_url, request.companyName)
             else: target_text = scrape_strategic_content(None, request.companyName)
 
         intent_results = analyze_intent(target_text)
 
         # --- STEP 2: SCANNER 2 (Reality + Context) ---
+        # THIS CALLS THE UPDATED TRIBUNAL LOGIC
         reality_results = x_ray_search(request.companyName, target_url)
         gap = intent_results["score"] - reality_results["score"]
         
@@ -167,18 +177,16 @@ async def run_scan(request: ScanRequest):
         new_timestamp = datetime.utcnow().isoformat()
         result_id = str(uuid.uuid4())
         
-        # 1. Construct FULL DATA (Heavy)
-        # Check if we have history to preserve
+        # HISTORY PRESERVATION
         history = []
         existing_data = storage.get_company_data(request.companyName)
         if existing_data:
             history = existing_data.get("history", [])
-            # Add current state to history
             history.append({
                 "date": existing_data.get("lastUpdated"),
                 "gap": existing_data.get("reality_gap", 0)
             })
-            if len(history) > 12: history = history[-12:] # Keep last 12 scans
+            if len(history) > 12: history = history[-12:] 
 
         full_data = {
             "id": result_id,
@@ -197,7 +205,6 @@ async def run_scan(request: ScanRequest):
             "is_simulated": reality_results.get("is_simulated", False)
         }
         
-        # 2. Construct SUMMARY DATA (Lightweight)
         summary_entry = {
             "id": result_id,
             "companyName": request.companyName,
@@ -207,11 +214,12 @@ async def run_scan(request: ScanRequest):
             "lastUpdated": new_timestamp
         }
         
-        # 3. SAVE (Atomic Operations)
+        # --- STEP 4: DATABASE UPDATE ---
         if request.saveToDatabase:
-            # Save detail file
+            # 1. Save the Heavy Full Data (used by Modal)
             storage.save_company_data(request.companyName, full_data)
-            # Update index file
+            # 2. Update the Lightweight Index (used by Landing Page)
+            # This ensures new companies appear in the list immediately.
             storage.update_global_index(summary_entry)
         
         return {"success": True, "data": full_data}

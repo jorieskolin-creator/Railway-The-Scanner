@@ -35,10 +35,9 @@ def x_ray_search(company_name: str, company_url: str = None):
     SCANNER 2: THE REALITY CHECK (External Evidence)
     
     This function performs the Forensic Scan.
-    It uses the '4 Juries' methodology with STRICT domain filtering.
+    It uses the 'Standardized Tribunal' methodology with STRICT domain filtering.
     """
     
-    # Only GEMINI_API_KEY is required now.
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
     
     checklist = []
@@ -58,36 +57,35 @@ def x_ray_search(company_name: str, company_url: str = None):
     try:
         client = genai.Client(api_key=api_key)
         
-        # WE DEFINE THE SOURCES HERE (MERGED TRIBUNAL)
+        # WE DEFINE THE SOURCES HERE (THE STANDARDIZED TRIBUNAL)
         prompt = f"""
         Perform a FORENSIC INVESTIGATION on "{search_name}" (Domain: {domain_hint}).
         
-        SEARCH STRATEGY (STRICT - COMBINED SOURCES):
+        SEARCH STRATEGY (STRICT - APPROVED DOMAINS ONLY):
         Do NOT read the company's own marketing pages (except for developer portals/investor PDFs).
-        Look ONLY at evidence from these specific 'JURIES' (The Standardized Tribunal):
+        Look ONLY at evidence from these specific 'JURIES' defined below.
 
         1. THE ARCHITECTURAL JURY (Tech & Structure)
            - Evidence: Service Portfolio, Platform Thinking, API-First, DevOps maturity.
-           - Developer Portals (Platform Thinking): `site:{domain_hint} "API documentation" OR "Developer Portal" OR "SDK"` OR `site:{domain_hint} "Rajapinnat" OR "Kehittäjille" OR "Avoin data"`
-           - System Status (Transparency): `site:{domain_hint} "System Status" OR "Operational" OR "Incident History"` OR `site:{domain_hint} "Palveluiden tila" OR "Häiriötiedotteet"`
-           - Technical Communities (The Tech Jury): `site:stackoverflow.com "{search_name}"` OR `site:github.com "{search_name}"`
+           - Public Developer Portals (High Positive Signal): `site:{domain_hint} "API documentation" OR "Developer Portal" OR "SDK"` OR `site:{domain_hint} "Rajapinnat" OR "Kehittäjille" OR "Avoin data"`
+           - System Status Pages (Transparency Test): `site:{domain_hint} "System Status" OR "Operational" OR "Incident History"` OR `site:{domain_hint} "Palveluiden tila" OR "Häiriötiedotteet"`
+           - Technical Communities: `site:stackoverflow.com "{search_name}"` OR `site:github.com "{search_name}"`
 
-        2. THE STRATEGIC JURY (Money, Press & Intent)
+        2. THE STRATEGIC JURY (Money & Intent)
            - Evidence: Strategy (Growth vs. Efficiency), RenDanHeYi.
            - Capital Markets Day (CMD): `site:{domain_hint} filetype:pdf "Capital Markets Day" OR "Strategy Presentation"` OR `site:{domain_hint} filetype:pdf "Sijoittajaesitys" OR "Pääomamarkkinapäivä"`
-           - Risk Management Reports: `site:{domain_hint} filetype:pdf "Annual Report" AND "Risk Management"` OR `site:{domain_hint} filetype:pdf "Vuosikertomus" AND "Riskienhallinta"`
-           - Finnish Financial & Tech News (The Press Jury): `site:kauppalehti.fi "{search_name}"` OR `site:talouselama.fi "{search_name}"` OR `site:tekniikkatalous.fi "{search_name}"` OR `site:tivi.fi "{search_name}"`
+           - Risk Management Reports (Fragility Check): `site:{domain_hint} filetype:pdf "Annual Report" AND "Risk Management"` OR `site:{domain_hint} filetype:pdf "Vuosikertomus" AND "Riskienhallinta"`
+           - Finnish Financial & Tech News: `site:kauppalehti.fi "{search_name}"` OR `site:talouselama.fi "{search_name}"` OR `site:tekniikkatalous.fi "{search_name}"` OR `site:tivi.fi "{search_name}"`
 
-        3. THE COMMUNITY JURY (Culture, People & Reality)
+        3. THE COMMUNITY JURY (Culture & Reality)
            - Evidence: Operating Model, Psychological Safety, Learning Organization.
            - Finnish Tech Events: `"{search_name}" AND ("ScanAgile" OR "DevOps Finland" OR "Disobey" OR "Mimmit koodaa")`
-           - The Unfiltered Voice (Anonymous): `site:teamblind.com "{search_name}"` OR `site:reddit.com "{search_name}"`
-           - Employee Voice (The People Jury): `site:glassdoor.com "{search_name}"`
-           - Recruitment Channels: `site:thehub.io "{search_name}"` OR `site:indeed.com "{search_name}"` OR `site:oikotie.fi "{search_name}"` OR `site:duunitori.fi "{search_name}"` OR `site:linkedin.com "{search_name}"`
+           - TeamBlind & Reddit (The Unfiltered Voice): `site:teamblind.com "{search_name}"` OR `site:reddit.com "{search_name}" AND ("work culture" OR "työkulttuuri" OR "management")`
+           - Employee Voice & Recruitment: `site:glassdoor.com "{search_name}"` OR `site:thehub.io "{search_name}"` OR `site:indeed.com "{search_name}"` OR `site:oikotie.fi "{search_name}"` OR `site:duunitori.fi "{search_name}"` OR `site:linkedin.com "{search_name}"`
 
-        4. THE ACADEMIC JURY (Deep Audits & Thought Leadership)
+        4. THE ACADEMIC JURY (Deep Audits)
            - Evidence: Internal Operating Model failures/successes.
-           - Master's Theses (Deep Audits): `site:theseus.fi "{search_name}" AND ("Agile" OR "Process" OR "Johtaminen" OR "Organisaatio")`
+           - Master's Theses & Dissertations: `site:theseus.fi "{search_name}" AND ("Agile" OR "Process" OR "Johtaminen" OR "Organisaatio")`
            - Aalto University: `site:aalto.fi "{search_name}" AND ("Thesis" OR "Diplomityö")`
            - Thought Leadership: `site:medium.com "{search_name}"`
 
@@ -115,8 +113,6 @@ def x_ray_search(company_name: str, company_url: str = None):
         }}
         """
 
-        # Use Gemini 3 Flash Preview as requested for Scanner 2
-        # It supports the google_search tool.
         response = client.models.generate_content(
             model='gemini-3-flash-preview',
             contents=prompt,
@@ -126,14 +122,11 @@ def x_ray_search(company_name: str, company_url: str = None):
             }
         )
         
-        # Parse the result
         if response.text:
             data = json.loads(response.text)
             
-            # Extract Findings
             findings = data.get("findings", [])
             for f in findings:
-                # Add to checklist for UI
                 checklist.append({
                     "category": f.get("category", "General"),
                     "query": f.get("label", "Signal"),
@@ -141,7 +134,6 @@ def x_ray_search(company_name: str, company_url: str = None):
                     "sentiment": f.get("sentiment", "neutral")
                 })
                 
-                # Add to links if found
                 if f.get("found") and f.get("url"):
                     raw_findings.append({
                         "title": f.get("title", "Evidence Found"),
@@ -150,7 +142,6 @@ def x_ray_search(company_name: str, company_url: str = None):
                         "source": get_clean_domain(f.get("url", ""))
                     })
             
-            # Calculate Score
             adjustment = data.get("reality_score_adjustment", 0)
             final_score = max(0, min(100, base_score + adjustment))
             
@@ -160,59 +151,34 @@ def x_ray_search(company_name: str, company_url: str = None):
                 "score": int(final_score),
                 "checklist": checklist,
                 "links": raw_findings,
-                "is_simulated": False # This was a REAL search
+                "is_simulated": False
             }
 
     except Exception as e:
         print(f"   [Scanner 2] Google Search Tool Failed: {e}")
-        # Fallthrough to Simulation
 
-    # --- FALLBACK: AI SIMULATION ---
-    # If the Search Tool fails (e.g. model overloaded), we fall back to knowledge-base simulation
+    # --- FALLBACK: SIMULATION ---
     print(f"   [Scanner 2] Engaging AI Simulation for {company_name} (Fallback)...")
-    is_simulated = True
     
     try:
         client = genai.Client(api_key=api_key)
         sim_prompt = f"""
-        You are a Forensic Data Generator.
-        I cannot access live search results for {company_name}.
-        
-        Based on your internal knowledge base about {company_name} (industry reputation, typical operating model):
-        Generate 3 REALISTIC 'Search Snippets' that represent the likely operational reality.
-        
-        Return JSON:
-        {{
-            "findings": [
-                {{
-                    "title": "Realistic Forum Post Title",
-                    "snippet": "Realistic text...",
-                    "url": "https://glassdoor.com/...",
-                    "sentiment": "negative" or "positive"
-                }}
-            ],
-            "score": (Estimated Reality Score 0-100)
-        }}
+        You are a Forensic Data Generator. I cannot access live search results for {company_name}.
+        Based on your internal knowledge base about {company_name}, generate 3 REALISTIC 'Search Snippets' representing their likely operational reality.
+        Return JSON with 'findings' (array of objects with title, snippet, url) and 'score' (0-100).
         """
-        
-        # Fallback can also use flash
         response = client.models.generate_content(
             model='gemini-3-flash-preview',
             contents=sim_prompt,
             config={'response_mime_type': 'application/json'}
         )
-        
         sim_data = json.loads(response.text)
-        
         return {
             "score": sim_data.get("score", 50),
-            "checklist": [
-                {"category": "Simulation", "query": "Historical Data", "found": True, "sentiment": "neutral"}
-            ],
+            "checklist": [],
             "links": sim_data.get("findings", []),
             "is_simulated": True
         }
 
     except Exception as e:
-        print(f"   [Scanner 2] Simulation Failed: {e}")
         return { "score": 50, "checklist": [], "links": [], "is_simulated": True }
