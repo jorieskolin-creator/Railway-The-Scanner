@@ -155,10 +155,16 @@ def x_ray_search(company_name: str, company_url: str = None):
         label = item['label']
         category = item['category']
         
-        url = f"https://www.googleapis.com/customsearch/v1?key={api_key}&cx={cx_id}&q={raw_query}"
+        # USE PARAMS FOR SAFE ENCODING
+        params = {
+            'key': api_key,
+            'cx': cx_id,
+            'q': raw_query,
+            'num': 1 # We only need to know if 1 exists
+        }
         
         try:
-            res = requests.get(url)
+            res = requests.get("https://www.googleapis.com/customsearch/v1", params=params, timeout=5)
             found = False
             
             if res.status_code == 200:
@@ -172,6 +178,9 @@ def x_ray_search(company_name: str, company_url: str = None):
                         "source": result.get('displayLink'),
                         "snippet": result.get('snippet', '')
                     })
+            else:
+                # Log specific error for debugging (e.g., 403 Quota, 400 Bad Request)
+                print(f"      [API ERROR] {res.status_code}: {res.text[:100]}")
             
             if found:
                 if sentiment == "positive":
@@ -187,7 +196,7 @@ def x_ray_search(company_name: str, company_url: str = None):
             })
             
         except Exception as e:
-            print(f"      Err: {str(e)[:50]}")
+            print(f"      [Exception] {str(e)[:50]}")
             checklist.append({"category": category, "query": label, "found": False, "sentiment": "neutral"})
 
     final_score = max(0, min(100, current_score))
