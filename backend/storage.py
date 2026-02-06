@@ -3,6 +3,7 @@ import os
 import requests
 import json
 import time
+from datetime import datetime
 
 class BlobStorage:
     def __init__(self):
@@ -102,19 +103,38 @@ class BlobStorage:
                 
                 if list_response.status_code == 200:
                     blobs = list_response.json().get("blobs", [])
-                    # Find closest match.
-                    matches = [b for b in blobs if filename_match in b.get("pathname", "")]
-                    matches.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
+                    
+                    # Filter matching files. 
+                    # Vercel Blob often adds suffix: "dashboard_data-123.json"
+                    # We check if pathname STARTS with dashboard_data to be precise
+                    base_name = filename_match.replace(".json", "")
+                    matches = [b for b in blobs if b.get("pathname", "").startswith(base_name)]
                     
                     if matches:
-                        target_url = matches[0]["url"]
-                        print(f"Strategy 1 (API): Found file at {target_url}")
+                        # Robust Sorting: Parse ISO date string
+                        # Vercel date format: '2023-10-27T10:00:00.000Z'
+                        def parse_date(blob):
+                            try:
+                                ts = blob.get("uploadedAt", "")
+                                if ts.endswith('Z'): ts = ts[:-1]
+                                return datetime.fromisoformat(ts)
+                            except:
+                                return datetime.min
+
+                        matches.sort(key=parse_date, reverse=True)
+                        
+                        target_blob = matches[0]
+                        target_url = target_blob["url"]
+                        
+                        print(f"Strategy 1 (API): Found {len(matches)} files. Picking latest: {target_blob.get('pathname')} ({target_blob.get('uploadedAt')})")
                         
                         # Add cache buster to the read request
                         data_response = requests.get(f"{target_url}?t={timestamp}")
                         
                         if data_response.status_code == 200:
                             return data_response.json()
+                    else:
+                        print("Strategy 1 (API): No matching files found in bucket.")
             except Exception as e:
                 print(f"Strategy 1 (API) failed: {e}")
 

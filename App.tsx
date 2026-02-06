@@ -60,6 +60,23 @@ const App = () => {
     checkHealth();
   }, []);
 
+  // --- CRITICAL FIX: SYNC MODAL WITH DATA ---
+  // If the global 'data' updates (e.g. via Refresh), find the currently selected company
+  // in the new list and update 'selectedCompany' so the Modal reflects the changes instantly.
+  useEffect(() => {
+    if (selectedCompany && data.length > 0) {
+        const freshRecord = data.find(c => c.companyName === selectedCompany.companyName);
+        if (freshRecord) {
+            // Check if timestamp or scores differ before updating to prevent loops
+            if (freshRecord.lastUpdated !== selectedCompany.lastUpdated || 
+                freshRecord.reality_score !== selectedCompany.reality_score) {
+                console.log("Syncing Modal with fresh data for:", freshRecord.companyName);
+                setSelectedCompany(freshRecord);
+            }
+        }
+    }
+  }, [data, selectedCompany]);
+
   // Function to load data from backend
   const fetchRealData = async () => {
     try {
@@ -68,7 +85,7 @@ const App = () => {
         // Add cache busting timestamp to URL to prevent browser caching
         const response = await fetch(`/dashboard-data?t=${Date.now()}`, {
             headers: { 
-              'Cache-Control': 'no-cache',
+              'Cache-Control': 'no-cache, no-store, must-revalidate',
               'Pragma': 'no-cache'
             }
         });
@@ -235,7 +252,12 @@ const App = () => {
             )}
 
             <div className="flex items-center gap-2">
-                {lastSynced && <span className="hidden sm:block text-[10px] text-cyan-300/70 font-mono">Synced: {lastSynced}</span>}
+                {lastSynced && (
+                    <div className="hidden sm:flex flex-col items-end mr-2">
+                        <span className="text-[9px] text-slate-400 uppercase tracking-widest">Local Fetch</span>
+                        <span className="text-[10px] text-cyan-300/90 font-mono">{lastSynced}</span>
+                    </div>
+                )}
                 <button 
                     onClick={fetchRealData} 
                     title="Refresh Data from Server"
