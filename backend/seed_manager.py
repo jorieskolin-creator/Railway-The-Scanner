@@ -69,56 +69,30 @@ def get_deterministic_fallback(company_name):
     return profile["text"]
 
 def scrape_homepage_text(url: str, company_name: str = "Unknown"):
-    """
-    Advanced Scraper with Bilingual Support and Deterministic Fallback.
-    """
     if not url: return get_deterministic_fallback(company_name)
-    
     try:
-        # UPDATED HEADERS: explicitly ask for Finnish (fi) then English (en)
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'fi-FI,fi;q=0.9,en-US;q=0.8,en;q=0.7' 
         }
-        
         response = requests.get(url, headers=headers, timeout=6)
-        
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
-            
             extracted_lines = []
-            
-            # --- 1. FORENSIC EXTRACTION (Meta Data) ---
             if soup.title: extracted_lines.append(soup.title.string)
-            
             meta_desc = soup.find('meta', attrs={'name': 'description'}) or soup.find('meta', attrs={'property': 'og:description'})
             if meta_desc and meta_desc.get('content'): extracted_lines.append(meta_desc.get('content'))
-
-            meta_keys = soup.find('meta', attrs={'name': 'keywords'})
-            if meta_keys and meta_keys.get('content'): extracted_lines.append(meta_keys.get('content'))
-
-            # --- 2. STANDARD EXTRACTION ---
             tags = soup.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'li', 'article', 'blockquote'])
             for t in tags:
                 text = t.get_text().strip()
-                if len(text) > 20: 
-                    extracted_lines.append(text)
-            
+                if len(text) > 20: extracted_lines.append(text)
             combined_text = " ".join(extracted_lines)
-            
-            if len(combined_text) < 200:
-                print(f"  -> Content too short ({len(combined_text)} chars). Using deterministic fallback.")
-                return get_deterministic_fallback(company_name)
-                
+            if len(combined_text) < 200: return get_deterministic_fallback(company_name)
             return combined_text[:8000]
-            
         else:
-            print(f"  -> Scrape failed ({response.status_code}). Using fallback.")
             return get_deterministic_fallback(company_name)
-            
     except Exception as e:
-        print(f"  -> Scrape exception for {url}: {str(e)[:50]}")
         return get_deterministic_fallback(company_name)
 
 def run_batch_seed(real_xray_mode=True):
@@ -144,42 +118,32 @@ def run_batch_seed(real_xray_mode=True):
         reality_results = x_ray_search(company['name'], company['url'])
             
         gap = intent_results["score"] - reality_results["score"]
-        
         summary_text = f"Analysis for {company['name']}. Intent: {intent_results['score']}, Reality: {reality_results['score']}."
         
         if ai_client:
             try:
-                # DYNAMICALLY LOAD KNOWLEDGE BASE
                 knowledge_context = get_evolving_framework()
-
                 prompt = f"""
-                ### STEP 3: SYNTHESIS
-                
-                You are analyzing {company['name']}.
+                ### STEP 3: BATCH SYNTHESIS
+                Analyze {company['name']}.
                 
                 ## KNOWLEDGE BASE
-                Use this JSON as your source of truth:
                 {knowledge_context}
 
                 ## DATA
-                Intent Score: {intent_results["score"]}/100
-                Reality Score: {reality_results["score"]}/100
-                Gap: {gap}
-                
-                Evidence Found: {', '.join([l['title'] for l in reality_results['links'][:3]])}
+                Gap: {gap} (Intent {intent_results["score"]} vs Reality {reality_results["score"]}).
+                Evidence: {', '.join([l['title'] for l in reality_results['links'][:3]])}
 
                 ## TASK
-                Write a 2-sentence Forensic Summary.
-                Classify them (e.g., "Agile Theater", "Silent Executor") using the Knowledge Base vocabulary.
+                Classify them (e.g., "Agile Theater") and explain why in 2 sentences.
                 """
                 
-                # USING PRO FOR BATCH SEED TO ENSURE QUALITY
-                resp = ai_client.models.generateContent(
-                    model='gemini-3-pro-preview',
+                # FIX: generateContent -> generate_content
+                resp = ai_client.models.generate_content(
+                    model='gemini-3-flash-preview',
                     contents=prompt
                 )
-                if resp.text:
-                    summary_text = resp.text
+                if resp.text: summary_text = resp.text
             except Exception as e:
                 print(f"  -> AI Gen failed: {e}")
 
@@ -200,8 +164,7 @@ def run_batch_seed(real_xray_mode=True):
         }
         
         dashboard_data.append(entry)
-        # Gentle pacing for batch
-        time.sleep(0.1)
+        time.sleep(0.5) 
 
     print("Uploading batch results to Blob Storage...")
     url = storage.upload_json("dashboard_data.json", dashboard_data)
