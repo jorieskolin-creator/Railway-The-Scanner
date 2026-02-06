@@ -119,8 +119,16 @@ class ScanRequest(BaseModel):
 
 @app.post("/admin/seed-finland-100")
 async def seed_database(background_tasks: BackgroundTasks):
-    background_tasks.add_task(run_batch_seed, real_xray_mode=True)
+    background_tasks.add_task(run_batch_seed, real_xray_mode=True, limit=None)
     return {"status": "Batch Seeding Initiated", "message": "Check server logs for progress."}
+
+@app.post("/admin/seed-fast")
+async def seed_fast(background_tasks: BackgroundTasks):
+    """
+    Runs a calibration scan for just the top 3 companies.
+    """
+    background_tasks.add_task(run_batch_seed, real_xray_mode=True, limit=3)
+    return {"status": "Quick Calibration Initiated", "message": "Scanning top 3 companies (Nokia, Kone, Neste)..."}
 
 @app.post("/scan")
 async def run_scan(request: ScanRequest):

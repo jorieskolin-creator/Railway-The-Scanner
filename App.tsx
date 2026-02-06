@@ -28,6 +28,7 @@ const App = () => {
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [isSeeding, setIsSeeding] = useState(false);
+  const [isFastSeeding, setIsFastSeeding] = useState(false);
   const [lastSynced, setLastSynced] = useState(null);
   const [sortConfig, setSortConfig] = useState({ key: 'reality_gap', direction: 'desc' });
   const [systemStatus, setSystemStatus] = useState({ online: false, storage: false, google: false, ai: false });
@@ -157,15 +158,32 @@ const App = () => {
     }
   };
 
+  const handleFastSeed = async () => {
+      if (!IS_ADMIN_MODE) return;
+      if (!confirm("Run Quick Calibration? This will scan the top 3 companies (Nokia, Kone, Neste) to verify the pipeline.")) return;
+      
+      setIsFastSeeding(true);
+      try {
+          const response = await fetch(`/admin/seed-fast`, { method: 'POST' });
+          if (response.ok) {
+              alert("✅ Quick Calibration Started. Check logs. Dashboard will update in ~2 mins.");
+          }
+      } catch (e) {
+          alert("❌ Error starting fast seed");
+      } finally {
+          setIsFastSeeding(false);
+      }
+  };
+
   const handleBatchSeed = async () => {
     if (!IS_ADMIN_MODE) return;
-    if (!confirm("Start Batch Refresh? This will reset the Index and create 100+ individual files.")) return;
+    if (!confirm("Start Full Market Scan (100 Companies)? This takes ~30 minutes.")) return;
     
     setIsSeeding(true);
     try {
         const response = await fetch(`/admin/seed-finland-100`, { method: 'POST' });
         if (response.ok) {
-            alert("✅ Batch Refresh Initiated. Check Railway Logs for progress.");
+            alert("✅ Full Batch Scan Initiated. Check Railway Logs for progress.");
         }
     } catch (e) {
         alert("❌ Error starting batch seed");
@@ -223,10 +241,16 @@ const App = () => {
                  </span>
             </div>
             {IS_ADMIN_MODE && (
-                <button onClick={handleBatchSeed} disabled={isSeeding} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-lg transition-all">
-                    {isSeeding ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
-                    {isSeeding ? "REFRESHING..." : "REFRESH DATABASE"}
+                <>
+                <button onClick={handleFastSeed} disabled={isFastSeeding || isSeeding} className="hidden lg:flex items-center gap-2 px-3 py-2 bg-emerald-900/40 hover:bg-emerald-800/60 border border-emerald-500/20 text-emerald-300 font-semibold text-[10px] rounded-lg transition-all">
+                    {isFastSeeding ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
+                    {isFastSeeding ? "CALIBRATING..." : "QUICK TEST (3)"}
                 </button>
+                <button onClick={handleBatchSeed} disabled={isSeeding || isFastSeeding} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-lg transition-all">
+                    {isSeeding ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
+                    {isSeeding ? "SCANNING 100..." : "REFRESH DB"}
+                </button>
+                </>
             )}
             <div className="flex items-center gap-2">
                 {lastSynced && <span className="text-[10px] text-cyan-300/70 font-mono hidden sm:block">{lastSynced}</span>}
@@ -265,9 +289,14 @@ const App = () => {
                     <p className="text-sm max-w-md mt-2">No records found. The database might be empty, or the backend is unable to read from Vercel Blob Storage.</p>
                 </div>
                 {IS_ADMIN_MODE && (
-                    <button onClick={handleBatchSeed} className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold rounded-lg transition-all">
-                        Initialize Batch Scan
-                    </button>
+                    <div className="flex gap-4 mt-6">
+                        <button onClick={handleFastSeed} className="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold rounded-lg transition-all flex items-center gap-2">
+                           <Play size={16} /> Run Quick Test (3)
+                        </button>
+                        <button onClick={handleBatchSeed} className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold rounded-lg transition-all flex items-center gap-2">
+                           <Database size={16} /> Run Full Scan (100)
+                        </button>
+                    </div>
                 )}
              </div>
           ) : (

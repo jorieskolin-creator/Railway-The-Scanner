@@ -95,14 +95,23 @@ def scrape_strategic_content(base_url: str, company_name: str = "Unknown"):
     # print(f"   [Scanner 1] Extraction Complete. Total Chars: {len(combined_text)}")
     return combined_text[:60000]
 
-def run_batch_seed(real_xray_mode=True):
-    total_count = len(TOP_100_COMPANIES)
-    print(f"=== STARTING REAL FORENSIC BATCH SCAN ({total_count} Companies) ===")
-    print("WARNING: This process performs real scraping and AI analysis. It will take approx 20-30 minutes.")
+def run_batch_seed(real_xray_mode=True, limit=None):
+    # Select companies based on limit
+    target_list = TOP_100_COMPANIES[:limit] if limit else TOP_100_COMPANIES
+    total_count = len(target_list)
+    
+    print(f"=== STARTING BATCH SCAN (Count: {total_count}) ===")
     
     storage = BlobStorage()
     batch_summary_list = []
     
+    # If running a small test, fetch existing summary so we don't overwrite the full list with just 3 items
+    if limit and limit < 10:
+        existing_index = storage.retrieve_latest_data("index/summary_list.json")
+        if existing_index:
+            batch_summary_list = existing_index
+            print(f"   [Info] Appending to existing index of {len(batch_summary_list)} items.")
+
     api_key = clean_env_var(os.environ.get("API_KEY") or os.environ.get("GEMINI_API_KEY"))
     gemini_client = None
     if api_key:
@@ -111,7 +120,7 @@ def run_batch_seed(real_xray_mode=True):
         except:
             print("   [Error] Gemini Client init failed.")
 
-    for i, company in enumerate(TOP_100_COMPANIES):
+    for i, company in enumerate(target_list):
         print(f"\n[{i+1}/{total_count}] Processing: {company['name']} ...")
         
         try:
@@ -190,7 +199,11 @@ def run_batch_seed(real_xray_mode=True):
                 "lastUpdated": timestamp,
                 "detailsUrl": saved_url
             }
+            
+            # Update local list (Remove old entry if exists, add new)
+            batch_summary_list = [x for x in batch_summary_list if x['companyName'] != company['name']]
             batch_summary_list.append(summary_entry)
+            
             print(f"   -> Saved. URL: {saved_url}")
 
             # 7. RATE LIMITING SAFETY
