@@ -35,7 +35,7 @@ def x_ray_search(company_name: str, company_url: str = None):
     SCANNER 2: THE REALITY CHECK (External Evidence)
     
     This function performs the Forensic Scan.
-    It now uses the '4 Juries' methodology for deep validation.
+    It uses the '4 Juries' methodology with STRICT domain filtering.
     """
     
     # Only GEMINI_API_KEY is required now.
@@ -47,6 +47,8 @@ def x_ray_search(company_name: str, company_url: str = None):
     is_simulated = False
     
     search_name = clean_company_name_for_search(company_name)
+    domain_hint = get_clean_domain(company_url) if company_url else f"{search_name.lower().replace(' ', '')}.fi"
+    
     print(f"   [Forensic Scan] Target: {company_name} (Search Term: {search_name})")
 
     if not api_key:
@@ -56,33 +58,38 @@ def x_ray_search(company_name: str, company_url: str = None):
     try:
         client = genai.Client(api_key=api_key)
         
-        # We craft a prompt that forces the model to look at the "Jury" of sources
-        # UPGRADE: Added Architectural, Strategic, Community, and Academic juries.
+        # WE DEFINE THE SOURCES HERE (MERGED TRIBUNAL)
         prompt = f"""
-        Perform a FORENSIC INVESTIGATION on "{search_name}".
+        Perform a FORENSIC INVESTIGATION on "{search_name}" (Domain: {domain_hint}).
         
-        SEARCH STRATEGY (STRICT - APPROVED SOURCES ONLY):
-        Do NOT read the company's own marketing pages.
+        SEARCH STRATEGY (STRICT - COMBINED SOURCES):
+        Do NOT read the company's own marketing pages (except for developer portals/investor PDFs).
         Look ONLY at evidence from these specific 'JURIES' (The Standardized Tribunal):
 
-        1. THE ARCHITECTURAL JURY (Tech Reality):
-           - Search for Developer Portals: `site:developer.*` OR `site:api.*` related to {search_name}.
-           - Search for Status Pages: `site:status.*` (Transparency test).
-           - Sources: *.github.com, developer.{search_name.lower().replace(' ', '')}.com
+        1. THE ARCHITECTURAL JURY (Tech & Structure)
+           - Evidence: Service Portfolio, Platform Thinking, API-First, DevOps maturity.
+           - Developer Portals (Platform Thinking): `site:{domain_hint} "API documentation" OR "Developer Portal" OR "SDK"` OR `site:{domain_hint} "Rajapinnat" OR "Kehittäjille" OR "Avoin data"`
+           - System Status (Transparency): `site:{domain_hint} "System Status" OR "Operational" OR "Incident History"` OR `site:{domain_hint} "Palveluiden tila" OR "Häiriötiedotteet"`
+           - Technical Communities (The Tech Jury): `site:stackoverflow.com "{search_name}"` OR `site:github.com "{search_name}"`
 
-        2. THE STRATEGIC JURY (Investor Truth):
-           - Search for Capital Markets Day (CMD) PDFs. 
-           - Query: `filetype:pdf "{search_name}" "Capital Markets Day" strategy`
-           - Query: `filetype:pdf "{search_name}" "Risk Management" rigid`
+        2. THE STRATEGIC JURY (Money, Press & Intent)
+           - Evidence: Strategy (Growth vs. Efficiency), RenDanHeYi.
+           - Capital Markets Day (CMD): `site:{domain_hint} filetype:pdf "Capital Markets Day" OR "Strategy Presentation"` OR `site:{domain_hint} filetype:pdf "Sijoittajaesitys" OR "Pääomamarkkinapäivä"`
+           - Risk Management Reports: `site:{domain_hint} filetype:pdf "Annual Report" AND "Risk Management"` OR `site:{domain_hint} filetype:pdf "Vuosikertomus" AND "Riskienhallinta"`
+           - Finnish Financial & Tech News (The Press Jury): `site:kauppalehti.fi "{search_name}"` OR `site:talouselama.fi "{search_name}"` OR `site:tekniikkatalous.fi "{search_name}"` OR `site:tivi.fi "{search_name}"`
 
-        3. THE COMMUNITY JURY (Culture & Reputation):
-           - Finnish Tech Events: "ScanAgile", "DevOps Finland", "Mimmit koodaa".
-           - Unfiltered Voice: `site:reddit.com`, `site:teamblind.com`.
-           - Recruitment: `site:thehub.io`, `site:glassdoor.com`.
+        3. THE COMMUNITY JURY (Culture, People & Reality)
+           - Evidence: Operating Model, Psychological Safety, Learning Organization.
+           - Finnish Tech Events: `"{search_name}" AND ("ScanAgile" OR "DevOps Finland" OR "Disobey" OR "Mimmit koodaa")`
+           - The Unfiltered Voice (Anonymous): `site:teamblind.com "{search_name}"` OR `site:reddit.com "{search_name}"`
+           - Employee Voice (The People Jury): `site:glassdoor.com "{search_name}"`
+           - Recruitment Channels: `site:thehub.io "{search_name}"` OR `site:indeed.com "{search_name}"` OR `site:oikotie.fi "{search_name}"` OR `site:duunitori.fi "{search_name}"` OR `site:linkedin.com "{search_name}"`
 
-        4. THE ACADEMIC JURY (Deep Audits):
-           - Finnish Thesis Database (Public Audits): `site:theseus.fi "{search_name}"`.
-           - Look for titles like "Agile Transformation at...", "Challenges in...".
+        4. THE ACADEMIC JURY (Deep Audits & Thought Leadership)
+           - Evidence: Internal Operating Model failures/successes.
+           - Master's Theses (Deep Audits): `site:theseus.fi "{search_name}" AND ("Agile" OR "Process" OR "Johtaminen" OR "Organisaatio")`
+           - Aalto University: `site:aalto.fi "{search_name}" AND ("Thesis" OR "Diplomityö")`
+           - Thought Leadership: `site:medium.com "{search_name}"`
 
         VERIFY THESE 5 HYPOTHESES:
         1. "Surveillance": Is there micromanagement, time-tracking, or low trust?
@@ -100,7 +107,7 @@ def x_ray_search(company_name: str, company_url: str = None):
                     "found": boolean,
                     "sentiment": "negative" or "positive",
                     "snippet": "Quote finding...",
-                    "title": "Source Title (e.g. 'Theseus Thesis: Agile Failures')",
+                    "title": "Source Title (e.g. 'Kauppalehti: Layoff News')",
                     "url": "URL of the source"
                 }}
             ],
