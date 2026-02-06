@@ -1,8 +1,6 @@
-
 import os
 import requests
 import re
-import hashlib
 import time
 from urllib.parse import urlparse
 
@@ -103,57 +101,6 @@ def get_clean_domain(url):
     except:
         return ""
 
-def get_simulated_score(company_name):
-    """
-    Generates a consistent Reality Score based on the company name to avoid
-    the 'flat 50' issue when API keys are missing.
-    """
-    hash_val = int(hashlib.sha256(company_name.encode('utf-8')).hexdigest(), 16)
-    # Range 20 to 80
-    base_score = 20 + (hash_val % 61) 
-    return base_score
-
-def run_simulation(company_name, queries):
-    """
-    Helper to run the simulation logic, shared by both
-    no-key mode.
-    """
-    checklist = []
-    evidence_links = []
-    simulated_score = get_simulated_score(company_name)
-    
-    for item in queries:
-        # Deterministic simulation based on name + query label
-        item_hash = int(hashlib.sha256((company_name + item['label']).encode('utf-8')).hexdigest(), 16)
-        
-        # Probability of finding evidence based on company score
-        if item['sentiment'] == 'positive':
-            is_found = (item_hash % 100) < simulated_score
-        else:
-            is_found = (item_hash % 100) > simulated_score
-        
-        checklist.append({
-            "category": item['category'],
-            "query": item['label'],
-            "found": is_found,
-            "sentiment": item['sentiment']
-        })
-        
-        if is_found:
-            evidence_links.append({
-                "title": f"[{item['sentiment'].upper()}] {item['label']} (Simulated)",
-                "url": "#",
-                "source": "Simulated Forensic Search",
-                "snippet": f"Simulated detection of {item['label']} for {company_name}."
-            })
-
-    return { 
-        "score": simulated_score, 
-        "checklist": checklist, 
-        "links": evidence_links[:5], 
-        "is_simulated": True 
-    }
-
 def x_ray_search(company_name: str, company_url: str = None):
     api_key = os.environ.get("GOOGLE_API_KEY")
     cx_id = os.environ.get("CX_ENGINE_ID")
@@ -163,12 +110,18 @@ def x_ray_search(company_name: str, company_url: str = None):
     checklist = []
     evidence_links = []
     
-    # --- SIMULATION MODE (MISSING KEYS) ---
+    # --- NO KEYS MODE ---
     if not api_key or not cx_id:
-        print(f"   [X-Ray] No API Keys. Simulating for {company_name}")
-        return run_simulation(company_name, queries)
+        print(f"   [X-Ray] No API Keys. Returning 0 score for {company_name}")
+        # Return empty/neutral result, NO SIMULATION
+        return { 
+            "score": 0, 
+            "checklist": [], 
+            "links": [], 
+            "is_simulated": False 
+        }
 
-    # --- REAL MODE (BILINGUAL) ---
+    # --- REAL MODE ---
     current_score = 50 
     IMPACT_WEIGHT = 7 
 
@@ -176,9 +129,8 @@ def x_ray_search(company_name: str, company_url: str = None):
 
     for item in queries:
         # Rate limiting logic for standard quotas (100 QPM)
-        # Even with 10k/day, the per-minute limit is strict.
-        # 1.0s delay guarantees max 60 requests/min, staying safely under 100.
-        time.sleep(1.0) 
+        # 1.2s delay guarantees max ~50 requests/min, staying safely under 100.
+        time.sleep(1.2) 
 
         raw_query = item['q']
         sentiment = item['sentiment']
@@ -211,9 +163,9 @@ def x_ray_search(company_name: str, company_url: str = None):
                         "snippet": result.get('snippet', '')
                     })
             elif res.status_code == 403:
-                # NO SIMULATION FALLBACK as requested.
-                print(f"      [API ERROR 403] Forbidden/Quota. Check QPM limits or Key permissions.")
-                # We interpret this as "Not Found" for this query, but continue the batch
+                # Log error but DO NOT switch to simulation. 
+                # Just assume not found for this specific query and continue.
+                print(f"      [API ERROR 403] Quota/Permission Error. QPM limit likely hit.")
             else:
                 print(f"      [API ERROR] {res.status_code}")
             
