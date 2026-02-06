@@ -42,9 +42,9 @@ const getGeminiClient = () => {
   `;
 
   try {
-    // UPGRADE: Using gemini-3-flash-preview for latest reasoning capabilities
+    // UPGRADE: Using gemini-3-pro-preview for synthesis as requested
     const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
+      model: 'gemini-3-pro-preview',
       contents: prompt,
     });
     
