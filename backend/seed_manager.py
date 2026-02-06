@@ -12,6 +12,7 @@ from scanner_one import analyze_intent
 from scanner_two import x_ray_search
 from storage import BlobStorage
 from google import genai
+from knowledge_base import get_evolving_framework
 
 # --- DETERMINISTIC FALLBACK PROFILES ---
 FALLBACK_PROFILES = [
@@ -148,21 +149,33 @@ def run_batch_seed(real_xray_mode=True):
         
         if ai_client:
             try:
-                # Providing context to the AI
+                # DYNAMICALLY LOAD KNOWLEDGE BASE
+                knowledge_context = get_evolving_framework()
+
                 prompt = f"""
-                You are a Strategic Forensics Analyst.
-                Company: {company['name']}
+                ### STEP 3: SYNTHESIS
+                
+                You are analyzing {company['name']}.
+                
+                ## KNOWLEDGE BASE
+                Use this JSON as your source of truth:
+                {knowledge_context}
+
+                ## DATA
                 Intent Score: {intent_results["score"]}/100
                 Reality Score: {reality_results["score"]}/100
                 Gap: {gap}
                 
-                Evidence: {', '.join([l['title'] for l in reality_results['links'][:3]])}
+                Evidence Found: {', '.join([l['title'] for l in reality_results['links'][:3]])}
 
-                Write a 2-sentence summary using terms like "Digital Taylorism", "Agile Theater", or "Silent Executor".
+                ## TASK
+                Write a 2-sentence Forensic Summary.
+                Classify them (e.g., "Agile Theater", "Silent Executor") using the Knowledge Base vocabulary.
                 """
                 
-                resp = ai_client.models.generate_content(
-                    model='gemini-3-flash-preview',
+                # USING PRO FOR BATCH SEED TO ENSURE QUALITY
+                resp = ai_client.models.generateContent(
+                    model='gemini-3-pro-preview',
                     contents=prompt
                 )
                 if resp.text:
@@ -187,6 +200,7 @@ def run_batch_seed(real_xray_mode=True):
         }
         
         dashboard_data.append(entry)
+        # Gentle pacing for batch
         time.sleep(0.1)
 
     print("Uploading batch results to Blob Storage...")
