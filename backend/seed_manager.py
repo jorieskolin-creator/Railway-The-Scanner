@@ -1,4 +1,3 @@
-
 import os
 import requests
 import uuid
@@ -68,32 +67,106 @@ def get_deterministic_fallback(company_name):
     profile = FALLBACK_PROFILES[hash_val % len(FALLBACK_PROFILES)]
     return profile["text"]
 
-def scrape_homepage_text(url: str, company_name: str = "Unknown"):
-    if not url: return get_deterministic_fallback(company_name)
+def get_page_text(url, timeout=4):
+    """
+    Helper to fetch and clean text from a single URL.
+    """
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
             'Accept-Language': 'fi-FI,fi;q=0.9,en-US;q=0.8,en;q=0.7' 
         }
-        response = requests.get(url, headers=headers, timeout=6)
+        response = requests.get(url, headers=headers, timeout=timeout)
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
-            extracted_lines = []
-            if soup.title: extracted_lines.append(soup.title.string)
-            meta_desc = soup.find('meta', attrs={'name': 'description'}) or soup.find('meta', attrs={'property': 'og:description'})
-            if meta_desc and meta_desc.get('content'): extracted_lines.append(meta_desc.get('content'))
-            tags = soup.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'li', 'article', 'blockquote'])
-            for t in tags:
-                text = t.get_text().strip()
-                if len(text) > 20: extracted_lines.append(text)
-            combined_text = " ".join(extracted_lines)
-            if len(combined_text) < 200: return get_deterministic_fallback(company_name)
-            return combined_text[:8000]
-        else:
-            return get_deterministic_fallback(company_name)
-    except Exception as e:
+            
+            # Remove scripts, styles, nav, footers to get core content
+            for script in soup(["script", "style", "nav", "footer", "aside", "header", "noscript"]):
+                script.decompose()
+                
+            text = soup.get_text(separator=' ')
+            # Clean whitespace
+            lines = [line.strip() for line in text.splitlines() if len(line.strip()) > 30] # Only keep substantial sentences
+            return " ".join(lines)
+    except:
+        pass
+    return ""
+
+def scrape_strategic_content(base_url: str, company_name: str = "Unknown"):
+    """
+    SCANNER 1 SOURCE DEFINITION (The "Intent" Layer):
+    
+    We strictly limit the scraping to the 'Official Narrative' pages to capture 
+    what the company *promises* or *thinks* it is.
+    
+    Expanded Sources:
+    1. Homepage (Landing Page messaging)
+    2. /Strategy (The Vision)
+    3. /Offerings (Products, Services, Solutions - "What we are promising")
+    4. /Investors (Governance & Metrics)
+    5. /Careers & /Jobs (Job Ads reveal actual role expectations)
+    6. /Insights (Blogs, News - Thought Leadership)
+    7. /Sustainability (Operating Principles)
+    """
+    if not base_url: return get_deterministic_fallback(company_name)
+    
+    base_url = base_url.rstrip('/')
+    collected_text = []
+    
+    # 1. Fetch Homepage
+    print(f"   [Scanner 1] Source 1: Homepage ({base_url})")
+    home_text = get_page_text(base_url)
+    if home_text: collected_text.append(home_text)
+    
+    # 2. Strategic Targets (English & Finnish)
+    # We probe these specific paths to build the "Intent" corpus.
+    targets = [
+        # Strategy & Vision
+        "/strategy", "/strategia", "/vision", "/visio", "/our-story", "/tarinamme", "/about-us", "/meista",
+        
+        # Offerings (Products & Services - What they sell)
+        "/services", "/palvelut", "/products", "/tuotteet", 
+        "/solutions", "/ratkaisut", "/offering", "/tarjooma",
+        
+        # Investors & Governance
+        "/investors", "/sijoittajat", "/governance", "/hallinnointi",
+        
+        # Talent & Job Ads (What they ask for)
+        "/careers", "/tyopaikat", "/urapolku", "/working-at", "/meille-toihin",
+        "/jobs", "/avoimet-tyopaikat", "/open-positions",
+        
+        # Thought Leadership & Blogs (What they preach)
+        "/blog", "/blogi", "/insights", "/news", "/uutiset", "/ajankohtaista", "/media",
+        
+        # Sustainability
+        "/sustainability", "/vastuullisuus", "/sustainability/approach"
+    ]
+    
+    # Increased max_pages to 5 to accommodate the wider net (Jobs, Blogs, Services)
+    pages_crawled = 0
+    max_pages = 5
+    
+    for path in targets:
+        if pages_crawled >= max_pages: break
+        
+        target_url = base_url + path
+        print(f"   [Scanner 1] Probing Source: {target_url}")
+        page_text = get_page_text(target_url, timeout=2.5)
+        
+        # Only add if we found substantial text (avoids 404 pages that just say "Not Found")
+        if len(page_text) > 400: 
+            collected_text.append(page_text)
+            pages_crawled += 1
+            
+    full_corpus = " ".join(collected_text)
+    
+    if len(full_corpus) < 200:
+        print("   [Scanner 1] Warning: Scrape yielded low data. Using deterministic fallback.")
         return get_deterministic_fallback(company_name)
+        
+    print(f"   [Scanner 1] Narrative Corpus Built. Size: {len(full_corpus)} chars.")
+    return full_corpus[:25000] # Increased cap slightly to hold the extra context
 
 def run_batch_seed(real_xray_mode=True):
     total_count = len(TOP_100_COMPANIES)
@@ -113,7 +186,9 @@ def run_batch_seed(real_xray_mode=True):
     for i, company in enumerate(TOP_100_COMPANIES):
         print(f"[{i+1}/{total_count}] Processing {company['name']}...")
         
-        scraped_text = scrape_homepage_text(company['url'], company['name'])
+        # UPGRADE: Use Strategic Scraper (Scanner 1)
+        scraped_text = scrape_strategic_content(company['url'], company['name'])
+        
         intent_results = analyze_intent(scraped_text)
         reality_results = x_ray_search(company['name'], company['url'])
             
@@ -138,9 +213,8 @@ def run_batch_seed(real_xray_mode=True):
                 Classify them (e.g., "Agile Theater") and explain why in 2 sentences.
                 """
                 
-                # FIX: generateContent -> generate_content
                 resp = ai_client.models.generate_content(
-                    model='gemini-3-flash-preview',
+                    model='gemini-3-pro-preview', # Upgraded to Pro for synthesis
                     contents=prompt
                 )
                 if resp.text: summary_text = resp.text

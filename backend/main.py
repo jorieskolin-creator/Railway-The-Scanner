@@ -15,7 +15,7 @@ from google.genai import types
 from scanner_one import analyze_intent
 from scanner_two import x_ray_search
 from storage import BlobStorage
-from seed_manager import run_batch_seed, scrape_homepage_text
+from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES
 from knowledge_base import get_evolving_framework
 
@@ -29,7 +29,6 @@ def clean_env_var(value):
     return value.strip().strip('"').strip("'")
 
 # Log Environment Config
-# Note: CX_ENGINE_ID and GOOGLE_API_KEY are no longer needed as we use Gemini Native Search.
 blob_token = clean_env_var(os.environ.get("BLOB_READ_WRITE_TOKEN"))
 gemini_key = clean_env_var(os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY"))
 
@@ -71,8 +70,6 @@ def health_check():
         "config_status": {
             "has_blob_token": bool(token),
             "has_gemini_key": gemini_present,
-            # We map 'has_google_search_key' to Gemini presence, 
-            # because Gemini now provides the Search capability natively.
             "has_google_search_key": gemini_present
         }
     }
@@ -106,8 +103,8 @@ async def run_scan(request: ScanRequest):
                     break
 
         if not target_text or len(target_text) < 100:
-            if target_url: target_text = scrape_homepage_text(target_url)
-            else: target_text = scrape_homepage_text(None)
+            if target_url: target_text = scrape_strategic_content(target_url, request.companyName)
+            else: target_text = scrape_strategic_content(None, request.companyName)
 
         intent_results = analyze_intent(target_text)
 
@@ -151,8 +148,8 @@ async def run_scan(request: ScanRequest):
                 3. Cite specific evidence found by Scanner 2.
                 """
                 
+                # Use Gemini 3 Pro Preview for High Quality Synthesis as requested
                 try:
-                    # USE PRO FOR SINGLE USER SCANS (Higher Quality)
                     response = client.models.generate_content(
                         model='gemini-3-pro-preview',
                         contents=prompt

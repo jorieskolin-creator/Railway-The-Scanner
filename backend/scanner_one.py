@@ -1,35 +1,48 @@
-
 import re
 
 # Keyword Definitions (Mirrors constants.ts)
 # INCLUDES FINNISH (FI) TRANSLATIONS
-# UPGRADE: Added "Deep Vocabulary" from research (Kapulanvaihto, Portinvartijuus, etc.)
+# UPGRADE v2.5: Doubled Vocabulary for High-Resolution "Intent" Analysis.
+# Focused on distinguishing "Marketing Fluff" from "Structural Intent".
+
 CATEGORIES = {
     "Operating Model": {
         "good": [
+            # English
             "Service Areas", "Value Streams", "Stream-aligned", "Distributed Authority", "Sense and Respond",
             "Psychological Safety", "Cross-functional", "Flow Efficiency", "Platform Team", "Autonomy",
             "Outcome-driven", "Micro-enterprises", "Customer Intimacy", "Self-organization", "Experimentation",
             "Launch-and-Learn", "Fluid", "Network of Teams", "Enabling Leadership", "Cognitive Load",
-            "Zero Distance", "Communities of Practice", "Transparency", "Human-centric", "End-to-End Responsibility"
+            "Zero Distance", "Communities of Practice", "Transparency", "Human-centric", "End-to-End Responsibility",
+            "Decentralized decision-making", "Team topologies", "Inner source", "DevEx", "Developer Experience",
+            "Sociocracy", "Holacracy", "Edge computing", "Local decision making", "Empowered teams",
+            "Servant leadership", "Non-hierarchical", "Pod structure", "Chapter and Guild", "Federated governance"
         ],
         "good_fi": [
+            # Finnish
             "arvovirta", "itseohjautuvuu", "matala hierarkia", "kokeilukulttuuri", "asiakaslähtöisy",
             "ketterä", "tiimimalli", "vastuun jakami", "psykologinen turvallisuu", "poikkitoiminnalli",
-            "oppiva organisaatio", "palvelumuotoilu", "onnistumisen edellytyk", "virtaustehokkuus", "alustatiimi"
+            "oppiva organisaatio", "palvelumuotoilu", "onnistumisen edellytyk", "virtaustehokkuus", "alustatiimi",
+            "jaettu johtajuus", "itseorganisoitumi", "tiimiorganisaatio", "valtuutettu", "ihmiskeskeinen",
+            "verkostomainen", "matala organisaatio", "päätösvalta", "lähijohtami", "valmentava ote"
         ],
         "bad": [
+            # English
             "Functional Silos", "Command and Control", "Digital Taylorism", "Handovers", "Resource Efficiency",
             "Approval Chain", "Micromanagement", "Output-driven", "Rigid", "Bureaucracy",
             "Gatekeeping", "Waterfall", "Order-taker", "Compliance-driven", "Siloed Data",
             "HiPPO", "Standardization", "Big Bang", "Utilization Rate", "Legacy Thinking",
-            "Spot Optimization", "Ticket-based", "Information Asymmetry", "Need to Know", "Predictability"
+            "Spot Optimization", "Ticket-based", "Information Asymmetry", "Need to Know", "Predictability",
+            "Matrix organization", "Steering committee", "Change control board", "Lines of command", "Top-down mandate",
+            "Departmental barriers", "Budget compliance", "Scope creep", "Change request", "Sign-off culture"
         ],
         "bad_fi": [
+            # Finnish
             "siilo", "poteroitumi", "käskyttämi", "hierarkia", "mikromanagerointi",
             "byrokratia", "hyväksyntäketju", "vesiputousmalli", "kankeus", "siiloutumi",
             "suorituskeskeisy", "kontrollointi", "ylhäältä alas", "jäykkä", 
-            "resurssitehokkuus", "käyttöaste", "kapulanvaihto", "portinvartijuus"
+            "resurssitehokkuus", "käyttöaste", "kapulanvaihto", "portinvartijuus",
+            "matriisiorganisaatio", "ohjausryhmä", "linjaorganisaatio", "komentoketju", "hyväksytys"
         ]
     },
     "Service Portfolio": {
@@ -38,22 +51,27 @@ CATEGORIES = {
             "Modular", "Scalability", "Continuous Delivery", "User-centric", "Product-Market Fit",
             "Subscription", "Cloud-native", "Data-driven", "Composable", "Service Design",
             "Value Proposition", "Feedback Loop", "MVP", "Consumption-based", "Self-service",
-            "Interoperability", "Digital Twin", "Solution-oriented", "Lifetime Value", "Frictionless"
+            "Interoperability", "Digital Twin", "Solution-oriented", "Lifetime Value", "Frictionless",
+            "Microservices", "Headless", "Omnichannel", "Usage-based pricing", "Stickiness",
+            "Integration ready", "Developer friendly", "Marketplace", "Plug and play", "Always-on"
         ],
         "good_fi": [
             "jatkuva laskutus", "alustatalous", "ekosysteemi", "skaalautuvuu", "käyttäjälähtöi",
-            "pilvipohjai", "datapohjai", "itsepalvelu", "modulaari", "toistuvaislaskutus"
+            "pilvipohjai", "datapohjai", "itsepalvelu", "modulaari", "toistuvaislaskutus",
+            "palvelullistami", "rajapinta", "integroitavuus", "kokonaisratkaisu", "asiakasarvo"
         ],
         "bad": [
             "Legacy", "Monolith", "On-premise", "Customization", "Project-based",
             "One-off Sales", "Maintenance-heavy", "Vendor Lock-in", "Siloed Data", "Hardware-centric",
             "Manual Updates", "Consulting-heavy", "End-of-Life", "Fragmented", "Feature Factory",
             "Complexity", "Static", "Commoditized", "Proprietary", "License-based",
-            "Discontinued", "Cost-plus Pricing", "Bloatware", "Version 1.0", "Cannibalization"
+            "Discontinued", "Cost-plus Pricing", "Bloatware", "Version 1.0", "Cannibalization",
+            "Bespoke", "Heavily customized", "Sunset", "On-prem", "Perpetual license"
         ],
         "bad_fi": [
             "vanhentu", "räätälöity", "projektiluontoi", "kertakauppa", "ylläpitoraskas",
-            "toimittajaloukku", "järjestelmäriippuvuu", "monoliitti", "paikallinen asennus", "lisenssipohjai"
+            "toimittajaloukku", "järjestelmäriippuvuu", "monoliitti", "paikallinen asennus", "lisenssipohjai",
+            "hajanaiset järjestelmät", "kustomoitu", "rautapohjainen", "massiivinen", "monimutkainen"
         ]
     },
     "Values": {
@@ -62,24 +80,30 @@ CATEGORIES = {
             "Inclusion", "Empowerment", "Learning", "Openness", "Empathy",
             "Collaboration", "Purpose-driven", "Adaptability", "Resilience", "Accountability",
             "Diversity", "Innovation", "Feedback", "Growth Mindset", "Integrity",
-            "Sustainability", "Experimentation", "Fun", "Human-centric", "Servant Leadership"
+            "Sustainability", "Experimentation", "Fun", "Human-centric", "Servant Leadership",
+            "Blameless", "Radical candor", "Wellbeing", "Work-life balance", "Equity",
+            "Social responsibility", "Ethical", "Community", "Respect", "Ownership"
         ],
         "good_fi": [
             "luottamus", "avoimuus", "läpinäkyvyys", "rohkeus", "oppimi", "yhteistyö",
             "tarkoitusperäisy", "sopeutumiskyky", "vastuullisuu", "monimuotoisuu", "palaute",
-            "kasvun asenne", "kestävä kehitys", "ihmisläheisy", "nollaetäisyys"
+            "kasvun asenne", "kestävä kehitys", "ihmisläheisy", "nollaetäisyys",
+            "syyllistämättömyys", "hyvinvointi", "tasa-arvo", "eettisyys", "yhteisöllisyys"
         ],
         "bad": [
             "Secrecy", "Fear", "Blame", "Control", "Compliance",
             "Hierarchy", "Silos", "Micromanagement", "Obedience", "Politics",
             "Status Quo", "Risk-averse", "Arrogance", "Bureaucracy", "Rigidity",
             "Greed", "Exclusion", "Punishment", "Competitiveness", "Opacity",
-            "Command", "Ego", "Short-termism", "Exploitation", "Distrust"
+            "Command", "Ego", "Short-termism", "Exploitation", "Distrust",
+            "Nepotism", "Favoritism", "Crunch time", "Burnout", "Overwork",
+            "Internal competition", "Face time", "Presenteeism", "Top-down culture"
         ],
         "bad_fi": [
             "salailu", "pelko", "syyttely", "kontrolli", "sokea tottelemi",
             "valtapeli", "muutosvastarinta", "ylimielisy", "rangaistus", "kilpailuhenkisy",
-            "epäluottamus", "lyhytnäköisy", "hyväksikäyttö"
+            "epäluottamus", "lyhytnäköisy", "hyväksikäyttö", "kyttäyskulttuuri", "suosinta",
+            "uupumus", "sisäinen kilpailu", "läsnäolopakko", "jäykkyys"
         ]
     },
     "Strategy": {
@@ -88,24 +112,30 @@ CATEGORIES = {
             "Vision", "Mission", "Customer-centric", "Agile Strategy", "Innovation",
             "Ecosystem", "Data-driven", "Future-proof", "Resilience", "Differentiation",
             "Outcome-based", "Sustainability", "Disruption", "Blue Ocean", "Pivot",
-            "Horizon 1/2/3", "Focus", "Alignment", "Execution", "Emergent"
+            "Horizon 1/2/3", "Focus", "Alignment", "Execution", "Emergent",
+            "Strategic bet", "Optionality", "Customer success", "Market shaping", "Trend setting",
+            "Proactive", "Visionary", "Holistic", "Systemic", "Long-term value"
         ],
         "good_fi": [
             "pohjantähti", "arvonluonti", "digitaalinen transformaatio", "kasvu", "visio",
             "asiakaskeskei", "innovaatio", "tulevaisuudenkestävä", "erottautumi", "kestävyys",
-            "suunnanmuutos", "toimeenpano", "havainnoi ja reagoi", "vaikuttavuusohjautuva", "julkaise ja opi"
+            "suunnanmuutos", "toimeenpano", "havainnoi ja reagoi", "vaikuttavuusohjautuva", "julkaise ja opi",
+            "strateginen valinta", "asiakasmenestys", "markkinan muokkaami", "ennakoiva", "kokonaisvaltainen"
         ],
         "bad": [
             "Cost-cutting", "Defensive", "Short-term", "Static", "Reactive",
             "Generic", "Status Quo", "Siloed", "Unclear", "Budget-driven",
             "Top-down", "Rigid", "Risk-averse", "Legacy-focused", "Competitor-obsessed",
             "Shareholder-only", "Volume-based", "Efficiency-only", "Drifting", "Fragmented",
-            "Bureaucratic", "Complacent", "Opaque", "Incremental", "Project-based"
+            "Bureaucratic", "Complacent", "Opaque", "Incremental", "Project-based",
+            "Quarterly result focused", "Cost reduction", "Layoffs", "Downsizing", "Optimizing for efficiency",
+            "Race to the bottom", "Imitation", "Follower", "Conservative"
         ],
         "bad_fi": [
             "kulukuri", "säästöt", "leikkaukset", "yt-neuvottelut", "lyhytnäköi", "staattinen",
             "reagoiva", "budjettiohjattu", "ylhäältä saneltu", "riskin välttämi", "kilpailijakeskei",
-            "tehokkuusajattelu", "viisivuotissuunnitelma", "kiinteä tavoite", "kertarysäys"
+            "tehokkuusajattelu", "viisivuotissuunnitelma", "kiinteä tavoite", "kertarysäys",
+            "kvartaalitalous", "kustannussäästö", "irtisanomi", "tehostami", "säilyttävä"
         ]
     },
     "Business Model": {
@@ -114,22 +144,26 @@ CATEGORIES = {
             "SaaS", "Marketplace", "Data Monetization", "Servitization", "Outcome-based Pricing",
             "Direct-to-Consumer", "Sharing Economy", "API Economy", "Scalable", "Asset-light",
             "Community", "User-generated Content", "Open Source", "Partner Network", "Dynamic Pricing",
-            "Lifetime Value", "Circular Economy", "Membership", "Flywheel", "Value Co-creation"
+            "Lifetime Value", "Circular Economy", "Membership", "Flywheel", "Value Co-creation",
+            "Product-led growth", "PLG", "Community-led", "Open innovation", "Crowdsourcing"
         ],
         "good_fi": [
             "alusta", "verkostovaikutus", "palvelullistami", "yhteisö", "jakamistalous",
-            "skaalautuva", "kumppaniverkosto", "kiertotalous", "jäsenyys"
+            "skaalautuva", "kumppaniverkosto", "kiertotalous", "jäsenyys", "tuotevetoinen",
+            "avoin innovaatio", "joukkoistami", "yhteiskehittämi"
         ],
         "bad": [
             "Pipeline", "One-off Sales", "Middlemen", "Rent-seeking", "Asset-heavy",
             "Commodity", "Closed System", "Linear", "Transactional", "Cost-plus",
             "Ad-driven", "Brick-and-mortar", "Intermediary", "Manual", "High Friction",
             "Locked-in", "Inventory-heavy", "Time-based", "Project-based", "Hidden Fees",
-            "Arbitrage", "Unsustainable", "Predatory", "Analog", "Dependent"
+            "Arbitrage", "Unsustainable", "Predatory", "Analog", "Dependent",
+            "Consulting hours", "Billable hours", "Markup", "Reselling", "Vendor lock"
         ],
         "bad_fi": [
             "välikädet", "omaisuuserät", "suljettu järjestelmä", "lineaarinen", "tapahtumapohjai",
-            "piilokulut", "kestämätön", "analoginen", "riippuvai"
+            "piilokulut", "kestämätön", "analoginen", "riippuvai", "tuntilaskutus",
+            "katehinnoittelu", "jälleenmyynti", "varastoriippuvainen"
         ]
     },
     "AI Readiness": {
@@ -138,22 +172,27 @@ CATEGORIES = {
             "DevOps", "Data Mesh", "Automation", "Real-time", "Predictive",
             "Scalable", "Cybersecurity", "Data Quality", "Integration", "Open AI",
             "Python", "Algorithm", "Digital Twin", "Smart", "Self-healing",
-            "Serverless", "Agile IT", "Citizen Developer", "Data Governance", "Augmented"
+            "Serverless", "Agile IT", "Citizen Developer", "Data Governance", "Augmented",
+            "LLM", "Generative AI", "Neural network", "Deep learning", "MLOps",
+            "Data pipeline", "Streaming data", "Cloud-first", "Automated decisioning"
         ],
         "good_fi": [
             "pilvi", "koneoppimi", "automaatio", "reaaliaikai", "ennakoiva",
-            "tietoturva", "integraatio", "algoritmi", "älykäs", "tiedolla johtami"
+            "tietoturva", "integraatio", "algoritmi", "älykäs", "tiedolla johtami",
+            "tekoälyavusteinen", "generatiivinen", "neuroverkko", "pilviensin"
         ],
         "bad": [
             "Legacy", "On-premise", "Siloed Data", "Manual Process", "Spreadsheet",
             "Mainframe", "Monolith", "Security Breach", "Downtime", "Batch Processing",
             "Technical Debt", "Paper-based", "Disconnected", "Proprietary", "Fragmented",
             "Unstructured Data", "Shadow IT", "Waterfall", "Cost Center", "Outdated",
-            "Manual Entry", "Black Box", "Vulnerable", "Rigid", "Offline"
+            "Manual Entry", "Black Box", "Vulnerable", "Rigid", "Offline",
+            "Excel-based", "Legacy migration", "Spaghetti code", "Data swamp", "Breach"
         ],
         "bad_fi": [
             "vanha järjestelmä", "siiloutunut data", "manuaalinen", "taulukkolaskenta", "tietomurto",
-            "katkos", "tekninen velka", "paperi", "hajanai", "tietosuojaongelma"
+            "katkos", "tekninen velka", "paperi", "hajanai", "tietosuojaongelma",
+            "excel-sulkeiset", "tietosuo", "vanhentunut", "irrallinen"
         ]
     }
 }

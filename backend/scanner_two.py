@@ -1,3 +1,4 @@
+
 import os
 import json
 import time
@@ -31,12 +32,16 @@ def get_clean_domain(url):
 
 def x_ray_search(company_name: str, company_url: str = None):
     """
-    Performs a Forensic X-Ray Scan using Gemini with Google Search Grounding.
+    SCANNER 2: THE REALITY CHECK (External Evidence)
     
-    ARCHITECTURAL CHANGE:
-    - Removed 'CX_ENGINE_ID' (Legacy Custom Search).
-    - Now uses Gemini's native 'google_search' tool.
-    - This automatically searches the ENTIRE WEB (Glassdoor, Reddit, News, etc.).
+    This function performs the Forensic Scan.
+    CRITICAL: It is strictly prohibited from using the company's own website as a source.
+    
+    APPROVED SOURCES (STRICT ALLOWLIST):
+    1. Tech/Code: StackOverflow, GitHub.
+    2. Thought Leadership: Medium.
+    3. FI Financial News: Tekniikka&Talous, Talouselämä, Kauppalehti, Tivi.
+    4. Employee Voice: Glassdoor, Indeed, The Hub, Oikotie, Duunitori, LinkedIn.
     """
     
     # Only GEMINI_API_KEY is required now.
@@ -57,23 +62,46 @@ def x_ray_search(company_name: str, company_url: str = None):
     try:
         client = genai.Client(api_key=api_key)
         
-        # We ask Gemini to do the heavy lifting: Search AND Categorize in one go.
-        # This saves 10+ HTTP calls and uses the full Google Index.
+        # We craft a prompt that forces the model to look at the "Jury" of sources
+        # DOMAIN ALLOWLIST ENFORCED HERE
         prompt = f"""
-        INVESTIGATE the company "{search_name}" using Google Search.
+        Perform a FORENSIC INVESTIGATION on "{search_name}".
         
-        Look for recent employee reviews (Glassdoor, Reddit, Blind), news articles, and blogs.
-        Specifically verify these 5 FORENSIC HYPOTHESES:
+        SEARCH STRATEGY (STRICT - APPROVED SOURCES ONLY):
+        Do NOT read the company's own website.
+        Look ONLY at evidence from these specific domain groups (The "Standardized Tribunal"):
 
-        1. "Surveillance": Is there evidence of micromanagement or time-tracking software?
-        2. "Silos": Are there complaints about bureaucracy, handovers, or turf wars?
-        3. "Fake Agile": Do people call it "Zombie Scrum", "Waterfall", or "Agile in Name Only"?
-        4. "Fear Culture": Is there a "Blame Culture" or lack of psychological safety?
-        5. "Legacy Inertia": Are there complaints about old systems, "Excel Hell", or manual reporting?
+        1. TECHNICAL COMMUNITIES (The Tech Jury):
+           - *.stackoverflow.com
+           - *.github.com
 
-        Also look for POSITIVE signals (e.g., "Autonomy", "Psychological Safety", "Modern Tech Stack").
+        2. FINNISH FINANCIAL & TECH NEWS (The Press Jury):
+           - *.tekniikkatalous.fi
+           - *.talouselama.fi
+           - *.kauppalehti.fi
+           - *.tivi.fi
 
-        RETURN STRICT JSON ONLY:
+        3. EMPLOYEE VOICE & RECRUITMENT (The People Jury):
+           - *.glassdoor.com
+           - *.thehub.io
+           - *.indeed.com
+           - *.oikotie.fi
+           - *.duunitori.fi
+           - *.linkedin.com
+           
+        4. THOUGHT LEADERSHIP:
+           - *.medium.com
+
+        VERIFY THESE 5 HYPOTHESES:
+        1. "Surveillance": Is there micromanagement, time-tracking, or low trust?
+        2. "Silos": Are there complaints about bureaucracy, "turf wars", or heavy handovers?
+        3. "Fake Agile": Do employees call it "Waterfall", "Zombie Scrum", or "Agile in Name Only"?
+        4. "Fear Culture": Is there a blame culture, fear of failure, or layoffs handled poorly?
+        5. "Legacy Inertia": Are there complaints about "Excel Hell", old systems, or manual work?
+
+        Also look for POSITIVE signals (e.g. "Autonomy", "Great Culture", "Modern Tech", "Open Source contributions").
+
+        RETURN STRICT JSON:
         {{
             "findings": [
                 {{
@@ -81,18 +109,19 @@ def x_ray_search(company_name: str, company_url: str = None):
                     "label": "Surveillance",
                     "found": boolean,
                     "sentiment": "negative" or "positive" or "neutral",
-                    "snippet": "Direct quote or summary of what was found...",
-                    "title": "Title of source",
-                    "url": "URL of source"
+                    "snippet": "Quote finding...",
+                    "title": "Source Title (e.g. 'Talouselämä Article')",
+                    "url": "URL of the source"
                 }}
             ],
             "reality_score_adjustment": (integer between -30 and +30 based on evidence balance)
         }}
         """
 
-        # Use Gemini 2.5 Flash as it robustly supports the Google Search tool
+        # Use Gemini 3 Flash Preview as requested for Scanner 2
+        # It supports the google_search tool.
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-3-flash-preview',
             contents=prompt,
             config={
                 'tools': [{'google_search': {}}],
@@ -169,8 +198,9 @@ def x_ray_search(company_name: str, company_url: str = None):
         }}
         """
         
+        # Fallback can also use flash
         response = client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-3-flash-preview',
             contents=sim_prompt,
             config={'response_mime_type': 'application/json'}
         )
