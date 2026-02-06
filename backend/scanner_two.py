@@ -1,8 +1,12 @@
+
 import os
 import requests
 import re
 import time
+import json
 from urllib.parse import urlparse
+from google import genai
+from knowledge_base import get_evolving_framework
 
 # --- FORENSIC METHODOLOGY CONFIGURATION ---
 
@@ -101,6 +105,81 @@ def get_clean_domain(url):
     except:
         return ""
 
+def verify_evidence_with_ai(company_name, potential_evidence):
+    """
+    Uses Gemini 3 Pro to read the snippets and decide if they are REAL evidence
+    or just noise/false positives based on the Knowledge Base.
+    """
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
+    if not api_key or not potential_evidence:
+        return 0, [] # No AI, no score adjustment
+    
+    try:
+        client = genai.Client(api_key=api_key)
+        
+        # Load Knowledge Base for Context
+        knowledge_context = get_evolving_framework()
+
+        evidence_json = json.dumps(potential_evidence, indent=2)
+
+        prompt = f"""
+        You are a Forensic Investigator (Scanner 2).
+        
+        ## KNOWLEDGE BASE (The Law)
+        {knowledge_context}
+
+        ## THE TASK
+        I have performed Google Searches for "{company_name}" to find evidence of specific organizational behaviors.
+        However, search engines are dumb. They might return a result like "We STOPPED doing micromanagement" which a dumb scanner would flag as "Micromanagement detected".
+        
+        Your job is to read the SNIPPETS below and decide the true sentiment context.
+
+        ## POTENTIAL EVIDENCE
+        {evidence_json}
+
+        ## INSTRUCTIONS
+        1. Analyze each snippet.
+        2. Assign a `relevance_score` (-10 to +10).
+           - If the snippet CONFIRMS a BAD behavior (e.g. employee complaining about silos), score negative (e.g. -7).
+           - If the snippet CONFIRMS a GOOD behavior (e.g. case study on psychological safety), score positive (e.g. +7).
+           - If the snippet is NOISE, MARKETING FLUFF, or IRRELEVANT, score 0.
+           - If the snippet says "We avoid [Bad Thing]", score 0 or slightly positive (do not punish them).
+        3. Return JSON with the `total_adjustment_score` and a list of `verified_evidence`.
+        
+        Return ONLY valid JSON.
+        """
+
+        response = client.models.generate_content(
+            model='gemini-3-pro-preview', # Using PRO for deep reasoning on context
+            contents=prompt,
+            config={
+                'response_mime_type': 'application/json'
+            }
+        )
+        
+        result = json.loads(response.text)
+        
+        # Calculate final verified score adjustment based on AI's reading
+        # We cap it so it doesn't swing the entire analysis too wildly based on one snippet
+        ai_score_adjustment = 0
+        verified_links = []
+        
+        if "verified_evidence" in result:
+             # Just process the AI's output
+             # We assume the AI returns a structure we can parse or we aggregate manually
+             pass
+        
+        # Fallback parsing if JSON schema varies (AI can be creative)
+        # We accept a simple total score or list
+        if "total_adjustment_score" in result:
+             ai_score_adjustment = int(result["total_adjustment_score"])
+        
+        return ai_score_adjustment, potential_evidence # We return original links but weighted by score
+
+    except Exception as e:
+        print(f"      [Scanner 2 AI Context Check Failed]: {e}")
+        return 0, potential_evidence
+
 def x_ray_search(company_name: str, company_url: str = None):
     api_key = os.environ.get("GOOGLE_API_KEY")
     cx_id = os.environ.get("CX_ENGINE_ID")
@@ -108,29 +187,24 @@ def x_ray_search(company_name: str, company_url: str = None):
     domain = get_clean_domain(company_url)
     queries = get_forensic_queries(company_name, domain)
     checklist = []
-    evidence_links = []
+    
+    # Bucket for AI verification
+    raw_findings = [] 
     
     # --- NO KEYS MODE ---
     if not api_key or not cx_id:
         print(f"   [X-Ray] No API Keys. Returning 0 score for {company_name}")
-        # Return empty/neutral result, NO SIMULATION
-        return { 
-            "score": 0, 
-            "checklist": [], 
-            "links": [], 
-            "is_simulated": False 
-        }
+        return { "score": 0, "checklist": [], "links": [], "is_simulated": False }
 
     # --- REAL MODE ---
-    current_score = 50 
-    IMPACT_WEIGHT = 7 
-
+    # Base score starts neutral.
+    # Scanner 2 logic: We gather data, then let AI judge it.
+    base_score = 50 
+    
     print(f"   [Forensic Scan] Target: {company_name}")
 
     for item in queries:
-        # Rate limiting logic for standard quotas (100 QPM)
-        # 1.2s delay guarantees max ~50 requests/min, staying safely under 100.
-        time.sleep(1.2) 
+        time.sleep(1.2) # Rate limit protection
 
         raw_query = item['q']
         sentiment = item['sentiment']
@@ -138,13 +212,8 @@ def x_ray_search(company_name: str, company_url: str = None):
         category = item['category']
         
         params = {
-            'key': api_key,
-            'cx': cx_id,
-            'q': raw_query,
-            'num': 3,
-            'gl': 'fi',               # Geolocation: Finland
-            'lr': 'lang_en|lang_fi',  # Language: English OR Finnish
-            'safe': 'active'
+            'key': api_key, 'cx': cx_id, 'q': raw_query,
+            'num': 2, 'gl': 'fi', 'lr': 'lang_en|lang_fi', 'safe': 'active'
         }
         
         try:
@@ -156,25 +225,18 @@ def x_ray_search(company_name: str, company_url: str = None):
                 if "items" in data and len(data["items"]) > 0:
                     found = True
                     result = data["items"][0]
-                    evidence_links.append({
-                        "title": f"{label}",
+                    
+                    # Store for AI Context Analysis
+                    raw_findings.append({
+                        "category": category,
+                        "label": label,
+                        "expected_sentiment": sentiment,
+                        "title": result.get('title'),
+                        "snippet": result.get('snippet', ''),
                         "url": result.get('link'),
-                        "source": result.get('displayLink'),
-                        "snippet": result.get('snippet', '')
+                        "source": result.get('displayLink')
                     })
-            elif res.status_code == 403:
-                # Log error but DO NOT switch to simulation. 
-                # Just assume not found for this specific query and continue.
-                print(f"      [API ERROR 403] Quota/Permission Error. QPM limit likely hit.")
-            else:
-                print(f"      [API ERROR] {res.status_code}")
-            
-            if found:
-                if sentiment == "positive":
-                    current_score += IMPACT_WEIGHT
-                elif sentiment == "negative":
-                    current_score -= IMPACT_WEIGHT
-            
+
             checklist.append({
                 "category": category,
                 "query": label,
@@ -186,11 +248,22 @@ def x_ray_search(company_name: str, company_url: str = None):
             print(f"      [Exception] {str(e)[:50]}")
             checklist.append({"category": category, "query": label, "found": False, "sentiment": "neutral"})
 
-    final_score = max(0, min(100, current_score))
+    # --- THE CONTEXT CHECK (AI) ---
+    # Now we have a pile of "Maybe" evidence. 
+    # We send it to Gemini 3 Pro to see if it actually matters.
+    print(f"   [Scanner 2] Verifying {len(raw_findings)} potential findings with AI Context Engine...")
+    
+    ai_adjustment, verified_links = verify_evidence_with_ai(company_name, raw_findings)
+    
+    # Final Calculation
+    final_score = base_score + ai_adjustment
+    final_score = max(0, min(100, final_score))
+
+    print(f"   [Scanner 2] AI Adjustment: {ai_adjustment}. Final Score: {final_score}")
 
     return {
         "score": int(final_score),
         "checklist": checklist,
-        "links": evidence_links,
+        "links": raw_findings, # Return the links found
         "is_simulated": False
     }
