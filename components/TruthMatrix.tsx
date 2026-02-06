@@ -9,10 +9,10 @@ const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] 
     let gapColor = "text-emerald-400";
     
     if (gap > 15) {
-        gapLabel = "Hype (Ambition > Reality)";
+        gapLabel = "Talk-not-Walk (Hype)"; // Updated label
         gapColor = "text-amber-400";
     } else if (gap < -15) {
-        gapLabel = "Surplus (Reality > Ambition)";
+        gapLabel = "Silent Doers (Surplus)"; // Updated label
         gapColor = "text-cyan-400";
     }
 
@@ -71,22 +71,22 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
           
           {/* Quadrant Backgrounds */}
           <ReferenceArea x1={0} x2={50} y1={50} y2={100} fill="#22d3ee" fillOpacity={0.03} /> {/* Silent Doers */}
-          <ReferenceArea x1={50} x2={100} y1={50} y2={100} fill="#10b981" fillOpacity={0.03} /> {/* Adaptive Leaders */}
-          <ReferenceArea x1={0} x2={50} y1={0} y2={50} fill="#64748b" fillOpacity={0.03} /> {/* Legacy */}
-          <ReferenceArea x1={50} x2={100} y1={0} y2={50} fill="#f59e0b" fillOpacity={0.03} /> {/* Theater */}
+          <ReferenceArea x1={50} x2={100} y1={50} y2={100} fill="#10b981" fillOpacity={0.03} /> {/* Walk-and-Talk */}
+          <ReferenceArea x1={0} x2={50} y1={0} y2={50} fill="#64748b" fillOpacity={0.03} /> {/* Stagnation */}
+          <ReferenceArea x1={50} x2={100} y1={0} y2={50} fill="#f59e0b" fillOpacity={0.03} /> {/* Talk-not-Walk */}
 
           {/* Quadrant Labels */}
           <ReferenceArea x1={5} x2={45} y1={90} y2={98} stroke="none" fill="none">
              <Label value="SILENT DOERS" position="center" fill="#22d3ee" fontSize={11} fontWeight={700} opacity={0.6} letterSpacing="0.05em" />
           </ReferenceArea>
           <ReferenceArea x1={55} x2={95} y1={90} y2={98} stroke="none" fill="none">
-             <Label value="ADAPTIVE LEADERS" position="center" fill="#34d399" fontSize={11} fontWeight={700} opacity={0.6} letterSpacing="0.05em" />
+             <Label value="WALK-AND-TALK" position="center" fill="#34d399" fontSize={11} fontWeight={700} opacity={0.6} letterSpacing="0.05em" />
           </ReferenceArea>
           <ReferenceArea x1={55} x2={95} y1={5} y2={15} stroke="none" fill="none">
-             <Label value="AGILE THEATER" position="center" fill="#fbbf24" fontSize={11} fontWeight={700} opacity={0.6} letterSpacing="0.05em" />
+             <Label value="TALK-NOT-WALK" position="center" fill="#fbbf24" fontSize={11} fontWeight={700} opacity={0.6} letterSpacing="0.05em" />
           </ReferenceArea>
            <ReferenceArea x1={5} x2={45} y1={5} y2={15} stroke="none" fill="none">
-             <Label value="LEGACY INCUMBENTS" position="center" fill="#94a3b8" fontSize={11} fontWeight={700} opacity={0.6} letterSpacing="0.05em" />
+             <Label value="STAGNATION" position="center" fill="#94a3b8" fontSize={11} fontWeight={700} opacity={0.6} letterSpacing="0.05em" />
           </ReferenceArea>
 
           <Scatter name="Companies" data={data} onClick={(node) => onSelectCompany(node.payload)} cursor="pointer">

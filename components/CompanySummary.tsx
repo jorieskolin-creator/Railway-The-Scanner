@@ -8,19 +8,26 @@ const CompanySummary = ({ data }) => {
   // Gap < -15 (Low Ambition, High Reality) -> Cyan (Performance Surplus / Humble)
   // Gap ~ 0 -> Emerald (Aligned)
   let gapColor = '#10b981'; // Default Emerald
-  let gapLabel = "Aligned";
+  let gapLabel = "Aligned (Walk-and-Talk)";
   let gapValueDisplay = data.reality_gap;
   
   if (data.reality_gap > 15) {
       gapColor = '#f59e0b'; // Amber (Overpromising)
-      gapLabel = "Hype Surplus";
+      gapLabel = "Talk-not-Walk (Hype)";
       gapValueDisplay = `+${data.reality_gap}`;
   } else if (data.reality_gap < -15) {
       gapColor = '#22d3ee'; // Cyan (Underpromising/Humble)
-      gapLabel = "Performance Surplus";
+      gapLabel = "Silent Doers (Surplus)";
       gapValueDisplay = `${data.reality_gap}`; // Already negative
   } else {
       gapValueDisplay = data.reality_gap > 0 ? `+${data.reality_gap}` : data.reality_gap;
+      // Refine logic for low/low vs high/high if needed, but gap doesn't tell full story.
+      // Assuming Aligned for now as general good state, though Stagnation is also aligned (0 gap).
+      // We can use scores to differentiate.
+      if (data.reality_score < 40 && data.intent_score < 40) {
+          gapLabel = "Stagnation (Low/Low)";
+          gapColor = '#94a3b8'; // Gray
+      }
   }
 
   const radarData = data.intent_breakdown.map(item => ({

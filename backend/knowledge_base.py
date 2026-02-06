@@ -43,10 +43,10 @@ Evaluate companies against these 5 Dimensions. Use these terms explicitly.
 ## 2. DIAGNOSTIC ARCHETYPES
 Classify the company into one of these buckets based on the Data:
 
-1.  **"Agile Theater" (High Intent / Low Reality):** The company uses all the right buzzwords (Squads, AI, Platform) but evidence shows micromanagement and rigid silos. They are "Modernization Washing".
-2.  **"Legacy Incumbent" (Low Intent / Low Reality):** Honest about being traditional. Top-down, command-and-control, slow moving.
-3.  **"Silent Executor" (Low Intent / High Reality):** They don't brag about "Agile" on their website, but evidence shows high autonomy and happy engineering teams.
-4.  **"Adaptive Leader" (High Intent / High Reality):** Coherence between what they preach and how they operate.
+1.  **"Talk-not-Walk" (High Intent / Low Reality):** formerly "Agile Theater". The company uses all the right buzzwords (Squads, AI, Platform) but evidence shows micromanagement and rigid silos. They are "Modernization Washing".
+2.  **"Stagnation" (Low Intent / Low Reality):** formerly "Legacy Incumbent". Honest about being traditional. Top-down, command-and-control, slow moving.
+3.  **"Silent Doers" (Low Intent / High Reality):** They don't brag about "Agile" on their website, but evidence shows high autonomy and happy engineering teams.
+4.  **"Walk-and-Talk" (High Intent / High Reality):** formerly "Adaptive Leader". Coherence between what they preach and how they operate.
 
 ## 3. WRITING GUARDRAILS
 - **Tone:** Analytical, Direct, Forensic. No marketing fluff.
@@ -87,10 +87,10 @@ Refer to this data to identify if a company is displaying "Old Way" (Bad) or "Mo
 ## 2. DIAGNOSTIC ARCHETYPES
 Classify the company into one of these buckets based on the Data:
 
-1.  **"Agile Theater" (High Intent / Low Reality):** The company uses all the right buzzwords (Squads, AI, Platform) but evidence shows micromanagement and rigid silos. They are "Modernization Washing".
-2.  **"Legacy Incumbent" (Low Intent / Low Reality):** Honest about being traditional. Top-down, command-and-control, slow moving.
-3.  **"Silent Executor" (Low Intent / High Reality):** They don't brag about "Agile" on their website, but evidence shows high autonomy and happy engineering teams.
-4.  **"Adaptive Leader" (High Intent / High Reality):** Coherence between what they preach and how they operate.
+1.  **"Talk-not-Walk" (High Intent / Low Reality):** formerly "Agile Theater". The company uses all the right buzzwords (Squads, AI, Platform) but evidence shows micromanagement and rigid silos. They are "Modernization Washing".
+2.  **"Stagnation" (Low Intent / Low Reality):** formerly "Legacy Incumbent". Honest about being traditional. Top-down, command-and-control, slow moving.
+3.  **"Silent Doers" (Low Intent / High Reality):** They don't brag about "Agile" on their website, but evidence shows high autonomy and happy engineering teams.
+4.  **"Walk-and-Talk" (High Intent / High Reality):** formerly "Adaptive Leader". Coherence between what they preach and how they operate.
 
 ## 3. WRITING GUARDRAILS
 - **Tone:** Analytical, Direct, Forensic. No marketing fluff.
