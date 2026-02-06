@@ -1,5 +1,5 @@
 
-const { useState, useEffect } = (window as any).React;
+const { useState, useEffect, useRef } = (window as any).React;
 
 const LucideRaw = (window as any).Lucide || {};
 const Icons = new Proxy(LucideRaw, {
@@ -32,6 +32,9 @@ const App = () => {
   const [lastSynced, setLastSynced] = useState(null);
   const [sortConfig, setSortConfig] = useState({ key: 'reality_gap', direction: 'desc' });
   const [systemStatus, setSystemStatus] = useState({ online: false, storage: false, google: false, ai: false });
+  
+  // Track previous data length to detect when new items arrive
+  const prevDataLengthRef = useRef(0);
 
   const checkHealth = async () => {
       try {
@@ -58,30 +61,50 @@ const App = () => {
   }, []);
 
   // Fetch LIGHTWEIGHT Summary Data
-  const fetchSummaryData = async () => {
+  const fetchSummaryData = async (silent = false) => {
     try {
-        setLoading(true);
+        if (!silent) setLoading(true);
         setConnectionError(null);
         const response = await fetch(`/dashboard-data?t=${Date.now()}`);
         if (response.ok) {
             const json = await response.json();
-            console.log("Loaded summary data:", json.length, "records");
-            setData(json);
+            const newData = json || [];
+            
+            // Check if data grew
+            if (newData.length > prevDataLengthRef.current) {
+                console.log(`New data detected! ${prevDataLengthRef.current} -> ${newData.length}`);
+                // If we were seeding, and we see data, we can stop the "spinner" conceptually 
+                // (though usually we wait for the whole batch, seeing items pop in is nice)
+            }
+            prevDataLengthRef.current = newData.length;
+            
+            setData(newData);
             setLastSynced(new Date().toLocaleTimeString('en-US', { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }));
         } else {
             throw new Error("Failed to fetch summary data");
         }
     } catch (e) {
         console.error(e);
-        setData([]); 
+        if (!silent) setData([]); 
     } finally {
-        setLoading(false);
+        if (!silent) setLoading(false);
     }
   };
 
   useEffect(() => {
     fetchSummaryData();
   }, []);
+
+  // Auto-Poll when seeding
+  useEffect(() => {
+      let interval;
+      if (isFastSeeding || isSeeding) {
+          interval = setInterval(() => {
+              fetchSummaryData(true); // Silent fetch
+          }, 5000);
+      }
+      return () => clearInterval(interval);
+  }, [isFastSeeding, isSeeding]);
 
   // Fetch DETAILED Data for a specific company
   const handleCompanyClick = async (summaryItem) => {
@@ -166,13 +189,15 @@ const App = () => {
       try {
           const response = await fetch(`/admin/seed-fast`, { method: 'POST' });
           if (response.ok) {
-              alert("✅ Quick Calibration Started. Check logs. Dashboard will update in ~2 mins.");
+              alert("✅ Quick Calibration Started. Dashboard will update automatically when data arrives.");
           }
       } catch (e) {
           alert("❌ Error starting fast seed");
-      } finally {
           setIsFastSeeding(false);
       }
+      
+      // Turn off the spinner after 60s max (fail-safe)
+      setTimeout(() => setIsFastSeeding(false), 60000);
   };
 
   const handleBatchSeed = async () => {
@@ -183,11 +208,10 @@ const App = () => {
     try {
         const response = await fetch(`/admin/seed-finland-100`, { method: 'POST' });
         if (response.ok) {
-            alert("✅ Full Batch Scan Initiated. Check Railway Logs for progress.");
+            alert("✅ Full Batch Scan Initiated. Dashboard will update as batches complete.");
         }
     } catch (e) {
         alert("❌ Error starting batch seed");
-    } finally {
         setIsSeeding(false);
     }
   };
@@ -254,7 +278,7 @@ const App = () => {
             )}
             <div className="flex items-center gap-2">
                 {lastSynced && <span className="text-[10px] text-cyan-300/70 font-mono hidden sm:block">{lastSynced}</span>}
-                <button onClick={fetchSummaryData} className="p-2 bg-white/5 rounded-full hover:bg-white/10">
+                <button onClick={() => fetchSummaryData(false)} className="p-2 bg-white/5 rounded-full hover:bg-white/10">
                     <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
                 </button>
             </div>
@@ -277,7 +301,7 @@ const App = () => {
               <Sparkles className="text-cyan-300 w-4 h-4" /> Market Landscape
             </h2>
           </div>
-          {loading ? (
+          {loading && data.length === 0 ? (
              <div className="h-[400px] w-full bg-[#0f172a]/60 rounded-2xl flex items-center justify-center">
                 <Loader2 className="animate-spin text-cyan-400" size={32} />
              </div>
@@ -290,11 +314,13 @@ const App = () => {
                 </div>
                 {IS_ADMIN_MODE && (
                     <div className="flex gap-4 mt-6">
-                        <button onClick={handleFastSeed} className="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold rounded-lg transition-all flex items-center gap-2">
-                           <Play size={16} /> Run Quick Test (3)
+                        <button onClick={handleFastSeed} disabled={isFastSeeding} className="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold rounded-lg transition-all flex items-center gap-2 disabled:opacity-50">
+                           {isFastSeeding ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />} 
+                           Run Quick Test (3)
                         </button>
-                        <button onClick={handleBatchSeed} className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold rounded-lg transition-all flex items-center gap-2">
-                           <Database size={16} /> Run Full Scan (100)
+                        <button onClick={handleBatchSeed} disabled={isSeeding} className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold rounded-lg transition-all flex items-center gap-2 disabled:opacity-50">
+                           {isSeeding ? <Loader2 size={16} className="animate-spin" /> : <Database size={16} />}
+                           Run Full Scan (100)
                         </button>
                     </div>
                 )}
