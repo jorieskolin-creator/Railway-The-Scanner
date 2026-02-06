@@ -135,13 +135,16 @@ def run_batch_seed(real_xray_mode=True, limit=None):
     storage = BlobStorage()
     batch_summary_list = []
     
-    # If running a small test, fetch existing summary so we don't overwrite the full list with just 3 items
-    if limit and limit < 10:
-        # FIX: Remove .json extension to ensure we find the existing file with suffix
+    # CRITICAL: Always try to load existing data first.
+    # This enables "Resume" capability and prevents wiping the dashboard on start.
+    # If files were deleted (Fresh Start), this simply returns [] which is correct.
+    try:
         existing_index = storage.retrieve_latest_data("index/summary_list")
         if existing_index:
             batch_summary_list = existing_index
-            print(f"   [Info] Appending to existing index of {len(batch_summary_list)} items.")
+            print(f"   [Info] Loaded existing index of {len(batch_summary_list)} items. Updates will occur in-place.")
+    except Exception as e:
+        print(f"   [Info] Could not load existing index (Starting Fresh): {e}")
 
     api_key = clean_env_var(os.environ.get("API_KEY") or os.environ.get("GEMINI_API_KEY"))
     gemini_client = None
