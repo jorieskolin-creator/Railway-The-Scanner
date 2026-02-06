@@ -124,10 +124,23 @@ def analyze_intent(text: str):
     total_words = len(text.split())
     if total_words == 0: total_words = 1 # Avoid div by zero
 
-    # Thresholds based on PDF logic
-    GOOD_THRESHOLD = 3
-    BAD_THRESHOLD = 1
+    # --- ADAPTIVE SENSITIVITY ---
+    # If the text is short (< 400 words, likely just Meta Descriptions or light About pages),
+    # we lower the threshold and normalize the score differently to avoid "Zero Score" issues.
+    is_short_text = total_words < 400
     
+    if is_short_text:
+        GOOD_THRESHOLD = 1
+        BAD_THRESHOLD = 1
+        # In short text, we expect fewer total signals. 
+        # A divisor of 5.0 means finding ~5 keywords yields 100% score for that category.
+        NORMALIZATION_DIVISOR = 5.0 
+    else:
+        GOOD_THRESHOLD = 3
+        BAD_THRESHOLD = 1
+        # Standard methodology from PDF: 25 items per category normalized to 100.
+        NORMALIZATION_DIVISOR = 25.0
+
     lower_text = text.lower()
 
     for category, keywords in CATEGORIES.items():
@@ -139,14 +152,14 @@ def analyze_intent(text: str):
             pattern = r'\b' + re.escape(word.lower()) + r'\b'
             matches = list(re.finditer(pattern, lower_text))
             
-            # PDF Logic: 3 mentions needed to count as a "Signal" (Threshold)
+            # Use Adaptive Threshold
             if len(matches) >= GOOD_THRESHOLD:
                 unique_good_found += 1
             
             # For Vibrancy/Friction, we count ALL volume, not just unique signals
             total_good_matches += len(matches)
             
-        # 2. Count Bad Signals with NEGATIVE LOOK-AROUND (Page 10)
+        # 2. Count Bad Signals with NEGATIVE LOOK-AROUND
         for word in keywords["bad"]:
             pattern = r'\b' + re.escape(word.lower()) + r'\b'
             matches = list(re.finditer(pattern, lower_text))
@@ -161,7 +174,6 @@ def analyze_intent(text: str):
                 if not is_negated(preceding_text):
                     valid_bad_occurrences_for_word += 1
                 else:
-                    # Logic Trap Avoided: "We will eliminate bureaucracy" -> Not counted as Bad.
                     pass
 
             if valid_bad_occurrences_for_word >= BAD_THRESHOLD:
@@ -170,14 +182,13 @@ def analyze_intent(text: str):
             total_bad_matches += valid_bad_occurrences_for_word
 
         # 3. Calculate "Net Modernization Score" (Page 10 Formula)
-        # Score = (Good Matches - Bad Matches) / Total Items (25)
-        # Note: Using Unique Counts for the Category Score, but Total Volume for Friction/Vibrancy
+        # Score = (Good Matches - Bad Matches) / Normalization Factor
         net_result = unique_good_found - unique_bad_found
         
         if net_result < 0:
             score = 0
         else:
-            score = (net_result / 25.0) * 100
+            score = (net_result / NORMALIZATION_DIVISOR) * 100
             if score > 100: score = 100
 
         breakdown.append({
@@ -195,9 +206,6 @@ def analyze_intent(text: str):
 
     # B. Friction Index (Page 14)
     # Formula: 1 - (|Good - Bad| / (Good + Bad))
-    # Measures confusion/conflict.
-    # 0.0 = Coherent (All Good or All Bad)
-    # 1.0 = High Friction (50/50 Split)
     denominator = total_good_matches + total_bad_matches
     if denominator == 0:
         friction_index = 0.0 # No signals = No friction
@@ -211,7 +219,6 @@ def analyze_intent(text: str):
     vibrancy_raw = denominator / total_words
     
     # Normalize: Assuming > 5% keyword density is "Maximum Vibrancy" (100)
-    # This is a heuristic calibration.
     vibrancy_score = (vibrancy_raw / 0.05) * 100 
     if vibrancy_score > 100: vibrancy_score = 100
 
