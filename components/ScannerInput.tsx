@@ -1,11 +1,33 @@
 
 const { useState } = (window as any).React;
-const { Search, FileText, Globe, Zap, Link } = (window as any).Lucide;
+const { Search, FileText, Globe, Zap, Link, AlertCircle } = (window as any).Lucide;
 
 const ScannerInput = ({ onScan }) => {
   const [companyName, setCompanyName] = useState('');
   const [companyUrl, setCompanyUrl] = useState('');
   const [reportText, setReportText] = useState('');
+  const [urlError, setUrlError] = useState('');
+
+  const validateUrl = (url) => {
+    if (!url) return true;
+    try {
+      new URL(url);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  };
+
+  const handleUrlChange = (e) => {
+    const val = e.target.value;
+    setCompanyUrl(val);
+    
+    if (val && !validateUrl(val)) {
+      setUrlError("Invalid URL format. Please include http:// or https://");
+    } else {
+      setUrlError("");
+    }
+  };
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -16,6 +38,12 @@ const ScannerInput = ({ onScan }) => {
     if (!companyName) {
       alert("Company Name is required.");
       return;
+    }
+
+    if (companyUrl && !validateUrl(companyUrl)) {
+        // Double check on submit
+        setUrlError("Invalid URL format. Please include http:// or https://");
+        return;
     }
 
     if (!companyUrl && !reportText) {
@@ -29,16 +57,15 @@ const ScannerInput = ({ onScan }) => {
   const loadSampleData = () => {
     setCompanyName("Metsä Group");
     setCompanyUrl("https://www.metsagroup.com");
-    setReportText(""); // clear text to demonstrate auto-scrape if desired, or fill it
-    // For specific demo purposes, we can leave text empty to test auto-scrape
-    // or fill it to test manual. Let's fill it for the "Legacy" demo to ensure a specific result.
+    setUrlError("");
+    setReportText(""); 
     setReportText("We are committed to functional silos and strict command chains. Our strategy focuses on cost-cutting and maintaining our legacy assets.");
   };
 
   const loadAdaptiveData = () => {
     setCompanyName("Wärtsilä Oyj");
     setCompanyUrl("https://www.wartsila.com");
-    // Leave empty to demonstrate Auto-Scrape capability
+    setUrlError("");
     setReportText(""); 
   };
 
@@ -86,21 +113,27 @@ const ScannerInput = ({ onScan }) => {
                 <input
                   type="url"
                   value={companyUrl}
-                  onChange={(e) => setCompanyUrl(e.target.value)}
+                  onChange={handleUrlChange}
                   placeholder="https://company.fi"
-                  className="w-full pl-10 pr-4 py-3 bg-black/20 border border-white/10 rounded-lg text-white placeholder-slate-600 focus:ring-1 focus:ring-cyan-500/50 focus:border-cyan-500/50 outline-none transition-all font-medium text-sm"
+                  className={`w-full pl-10 pr-4 py-3 bg-black/20 border rounded-lg text-white placeholder-slate-600 focus:ring-1 outline-none transition-all font-medium text-sm ${urlError ? 'border-rose-500 focus:ring-rose-500/50' : 'border-white/10 focus:ring-cyan-500/50 focus:border-cyan-500/50'}`}
                 />
-                <div className="absolute left-3 top-3.5 text-slate-600 group-focus-within:text-cyan-400 transition-colors">
+                <div className={`absolute left-3 top-3.5 transition-colors ${urlError ? 'text-rose-500' : 'text-slate-600 group-focus-within:text-cyan-400'}`}>
                     <Link size={16} />
                 </div>
             </div>
+            {urlError && (
+              <div className="flex items-center gap-1.5 text-rose-400 mt-1.5 animate-in slide-in-from-left-1 duration-200">
+                <AlertCircle size={12} />
+                <span className="text-[10px] font-medium">{urlError}</span>
+              </div>
+            )}
           </div>
         </div>
 
         <div className="space-y-2">
           <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 flex justify-between items-center">
             <span>Narrative Input (Intent)</span>
-            {companyUrl ? (
+            {companyUrl && !urlError ? (
                 <span className="text-emerald-400 font-normal normal-case tracking-normal flex items-center gap-1">
                     <Zap size={10} /> Auto-Scrape Enabled (Leave empty to scan website)
                 </span>
@@ -115,7 +148,7 @@ const ScannerInput = ({ onScan }) => {
               value={reportText}
               onChange={(e) => setReportText(e.target.value)}
               placeholder={companyUrl ? "Leave empty to automatically scrape the homepage and Strategy pages..." : "Paste Annual Report, Strategy Text, or 'About Us' content here..."}
-              className={`w-full pl-10 pr-4 py-3 h-32 bg-black/20 border rounded-lg text-white placeholder-slate-600 focus:ring-1 focus:ring-cyan-500/50 focus:border-cyan-500/50 outline-none transition-all resize-none font-mono text-xs leading-relaxed custom-scrollbar ${companyUrl ? 'border-emerald-500/20' : 'border-white/10'}`}
+              className={`w-full pl-10 pr-4 py-3 h-32 bg-black/20 border rounded-lg text-white placeholder-slate-600 focus:ring-1 focus:ring-cyan-500/50 focus:border-cyan-500/50 outline-none transition-all resize-none font-mono text-xs leading-relaxed custom-scrollbar ${companyUrl && !urlError ? 'border-emerald-500/20' : 'border-white/10'}`}
             />
             <div className="absolute left-3 top-3.5 text-slate-600 group-focus-within:text-cyan-400 transition-colors">
               <FileText size={16} />

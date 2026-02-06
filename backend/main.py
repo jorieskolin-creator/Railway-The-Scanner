@@ -227,8 +227,34 @@ async def run_scan(request: ScanRequest):
                         result_data["id"] = item.get("id", result_id) 
                         break
                 
-                if index > -1: current_db[index] = result_data
-                else: current_db.append(result_data)
+                if index > -1: 
+                    # --- HISTORY PRESERVATION LOGIC ---
+                    # We are updating an existing entry. Let's archive the previous state into 'history'.
+                    existing_record = current_db[index]
+                    history = existing_record.get("history", [])
+                    
+                    # Create snapshot of the OLD record before overwriting
+                    snapshot = {
+                        "date": existing_record.get("lastUpdated"),
+                        "gap": existing_record.get("reality_gap", 0),
+                        "reality_score": existing_record.get("reality_score", 0),
+                        "intent_score": existing_record.get("intent_score", 0)
+                    }
+                    
+                    # Only append if it's a valid previous record
+                    if snapshot["date"]:
+                        history.append(snapshot)
+                    
+                    # Keep history manageable (last 10 scans)
+                    if len(history) > 10:
+                        history = history[-10:]
+                        
+                    result_data["history"] = history
+                    current_db[index] = result_data
+                else: 
+                    # New Entry
+                    result_data["history"] = []
+                    current_db.append(result_data)
                 
                 upload_url = storage.upload_json(BLOB_FILENAME, current_db)
                 if not upload_url:

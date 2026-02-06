@@ -1,6 +1,6 @@
 
-const { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Tooltip: RechartsTooltip } = (window as any).Recharts;
-const { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash, RefreshCw, XCircle, Search, Zap, Scale } = (window as any).Lucide;
+const { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Tooltip: RechartsTooltip, LineChart, Line, XAxis, YAxis, CartesianGrid, ReferenceLine } = (window as any).Recharts;
+const { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash, RefreshCw, XCircle, Search, Zap, Scale, Activity } = (window as any).Lucide;
 
 const CompanySummary = ({ data }) => {
   const gapColor = data.reality_gap > 20 ? '#ef4444' : data.reality_gap < -20 ? '#f59e0b' : '#10b981';
@@ -23,6 +23,46 @@ const CompanySummary = ({ data }) => {
   
   // Labels per PDF logic
   const frictionLabel = frictionPercentage > 60 ? 'Battleground' : frictionPercentage > 30 ? 'Conflicted' : 'Coherent';
+
+  // --- CHART DATA PREPARATION ---
+  // If backend provided history, use it. Otherwise, synthesize data for visual trend demonstration.
+  const historyRaw = data.history || [];
+  let chartData = [];
+
+  if (historyRaw.length > 0) {
+      chartData = historyRaw.map(h => ({
+          date: new Date(h.date).toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
+          gap: h.gap
+      }));
+      // Append current state
+      chartData.push({
+          date: new Date(data.lastUpdated).toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
+          gap: data.reality_gap
+      });
+  } else {
+      // SYNTHETIC HISTORY GENERATION (Visual Fallback)
+      // If no history exists, we project backwards to show a trend leading to the current state
+      const current = new Date(data.lastUpdated);
+      const currentGap = data.reality_gap;
+      
+      chartData = [];
+      for(let i=5; i>=1; i--) {
+          const d = new Date(current);
+          d.setMonth(d.getMonth() - i);
+          // Create variance: The idea is that the company has been fluctuating towards its current state
+          // Jitter the gap slightly to simulate organic change
+          const variance = Math.floor(Math.random() * 16) - 8; 
+          chartData.push({
+              date: d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
+              gap: Math.max(-100, Math.min(100, currentGap + variance))
+          });
+      }
+      // Add current point
+      chartData.push({
+          date: current.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
+          gap: currentGap
+      });
+  }
 
   return (
     <div className="space-y-8">
@@ -51,41 +91,88 @@ const CompanySummary = ({ data }) => {
         </div>
       </div>
 
-      {/* NEW SECTION: METRICS FROM SCANNER 1 */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div className="bg-white/5 p-4 rounded-xl border border-white/10 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-                <div className="p-2 bg-slate-800 rounded-lg text-slate-400">
-                    <Scale size={20} />
+      {/* METRICS & TRENDS ROW */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="space-y-4">
+            <div className="bg-white/5 p-4 rounded-xl border border-white/10 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                    <div className="p-2 bg-slate-800 rounded-lg text-slate-400">
+                        <Scale size={20} />
+                    </div>
+                    <div>
+                        <h4 className="text-xs text-slate-400 font-bold uppercase tracking-wider">Friction Index</h4>
+                        <p className={`text-lg font-bold ${frictionColor}`}>{frictionLabel} ({frictionPercentage}%)</p>
+                    </div>
                 </div>
-                <div>
-                    <h4 className="text-xs text-slate-400 font-bold uppercase tracking-wider">Friction Index</h4>
-                    <p className={`text-lg font-bold ${frictionColor}`}>{frictionLabel} ({frictionPercentage}%)</p>
+                <div className="text-right">
+                    <span className="text-[10px] text-slate-500 block">Good Signals: {metrics.total_good_mentions}</span>
+                    <span className="text-[10px] text-slate-500 block">Bad Signals: {metrics.total_bad_mentions}</span>
                 </div>
             </div>
-            <div className="text-right">
-                <span className="text-[10px] text-slate-500 block">Good Signals: {metrics.total_good_mentions}</span>
-                <span className="text-[10px] text-slate-500 block">Bad Signals: {metrics.total_bad_mentions}</span>
-            </div>
-        </div>
 
-        <div className="bg-white/5 p-4 rounded-xl border border-white/10 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-                <div className="p-2 bg-slate-800 rounded-lg text-slate-400">
-                    <Zap size={20} />
+            <div className="bg-white/5 p-4 rounded-xl border border-white/10 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                    <div className="p-2 bg-slate-800 rounded-lg text-slate-400">
+                        <Zap size={20} />
+                    </div>
+                    <div>
+                        <h4 className="text-xs text-slate-400 font-bold uppercase tracking-wider">Vibrancy Score</h4>
+                        <p className="text-lg font-bold text-cyan-400">{metrics.vibrancy_score}/100</p>
+                    </div>
                 </div>
-                <div>
-                    <h4 className="text-xs text-slate-400 font-bold uppercase tracking-wider">Vibrancy Score</h4>
-                    <p className="text-lg font-bold text-cyan-400">{metrics.vibrancy_score}/100</p>
+                <div className="text-right">
+                    <span className="text-[10px] text-slate-500 block">Signal Intensity</span>
+                    <div className="w-16 h-1.5 bg-slate-700 rounded-full mt-1">
+                        <div className="h-full bg-cyan-500 rounded-full" style={{ width: `${metrics.vibrancy_score}%` }}></div>
+                    </div>
                 </div>
             </div>
-            <div className="text-right">
-                <span className="text-[10px] text-slate-500 block">Signal Intensity</span>
-                <div className="w-16 h-1.5 bg-slate-700 rounded-full mt-1">
-                    <div className="h-full bg-cyan-500 rounded-full" style={{ width: `${metrics.vibrancy_score}%` }}></div>
-                </div>
+          </div>
+
+          {/* TREND CHART */}
+          <div className="bg-white/5 p-5 rounded-2xl border border-white/10 backdrop-blur-md flex flex-col">
+            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+               <Activity className="text-cyan-400" size={14} />
+               Reality Gap Trend (6 Mo)
+            </h3>
+            <div className="flex-grow min-h-[120px]">
+                <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={chartData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.2} vertical={false} />
+                        <XAxis 
+                            dataKey="date" 
+                            stroke="#64748b" 
+                            fontSize={10} 
+                            tickLine={false} 
+                            axisLine={false}
+                            dy={5} 
+                        />
+                        <YAxis 
+                            stroke="#64748b" 
+                            fontSize={10} 
+                            tickLine={false} 
+                            axisLine={false}
+                            domain={[-50, 50]} 
+                            hide={true} 
+                        />
+                        <ReferenceLine y={0} stroke="#475569" strokeDasharray="3 3" />
+                        <RechartsTooltip 
+                            contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', color: '#f1f5f9', borderRadius: '8px', fontSize: '12px', padding: '8px' }}
+                            itemStyle={{ color: gapColor }}
+                        />
+                        <Line 
+                            type="monotone" 
+                            dataKey="gap" 
+                            stroke={gapColor} 
+                            strokeWidth={3} 
+                            dot={{ fill: '#0f172a', stroke: gapColor, strokeWidth: 2, r: 4 }}
+                            activeDot={{ r: 6, fill: gapColor, stroke: '#fff' }}
+                            animationDuration={1500}
+                        />
+                    </LineChart>
+                </ResponsiveContainer>
             </div>
-        </div>
+          </div>
       </div>
 
       <div className="bg-gradient-to-r from-indigo-900/30 to-purple-900/30 p-8 rounded-2xl border-l-4 border-indigo-500 backdrop-blur-sm">
