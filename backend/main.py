@@ -20,7 +20,7 @@ from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES
 from knowledge_base import get_evolving_framework
 
-print("Starting Adaptability Scanner Backend (v3.5 - Connectivity Check)...", flush=True)
+print("Starting Adaptability Scanner Backend (v3.6 - Prefix Fix)...", flush=True)
 
 def clean_env_var(value):
     if not value: return ""
@@ -71,7 +71,7 @@ def health_check():
         storage_connected = False
 
     return {
-        "status": "Adaptability Scanner API Online (v3.5)", 
+        "status": "Adaptability Scanner API Online (v3.6)", 
         "timestamp": datetime.utcnow().isoformat(),
         "storage_connected": storage_connected,
         "config_status": {
@@ -89,7 +89,9 @@ async def get_dashboard_data(response: Response):
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     print("GET /dashboard-data requested...")
     
-    data = storage.retrieve_latest_data("index/summary_list.json")
+    # FIX: Remove .json extension to match Vercel's suffixing behavior
+    # Searching for "index/summary_list" will match "index/summary_list-AbCd.json"
+    data = storage.retrieve_latest_data("index/summary_list")
     
     if data:
         print(f" -> Success. Returning {len(data)} records.")

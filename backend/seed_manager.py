@@ -107,7 +107,8 @@ def run_batch_seed(real_xray_mode=True, limit=None):
     
     # If running a small test, fetch existing summary so we don't overwrite the full list with just 3 items
     if limit and limit < 10:
-        existing_index = storage.retrieve_latest_data("index/summary_list.json")
+        # FIX: Remove .json extension to ensure we find the existing file with suffix
+        existing_index = storage.retrieve_latest_data("index/summary_list")
         if existing_index:
             batch_summary_list = existing_index
             print(f"   [Info] Appending to existing index of {len(batch_summary_list)} items.")
