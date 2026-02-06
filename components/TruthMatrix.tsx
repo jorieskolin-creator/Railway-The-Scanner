@@ -68,7 +68,7 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
             tickLine={false}
             axisLine={{ stroke: '#334155', opacity: 0.5 }}
             tick={{ fontSize: 10, fill: '#64748b' }}
-            label={{ value: 'AMBITION INDEX (Adjusted for Friction)', position: 'bottom', fill: '#475569', fontSize: 10, dy: 20, letterSpacing: '0.1em' }} 
+            label={{ value: 'AMBITION INDEX', position: 'bottom', fill: '#475569', fontSize: 10, dy: 20, letterSpacing: '0.1em' }} 
           />
           <YAxis 
             type="number" 
