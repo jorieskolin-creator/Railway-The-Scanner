@@ -183,32 +183,32 @@ const App = () => {
 
   const handleFastSeed = async () => {
       if (!IS_ADMIN_MODE) return;
-      if (!confirm("Run Quick Calibration? This will scan the top 3 companies (Nokia, Kone, Neste) to verify the pipeline.")) return;
+      if (!confirm("Run Quick Calibration? This will scan the top 3 companies (Nokia, Kone, Neste) scanning up to 8 strategic pages each.")) return;
       
       setIsFastSeeding(true);
       try {
           const response = await fetch(`/admin/seed-fast`, { method: 'POST' });
           if (response.ok) {
-              alert("✅ Quick Calibration Started. Dashboard will update automatically when data arrives.");
+              alert("✅ Quick Calibration Started. Watch the table for updates (Nokia, Kone, Neste).");
           }
       } catch (e) {
           alert("❌ Error starting fast seed");
           setIsFastSeeding(false);
       }
       
-      // Turn off the spinner after 60s max (fail-safe)
-      setTimeout(() => setIsFastSeeding(false), 60000);
+      // Turn off the spinner after 150s max (fail-safe for deep scans)
+      setTimeout(() => setIsFastSeeding(false), 150000);
   };
 
   const handleBatchSeed = async () => {
     if (!IS_ADMIN_MODE) return;
-    if (!confirm("Start Full Market Scan (100 Companies)? This takes ~30 minutes.")) return;
+    if (!confirm("Start Full Market Scan (100 Companies)? This takes ~45 minutes.")) return;
     
     setIsSeeding(true);
     try {
         const response = await fetch(`/admin/seed-finland-100`, { method: 'POST' });
         if (response.ok) {
-            alert("✅ Full Batch Scan Initiated. Dashboard will update as batches complete.");
+            alert("✅ Full Batch Scan Initiated. Dashboard will update in real-time.");
         }
     } catch (e) {
         alert("❌ Error starting batch seed");

@@ -235,7 +235,10 @@ def run_batch_seed(real_xray_mode=True, limit=None):
             batch_summary_list = [x for x in batch_summary_list if x['companyName'] != company['name']]
             batch_summary_list.append(summary_entry)
             
-            print(f"   -> Saved. URL: {saved_url}")
+            # CRITICAL UPDATE: Save incrementally so the user sees progress immediately
+            storage.save_global_index_direct(batch_summary_list)
+            
+            print(f"   -> Saved & Index Updated. URL: {saved_url}")
 
             # 7. RATE LIMITING SAFETY
             # Sleep 5 seconds between companies to avoid hammering Google Search API
@@ -246,7 +249,7 @@ def run_batch_seed(real_xray_mode=True, limit=None):
             # Continue to next company, do not crash the whole batch
             continue
 
-    print(f"\n=== BATCH COMPLETE. SAVING GLOBAL INDEX ({len(batch_summary_list)} entries) ===")
+    print(f"\n=== BATCH COMPLETE. FINAL SAVE ({len(batch_summary_list)} entries) ===")
     storage.save_global_index_direct(batch_summary_list)
     print("Database Refresh Successful.")
     return True
