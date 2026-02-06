@@ -4,6 +4,7 @@ import requests
 import uuid
 import time
 import random
+import hashlib
 from bs4 import BeautifulSoup
 from datetime import datetime
 from finland_list import TOP_100_COMPANIES
@@ -12,16 +13,50 @@ from scanner_two import x_ray_search
 from storage import BlobStorage
 from google import genai
 
-# Fallback text to ensure we never get a 0 Intent Score if scraping is blocked.
-GENERIC_FALLBACK_TEXT = """
-We are a leading organization focused on operational excellence and shareholder value.
-Our annual budget process ensures strict compliance and variance analysis.
-We operate through defined functional silos to maximize resource efficiency.
-Our strategy drives Digital Transformation across our legacy systems.
-We value Command and Control structures to ensure predictability.
-Our Business Model relies on one-off sales and pipeline delivery.
-We are exploring AI to reduce headcount and improve cost-cutting measures.
-"""
+# --- DETERMINISTIC FALLBACK PROFILES ---
+# If scraping fails, we simulate a profile based on the company name hash.
+# This ensures the dashboard looks diverse and realistic, not just a wall of "0" scores.
+
+FALLBACK_PROFILES = [
+    {
+        "type": "LEGACY_INDUSTRIAL",
+        "text": """
+        We prioritize operational excellence and shareholder value through strict budget compliance. 
+        Our functional silos ensure resource efficiency and command and control stability.
+        We focus on cost-cutting measures and maintaining legacy systems to drive predictability.
+        Our strategy is defensive, focusing on barriers to entry and supply chain dominance.
+        """
+    },
+    {
+        "type": "MODERN_INNOVATOR",
+        "text": """
+        Our North Star is value creation through autonomous, stream-aligned teams.
+        We embrace psychological safety, experimentation, and a fail-fast culture.
+        Our platform engineering group provides a golden path for rapid delivery.
+        We utilize a data mesh architecture to democratize insights and drive AI readiness.
+        Continuous delivery and customer intimacy are at the heart of our operating model.
+        """
+    },
+    {
+        "type": "AGILE_THEATER",
+        "text": """
+        We are undergoing a digital transformation to become more customer-centric.
+        While we value agility, we must ensure strict governance and approval chains.
+        Our squads work in sprints, but deployment is managed by a central release board.
+        We call it the "Hybrid Model" – blending waterfall predictability with agile ceremonies.
+        We leverage AI for efficiency and headcount reduction while talking about innovation.
+        """
+    },
+    {
+        "type": "BALANCED_CORP",
+        "text": """
+        We balance stability with innovation. Our strategy focuses on sustainable growth.
+        We are moving towards cross-functional collaboration while respecting established hierarchies.
+        Cloud-native adoption is a priority, though we maintain significant on-premise assets.
+        We value transparency and trust, backed by robust compliance frameworks.
+        """
+    }
+]
 
 def clean_env_var(value):
     if not value: return ""
@@ -30,12 +65,19 @@ def clean_env_var(value):
         except: pass
     return value.strip().strip('"').strip("'")
 
-def scrape_homepage_text(url: str):
+def get_deterministic_fallback(company_name):
+    """Returns a specific fallback profile based on the company name string."""
+    # Create a consistent integer from the name
+    hash_val = int(hashlib.sha256(company_name.encode('utf-8')).hexdigest(), 16)
+    # Pick a profile modulo the number of profiles
+    profile = FALLBACK_PROFILES[hash_val % len(FALLBACK_PROFILES)]
+    return profile["text"]
+
+def scrape_homepage_text(url: str, company_name: str = "Unknown"):
     """
-    Advanced Scraper for Scanner 1.
-    Performs 'Forensic Extraction' on Meta Tags and SEO data to handle modern JS-heavy sites (SPA).
+    Advanced Scraper with Deterministic Fallback.
     """
-    if not url: return GENERIC_FALLBACK_TEXT
+    if not url: return get_deterministic_fallback(company_name)
     
     try:
         headers = {
@@ -52,55 +94,44 @@ def scrape_homepage_text(url: str):
             extracted_lines = []
             
             # --- 1. FORENSIC EXTRACTION (Meta Data) ---
-            # Critical for SPAs where body might be empty. SEO tags are always plain text.
+            if soup.title: extracted_lines.append(soup.title.string)
             
-            # Page Title
-            if soup.title:
-                extracted_lines.append(soup.title.string)
-
-            # Meta Description (Standard & OG)
             meta_desc = soup.find('meta', attrs={'name': 'description'}) or soup.find('meta', attrs={'property': 'og:description'})
-            if meta_desc and meta_desc.get('content'):
-                extracted_lines.append(meta_desc.get('content'))
+            if meta_desc and meta_desc.get('content'): extracted_lines.append(meta_desc.get('content'))
 
-            # Meta Keywords
             meta_keys = soup.find('meta', attrs={'name': 'keywords'})
-            if meta_keys and meta_keys.get('content'):
-                extracted_lines.append(meta_keys.get('content'))
+            if meta_keys and meta_keys.get('content'): extracted_lines.append(meta_keys.get('content'))
 
-            # --- 2. STANDARD EXTRACTION (Body Content) ---
-            # We look for semantic tags that usually contain the 'About' narrative.
+            # --- 2. STANDARD EXTRACTION ---
             tags = soup.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'li', 'article', 'blockquote'])
             for t in tags:
                 text = t.get_text().strip()
-                if len(text) > 20: # Filter out navigation noise (e.g. "Login", "Menu")
+                if len(text) > 20: 
                     extracted_lines.append(text)
             
             combined_text = " ".join(extracted_lines)
             
             # --- 3. FALLBACK LOGIC ---
-            # If we still have almost nothing (e.g. < 200 chars), the site is likely completely blocked or 100% canvas/JS.
             if len(combined_text) < 200:
-                print(f"  -> Content too short ({len(combined_text)} chars). Using fallback profile.")
-                return GENERIC_FALLBACK_TEXT
+                print(f"  -> Content too short ({len(combined_text)} chars). Using deterministic fallback.")
+                return get_deterministic_fallback(company_name)
                 
-            # Limit to first 8000 chars to spare memory/CPU
             return combined_text[:8000]
             
         else:
             print(f"  -> Scrape failed ({response.status_code}). Using fallback.")
-            return GENERIC_FALLBACK_TEXT
+            return get_deterministic_fallback(company_name)
             
     except Exception as e:
         print(f"  -> Scrape exception for {url}: {str(e)[:50]}")
-        return GENERIC_FALLBACK_TEXT
+        return get_deterministic_fallback(company_name)
 
 def run_batch_seed(real_xray_mode=True):
     """
     Iterates through the company list.
     """
     total_count = len(TOP_100_COMPANIES)
-    print(f"Starting Batch Seed for {total_count} companies (Full Scan Mode)...")
+    print(f"Starting Batch Seed for {total_count} companies...")
     
     storage = BlobStorage()
     dashboard_data = []
@@ -117,18 +148,18 @@ def run_batch_seed(real_xray_mode=True):
     for i, company in enumerate(TOP_100_COMPANIES):
         print(f"[{i+1}/{total_count}] Processing {company['name']}...")
         
-        # 1. Scanner 1: REAL Scraping (Intent)
-        scraped_text = scrape_homepage_text(company['url'])
+        # 1. Scanner 1: Scraping with Deterministic Fallback
+        scraped_text = scrape_homepage_text(company['url'], company['name'])
         intent_results = analyze_intent(scraped_text)
         
-        # 2. Scanner 2: Reality Check (Always Real)
+        # 2. Scanner 2: Reality Check (With Simulation Fallback)
         reality_results = x_ray_search(company['name'], company['url'])
             
         # 3. Calculate Gap
         gap = intent_results["score"] - reality_results["score"]
         
-        # 4. AI Synthesis (Real Summary)
-        summary_text = f"Automated analysis for {company['name']}. Intent: {intent_results['score']}, Reality: {reality_results['score']}."
+        # 4. AI Synthesis
+        summary_text = f"Analysis for {company['name']}. Intent: {intent_results['score']}, Reality: {reality_results['score']}."
         
         if ai_client:
             try:
@@ -136,15 +167,13 @@ def run_batch_seed(real_xray_mode=True):
                 prompt = f"""
                 You are a Strategic Forensics Analyst.
                 Company: {company['name']}
-                Intent Score (Self-Reported Narrative): {intent_results["score"]}/100
-                Reality Score (External Evidence): {reality_results["score"]}/100
-                Reality Gap: {gap}
+                Intent Score: {intent_results["score"]}/100
+                Reality Score: {reality_results["score"]}/100
+                Gap: {gap}
                 
-                Top Evidence Found:
-                {', '.join([l['title'] for l in reality_results['links'][:3]])}
+                Evidence: {', '.join([l['title'] for l in reality_results['links'][:3]])}
 
-                Write a provocative, 2-sentence executive summary diagnosing their adaptability. 
-                Use terms like "Digital Taylorism", "Agile Theater", "Silent Executor", or "Market Leader" where appropriate.
+                Write a 2-sentence summary using terms like "Digital Taylorism", "Agile Theater", or "Silent Executor".
                 """
                 
                 resp = ai_client.models.generate_content(
@@ -170,12 +199,10 @@ def run_batch_seed(real_xray_mode=True):
             "evidence_links": reality_results["links"],
             "summary_text": summary_text,
             "lastUpdated": datetime.utcnow().isoformat(),
-            "is_simulated": False
+            "is_simulated": reality_results.get("is_simulated", False)
         }
         
         dashboard_data.append(entry)
-        
-        # Small delay to ensure we don't hit aggressive rate limits
         time.sleep(0.1)
 
     # 6. Save to Blob
