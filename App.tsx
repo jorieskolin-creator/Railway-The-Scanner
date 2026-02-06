@@ -32,6 +32,7 @@ const App = () => {
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [isSeeding, setIsSeeding] = useState(false);
+  const [lastSynced, setLastSynced] = useState(null); // New state for visual feedback
   const [sortConfig, setSortConfig] = useState({ key: 'reality_gap', direction: 'desc' });
   const [systemStatus, setSystemStatus] = useState({ online: false, storage: false, google: false, ai: false });
 
@@ -66,7 +67,10 @@ const App = () => {
         setConnectionError(null);
         // Add cache busting timestamp to URL to prevent browser caching
         const response = await fetch(`/dashboard-data?t=${Date.now()}`, {
-            headers: { 'Cache-Control': 'no-cache' }
+            headers: { 
+              'Cache-Control': 'no-cache',
+              'Pragma': 'no-cache'
+            }
         });
         
         if (response.ok) {
@@ -74,6 +78,7 @@ const App = () => {
             // If json is empty array, that's fine (empty DB)
             console.log("Loaded real data from backend:", json.length, "records");
             setData(json);
+            setLastSynced(new Date().toLocaleTimeString('en-US', { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }));
         } else {
             throw new Error("Failed to fetch data");
         }
@@ -229,13 +234,16 @@ const App = () => {
                 </button>
             )}
 
-            <button 
-                onClick={fetchRealData} 
-                title="Refresh Data from Server"
-                className="p-2 bg-white/5 hover:bg-white/10 rounded-full text-indigo-300 transition-all border border-transparent hover:border-indigo-500/30 active:scale-95"
-            >
-                <RefreshCw size={14} className={loading ? "animate-spin text-cyan-400" : ""} />
-            </button>
+            <div className="flex items-center gap-2">
+                {lastSynced && <span className="hidden sm:block text-[10px] text-cyan-300/70 font-mono">Synced: {lastSynced}</span>}
+                <button 
+                    onClick={fetchRealData} 
+                    title="Refresh Data from Server"
+                    className="p-2 bg-white/5 hover:bg-white/10 rounded-full text-indigo-300 transition-all border border-transparent hover:border-indigo-500/30 active:scale-95"
+                >
+                    <RefreshCw size={14} className={loading ? "animate-spin text-cyan-400" : ""} />
+                </button>
+            </div>
 
             <div className="relative w-full max-w-[240px] group hidden sm:block">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-indigo-300">

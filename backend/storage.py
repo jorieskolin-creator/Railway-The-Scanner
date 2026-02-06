@@ -94,8 +94,9 @@ class BlobStorage:
         # --- Strategy 1: API List ---
         if self.token:
             try:
+                # Force fresh listing by adding timestamp to the listing request
                 list_response = requests.get(
-                    self.api_url,
+                    f"{self.api_url}?t={timestamp}",
                     headers=self._get_headers()
                 )
                 

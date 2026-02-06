@@ -1,4 +1,5 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -75,7 +76,11 @@ def health_check():
     }
 
 @app.get("/dashboard-data")
-async def get_dashboard_data():
+async def get_dashboard_data(response: Response):
+    # CRITICAL: Prevent caching of the JSON data to ensure live updates from Vercel are seen immediately.
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
     return storage.retrieve_latest_data(BLOB_FILENAME)
 
 class ScanRequest(BaseModel):
