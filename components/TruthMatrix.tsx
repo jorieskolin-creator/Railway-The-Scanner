@@ -5,15 +5,29 @@ const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] 
   if (active && payload && payload.length) {
     const data = payload[0].payload;
     const gap = data.reality_gap;
-    let gapLabel = "Aligned";
-    let gapColor = "text-emerald-400";
+    const intent = data.intent_score;
+    const reality = data.reality_score;
     
-    if (gap > 15) {
-        gapLabel = "Talk-not-Walk (Hype)"; // Updated label
-        gapColor = "text-amber-400";
-    } else if (gap < -15) {
-        gapLabel = "Silent Doers (Surplus)"; // Updated label
-        gapColor = "text-cyan-400";
+    // Strict Quadrant Classification (50/50 Split)
+    let gapLabel = "Stagnation";
+    let gapColor = "text-slate-400";
+    
+    if (reality >= 50) {
+        if (intent >= 50) {
+            gapLabel = "Walk-and-Talk";
+            gapColor = "text-emerald-400";
+        } else {
+            gapLabel = "Silent Doers";
+            gapColor = "text-cyan-400";
+        }
+    } else {
+        if (intent >= 50) {
+            gapLabel = "Talk-not-Walk";
+            gapColor = "text-amber-400";
+        } else {
+            gapLabel = "Stagnation";
+            gapColor = "text-slate-400";
+        }
     }
 
     return (
@@ -21,10 +35,10 @@ const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] 
         <p className="font-bold text-sm mb-3 text-white border-b border-white/10 pb-2">{data.companyName}</p>
         <div className="grid grid-cols-2 gap-x-4 gap-y-2 font-mono text-[10px] uppercase tracking-wider">
             <span className="text-slate-500">Stated Ambition</span>
-            <span className="text-indigo-400 text-right font-bold">{data.intent_score}/100</span>
+            <span className="text-indigo-400 text-right font-bold">{intent}/100</span>
             
             <span className="text-slate-500">Ops Reality</span>
-            <span className="text-emerald-400 text-right font-bold">{data.reality_score}/100</span>
+            <span className="text-emerald-400 text-right font-bold">{reality}/100</span>
             
             <div className="col-span-2 h-px bg-white/10 my-1"></div>
             
@@ -91,16 +105,22 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
 
           <Scatter name="Companies" data={data} onClick={(node) => onSelectCompany(node.payload)} cursor="pointer">
             {data.map((entry, index) => {
-              // Color Logic based on Integrity Delta
-              // Cyan = Performance Surplus (Good)
-              // Amber = Hype Surplus (Bad)
-              // Emerald = Aligned
-              // Gray = Low/Low
-              let fillColor = '#94a3b8';
+              // Color Logic: Strictly based on Quadrants
+              // Top Right: Emerald (Walk-and-Talk)
+              // Top Left: Cyan (Silent Doers)
+              // Bottom Right: Amber (Talk-not-Walk)
+              // Bottom Left: Gray (Stagnation)
+              let fillColor = '#94a3b8'; // Default Stagnation
+              const r = entry.reality_score;
+              const i = entry.intent_score;
               
-              if (entry.reality_gap < -15) fillColor = '#22d3ee'; // Surplus
-              else if (entry.reality_gap > 15) fillColor = '#f59e0b'; // Hype
-              else if (entry.reality_score > 50) fillColor = '#10b981'; // Aligned High
+              if (r >= 50) {
+                  if (i >= 50) fillColor = '#10b981'; // Walk-and-Talk
+                  else fillColor = '#22d3ee'; // Silent Doers
+              } else {
+                  if (i >= 50) fillColor = '#f59e0b'; // Talk-not-Walk
+                  else fillColor = '#94a3b8'; // Stagnation
+              }
               
               return (
                 <Cell 

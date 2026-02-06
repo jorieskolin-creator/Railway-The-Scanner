@@ -3,32 +3,34 @@ const { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusA
 const { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash, RefreshCw, XCircle, Search, Zap, Scale, Activity } = (window as any).Lucide;
 
 const CompanySummary = ({ data }) => {
-  // NEW VISUAL LOGIC:
-  // Gap > 15 (High Ambition, Low Reality) -> Amber (Hype)
-  // Gap < -15 (Low Ambition, High Reality) -> Cyan (Performance Surplus / Humble)
-  // Gap ~ 0 -> Emerald (Aligned)
-  let gapColor = '#10b981'; // Default Emerald
-  let gapLabel = "Aligned (Walk-and-Talk)";
-  let gapValueDisplay = data.reality_gap;
+  // NEW VISUAL LOGIC (Quadrant-based 50/50 split):
+  // Silent Doers: Reality >= 50, Ambition < 50
+  // Walk-and-Talk: Reality >= 50, Ambition >= 50
+  // Talk-not-Walk: Reality < 50, Ambition >= 50
+  // Stagnation: Reality < 50, Ambition < 50
+
+  let gapColor = '#94a3b8';
+  let gapLabel = "Stagnation";
   
-  if (data.reality_gap > 15) {
-      gapColor = '#f59e0b'; // Amber (Overpromising)
-      gapLabel = "Talk-not-Walk (Hype)";
-      gapValueDisplay = `+${data.reality_gap}`;
-  } else if (data.reality_gap < -15) {
-      gapColor = '#22d3ee'; // Cyan (Underpromising/Humble)
-      gapLabel = "Silent Doers (Surplus)";
-      gapValueDisplay = `${data.reality_gap}`; // Already negative
+  if (data.reality_score >= 50) {
+      if (data.intent_score >= 50) {
+          gapLabel = "Walk-and-Talk (Aligned)";
+          gapColor = '#10b981'; // Emerald
+      } else {
+          gapLabel = "Silent Doers (Surplus)";
+          gapColor = '#22d3ee'; // Cyan
+      }
   } else {
-      gapValueDisplay = data.reality_gap > 0 ? `+${data.reality_gap}` : data.reality_gap;
-      // Refine logic for low/low vs high/high if needed, but gap doesn't tell full story.
-      // Assuming Aligned for now as general good state, though Stagnation is also aligned (0 gap).
-      // We can use scores to differentiate.
-      if (data.reality_score < 40 && data.intent_score < 40) {
+      if (data.intent_score >= 50) {
+          gapLabel = "Talk-not-Walk (Hype)";
+          gapColor = '#f59e0b'; // Amber
+      } else {
           gapLabel = "Stagnation (Low/Low)";
           gapColor = '#94a3b8'; // Gray
       }
   }
+  
+  let gapValueDisplay = data.reality_gap > 0 ? `+${data.reality_gap}` : `${data.reality_gap}`;
 
   const radarData = data.intent_breakdown.map(item => ({
     subject: item.name,
@@ -164,7 +166,7 @@ const CompanySummary = ({ data }) => {
                             fontSize={10} 
                             tickLine={false} 
                             axisLine={false}
-                            domain={[-50, 50]} 
+                            domain={[-100, 100]} 
                             hide={true} 
                         />
                         <ReferenceLine y={0} stroke="#475569" strokeDasharray="3 3" />
