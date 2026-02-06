@@ -60,31 +60,61 @@ def scrape_strategic_content(base_url: str, company_name: str = "Unknown"):
     if not home_html: return f"Automatic scraping failed for {base_url}."
 
     soup = BeautifulSoup(home_html, 'html.parser')
-    targets = {
-        "Job Ads": ["career", "jobs", "työpaikat", "rekry", "join us", "open positions", "careers"],
-        "Service Offerings": ["services", "products", "palvelut", "tuotteet", "solutions", "ratkaisut", "offering"],
-        "Product Portfolio": ["about", "tietoa", "company", "yritys", "strategy", "strategia", "investors", "sijoittajat"],
-        "Blogs": ["blog", "news", "ajankohtaista", "insights", "articles", "stories"]
+    
+    # PRIORITY MAP: The exact list of categories to scan for Intent Analysis
+    # We look for the first valid link for each category to ensure we get the main landing page
+    priority_map = {
+        "Strategy": ["strategy", "strategia", "vision", "visio", "mission", "purpose", "tavoitteet", "goals"],
+        "Sustainability": ["sustainability", "vastuullisuus", "esg", "environment", "ympäristö", "climate"],
+        "Investors": ["investors", "sijoittajat", "governance", "hallinto", "reports", "financials", "annual"],
+        "Careers": ["careers", "jobs", "työpaikat", "rekry", "open positions", "ura", "join us"],
+        "About": ["about", "meistä", "company", "yritys", "story", "history", "who we are"],
+        "Services": ["services", "palvelut", "solutions", "ratkaisut", "offering", "what we do"],
+        "Products": ["products", "tuotteet", "technology", "teknologia"],
+        "Blog": ["blog", "news", "ajankohtaista", "insights", "media", "press", "tiedotteet"]
     }
     
-    found_urls = set()
+    found_targets = {} # Category -> URL
+    
     def make_absolute(href):
         if href.startswith('http'): return href
         if href.startswith('//'): return 'https:' + href
         if href.startswith('/'): return base_url.rstrip('/') + href
         return base_url.rstrip('/') + '/' + href
 
-    for a in soup.find_all('a', href=True):
-        href = a['href'].lower()
-        text = a.get_text(strip=True).lower()
-        for category, keywords in targets.items():
+    all_links = soup.find_all('a', href=True)
+
+    # 1. Fill buckets based on priority
+    for category, keywords in priority_map.items():
+        for a in all_links:
+            href = a['href'].lower()
+            text = a.get_text(strip=True).lower()
+            
+            # Check if this link matches the category keywords
             if any(k in href for k in keywords) or any(k in text for k in keywords):
                 full_url = make_absolute(a['href'])
-                if base_url.split('.')[1] in full_url: found_urls.add(full_url)
+                
+                # Internal Domain Check (Safety)
+                try:
+                    base_domain = base_url.split('/')[2].replace('www.', '')
+                    if base_domain in full_url: 
+                        # Only take the first match per category to avoid scanning 10 different blog pages
+                        if category not in found_targets:
+                            found_targets[category] = full_url
+                except:
+                    pass
 
     final_text = []
     final_text.append(f"--- HOMEPAGE ({base_url}) ---\n" + extract_content_from_html(home_html))
-    urls_to_visit = list(found_urls)[:2] # Reduced to 2 subpages to be polite/faster during batch
+    
+    # 2. Compile unique URLs 
+    # Sorting ensures DETERMINISTIC behavior (The Butterfly Effect fix)
+    urls_to_visit = sorted(list(set(found_targets.values())))
+    
+    print(f"   [Scanner 1] Identified Strategic Targets: {list(found_targets.keys())}")
+    print(f"   [Scanner 1] Visiting {len(urls_to_visit)} subpages...")
+
+    # 3. Visit pages
     for url in urls_to_visit:
         # print(f"   [Scanner 1] + Visiting: {url}")
         sub_html = get_page_text(url)
@@ -92,8 +122,8 @@ def scrape_strategic_content(base_url: str, company_name: str = "Unknown"):
         if content: final_text.append(f"--- SUBPAGE ({url}) ---\n" + content)
             
     combined_text = "\n\n".join(final_text)
-    # print(f"   [Scanner 1] Extraction Complete. Total Chars: {len(combined_text)}")
-    return combined_text[:60000]
+    # Return up to 100k chars to ensure we capture the depth of these ~8 pages
+    return combined_text[:100000]
 
 def run_batch_seed(real_xray_mode=True, limit=None):
     # Select companies based on limit
