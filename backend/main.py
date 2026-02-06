@@ -18,6 +18,7 @@ from scanner_two import x_ray_search
 from storage import BlobStorage
 from seed_manager import run_batch_seed, scrape_homepage_text
 from finland_list import TOP_100_COMPANIES
+from knowledge_base import get_evolving_framework
 
 print("Starting Adaptability Scanner Backend (v2.0)...", flush=True)
 
@@ -136,7 +137,7 @@ async def seed_database(background_tasks: BackgroundTasks):
 @app.post("/scan")
 async def run_scan(request: ScanRequest):
     try:
-        # 1. AUTO-SCRAPE LOGIC
+        # --- STEP 1: PREPARATION & SCANNER 1 (INTENT) ---
         # If reportText is empty (from Refresh button) or too short, we scrape the site.
         target_text = request.reportText
         target_url = request.companyUrl
@@ -159,37 +160,81 @@ async def run_scan(request: ScanRequest):
                 print("No URL found. Using generic fallback.")
                 target_text = scrape_homepage_text(None) # Returns generic text
 
-        # 2. Run Analysis
+        # Execute Scanner 1
         intent_results = analyze_intent(target_text)
+
+        # --- STEP 2: SCANNER 2 (REALITY / EVIDENCE) ---
+        # Checks Google for specific behavioral signals defined in methodology
+        # AND uses AI to verify context
         reality_results = x_ray_search(request.companyName, target_url)
         gap = intent_results["score"] - reality_results["score"]
         
-        # 3. AI Synthesis
+        # --- STEP 3: SYNTHESIS (THE AI JUDGE) ---
+        # Fetches Knowledge Base and applies it to the data from Step 1 & 2
         summary = "AI Summary Unavailable (Config Error)"
         api_key = clean_env_var(os.environ.get("API_KEY") or os.environ.get("GEMINI_API_KEY"))
         
         if api_key:
             try:
                 client = genai.Client(api_key=api_key)
-                prompt = f"""
-                Analyze {request.companyName} (Finland Top 100 Context).
-                Intent Score: {intent_results["score"]}/100.
-                Reality Score: {reality_results["score"]}/100.
-                Gap: {gap}.
-                Verified Evidence: {', '.join([l['title'] for l in reality_results['links'][:3]])}
                 
-                Write a concise executive summary (max 3 sentences) diagnosing their adaptability.
+                # Construct Rich Context from Data
+                intent_narrative = json.dumps(intent_results["breakdown"])
+                evidence_list = ', '.join([f"{l['title']}: {l.get('snippet', '')}" for l in reality_results['links'][:4]])
+                
+                # DYNAMICALLY LOAD KNOWLEDGE BASE (SINGLE SOURCE OF TRUTH)
+                # This fetches tactics.json to be used as the guideline.
+                knowledge_context = get_evolving_framework()
+
+                prompt = f"""
+                ### STEP 3: DATA SYNTHESIS & EVALUATION
+                
+                You are the "Knowledge Engine" for the Adaptability Scanner.
+                
+                ## THE KNOWLEDGE BASE (Single Source of Truth)
+                Your evaluation MUST be based on the following framework/tactics. 
+                Do not use generic agile definitions; use the vocabulary provided below:
+                
+                {knowledge_context}
+
+                ## INPUT DATA (Collected by Scanners 1 & 2)
+                
+                **Target Entity:** {request.companyName}
+                **Intent Score (What they say):** {intent_results["score"]}/100
+                **Reality Score (What they do):** {reality_results["score"]}/100
+                **The Gap:** {gap} (Positive gap = Potential Theater; Negative gap = Silent Execution)
+
+                **Scanner 1 Findings (Narrative/Intent):**
+                {intent_narrative}
+
+                **Scanner 2 Findings (Forensic Evidence - Verified by AI):**
+                {evidence_list}
+
+                ## YOUR TASK
+                Write a concise **Executive Diagnostic Summary** (max 100 words).
+                1. **Classify:** Identify the archetype (e.g., "Agile Theater", "Adaptive Leader") based on the Knowledge Base definitions.
+                2. **Contextualize:** Explain the gap using the Knowledge Base vocabulary (e.g., "Data suggests Digital Taylorism despite 'Flow' rhetoric").
+                3. **Advise:** Provide one strategic warning derived from the 'Bad' patterns in the Knowledge Base.
                 """
                 
                 try:
-                    # UPDATED MODEL TO GEMINI 3 FLASH
+                    # UPGRADE: Using Gemini 3 Pro for the Final Synthesis as requested
                     response = client.models.generate_content(
-                        model='gemini-3-flash-preview',
+                        model='gemini-3-pro-preview',
                         contents=prompt
                     )
                     if response.text: summary = response.text
                 except Exception as e:
-                    print(f"Gemini 3 Flash Error: {e}")
+                    print(f"Gemini 3 Pro Error (Falling back to Flash): {e}")
+                    try:
+                        # Fallback if Pro is unavailable/quota exceeded
+                        response = client.models.generate_content(
+                            model='gemini-3-flash-preview',
+                            contents=prompt
+                        )
+                        if response.text: summary = response.text
+                    except Exception as e2:
+                        print(f"Gemini 3 Flash Error: {e2}")
 
             except Exception as e:
                 print(f"Gemini Client Error: {e}")
@@ -214,7 +259,7 @@ async def run_scan(request: ScanRequest):
             "is_simulated": reality_results.get("is_simulated", False)
         }
         
-        # 5. Save to Database
+        # 5. Save to Database (If requested by Frontend)
         if request.saveToDatabase:
             print(f"Persisting update for {request.companyName}...")
             try:
@@ -229,36 +274,25 @@ async def run_scan(request: ScanRequest):
                 
                 if index > -1: 
                     # --- HISTORY PRESERVATION LOGIC ---
-                    # We are updating an existing entry. Let's archive the previous state into 'history'.
                     existing_record = current_db[index]
                     history = existing_record.get("history", [])
-                    
-                    # Create snapshot of the OLD record before overwriting
                     snapshot = {
                         "date": existing_record.get("lastUpdated"),
                         "gap": existing_record.get("reality_gap", 0),
                         "reality_score": existing_record.get("reality_score", 0),
                         "intent_score": existing_record.get("intent_score", 0)
                     }
-                    
-                    # Only append if it's a valid previous record
-                    if snapshot["date"]:
-                        history.append(snapshot)
-                    
-                    # Keep history manageable (last 10 scans)
-                    if len(history) > 10:
-                        history = history[-10:]
-                        
+                    if snapshot["date"]: history.append(snapshot)
+                    if len(history) > 10: history = history[-10:]
                     result_data["history"] = history
                     current_db[index] = result_data
                 else: 
-                    # New Entry
                     result_data["history"] = []
                     current_db.append(result_data)
                 
                 upload_url = storage.upload_json(BLOB_FILENAME, current_db)
                 if not upload_url:
-                    result_data["persistence_warning"] = "Warning: Data was analyzed but NOT saved to database (Missing BLOB_READ_WRITE_TOKEN)."
+                    result_data["persistence_warning"] = "Warning: Data analyzed but NOT saved (Missing Token)."
 
             except Exception as e:
                 print(f"Persistence Failed: {e}")
