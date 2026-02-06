@@ -1,3 +1,4 @@
+
 const { useState, useEffect } = (window as any).React;
 
 // --- ICON SAFETY LAYER ---
@@ -63,7 +64,11 @@ const App = () => {
     try {
         setLoading(true);
         setConnectionError(null);
-        const response = await fetch('/dashboard-data');
+        // Add cache busting timestamp to URL to prevent browser caching
+        const response = await fetch(`/dashboard-data?t=${Date.now()}`, {
+            headers: { 'Cache-Control': 'no-cache' }
+        });
+        
         if (response.ok) {
             const json = await response.json();
             // If json is empty array, that's fine (empty DB)
@@ -227,9 +232,9 @@ const App = () => {
             <button 
                 onClick={fetchRealData} 
                 title="Refresh Data from Server"
-                className="p-2 bg-white/5 hover:bg-white/10 rounded-full text-indigo-300 transition-all border border-transparent hover:border-indigo-500/30"
+                className="p-2 bg-white/5 hover:bg-white/10 rounded-full text-indigo-300 transition-all border border-transparent hover:border-indigo-500/30 active:scale-95"
             >
-                <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+                <RefreshCw size={14} className={loading ? "animate-spin text-cyan-400" : ""} />
             </button>
 
             <div className="relative w-full max-w-[240px] group hidden sm:block">
