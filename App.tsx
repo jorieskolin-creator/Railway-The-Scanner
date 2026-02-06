@@ -73,8 +73,6 @@ const App = () => {
             // Check if data grew
             if (newData.length > prevDataLengthRef.current) {
                 console.log(`New data detected! ${prevDataLengthRef.current} -> ${newData.length}`);
-                // If we were seeding, and we see data, we can stop the "spinner" conceptually 
-                // (though usually we wait for the whole batch, seeing items pop in is nice)
             }
             prevDataLengthRef.current = newData.length;
             
@@ -402,8 +400,27 @@ const App = () => {
         isLoading={isLoadingDetails}
         onClose={() => setIsModalOpen(false)}
         onUpdate={(updated) => {
+            // OPTIMISTIC UPDATE: Update local data immediately so graph reflects changes instantly
             setSelectedCompany(updated);
-            fetchSummaryData();
+            setData(prev => {
+                const idx = prev.findIndex(p => p.companyName === updated.companyName);
+                if (idx > -1) {
+                    const newArr = [...prev];
+                    // Merge new stats into the old summary object
+                    newArr[idx] = { 
+                        ...newArr[idx], 
+                        intent_score: updated.intent_score,
+                        reality_score: updated.reality_score,
+                        reality_gap: updated.reality_gap,
+                        lastUpdated: updated.lastUpdated
+                    }; 
+                    return newArr;
+                }
+                // If new company (unlikely in update flow but possible), add it
+                return [...prev, updated];
+            });
+            // Fetch real data in background to confirm
+            fetchSummaryData(true); 
         }}
       />
     </div>
