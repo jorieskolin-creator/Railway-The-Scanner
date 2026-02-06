@@ -3,6 +3,7 @@ import re
 
 # Keyword Definitions (Mirrors constants.ts)
 # INCLUDES FINNISH (FI) TRANSLATIONS
+# UPGRADE: Added "Deep Vocabulary" from research (Kapulanvaihto, Portinvartijuus, etc.)
 CATEGORIES = {
     "Operating Model": {
         "good": [
@@ -15,7 +16,7 @@ CATEGORIES = {
         "good_fi": [
             "arvovirta", "itseohjautuvuu", "matala hierarkia", "kokeilukulttuuri", "asiakaslähtöisy",
             "ketterä", "tiimimalli", "vastuun jakami", "psykologinen turvallisuu", "poikkitoiminnalli",
-            "oppiva organisaatio", "palvelumuotoilu", "onnistumisen edellytyk"
+            "oppiva organisaatio", "palvelumuotoilu", "onnistumisen edellytyk", "virtaustehokkuus", "alustatiimi"
         ],
         "bad": [
             "Functional Silos", "Command and Control", "Digital Taylorism", "Handovers", "Resource Efficiency",
@@ -27,7 +28,8 @@ CATEGORIES = {
         "bad_fi": [
             "siilo", "poteroitumi", "käskyttämi", "hierarkia", "mikromanagerointi",
             "byrokratia", "hyväksyntäketju", "vesiputousmalli", "kankeus", "siiloutumi",
-            "suorituskeskeisy", "kontrollointi", "ylhäältä alas", "jäykkä"
+            "suorituskeskeisy", "kontrollointi", "ylhäältä alas", "jäykkä", 
+            "resurssitehokkuus", "käyttöaste", "kapulanvaihto", "portinvartijuus"
         ]
     },
     "Service Portfolio": {
@@ -65,7 +67,7 @@ CATEGORIES = {
         "good_fi": [
             "luottamus", "avoimuus", "läpinäkyvyys", "rohkeus", "oppimi", "yhteistyö",
             "tarkoitusperäisy", "sopeutumiskyky", "vastuullisuu", "monimuotoisuu", "palaute",
-            "kasvun asenne", "kestävä kehitys", "ihmisläheisy"
+            "kasvun asenne", "kestävä kehitys", "ihmisläheisy", "nollaetäisyys"
         ],
         "bad": [
             "Secrecy", "Fear", "Blame", "Control", "Compliance",
@@ -91,7 +93,7 @@ CATEGORIES = {
         "good_fi": [
             "pohjantähti", "arvonluonti", "digitaalinen transformaatio", "kasvu", "visio",
             "asiakaskeskei", "innovaatio", "tulevaisuudenkestävä", "erottautumi", "kestävyys",
-            "suunnanmuutos", "toimeenpano"
+            "suunnanmuutos", "toimeenpano", "havainnoi ja reagoi", "vaikuttavuusohjautuva", "julkaise ja opi"
         ],
         "bad": [
             "Cost-cutting", "Defensive", "Short-term", "Static", "Reactive",
@@ -103,7 +105,7 @@ CATEGORIES = {
         "bad_fi": [
             "kulukuri", "säästöt", "leikkaukset", "yt-neuvottelut", "lyhytnäköi", "staattinen",
             "reagoiva", "budjettiohjattu", "ylhäältä saneltu", "riskin välttämi", "kilpailijakeskei",
-            "tehokkuusajattelu"
+            "tehokkuusajattelu", "viisivuotissuunnitelma", "kiinteä tavoite", "kertarysäys"
         ]
     },
     "Business Model": {
@@ -249,8 +251,13 @@ def analyze_intent(text: str):
             
             total_bad_matches += valid_bad_occurrences_for_word
 
-        # 3. Calculate Score
-        net_result = unique_good_found - unique_bad_found
+        # 3. Calculate Score with FRICTION WEIGHTING
+        # UPGRADE: Bad signals weigh more (1.5x) than good signals.
+        # This prevents "Keyword Stuffing" where a company mentions "Agile" 50 times 
+        # but also mentions "Micromanagement" 5 times.
+        FRICTION_WEIGHT = 2.0
+        
+        net_result = unique_good_found - (unique_bad_found * FRICTION_WEIGHT)
         
         if net_result < 0:
             score = 0
