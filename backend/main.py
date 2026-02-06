@@ -20,7 +20,7 @@ from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES
 from knowledge_base import get_evolving_framework
 
-print("Starting Adaptability Scanner Backend (v3.1 Final)...", flush=True)
+print("Starting Adaptability Scanner Backend (v3.2 - Robust Retrieval)...", flush=True)
 
 def clean_env_var(value):
     if not value: return ""
@@ -28,9 +28,6 @@ def clean_env_var(value):
         try: value = value.split("=", 1)[1]
         except: pass
     return value.strip().strip('"').strip("'")
-
-blob_token = clean_env_var(os.environ.get("BLOB_READ_WRITE_TOKEN"))
-gemini_key = clean_env_var(os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY"))
 
 app = FastAPI()
 
@@ -61,13 +58,15 @@ async def read_root(): return FileResponse("../index.html")
 @app.get("/api/health")
 def health_check():
     token = clean_env_var(os.environ.get("BLOB_READ_WRITE_TOKEN"))
+    blob_url = clean_env_var(os.environ.get("VITE_BLOB_URL") or os.environ.get("BLOB_URL"))
     gemini_present = bool(clean_env_var(os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")))
     
     return {
-        "status": "Adaptability Scanner API Online (v3.1)", 
+        "status": "Adaptability Scanner API Online (v3.2)", 
         "timestamp": datetime.utcnow().isoformat(),
         "config_status": {
             "has_blob_token": bool(token),
+            "has_blob_url": bool(blob_url),
             "has_gemini_key": gemini_present,
             "has_google_search_key": gemini_present
         }
@@ -76,24 +75,26 @@ def health_check():
 @app.get("/dashboard-data")
 async def get_dashboard_data(response: Response):
     """
-    Returns the LIGHTWEIGHT summary list for the landing page table/graph.
+    Returns the LIGHTWEIGHT summary list.
     """
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    response.headers["Pragma"] = "no-cache"
-    response.headers["Expires"] = "0"
-    
     data = storage.retrieve_latest_data("index/summary_list.json")
     return data or []
 
 @app.get("/company/{company_name}")
 async def get_company_details(company_name: str, response: Response):
     """
-    Returns the FULL DETAILED report for a specific company from Vercel Blob.
+    Returns the FULL DETAILED report.
+    Attempts to fetch specific file from Blob storage.
     """
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    print(f"GET Request for Company Detail: {company_name}")
+    
     data = storage.get_company_data(company_name)
     if not data:
-        raise HTTPException(status_code=404, detail="Company report not found")
+        print(f" -> Not found in blob storage: {company_name}")
+        raise HTTPException(status_code=404, detail="Company report not found in Vercel Blob.")
+    
     return data
 
 class ScanRequest(BaseModel):
@@ -104,22 +105,17 @@ class ScanRequest(BaseModel):
 
 @app.post("/admin/seed-finland-100")
 async def seed_database(background_tasks: BackgroundTasks):
-    """
-    BATCH REFRESH: Updates all 100 companies in the index + individual files.
-    """
     background_tasks.add_task(run_batch_seed, real_xray_mode=True)
-    return {"status": "Batch Seeding Initiated", "message": "Processing Finland Top 100 in background."}
+    return {"status": "Batch Seeding Initiated", "message": "Check server logs for progress."}
 
 @app.post("/scan")
 async def run_scan(request: ScanRequest):
     """
-    REAL FORENSIC SCAN:
-    1. Scrapes the defined sources (Scanner 1).
-    2. Runs the Tribunal Search (Scanner 2).
-    3. Synthesizes via Gemini.
-    4. Saves to Database (if requested), adding new companies to the index AND saving their individual file.
+    REAL FORENSIC SCAN (Live).
     """
     try:
+        print(f"--- LIVE SCAN INITIATED FOR: {request.companyName} ---")
+        
         # --- STEP 1: SCANNER 1 (Intent) ---
         target_text = request.reportText
         target_url = request.companyUrl
@@ -131,14 +127,12 @@ async def run_scan(request: ScanRequest):
                     break
 
         if not target_text or len(target_text) < 100:
-            # THIS CALLS THE UPDATED SCRAPER WITH "JOB ADS", "SERVICES", ETC.
             if target_url: target_text = scrape_strategic_content(target_url, request.companyName)
             else: target_text = scrape_strategic_content(None, request.companyName)
 
         intent_results = analyze_intent(target_text)
 
-        # --- STEP 2: SCANNER 2 (Reality + Context) ---
-        # THIS CALLS THE UPDATED TRIBUNAL LOGIC
+        # --- STEP 2: SCANNER 2 (Reality) ---
         reality_results = x_ray_search(request.companyName, target_url)
         gap = intent_results["score"] - reality_results["score"]
         
@@ -163,21 +157,14 @@ async def run_scan(request: ScanRequest):
 
                 Task: Write a 100-word forensic executive summary.
                 """
-                
-                try:
-                    response = client.models.generate_content(model='gemini-3-pro-preview', contents=prompt)
-                    if response.text: summary = response.text
-                except:
-                    response = client.models.generate_content(model='gemini-3-flash-preview', contents=prompt)
-                    if response.text: summary = response.text
-
+                response = client.models.generate_content(model='gemini-3-pro-preview', contents=prompt)
+                if response.text: summary = response.text
             except Exception as e:
                 print(f"Gemini Error: {e}")
 
         new_timestamp = datetime.utcnow().isoformat()
         result_id = str(uuid.uuid4())
         
-        # HISTORY PRESERVATION
         history = []
         existing_data = storage.get_company_data(request.companyName)
         if existing_data:
@@ -205,25 +192,25 @@ async def run_scan(request: ScanRequest):
             "is_simulated": reality_results.get("is_simulated", False)
         }
         
-        summary_entry = {
-            "id": result_id,
-            "companyName": request.companyName,
-            "intent_score": intent_results["score"],
-            "reality_score": reality_results["score"],
-            "reality_gap": gap,
-            "lastUpdated": new_timestamp
-        }
-        
-        # --- STEP 4: DATABASE UPDATE ---
+        # --- STEP 4: SAVE ---
+        saved_url = None
         if request.saveToDatabase:
-            # 1. Save the Heavy Full Data (used by Modal)
-            storage.save_company_data(request.companyName, full_data)
-            # 2. Update the Lightweight Index (used by Landing Page)
-            # This ensures new companies appear in the list immediately.
+            saved_url = storage.save_company_data(request.companyName, full_data)
+            print(f"   [Live Scan] Saved detailed report to: {saved_url}")
+            
+            summary_entry = {
+                "id": result_id,
+                "companyName": request.companyName,
+                "intent_score": intent_results["score"],
+                "reality_score": reality_results["score"],
+                "reality_gap": gap,
+                "lastUpdated": new_timestamp,
+                "detailsUrl": saved_url # Ensure we save the specific link
+            }
             storage.update_global_index(summary_entry)
         
         return {"success": True, "data": full_data}
 
     except Exception as e:
-        print(f"Server Error: {str(e)}")
+        print(f"Server Error during Live Scan: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
