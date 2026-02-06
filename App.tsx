@@ -86,21 +86,26 @@ const App = () => {
     if (!summaryItem) return;
     
     setIsLoadingDetails(true);
-    // Open modal with summary data first (better UX than waiting)
-    // We add a 'partial: true' flag so the Modal knows it might be missing deep data
+    // Optimistic UI: Open modal with summary data first
+    // We flag it as 'partial' so the modal knows we are still hunting for the heavy file
     setSelectedCompany({ ...summaryItem, partial: true });
     setIsModalOpen(true);
 
     try {
+        // This request hits the backend, which pulls the specific .json file from Vercel
         const res = await fetch(`/company/${encodeURIComponent(summaryItem.companyName)}?t=${Date.now()}`);
         if (res.ok) {
             const fullData = await res.json();
+            // Success: Replace the lightweight summary with the heavy dossier
             setSelectedCompany(fullData);
         } else {
-            console.error("Failed to load details");
+            console.warn("Full detailed report not found, falling back to summary.");
+            // Fallback: Remove the 'partial' flag so the spinner stops, but keep the summary data
+            setSelectedCompany(prev => ({ ...prev, partial: false, summary_text: "Detailed forensic report unavailable. Displaying summary index data." }));
         }
     } catch (e) {
         console.error("Error fetching details", e);
+        setSelectedCompany(prev => ({ ...prev, partial: false }));
     } finally {
         setIsLoadingDetails(false);
     }
@@ -119,8 +124,8 @@ const App = () => {
       const json = await response.json();
       const newResult = json.data;
 
-      // Update Summary List Local State
-      fetchSummaryData(); // Refresh the list from server to be safe
+      // Update Summary List Local State so the table updates immediately
+      fetchSummaryData(); 
       
       setIsScannerOpen(false);
       setSelectedCompany(newResult); // The scan result IS the full data
@@ -135,16 +140,16 @@ const App = () => {
 
   const handleBatchSeed = async () => {
     if (!IS_ADMIN_MODE) return;
-    if (!confirm("Start Batch Refresh? This will reset the Index.")) return;
+    if (!confirm("Start Batch Refresh? This will reset the Index and create 100+ individual files.")) return;
     
     setIsSeeding(true);
     try {
         const response = await fetch(`/admin/seed-finland-100`, { method: 'POST' });
         if (response.ok) {
-            alert("✅ Batch Refresh Started in Background.");
+            alert("✅ Batch Refresh Initiated. Check Railway Logs for progress.");
         }
     } catch (e) {
-        alert("❌ Error");
+        alert("❌ Error starting batch seed");
     } finally {
         setIsSeeding(false);
     }

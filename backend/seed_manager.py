@@ -202,7 +202,9 @@ def run_batch_seed(real_xray_mode=True):
         }
         
         # 1. SAVE INDIVIDUAL COMPANY FILE
-        storage.save_company_data(company["name"], full_data)
+        url = storage.save_company_data(company["name"], full_data)
+        if url:
+             print(f" -> Saved Individual File: companies/{storage.sanitize_filename(company['name'])}.json")
         
         # 2. ADD TO SUMMARY LIST
         batch_summary_list.append(summary_entry)
