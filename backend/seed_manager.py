@@ -14,9 +14,6 @@ from storage import BlobStorage
 from google import genai
 
 # --- DETERMINISTIC FALLBACK PROFILES ---
-# If scraping fails, we simulate a profile based on the company name hash.
-# This ensures the dashboard looks diverse and realistic, not just a wall of "0" scores.
-
 FALLBACK_PROFILES = [
     {
         "type": "LEGACY_INDUSTRIAL",
@@ -66,26 +63,24 @@ def clean_env_var(value):
     return value.strip().strip('"').strip("'")
 
 def get_deterministic_fallback(company_name):
-    """Returns a specific fallback profile based on the company name string."""
-    # Create a consistent integer from the name
     hash_val = int(hashlib.sha256(company_name.encode('utf-8')).hexdigest(), 16)
-    # Pick a profile modulo the number of profiles
     profile = FALLBACK_PROFILES[hash_val % len(FALLBACK_PROFILES)]
     return profile["text"]
 
 def scrape_homepage_text(url: str, company_name: str = "Unknown"):
     """
-    Advanced Scraper with Deterministic Fallback.
+    Advanced Scraper with Bilingual Support and Deterministic Fallback.
     """
     if not url: return get_deterministic_fallback(company_name)
     
     try:
+        # UPDATED HEADERS: explicitly ask for English AND Finnish
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5'
+            'Accept-Language': 'en-US,en;q=0.9,fi;q=0.8' 
         }
-        # Timeout is short to keep batch processing fast
+        
         response = requests.get(url, headers=headers, timeout=6)
         
         if response.status_code == 200:
@@ -111,7 +106,6 @@ def scrape_homepage_text(url: str, company_name: str = "Unknown"):
             
             combined_text = " ".join(extracted_lines)
             
-            # --- 3. FALLBACK LOGIC ---
             if len(combined_text) < 200:
                 print(f"  -> Content too short ({len(combined_text)} chars). Using deterministic fallback.")
                 return get_deterministic_fallback(company_name)
@@ -127,16 +121,12 @@ def scrape_homepage_text(url: str, company_name: str = "Unknown"):
         return get_deterministic_fallback(company_name)
 
 def run_batch_seed(real_xray_mode=True):
-    """
-    Iterates through the company list.
-    """
     total_count = len(TOP_100_COMPANIES)
     print(f"Starting Batch Seed for {total_count} companies...")
     
     storage = BlobStorage()
     dashboard_data = []
     
-    # Initialize Gemini
     api_key = clean_env_var(os.environ.get("API_KEY") or os.environ.get("GEMINI_API_KEY"))
     ai_client = None
     if api_key:
@@ -148,17 +138,12 @@ def run_batch_seed(real_xray_mode=True):
     for i, company in enumerate(TOP_100_COMPANIES):
         print(f"[{i+1}/{total_count}] Processing {company['name']}...")
         
-        # 1. Scanner 1: Scraping with Deterministic Fallback
         scraped_text = scrape_homepage_text(company['url'], company['name'])
         intent_results = analyze_intent(scraped_text)
-        
-        # 2. Scanner 2: Reality Check (With Simulation Fallback)
         reality_results = x_ray_search(company['name'], company['url'])
             
-        # 3. Calculate Gap
         gap = intent_results["score"] - reality_results["score"]
         
-        # 4. AI Synthesis
         summary_text = f"Analysis for {company['name']}. Intent: {intent_results['score']}, Reality: {reality_results['score']}."
         
         if ai_client:
@@ -185,7 +170,6 @@ def run_batch_seed(real_xray_mode=True):
             except Exception as e:
                 print(f"  -> AI Gen failed: {e}")
 
-        # 5. Create Record
         entry = {
             "id": str(uuid.uuid4()),
             "companyName": company["name"],
@@ -205,7 +189,6 @@ def run_batch_seed(real_xray_mode=True):
         dashboard_data.append(entry)
         time.sleep(0.1)
 
-    # 6. Save to Blob
     print("Uploading batch results to Blob Storage...")
     url = storage.upload_json("dashboard_data.json", dashboard_data)
     
