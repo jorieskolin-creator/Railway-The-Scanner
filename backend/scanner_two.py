@@ -58,12 +58,15 @@ def x_ray_search(company_name: str, company_url: str = None):
         client = genai.Client(api_key=api_key)
         
         # WE DEFINE THE SOURCES HERE (THE STANDARDIZED TRIBUNAL)
+        # UPGRADE: Explicit instruction to Iterate ALL juries to prevent "forgetting" items.
         prompt = f"""
         Perform a FORENSIC INVESTIGATION on "{search_name}" (Domain: {domain_hint}).
         
         SEARCH STRATEGY (STRICT - APPROVED DOMAINS ONLY):
         Do NOT read the company's own marketing pages (except for developer portals/investor PDFs).
         Look ONLY at evidence from these specific 'JURIES' defined below.
+        
+        CRITICAL: You must execute searches for ALL 4 JURIES. Do not skip any.
 
         1. THE ARCHITECTURAL JURY (Tech & Structure)
            - Evidence: Service Portfolio, Platform Thinking, API-First, DevOps maturity.
@@ -89,7 +92,7 @@ def x_ray_search(company_name: str, company_url: str = None):
            - Aalto University: `site:aalto.fi "{search_name}" AND ("Thesis" OR "Diplomityö")`
            - Thought Leadership: `site:medium.com "{search_name}"`
 
-        VERIFY THESE 5 HYPOTHESES:
+        VERIFY THESE 5 HYPOTHESES (Do not skip):
         1. "Surveillance": Is there micromanagement, time-tracking, or low trust?
         2. "Silos": Are there complaints about bureaucracy, "turf wars", or heavy handovers?
         3. "Fake Agile": Do employees call it "Waterfall", "Zombie Scrum", or "Agile in Name Only"?
@@ -113,12 +116,15 @@ def x_ray_search(company_name: str, company_url: str = None):
         }}
         """
 
+        # UPGRADE: Using gemini-3-pro-preview instead of Flash for complex reasoning stability.
+        # UPGRADE: Added temperature: 0 to reduce random hallucination/skipping.
         response = client.models.generate_content(
-            model='gemini-3-flash-preview',
+            model='gemini-3-pro-preview',
             contents=prompt,
             config={
                 'tools': [{'google_search': {}}],
-                'response_mime_type': 'application/json'
+                'response_mime_type': 'application/json',
+                'temperature': 0.0
             }
         )
         
