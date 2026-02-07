@@ -2,6 +2,7 @@
 import os
 import json
 import time
+import re
 from urllib.parse import urlparse
 from google import genai
 from google.genai import types
@@ -29,6 +30,29 @@ def get_clean_domain(url):
         return domain
     except:
         return ""
+
+def extract_json_from_text(text):
+    """
+    Robustly extracts the first JSON object found in a string.
+    Handles Markdown code blocks, conversational filler, etc.
+    """
+    if not text: 
+        return None
+    
+    # 1. Try finding a markdown block first
+    markdown_match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if markdown_match:
+        return markdown_match.group(1)
+
+    # 2. Fallback: Find the first outer curly braces
+    # This regex looks for the first { and matches until the last }
+    # It accounts for nested braces to some extent by being greedy, 
+    # but strictly simplistic for the outer envelope.
+    match = re.search(r'\{.*\}', text, re.DOTALL)
+    if match:
+        return match.group(0)
+        
+    return None
 
 def x_ray_search(company_name: str, company_url: str = None):
     """
@@ -124,22 +148,22 @@ def x_ray_search(company_name: str, company_url: str = None):
             contents=prompt,
             config={
                 'tools': [{'google_search': {}}],
-                # 'response_mime_type': 'application/json', # REMOVED: Incompatible with google_search tool
-                'temperature': 0.0
+                'temperature': 0.0,
+                # Safety settings to prevent empty blocks on corporate content
+                'safety_settings': [
+                    {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
+                    {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
+                    {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
+                    {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
+                ]
             }
         )
         
-        if response.text:
-            # Robust Parsing: Clean potential Markdown JSON blocks
-            text_payload = response.text.strip()
-            if text_payload.startswith("```json"):
-                text_payload = text_payload[7:]
-            if text_payload.startswith("```"):
-                text_payload = text_payload[3:]
-            if text_payload.endswith("```"):
-                text_payload = text_payload[:-3]
-                
-            data = json.loads(text_payload.strip())
+        # Robust Parsing: Handle mix of text + json or pure text
+        json_payload = extract_json_from_text(response.text)
+        
+        if json_payload:
+            data = json.loads(json_payload)
             
             findings = data.get("findings", [])
             for f in findings:
@@ -169,6 +193,9 @@ def x_ray_search(company_name: str, company_url: str = None):
                 "links": raw_findings,
                 "is_simulated": False
             }
+        else:
+             print(f"   [Scanner 2] JSON Extraction Failed. Raw Text: {response.text[:100]}...")
+             raise ValueError("No JSON object found in response text")
 
     except Exception as e:
         print(f"   [Scanner 2] Google Search Tool Failed: {e}")
