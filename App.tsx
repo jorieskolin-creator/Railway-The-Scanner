@@ -31,7 +31,6 @@ const App = () => {
   const [lastSynced, setLastSynced] = useState(null);
   const [sortConfig, setSortConfig] = useState({ key: 'reality_score', direction: 'desc' });
   const [systemStatus, setSystemStatus] = useState({ online: false, storage: false, google: false, ai: false });
-  const [isLiveConnected, setIsLiveConnected] = useState(false);
   
   // Track previous data length to detect when new items arrive
   const prevDataLengthRef = useRef(0);
@@ -88,56 +87,6 @@ const App = () => {
   // INITIAL LOAD
   useEffect(() => {
     fetchSummaryData();
-  }, []);
-
-  // --- SSE REAL-TIME CONNECTION ---
-  useEffect(() => {
-    let eventSource;
-
-    const connectSSE = () => {
-        console.log("Connecting to Live Feed...");
-        eventSource = new EventSource('/events');
-
-        eventSource.onopen = () => {
-            console.log("Live Feed Connected.");
-            setIsLiveConnected(true);
-        };
-
-        eventSource.onmessage = (event) => {
-            try {
-                // The backend sends 'data: [...]' string.
-                const newData = JSON.parse(event.data);
-                
-                if (Array.isArray(newData)) {
-                     console.log("Live Update Received:", newData.length, "items");
-                     setData(newData);
-                     setLastSynced(new Date().toLocaleTimeString('en-US', { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }));
-                     
-                     // If data is arriving, we assume seeding might be happening
-                     if (newData.length > prevDataLengthRef.current) {
-                         prevDataLengthRef.current = newData.length;
-                     }
-                }
-            } catch (e) {
-                console.error("SSE Parse Error", e);
-            }
-        };
-
-        eventSource.onerror = (err) => {
-            console.warn("Live Feed disconnected. Retrying...");
-            setIsLiveConnected(false);
-            eventSource.close();
-        };
-    };
-
-    connectSSE();
-
-    return () => {
-        if (eventSource) {
-            console.log("Closing Live Feed.");
-            eventSource.close();
-        }
-    };
   }, []);
 
   // Fetch DETAILED Data for a specific company
@@ -201,12 +150,12 @@ const App = () => {
       const json = await response.json();
       const newResult = json.data;
 
-      // The SSE broadcast in backend will update the list automatically, 
-      // but we optimistically open the modal immediately.
-      
+      // Optimistically open modal and refresh background list
       setIsScannerOpen(false);
       setSelectedCompany(newResult); 
       setIsModalOpen(true);
+      fetchSummaryData(true); // Silent refresh of the main list
+      
     } catch (error) {
       console.error(error);
       alert("Error running scan.");
@@ -233,10 +182,11 @@ const App = () => {
     try {
         const response = await fetch(`/admin/seed-finland-100`, { method: 'POST' });
         if (response.ok) {
-            alert("✅ Full Batch Scan Initiated. Dashboard will update in real-time via Live Feed.");
+            alert("✅ Full Batch Scan Initiated in Background.\n\nSince this is a long-running process, please refresh the dashboard manually periodically to see new entries.");
         }
     } catch (e) {
         alert("❌ Error starting batch seed");
+    } finally {
         setIsSeeding(false);
     }
   };
@@ -302,14 +252,7 @@ const App = () => {
           
           <div className="flex items-center gap-4 w-full max-w-md ml-4 justify-end">
             <div className="flex items-center gap-3 mr-2">
-                 {/* SYSTEM STATUS INDICATOR */}
-                 <div className="hidden sm:flex items-center gap-1.5 px-2 py-1 rounded-full bg-black/20 border border-white/5">
-                    <div className={`w-1.5 h-1.5 rounded-full ${isLiveConnected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`}></div>
-                    <span className={`text-[9px] font-mono uppercase ${isLiveConnected ? 'text-emerald-400' : 'text-slate-500'}`}>
-                        {isLiveConnected ? "Live Feed" : "Offline"}
-                    </span>
-                 </div>
-                 
+                 {/* SYSTEM STATUS INDICATOR - LIVE FEED REMOVED */}
                  <div className="hidden sm:flex items-center gap-1.5">
                      <div className={`w-1.5 h-1.5 rounded-full ${systemStatus.storage ? 'bg-cyan-400' : 'bg-rose-500'}`}></div>
                      <span className="text-[9px] font-mono uppercase text-slate-500">
@@ -321,7 +264,7 @@ const App = () => {
                 <>
                 <button onClick={handleBatchSeed} disabled={isSeeding} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-lg transition-all">
                     {isSeeding ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
-                    {isSeeding ? "SCANNING 100..." : "REFRESH DB"}
+                    {isSeeding ? "STARTING..." : "REFRESH DB"}
                 </button>
                 </>
             )}
