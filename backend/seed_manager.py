@@ -178,7 +178,8 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None):
 
                     Task: Write a 175-word forensic executive summary. Be direct.
                     """
-                    resp = gemini_client.models.generate_content(model='gemini-3-pro-preview', contents=prompt)
+                    # SWITCHED TO GEMINI 2.0 PRO EXPERIMENTAL
+                    resp = gemini_client.models.generate_content(model='gemini-2.0-pro-exp-02-05', contents=prompt)
                     if resp.text: summary_text = resp.text
                 except Exception as e:
                     print(f"   [Synthesis Error] {e}")

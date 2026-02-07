@@ -191,7 +191,8 @@ async def run_scan(request: ScanRequest):
 
                 Task: Write a 175-word forensic executive summary.
                 """
-                response = client.models.generate_content(model='gemini-3-pro-preview', contents=prompt)
+                # SWITCHED TO GEMINI 2.0 PRO EXPERIMENTAL
+                response = client.models.generate_content(model='gemini-2.0-pro-exp-02-05', contents=prompt)
                 if response.text: summary = response.text
             except Exception as e:
                 print(f"Gemini Error: {e}")
