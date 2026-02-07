@@ -9,7 +9,7 @@ const Icons = new Proxy(LucideRaw, {
     }
 });
 
-const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock, HardDrive, Terminal } = Icons;
+const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock, HardDrive, Terminal, Radio } = Icons;
 
 const TruthMatrix = (window as any).TruthMatrix;
 const ScannerInput = (window as any).ScannerInput;
@@ -29,8 +29,9 @@ const App = () => {
   const [isScanning, setIsScanning] = useState(false);
   const [isSeeding, setIsSeeding] = useState(false);
   const [lastSynced, setLastSynced] = useState(null);
-  const [sortConfig, setSortConfig] = useState({ key: 'reality_gap', direction: 'desc' });
+  const [sortConfig, setSortConfig] = useState({ key: 'reality_score', direction: 'desc' });
   const [systemStatus, setSystemStatus] = useState({ online: false, storage: false, google: false, ai: false });
+  const [isLiveConnected, setIsLiveConnected] = useState(false);
   
   // Track previous data length to detect when new items arrive
   const prevDataLengthRef = useRef(0);
@@ -59,7 +60,7 @@ const App = () => {
     checkHealth();
   }, []);
 
-  // Fetch LIGHTWEIGHT Summary Data
+  // Fetch LIGHTWEIGHT Summary Data (Initial Load)
   const fetchSummaryData = async (silent = false) => {
     try {
         if (!silent) setLoading(true);
@@ -69,10 +70,6 @@ const App = () => {
             const json = await response.json();
             const newData = json || [];
             
-            // Check if data grew
-            if (newData.length > prevDataLengthRef.current) {
-                console.log(`New data detected! ${prevDataLengthRef.current} -> ${newData.length}`);
-            }
             prevDataLengthRef.current = newData.length;
             
             setData(newData);
@@ -88,20 +85,60 @@ const App = () => {
     }
   };
 
+  // INITIAL LOAD
   useEffect(() => {
     fetchSummaryData();
   }, []);
 
-  // Auto-Poll when seeding
+  // --- SSE REAL-TIME CONNECTION ---
   useEffect(() => {
-      let interval;
-      if (isSeeding) {
-          interval = setInterval(() => {
-              fetchSummaryData(true); // Silent fetch
-          }, 5000);
-      }
-      return () => clearInterval(interval);
-  }, [isSeeding]);
+    let eventSource;
+
+    const connectSSE = () => {
+        console.log("Connecting to Live Feed...");
+        eventSource = new EventSource('/events');
+
+        eventSource.onopen = () => {
+            console.log("Live Feed Connected.");
+            setIsLiveConnected(true);
+        };
+
+        eventSource.onmessage = (event) => {
+            try {
+                // The backend sends 'data: [...]' string.
+                const newData = JSON.parse(event.data);
+                
+                if (Array.isArray(newData)) {
+                     console.log("Live Update Received:", newData.length, "items");
+                     setData(newData);
+                     setLastSynced(new Date().toLocaleTimeString('en-US', { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+                     
+                     // If data is arriving, we assume seeding might be happening
+                     if (newData.length > prevDataLengthRef.current) {
+                         prevDataLengthRef.current = newData.length;
+                     }
+                }
+            } catch (e) {
+                console.error("SSE Parse Error", e);
+            }
+        };
+
+        eventSource.onerror = (err) => {
+            console.warn("Live Feed disconnected. Retrying...");
+            setIsLiveConnected(false);
+            eventSource.close();
+        };
+    };
+
+    connectSSE();
+
+    return () => {
+        if (eventSource) {
+            console.log("Closing Live Feed.");
+            eventSource.close();
+        }
+    };
+  }, []);
 
   // Fetch DETAILED Data for a specific company
   const handleCompanyClick = async (summaryItem) => {
@@ -115,7 +152,7 @@ const App = () => {
     try {
         let fullData = null;
         
-        // METHOD 1: Use the explicit URL if available (Best for Vercel Blob with suffixes)
+        // METHOD 1: Use the explicit URL if available
         if (summaryItem.detailsUrl) {
             console.log("Fetching details via direct URL:", summaryItem.detailsUrl);
             const res = await fetch(`${summaryItem.detailsUrl}?t=${Date.now()}`);
@@ -164,11 +201,11 @@ const App = () => {
       const json = await response.json();
       const newResult = json.data;
 
-      // Update Summary List Local State so the table updates immediately
-      fetchSummaryData(); 
+      // The SSE broadcast in backend will update the list automatically, 
+      // but we optimistically open the modal immediately.
       
       setIsScannerOpen(false);
-      setSelectedCompany(newResult); // The scan result IS the full data
+      setSelectedCompany(newResult); 
       setIsModalOpen(true);
     } catch (error) {
       console.error(error);
@@ -186,7 +223,7 @@ const App = () => {
     try {
         const response = await fetch(`/admin/seed-finland-100`, { method: 'POST' });
         if (response.ok) {
-            alert("✅ Full Batch Scan Initiated. Dashboard will update in real-time.");
+            alert("✅ Full Batch Scan Initiated. Dashboard will update in real-time via Live Feed.");
         }
     } catch (e) {
         alert("❌ Error starting batch seed");
@@ -204,8 +241,27 @@ const App = () => {
     item.companyName.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  // Helper for Archetype Logic
+  const getArchetype = (intent, reality) => {
+      if (reality >= 50) {
+          if (intent >= 50) return { label: "Walk-and-Talk", color: "text-emerald-400", bg: "bg-emerald-400/10", border: "border-emerald-400/20" };
+          return { label: "Silent Doer", color: "text-cyan-400", bg: "bg-cyan-400/10", border: "border-cyan-400/20" };
+      } else {
+          if (intent >= 50) return { label: "Talk-not-Walk", color: "text-amber-400", bg: "bg-amber-400/10", border: "border-amber-400/20" };
+          return { label: "Stagnation", color: "text-slate-400", bg: "bg-slate-400/10", border: "border-slate-400/20" };
+      }
+  };
+
   const sortedData = [...filteredData].sort((a, b) => {
     if (!sortConfig) return 0;
+    
+    // Sort by computed Archetype string
+    if (sortConfig.key === 'archetype') {
+         const archA = getArchetype(a.intent_score, a.reality_score).label;
+         const archB = getArchetype(b.intent_score, b.reality_score).label;
+         return sortConfig.direction === 'asc' ? archA.localeCompare(archB) : archB.localeCompare(archA);
+    }
+
     const aVal = a[sortConfig.key];
     const bVal = b[sortConfig.key];
     if (typeof aVal === 'string' && typeof bVal === 'string') return sortConfig.direction === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
@@ -235,12 +291,21 @@ const App = () => {
           </div>
           
           <div className="flex items-center gap-4 w-full max-w-md ml-4 justify-end">
-            <div className="flex items-center gap-2 mr-2">
+            <div className="flex items-center gap-3 mr-2">
                  {/* SYSTEM STATUS INDICATOR */}
-                 <div className={`w-2 h-2 rounded-full ${systemStatus.storage ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]' : 'bg-rose-500'}`}></div>
-                 <span className="text-[10px] font-mono uppercase text-slate-400 hidden sm:block">
-                    {systemStatus.storage ? "System Online" : "Storage Disconnected"}
-                 </span>
+                 <div className="hidden sm:flex items-center gap-1.5 px-2 py-1 rounded-full bg-black/20 border border-white/5">
+                    <div className={`w-1.5 h-1.5 rounded-full ${isLiveConnected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`}></div>
+                    <span className={`text-[9px] font-mono uppercase ${isLiveConnected ? 'text-emerald-400' : 'text-slate-500'}`}>
+                        {isLiveConnected ? "Live Feed" : "Offline"}
+                    </span>
+                 </div>
+                 
+                 <div className="hidden sm:flex items-center gap-1.5">
+                     <div className={`w-1.5 h-1.5 rounded-full ${systemStatus.storage ? 'bg-cyan-400' : 'bg-rose-500'}`}></div>
+                     <span className="text-[9px] font-mono uppercase text-slate-500">
+                        Storage
+                     </span>
+                 </div>
             </div>
             {IS_ADMIN_MODE && (
                 <>
@@ -318,26 +383,29 @@ const App = () => {
                         <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('companyName')}>Entity</th>
                         <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('intent_score')}>Ambition</th>
                         <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('reality_score')}>Reality</th>
-                        <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('reality_gap')}>Delta</th>
+                        <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('archetype')}>Archetype</th>
                         <th className="px-6 py-4">Action</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-white/5 text-slate-300">
-                      {sortedData.map((row) => (
+                      {sortedData.map((row) => {
+                        const archetype = getArchetype(row.intent_score, row.reality_score);
+                        return (
                         <tr key={row.id} className="hover:bg-white/5 transition-colors">
                           <td className="px-6 py-4 font-medium text-white">{row.companyName}</td>
                           <td className="px-6 py-4">{row.intent_score}</td>
                           <td className="px-6 py-4">{row.reality_score}</td>
                           <td className="px-6 py-4 font-mono text-xs">
-                             <span className={row.reality_gap > 15 ? 'text-rose-400' : row.reality_gap < -15 ? 'text-cyan-400' : 'text-emerald-400'}>
-                                {row.reality_gap > 0 ? '+' : ''}{row.reality_gap}
+                             <span className={`px-2.5 py-1 rounded-md border ${archetype.bg} ${archetype.border} ${archetype.color} font-semibold uppercase tracking-wider text-[10px]`}>
+                                {archetype.label}
                              </span>
                           </td>
                           <td className="px-6 py-4">
                             <button onClick={() => handleCompanyClick(row)} className="text-cyan-400 hover:text-cyan-300 text-xs font-medium">View Report</button>
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
               )}

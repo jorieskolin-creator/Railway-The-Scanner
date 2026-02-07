@@ -1,6 +1,7 @@
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Response
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -8,6 +9,7 @@ from typing import Optional, List
 import os
 import uuid
 import json
+import asyncio
 import requests
 from datetime import datetime
 from google import genai
@@ -20,7 +22,7 @@ from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES
 from knowledge_base import get_evolving_framework
 
-print("Starting Adaptability Scanner Backend (v3.7 - Reset Capable)...", flush=True)
+print("Starting Adaptability Scanner Backend (v3.8 - Realtime SSE)...", flush=True)
 
 def clean_env_var(value):
     if not value: return ""
@@ -44,6 +46,47 @@ print(f"   [Config] Effective Public Base URL: {storage.public_base_url or 'Auto
 
 app.mount("/components", StaticFiles(directory="../components"), name="components")
 app.mount("/services", StaticFiles(directory="../services"), name="services")
+
+# --- REAL-TIME SSE MANAGER ---
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[asyncio.Queue] = []
+
+    async def connect(self):
+        q = asyncio.Queue()
+        self.active_connections.append(q)
+        print(f"   [SSE] Client connected. Active streams: {len(self.active_connections)}")
+        return q
+
+    def disconnect(self, q: asyncio.Queue):
+        if q in self.active_connections:
+            self.active_connections.remove(q)
+            print(f"   [SSE] Client disconnected. Active streams: {len(self.active_connections)}")
+
+    async def broadcast(self, message: str):
+        # Push message to all active queues
+        for i, q in enumerate(self.active_connections):
+            try:
+                await q.put(message)
+            except Exception as e:
+                print(f"   [SSE] Failed to send to client {i}: {e}")
+
+manager = ConnectionManager()
+
+def broadcast_sync_wrapper(data):
+    """
+    Bridge to allow the Synchronous Seeding Task to trigger an Async Broadcast.
+    Uses asyncio.run_coroutine_threadsafe to inject into the main event loop.
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            payload = json.dumps(data)
+            asyncio.run_coroutine_threadsafe(manager.broadcast(payload), loop)
+    except Exception as e:
+        print(f"   [SSE Bridge Error] Could not broadcast update: {e}")
+
+# --- ROUTES ---
 
 @app.get("/App.tsx")
 async def get_app_tsx(): return FileResponse("../App.tsx", media_type="application/javascript")
@@ -71,7 +114,7 @@ def health_check():
         storage_connected = False
 
     return {
-        "status": "Adaptability Scanner API Online (v3.6)", 
+        "status": "Adaptability Scanner API Online (v3.8)", 
         "timestamp": datetime.utcnow().isoformat(),
         "storage_connected": storage_connected,
         "config_status": {
@@ -81,6 +124,32 @@ def health_check():
         }
     }
 
+@app.get("/events")
+async def sse_endpoint(request: Request):
+    """
+    Server-Sent Events endpoint.
+    Frontend connects here to receive real-time updates without polling.
+    """
+    async def event_generator():
+        queue = await manager.connect()
+        try:
+            while True:
+                # If client disconnects, request.is_disconnected() becomes true
+                if await request.is_disconnected():
+                    break
+                    
+                # Wait for new data (blocks until broadcast is called)
+                data = await queue.get()
+                
+                # Format as SSE
+                yield f"data: {data}\n\n"
+        except asyncio.CancelledError:
+            pass
+        finally:
+            manager.disconnect(queue)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
 @app.get("/dashboard-data")
 async def get_dashboard_data(response: Response):
     """
@@ -89,8 +158,6 @@ async def get_dashboard_data(response: Response):
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     print("GET /dashboard-data requested...")
     
-    # FIX: Remove .json extension to match Vercel's suffixing behavior
-    # Searching for "index/summary_list" will match "index/summary_list-AbCd.json"
     data = storage.retrieve_latest_data("index/summary_list")
     
     if data:
@@ -121,16 +188,9 @@ class ScanRequest(BaseModel):
 
 @app.post("/admin/seed-finland-100")
 async def seed_database(background_tasks: BackgroundTasks):
-    background_tasks.add_task(run_batch_seed, real_xray_mode=True, limit=None)
-    return {"status": "Batch Seeding Initiated", "message": "Check server logs for progress."}
-
-@app.post("/admin/seed-fast")
-async def seed_fast(background_tasks: BackgroundTasks):
-    """
-    Runs a calibration scan for just the top 3 companies.
-    """
-    background_tasks.add_task(run_batch_seed, real_xray_mode=True, limit=3)
-    return {"status": "Quick Calibration Initiated", "message": "Scanning top 3 companies (Nokia, Kone, Neste)..."}
+    # Pass the bridge function as a callback
+    background_tasks.add_task(run_batch_seed, real_xray_mode=True, limit=None, progress_callback=broadcast_sync_wrapper)
+    return {"status": "Batch Seeding Initiated", "message": "Check dashboard for real-time updates."}
 
 @app.post("/admin/reset-database")
 async def reset_database():
@@ -138,6 +198,8 @@ async def reset_database():
     WIPES ALL DATA. Used when changing math models (e.g. 4-point scale).
     """
     count = storage.nuke_everything()
+    # Broadcast empty list to clear frontend
+    await manager.broadcast("[]")
     return {"status": "Database Wiped", "deleted_count": count}
 
 @app.post("/scan")
@@ -225,7 +287,6 @@ async def run_scan(request: ScanRequest):
         }
         
         # --- STEP 4: SAVE ---
-        saved_url = None
         if request.saveToDatabase:
             saved_url = storage.save_company_data(request.companyName, full_data)
             print(f"   [Live Scan] Saved detailed report to: {saved_url}")
@@ -237,9 +298,16 @@ async def run_scan(request: ScanRequest):
                 "reality_score": reality_results["score"],
                 "reality_gap": gap,
                 "lastUpdated": new_timestamp,
-                "detailsUrl": saved_url # Ensure we save the specific link
+                "detailsUrl": saved_url
             }
+            # Update index
             storage.update_global_index(summary_entry)
+            
+            # BROADCAST UPDATE
+            # Fetch fresh full index to be safe, or just patch?
+            # For simplicity in /scan, we broadcast the updated full index
+            full_index = storage.retrieve_latest_data("index/summary_list")
+            await manager.broadcast(json.dumps(full_index or []))
         
         return {"success": True, "data": full_data}
 

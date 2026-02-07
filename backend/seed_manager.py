@@ -62,7 +62,6 @@ def scrape_strategic_content(base_url: str, company_name: str = "Unknown"):
     soup = BeautifulSoup(home_html, 'html.parser')
     
     # PRIORITY MAP: The exact list of categories to scan for Intent Analysis
-    # We look for the first valid link for each category to ensure we get the main landing page
     priority_map = {
         "Strategy": ["strategy", "strategia", "vision", "visio", "mission", "purpose", "tavoitteet", "goals"],
         "Sustainability": ["sustainability", "vastuullisuus", "esg", "environment", "ympäristö", "climate"],
@@ -84,21 +83,15 @@ def scrape_strategic_content(base_url: str, company_name: str = "Unknown"):
 
     all_links = soup.find_all('a', href=True)
 
-    # 1. Fill buckets based on priority
     for category, keywords in priority_map.items():
         for a in all_links:
             href = a['href'].lower()
             text = a.get_text(strip=True).lower()
-            
-            # Check if this link matches the category keywords
             if any(k in href for k in keywords) or any(k in text for k in keywords):
                 full_url = make_absolute(a['href'])
-                
-                # Internal Domain Check (Safety)
                 try:
                     base_domain = base_url.split('/')[2].replace('www.', '')
                     if base_domain in full_url: 
-                        # Only take the first match per category to avoid scanning 10 different blog pages
                         if category not in found_targets:
                             found_targets[category] = full_url
                 except:
@@ -107,26 +100,22 @@ def scrape_strategic_content(base_url: str, company_name: str = "Unknown"):
     final_text = []
     final_text.append(f"--- HOMEPAGE ({base_url}) ---\n" + extract_content_from_html(home_html))
     
-    # 2. Compile unique URLs 
-    # Sorting ensures DETERMINISTIC behavior (The Butterfly Effect fix)
     urls_to_visit = sorted(list(set(found_targets.values())))
-    
     print(f"   [Scanner 1] Identified Strategic Targets: {list(found_targets.keys())}")
-    print(f"   [Scanner 1] Visiting {len(urls_to_visit)} subpages...")
-
-    # 3. Visit pages
+    
     for url in urls_to_visit:
-        # print(f"   [Scanner 1] + Visiting: {url}")
         sub_html = get_page_text(url)
         content = extract_content_from_html(sub_html)
         if content: final_text.append(f"--- SUBPAGE ({url}) ---\n" + content)
             
     combined_text = "\n\n".join(final_text)
-    # Return up to 100k chars to ensure we capture the depth of these ~8 pages
     return combined_text[:100000]
 
-def run_batch_seed(real_xray_mode=True, limit=None):
-    # Select companies based on limit
+def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None):
+    """
+    Runs the batch seed process.
+    If progress_callback is provided, it calls it with the updated summary_list after every save.
+    """
     target_list = TOP_100_COMPANIES[:limit] if limit else TOP_100_COMPANIES
     total_count = len(target_list)
     
@@ -135,16 +124,13 @@ def run_batch_seed(real_xray_mode=True, limit=None):
     storage = BlobStorage()
     batch_summary_list = []
     
-    # CRITICAL: Always try to load existing data first.
-    # This enables "Resume" capability and prevents wiping the dashboard on start.
-    # If files were deleted (Fresh Start), this simply returns [] which is correct.
     try:
         existing_index = storage.retrieve_latest_data("index/summary_list")
         if existing_index:
             batch_summary_list = existing_index
-            print(f"   [Info] Loaded existing index of {len(batch_summary_list)} items. Updates will occur in-place.")
+            print(f"   [Info] Loaded existing index of {len(batch_summary_list)} items.")
     except Exception as e:
-        print(f"   [Info] Could not load existing index (Starting Fresh): {e}")
+        print(f"   [Info] Could not load existing index: {e}")
 
     api_key = clean_env_var(os.environ.get("API_KEY") or os.environ.get("GEMINI_API_KEY"))
     gemini_client = None
@@ -158,18 +144,16 @@ def run_batch_seed(real_xray_mode=True, limit=None):
         print(f"\n[{i+1}/{total_count}] Processing: {company['name']} ...")
         
         try:
-            # 1. REAL SCRAPING (Intent)
-            # We use the URL from the list
+            # 1. REAL SCRAPING
             scraped_text = scrape_strategic_content(company["url"], company["name"])
             
             # 2. REAL INTENT ANALYSIS
             intent_results = analyze_intent(scraped_text)
             print(f"   -> Intent Score: {intent_results['score']}")
 
-            # 3. REAL REALITY CHECK (Google Search via Gemini)
-            # This uses the imported x_ray_search which does the actual external API call
+            # 3. REAL REALITY CHECK
             reality_results = x_ray_search(company["name"], company["url"])
-            print(f"   -> Reality Score: {reality_results['score']} (Found {len(reality_results['links'])} evidence links)")
+            print(f"   -> Reality Score: {reality_results['score']}")
 
             gap = intent_results["score"] - reality_results["score"]
 
@@ -178,7 +162,6 @@ def run_batch_seed(real_xray_mode=True, limit=None):
             if gemini_client:
                 try:
                     intent_narrative = json.dumps(intent_results["breakdown"])
-                    # Take top 3 links for context
                     evidence_list = ', '.join([f"{l['title']}: {l.get('snippet', '')}" for l in reality_results['links'][:3]])
                     knowledge_context = get_evolving_framework()
 
@@ -195,13 +178,12 @@ def run_batch_seed(real_xray_mode=True, limit=None):
 
                     Task: Write a 100-word forensic executive summary. Be direct.
                     """
-                    # UPGRADE: Use Pro model for higher quality summaries in batch
                     resp = gemini_client.models.generate_content(model='gemini-3-pro-preview', contents=prompt)
                     if resp.text: summary_text = resp.text
                 except Exception as e:
                     print(f"   [Synthesis Error] {e}")
 
-            # 5. ASSEMBLE REAL DATA
+            # 5. ASSEMBLE DATA
             result_id = str(uuid.uuid4())
             timestamp = datetime.utcnow().isoformat()
 
@@ -219,7 +201,7 @@ def run_batch_seed(real_xray_mode=True, limit=None):
                 "summary_text": summary_text,
                 "lastUpdated": timestamp,
                 "history": [],
-                "is_simulated": False # FLAG AS REAL
+                "is_simulated": False 
             }
 
             # 6. SAVE TO BLOB
@@ -235,25 +217,26 @@ def run_batch_seed(real_xray_mode=True, limit=None):
                 "detailsUrl": saved_url
             }
             
-            # Update local list (Remove old entry if exists, add new)
+            # Update local list
             batch_summary_list = [x for x in batch_summary_list if x['companyName'] != company['name']]
             batch_summary_list.append(summary_entry)
             
-            # CRITICAL UPDATE: Save incrementally so the user sees progress immediately
+            # Save Global Index Incremental
             storage.save_global_index_direct(batch_summary_list)
             
-            print(f"   -> Saved & Index Updated. URL: {saved_url}")
-
-            # 7. RATE LIMITING SAFETY
-            # Sleep 5 seconds between companies to avoid hammering Google Search API
+            # 7. REAL-TIME CALLBACK (Triggers SSE Broadcast)
+            if progress_callback:
+                print(f"   [Batch] Broadcasting update ({len(batch_summary_list)} items)...")
+                progress_callback(batch_summary_list)
+            
+            # Rate Limit Safety
             time.sleep(5)
 
         except Exception as e:
             print(f"   [CRITICAL BATCH ERROR] Failed to process {company['name']}: {e}")
-            # Continue to next company, do not crash the whole batch
             continue
 
     print(f"\n=== BATCH COMPLETE. FINAL SAVE ({len(batch_summary_list)} entries) ===")
     storage.save_global_index_direct(batch_summary_list)
-    print("Database Refresh Successful.")
+    if progress_callback: progress_callback(batch_summary_list)
     return True
