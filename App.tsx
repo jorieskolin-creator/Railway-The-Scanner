@@ -356,16 +356,27 @@ const App = () => {
              </div>
           ) : data.length === 0 ? (
              <div className="h-[400px] w-full bg-[#0f172a]/60 rounded-2xl flex flex-col items-center justify-center border border-white/5 text-slate-400 gap-4">
-                <AlertTriangle size={48} className="text-amber-500/50" />
+                {systemStatus.storage ? (
+                    <Database size={48} className="text-cyan-500/50" />
+                ) : (
+                    <AlertTriangle size={48} className="text-amber-500/50" />
+                )}
+                
                 <div className="text-center">
-                    <h3 className="text-white font-bold text-lg">Database Connection Pending</h3>
-                    <p className="text-sm max-w-md mt-2">No records found. The database might be empty, or the backend is unable to read from Vercel Blob Storage.</p>
+                    <h3 className="text-white font-bold text-lg">
+                        {systemStatus.storage ? "Database Ready (Empty)" : "Storage Disconnected"}
+                    </h3>
+                    <p className="text-sm max-w-md mt-2">
+                        {systemStatus.storage 
+                           ? "Vercel Blob Storage is connected but contains no data. Folders will be automatically recreated upon initialization." 
+                           : "Could not connect to Vercel Blob. Please check your token or internet connection."}
+                    </p>
                 </div>
-                {IS_ADMIN_MODE && (
+                {IS_ADMIN_MODE && systemStatus.storage && (
                     <div className="flex gap-4 mt-6">
                         <button onClick={handleBatchSeed} disabled={isSeeding} className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold rounded-lg transition-all flex items-center gap-2 disabled:opacity-50">
                            {isSeeding ? <Loader2 size={16} className="animate-spin" /> : <Database size={16} />}
-                           Run Full Scan (100)
+                           Initialize & Seed Database
                         </button>
                     </div>
                 )}
