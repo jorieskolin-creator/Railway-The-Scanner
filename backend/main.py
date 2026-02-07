@@ -21,7 +21,7 @@ from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES
 from knowledge_base import get_evolving_framework
 
-print("Starting Adaptability Scanner Backend (v3.9.1 - Reliability Fixes)...", flush=True)
+print("Starting Adaptability Scanner Backend (v4.0.0 - Client Orchestration)...", flush=True)
 
 def clean_env_var(value):
     if not value: return ""
@@ -74,7 +74,7 @@ def health_check():
         storage_connected = False
 
     return {
-        "status": "Adaptability Scanner API Online (v3.9.1)", 
+        "status": "Adaptability Scanner API Online (v4.0.0)", 
         "timestamp": datetime.utcnow().isoformat(),
         "storage_connected": storage_connected,
         "config_status": {
@@ -120,9 +120,17 @@ class ScanRequest(BaseModel):
     reportText: str
     saveToDatabase: Optional[bool] = False
 
+@app.get("/admin/company-list")
+async def get_company_list():
+    """
+    Returns the static list of TOP 100 companies for client-side iteration.
+    """
+    return {"companies": TOP_100_COMPANIES}
+
 @app.post("/admin/seed-finland-100")
 async def seed_database(background_tasks: BackgroundTasks):
-    # Runs silently in background without broadcasting updates
+    # DEPRECATED: This method is prone to timeouts on Vercel.
+    # Kept for backward compatibility or local testing.
     background_tasks.add_task(run_batch_seed, real_xray_mode=True, limit=None)
     return {"status": "Batch Seeding Initiated", "message": "Process running in background. Refresh dashboard manually to see updates."}
 

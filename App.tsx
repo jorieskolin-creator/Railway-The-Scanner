@@ -1,4 +1,5 @@
 
+
 const { useState, useEffect, useRef } = (window as any).React;
 
 const LucideRaw = (window as any).Lucide || {};
@@ -9,7 +10,7 @@ const Icons = new Proxy(LucideRaw, {
     }
 });
 
-const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock, HardDrive, Terminal, Radio } = Icons;
+const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock, HardDrive, Terminal, Radio, Play, Pause, StopCircle } = Icons;
 
 const TruthMatrix = (window as any).TruthMatrix;
 const ScannerInput = (window as any).ScannerInput;
@@ -27,11 +28,15 @@ const App = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
-  const [isSeeding, setIsSeeding] = useState(false);
   const [lastSynced, setLastSynced] = useState(null);
   const [sortConfig, setSortConfig] = useState({ key: 'reality_score', direction: 'desc' });
   const [systemStatus, setSystemStatus] = useState({ online: false, storage: false, google: false, ai: false });
   
+  // BATCH STATE
+  const [isBatchOpen, setIsBatchOpen] = useState(false);
+  const [batchStatus, setBatchStatus] = useState({ current: 0, total: 0, isRunning: false, currentName: '', logs: [] });
+  const stopBatchRef = useRef(false);
+
   // Track previous data length to detect when new items arrive
   const prevDataLengthRef = useRef(0);
 
@@ -88,6 +93,20 @@ const App = () => {
   useEffect(() => {
     fetchSummaryData();
   }, []);
+
+  // Warn user before closing tab if batch is running
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+        if (batchStatus.isRunning) {
+            e.preventDefault();
+            e.returnValue = "Diagnosis in progress. Leaving will stop the scanner.";
+            return e.returnValue;
+        }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [batchStatus.isRunning]);
+
 
   // Fetch DETAILED Data for a specific company
   const handleCompanyClick = async (summaryItem) => {
@@ -164,31 +183,90 @@ const App = () => {
     }
   };
 
-  const handleBatchSeed = async () => {
+  // --- CLIENT-SIDE BATCH ORCHESTRATION ---
+  // This replaces the server-side batch to avoid Vercel timeouts.
+  // The browser controls the loop.
+  const handleStartBatch = async () => {
     if (!IS_ADMIN_MODE) return;
     
-    // AUTHENTICATION CHECK
     const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to initiate Batch Scan:");
-    if (!password) return; // Cancelled
+    if (!password) return; 
     
     if (password !== "CoolScanner2026!!!!!") {
         alert("ACCESS DENIED: Incorrect Password.");
         return;
     }
 
-    if (!confirm("⚠️ CAUTION: Start Full Market Scan (100 Companies)?\n\nThis process takes ~45 minutes and consumes significant API resources.")) return;
+    if (!confirm("⚠️ START CLIENT-SIDE BATCH SCAN?\n\nThis will scan companies one-by-one in YOUR browser.\n\nDO NOT CLOSE THIS TAB until finished.")) return;
     
-    setIsSeeding(true);
+    setIsBatchOpen(true);
+    stopBatchRef.current = false;
+    setBatchStatus({ current: 0, total: 0, isRunning: true, currentName: 'Initializing...', logs: ['Fetching Target List...'] });
+
     try {
-        const response = await fetch(`/admin/seed-finland-100`, { method: 'POST' });
-        if (response.ok) {
-            alert("✅ Full Batch Scan Initiated in Background.\n\nSince this is a long-running process, please refresh the dashboard manually periodically to see new entries.");
+        // 1. Get List
+        const listRes = await fetch('/admin/company-list');
+        const listJson = await listRes.json();
+        const targets = listJson.companies || [];
+
+        setBatchStatus(prev => ({ ...prev, total: targets.length, logs: [...prev.logs, `Loaded ${targets.length} targets.`] }));
+
+        // 2. Iterate
+        for (let i = 0; i < targets.length; i++) {
+            if (stopBatchRef.current) {
+                 setBatchStatus(prev => ({ ...prev, isRunning: false, logs: [...prev.logs, '⛔ Batch Stopped by User.'] }));
+                 break;
+            }
+
+            const target = targets[i];
+            const logPrefix = `[${i + 1}/${targets.length}] ${target.name}`;
+            
+            setBatchStatus(prev => ({ 
+                ...prev, 
+                current: i + 1, 
+                currentName: target.name,
+                logs: [...prev.logs, `Processing: ${target.name}...`] 
+            }));
+
+            try {
+                // Perform Scan
+                const res = await fetch('/scan', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        companyName: target.name, 
+                        companyUrl: target.url, 
+                        reportText: "", 
+                        saveToDatabase: true 
+                    })
+                });
+
+                if (res.ok) {
+                    setBatchStatus(prev => ({ ...prev, logs: [...prev.logs, `✅ Success: ${target.name}`] }));
+                } else {
+                     setBatchStatus(prev => ({ ...prev, logs: [...prev.logs, `❌ Failed: ${target.name}`] }));
+                }
+            } catch (err) {
+                 setBatchStatus(prev => ({ ...prev, logs: [...prev.logs, `⚠️ Network Error: ${target.name}`] }));
+            }
+
+            // Small delay to let React render and not choke Vercel rate limits too hard
+            await new Promise(r => setTimeout(r, 2000));
         }
+        
+        // Done
+        fetchSummaryData(true);
+        setBatchStatus(prev => ({ ...prev, isRunning: false, currentName: 'Complete', logs: [...prev.logs, '✨ BATCH EXECUTION FINISHED.'] }));
+
     } catch (e) {
-        alert("❌ Error starting batch seed");
-    } finally {
-        setIsSeeding(false);
+        alert("Error starting batch.");
+        console.error(e);
+        setBatchStatus(prev => ({ ...prev, isRunning: false }));
     }
+  };
+
+  const handleStopBatch = () => {
+      stopBatchRef.current = true;
   };
 
   const handleSort = (key) => {
@@ -252,7 +330,6 @@ const App = () => {
           
           <div className="flex items-center gap-4 w-full max-w-md ml-4 justify-end">
             <div className="flex items-center gap-3 mr-2">
-                 {/* SYSTEM STATUS INDICATOR - LIVE FEED REMOVED */}
                  <div className="hidden sm:flex items-center gap-1.5">
                      <div className={`w-1.5 h-1.5 rounded-full ${systemStatus.storage ? 'bg-cyan-400' : 'bg-rose-500'}`}></div>
                      <span className="text-[9px] font-mono uppercase text-slate-500">
@@ -262,9 +339,9 @@ const App = () => {
             </div>
             {IS_ADMIN_MODE && (
                 <>
-                <button onClick={handleBatchSeed} disabled={isSeeding} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-lg transition-all">
-                    {isSeeding ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
-                    {isSeeding ? "STARTING..." : "REFRESH DB"}
+                <button onClick={handleStartBatch} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-lg transition-all">
+                    {batchStatus.isRunning ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
+                    {batchStatus.isRunning ? "SCANNING..." : "REFRESH DB"}
                 </button>
                 </>
             )}
@@ -317,8 +394,8 @@ const App = () => {
                 </div>
                 {IS_ADMIN_MODE && systemStatus.storage && (
                     <div className="flex gap-4 mt-6">
-                        <button onClick={handleBatchSeed} disabled={isSeeding} className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold rounded-lg transition-all flex items-center gap-2 disabled:opacity-50">
-                           {isSeeding ? <Loader2 size={16} className="animate-spin" /> : <Database size={16} />}
+                        <button onClick={handleStartBatch} className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold rounded-lg transition-all flex items-center gap-2">
+                           <Database size={16} />
                            Initialize & Seed Database
                         </button>
                     </div>
@@ -377,6 +454,7 @@ const App = () => {
         </section>
       </main>
 
+      {/* SINGLE SCANNER MODAL */}
       {isScannerOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
            <div className="absolute inset-0 bg-black/90 backdrop-blur-sm" onClick={() => !isScanning && setIsScannerOpen(false)} />
@@ -398,19 +476,71 @@ const App = () => {
         </div>
       )}
 
+      {/* BATCH PROGRESS MODAL (NEW) */}
+      {isBatchOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/95 backdrop-blur-md" />
+            <div className="relative w-full max-w-lg bg-[#0f172a] border border-cyan-500/30 rounded-xl shadow-2xl z-10 flex flex-col max-h-[80vh]">
+                <div className="p-4 border-b border-white/10 flex justify-between items-center bg-black/20">
+                    <h3 className="font-bold text-white flex items-center gap-2">
+                        <Terminal size={18} className="text-cyan-400" />
+                        Batch Diagnosis Terminal
+                    </h3>
+                    <div className="flex gap-2">
+                        {batchStatus.isRunning ? (
+                             <button onClick={handleStopBatch} className="text-rose-400 hover:text-white px-2 py-1 text-xs border border-rose-500/30 rounded">
+                                STOP
+                             </button>
+                        ) : (
+                             <button onClick={() => setIsBatchOpen(false)} className="text-slate-400 hover:text-white">
+                                <X size={18} />
+                             </button>
+                        )}
+                    </div>
+                </div>
+                
+                <div className="p-6 space-y-4">
+                    <div className="flex justify-between text-xs font-mono text-cyan-300 uppercase">
+                        <span>Progress</span>
+                        <span>{batchStatus.current} / {batchStatus.total}</span>
+                    </div>
+                    <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                        <div 
+                            className="h-full bg-cyan-500 transition-all duration-300 ease-out"
+                            style={{ width: `${(batchStatus.current / (batchStatus.total || 1)) * 100}%` }}
+                        ></div>
+                    </div>
+                    <div className="text-center py-4">
+                        <h4 className="text-lg font-bold text-white animate-pulse">
+                            {batchStatus.isRunning ? `Analyzing: ${batchStatus.currentName}` : "Execution Halted"}
+                        </h4>
+                        <p className="text-xs text-slate-500 mt-1">
+                            {batchStatus.isRunning ? "Please keep this tab open to prevent timeouts." : "Process completed or stopped manually."}
+                        </p>
+                    </div>
+                </div>
+
+                <div className="flex-grow bg-black/50 p-4 font-mono text-[10px] text-slate-400 overflow-y-auto border-t border-white/10 space-y-1">
+                    {batchStatus.logs.map((log, i) => (
+                        <div key={i} className="border-b border-white/5 pb-0.5">{log}</div>
+                    ))}
+                    <div ref={(el) => el && el.scrollIntoView({ behavior: "smooth" })} />
+                </div>
+            </div>
+        </div>
+      )}
+
       <CompanyModal 
         company={selectedCompany} 
         isOpen={isModalOpen} 
         isLoading={isLoadingDetails}
         onClose={() => setIsModalOpen(false)}
         onUpdate={(updated) => {
-            // OPTIMISTIC UPDATE: Update local data immediately so graph reflects changes instantly
             setSelectedCompany(updated);
             setData(prev => {
                 const idx = prev.findIndex(p => p.companyName === updated.companyName);
                 if (idx > -1) {
                     const newArr = [...prev];
-                    // Merge new stats into the old summary object
                     newArr[idx] = { 
                         ...newArr[idx], 
                         intent_score: updated.intent_score,
@@ -420,10 +550,8 @@ const App = () => {
                     }; 
                     return newArr;
                 }
-                // If new company (unlikely in update flow but possible), add it
                 return [...prev, updated];
             });
-            // Fetch real data in background to confirm
             fetchSummaryData(true); 
         }}
       />
