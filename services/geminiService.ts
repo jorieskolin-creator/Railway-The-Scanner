@@ -42,10 +42,9 @@ const getGeminiClient = () => {
   `;
 
   try {
-    // UPGRADE: Gemini 2.5 Pro (Thinking Model)
-    // Note: We let the model decide the thinking budget by default.
+    // UPGRADE: Gemini 2.5 Pro (Production endpoint)
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-pro-preview',
+      model: 'gemini-2.5-pro',
       contents: prompt,
     });
     

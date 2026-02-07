@@ -116,10 +116,10 @@ def x_ray_search(company_name: str, company_url: str = None):
         }}
         """
 
-        # UPGRADE: Gemini 2.5 Pro (The new Thinking Model)
-        # Using preview channel to access 2.5 Pro
+        # UPGRADE: Gemini 2.5 Pro (Production)
+        # Using Google Search tool for deep forensic scanning
         response = client.models.generate_content(
-            model='gemini-2.5-pro-preview',
+            model='gemini-2.5-pro',
             contents=prompt,
             config={
                 'tools': [{'google_search': {}}],
@@ -174,7 +174,7 @@ def x_ray_search(company_name: str, company_url: str = None):
         Return JSON with 'findings' (array of objects with title, snippet, url) and 'score' (0-100).
         """
         response = client.models.generate_content(
-            model='gemini-2.5-pro-preview',
+            model='gemini-2.5-pro',
             contents=sim_prompt,
             config={'response_mime_type': 'application/json'}
         )
