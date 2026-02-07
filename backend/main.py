@@ -2,6 +2,7 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional, List
 import os
@@ -20,7 +21,7 @@ from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES
 from knowledge_base import get_evolving_framework
 
-print("Starting Adaptability Scanner Backend (v3.9 - SSE Removed for Reliability)...", flush=True)
+print("Starting Adaptability Scanner Backend (v3.9.1 - Reliability Fixes)...", flush=True)
 
 def clean_env_var(value):
     if not value: return ""
@@ -73,7 +74,7 @@ def health_check():
         storage_connected = False
 
     return {
-        "status": "Adaptability Scanner API Online (v3.9)", 
+        "status": "Adaptability Scanner API Online (v3.9.1)", 
         "timestamp": datetime.utcnow().isoformat(),
         "storage_connected": storage_connected,
         "config_status": {
