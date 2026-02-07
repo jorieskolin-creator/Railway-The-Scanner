@@ -1,5 +1,5 @@
 
-const { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Cell, Label } = (window as any).Recharts;
+const { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Cell, Label, ReferenceLine } = (window as any).Recharts;
 
 const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] }) => {
   if (active && payload && payload.length) {
@@ -9,8 +9,6 @@ const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] 
     const reality = data.reality_score;
     
     // Strict Quadrant Classification (50/50 Split)
-    // UPPER ZONE (Reality >= 50) = Viable
-    // LOWER ZONE (Reality < 50) = Critical Risk
     let gapLabel = "Stagnation";
     let gapColor = "text-slate-400";
     
@@ -28,12 +26,12 @@ const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] 
             gapColor = "text-amber-400";
         } else {
             gapLabel = "Stagnation";
-            gapColor = "text-rose-400"; // Updated to Rose for Danger Zone
+            gapColor = "text-rose-400";
         }
     }
 
     return (
-      <div className="bg-[#020617]/95 backdrop-blur-md border border-slate-700/50 p-4 rounded-xl shadow-2xl text-xs text-white min-w-[200px]">
+      <div className="bg-[#020617]/95 backdrop-blur-md border border-slate-700/50 p-4 rounded-xl shadow-2xl text-xs text-white min-w-[200px] z-50">
         <p className="font-bold text-sm mb-3 text-white border-b border-white/10 pb-2">{data.companyName}</p>
         <div className="grid grid-cols-2 gap-x-4 gap-y-2 font-mono text-[10px] uppercase tracking-wider">
             <span className="text-slate-500">Stated Ambition</span>
@@ -57,10 +55,22 @@ const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] 
 
 const TruthMatrix = ({ data, onSelectCompany }) => {
   return (
-    <div className="w-full h-[350px] relative overflow-hidden">
+    <div className="w-full h-[400px] relative overflow-hidden bg-[#0f172a]/40 rounded-xl border border-white/5">
       <ResponsiveContainer width="100%" height="100%">
         <ScatterChart margin={{ top: 20, right: 20, bottom: 40, left: 0 }}>
+          <defs>
+            <linearGradient id="greenZone" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#10b981" stopOpacity={0.25}/>
+                <stop offset="100%" stopColor="#10b981" stopOpacity={0.05}/>
+            </linearGradient>
+            <linearGradient id="redZone" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#f43f5e" stopOpacity={0.05}/>
+                <stop offset="100%" stopColor="#f43f5e" stopOpacity={0.25}/>
+            </linearGradient>
+          </defs>
+
           <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.2} />
+          
           <XAxis 
             type="number" 
             dataKey="intent_score" 
@@ -70,7 +80,7 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
             tickLine={false}
             axisLine={{ stroke: '#334155', opacity: 0.5 }}
             tick={{ fontSize: 10, fill: '#64748b' }}
-            label={{ value: 'AMBITION INDEX', position: 'bottom', fill: '#475569', fontSize: 10, dy: 20, letterSpacing: '0.1em' }} 
+            label={{ value: 'AMBITION INDEX (Narrative)', position: 'bottom', fill: '#475569', fontSize: 10, dy: 20, letterSpacing: '0.1em' }} 
           />
           <YAxis 
             type="number" 
@@ -83,70 +93,74 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
             tick={{ fontSize: 10, fill: '#64748b' }}
             label={{ value: 'OPERATIONAL REALITY (Evidence)', angle: -90, position: 'left', fill: '#475569', fontSize: 10, dx: -20, letterSpacing: '0.1em' }}
           />
+          
           <Tooltip content={<CustomTooltip />} cursor={{ strokeDasharray: '3 3', stroke: '#cbd5e1' }} />
           
-          {/* --- NEW ZONING STRATEGY: UPPER (Good) vs LOWER (Risk) --- */}
+          {/* --- ZONING --- */}
 
-          {/* UPPER HALF: "The Green Zone" (Reality >= 50) */}
+          {/* UPPER HALF: "The Place To Be" (Reality >= 50) */}
           <ReferenceArea 
             x1={0} x2={100} 
             y1={50} y2={100} 
-            fill="#10b981" 
-            fillOpacity={0.05} 
-            stroke="#10b981"
-            strokeOpacity={0.3}
-            strokeWidth={1}
+            fill="url(#greenZone)"
+            stroke="none"
           />
           
-          {/* LOWER HALF: "The Red Zone" (Reality < 50) */}
+          {/* LOWER HALF: "The Danger Zone" (Reality < 50) */}
           <ReferenceArea 
             x1={0} x2={100} 
             y1={0} y2={50} 
-            fill="#f43f5e" 
-            fillOpacity={0.05} 
-            stroke="#f43f5e"
-            strokeOpacity={0.3}
-            strokeWidth={1}
+            fill="url(#redZone)"
+            stroke="none"
           />
 
-          {/* Labels - Positioned to delineate the zones clearly */}
+          {/* MID LINE Separator */}
+          <ReferenceLine y={50} stroke="#22d3ee" strokeDasharray="4 4" strokeOpacity={0.6} />
+
+          {/* Labels */}
           
+          {/* Top Center-ish Background Label */}
+          <ReferenceArea x1={40} x2={60} y1={95} y2={100} stroke="none" fill="none">
+             <Label value="HIGH PERFORMANCE ZONE" position="center" fill="#10b981" fontSize={9} fontWeight={800} opacity={0.6} letterSpacing="0.2em" />
+          </ReferenceArea>
+          
+          {/* Bottom Center-ish Background Label */}
+          <ReferenceArea x1={40} x2={60} y1={0} y2={5} stroke="none" fill="none">
+             <Label value="CRITICAL RISK ZONE" position="center" fill="#f43f5e" fontSize={9} fontWeight={800} opacity={0.6} letterSpacing="0.2em" />
+          </ReferenceArea>
+
           {/* Top Left: Silent Doers */}
-          <ReferenceArea x1={5} x2={45} y1={90} y2={98} stroke="none" fill="none">
-             <Label value="SILENT DOERS" position="center" fill="#22d3ee" fontSize={11} fontWeight={700} opacity={0.8} letterSpacing="0.05em" />
+          <ReferenceArea x1={2} x2={25} y1={92} y2={98} stroke="none" fill="none">
+             <Label value="SILENT DOERS" position="insideTopLeft" fill="#22d3ee" fontSize={10} fontWeight={700} opacity={0.9} letterSpacing="0.05em" />
           </ReferenceArea>
           
           {/* Top Right: Walk-and-Talk */}
-          <ReferenceArea x1={55} x2={95} y1={90} y2={98} stroke="none" fill="none">
-             <Label value="WALK-AND-TALK" position="center" fill="#34d399" fontSize={11} fontWeight={700} opacity={0.8} letterSpacing="0.05em" />
+          <ReferenceArea x1={75} x2={98} y1={92} y2={98} stroke="none" fill="none">
+             <Label value="WALK-AND-TALK" position="insideTopRight" fill="#34d399" fontSize={10} fontWeight={700} opacity={0.9} letterSpacing="0.05em" />
           </ReferenceArea>
           
           {/* Bottom Right: Talk-not-Walk */}
-          <ReferenceArea x1={55} x2={95} y1={5} y2={15} stroke="none" fill="none">
-             <Label value="TALK-NOT-WALK" position="center" fill="#fbbf24" fontSize={11} fontWeight={700} opacity={0.8} letterSpacing="0.05em" />
+          <ReferenceArea x1={75} x2={98} y1={2} y2={8} stroke="none" fill="none">
+             <Label value="TALK-NOT-WALK" position="insideBottomRight" fill="#fbbf24" fontSize={10} fontWeight={700} opacity={0.9} letterSpacing="0.05em" />
           </ReferenceArea>
           
-          {/* Bottom Left: Stagnation (Changed to Rose to match Danger Zone) */}
-           <ReferenceArea x1={5} x2={45} y1={5} y2={15} stroke="none" fill="none">
-             <Label value="STAGNATION" position="center" fill="#fb7185" fontSize={11} fontWeight={700} opacity={0.8} letterSpacing="0.05em" />
+          {/* Bottom Left: Stagnation */}
+           <ReferenceArea x1={2} x2={25} y1={2} y2={8} stroke="none" fill="none">
+             <Label value="STAGNATION" position="insideBottomLeft" fill="#fb7185" fontSize={10} fontWeight={700} opacity={0.9} letterSpacing="0.05em" />
           </ReferenceArea>
 
           <Scatter name="Companies" data={data} onClick={(node) => onSelectCompany(node.payload)} cursor="pointer">
             {data.map((entry, index) => {
-              // Color Logic: Strictly based on Quadrants
-              // Top Right: Emerald (Walk-and-Talk)
-              // Top Left: Cyan (Silent Doers)
-              // Bottom Right: Amber (Talk-not-Walk)
-              // Bottom Left: Rose/Red (Stagnation)
+              // Color Logic
               let fillColor = '#fb7185'; 
               const r = entry.reality_score;
               const i = entry.intent_score;
               
               if (r >= 50) {
-                  if (i >= 50) fillColor = '#10b981'; // Walk-and-Talk
-                  else fillColor = '#22d3ee'; // Silent Doers
+                  if (i >= 50) fillColor = '#10b981'; // Walk-and-Talk (Emerald)
+                  else fillColor = '#22d3ee'; // Silent Doers (Cyan)
               } else {
-                  if (i >= 50) fillColor = '#f59e0b'; // Talk-not-Walk
+                  if (i >= 50) fillColor = '#f59e0b'; // Talk-not-Walk (Amber)
                   else fillColor = '#fb7185'; // Stagnation (Rose)
               }
               
@@ -154,9 +168,10 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
                 <Cell 
                   key={`cell-${index}`} 
                   fill={fillColor}
-                  stroke="#0f172a"
+                  stroke="#fff"
                   strokeWidth={1}
-                  fillOpacity={0.9}
+                  fillOpacity={0.8}
+                  style={{ filter: 'drop-shadow(0px 0px 4px rgba(255,255,255,0.2))' }}
                 />
               );
             })}
