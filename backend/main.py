@@ -189,7 +189,7 @@ async def run_scan(request: ScanRequest):
                 Evidence: {evidence_list}
                 Intent Data: {intent_narrative}
 
-                Task: Write a 100-word forensic executive summary.
+                Task: Write a 175-word forensic executive summary.
                 """
                 response = client.models.generate_content(model='gemini-3-pro-preview', contents=prompt)
                 if response.text: summary = response.text
