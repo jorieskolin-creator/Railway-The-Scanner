@@ -99,7 +99,7 @@ def x_ray_search(company_name: str, company_url: str = None):
         4. "Platform Thinking": Do they have a public API/Dev portal? (If yes -> High Reality Score).
         5. "Legacy Inertia": Are there academic theses describing failed transformations?
 
-        RETURN STRICT JSON:
+        RETURN STRICT JSON (Do not include markdown formatting):
         {{
             "findings": [
                 {{
@@ -118,18 +118,28 @@ def x_ray_search(company_name: str, company_url: str = None):
 
         # UPGRADE: Gemini 2.5 Pro (Production)
         # Using Google Search tool for deep forensic scanning
+        # FIX: Removed response_mime_type='application/json' as it conflicts with Google Search tools
         response = client.models.generate_content(
             model='gemini-2.5-pro',
             contents=prompt,
             config={
                 'tools': [{'google_search': {}}],
-                'response_mime_type': 'application/json',
+                # 'response_mime_type': 'application/json', # REMOVED: Incompatible with google_search tool
                 'temperature': 0.0
             }
         )
         
         if response.text:
-            data = json.loads(response.text)
+            # Robust Parsing: Clean potential Markdown JSON blocks
+            text_payload = response.text.strip()
+            if text_payload.startswith("```json"):
+                text_payload = text_payload[7:]
+            if text_payload.startswith("```"):
+                text_payload = text_payload[3:]
+            if text_payload.endswith("```"):
+                text_payload = text_payload[:-3]
+                
+            data = json.loads(text_payload.strip())
             
             findings = data.get("findings", [])
             for f in findings:
