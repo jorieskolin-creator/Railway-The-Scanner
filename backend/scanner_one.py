@@ -296,6 +296,10 @@ def analyze_intent(text: str):
         unique_good_found = 0
         unique_bad_found = 0
         
+        # New: Collect distinct words found for Deep Dive Export
+        matched_tokens_good = set()
+        matched_tokens_bad = set()
+        
         # Merge English and Finnish lists
         good_list = keywords["good"] + keywords.get("good_fi", [])
         bad_list = keywords["bad"] + keywords.get("bad_fi", [])
@@ -316,6 +320,9 @@ def analyze_intent(text: str):
                 
             matches = list(re.finditer(pattern, lower_text))
             
+            if len(matches) > 0:
+                matched_tokens_good.add(word)
+
             if len(matches) >= GOOD_THRESHOLD:
                 unique_good_found += 1
             
@@ -342,6 +349,9 @@ def analyze_intent(text: str):
                 if not is_negated(preceding_text):
                     valid_bad_occurrences_for_word += 1
 
+            if valid_bad_occurrences_for_word > 0:
+                matched_tokens_bad.add(word)
+
             if valid_bad_occurrences_for_word >= BAD_THRESHOLD:
                 unique_bad_found += 1
             
@@ -365,7 +375,12 @@ def analyze_intent(text: str):
             "name": category,
             "score": int(score),
             "goodCount": unique_good_found,
-            "badCount": unique_bad_found
+            "badCount": unique_bad_found,
+            "matches": list(matched_tokens_good) + list(matched_tokens_bad), # Combined list of tokens
+            "matches_detail": {
+                "good": list(matched_tokens_good),
+                "bad": list(matched_tokens_bad)
+            }
         })
 
     # --- AGGREGATE METRICS ---

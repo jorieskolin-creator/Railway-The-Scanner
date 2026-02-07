@@ -9,6 +9,8 @@ const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] 
     const reality = data.reality_score;
     
     // Strict Quadrant Classification (50/50 Split)
+    // UPPER ZONE (Reality >= 50) = Viable
+    // LOWER ZONE (Reality < 50) = Critical Risk
     let gapLabel = "Stagnation";
     let gapColor = "text-slate-400";
     
@@ -26,7 +28,7 @@ const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] 
             gapColor = "text-amber-400";
         } else {
             gapLabel = "Stagnation";
-            gapColor = "text-slate-400";
+            gapColor = "text-rose-400"; // Updated to Rose for Danger Zone
         }
     }
 
@@ -83,24 +85,50 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
           />
           <Tooltip content={<CustomTooltip />} cursor={{ strokeDasharray: '3 3', stroke: '#cbd5e1' }} />
           
-          {/* Quadrant Backgrounds */}
-          <ReferenceArea x1={0} x2={50} y1={50} y2={100} fill="#22d3ee" fillOpacity={0.03} /> {/* Silent Doers */}
-          <ReferenceArea x1={50} x2={100} y1={50} y2={100} fill="#10b981" fillOpacity={0.03} /> {/* Walk-and-Talk */}
-          <ReferenceArea x1={0} x2={50} y1={0} y2={50} fill="#64748b" fillOpacity={0.03} /> {/* Stagnation */}
-          <ReferenceArea x1={50} x2={100} y1={0} y2={50} fill="#f59e0b" fillOpacity={0.03} /> {/* Talk-not-Walk */}
+          {/* --- NEW ZONING STRATEGY: UPPER (Good) vs LOWER (Risk) --- */}
 
-          {/* Quadrant Labels */}
+          {/* UPPER HALF: "The Green Zone" (Reality >= 50) */}
+          <ReferenceArea 
+            x1={0} x2={100} 
+            y1={50} y2={100} 
+            fill="#10b981" 
+            fillOpacity={0.05} 
+            stroke="#10b981"
+            strokeOpacity={0.3}
+            strokeWidth={1}
+          />
+          
+          {/* LOWER HALF: "The Red Zone" (Reality < 50) */}
+          <ReferenceArea 
+            x1={0} x2={100} 
+            y1={0} y2={50} 
+            fill="#f43f5e" 
+            fillOpacity={0.05} 
+            stroke="#f43f5e"
+            strokeOpacity={0.3}
+            strokeWidth={1}
+          />
+
+          {/* Labels - Positioned to delineate the zones clearly */}
+          
+          {/* Top Left: Silent Doers */}
           <ReferenceArea x1={5} x2={45} y1={90} y2={98} stroke="none" fill="none">
-             <Label value="SILENT DOERS" position="center" fill="#22d3ee" fontSize={11} fontWeight={700} opacity={0.6} letterSpacing="0.05em" />
+             <Label value="SILENT DOERS" position="center" fill="#22d3ee" fontSize={11} fontWeight={700} opacity={0.8} letterSpacing="0.05em" />
           </ReferenceArea>
+          
+          {/* Top Right: Walk-and-Talk */}
           <ReferenceArea x1={55} x2={95} y1={90} y2={98} stroke="none" fill="none">
-             <Label value="WALK-AND-TALK" position="center" fill="#34d399" fontSize={11} fontWeight={700} opacity={0.6} letterSpacing="0.05em" />
+             <Label value="WALK-AND-TALK" position="center" fill="#34d399" fontSize={11} fontWeight={700} opacity={0.8} letterSpacing="0.05em" />
           </ReferenceArea>
+          
+          {/* Bottom Right: Talk-not-Walk */}
           <ReferenceArea x1={55} x2={95} y1={5} y2={15} stroke="none" fill="none">
-             <Label value="TALK-NOT-WALK" position="center" fill="#fbbf24" fontSize={11} fontWeight={700} opacity={0.6} letterSpacing="0.05em" />
+             <Label value="TALK-NOT-WALK" position="center" fill="#fbbf24" fontSize={11} fontWeight={700} opacity={0.8} letterSpacing="0.05em" />
           </ReferenceArea>
+          
+          {/* Bottom Left: Stagnation (Changed to Rose to match Danger Zone) */}
            <ReferenceArea x1={5} x2={45} y1={5} y2={15} stroke="none" fill="none">
-             <Label value="STAGNATION" position="center" fill="#94a3b8" fontSize={11} fontWeight={700} opacity={0.6} letterSpacing="0.05em" />
+             <Label value="STAGNATION" position="center" fill="#fb7185" fontSize={11} fontWeight={700} opacity={0.8} letterSpacing="0.05em" />
           </ReferenceArea>
 
           <Scatter name="Companies" data={data} onClick={(node) => onSelectCompany(node.payload)} cursor="pointer">
@@ -109,8 +137,8 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
               // Top Right: Emerald (Walk-and-Talk)
               // Top Left: Cyan (Silent Doers)
               // Bottom Right: Amber (Talk-not-Walk)
-              // Bottom Left: Gray (Stagnation)
-              let fillColor = '#94a3b8'; // Default Stagnation
+              // Bottom Left: Rose/Red (Stagnation)
+              let fillColor = '#fb7185'; 
               const r = entry.reality_score;
               const i = entry.intent_score;
               
@@ -119,7 +147,7 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
                   else fillColor = '#22d3ee'; // Silent Doers
               } else {
                   if (i >= 50) fillColor = '#f59e0b'; // Talk-not-Walk
-                  else fillColor = '#94a3b8'; // Stagnation
+                  else fillColor = '#fb7185'; // Stagnation (Rose)
               }
               
               return (

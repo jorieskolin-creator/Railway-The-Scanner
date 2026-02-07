@@ -217,7 +217,17 @@ const App = () => {
 
   const handleBatchSeed = async () => {
     if (!IS_ADMIN_MODE) return;
-    if (!confirm("Start Full Market Scan (100 Companies)? This takes ~45 minutes.")) return;
+    
+    // AUTHENTICATION CHECK
+    const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to initiate Batch Scan:");
+    if (!password) return; // Cancelled
+    
+    if (password !== "CoolScanner2026!!!!!") {
+        alert("ACCESS DENIED: Incorrect Password.");
+        return;
+    }
+
+    if (!confirm("⚠️ CAUTION: Start Full Market Scan (100 Companies)?\n\nThis process takes ~45 minutes and consumes significant API resources.")) return;
     
     setIsSeeding(true);
     try {
