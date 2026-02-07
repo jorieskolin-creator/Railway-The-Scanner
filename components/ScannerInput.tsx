@@ -1,12 +1,15 @@
 
 const { useState } = (window as any).React;
-const { Search, FileText, Globe, Zap, Link, AlertCircle } = (window as any).Lucide;
+const { Search, FileText, Globe, Zap, Link, AlertCircle, Database } = (window as any).Lucide;
 
 const ScannerInput = ({ onScan }) => {
   const [companyName, setCompanyName] = useState('');
   const [companyUrl, setCompanyUrl] = useState('');
   const [reportText, setReportText] = useState('');
   const [urlError, setUrlError] = useState('');
+  const [showModels, setShowModels] = useState(false);
+  const [modelList, setModelList] = useState([]);
+  const [loadingModels, setLoadingModels] = useState(false);
 
   const validateUrl = (url) => {
     if (!url) return true;
@@ -69,6 +72,28 @@ const ScannerInput = ({ onScan }) => {
     setReportText(""); 
   };
 
+  const fetchModels = async () => {
+    if (showModels) {
+        setShowModels(false);
+        return;
+    }
+    setLoadingModels(true);
+    setShowModels(true);
+    try {
+        const res = await fetch('/api/models');
+        const json = await res.json();
+        if (json.models) {
+            setModelList(json.models);
+        } else {
+            setModelList(["Error fetching models: " + JSON.stringify(json)]);
+        }
+    } catch (e) {
+        setModelList(["Network Error: " + e.message]);
+    } finally {
+        setLoadingModels(false);
+    }
+  };
+
   return (
     <div className="bg-slate-900">
       <div className="bg-white/5 p-6 border-b border-white/5 flex justify-between items-center">
@@ -79,6 +104,9 @@ const ScannerInput = ({ onScan }) => {
             <p className="text-[10px] text-slate-400 mt-1 uppercase tracking-widest font-semibold">Forensic Parameters (Finland Top 100)</p>
         </div>
         <div className="flex gap-2 text-xs">
+           <button type="button" onClick={fetchModels} className="px-3 py-1.5 rounded bg-white/5 hover:bg-white/10 text-slate-400 hover:text-cyan-300 border border-transparent hover:border-cyan-500/30 transition-all font-mono text-[10px] flex items-center gap-1">
+            <Database size={10} /> {showModels ? "HIDE MODELS" : "CHECK MODELS"}
+           </button>
            <button type="button" onClick={loadSampleData} className="px-3 py-1.5 rounded bg-white/5 hover:bg-rose-500/10 hover:text-rose-300 border border-transparent hover:border-rose-500/30 transition-all text-slate-400 font-mono text-[10px]">
             LOAD "LEGACY" (MANUAL TEXT)
           </button>
@@ -87,6 +115,24 @@ const ScannerInput = ({ onScan }) => {
           </button>
         </div>
       </div>
+
+      {showModels && (
+          <div className="bg-black/30 p-4 border-b border-white/5 animate-in slide-in-from-top-2">
+            <h4 className="text-xs font-bold text-white mb-2">Available Gemini Models (Server-Side)</h4>
+            {loadingModels ? (
+                <div className="text-xs text-slate-400">Querying Google Cloud...</div>
+            ) : (
+                <div className="grid grid-cols-2 gap-2 max-h-32 overflow-y-auto custom-scrollbar">
+                    {modelList.map((m, i) => (
+                        <div key={i} className="text-[10px] font-mono text-emerald-400 bg-emerald-950/30 px-2 py-1 rounded border border-emerald-900/50 truncate" title={m}>
+                            {m}
+                        </div>
+                    ))}
+                    {modelList.length === 0 && <div className="text-xs text-rose-400">No models found or API Key invalid.</div>}
+                </div>
+            )}
+          </div>
+      )}
       
       <form onSubmit={handleSubmit} className="p-8 space-y-6">
         <div className="grid md:grid-cols-2 gap-6">

@@ -42,9 +42,10 @@ const getGeminiClient = () => {
   `;
 
   try {
-    // SWITCHED TO GEMINI 2.0 PRO EXPERIMENTAL
+    // UPGRADE: Gemini 2.5 Pro (Thinking Model)
+    // Note: We let the model decide the thinking budget by default.
     const response = await ai.models.generateContent({
-      model: 'gemini-2.0-pro-exp-02-05',
+      model: 'gemini-2.5-pro-preview',
       contents: prompt,
     });
     

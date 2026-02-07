@@ -84,6 +84,30 @@ def health_check():
         }
     }
 
+@app.get("/api/models")
+def list_models():
+    """
+    DEBUG: List all models available to the API Key.
+    """
+    api_key = clean_env_var(os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY"))
+    if not api_key:
+        return {"error": "No API Key configured on server."}
+    
+    try:
+        client = genai.Client(api_key=api_key)
+        # List models and filter for generateContent support
+        models = list(client.models.list())
+        
+        # Format for frontend
+        available = []
+        for m in models:
+            if "generateContent" in m.supported_generation_methods:
+                available.append(m.name)
+        
+        return {"count": len(available), "models": sorted(available)}
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.get("/dashboard-data")
 async def get_dashboard_data(response: Response):
     """
@@ -191,8 +215,8 @@ async def run_scan(request: ScanRequest):
 
                 Task: Write a 175-word forensic executive summary.
                 """
-                # SWITCHED TO GEMINI 2.0 PRO EXPERIMENTAL
-                response = client.models.generate_content(model='gemini-2.0-pro-exp-02-05', contents=prompt)
+                # UPGRADE: Gemini 2.5 Pro (Thinking Model)
+                response = client.models.generate_content(model='gemini-2.5-pro-preview', contents=prompt)
                 if response.text: summary = response.text
             except Exception as e:
                 print(f"Gemini Error: {e}")

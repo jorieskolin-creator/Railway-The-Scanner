@@ -116,9 +116,10 @@ def x_ray_search(company_name: str, company_url: str = None):
         }}
         """
 
-        # SWITCHED TO GEMINI 2.0 PRO EXPERIMENTAL
+        # UPGRADE: Gemini 2.5 Pro (The new Thinking Model)
+        # Using preview channel to access 2.5 Pro
         response = client.models.generate_content(
-            model='gemini-2.0-pro-exp-02-05',
+            model='gemini-2.5-pro-preview',
             contents=prompt,
             config={
                 'tools': [{'google_search': {}}],
@@ -150,7 +151,7 @@ def x_ray_search(company_name: str, company_url: str = None):
             adjustment = data.get("reality_score_adjustment", 0)
             final_score = max(0, min(100, base_score + adjustment))
             
-            print(f"   [Scanner 2] Google Search Successful (Gemini 2.0 Pro). Found {len(raw_findings)} items. Adj: {adjustment}")
+            print(f"   [Scanner 2] Google Search Successful (Gemini 2.5 Pro). Found {len(raw_findings)} items. Adj: {adjustment}")
             
             return {
                 "score": int(final_score),
@@ -173,7 +174,7 @@ def x_ray_search(company_name: str, company_url: str = None):
         Return JSON with 'findings' (array of objects with title, snippet, url) and 'score' (0-100).
         """
         response = client.models.generate_content(
-            model='gemini-2.0-pro-exp-02-05',
+            model='gemini-2.5-pro-preview',
             contents=sim_prompt,
             config={'response_mime_type': 'application/json'}
         )
