@@ -68,7 +68,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     
     if not api_key:
         print("   [Scanner 2] CRITICAL: No GEMINI_API_KEY found. Using simulation fallback.")
-        return { "score": 50, "checklist": [], "links": [], "is_simulated": True }
+        return { "score": 60, "checklist": [], "links": [], "is_simulated": True }
 
     # --- DEFINING THE PROMPT ONCE ---
     prompt = f"""
@@ -103,6 +103,12 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     4. "Platform Thinking": Public API found?
     5. "Legacy Inertia": Failed transformations?
 
+    TEMPORAL WEIGHTING (STATUTE OF LIMITATIONS) - CRITICAL:
+    - Check the DATE of findings, especially in the Community Jury.
+    - If a negative finding (e.g., toxic culture complaint) is OLDER than 18 months, IGNORE IT or weight it very low (20% impact). Companies change.
+    - If a finding is RECENT (< 12 months), weight it at 100%.
+    - Favor FRESH evidence over legacy complaints.
+
     RETURN STRICT JSON:
     {{
         "findings": [
@@ -113,7 +119,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 "sentiment": "negative" or "positive",
                 "snippet": "Quote...",
                 "title": "Source Title",
-                "url": "URL"
+                "url": "URL",
+                "is_recent": boolean (True if < 18 months)
             }}
         ],
         "reality_score_adjustment": (integer -40 to +40)
@@ -162,7 +169,10 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     # --- PROCESS RESULTS ---
     checklist = []
     raw_findings = []
-    base_score = 50
+    # BASE SCORE UPDATE: Raised from 50 to 60.
+    # Assumption: Companies are slightly "Good" until proven "Bad".
+    # This prevents neutral search results from dragging a good company into Stagnation.
+    base_score = 60
 
     if data:
         findings = data.get("findings", [])
@@ -200,10 +210,10 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         response = client.models.generate_content(model="gemini-3-flash-preview", contents=sim_prompt)
         sim_data = json.loads(extract_json_from_text(response.text))
         return {
-            "score": sim_data.get("score", 50),
+            "score": sim_data.get("score", 60),
             "checklist": [],
             "links": sim_data.get("findings", []),
             "is_simulated": True
         }
     except:
-        return { "score": 50, "checklist": [], "links": [], "is_simulated": True }
+        return { "score": 60, "checklist": [], "links": [], "is_simulated": True }

@@ -357,11 +357,11 @@ def analyze_intent(text: str):
             
             total_bad_matches += valid_bad_occurrences_for_word
 
-        # 3. Calculate AMBITION (Score with High Friction Penalty)
-        # UPGRADE: Bad signals weigh drastically more (3.0x) than good signals.
+        # 3. Calculate AMBITION (Score with Moderate Friction Penalty)
+        # UPGRADE: Reduced weight from 3.0 to 2.0 to be less punitive.
         # This transforms the score from "Volume of Intent" to "Ambition Clarity".
-        # If a company contradicts itself (high friction), the Ambition Score collapses.
-        FRICTION_WEIGHT = 3.0
+        # If a company contradicts itself (high friction), the Ambition Score decreases, but doesn't collapse.
+        FRICTION_WEIGHT = 2.0
         
         net_result = unique_good_found - (unique_bad_found * FRICTION_WEIGHT)
         
