@@ -45,9 +45,6 @@ def extract_json_from_text(text):
         return markdown_match.group(1)
 
     # 2. Fallback: Find the first outer curly braces
-    # This regex looks for the first { and matches until the last }
-    # It accounts for nested braces to some extent by being greedy, 
-    # but strictly simplistic for the outer envelope.
     match = re.search(r'\{.*\}', text, re.DOTALL)
     if match:
         return match.group(0)
@@ -63,174 +60,150 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     """
     
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-    # HARDCODED UPGRADE: Default to Gemini 3 Pro Preview if no model_id provided
-    target_model = model_id or "gemini-3-pro-preview"
-    
-    checklist = []
-    raw_findings = []
-    base_score = 50
-    is_simulated = False
+    # Default to the chosen model, or fallback to the reliable 3-pro
+    primary_model = model_id or "gemini-3-pro-preview"
     
     search_name = clean_company_name_for_search(company_name)
     domain_hint = get_clean_domain(company_url) if company_url else f"{search_name.lower().replace(' ', '')}.fi"
     
-    print(f"   [Forensic Scan] Target: {company_name} (Search Term: {search_name}) using Model: {target_model}")
-
     if not api_key:
         print("   [Scanner 2] CRITICAL: No GEMINI_API_KEY found. Using simulation fallback.")
         return { "score": 50, "checklist": [], "links": [], "is_simulated": True }
 
-    try:
-        client = genai.Client(api_key=api_key)
-        
-        # WE DEFINE THE SOURCES HERE (THE STANDARDIZED TRIBUNAL)
-        # UPGRADE: Explicit instruction to Iterate ALL juries to prevent "forgetting" items.
-        prompt = f"""
-        Perform a FORENSIC INVESTIGATION on "{search_name}" (Domain: {domain_hint}).
-        
-        SEARCH STRATEGY (STRICT - APPROVED DOMAINS ONLY):
-        Do NOT read the company's own marketing pages (except for developer portals/investor PDFs).
-        Look ONLY at evidence from these specific 'JURIES' defined below.
-        
-        CRITICAL: You must execute searches for ALL 4 JURIES. Do not skip any.
-
-        1. THE ARCHITECTURAL JURY (Tech & Structure)
-           - Evidence: Service Portfolio, Platform Thinking, API-First, DevOps maturity.
-           - Public Developer Portals (High Positive Signal): `site:{domain_hint} "API documentation" OR "Developer Portal" OR "SDK"` OR `site:{domain_hint} "Rajapinnat" OR "Kehittäjille" OR "Avoin data"`
-           - System Status Pages (Transparency Test): `site:{domain_hint} "System Status" OR "Operational" OR "Incident History"` OR `site:{domain_hint} "Palveluiden tila" OR "Häiriötiedotteet"`
-           - Technical Communities: `site:stackoverflow.com "{search_name}"` OR `site:github.com "{search_name}"`
-
-        2. THE STRATEGIC JURY (Money & Intent)
-           - Evidence: Strategy (Growth vs. Efficiency), RenDanHeYi.
-           - Capital Markets Day (CMD): `site:{domain_hint} filetype:pdf "Capital Markets Day" OR "Strategy Presentation"` OR `site:{domain_hint} filetype:pdf "Sijoittajaesitys" OR "Pääomamarkkinapäivä"`
-           - Risk Management Reports (Fragility Check): `site:{domain_hint} filetype:pdf "Annual Report" AND "Risk Management"` OR `site:{domain_hint} filetype:pdf "Vuosikertomus" AND "Riskienhallinta"`
-           - Finnish Financial & Tech News: `site:kauppalehti.fi "{search_name}"` OR `site:talouselama.fi "{search_name}"` OR `site:tekniikkatalous.fi "{search_name}"` OR `site:tivi.fi "{search_name}"`
-
-        3. THE COMMUNITY JURY (Culture & Reality)
-           - Evidence: Operating Model, Psychological Safety, Learning Organization.
-           - Finnish Tech Events: `"{search_name}" AND ("ScanAgile" OR "DevOps Finland" OR "Disobey" OR "Mimmit koodaa")`
-           - TeamBlind & Reddit (The Unfiltered Voice): `site:teamblind.com "{search_name}"` OR `site:reddit.com "{search_name}" AND ("work culture" OR "työkulttuuri" OR "management")`
-           - Employee Voice & Recruitment: `site:glassdoor.com "{search_name}"` OR `site:thehub.io "{search_name}"` OR `site:indeed.com "{search_name}"` OR `site:oikotie.fi "{search_name}"` OR `site:duunitori.fi "{search_name}"` OR `site:linkedin.com "{search_name}"`
-
-        4. THE ACADEMIC JURY (Deep Audits)
-           - Evidence: Internal Operating Model failures/successes.
-           - Master's Theses & Dissertations: `site:theseus.fi "{search_name}" AND ("Agile" OR "Process" OR "Johtaminen" OR "Organisaatio")`
-           - Aalto University: `site:aalto.fi "{search_name}" AND ("Thesis" OR "Diplomityö")`
-           - Thought Leadership: `site:medium.com "{search_name}"`
-
-        VERIFY THESE 5 HYPOTHESES (Do not skip):
-        1. "Surveillance": Is there micromanagement, time-tracking, or low trust?
-        2. "Silos": Are there complaints about bureaucracy, "turf wars", or heavy handovers?
-        3. "Fake Agile": Do employees call it "Waterfall", "Zombie Scrum", or "Agile in Name Only"?
-        4. "Platform Thinking": Do they have a public API/Dev portal? (If yes -> High Reality Score).
-        5. "Legacy Inertia": Are there academic theses describing failed transformations?
-
-        RETURN STRICT JSON (Do not include markdown formatting).
-        IMPORTANT: You MUST return a JSON object. If you performed a search, summarize the findings into the JSON.
-        
-        {{
-            "findings": [
-                {{
-                    "category": "Operating Model" | "Strategy" | "Technology" | "Culture",
-                    "label": "Brief Label (e.g. 'Public Dev Portal Found')",
-                    "found": boolean,
-                    "sentiment": "negative" or "positive",
-                    "snippet": "Quote finding...",
-                    "title": "Source Title (e.g. 'Kauppalehti: Layoff News')",
-                    "url": "URL of the source"
-                }}
-            ],
-            "reality_score_adjustment": (integer between -40 and +40 based on evidence balance)
-        }}
-        """
-
-        # Using Google Search tool for deep forensic scanning
-        response = client.models.generate_content(
-            model=target_model,
-            contents=prompt,
-            config={
-                'tools': [{'google_search': {}}],
-                'temperature': 0.0,
-                # Safety settings to prevent empty blocks on corporate content
-                'safety_settings': [
-                    {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
-                    {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
-                    {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
-                    {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
-                ]
-            }
-        )
-        
-        # Robust Parsing: Handle mix of text + json or pure text
-        # FIX: Handle case where response.text is None (Google Search ran but returned no text)
-        text_content = response.text if response.text else ""
-        json_payload = extract_json_from_text(text_content)
-        
-        if json_payload:
-            data = json.loads(json_payload)
-            
-            findings = data.get("findings", [])
-            for f in findings:
-                checklist.append({
-                    "category": f.get("category", "General"),
-                    "query": f.get("label", "Signal"),
-                    "found": f.get("found", False),
-                    "sentiment": f.get("sentiment", "neutral")
-                })
-                
-                if f.get("found") and f.get("url"):
-                    raw_findings.append({
-                        "title": f.get("title", "Evidence Found"),
-                        "snippet": f.get("snippet", ""),
-                        "url": f.get("url", ""),
-                        "source": get_clean_domain(f.get("url", ""))
-                    })
-            
-            adjustment = data.get("reality_score_adjustment", 0)
-            final_score = max(0, min(100, base_score + adjustment))
-            
-            print(f"   [Scanner 2] Google Search Successful ({target_model}). Found {len(raw_findings)} items. Adj: {adjustment}")
-            
-            return {
-                "score": int(final_score),
-                "checklist": checklist,
-                "links": raw_findings,
-                "is_simulated": False
-            }
-        else:
-             print(f"   [Scanner 2] JSON Extraction Failed. Raw Text Length: {len(text_content)}")
-             # Do not raise error immediately, let fallback handle it
-             if len(text_content) > 0:
-                 print(f"   [Scanner 2] Partial content: {text_content[:100]}...")
-             
-             raise ValueError("No JSON object found in response text or empty response")
-
-    except Exception as e:
-        print(f"   [Scanner 2] Google Search Tool Failed: {e}")
-
-    # --- FALLBACK: SIMULATION ---
-    print(f"   [Scanner 2] Engaging AI Simulation for {company_name} (Fallback)...")
+    # --- DEFINING THE PROMPT ONCE ---
+    prompt = f"""
+    Perform a FORENSIC INVESTIGATION on "{search_name}" (Domain: {domain_hint}).
     
+    SEARCH STRATEGY (STRICT - APPROVED DOMAINS ONLY):
+    Do NOT read the company's own marketing pages.
+    Look ONLY at evidence from these specific 'JURIES' defined below.
+    
+    CRITICAL: You must execute searches for ALL 4 JURIES. Do not skip any.
+
+    1. THE ARCHITECTURAL JURY (Tech & Structure)
+       - Public Developer Portals: `site:{domain_hint} "API documentation" OR "Developer Portal"`
+       - System Status Pages: `site:{domain_hint} "System Status" OR "Häiriötiedotteet"`
+       - Technical Communities: `site:stackoverflow.com "{search_name}"`
+
+    2. THE STRATEGIC JURY (Money & Intent)
+       - Capital Markets Day (CMD): `site:{domain_hint} filetype:pdf "Capital Markets Day" OR "Strategy"`
+       - Risk Reports: `site:{domain_hint} filetype:pdf "Annual Report" AND "Risk Management"`
+
+    3. THE COMMUNITY JURY (Culture & Reality)
+       - TeamBlind & Reddit: `site:teamblind.com "{search_name}"` OR `site:reddit.com "{search_name}"`
+       - Employee Voice: `site:glassdoor.com "{search_name}"` OR `site:linkedin.com "{search_name}"`
+
+    4. THE ACADEMIC JURY (Deep Audits)
+       - Theses: `site:theseus.fi "{search_name}"`
+
+    VERIFY THESE 5 HYPOTHESES:
+    1. "Surveillance": Micromanagement/tracking?
+    2. "Silos": Bureaucracy complaints?
+    3. "Fake Agile": "Waterfall" or "Zombie Scrum"?
+    4. "Platform Thinking": Public API found?
+    5. "Legacy Inertia": Failed transformations?
+
+    RETURN STRICT JSON:
+    {{
+        "findings": [
+            {{
+                "category": "Operating Model",
+                "label": "Brief Label",
+                "found": boolean,
+                "sentiment": "negative" or "positive",
+                "snippet": "Quote...",
+                "title": "Source Title",
+                "url": "URL"
+            }}
+        ],
+        "reality_score_adjustment": (integer -40 to +40)
+    }}
+    """
+
+    def execute_with_model(target_model_name):
+        print(f"   [Forensic Scan] Target: {company_name} | Model: {target_model_name}")
+        try:
+            client = genai.Client(api_key=api_key)
+            response = client.models.generate_content(
+                model=target_model_name,
+                contents=prompt,
+                config={
+                    'tools': [{'google_search': {}}],
+                    'temperature': 0.0,
+                    'safety_settings': [
+                        {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
+                        {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
+                        {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
+                        {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
+                    ]
+                }
+            )
+            
+            text_content = response.text if response.text else ""
+            json_payload = extract_json_from_text(text_content)
+            
+            if json_payload:
+                return json.loads(json_payload)
+            else:
+                return None # Signal failure
+        except Exception as e:
+            print(f"   [Scanner 2 Error] Model {target_model_name} failed: {e}")
+            return None
+
+    # --- ATTEMPT 1: User Selected Model ---
+    data = execute_with_model(primary_model)
+
+    # --- ATTEMPT 2: Smart Upgrade (if needed) ---
+    # If the first attempt failed AND we haven't already tried the best model, try the best model.
+    if not data and primary_model != "gemini-3-pro-preview":
+        print("   [Scanner 2] Primary model failed to return JSON. AUTO-UPGRADING to Gemini 3 Pro Preview...")
+        data = execute_with_model("gemini-3-pro-preview")
+
+    # --- PROCESS RESULTS ---
+    checklist = []
+    raw_findings = []
+    base_score = 50
+
+    if data:
+        findings = data.get("findings", [])
+        for f in findings:
+            checklist.append({
+                "category": f.get("category", "General"),
+                "query": f.get("label", "Signal"),
+                "found": f.get("found", False),
+                "sentiment": f.get("sentiment", "neutral")
+            })
+            
+            if f.get("found") and f.get("url"):
+                raw_findings.append({
+                    "title": f.get("title", "Evidence Found"),
+                    "snippet": f.get("snippet", ""),
+                    "url": f.get("url", ""),
+                    "source": get_clean_domain(f.get("url", ""))
+                })
+        
+        adjustment = data.get("reality_score_adjustment", 0)
+        final_score = max(0, min(100, base_score + adjustment))
+        
+        return {
+            "score": int(final_score),
+            "checklist": checklist,
+            "links": raw_findings,
+            "is_simulated": False
+        }
+    
+    # --- FALLBACK: SIMULATION ---
+    print(f"   [Scanner 2] All models failed. Engaging AI Simulation for {company_name} (Fallback)...")
     try:
         client = genai.Client(api_key=api_key)
-        sim_prompt = f"""
-        You are a Forensic Data Generator. I cannot access live search results for {company_name}.
-        Based on your internal knowledge base about {company_name}, generate 3 REALISTIC 'Search Snippets' representing their likely operational reality.
-        Return JSON with 'findings' (array of objects with title, snippet, url) and 'score' (0-100).
-        """
-        response = client.models.generate_content(
-            model=target_model,
-            contents=sim_prompt,
-            config={'response_mime_type': 'application/json'}
-        )
-        sim_data = json.loads(response.text)
+        sim_prompt = f"Generate 3 REALISTIC forensic search findings for {company_name}. Return JSON with 'findings' and 'score'."
+        response = client.models.generate_content(model="gemini-3-flash-preview", contents=sim_prompt)
+        sim_data = json.loads(extract_json_from_text(response.text))
         return {
             "score": sim_data.get("score", 50),
             "checklist": [],
             "links": sim_data.get("findings", []),
             "is_simulated": True
         }
-
-    except Exception as e:
-        print(f"   [Scanner 2] Simulation Failed: {e}")
+    except:
         return { "score": 50, "checklist": [], "links": [], "is_simulated": True }

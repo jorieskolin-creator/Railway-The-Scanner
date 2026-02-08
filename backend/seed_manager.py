@@ -152,7 +152,8 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None):
             print(f"   -> Intent Score: {intent_results['score']}")
 
             # 3. REAL REALITY CHECK
-            reality_results = x_ray_search(company["name"], company["url"])
+            # Use 'gemini-3-pro-preview' explicitly for stability during batch
+            reality_results = x_ray_search(company["name"], company["url"], model_id="gemini-3-pro-preview")
             print(f"   -> Reality Score: {reality_results['score']}")
 
             gap = intent_results["score"] - reality_results["score"]
@@ -178,8 +179,8 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None):
 
                     Task: Write a 175-word forensic executive summary. Be direct.
                     """
-                    # UPGRADE: Gemini 2.5 Pro (Production)
-                    resp = gemini_client.models.generate_content(model='gemini-2.5-pro', contents=prompt)
+                    # UPGRADE: Force Gemini 3 Pro for batch synthesis to prevent 2.5 hallucination/timeout
+                    resp = gemini_client.models.generate_content(model='gemini-3-pro-preview', contents=prompt)
                     if resp.text: summary_text = resp.text
                 except Exception as e:
                     print(f"   [Synthesis Error] {e}")
