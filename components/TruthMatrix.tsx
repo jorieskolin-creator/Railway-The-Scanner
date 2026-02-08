@@ -31,7 +31,7 @@ const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] 
     }
 
     return (
-      <div className="bg-[#020617]/95 backdrop-blur-md border border-slate-700/50 p-4 rounded-xl shadow-2xl text-xs text-white min-w-[200px] z-50">
+      <div className="bg-[#020617]/95 backdrop-blur-md border border-slate-700/50 p-4 rounded-xl shadow-2xl text-xs text-white min-w-[200px] z-50 animate-in fade-in zoom-in-95 duration-200">
         <p className="font-bold text-sm mb-3 text-white border-b border-white/10 pb-2">{data.companyName}</p>
         <div className="grid grid-cols-2 gap-x-4 gap-y-2 font-mono text-[10px] uppercase tracking-wider">
             <span className="text-slate-500">Stated Ambition</span>
@@ -55,18 +55,40 @@ const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] 
 
 const TruthMatrix = ({ data, onSelectCompany }) => {
   return (
-    <div className="w-full h-[400px] relative overflow-hidden bg-[#0f172a]/40 rounded-xl border border-white/5">
+    <div className="w-full h-[400px] relative overflow-hidden bg-[#0f172a]/40 rounded-xl border border-white/5 group">
+      {/* Subtle Background Grid Animation */}
+      <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:20px_20px] [mask-image:radial-gradient(ellipse_60%_60%_at_50%_50%,black,transparent)] pointer-events-none"></div>
+
       <ResponsiveContainer width="100%" height="100%">
         <ScatterChart margin={{ top: 20, right: 20, bottom: 40, left: 0 }}>
           <defs>
+            {/* 1. Global Upper Half (Green Tint) - Static but clean */}
             <linearGradient id="greenZone" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#10b981" stopOpacity={0.25}/>
-                <stop offset="100%" stopColor="#10b981" stopOpacity={0.05}/>
+                <stop offset="5%" stopColor="#10b981" stopOpacity={0.15}/>
+                <stop offset="95%" stopColor="#10b981" stopOpacity={0.02}/>
             </linearGradient>
+            
+            {/* 2. Global Lower Half (Red Tint) - Static but clean */}
             <linearGradient id="redZone" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#f43f5e" stopOpacity={0.05}/>
-                <stop offset="100%" stopColor="#f43f5e" stopOpacity={0.25}/>
+                <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.02}/>
+                <stop offset="95%" stopColor="#f43f5e" stopOpacity={0.15}/>
             </linearGradient>
+
+            {/* 3. High Performance Glow (Top Right Quadrant) - PULSING ANIMATION */}
+            <radialGradient id="sweetSpot" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stopColor="#34d399" stopOpacity={0.2}>
+                    <animate attributeName="stopOpacity" values="0.2;0.35;0.2" dur="4s" repeatCount="indefinite" />
+                </stop>
+                <stop offset="100%" stopColor="#34d399" stopOpacity={0}/>
+            </radialGradient>
+
+            {/* 4. Critical Risk Glow (Bottom Left Quadrant) - PULSING ANIMATION */}
+            <radialGradient id="dangerSpot" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stopColor="#f43f5e" stopOpacity={0.2}>
+                     <animate attributeName="stopOpacity" values="0.2;0.35;0.2" dur="5s" repeatCount="indefinite" />
+                </stop>
+                <stop offset="100%" stopColor="#f43f5e" stopOpacity={0}/>
+            </radialGradient>
           </defs>
 
           <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.2} />
@@ -96,57 +118,43 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
           
           <Tooltip content={<CustomTooltip />} cursor={{ strokeDasharray: '3 3', stroke: '#cbd5e1' }} />
           
-          {/* --- ZONING --- */}
+          {/* --- ZONING LAYERS --- */}
 
-          {/* UPPER HALF: "The Place To Be" (Reality >= 50) */}
-          <ReferenceArea 
-            x1={0} x2={100} 
-            y1={50} y2={100} 
-            fill="url(#greenZone)"
-            stroke="none"
-          />
+          {/* LAYER 1: The Great Divide (50 line) Backgrounds */}
+          <ReferenceArea x1={0} x2={100} y1={50} y2={100} fill="url(#greenZone)" stroke="none" />
+          <ReferenceArea x1={0} x2={100} y1={0} y2={50} fill="url(#redZone)" stroke="none" />
+
+          {/* LAYER 2: Quadrant Spotlights (Pulsing) */}
+          {/* Walk-and-Talk (Top Right) */}
+          <ReferenceArea x1={50} x2={100} y1={50} y2={100} fill="url(#sweetSpot)" stroke="none" />
           
-          {/* LOWER HALF: "The Danger Zone" (Reality < 50) */}
-          <ReferenceArea 
-            x1={0} x2={100} 
-            y1={0} y2={50} 
-            fill="url(#redZone)"
-            stroke="none"
-          />
+          {/* Stagnation (Bottom Left) */}
+          <ReferenceArea x1={0} x2={50} y1={0} y2={50} fill="url(#dangerSpot)" stroke="none" />
 
           {/* MID LINE Separator */}
           <ReferenceLine y={50} stroke="#22d3ee" strokeDasharray="4 4" strokeOpacity={0.6} />
+          <ReferenceLine x={50} stroke="#6366f1" strokeDasharray="4 4" strokeOpacity={0.3} />
 
-          {/* Labels */}
-          
-          {/* Top Center-ish Background Label */}
-          <ReferenceArea x1={40} x2={60} y1={95} y2={100} stroke="none" fill="none">
-             <Label value="HIGH PERFORMANCE ZONE" position="center" fill="#10b981" fontSize={9} fontWeight={800} opacity={0.6} letterSpacing="0.2em" />
-          </ReferenceArea>
-          
-          {/* Bottom Center-ish Background Label */}
-          <ReferenceArea x1={40} x2={60} y1={0} y2={5} stroke="none" fill="none">
-             <Label value="CRITICAL RISK ZONE" position="center" fill="#f43f5e" fontSize={9} fontWeight={800} opacity={0.6} letterSpacing="0.2em" />
-          </ReferenceArea>
-
-          {/* Top Left: Silent Doers */}
-          <ReferenceArea x1={2} x2={25} y1={92} y2={98} stroke="none" fill="none">
-             <Label value="SILENT DOERS" position="insideTopLeft" fill="#22d3ee" fontSize={10} fontWeight={700} opacity={0.9} letterSpacing="0.05em" />
-          </ReferenceArea>
+          {/* LABELS */}
           
           {/* Top Right: Walk-and-Talk */}
-          <ReferenceArea x1={75} x2={98} y1={92} y2={98} stroke="none" fill="none">
-             <Label value="WALK-AND-TALK" position="insideTopRight" fill="#34d399" fontSize={10} fontWeight={700} opacity={0.9} letterSpacing="0.05em" />
+          <ReferenceArea x1={80} x2={98} y1={92} y2={98} stroke="none" fill="none">
+             <Label value="WALK-AND-TALK" position="insideTopRight" fill="#34d399" fontSize={10} fontWeight={900} opacity={0.8} letterSpacing="0.05em" />
           </ReferenceArea>
           
+          {/* Top Left: Silent Doers */}
+          <ReferenceArea x1={2} x2={20} y1={92} y2={98} stroke="none" fill="none">
+             <Label value="SILENT DOERS" position="insideTopLeft" fill="#22d3ee" fontSize={10} fontWeight={700} opacity={0.7} letterSpacing="0.05em" />
+          </ReferenceArea>
+
           {/* Bottom Right: Talk-not-Walk */}
-          <ReferenceArea x1={75} x2={98} y1={2} y2={8} stroke="none" fill="none">
-             <Label value="TALK-NOT-WALK" position="insideBottomRight" fill="#fbbf24" fontSize={10} fontWeight={700} opacity={0.9} letterSpacing="0.05em" />
+          <ReferenceArea x1={80} x2={98} y1={2} y2={8} stroke="none" fill="none">
+             <Label value="TALK-NOT-WALK" position="insideBottomRight" fill="#fbbf24" fontSize={10} fontWeight={700} opacity={0.7} letterSpacing="0.05em" />
           </ReferenceArea>
           
           {/* Bottom Left: Stagnation */}
-           <ReferenceArea x1={2} x2={25} y1={2} y2={8} stroke="none" fill="none">
-             <Label value="STAGNATION" position="insideBottomLeft" fill="#fb7185" fontSize={10} fontWeight={700} opacity={0.9} letterSpacing="0.05em" />
+           <ReferenceArea x1={2} x2={20} y1={2} y2={8} stroke="none" fill="none">
+             <Label value="STAGNATION" position="insideBottomLeft" fill="#fb7185" fontSize={10} fontWeight={900} opacity={0.8} letterSpacing="0.05em" />
           </ReferenceArea>
 
           <Scatter name="Companies" data={data} onClick={(node) => onSelectCompany(node.payload)} cursor="pointer">
@@ -170,8 +178,9 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
                   fill={fillColor}
                   stroke="#fff"
                   strokeWidth={1}
-                  fillOpacity={0.8}
-                  style={{ filter: 'drop-shadow(0px 0px 4px rgba(255,255,255,0.2))' }}
+                  fillOpacity={0.9}
+                  className="hover:scale-110 transition-transform duration-200 origin-center"
+                  style={{ filter: 'drop-shadow(0px 0px 6px rgba(255,255,255,0.4))' }}
                 />
               );
             })}
