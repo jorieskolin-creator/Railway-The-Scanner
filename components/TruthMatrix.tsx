@@ -34,22 +34,27 @@ const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] 
         }
     }
 
+    // LIST LIMIT: Increased to 12 to accommodate larger clusters like 8 companies
+    const DISPLAY_LIMIT = 12;
+
     return (
       <div 
-        className="bg-[#020617]/95 backdrop-blur-md border border-slate-700/50 p-4 rounded-xl shadow-2xl text-xs text-white min-w-[200px] z-50 animate-in fade-in zoom-in-95 duration-200"
+        className="bg-[#020617]/95 backdrop-blur-md border border-slate-700/50 p-4 rounded-xl shadow-2xl text-xs text-white min-w-[220px] max-w-[300px] z-50 animate-in fade-in zoom-in-95 duration-200"
       >
         <div className="border-b border-white/10 pb-2 mb-2">
             <span className="text-[10px] font-mono uppercase text-slate-500 block mb-1">
                 {companies.length > 1 ? `${companies.length} Entities at this position` : "Entity"}
             </span>
-            <ul className="space-y-1 max-h-[150px] overflow-hidden">
-                {companies.slice(0, 5).map((c: any, i: number) => (
-                    <li key={i} className="font-bold text-sm text-white truncate">
+            <ul className="space-y-1">
+                {companies.slice(0, DISPLAY_LIMIT).map((c: any, i: number) => (
+                    <li key={i} className="font-bold text-xs text-white truncate border-b border-white/5 last:border-0 pb-1 mb-1 last:mb-0 last:pb-0">
                         {c.companyName}
                     </li>
                 ))}
-                {companies.length > 5 && (
-                    <li className="text-[10px] text-slate-400 italic">...and {companies.length - 5} more</li>
+                {companies.length > DISPLAY_LIMIT && (
+                    <li className="text-[10px] text-slate-400 italic pt-1 border-t border-white/5 mt-1">
+                        ...and {companies.length - DISPLAY_LIMIT} more
+                    </li>
                 )}
             </ul>
         </div>
