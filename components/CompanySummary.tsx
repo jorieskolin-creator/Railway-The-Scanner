@@ -1,6 +1,6 @@
 
 const { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Tooltip: RechartsTooltip, LineChart, Line, XAxis, YAxis, CartesianGrid, ReferenceLine } = (window as any).Recharts;
-const { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash, RefreshCw, XCircle, Search, Zap, Scale, Activity, Download, Copy, FileJson, FileCode, Check } = (window as any).Lucide;
+const { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash, RefreshCw, XCircle, Search, Zap, Scale, Activity, Download, Copy, FileJson, FileCode, Check, Eye, AlertOctagon } = (window as any).Lucide;
 const { useRef, useState } = (window as any).React;
 
 const HighlightText = ({ text }) => {
@@ -12,7 +12,7 @@ const HighlightText = ({ text }) => {
     "Legacy", "Talk-not-Walk", "Stagnation", "Surveillance", "Turf Wars", "Water-scrum-fall",
     "Ticket-based", "Output-driven", "Gatekeeping", "Compliance-driven", "Blame Culture",
     "Risk-averse", "Siloed", "Waterfall", "Consulting-heavy", "Vendor Lock-in", "Burnout",
-    "Change Control Board", "HiPPO", "Modernization Washing"
+    "Change Control Board", "HiPPO", "Modernization Washing", "AI Washing", "Agile Washing"
   ];
 
   const positiveTerms = [
@@ -102,6 +102,30 @@ const CompanySummary = ({ data }) => {
   const frictionPercentage = Math.round(metrics.friction_index * 100);
   const frictionColor = frictionPercentage > 60 ? 'text-rose-400' : frictionPercentage > 30 ? 'text-amber-400' : 'text-emerald-400';
   const frictionLabel = frictionPercentage > 60 ? 'Battleground' : frictionPercentage > 30 ? 'Conflicted' : 'Coherent';
+  
+  // Confidence Logic
+  const confidence = data.confidence_score !== undefined ? data.confidence_score : 0;
+  let confidenceColor = 'text-slate-400';
+  let confidenceLabel = 'Unknown';
+  let confidenceBg = 'bg-slate-700';
+
+  if (confidence > 80) {
+      confidenceColor = 'text-emerald-400';
+      confidenceLabel = 'High Fidelity';
+      confidenceBg = 'bg-emerald-500';
+  } else if (confidence > 60) {
+      confidenceColor = 'text-cyan-400';
+      confidenceLabel = 'Verified';
+      confidenceBg = 'bg-cyan-500';
+  } else if (confidence > 40) {
+      confidenceColor = 'text-amber-400';
+      confidenceLabel = 'Partial Data';
+      confidenceBg = 'bg-amber-500';
+  } else {
+      confidenceColor = 'text-rose-400';
+      confidenceLabel = 'Manual Review Rec.';
+      confidenceBg = 'bg-rose-500';
+  }
 
   // --- CHART DATA PREPARATION ---
   const historyRaw = data.history || [];
@@ -255,6 +279,22 @@ const CompanySummary = ({ data }) => {
             </div>
         </div>
 
+        {/* WASHING WARNING BANNER (NEW) */}
+        {data.washing_flag && (
+            <div className="animate-in slide-in-from-top-4 bg-rose-500/10 border-l-4 border-rose-500 p-4 rounded-r-xl flex items-start gap-4 shadow-lg shadow-rose-900/20">
+                <AlertOctagon className="text-rose-500 shrink-0 mt-0.5" size={24} />
+                <div>
+                    <h4 className="text-rose-400 font-bold text-sm uppercase tracking-wide">
+                        {data.washing_type ? data.washing_type.toUpperCase() : "MODERNIZATION WASHING DETECTED"}
+                    </h4>
+                    <p className="text-slate-300 text-sm mt-1">
+                        Forensic analysis confirms a significant contradiction between marketing intent and operational reality. 
+                        High-level claims ({data.intent_score} Ambition) are unsupported by technical evidence.
+                    </p>
+                </div>
+            </div>
+        )}
+
         {/* METRICS & TRENDS ROW */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div className="space-y-4">
@@ -277,18 +317,18 @@ const CompanySummary = ({ data }) => {
                 <div className="bg-white/5 p-4 rounded-xl border border-white/10 flex items-center justify-between">
                     <div className="flex items-center gap-3">
                         <div className="p-2 bg-slate-800 rounded-lg text-slate-400">
-                            <Zap size={20} />
+                            <Eye size={20} />
                         </div>
                         <div>
-                            <h4 className="text-xs text-slate-400 font-bold uppercase tracking-wider">Vibrancy Score</h4>
-                            <p className="text-lg font-bold text-cyan-400">{metrics.vibrancy_score}/100</p>
+                            <h4 className="text-xs text-slate-400 font-bold uppercase tracking-wider">AI Confidence</h4>
+                            <p className={`text-lg font-bold ${confidenceColor}`}>{confidenceLabel} ({confidence}%)</p>
                         </div>
                     </div>
                     <div className="text-right">
-                        <span className="text-[10px] text-slate-500 block">Signal Intensity</span>
-                        <div className="w-16 h-1.5 bg-slate-700 rounded-full mt-1">
-                            <div className="h-full bg-cyan-500 rounded-full" style={{ width: `${metrics.vibrancy_score}%` }}></div>
-                        </div>
+                         <span className="text-[10px] text-slate-500 block">Based on evidence density</span>
+                         <div className="w-16 h-1.5 bg-slate-700 rounded-full mt-1">
+                            <div className={`h-full ${confidenceBg} rounded-full`} style={{ width: `${confidence}%` }}></div>
+                         </div>
                     </div>
                 </div>
             </div>

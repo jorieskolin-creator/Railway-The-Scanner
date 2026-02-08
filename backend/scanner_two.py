@@ -51,7 +51,7 @@ def extract_json_from_text(text):
         
     return None
 
-def x_ray_search(company_name: str, company_url: str = None, model_id: str = None):
+def x_ray_search(company_name: str, company_url: str = None, model_id: str = None, intent_score: int = 0):
     """
     SCANNER 2: THE REALITY CHECK (External Evidence)
     
@@ -68,11 +68,12 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     
     if not api_key:
         print("   [Scanner 2] CRITICAL: No GEMINI_API_KEY found. Using simulation fallback.")
-        return { "score": 60, "checklist": [], "links": [], "is_simulated": True }
+        return { "score": 60, "checklist": [], "links": [], "is_simulated": True, "confidence_score": 0, "washing_flag": False }
 
     # --- DEFINING THE PROMPT ONCE ---
     prompt = f"""
     Perform a FORENSIC INVESTIGATION on "{search_name}" (Domain: {domain_hint}).
+    CONTEXT: Internal/Marketing text analysis suggests an Intent Score of {intent_score}/100.
     
     SEARCH STRATEGY (STRICT - APPROVED DOMAINS ONLY):
     Do NOT read the company's own marketing pages.
@@ -109,6 +110,11 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     - If a finding is RECENT (< 12 months), weight it at 100%.
     - Favor FRESH evidence over legacy complaints.
 
+    DETECT "WASHING" (High Intent vs Low Reality):
+    - If Intent Score is HIGH (>65) but you find evidence of manual processes, legacy systems, or bureaucracy, this is "Washing" (Fake modernization).
+    - AI WASHING: Claims of "AI-driven" but no technical evidence (docs/repos) or complaints of "manual excel work".
+    - AGILE WASHING: Claims of "Tribes/Squads" but evidence of "Waterfall", "Approvals", "Bureaucracy".
+
     RETURN STRICT JSON:
     {{
         "findings": [
@@ -123,8 +129,16 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 "is_recent": boolean (True if < 18 months)
             }}
         ],
-        "reality_score_adjustment": (integer -40 to +40)
+        "reality_score_adjustment": (integer -40 to +40),
+        "confidence_score": (integer 0 to 100),
+        "washing_flag": boolean (True if significant contradiction/washing found),
+        "washing_type": "AI Washing" or "Agile Washing" or "Green Washing" or null
     }}
+    
+    GUIDE FOR CONFIDENCE SCORE:
+    - 0-40: Very few sources found, evidence is generic or very old.
+    - 41-70: Some specific evidence found, but mixed recency or limited sources.
+    - 71-100: Multiple independent sources (Juries) confirm findings, evidence is recent (<12mo) and specific.
     """
 
     def execute_with_model(target_model_name):
@@ -193,27 +207,39 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 })
         
         adjustment = data.get("reality_score_adjustment", 0)
+        confidence = data.get("confidence_score", 50) # Default to medium confidence if missing
+        
+        # Determine Washing based on AI flag OR raw gap if flag is missing
+        washing_flag = data.get("washing_flag", False)
+        washing_type = data.get("washing_type", None)
+        
         final_score = max(0, min(100, base_score + adjustment))
         
         return {
             "score": int(final_score),
             "checklist": checklist,
             "links": raw_findings,
-            "is_simulated": False
+            "is_simulated": False,
+            "confidence_score": int(confidence),
+            "washing_flag": washing_flag,
+            "washing_type": washing_type
         }
     
     # --- FALLBACK: SIMULATION ---
     print(f"   [Scanner 2] All models failed. Engaging AI Simulation for {company_name} (Fallback)...")
     try:
         client = genai.Client(api_key=api_key)
-        sim_prompt = f"Generate 3 REALISTIC forensic search findings for {company_name}. Return JSON with 'findings' and 'score'."
+        sim_prompt = f"Generate 3 REALISTIC forensic search findings for {company_name}. Return JSON with 'findings', 'score' (0-100), 'confidence_score' (0-100), and 'washing_flag' (boolean)."
         response = client.models.generate_content(model="gemini-3-flash-preview", contents=sim_prompt)
         sim_data = json.loads(extract_json_from_text(response.text))
         return {
             "score": sim_data.get("score", 60),
             "checklist": [],
             "links": sim_data.get("findings", []),
-            "is_simulated": True
+            "is_simulated": True,
+            "confidence_score": sim_data.get("confidence_score", 40),
+            "washing_flag": sim_data.get("washing_flag", False),
+            "washing_type": sim_data.get("washing_type", None)
         }
     except:
-        return { "score": 60, "checklist": [], "links": [], "is_simulated": True }
+        return { "score": 60, "checklist": [], "links": [], "is_simulated": True, "confidence_score": 0, "washing_flag": False }

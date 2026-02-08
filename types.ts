@@ -35,6 +35,9 @@ interface AnalysisResult {
   intent_score: number;
   reality_score: number;
   reality_gap: number; 
+  confidence_score?: number; 
+  washing_flag?: boolean; // NEW: Washing Flag
+  washing_type?: string | null; // NEW: AI Washing, Agile Washing, etc.
   evidence_links: EvidenceLink[];
   summary_text: string;
   lastUpdated: string; 

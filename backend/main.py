@@ -1,5 +1,4 @@
 
-
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Response, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -25,8 +24,8 @@ from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES
 from knowledge_base import get_evolving_framework
 
-# VERIFICATION LOG: v4.1.7 - Hybrid Auto-Pilot Default
-print("Starting Adaptability Scanner Backend (v4.1.7 - Hybrid Auto-Pilot)...", flush=True)
+# VERIFICATION LOG: v4.1.9 - Washing Detection Update
+print("Starting Adaptability Scanner Backend (v4.1.9 - Washing Detection)...", flush=True)
 
 def clean_env_var(value):
     if not value: return ""
@@ -98,7 +97,7 @@ async def read_root(): return FileResponse("../index.html")
 def health_check():
     token = clean_env_var(os.environ.get("BLOB_READ_WRITE_TOKEN"))
     return {
-        "status": "Adaptability Scanner API Online (v4.1.7)", 
+        "status": "Adaptability Scanner API Online (v4.1.9)", 
         "timestamp": datetime.utcnow().isoformat(),
         "storage_connected": bool(token)
     }
@@ -235,8 +234,12 @@ async def run_scan(
         intent_results = analyze_intent(combined_text)
 
         # --- STEP 2: SCANNER 2 (Reality) ---
-        reality_results = x_ray_search(companyName, target_url, model_id=search_model)
+        # Pass intent_score so Scanner 2 can detect washing contradictions
+        reality_results = x_ray_search(companyName, target_url, model_id=search_model, intent_score=intent_results["score"])
         gap = intent_results["score"] - reality_results["score"]
+        confidence = reality_results.get("confidence_score", 50)
+        washing_flag = reality_results.get("washing_flag", False)
+        washing_type = reality_results.get("washing_type", None)
         
         # --- STEP 3: SYNTHESIS ---
         summary = "AI Summary Unavailable"
@@ -252,17 +255,25 @@ async def run_scan(
                 doc_context = ""
                 if uploaded_doc_names:
                     doc_context = f"NOTE: Analysis includes confidential internal documents: {', '.join(uploaded_doc_names)}. Treat this as high-fidelity intent data."
+                
+                washing_context = ""
+                if washing_flag:
+                    washing_context = f"CRITICAL: The forensic scanner DETECTED {washing_type or 'WASHING'}. The gap between intent ({intent_results['score']}) and reality ({reality_results['score']}) is confirmed by lack of evidence."
 
                 prompt = f"""
                 ### SYNTHESIS
                 Target: {companyName}
                 Intent: {intent_results["score"]}, Reality: {reality_results["score"]}, Gap: {gap}
+                AI Confidence: {confidence}/100
                 Knowledge Base: {knowledge_context}
                 Evidence: {evidence_list}
                 Intent Data: {intent_narrative}
                 {doc_context}
+                {washing_context}
 
                 Task: Write a 175-word forensic executive summary.
+                1. Explicitly mention the 'AI Confidence' level if it is low (below 50).
+                2. If Washing is detected, use the term "{washing_type or 'Modernization Washing'}" explicitly.
                 """
                 
                 response = client.models.generate_content(model=synthesis_model, contents=prompt)
@@ -290,6 +301,9 @@ async def run_scan(
             "intent_score": intent_results["score"],
             "reality_score": reality_results["score"],
             "reality_gap": gap,
+            "confidence_score": confidence,
+            "washing_flag": washing_flag,
+            "washing_type": washing_type,
             "intent_breakdown": intent_results["breakdown"],
             "metrics": intent_results.get("metrics", {}),
             "reality_checklist": reality_results["checklist"],
@@ -298,7 +312,7 @@ async def run_scan(
             "lastUpdated": new_timestamp,
             "history": history,
             "is_simulated": reality_results.get("is_simulated", False),
-            "uploaded_docs": uploaded_doc_names # STORE FILE NAMES FOR UI BADGE
+            "uploaded_docs": uploaded_doc_names 
         }
         
         # --- STEP 4: SAVE ---
