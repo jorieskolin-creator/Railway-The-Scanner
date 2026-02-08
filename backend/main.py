@@ -1,5 +1,5 @@
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Response, Request
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Response, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -10,7 +10,10 @@ import uuid
 import json
 import asyncio
 import requests
+import io
 from datetime import datetime
+from bs4 import BeautifulSoup
+from pypdf import PdfReader
 from google import genai
 from google.genai import types
 
@@ -21,7 +24,7 @@ from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES
 from knowledge_base import get_evolving_framework
 
-print("Starting Adaptability Scanner Backend (v4.0.0 - Client Orchestration)...", flush=True)
+print("Starting Adaptability Scanner Backend (v4.1.0 - Hybrid Intelligence)...", flush=True)
 
 def clean_env_var(value):
     if not value: return ""
@@ -41,10 +44,40 @@ app.add_middleware(
 )
 
 storage = BlobStorage()
-print(f"   [Config] Effective Public Base URL: {storage.public_base_url or 'Auto-Discovery Active'}")
 
 app.mount("/components", StaticFiles(directory="../components"), name="components")
 app.mount("/services", StaticFiles(directory="../services"), name="services")
+
+# --- FILE PROCESSING HELPERS ---
+async def extract_text_from_file(file: UploadFile) -> str:
+    content = await file.read()
+    filename = file.filename.lower()
+    text = ""
+    
+    try:
+        if filename.endswith(".pdf"):
+            pdf = PdfReader(io.BytesIO(content))
+            for page in pdf.pages:
+                text += page.extract_text() + "\n"
+            print(f"   [File Parser] Extracted {len(text)} chars from PDF: {filename}")
+            
+        elif filename.endswith(".html") or filename.endswith(".htm"):
+            soup = BeautifulSoup(content, 'html.parser')
+            # Remove scripts and styles
+            for script in soup(["script", "style"]):
+                script.decompose()
+            text = soup.get_text(separator=' ')
+            print(f"   [File Parser] Extracted {len(text)} chars from HTML: {filename}")
+        
+        else:
+            # Fallback for text files
+            text = content.decode('utf-8', errors='ignore')
+            
+    except Exception as e:
+        print(f"   [File Parser Error] Could not parse {filename}: {e}")
+        return ""
+        
+    return text
 
 # --- ROUTES ---
 
@@ -62,139 +95,95 @@ async def read_root(): return FileResponse("../index.html")
 @app.get("/api/health")
 def health_check():
     token = clean_env_var(os.environ.get("BLOB_READ_WRITE_TOKEN"))
-    blob_url = clean_env_var(os.environ.get("VITE_BLOB_URL") or os.environ.get("BLOB_URL"))
-    
-    # Verify Storage Connectivity by trying to list 1 file
-    storage_connected = False
-    try:
-        # Check if we can talk to Vercel API
-        test_list = storage._list(prefix="index", limit=1)
-        storage_connected = True
-    except:
-        storage_connected = False
-
     return {
-        "status": "Adaptability Scanner API Online (v4.0.0)", 
+        "status": "Adaptability Scanner API Online (v4.1.0)", 
         "timestamp": datetime.utcnow().isoformat(),
-        "storage_connected": storage_connected,
-        "config_status": {
-            "has_blob_token": bool(token),
-            "has_blob_url_env": bool(blob_url),
-            "effective_base_url": storage.public_base_url
-        }
+        "storage_connected": bool(token)
     }
 
 @app.get("/api/models")
 def list_models():
-    """
-    DEBUG: List all models available to the API Key.
-    """
     api_key = clean_env_var(os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY"))
-    if not api_key:
-        return {"error": "No API Key configured on server."}
-    
+    if not api_key: return {"error": "No API Key configured on server."}
     try:
         client = genai.Client(api_key=api_key)
-        # List models and filter for generateContent support
         models = list(client.models.list())
-        
-        # Format for frontend
-        available = []
-        for m in models:
-            if "generateContent" in m.supported_generation_methods:
-                available.append(m.name)
-        
+        available = [m.name for m in models if "generateContent" in m.supported_generation_methods]
         return {"count": len(available), "models": sorted(available)}
     except Exception as e:
         return {"error": str(e)}
 
 @app.get("/dashboard-data")
 async def get_dashboard_data(response: Response):
-    """
-    Returns the LIGHTWEIGHT summary list.
-    """
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    print("GET /dashboard-data requested...")
-    
     data = storage.retrieve_latest_data("index/summary_list")
-    
-    if data:
-        print(f" -> Success. Returning {len(data)} records.")
-    else:
-        print(" -> Warning: Storage returned empty list or None.")
-        
     return data or []
 
 @app.get("/company/{company_name}")
 async def get_company_details(company_name: str, response: Response):
-    """
-    Returns the FULL DETAILED report.
-    """
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    
     data = storage.get_company_data(company_name)
     if not data:
         raise HTTPException(status_code=404, detail="Company report not found in Vercel Blob.")
-    
     return data
-
-class ScanRequest(BaseModel):
-    companyName: str
-    companyUrl: Optional[str] = None
-    reportText: str
-    saveToDatabase: Optional[bool] = False
-    modelId: Optional[str] = None # Optional Model Override from Client
 
 @app.get("/admin/company-list")
 async def get_company_list():
-    """
-    Returns the static list of TOP 100 companies for client-side iteration.
-    """
     return {"companies": TOP_100_COMPANIES}
-
-@app.post("/admin/seed-finland-100")
-async def seed_database(background_tasks: BackgroundTasks):
-    # DEPRECATED: This method is prone to timeouts on Vercel.
-    # Kept for backward compatibility or local testing.
-    background_tasks.add_task(run_batch_seed, real_xray_mode=True, limit=None)
-    return {"status": "Batch Seeding Initiated", "message": "Process running in background. Refresh dashboard manually to see updates."}
 
 @app.post("/admin/reset-database")
 async def reset_database():
-    """
-    WIPES ALL DATA. Used when changing math models (e.g. 4-point scale).
-    """
     count = storage.nuke_everything()
     return {"status": "Database Wiped", "deleted_count": count}
 
+# --- MAIN SCAN ENDPOINT (MULTIPART) ---
 @app.post("/scan")
-async def run_scan(request: ScanRequest):
+async def run_scan(
+    companyName: str = Form(...),
+    companyUrl: Optional[str] = Form(None),
+    reportText: str = Form(""),
+    saveToDatabase: bool = Form(True),
+    modelId: Optional[str] = Form(None),
+    files: List[UploadFile] = File(None)
+):
     """
-    REAL FORENSIC SCAN (Live).
+    Hybrid Forensic Scan: Accepts Text + URLs + Uploaded Documents (PDF/HTML).
     """
     try:
-        print(f"--- LIVE SCAN INITIATED FOR: {request.companyName} ---")
-        # HARDCODED UPGRADE: Default to Gemini 3 Pro Preview
-        target_model = request.modelId or "gemini-3-pro-preview"
+        print(f"--- LIVE SCAN INITIATED FOR: {companyName} ---")
+        target_model = modelId or "gemini-3-pro-preview"
+        
+        # --- PROCESS FILES ---
+        combined_text = reportText if reportText else ""
+        uploaded_doc_names = []
+        
+        if files:
+            print(f"   [Upload] Processing {len(files)} uploaded documents...")
+            for file in files:
+                doc_text = await extract_text_from_file(file)
+                if doc_text:
+                    combined_text += f"\n\n--- INTERNAL DOCUMENT: {file.filename} ---\n{doc_text}"
+                    uploaded_doc_names.append(file.filename)
         
         # --- STEP 1: SCANNER 1 (Intent) ---
-        target_text = request.reportText
-        target_url = request.companyUrl
+        target_url = companyUrl
         
         if not target_url:
             for c in TOP_100_COMPANIES:
-                if c['name'].lower() == request.companyName.lower():
+                if c['name'].lower() == companyName.lower():
                     target_url = c['url']
                     break
 
-        if not target_text or len(target_text) < 100:
-            if target_url: target_text = scrape_strategic_content(target_url, request.companyName)
-            else: target_text = scrape_strategic_content(None, request.companyName)
+        # If text is still empty (no upload, no input), try scraping
+        if not combined_text or len(combined_text) < 100:
+            if target_url: combined_text = scrape_strategic_content(target_url, companyName)
+            else: combined_text = scrape_strategic_content(None, companyName)
 
-        intent_results = analyze_intent(target_text)
+        # Analyze Intent (Now includes Deep Doc content)
+        intent_results = analyze_intent(combined_text)
 
         # --- STEP 2: SCANNER 2 (Reality) ---
-        reality_results = x_ray_search(request.companyName, target_url, model_id=target_model)
+        reality_results = x_ray_search(companyName, target_url, model_id=target_model)
         gap = intent_results["score"] - reality_results["score"]
         
         # --- STEP 3: SYNTHESIS ---
@@ -207,19 +196,23 @@ async def run_scan(request: ScanRequest):
                 intent_narrative = json.dumps(intent_results["breakdown"])
                 evidence_list = ', '.join([f"{l['title']}: {l.get('snippet', '')}" for l in reality_results['links'][:4]])
                 knowledge_context = get_evolving_framework()
+                
+                doc_context = ""
+                if uploaded_doc_names:
+                    doc_context = f"NOTE: Analysis includes confidential internal documents: {', '.join(uploaded_doc_names)}. Treat this as high-fidelity intent data."
 
                 prompt = f"""
                 ### SYNTHESIS
-                Target: {request.companyName}
+                Target: {companyName}
                 Intent: {intent_results["score"]}, Reality: {reality_results["score"]}, Gap: {gap}
                 Knowledge Base: {knowledge_context}
                 Evidence: {evidence_list}
                 Intent Data: {intent_narrative}
+                {doc_context}
 
                 Task: Write a 175-word forensic executive summary.
                 """
                 
-                # Use the user-selected model for summary as well
                 response = client.models.generate_content(model=target_model, contents=prompt)
                 if response.text: summary = response.text
             except Exception as e:
@@ -229,7 +222,7 @@ async def run_scan(request: ScanRequest):
         result_id = str(uuid.uuid4())
         
         history = []
-        existing_data = storage.get_company_data(request.companyName)
+        existing_data = storage.get_company_data(companyName)
         if existing_data:
             history = existing_data.get("history", [])
             history.append({
@@ -240,7 +233,7 @@ async def run_scan(request: ScanRequest):
 
         full_data = {
             "id": result_id,
-            "companyName": request.companyName,
+            "companyName": companyName,
             "companyUrl": target_url, 
             "intent_score": intent_results["score"],
             "reality_score": reality_results["score"],
@@ -252,22 +245,24 @@ async def run_scan(request: ScanRequest):
             "summary_text": summary,
             "lastUpdated": new_timestamp,
             "history": history,
-            "is_simulated": reality_results.get("is_simulated", False)
+            "is_simulated": reality_results.get("is_simulated", False),
+            "uploaded_docs": uploaded_doc_names # STORE FILE NAMES FOR UI BADGE
         }
         
         # --- STEP 4: SAVE ---
-        if request.saveToDatabase:
-            saved_url = storage.save_company_data(request.companyName, full_data)
+        if saveToDatabase:
+            saved_url = storage.save_company_data(companyName, full_data)
             print(f"   [Live Scan] Saved detailed report to: {saved_url}")
             
             summary_entry = {
                 "id": result_id,
-                "companyName": request.companyName,
+                "companyName": companyName,
                 "intent_score": intent_results["score"],
                 "reality_score": reality_results["score"],
                 "reality_gap": gap,
                 "lastUpdated": new_timestamp,
-                "detailsUrl": saved_url
+                "detailsUrl": saved_url,
+                "has_docs": len(uploaded_doc_names) > 0 # FLAG FOR FRONTEND
             }
             # Update index
             storage.update_global_index(summary_entry)

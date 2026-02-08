@@ -158,13 +158,28 @@ const App = () => {
     }
   };
 
-  const handleRunScan = async (input) => {
+  const handleRunScan = async (input, isFormData = false) => {
     setIsScanning(true);
     try {
+      // If it's already FormData (from ScannerInput), use it directly.
+      // If it's a JSON object (from automated calls?), convert it.
+      
+      let body;
+      let headers = {};
+      
+      if (isFormData) {
+          body = input;
+          // Don't set Content-Type for FormData; browser handles it
+      } else {
+          // Fallback for old JSON calls if any exist
+          body = JSON.stringify({ ...input, saveToDatabase: true });
+          headers = { 'Content-Type': 'application/json' };
+      }
+
       const response = await fetch(`/scan`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...input, saveToDatabase: true })
+        headers: headers,
+        body: body
       });
       
       if (!response.ok) throw new Error("Scan failed");
@@ -221,18 +236,17 @@ const App = () => {
             }));
 
             try {
-                // Perform Scan
-                // NOTE: Using selected adminModel
+                // Perform Scan (Batch uses FormData now too for consistency, though empty files)
+                const formData = new FormData();
+                formData.append('companyName', target.name);
+                formData.append('companyUrl', target.url);
+                formData.append('reportText', "");
+                formData.append('saveToDatabase', 'true');
+                formData.append('modelId', adminModel);
+                
                 const res = await fetch('/scan', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        companyName: target.name, 
-                        companyUrl: target.url, 
-                        reportText: "", 
-                        saveToDatabase: true,
-                        modelId: adminModel 
-                    })
+                    body: formData
                 });
 
                 if (res.ok) {
@@ -497,7 +511,10 @@ const App = () => {
                         const archetype = getArchetype(row.intent_score, row.reality_score);
                         return (
                         <tr key={row.id} className="hover:bg-white/5 transition-colors">
-                          <td className="px-6 py-4 font-medium text-white">{row.companyName}</td>
+                          <td className="px-6 py-4 font-medium text-white flex items-center gap-2">
+                              {row.companyName}
+                              {row.has_docs && <Cpu size={12} className="text-indigo-400" title="Deep Dive Docs Used" />}
+                          </td>
                           <td className="px-6 py-4">{row.intent_score}</td>
                           <td className="px-6 py-4">{row.reality_score}</td>
                           <td className="px-6 py-4 font-mono text-xs">
@@ -610,7 +627,8 @@ const App = () => {
                         intent_score: updated.intent_score,
                         reality_score: updated.reality_score,
                         reality_gap: updated.reality_gap,
-                        lastUpdated: updated.lastUpdated
+                        lastUpdated: updated.lastUpdated,
+                        has_docs: updated.uploaded_docs && updated.uploaded_docs.length > 0
                     }; 
                     return newArr;
                 }
