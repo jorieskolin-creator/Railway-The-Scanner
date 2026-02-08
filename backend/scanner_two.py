@@ -110,8 +110,10 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     - If a finding is RECENT (< 12 months), weight it at 100%.
     - Favor FRESH evidence over legacy complaints.
 
-    DETECT "WASHING" (High Intent vs Low Reality):
-    - If Intent Score is HIGH (>65) but you find evidence of manual processes, legacy systems, or bureaucracy, this is "Washing" (Fake modernization).
+    DETECT "WASHING" (Logic Check):
+    - Intent Score is {intent_score}. 
+    - RULE: "Washing" (Green/Agile/AI Washing) is ONLY possible if Intent Score is HIGH (>60) AND Reality is LOW.
+    - IF Intent Score is LOW (<50), you CANNOT flag this as Washing.
     - AI WASHING: Claims of "AI-driven" but no technical evidence (docs/repos) or complaints of "manual excel work".
     - AGILE WASHING: Claims of "Tribes/Squads" but evidence of "Waterfall", "Approvals", "Bureaucracy".
 
@@ -131,7 +133,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         ],
         "reality_score_adjustment": (integer -40 to +40),
         "confidence_score": (integer 0 to 100),
-        "washing_flag": boolean (True if significant contradiction/washing found),
+        "washing_flag": boolean (True if significant contradiction/washing found AND Intent > 60),
         "washing_type": "AI Washing" or "Agile Washing" or "Green Washing" or null
     }}
     

@@ -24,8 +24,8 @@ from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES
 from knowledge_base import get_evolving_framework
 
-# VERIFICATION LOG: v4.1.9 - Washing Detection Update
-print("Starting Adaptability Scanner Backend (v4.1.9 - Washing Detection)...", flush=True)
+# VERIFICATION LOG: v4.2.0 - Logic Consistency Patch
+print("Starting Adaptability Scanner Backend (v4.2.0 - Logic Consistency)...", flush=True)
 
 def clean_env_var(value):
     if not value: return ""
@@ -97,7 +97,7 @@ async def read_root(): return FileResponse("../index.html")
 def health_check():
     token = clean_env_var(os.environ.get("BLOB_READ_WRITE_TOKEN"))
     return {
-        "status": "Adaptability Scanner API Online (v4.1.9)", 
+        "status": "Adaptability Scanner API Online (v4.2.0)", 
         "timestamp": datetime.utcnow().isoformat(),
         "storage_connected": bool(token)
     }
@@ -188,9 +188,6 @@ async def run_scan(
         print(f"--- LIVE SCAN INITIATED FOR: {companyName} ---")
         
         # --- MODEL SELECTION STRATEGY ---
-        # If modelId is provided (Override), use it for EVERYTHING.
-        # If modelId is None/Empty (Auto), use the HYBRID STRATEGY.
-        
         if modelId and modelId.strip():
             # USER FORCE OVERRIDE
             search_model = modelId
@@ -225,12 +222,10 @@ async def run_scan(
                     target_url = c['url']
                     break
 
-        # If text is still empty (no upload, no input), try scraping
         if not combined_text or len(combined_text) < 100:
             if target_url: combined_text = scrape_strategic_content(target_url, companyName)
             else: combined_text = scrape_strategic_content(None, companyName)
 
-        # Analyze Intent (Now includes Deep Doc content)
         intent_results = analyze_intent(combined_text)
 
         # --- STEP 2: SCANNER 2 (Reality) ---
@@ -241,6 +236,22 @@ async def run_scan(
         washing_flag = reality_results.get("washing_flag", False)
         washing_type = reality_results.get("washing_type", None)
         
+        # --- LOGIC CONSISTENCY CHECK ---
+        # CRITICAL FIX: "Washing" is impossible if Reality >= Intent.
+        # It implies they are doing MORE than they say (Silent Doers).
+        if reality_results["score"] >= intent_results["score"]:
+            if washing_flag:
+                print(f"   [Logic Override] Washing Flag set to FALSE. Reality ({reality_results['score']}) >= Intent ({intent_results['score']}). This is a Surplus/Silent Doer.")
+            washing_flag = False
+            washing_type = None
+        
+        # Also impossible if Ambition is very low (e.g. < 40)
+        if intent_results["score"] < 40:
+             if washing_flag:
+                print(f"   [Logic Override] Washing Flag set to FALSE. Intent ({intent_results['score']}) is too low to qualify as Washing.")
+             washing_flag = False
+             washing_type = None
+
         # --- STEP 3: SYNTHESIS ---
         summary = "AI Summary Unavailable"
         api_key = clean_env_var(os.environ.get("API_KEY") or os.environ.get("GEMINI_API_KEY"))
@@ -256,9 +267,12 @@ async def run_scan(
                 if uploaded_doc_names:
                     doc_context = f"NOTE: Analysis includes confidential internal documents: {', '.join(uploaded_doc_names)}. Treat this as high-fidelity intent data."
                 
+                # Logic-aware Context
                 washing_context = ""
                 if washing_flag:
-                    washing_context = f"CRITICAL: The forensic scanner DETECTED {washing_type or 'WASHING'}. The gap between intent ({intent_results['score']}) and reality ({reality_results['score']}) is confirmed by lack of evidence."
+                    washing_context = f"CRITICAL: The forensic scanner DETECTED {washing_type or 'WASHING'}. The gap between High Intent ({intent_results['score']}) and Low Reality ({reality_results['score']}) is confirmed."
+                elif reality_results["score"] > intent_results["score"] + 10:
+                    washing_context = f"CRITICAL DIAGNOSIS: This company is a 'SILENT DOER'. They have Low Intent ({intent_results['score']}) but High Operational Reality ({reality_results['score']}). They under-promise and over-deliver."
 
                 prompt = f"""
                 ### SYNTHESIS
@@ -274,6 +288,7 @@ async def run_scan(
                 Task: Write a 175-word forensic executive summary.
                 1. Explicitly mention the 'Summary Confidence' level if it is low (below 50).
                 2. If Washing is detected, use the term "{washing_type or 'Modernization Washing'}" explicitly.
+                3. If they are 'Silent Doers' (High Reality, Low Intent), praise their operational integrity.
                 """
                 
                 response = client.models.generate_content(model=synthesis_model, contents=prompt)

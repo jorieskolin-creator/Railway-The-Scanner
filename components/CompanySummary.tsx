@@ -279,8 +279,9 @@ const CompanySummary = ({ data }) => {
             </div>
         </div>
 
-        {/* WASHING WARNING BANNER (NEW) */}
-        {data.washing_flag && (
+        {/* WASHING WARNING BANNER */}
+        {/* LOGIC FIX: Ensure Washing only displays if Intent > Reality. Silent Doers (Surplus) should NOT see this. */}
+        {data.washing_flag && data.intent_score > data.reality_score && (
             <div className="animate-in slide-in-from-top-4 bg-rose-500/10 border-l-4 border-rose-500 p-4 rounded-r-xl flex items-start gap-4 shadow-lg shadow-rose-900/20">
                 <AlertOctagon className="text-rose-500 shrink-0 mt-0.5" size={24} />
                 <div>
