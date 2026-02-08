@@ -24,8 +24,8 @@ from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES
 from knowledge_base import get_evolving_framework
 
-# VERIFICATION LOG: v4.2.0 - Logic Consistency Patch
-print("Starting Adaptability Scanner Backend (v4.2.0 - Logic Consistency)...", flush=True)
+# VERIFICATION LOG: v4.4.0 - Strict Coordinate Logic
+print("Starting Adaptability Scanner Backend (v4.4.0 - Strict Archetypes)...", flush=True)
 
 def clean_env_var(value):
     if not value: return ""
@@ -267,17 +267,34 @@ async def run_scan(
                 if uploaded_doc_names:
                     doc_context = f"NOTE: Analysis includes confidential internal documents: {', '.join(uploaded_doc_names)}. Treat this as high-fidelity intent data."
                 
+                # --- COORDINATE LOGIC (STRICT) ---
+                # Lower-Left: Stagnation (Intent < 50, Reality < 50)
+                # Lower-Right: Talk-not-Walk (Intent >= 50, Reality < 50)
+                # Upper-Left: Silent Doers (Intent < 50, Reality >= 50)
+                # Upper-Right: Walk-and-Talk (Intent >= 50, Reality >= 50)
+                
+                archetype = "Unknown"
+                if reality_results["score"] >= 50:
+                    if intent_results["score"] >= 50:
+                        archetype = "Walk-and-Talk (Aligned)"
+                    else:
+                        archetype = "Silent Doers (Surplus)"
+                else:
+                    if intent_results["score"] >= 50:
+                        archetype = "Talk-not-Walk (Hype)"
+                    else:
+                        archetype = "Stagnation (Low/Low)"
+
                 # Logic-aware Context
                 washing_context = ""
                 if washing_flag:
-                    washing_context = f"CRITICAL: The forensic scanner DETECTED {washing_type or 'WASHING'}. The gap between High Intent ({intent_results['score']}) and Low Reality ({reality_results['score']}) is confirmed."
-                elif reality_results["score"] > intent_results["score"] + 10:
-                    washing_context = f"CRITICAL DIAGNOSIS: This company is a 'SILENT DOER'. They have Low Intent ({intent_results['score']}) but High Operational Reality ({reality_results['score']}). They under-promise and over-deliver."
-
+                    washing_context = f"CRITICAL: The forensic scanner DETECTED {washing_type or 'WASHING'}. This confirms the 'Talk-not-Walk' diagnosis."
+                
                 prompt = f"""
                 ### SYNTHESIS
                 Target: {companyName}
                 Intent: {intent_results["score"]}, Reality: {reality_results["score"]}, Gap: {gap}
+                DIAGNOSIS ARCHETYPE: {archetype.upper()}
                 Summary Confidence: {confidence}/100
                 Knowledge Base: {knowledge_context}
                 Evidence: {evidence_list}
@@ -286,9 +303,10 @@ async def run_scan(
                 {washing_context}
 
                 Task: Write a 175-word forensic executive summary.
-                1. Explicitly mention the 'Summary Confidence' level if it is low (below 50).
-                2. If Washing is detected, use the term "{washing_type or 'Modernization Washing'}" explicitly.
-                3. If they are 'Silent Doers' (High Reality, Low Intent), praise their operational integrity.
+                1. STATE THE ARCHETYPE ({archetype}) explicitly in the first sentence.
+                2. Explicitly mention the 'Summary Confidence' level if it is low (below 50).
+                3. If Washing is detected, use the term "{washing_type or 'Modernization Washing'}" explicitly.
+                4. Focus on why they are in this specific quadrant.
                 """
                 
                 response = client.models.generate_content(model=synthesis_model, contents=prompt)

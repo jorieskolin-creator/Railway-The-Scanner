@@ -1,5 +1,4 @@
 
-
 const { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Label, ReferenceLine } = (window as any).Recharts;
 
 const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] }) => {
@@ -12,7 +11,7 @@ const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] 
     const intent = data.intent_score;
     const reality = data.reality_score;
 
-    // Strict Quadrant Classification
+    // Strict Quadrant Classification (Coordinate-based)
     let gapLabel = "Stagnation";
     let gapColor = "text-slate-400";
     
@@ -81,7 +80,7 @@ const renderCustomDot = (props: any) => {
     const { intent_score: i, reality_score: r, companies } = payload;
     const count = companies ? companies.length : 1;
 
-    // Color Logic
+    // Color Logic (Strict Quadrant)
     let fillColor = '#fb7185'; 
     if (r >= 50) {
         if (i >= 50) fillColor = '#10b981'; // Walk-and-Talk (Emerald)

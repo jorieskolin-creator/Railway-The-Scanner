@@ -60,12 +60,7 @@ const CompanySummary = ({ data }) => {
   const summaryRef = useRef(null);
   const [copied, setCopied] = useState(false);
 
-  // NEW VISUAL LOGIC (Quadrant-based 50/50 split):
-  // Silent Doers: Reality >= 50, Ambition < 50
-  // Walk-and-Talk: Reality >= 50, Ambition >= 50
-  // Talk-not-Walk: Reality < 50, Ambition >= 50
-  // Stagnation: Reality < 50, Ambition < 50
-
+  // STRICT COORDINATE LOGIC (X=50, Y=50 Split)
   let gapColor = '#94a3b8';
   let gapLabel = "Stagnation";
   
@@ -83,7 +78,7 @@ const CompanySummary = ({ data }) => {
           gapColor = '#f59e0b'; // Amber
       } else {
           gapLabel = "Stagnation (Low/Low)";
-          gapColor = '#94a3b8'; // Gray
+          gapColor = '#fb7185'; // Rose/Red (Specific for Stagnation now)
       }
   }
   

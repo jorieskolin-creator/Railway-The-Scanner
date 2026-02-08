@@ -1,5 +1,6 @@
 
 
+
 const { useState, useEffect, useRef } = (window as any).React;
 
 const LucideRaw = (window as any).Lucide || {};
@@ -362,14 +363,26 @@ const App = () => {
     item.companyName.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  // Helper for Archetype Logic
+  // Helper for Archetype Logic (Strict Coordinate System)
   const getArchetype = (intent, reality) => {
       if (reality >= 50) {
-          if (intent >= 50) return { label: "Walk-and-Talk", color: "text-emerald-400", bg: "bg-emerald-400/10", border: "border-emerald-400/20" };
-          return { label: "Silent Doer", color: "text-cyan-400", bg: "bg-cyan-400/10", border: "border-cyan-400/20" };
+          // Upper Half
+          if (intent >= 50) {
+              // Upper Right
+              return { label: "Walk-and-Talk", color: "text-emerald-400", bg: "bg-emerald-400/10", border: "border-emerald-400/20" };
+          } else {
+              // Upper Left
+              return { label: "Silent Doer", color: "text-cyan-400", bg: "bg-cyan-400/10", border: "border-cyan-400/20" };
+          }
       } else {
-          if (intent >= 50) return { label: "Talk-not-Walk", color: "text-amber-400", bg: "bg-amber-400/10", border: "border-amber-400/20" };
-          return { label: "Stagnation", color: "text-slate-400", bg: "bg-slate-400/10", border: "border-slate-400/20" };
+          // Lower Half
+          if (intent >= 50) {
+              // Lower Right
+              return { label: "Talk-not-Walk", color: "text-amber-400", bg: "bg-amber-400/10", border: "border-amber-400/20" };
+          } else {
+              // Lower Left
+              return { label: "Stagnation", color: "text-slate-400", bg: "bg-slate-400/10", border: "border-slate-400/20" };
+          }
       }
   };
 

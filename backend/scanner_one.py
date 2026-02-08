@@ -275,20 +275,21 @@ def analyze_intent(text: str):
     if total_words == 0: total_words = 1 
 
     # --- ADAPTIVE SENSITIVITY ---
-    # CALIBRATION FIX: 
-    # Previously, divisor was 25.0, then 6.0.
-    # New divisor is 4.0. This means a Net Score of 4 = 100%.
-    # This aggressively maps companies with coherent narratives to the right side.
+    # CALIBRATION FIX v4.4:
+    # Relaxed scoring further.
+    # GOOD_THRESHOLD: 1 match is enough to score.
+    # FRICTION_WEIGHT: 0.6. It now takes ~2 bad keywords to cancel 1 good keyword.
+    
     is_short_text = total_words < 400
     
+    # 1 is enough to count as a signal now.
+    GOOD_THRESHOLD = 1
+    BAD_THRESHOLD = 1
+    
     if is_short_text:
-        GOOD_THRESHOLD = 1
-        BAD_THRESHOLD = 1
-        NORMALIZATION_DIVISOR = 2.0 
+        NORMALIZATION_DIVISOR = 1.5 # Very easy to score on short text
     else:
-        GOOD_THRESHOLD = 3
-        BAD_THRESHOLD = 1
-        NORMALIZATION_DIVISOR = 4.0 # Optimized for Forensic Clarity
+        NORMALIZATION_DIVISOR = 3.0 # Moderate difficulty on long text
 
     lower_text = text.lower()
 
@@ -306,16 +307,11 @@ def analyze_intent(text: str):
 
         # 1. Count Good Signals
         for word in good_list:
-            # FIX: Morphological Matching for Finnish
-            # English uses strict boundary \bword\b
-            # Finnish uses prefix boundary \bword (allows suffixes like -ssa, -lla, -t, -yys)
             is_finnish = word in keywords.get("good_fi", [])
             
             if is_finnish:
-                # Match start of word, allow characters after
                 pattern = r'\b' + re.escape(word.lower())
             else:
-                # Strict match for English to avoid false positives (e.g. "is" matching "island")
                 pattern = r'\b' + re.escape(word.lower()) + r'\b'
                 
             matches = list(re.finditer(pattern, lower_text))
@@ -357,11 +353,10 @@ def analyze_intent(text: str):
             
             total_bad_matches += valid_bad_occurrences_for_word
 
-        # 3. Calculate AMBITION (Score with Moderate Friction Penalty)
-        # UPGRADE: Reduced weight from 3.0 to 2.0 to be less punitive.
-        # This transforms the score from "Volume of Intent" to "Ambition Clarity".
-        # If a company contradicts itself (high friction), the Ambition Score decreases, but doesn't collapse.
-        FRICTION_WEIGHT = 2.0
+        # 3. Calculate AMBITION (Score with Low Friction Penalty)
+        # UPGRADE v4.4: Reduced from 1.0 to 0.6.
+        # This prevents companies with mixed signals from dropping to 0.
+        FRICTION_WEIGHT = 0.6
         
         net_result = unique_good_found - (unique_bad_found * FRICTION_WEIGHT)
         
@@ -376,7 +371,7 @@ def analyze_intent(text: str):
             "score": int(score),
             "goodCount": unique_good_found,
             "badCount": unique_bad_found,
-            "matches": list(matched_tokens_good) + list(matched_tokens_bad), # Combined list of tokens
+            "matches": list(matched_tokens_good) + list(matched_tokens_bad),
             "matches_detail": {
                 "good": list(matched_tokens_good),
                 "bad": list(matched_tokens_bad)
