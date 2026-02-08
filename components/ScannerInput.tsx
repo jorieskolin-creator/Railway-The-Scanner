@@ -1,6 +1,6 @@
 
 const { useState, useRef } = (window as any).React;
-const { Search, FileText, Globe, Zap, Link, AlertCircle, Database, Settings, Cpu, UploadCloud, File, X } = (window as any).Lucide;
+const { Search, FileText, Globe, Zap, Link, AlertCircle, Database, Settings, Cpu, UploadCloud, File, X, Sparkles } = (window as any).Lucide;
 
 const ScannerInput = ({ onScan }) => {
   const [companyName, setCompanyName] = useState('');
@@ -17,7 +17,8 @@ const ScannerInput = ({ onScan }) => {
   
   // NEW: Model Override State
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [selectedModel, setSelectedModel] = useState('gemini-3-pro-preview');
+  // Default is empty string, which implies "Hybrid Auto-Pilot"
+  const [selectedModel, setSelectedModel] = useState('');
 
   const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
@@ -97,7 +98,13 @@ const ScannerInput = ({ onScan }) => {
     formData.append('companyName', companyName);
     if (companyUrl) formData.append('companyUrl', companyUrl);
     formData.append('reportText', reportText);
-    formData.append('modelId', selectedModel);
+    
+    // Only append modelId if user explicitly selected one. 
+    // If empty, backend uses Hybrid default.
+    if (selectedModel) {
+        formData.append('modelId', selectedModel);
+    }
+    
     formData.append('saveToDatabase', 'true');
     
     selectedFiles.forEach(file => {
@@ -130,6 +137,15 @@ const ScannerInput = ({ onScan }) => {
     }
   };
 
+  // Helper to display current selection
+  const getModelLabel = () => {
+      if (!selectedModel) return "AUTO (HYBRID)";
+      if (selectedModel.includes('3-pro')) return "3 PRO (FORCED)";
+      if (selectedModel.includes('flash')) return "3 FLASH (FORCED)";
+      if (selectedModel.includes('2.5')) return "2.5 PRO (FORCED)";
+      return selectedModel;
+  };
+
   return (
     <div className="bg-slate-900">
       <div className="bg-white/5 p-6 border-b border-white/5 flex justify-between items-center">
@@ -141,7 +157,7 @@ const ScannerInput = ({ onScan }) => {
         </div>
         <div className="flex gap-2 text-xs">
            <button type="button" onClick={() => setShowAdvanced(!showAdvanced)} className={`px-3 py-1.5 rounded border transition-all font-mono text-[10px] flex items-center gap-1 ${showAdvanced ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30' : 'bg-white/5 text-slate-400 border-transparent hover:bg-white/10'}`}>
-            <Settings size={10} /> {showAdvanced ? 'HIDE OPTIONS' : 'AI MODEL'}
+            <Cpu size={10} /> {getModelLabel()}
            </button>
            <button type="button" onClick={fetchModels} className="px-3 py-1.5 rounded bg-white/5 hover:bg-white/10 text-slate-400 hover:text-cyan-300 border border-transparent hover:border-cyan-500/30 transition-all font-mono text-[10px] flex items-center gap-1">
             <Database size={10} /> {showModels ? "HIDE LIST" : "CHECK SERVER"}
@@ -170,39 +186,53 @@ const ScannerInput = ({ onScan }) => {
       {showAdvanced && (
           <div className="bg-indigo-950/20 p-4 border-b border-indigo-500/20 animate-in slide-in-from-top-2 flex flex-col gap-2">
              <label className="text-[10px] font-bold uppercase tracking-widest text-indigo-300 flex items-center gap-2">
-                <Cpu size={12} /> AI Model Override
+                <Cpu size={12} /> Model Selection Strategy
              </label>
-             <div className="flex flex-col sm:flex-row gap-2">
-                 <input 
-                    type="text" 
-                    value={selectedModel} 
-                    onChange={(e) => setSelectedModel(e.target.value)}
-                    className="flex-1 bg-black/40 border border-indigo-500/30 rounded px-3 py-1.5 text-xs text-white font-mono placeholder-slate-600 focus:outline-none focus:border-indigo-400"
-                    placeholder="e.g. gemini-3-pro-preview"
-                 />
-                 <div className="flex gap-1">
+             <div className="flex flex-col gap-3">
+                 <div className="flex gap-1 flex-wrap">
+                    <button 
+                        type="button"
+                        onClick={() => setSelectedModel('')} 
+                        className={`flex-1 px-3 py-2 rounded text-[10px] border transition-all flex flex-col items-center gap-1 ${selectedModel === '' ? 'bg-indigo-600 text-white border-indigo-400 shadow-[0_0_10px_rgba(99,102,241,0.3)]' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
+                    >
+                        <span className="font-bold flex items-center gap-1"><Sparkles size={10} /> AUTO (HYBRID)</span>
+                        <span className="text-[9px] opacity-70">3 Pro (Search) + 2.5 Pro (Summary)</span>
+                    </button>
+                    
                     <button 
                         type="button"
                         onClick={() => setSelectedModel('gemini-3-pro-preview')} 
-                        className={`px-2 py-1 rounded text-[10px] border transition-colors ${selectedModel === 'gemini-3-pro-preview' ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
+                        className={`flex-1 px-3 py-2 rounded text-[10px] border transition-all flex flex-col items-center gap-1 ${selectedModel === 'gemini-3-pro-preview' ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
                     >
-                        3 Pro
+                        <span className="font-bold">3 PRO</span>
+                        <span className="text-[9px] opacity-70">Force High Logic</span>
                     </button>
+                    
                     <button 
                         type="button"
                         onClick={() => setSelectedModel('gemini-3-flash-preview')} 
-                        className={`px-2 py-1 rounded text-[10px] border transition-colors ${selectedModel === 'gemini-3-flash-preview' ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
+                        className={`flex-1 px-3 py-2 rounded text-[10px] border transition-all flex flex-col items-center gap-1 ${selectedModel === 'gemini-3-flash-preview' ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
                     >
-                        3 Flash
+                        <span className="font-bold">3 FLASH</span>
+                        <span className="text-[9px] opacity-70">Force Speed</span>
                     </button>
+                    
                     <button 
                         type="button"
                         onClick={() => setSelectedModel('gemini-2.5-pro')} 
-                        className={`px-2 py-1 rounded text-[10px] border transition-colors ${selectedModel === 'gemini-2.5-pro' ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
+                        className={`flex-1 px-3 py-2 rounded text-[10px] border transition-all flex flex-col items-center gap-1 ${selectedModel === 'gemini-2.5-pro' ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
                     >
-                        2.5 Pro
+                        <span className="font-bold">2.5 PRO</span>
+                        <span className="text-[9px] opacity-70">Force Creative</span>
                     </button>
                  </div>
+                 
+                 {selectedModel !== '' && (
+                     <div className="flex items-center gap-2 text-[10px] text-amber-300 bg-amber-950/30 p-2 rounded border border-amber-900/50">
+                         <AlertCircle size={12} />
+                         <span>Override Active: This model will be used for BOTH Search and Synthesis.</span>
+                     </div>
+                 )}
              </div>
           </div>
       )}

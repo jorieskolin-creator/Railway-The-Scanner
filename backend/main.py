@@ -24,8 +24,8 @@ from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES
 from knowledge_base import get_evolving_framework
 
-# VERIFICATION LOG: Use this to check Railway logs and ensure v4.1.2 is running
-print("Starting Adaptability Scanner Backend (v4.1.2 - CACHE CLEARED)...", flush=True)
+# VERIFICATION LOG: v4.1.7 - Hybrid Auto-Pilot Default
+print("Starting Adaptability Scanner Backend (v4.1.7 - Hybrid Auto-Pilot)...", flush=True)
 
 def clean_env_var(value):
     if not value: return ""
@@ -97,7 +97,7 @@ async def read_root(): return FileResponse("../index.html")
 def health_check():
     token = clean_env_var(os.environ.get("BLOB_READ_WRITE_TOKEN"))
     return {
-        "status": "Adaptability Scanner API Online (v4.1.2)", 
+        "status": "Adaptability Scanner API Online (v4.1.7)", 
         "timestamp": datetime.utcnow().isoformat(),
         "storage_connected": bool(token)
     }
@@ -152,8 +152,24 @@ async def run_scan(
     """
     try:
         print(f"--- LIVE SCAN INITIATED FOR: {companyName} ---")
-        target_model = modelId or "gemini-3-pro-preview"
         
+        # --- MODEL SELECTION STRATEGY ---
+        # If modelId is provided (Override), use it for EVERYTHING.
+        # If modelId is None/Empty (Auto), use the HYBRID STRATEGY.
+        
+        if modelId and modelId.strip():
+            # USER FORCE OVERRIDE
+            search_model = modelId
+            synthesis_model = modelId
+            print(f"   [Model Strategy] Manual Override Active: Using {modelId} for all steps.")
+        else:
+            # AUTO-PILOT (HYBRID)
+            # Scanner 2 (Logic) -> Gemini 3 Pro
+            # Synthesis (Writing) -> Gemini 2.5 Pro
+            search_model = "gemini-3-pro-preview"
+            synthesis_model = "gemini-2.5-pro"
+            print(f"   [Model Strategy] Auto-Pilot Active: Search={search_model}, Synthesis={synthesis_model}")
+
         # --- PROCESS FILES ---
         combined_text = reportText if reportText else ""
         uploaded_doc_names = []
@@ -184,7 +200,7 @@ async def run_scan(
         intent_results = analyze_intent(combined_text)
 
         # --- STEP 2: SCANNER 2 (Reality) ---
-        reality_results = x_ray_search(companyName, target_url, model_id=target_model)
+        reality_results = x_ray_search(companyName, target_url, model_id=search_model)
         gap = intent_results["score"] - reality_results["score"]
         
         # --- STEP 3: SYNTHESIS ---
@@ -214,10 +230,10 @@ async def run_scan(
                 Task: Write a 175-word forensic executive summary.
                 """
                 
-                response = client.models.generate_content(model=target_model, contents=prompt)
+                response = client.models.generate_content(model=synthesis_model, contents=prompt)
                 if response.text: summary = response.text
             except Exception as e:
-                print(f"Gemini Error: {e}")
+                print(f"Gemini Synthesis Error: {e}")
 
         new_timestamp = datetime.utcnow().isoformat()
         result_id = str(uuid.uuid4())

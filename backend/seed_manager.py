@@ -152,7 +152,7 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None):
             print(f"   -> Intent Score: {intent_results['score']}")
 
             # 3. REAL REALITY CHECK
-            # Use 'gemini-3-pro-preview' explicitly for stability during batch
+            # Keep 3-Pro for the Logic/Search step (Quality is critical here)
             reality_results = x_ray_search(company["name"], company["url"], model_id="gemini-3-pro-preview")
             print(f"   -> Reality Score: {reality_results['score']}")
 
@@ -179,8 +179,10 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None):
 
                     Task: Write a 175-word forensic executive summary. Be direct.
                     """
-                    # UPGRADE: Force Gemini 3 Pro for batch synthesis to prevent 2.5 hallucination/timeout
-                    resp = gemini_client.models.generate_content(model='gemini-3-pro-preview', contents=prompt)
+                    # HYBRID STRATEGY: 
+                    # Use Gemini 2.5 Pro for Synthesis.
+                    # It creates better text than Flash, but uses a different quota bucket than 3 Pro.
+                    resp = gemini_client.models.generate_content(model='gemini-2.5-pro', contents=prompt)
                     if resp.text: summary_text = resp.text
                 except Exception as e:
                     print(f"   [Synthesis Error] {e}")
