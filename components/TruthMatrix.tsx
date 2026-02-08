@@ -1,18 +1,18 @@
 
 
-const { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Cell, Label, ReferenceLine } = (window as any).Recharts;
+const { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Label, ReferenceLine } = (window as any).Recharts;
 
 const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] }) => {
   if (active && payload && payload.length) {
     const data = payload[0].payload; // This is now our aggregated object
     const companies = data.companies || [data]; // Fallback if not aggregated
     
-    // Use coordinates from the first company (since they are all identical in this cluster)
+    // Use coordinates from the first company
+    const gap = data.reality_gap;
     const intent = data.intent_score;
     const reality = data.reality_score;
-    const gap = data.reality_gap; // Use the gap of the representative (or calculating avg if needed, but usually identical here)
 
-    // Strict Quadrant Classification (50/50 Split)
+    // Strict Quadrant Classification
     let gapLabel = "Stagnation";
     let gapColor = "text-slate-400";
     
@@ -37,7 +37,6 @@ const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] 
     return (
       <div 
         className="bg-[#020617]/95 backdrop-blur-md border border-slate-700/50 p-4 rounded-xl shadow-2xl text-xs text-white min-w-[200px] z-50 animate-in fade-in zoom-in-95 duration-200"
-        style={{ pointerEvents: 'none' }} // CRITICAL FIX: Prevents tooltip from capturing mouse and causing flickering
       >
         <div className="border-b border-white/10 pb-2 mb-2">
             <span className="text-[10px] font-mono uppercase text-slate-500 block mb-1">
@@ -56,8 +55,6 @@ const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] 
         </div>
 
         <div className="grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[10px] uppercase tracking-wider">
-            {/* Values removed as requested, only showing Archetype and Gap Direction */}
-            
             <span className="text-slate-500">Integrity Delta</span>
             <span className={`text-right font-bold ${gap > 0 ? 'text-emerald-400' : gap < 0 ? 'text-rose-400' : 'text-slate-400'}`}>
                 {gap > 0 ? '+' : ''}{gap}
@@ -73,10 +70,54 @@ const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] 
   return null;
 };
 
+// CUSTOM DOT RENDERER for Bigger Spots & Stability
+const renderCustomDot = (props: any) => {
+    const { cx, cy, payload } = props;
+    const { intent_score: i, reality_score: r, companies } = payload;
+    const count = companies ? companies.length : 1;
+
+    // Color Logic
+    let fillColor = '#fb7185'; 
+    if (r >= 50) {
+        if (i >= 50) fillColor = '#10b981'; // Walk-and-Talk (Emerald)
+        else fillColor = '#22d3ee'; // Silent Doers (Cyan)
+    } else {
+        if (i >= 50) fillColor = '#f59e0b'; // Talk-not-Walk (Amber)
+        else fillColor = '#fb7185'; // Stagnation (Rose)
+    }
+
+    // Size Logic: Bigger spots
+    // Base 8px (was ~5px default), add size for clusters
+    const radius = Math.min(18, 8 + (count - 1) * 3);
+
+    return (
+        <g>
+            <circle 
+                cx={cx} 
+                cy={cy} 
+                r={radius} 
+                fill={fillColor} 
+                stroke="#fff" 
+                strokeWidth={count > 1 ? 2 : 1.5} 
+                fillOpacity={0.9}
+                style={{ 
+                    filter: count > 1 ? 'drop-shadow(0 0 8px rgba(255,255,255,0.4))' : 'drop-shadow(0 0 4px rgba(0,0,0,0.5))',
+                    cursor: 'pointer',
+                    transition: 'all 0.3s ease'
+                }}
+            />
+            {count > 1 && (
+                <text x={cx} y={cy} dy={3} textAnchor="middle" fill="#fff" fontSize={10} fontWeight="bold" style={{ pointerEvents: 'none' }}>
+                    {count}
+                </text>
+            )}
+        </g>
+    );
+};
+
 const TruthMatrix = ({ data, onSelectCompany }) => {
   
   // 1. GROUP DATA LOGIC
-  // Combine companies that have the exact same X (intent) and Y (reality) coordinates
   const groupedData = (window as any).React.useMemo(() => {
       const groups: { [key: string]: any } = {};
       
@@ -84,15 +125,13 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
           const key = `${item.intent_score}-${item.reality_score}`;
           if (!groups[key]) {
               groups[key] = {
-                  ...item, // Keep the first item's properties as representative (for colors/rendering)
+                  ...item, 
                   companies: [item]
               };
           } else {
               groups[key].companies.push(item);
           }
       });
-      
-      // Convert map back to array
       return Object.values(groups);
   }, [data]);
 
@@ -104,27 +143,20 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
       <ResponsiveContainer width="100%" height="100%">
         <ScatterChart margin={{ top: 20, right: 20, bottom: 40, left: 0 }}>
           <defs>
-            {/* 1. Global Upper Half (Green Tint) - Static but clean */}
             <linearGradient id="greenZone" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#10b981" stopOpacity={0.15}/>
                 <stop offset="95%" stopColor="#10b981" stopOpacity={0.02}/>
             </linearGradient>
-            
-            {/* 2. Global Lower Half (Red Tint) - Static but clean */}
             <linearGradient id="redZone" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#f43f5e" stopOpacity={0.02}/>
                 <stop offset="95%" stopColor="#f43f5e" stopOpacity={0.15}/>
             </linearGradient>
-
-            {/* 3. High Performance Glow (Top Right Quadrant) - PULSING ANIMATION */}
             <radialGradient id="sweetSpot" cx="50%" cy="50%" r="50%">
                 <stop offset="0%" stopColor="#34d399" stopOpacity={0.2}>
                     <animate attributeName="stopOpacity" values="0.2;0.35;0.2" dur="4s" repeatCount="indefinite" />
                 </stop>
                 <stop offset="100%" stopColor="#34d399" stopOpacity={0}/>
             </radialGradient>
-
-            {/* 4. Critical Risk Glow (Bottom Left Quadrant) - PULSING ANIMATION */}
             <radialGradient id="dangerSpot" cx="50%" cy="50%" r="50%">
                 <stop offset="0%" stopColor="#f43f5e" stopOpacity={0.2}>
                      <animate attributeName="stopOpacity" values="0.2;0.35;0.2" dur="5s" repeatCount="indefinite" />
@@ -158,48 +190,31 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
             label={{ value: 'OPERATIONAL REALITY (Evidence)', angle: -90, position: 'left', fill: '#475569', fontSize: 10, dx: -20, letterSpacing: '0.1em' }}
           />
           
+          {/* TOOLTIP FIX: wrapperStyle={{ pointerEvents: 'none' }} prevents the flashing loop */}
           <Tooltip 
             content={<CustomTooltip />} 
             cursor={{ strokeDasharray: '3 3', stroke: '#cbd5e1' }}
-            isAnimationActive={false} // Helps stability
-            offset={20} // Distance from cursor
+            isAnimationActive={false}
+            offset={25}
+            wrapperStyle={{ pointerEvents: 'none', zIndex: 100 }}
           />
           
-          {/* --- ZONING LAYERS --- */}
-
-          {/* LAYER 1: The Great Divide (50 line) Backgrounds */}
           <ReferenceArea x1={0} x2={100} y1={50} y2={100} fill="url(#greenZone)" stroke="none" />
           <ReferenceArea x1={0} x2={100} y1={0} y2={50} fill="url(#redZone)" stroke="none" />
-
-          {/* LAYER 2: Quadrant Spotlights (Pulsing) */}
-          {/* Walk-and-Talk (Top Right) */}
           <ReferenceArea x1={50} x2={100} y1={50} y2={100} fill="url(#sweetSpot)" stroke="none" />
-          
-          {/* Stagnation (Bottom Left) */}
           <ReferenceArea x1={0} x2={50} y1={0} y2={50} fill="url(#dangerSpot)" stroke="none" />
-
-          {/* MID LINE Separator */}
           <ReferenceLine y={50} stroke="#22d3ee" strokeDasharray="4 4" strokeOpacity={0.6} />
           <ReferenceLine x={50} stroke="#6366f1" strokeDasharray="4 4" strokeOpacity={0.3} />
 
-          {/* LABELS */}
-          
-          {/* Top Right: Walk-and-Talk */}
           <ReferenceArea x1={80} x2={98} y1={92} y2={98} stroke="none" fill="none">
              <Label value="WALK-AND-TALK" position="insideTopRight" fill="#34d399" fontSize={10} fontWeight={900} opacity={0.8} letterSpacing="0.05em" />
           </ReferenceArea>
-          
-          {/* Top Left: Silent Doers */}
           <ReferenceArea x1={2} x2={20} y1={92} y2={98} stroke="none" fill="none">
              <Label value="SILENT DOERS" position="insideTopLeft" fill="#22d3ee" fontSize={10} fontWeight={700} opacity={0.7} letterSpacing="0.05em" />
           </ReferenceArea>
-
-          {/* Bottom Right: Talk-not-Walk */}
           <ReferenceArea x1={80} x2={98} y1={2} y2={8} stroke="none" fill="none">
              <Label value="TALK-NOT-WALK" position="insideBottomRight" fill="#fbbf24" fontSize={10} fontWeight={700} opacity={0.7} letterSpacing="0.05em" />
           </ReferenceArea>
-          
-          {/* Bottom Left: Stagnation */}
            <ReferenceArea x1={2} x2={20} y1={2} y2={8} stroke="none" fill="none">
              <Label value="STAGNATION" position="insideBottomLeft" fill="#fb7185" fontSize={10} fontWeight={900} opacity={0.8} letterSpacing="0.05em" />
           </ReferenceArea>
@@ -207,47 +222,15 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
           <Scatter 
             name="Companies" 
             data={groupedData} 
+            shape={renderCustomDot}
             onClick={(node) => {
-                // Handle click: If cluster has only 1, open it. 
-                // If cluster has multiple, we default to the first one for now 
-                // (or you could open a small menu, but here we keep the interaction simple)
+                // If cluster has multiple, we default to the first one for now
                 if (node.payload.companies && node.payload.companies.length > 0) {
                     onSelectCompany(node.payload.companies[0]);
                 }
             }} 
             cursor="pointer"
-          >
-            {groupedData.map((entry: any, index: number) => {
-              // Color Logic
-              let fillColor = '#fb7185'; 
-              const r = entry.reality_score;
-              const i = entry.intent_score;
-              const count = entry.companies.length;
-              
-              if (r >= 50) {
-                  if (i >= 50) fillColor = '#10b981'; // Walk-and-Talk (Emerald)
-                  else fillColor = '#22d3ee'; // Silent Doers (Cyan)
-              } else {
-                  if (i >= 50) fillColor = '#f59e0b'; // Talk-not-Walk (Amber)
-                  else fillColor = '#fb7185'; // Stagnation (Rose)
-              }
-              
-              // If multiple companies are at this spot, we make the dot slightly larger and add a glow
-              const size = count > 1 ? 120 : 80; 
-              
-              return (
-                <Cell 
-                  key={`cell-${index}`} 
-                  fill={fillColor}
-                  stroke="#fff"
-                  strokeWidth={count > 1 ? 2 : 1}
-                  fillOpacity={count > 1 ? 1 : 0.8}
-                  className="hover:scale-110 transition-transform duration-200 origin-center"
-                  style={{ filter: count > 1 ? 'drop-shadow(0px 0px 8px rgba(255,255,255,0.6))' : 'drop-shadow(0px 0px 4px rgba(255,255,255,0.3))' }}
-                />
-              );
-            })}
-          </Scatter>
+          />
         </ScatterChart>
       </ResponsiveContainer>
     </div>
