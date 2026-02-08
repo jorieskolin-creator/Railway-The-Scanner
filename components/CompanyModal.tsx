@@ -1,6 +1,7 @@
 
+
 const { useState, useRef } = (window as any).React;
-const { X, RefreshCw, Calendar, Clock, Loader2: Loader2Icon, UploadCloud, File, Trash2 } = (window as any).Lucide;
+const { X, RefreshCw, Calendar, Clock, Loader2: Loader2Icon, UploadCloud, File, Trash2, Cpu, Sparkles, Zap, Settings, AlertCircle } = (window as any).Lucide;
 
 const CompanySummary = (window as any).CompanySummary;
 
@@ -8,6 +9,11 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading }) => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
   const [refreshFiles, setRefreshFiles] = useState([]);
+  
+  // NEW: Model Strategy State
+  const [showModelSelect, setShowModelSelect] = useState(false);
+  const [selectedModel, setSelectedModel] = useState(''); // '' = Default Hybrid
+
   const fileInputRef = useRef(null);
 
   const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
@@ -45,6 +51,11 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading }) => {
       formData.append('reportText', "");
       formData.append('saveToDatabase', 'true');
       
+      // NEW: Append Model ID if selected
+      if (selectedModel) {
+          formData.append('modelId', selectedModel);
+      }
+      
       // Append files if any
       refreshFiles.forEach(file => {
           formData.append('files', file);
@@ -62,6 +73,7 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading }) => {
       // Reset state
       setRefreshFiles([]);
       setShowUpload(false);
+      setShowModelSelect(false);
       
     } catch (error) {
       console.error("Refresh Error:", error);
@@ -124,6 +136,8 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading }) => {
 
         {/* FOOTER */}
         <div className="px-8 py-6 border-t border-white/5 bg-slate-900 space-y-3">
+          
+          {/* FILE UPLOAD PANEL */}
           {showUpload && (
               <div className="animate-in slide-in-from-bottom-2 bg-black/30 p-3 rounded-lg border border-white/10 mb-2">
                   <div className="flex justify-between items-center mb-2">
@@ -148,11 +162,64 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading }) => {
               </div>
           )}
 
+          {/* MODEL SELECTION PANEL */}
+          {showModelSelect && (
+              <div className="animate-in slide-in-from-bottom-2 bg-indigo-950/20 p-3 rounded-lg border border-indigo-500/20 mb-2">
+                  <div className="flex justify-between items-center mb-2">
+                       <span className="text-[10px] font-bold uppercase text-indigo-300 flex items-center gap-2"><Cpu size={12}/> Model Strategy</span>
+                       <button onClick={() => setShowModelSelect(false)}><X size={12} className="text-indigo-400 hover:text-white" /></button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button 
+                        onClick={() => setSelectedModel('')} 
+                        className={`px-2 py-2 rounded text-[10px] border transition-all flex flex-col items-center gap-1 ${selectedModel === '' ? 'bg-emerald-600 text-white border-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
+                    >
+                        <span className="font-bold flex items-center gap-1"><Sparkles size={10} /> HYBRID (DEFAULT)</span>
+                        <span className="text-[9px] opacity-90 scale-90">3 Pro (Logic) + 2.5 Pro (Text)</span>
+                    </button>
+                    
+                    <button 
+                        onClick={() => setSelectedModel('gemini-3-pro-preview')} 
+                        className={`px-2 py-2 rounded text-[10px] border transition-all flex flex-col items-center gap-1 ${selectedModel === 'gemini-3-pro-preview' ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
+                    >
+                        <span className="font-bold">FORCE 3 PRO</span>
+                        <span className="text-[9px] opacity-70 scale-90">Max Logic & Reasoning</span>
+                    </button>
+                    
+                    <button 
+                        onClick={() => setSelectedModel('gemini-3-flash-preview')} 
+                        className={`px-2 py-2 rounded text-[10px] border transition-all flex flex-col items-center gap-1 ${selectedModel === 'gemini-3-flash-preview' ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
+                    >
+                        <span className="font-bold">FORCE 3 FLASH</span>
+                        <span className="text-[9px] opacity-70 scale-90">Max Speed & Througput</span>
+                    </button>
+                    
+                    <button 
+                        onClick={() => setSelectedModel('gemini-2.5-pro')} 
+                        className={`px-2 py-2 rounded text-[10px] border transition-all flex flex-col items-center gap-1 ${selectedModel === 'gemini-2.5-pro' ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
+                    >
+                        <span className="font-bold">FORCE 2.5 PRO</span>
+                        <span className="text-[9px] opacity-70 scale-90">Balanced Legacy</span>
+                    </button>
+                  </div>
+              </div>
+          )}
+
           <div className="flex gap-2">
               <button 
-                onClick={() => setShowUpload(!showUpload)}
+                onClick={() => { setShowModelSelect(!showModelSelect); setShowUpload(false); }}
                 disabled={isRefreshing}
-                className={`px-4 py-3 rounded-lg border flex items-center justify-center transition-all ${showUpload ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-white/5 text-slate-400 border-white/10 hover:bg-white/10'}`}
+                className={`px-3 py-3 rounded-lg border flex items-center justify-center gap-2 transition-all min-w-[50px] ${showModelSelect || selectedModel !== '' ? 'bg-amber-500/10 text-amber-300 border-amber-500/30' : 'bg-white/5 text-slate-400 border-white/10 hover:bg-white/10'}`}
+                title="Select Gemini Model"
+              >
+                 <Settings size={16} />
+                 {selectedModel && <span className="text-[10px] font-bold">OVERRIDE</span>}
+              </button>
+
+              <button 
+                onClick={() => { setShowUpload(!showUpload); setShowModelSelect(false); }}
+                disabled={isRefreshing}
+                className={`px-3 py-3 rounded-lg border flex items-center justify-center transition-all ${showUpload ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-white/5 text-slate-400 border-white/10 hover:bg-white/10'}`}
                 title="Add Internal Documents"
               >
                  <UploadCloud size={16} />
@@ -170,12 +237,12 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading }) => {
                 {isRefreshing ? (
                   <>
                     <Loader2Icon className="animate-spin" size={16} />
-                    Analysing with Documents...
+                    Analysing...
                   </>
                 ) : (
                   <>
                     <RefreshCw size={16} />
-                    {refreshFiles.length > 0 ? "Deep Scan with Docs" : "Refresh Forensic Scan"}
+                    {refreshFiles.length > 0 ? "Deep Scan (Docs)" : selectedModel ? "Scan (Custom Model)" : "Refresh Scan (Hybrid)"}
                   </>
                 )}
               </button>

@@ -1,4 +1,5 @@
 
+
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Response, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -101,6 +102,40 @@ def health_check():
         "timestamp": datetime.utcnow().isoformat(),
         "storage_connected": bool(token)
     }
+
+@app.get("/api/find-url")
+async def find_company_url(name: str):
+    """
+    Uses Gemini Flash + Google Search Grounding to find the official URL.
+    """
+    api_key = clean_env_var(os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY"))
+    if not api_key: return {"url": ""}
+    
+    try:
+        client = genai.Client(api_key=api_key)
+        # Using 3 Flash for basic grounded task (recommended in guidelines for basic text tasks)
+        # and it supports google_search tool.
+        response = client.models.generate_content(
+            model='gemini-3-flash-preview', 
+            contents=f"What is the official website homepage URL for the organization '{name}'? Return ONLY the URL string (e.g. https://www.example.com). Do not include markdown or explanations.",
+            config={
+                'tools': [{'google_search': {}}],
+                'temperature': 0.0
+            }
+        )
+        
+        if response.text:
+            url = response.text.strip()
+            # Simple cleanup for markdown links or quotes
+            if "](" in url: url = url.split("](")[1].strip(")")
+            url = url.strip("'").strip('"')
+            if url.startswith("http"):
+                return {"url": url}
+                
+        return {"url": ""}
+    except Exception as e:
+        print(f"   [API] Find URL failed: {e}")
+        return {"url": ""}
 
 @app.get("/api/models")
 def list_models():

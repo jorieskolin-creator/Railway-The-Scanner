@@ -1,7 +1,7 @@
 
 
 const { useState, useRef } = (window as any).React;
-const { Search, FileText, Globe, Zap, Link, AlertCircle, Database, Settings, Cpu, UploadCloud, File, X, Sparkles } = (window as any).Lucide;
+const { Search, FileText, Globe, Zap, Link, AlertCircle, Database, Settings, Cpu, UploadCloud, File, X, Sparkles, Loader2 } = (window as any).Lucide;
 
 const ScannerInput = ({ onScan }) => {
   const [companyName, setCompanyName] = useState('');
@@ -20,6 +20,9 @@ const ScannerInput = ({ onScan }) => {
   const [showAdvanced, setShowAdvanced] = useState(false);
   // Default is empty string, which implies "Hybrid Auto-Pilot"
   const [selectedModel, setSelectedModel] = useState('');
+  
+  // NEW: Auto-Discovery State
+  const [isFindingUrl, setIsFindingUrl] = useState(false);
 
   const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
@@ -42,6 +45,27 @@ const ScannerInput = ({ onScan }) => {
     } else {
       setUrlError("");
     }
+  };
+
+  const handleNameBlur = async () => {
+      // Auto-fetch URL if name exists, URL is empty, and we aren't already searching
+      if (companyName.trim().length > 1 && !companyUrl && !isFindingUrl) {
+          setIsFindingUrl(true);
+          try {
+              const res = await fetch(`/api/find-url?name=${encodeURIComponent(companyName)}`);
+              if (res.ok) {
+                  const json = await res.json();
+                  if (json.url && validateUrl(json.url)) {
+                      setCompanyUrl(json.url);
+                      setUrlError("");
+                  }
+              }
+          } catch (e) {
+              console.warn("URL Auto-discovery failed", e);
+          } finally {
+              setIsFindingUrl(false);
+          }
+      }
   };
 
   const handleFileChange = (e) => {
@@ -247,6 +271,7 @@ const ScannerInput = ({ onScan }) => {
                 type="text"
                 value={companyName}
                 onChange={(e) => setCompanyName(e.target.value)}
+                onBlur={handleNameBlur}
                 placeholder="e.g. Kone, Neste, UPM"
                 className="w-full pl-10 pr-4 py-3 bg-black/20 border border-white/10 rounded-lg text-white placeholder-slate-600 focus:ring-1 focus:ring-cyan-500/50 focus:border-cyan-500/50 outline-none transition-all font-medium text-sm"
                 required
@@ -268,7 +293,11 @@ const ScannerInput = ({ onScan }) => {
                   className={`w-full pl-10 pr-4 py-3 bg-black/20 border rounded-lg text-white placeholder-slate-600 focus:ring-1 outline-none transition-all font-medium text-sm ${urlError ? 'border-rose-500 focus:ring-rose-500/50' : 'border-white/10 focus:ring-cyan-500/50 focus:border-cyan-500/50'}`}
                 />
                 <div className={`absolute left-3 top-3.5 transition-colors ${urlError ? 'text-rose-500' : 'text-slate-600 group-focus-within:text-cyan-400'}`}>
-                    <Link size={16} />
+                    {isFindingUrl ? (
+                        <Loader2 size={16} className="animate-spin text-cyan-400" />
+                    ) : (
+                        <Link size={16} />
+                    )}
                 </div>
             </div>
             {urlError && (
@@ -327,9 +356,14 @@ const ScannerInput = ({ onScan }) => {
         <div className="space-y-2">
           <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500 flex justify-between items-center">
             <span>Narrative Input (Additional Context)</span>
-            {companyUrl && !urlError && (
+            {companyUrl && !urlError && !isFindingUrl && (
                 <span className="text-emerald-400 font-normal normal-case tracking-normal flex items-center gap-1">
                     <Zap size={10} /> Auto-Scrape Active
+                </span>
+            )}
+            {isFindingUrl && (
+                <span className="text-cyan-400 font-normal normal-case tracking-normal flex items-center gap-1">
+                    <Loader2 size={10} className="animate-spin" /> Locating URL...
                 </span>
             )}
           </label>

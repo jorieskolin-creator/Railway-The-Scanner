@@ -1,13 +1,17 @@
 
+
 const { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Cell, Label, ReferenceLine } = (window as any).Recharts;
 
 const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] }) => {
   if (active && payload && payload.length) {
-    const data = payload[0].payload;
-    const gap = data.reality_gap;
+    const data = payload[0].payload; // This is now our aggregated object
+    const companies = data.companies || [data]; // Fallback if not aggregated
+    
+    // Use coordinates from the first company (since they are all identical in this cluster)
     const intent = data.intent_score;
     const reality = data.reality_score;
-    
+    const gap = data.reality_gap; // Use the gap of the representative (or calculating avg if needed, but usually identical here)
+
     // Strict Quadrant Classification (50/50 Split)
     let gapLabel = "Stagnation";
     let gapColor = "text-slate-400";
@@ -31,21 +35,37 @@ const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] 
     }
 
     return (
-      <div className="bg-[#020617]/95 backdrop-blur-md border border-slate-700/50 p-4 rounded-xl shadow-2xl text-xs text-white min-w-[200px] z-50 animate-in fade-in zoom-in-95 duration-200">
-        <p className="font-bold text-sm mb-3 text-white border-b border-white/10 pb-2">{data.companyName}</p>
-        <div className="grid grid-cols-2 gap-x-4 gap-y-2 font-mono text-[10px] uppercase tracking-wider">
-            <span className="text-slate-500">Stated Ambition</span>
-            <span className="text-indigo-400 text-right font-bold">{intent}/100</span>
-            
-            <span className="text-slate-500">Ops Reality</span>
-            <span className="text-emerald-400 text-right font-bold">{reality}/100</span>
-            
-            <div className="col-span-2 h-px bg-white/10 my-1"></div>
+      <div 
+        className="bg-[#020617]/95 backdrop-blur-md border border-slate-700/50 p-4 rounded-xl shadow-2xl text-xs text-white min-w-[200px] z-50 animate-in fade-in zoom-in-95 duration-200"
+        style={{ pointerEvents: 'none' }} // CRITICAL FIX: Prevents tooltip from capturing mouse and causing flickering
+      >
+        <div className="border-b border-white/10 pb-2 mb-2">
+            <span className="text-[10px] font-mono uppercase text-slate-500 block mb-1">
+                {companies.length > 1 ? `${companies.length} Entities at this position` : "Entity"}
+            </span>
+            <ul className="space-y-1 max-h-[150px] overflow-hidden">
+                {companies.slice(0, 5).map((c: any, i: number) => (
+                    <li key={i} className="font-bold text-sm text-white truncate">
+                        {c.companyName}
+                    </li>
+                ))}
+                {companies.length > 5 && (
+                    <li className="text-[10px] text-slate-400 italic">...and {companies.length - 5} more</li>
+                )}
+            </ul>
+        </div>
+
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[10px] uppercase tracking-wider">
+            {/* Values removed as requested, only showing Archetype and Gap Direction */}
             
             <span className="text-slate-500">Integrity Delta</span>
-            <span className={`text-right font-bold ${gapColor}`}>{gap > 0 ? '+' : ''}{gap}</span>
+            <span className={`text-right font-bold ${gap > 0 ? 'text-emerald-400' : gap < 0 ? 'text-rose-400' : 'text-slate-400'}`}>
+                {gap > 0 ? '+' : ''}{gap}
+            </span>
             
-            <span className={`col-span-2 text-center mt-1 py-1 rounded bg-white/5 ${gapColor}`}>{gapLabel}</span>
+            <div className={`col-span-2 text-center mt-2 py-1.5 rounded bg-white/5 ${gapColor} font-bold border border-white/5`}>
+                {gapLabel}
+            </div>
         </div>
       </div>
     );
@@ -54,6 +74,28 @@ const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] 
 };
 
 const TruthMatrix = ({ data, onSelectCompany }) => {
+  
+  // 1. GROUP DATA LOGIC
+  // Combine companies that have the exact same X (intent) and Y (reality) coordinates
+  const groupedData = (window as any).React.useMemo(() => {
+      const groups: { [key: string]: any } = {};
+      
+      data.forEach((item: any) => {
+          const key = `${item.intent_score}-${item.reality_score}`;
+          if (!groups[key]) {
+              groups[key] = {
+                  ...item, // Keep the first item's properties as representative (for colors/rendering)
+                  companies: [item]
+              };
+          } else {
+              groups[key].companies.push(item);
+          }
+      });
+      
+      // Convert map back to array
+      return Object.values(groups);
+  }, [data]);
+
   return (
     <div className="w-full h-[400px] relative overflow-hidden bg-[#0f172a]/40 rounded-xl border border-white/5 group">
       {/* Subtle Background Grid Animation */}
@@ -116,7 +158,12 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
             label={{ value: 'OPERATIONAL REALITY (Evidence)', angle: -90, position: 'left', fill: '#475569', fontSize: 10, dx: -20, letterSpacing: '0.1em' }}
           />
           
-          <Tooltip content={<CustomTooltip />} cursor={{ strokeDasharray: '3 3', stroke: '#cbd5e1' }} />
+          <Tooltip 
+            content={<CustomTooltip />} 
+            cursor={{ strokeDasharray: '3 3', stroke: '#cbd5e1' }}
+            isAnimationActive={false} // Helps stability
+            offset={20} // Distance from cursor
+          />
           
           {/* --- ZONING LAYERS --- */}
 
@@ -157,12 +204,25 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
              <Label value="STAGNATION" position="insideBottomLeft" fill="#fb7185" fontSize={10} fontWeight={900} opacity={0.8} letterSpacing="0.05em" />
           </ReferenceArea>
 
-          <Scatter name="Companies" data={data} onClick={(node) => onSelectCompany(node.payload)} cursor="pointer">
-            {data.map((entry, index) => {
+          <Scatter 
+            name="Companies" 
+            data={groupedData} 
+            onClick={(node) => {
+                // Handle click: If cluster has only 1, open it. 
+                // If cluster has multiple, we default to the first one for now 
+                // (or you could open a small menu, but here we keep the interaction simple)
+                if (node.payload.companies && node.payload.companies.length > 0) {
+                    onSelectCompany(node.payload.companies[0]);
+                }
+            }} 
+            cursor="pointer"
+          >
+            {groupedData.map((entry: any, index: number) => {
               // Color Logic
               let fillColor = '#fb7185'; 
               const r = entry.reality_score;
               const i = entry.intent_score;
+              const count = entry.companies.length;
               
               if (r >= 50) {
                   if (i >= 50) fillColor = '#10b981'; // Walk-and-Talk (Emerald)
@@ -172,15 +232,18 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
                   else fillColor = '#fb7185'; // Stagnation (Rose)
               }
               
+              // If multiple companies are at this spot, we make the dot slightly larger and add a glow
+              const size = count > 1 ? 120 : 80; 
+              
               return (
                 <Cell 
                   key={`cell-${index}`} 
                   fill={fillColor}
                   stroke="#fff"
-                  strokeWidth={1}
-                  fillOpacity={0.9}
+                  strokeWidth={count > 1 ? 2 : 1}
+                  fillOpacity={count > 1 ? 1 : 0.8}
                   className="hover:scale-110 transition-transform duration-200 origin-center"
-                  style={{ filter: 'drop-shadow(0px 0px 6px rgba(255,255,255,0.4))' }}
+                  style={{ filter: count > 1 ? 'drop-shadow(0px 0px 8px rgba(255,255,255,0.6))' : 'drop-shadow(0px 0px 4px rgba(255,255,255,0.3))' }}
                 />
               );
             })}
