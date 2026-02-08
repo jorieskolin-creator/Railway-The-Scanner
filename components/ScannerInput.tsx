@@ -1,4 +1,5 @@
 
+
 const { useState, useRef } = (window as any).React;
 const { Search, FileText, Globe, Zap, Link, AlertCircle, Database, Settings, Cpu, UploadCloud, File, X, Sparkles } = (window as any).Lucide;
 
@@ -139,10 +140,10 @@ const ScannerInput = ({ onScan }) => {
 
   // Helper to display current selection
   const getModelLabel = () => {
-      if (!selectedModel) return "AUTO (HYBRID)";
-      if (selectedModel.includes('3-pro')) return "3 PRO (FORCED)";
-      if (selectedModel.includes('flash')) return "3 FLASH (FORCED)";
-      if (selectedModel.includes('2.5')) return "2.5 PRO (FORCED)";
+      if (!selectedModel) return "STRATEGY: HYBRID (DEFAULT)";
+      if (selectedModel.includes('3-pro')) return "STRATEGY: FORCE 3 PRO";
+      if (selectedModel.includes('flash')) return "STRATEGY: FORCE 3 FLASH";
+      if (selectedModel.includes('2.5')) return "STRATEGY: FORCE 2.5 PRO";
       return selectedModel;
   };
 
@@ -156,7 +157,7 @@ const ScannerInput = ({ onScan }) => {
             <p className="text-[10px] text-slate-400 mt-1 uppercase tracking-widest font-semibold">Forensic Parameters (Finland Top 100)</p>
         </div>
         <div className="flex gap-2 text-xs">
-           <button type="button" onClick={() => setShowAdvanced(!showAdvanced)} className={`px-3 py-1.5 rounded border transition-all font-mono text-[10px] flex items-center gap-1 ${showAdvanced ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30' : 'bg-white/5 text-slate-400 border-transparent hover:bg-white/10'}`}>
+           <button type="button" onClick={() => setShowAdvanced(!showAdvanced)} className={`px-3 py-1.5 rounded border transition-all font-mono text-[10px] flex items-center gap-1 font-bold ${!selectedModel ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-amber-500/10 text-amber-400 border-amber-500/30'}`}>
             <Cpu size={10} /> {getModelLabel()}
            </button>
            <button type="button" onClick={fetchModels} className="px-3 py-1.5 rounded bg-white/5 hover:bg-white/10 text-slate-400 hover:text-cyan-300 border border-transparent hover:border-cyan-500/30 transition-all font-mono text-[10px] flex items-center gap-1">
@@ -193,10 +194,10 @@ const ScannerInput = ({ onScan }) => {
                     <button 
                         type="button"
                         onClick={() => setSelectedModel('')} 
-                        className={`flex-1 px-3 py-2 rounded text-[10px] border transition-all flex flex-col items-center gap-1 ${selectedModel === '' ? 'bg-indigo-600 text-white border-indigo-400 shadow-[0_0_10px_rgba(99,102,241,0.3)]' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
+                        className={`flex-1 px-3 py-2 rounded text-[10px] border transition-all flex flex-col items-center gap-1 ${selectedModel === '' ? 'bg-emerald-600 text-white border-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
                     >
-                        <span className="font-bold flex items-center gap-1"><Sparkles size={10} /> AUTO (HYBRID)</span>
-                        <span className="text-[9px] opacity-70">3 Pro (Search) + 2.5 Pro (Summary)</span>
+                        <span className="font-bold flex items-center gap-1"><Sparkles size={10} /> HYBRID (DEFAULT)</span>
+                        <span className="text-[9px] opacity-90">3 Pro (Logic) + 2.5 Pro (Text)</span>
                     </button>
                     
                     <button 
@@ -230,7 +231,7 @@ const ScannerInput = ({ onScan }) => {
                  {selectedModel !== '' && (
                      <div className="flex items-center gap-2 text-[10px] text-amber-300 bg-amber-950/30 p-2 rounded border border-amber-900/50">
                          <AlertCircle size={12} />
-                         <span>Override Active: This model will be used for BOTH Search and Synthesis.</span>
+                         <span>Override Active: Single model used for entire pipeline.</span>
                      </div>
                  )}
              </div>

@@ -1,4 +1,5 @@
 
+
 const { useState, useEffect, useRef } = (window as any).React;
 
 const LucideRaw = (window as any).Lucide || {};
@@ -32,7 +33,8 @@ const App = () => {
   const [systemStatus, setSystemStatus] = useState({ online: false, storage: false, google: false, ai: false });
   
   // ADMIN SETTINGS
-  const [adminModel, setAdminModel] = useState('gemini-3-pro-preview');
+  // Default to '' (Empty String) which triggers the "Hybrid Auto-Pilot" in the backend.
+  const [adminModel, setAdminModel] = useState('');
 
   // BATCH STATE
   const [isBatchOpen, setIsBatchOpen] = useState(false);
@@ -205,8 +207,10 @@ const App = () => {
       setIsBatchOpen(true);
       stopBatchRef.current = false;
       
-      const modelLabel = adminModel === 'gemini-3-pro-preview' ? 'Gemini 3 Pro' : 
-                         adminModel === 'gemini-3-flash-preview' ? 'Gemini 3 Flash' : 'Gemini 2.5 Pro';
+      let modelLabel = "Auto (Hybrid)";
+      if (adminModel === 'gemini-3-pro-preview') modelLabel = 'Gemini 3 Pro';
+      if (adminModel === 'gemini-3-flash-preview') modelLabel = 'Gemini 3 Flash';
+      if (adminModel === 'gemini-2.5-pro') modelLabel = 'Gemini 2.5 Pro';
       
       setBatchStatus({ 
           current: 0, 
@@ -242,7 +246,12 @@ const App = () => {
                 formData.append('companyUrl', target.url);
                 formData.append('reportText', "");
                 formData.append('saveToDatabase', 'true');
-                formData.append('modelId', adminModel);
+                
+                // If adminModel is empty, we send empty (triggering Hybrid on backend)
+                // If it has a value, we force that model.
+                if (adminModel) {
+                    formData.append('modelId', adminModel);
+                }
                 
                 const res = await fetch('/scan', {
                     method: 'POST',
@@ -283,8 +292,10 @@ const App = () => {
         alert("ACCESS DENIED: Incorrect Password.");
         return;
     }
+    
+    const modelLabel = adminModel === '' ? 'AUTO (Hybrid)' : adminModel;
 
-    if (!confirm(`⚠️ START FULL BATCH SCAN (100+ Companies)?\n\nModel: ${adminModel}\n\nThis will take a significant amount of time.\n\nDO NOT CLOSE THIS TAB until finished.`)) return;
+    if (!confirm(`⚠️ START FULL BATCH SCAN (100+ Companies)?\n\nModel: ${modelLabel}\n\nThis will take a significant amount of time.\n\nDO NOT CLOSE THIS TAB until finished.`)) return;
     
     // Get List
     try {
@@ -321,10 +332,20 @@ const App = () => {
   };
 
   const cycleAdminModel = () => {
-      const models = ['gemini-3-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro'];
+      // Added '' (Empty) as the first option for Hybrid Mode
+      const models = ['', 'gemini-3-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro'];
       const idx = models.indexOf(adminModel);
       const nextIdx = (idx + 1) % models.length;
       setAdminModel(models[nextIdx]);
+  };
+
+  // Helper to get display label for Admin Button
+  const getAdminModelLabel = () => {
+      if (adminModel === '') return 'DEFAULT (HYBRID: 3 PRO + 2.5 PRO)';
+      if (adminModel === 'gemini-3-pro-preview') return 'FORCE: GEMINI 3 PRO';
+      if (adminModel === 'gemini-3-flash-preview') return 'FORCE: GEMINI 3 FLASH';
+      if (adminModel === 'gemini-2.5-pro') return 'FORCE: GEMINI 2.5 PRO';
+      return adminModel;
   };
 
   const handleStopBatch = () => {
@@ -404,14 +425,11 @@ const App = () => {
                 {/* ADMIN MODEL SWITCHER */}
                 <button 
                   onClick={cycleAdminModel}
-                  className="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded transition-all text-[10px] font-mono"
-                  title="Switch Model for Batch Operations"
+                  className={`hidden md:flex items-center gap-1.5 px-3 py-1.5 border rounded transition-all text-[10px] font-mono font-bold tracking-tight ${adminModel === '' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 shadow-[0_0_10px_rgba(16,185,129,0.2)]' : 'bg-amber-500/10 text-amber-300 border-amber-500/30'}`}
+                  title="Click to cycle Model Strategy (Default vs Forced)"
                 >
-                    <Cpu size={12} className={adminModel.includes('flash') ? 'text-amber-400' : 'text-cyan-400'} />
-                    <span className="text-slate-300">
-                        {adminModel === 'gemini-3-pro-preview' ? '3 PRO' : 
-                         adminModel === 'gemini-3-flash-preview' ? '3 FLASH' : '2.5 PRO'}
-                    </span>
+                    {adminModel === '' ? <Sparkles size={12} className="text-emerald-300" /> : <Cpu size={12} className="text-amber-400" />}
+                    <span>{getAdminModelLabel()}</span>
                 </button>
 
                 <button onClick={handleTestBatch} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-cyan-900/40 hover:bg-cyan-800/60 border border-cyan-700/50 text-cyan-200 font-mono font-bold text-[10px] rounded transition-all">
