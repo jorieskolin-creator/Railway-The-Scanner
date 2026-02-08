@@ -24,7 +24,8 @@ from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES
 from knowledge_base import get_evolving_framework
 
-print("Starting Adaptability Scanner Backend (v4.1.0 - Hybrid Intelligence)...", flush=True)
+# VERIFICATION LOG: Use this to check Railway logs and ensure v4.1.2 is running
+print("Starting Adaptability Scanner Backend (v4.1.2 - CACHE CLEARED)...", flush=True)
 
 def clean_env_var(value):
     if not value: return ""
@@ -96,7 +97,7 @@ async def read_root(): return FileResponse("../index.html")
 def health_check():
     token = clean_env_var(os.environ.get("BLOB_READ_WRITE_TOKEN"))
     return {
-        "status": "Adaptability Scanner API Online (v4.1.0)", 
+        "status": "Adaptability Scanner API Online (v4.1.2)", 
         "timestamp": datetime.utcnow().isoformat(),
         "storage_connected": bool(token)
     }
