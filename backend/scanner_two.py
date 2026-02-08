@@ -54,7 +54,7 @@ def extract_json_from_text(text):
         
     return None
 
-def x_ray_search(company_name: str, company_url: str = None):
+def x_ray_search(company_name: str, company_url: str = None, model_id: str = None):
     """
     SCANNER 2: THE REALITY CHECK (External Evidence)
     
@@ -63,6 +63,8 @@ def x_ray_search(company_name: str, company_url: str = None):
     """
     
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
+    # HARDCODED UPGRADE: Default to Gemini 3 Pro Preview if no model_id provided
+    target_model = model_id or "gemini-3-pro-preview"
     
     checklist = []
     raw_findings = []
@@ -72,7 +74,7 @@ def x_ray_search(company_name: str, company_url: str = None):
     search_name = clean_company_name_for_search(company_name)
     domain_hint = get_clean_domain(company_url) if company_url else f"{search_name.lower().replace(' ', '')}.fi"
     
-    print(f"   [Forensic Scan] Target: {company_name} (Search Term: {search_name})")
+    print(f"   [Forensic Scan] Target: {company_name} (Search Term: {search_name}) using Model: {target_model}")
 
     if not api_key:
         print("   [Scanner 2] CRITICAL: No GEMINI_API_KEY found. Using simulation fallback.")
@@ -123,7 +125,9 @@ def x_ray_search(company_name: str, company_url: str = None):
         4. "Platform Thinking": Do they have a public API/Dev portal? (If yes -> High Reality Score).
         5. "Legacy Inertia": Are there academic theses describing failed transformations?
 
-        RETURN STRICT JSON (Do not include markdown formatting):
+        RETURN STRICT JSON (Do not include markdown formatting).
+        IMPORTANT: You MUST return a JSON object. If you performed a search, summarize the findings into the JSON.
+        
         {{
             "findings": [
                 {{
@@ -140,11 +144,9 @@ def x_ray_search(company_name: str, company_url: str = None):
         }}
         """
 
-        # UPGRADE: Gemini 2.5 Pro (Production)
         # Using Google Search tool for deep forensic scanning
-        # FIX: Removed response_mime_type='application/json' as it conflicts with Google Search tools
         response = client.models.generate_content(
-            model='gemini-2.5-pro',
+            model=target_model,
             contents=prompt,
             config={
                 'tools': [{'google_search': {}}],
@@ -160,7 +162,9 @@ def x_ray_search(company_name: str, company_url: str = None):
         )
         
         # Robust Parsing: Handle mix of text + json or pure text
-        json_payload = extract_json_from_text(response.text)
+        # FIX: Handle case where response.text is None (Google Search ran but returned no text)
+        text_content = response.text if response.text else ""
+        json_payload = extract_json_from_text(text_content)
         
         if json_payload:
             data = json.loads(json_payload)
@@ -185,7 +189,7 @@ def x_ray_search(company_name: str, company_url: str = None):
             adjustment = data.get("reality_score_adjustment", 0)
             final_score = max(0, min(100, base_score + adjustment))
             
-            print(f"   [Scanner 2] Google Search Successful (Gemini 2.5 Pro). Found {len(raw_findings)} items. Adj: {adjustment}")
+            print(f"   [Scanner 2] Google Search Successful ({target_model}). Found {len(raw_findings)} items. Adj: {adjustment}")
             
             return {
                 "score": int(final_score),
@@ -194,8 +198,12 @@ def x_ray_search(company_name: str, company_url: str = None):
                 "is_simulated": False
             }
         else:
-             print(f"   [Scanner 2] JSON Extraction Failed. Raw Text: {response.text[:100]}...")
-             raise ValueError("No JSON object found in response text")
+             print(f"   [Scanner 2] JSON Extraction Failed. Raw Text Length: {len(text_content)}")
+             # Do not raise error immediately, let fallback handle it
+             if len(text_content) > 0:
+                 print(f"   [Scanner 2] Partial content: {text_content[:100]}...")
+             
+             raise ValueError("No JSON object found in response text or empty response")
 
     except Exception as e:
         print(f"   [Scanner 2] Google Search Tool Failed: {e}")
@@ -211,7 +219,7 @@ def x_ray_search(company_name: str, company_url: str = None):
         Return JSON with 'findings' (array of objects with title, snippet, url) and 'score' (0-100).
         """
         response = client.models.generate_content(
-            model='gemini-2.5-pro',
+            model=target_model,
             contents=sim_prompt,
             config={'response_mime_type': 'application/json'}
         )
@@ -224,4 +232,5 @@ def x_ray_search(company_name: str, company_url: str = None):
         }
 
     except Exception as e:
+        print(f"   [Scanner 2] Simulation Failed: {e}")
         return { "score": 50, "checklist": [], "links": [], "is_simulated": True }

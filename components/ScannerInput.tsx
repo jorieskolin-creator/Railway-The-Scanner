@@ -1,6 +1,6 @@
 
 const { useState } = (window as any).React;
-const { Search, FileText, Globe, Zap, Link, AlertCircle, Database } = (window as any).Lucide;
+const { Search, FileText, Globe, Zap, Link, AlertCircle, Database, Settings, Cpu } = (window as any).Lucide;
 
 const ScannerInput = ({ onScan }) => {
   const [companyName, setCompanyName] = useState('');
@@ -10,6 +10,10 @@ const ScannerInput = ({ onScan }) => {
   const [showModels, setShowModels] = useState(false);
   const [modelList, setModelList] = useState([]);
   const [loadingModels, setLoadingModels] = useState(false);
+  
+  // NEW: Model Override State (Defaulting to Gemini 3 Pro as requested)
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [selectedModel, setSelectedModel] = useState('gemini-3-pro-preview');
 
   const validateUrl = (url) => {
     if (!url) return true;
@@ -35,16 +39,12 @@ const ScannerInput = ({ onScan }) => {
   const handleSubmit = (e) => {
     e.preventDefault();
     
-    // VALIDATION LOGIC:
-    // 1. Company Name is always required.
-    // 2. We need EITHER a URL (to auto-scrape) OR Text (to analyze manually).
     if (!companyName) {
       alert("Company Name is required.");
       return;
     }
 
     if (companyUrl && !validateUrl(companyUrl)) {
-        // Double check on submit
         setUrlError("Invalid URL format. Please include http:// or https://");
         return;
     }
@@ -54,22 +54,8 @@ const ScannerInput = ({ onScan }) => {
       return;
     }
 
-    onScan({ companyName, companyUrl, reportText });
-  };
-
-  const loadSampleData = () => {
-    setCompanyName("Metsä Group");
-    setCompanyUrl("https://www.metsagroup.com");
-    setUrlError("");
-    setReportText(""); 
-    setReportText("We are committed to functional silos and strict command chains. Our strategy focuses on cost-cutting and maintaining our legacy assets.");
-  };
-
-  const loadAdaptiveData = () => {
-    setCompanyName("Wärtsilä Oyj");
-    setCompanyUrl("https://www.wartsila.com");
-    setUrlError("");
-    setReportText(""); 
+    // Pass the selected model to the parent handler
+    onScan({ companyName, companyUrl, reportText, modelId: selectedModel });
   };
 
   const fetchModels = async () => {
@@ -104,15 +90,12 @@ const ScannerInput = ({ onScan }) => {
             <p className="text-[10px] text-slate-400 mt-1 uppercase tracking-widest font-semibold">Forensic Parameters (Finland Top 100)</p>
         </div>
         <div className="flex gap-2 text-xs">
-           <button type="button" onClick={fetchModels} className="px-3 py-1.5 rounded bg-white/5 hover:bg-white/10 text-slate-400 hover:text-cyan-300 border border-transparent hover:border-cyan-500/30 transition-all font-mono text-[10px] flex items-center gap-1">
-            <Database size={10} /> {showModels ? "HIDE MODELS" : "CHECK MODELS"}
+           <button type="button" onClick={() => setShowAdvanced(!showAdvanced)} className={`px-3 py-1.5 rounded border transition-all font-mono text-[10px] flex items-center gap-1 ${showAdvanced ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30' : 'bg-white/5 text-slate-400 border-transparent hover:bg-white/10'}`}>
+            <Settings size={10} /> {showAdvanced ? 'HIDE OPTIONS' : 'AI MODEL'}
            </button>
-           <button type="button" onClick={loadSampleData} className="px-3 py-1.5 rounded bg-white/5 hover:bg-rose-500/10 hover:text-rose-300 border border-transparent hover:border-rose-500/30 transition-all text-slate-400 font-mono text-[10px]">
-            LOAD "LEGACY" (MANUAL TEXT)
-          </button>
-           <button type="button" onClick={loadAdaptiveData} className="px-3 py-1.5 rounded bg-white/5 hover:bg-emerald-500/10 hover:text-emerald-300 border border-transparent hover:border-emerald-500/30 transition-all text-slate-400 font-mono text-[10px]">
-            LOAD "ADAPTIVE" (AUTO-SCAN)
-          </button>
+           <button type="button" onClick={fetchModels} className="px-3 py-1.5 rounded bg-white/5 hover:bg-white/10 text-slate-400 hover:text-cyan-300 border border-transparent hover:border-cyan-500/30 transition-all font-mono text-[10px] flex items-center gap-1">
+            <Database size={10} /> {showModels ? "HIDE LIST" : "CHECK SERVER"}
+           </button>
         </div>
       </div>
 
@@ -124,13 +107,56 @@ const ScannerInput = ({ onScan }) => {
             ) : (
                 <div className="grid grid-cols-2 gap-2 max-h-32 overflow-y-auto custom-scrollbar">
                     {modelList.map((m, i) => (
-                        <div key={i} className="text-[10px] font-mono text-emerald-400 bg-emerald-950/30 px-2 py-1 rounded border border-emerald-900/50 truncate" title={m}>
+                        <div key={i} className="text-[10px] font-mono text-emerald-400 bg-emerald-950/30 px-2 py-1 rounded border border-emerald-900/50 truncate cursor-pointer hover:bg-emerald-900/50" onClick={() => { setSelectedModel(m); setShowModels(false); setShowAdvanced(true); }}>
                             {m}
                         </div>
                     ))}
                     {modelList.length === 0 && <div className="text-xs text-rose-400">No models found or API Key invalid.</div>}
                 </div>
             )}
+          </div>
+      )}
+
+      {showAdvanced && (
+          <div className="bg-indigo-950/20 p-4 border-b border-indigo-500/20 animate-in slide-in-from-top-2 flex flex-col gap-2">
+             <label className="text-[10px] font-bold uppercase tracking-widest text-indigo-300 flex items-center gap-2">
+                <Cpu size={12} /> AI Model Override
+             </label>
+             <div className="flex flex-col sm:flex-row gap-2">
+                 <input 
+                    type="text" 
+                    value={selectedModel} 
+                    onChange={(e) => setSelectedModel(e.target.value)}
+                    className="flex-1 bg-black/40 border border-indigo-500/30 rounded px-3 py-1.5 text-xs text-white font-mono placeholder-slate-600 focus:outline-none focus:border-indigo-400"
+                    placeholder="e.g. gemini-3-pro-preview"
+                 />
+                 <div className="flex gap-1">
+                    <button 
+                        type="button"
+                        onClick={() => setSelectedModel('gemini-3-pro-preview')} 
+                        className={`px-2 py-1 rounded text-[10px] border transition-colors ${selectedModel === 'gemini-3-pro-preview' ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
+                    >
+                        3 Pro (Default)
+                    </button>
+                    <button 
+                        type="button"
+                        onClick={() => setSelectedModel('gemini-3-flash-preview')} 
+                        className={`px-2 py-1 rounded text-[10px] border transition-colors ${selectedModel === 'gemini-3-flash-preview' ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
+                    >
+                        3 Flash
+                    </button>
+                    <button 
+                        type="button"
+                        onClick={() => setSelectedModel('gemini-2.5-pro')} 
+                        className={`px-2 py-1 rounded text-[10px] border transition-colors ${selectedModel === 'gemini-2.5-pro' ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
+                    >
+                        2.5 Pro
+                    </button>
+                 </div>
+             </div>
+             <p className="text-[9px] text-slate-500">
+                <span className="text-indigo-400 font-bold">Recommended:</span> Gemini 3 Pro for best reasoning. Flash for speed. 2.5 Pro for legacy stability.
+             </p>
           </div>
       )}
       

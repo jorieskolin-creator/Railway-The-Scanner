@@ -3,6 +3,59 @@ const { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusA
 const { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash, RefreshCw, XCircle, Search, Zap, Scale, Activity, Download, Copy, FileJson, FileCode, Check } = (window as any).Lucide;
 const { useRef, useState } = (window as any).React;
 
+const HighlightText = ({ text }) => {
+  if (!text) return null;
+  
+  const negativeTerms = [
+    "Digital Taylorism", "Feature Factory", "Command and Control", "Zombie Scrum", 
+    "Fake Agile", "Silos", "Micromanagement", "Project-based", "Fear", "Bureaucracy", 
+    "Legacy", "Talk-not-Walk", "Stagnation", "Surveillance", "Turf Wars", "Water-scrum-fall",
+    "Ticket-based", "Output-driven", "Gatekeeping", "Compliance-driven", "Blame Culture",
+    "Risk-averse", "Siloed", "Waterfall", "Consulting-heavy", "Vendor Lock-in", "Burnout",
+    "Change Control Board", "HiPPO", "Modernization Washing"
+  ];
+
+  const positiveTerms = [
+    "Psychological Safety", "Platform Engineering", "Flow Efficiency", "Autonomy", 
+    "Value Streams", "Outcome-based", "Trust", "Innovation", "Modernization", 
+    "Walk-and-Talk", "Silent Doers", "Distributed Authority", "Sense and Respond",
+    "Stream-aligned", "Zero Distance", "Customer Intimacy", "Continuous Delivery",
+    "DevOps", "Data Mesh", "Empowerment", "Learning Organization", "Servant Leadership",
+    "Cloud-native", "Ecosystem", "Open Source", "Self-organization", "Cross-functional",
+    "Adaptive Strategy", "Generative AI", "AI-Augmented"
+  ];
+
+  const sortTerms = (a, b) => b.length - a.length;
+  negativeTerms.sort(sortTerms);
+  positiveTerms.sort(sortTerms);
+  
+  const allTerms = [...negativeTerms, ...positiveTerms];
+  const escapedTerms = allTerms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  
+  const regex = new RegExp(`(${escapedTerms.join('|')})`, 'gi');
+  const parts = text.split(regex);
+
+  return (
+    <>
+      {parts.map((part, i) => {
+        const lowerPart = part.toLowerCase();
+        const isNegative = negativeTerms.some(term => term.toLowerCase() === lowerPart);
+        const isPositive = positiveTerms.some(term => term.toLowerCase() === lowerPart);
+
+        if (isNegative) {
+             return <span key={i} className="font-bold text-rose-300 bg-rose-500/20 px-1 py-0.5 rounded mx-0.5 border border-rose-500/30 shadow-[0_0_10px_rgba(244,63,94,0.2)]" title="Negative Signal">{part}</span>;
+        }
+        
+        if (isPositive) {
+             return <span key={i} className="font-bold text-emerald-300 bg-emerald-500/20 px-1 py-0.5 rounded mx-0.5 border border-emerald-500/30 shadow-[0_0_10px_rgba(16,185,129,0.2)]" title="Positive Signal">{part}</span>;
+        }
+
+        return part;
+      })}
+    </>
+  );
+};
+
 const CompanySummary = ({ data }) => {
   const summaryRef = useRef(null);
   const [copied, setCopied] = useState(false);
@@ -292,7 +345,7 @@ const CompanySummary = ({ data }) => {
             AI Diagnosis
             </h3>
             <p className="text-slate-200 leading-relaxed whitespace-pre-line text-lg font-light">
-            {data.summary_text}
+                <HighlightText text={data.summary_text} />
             </p>
         </div>
 
@@ -337,7 +390,7 @@ const CompanySummary = ({ data }) => {
                     <div className="flex items-start justify-between">
                         <div>
                         <h4 className="font-medium text-slate-200 group-hover:text-emerald-400 transition-colors text-sm line-clamp-1">
-                            {link.title}
+                            <HighlightText text={link.title} />
                         </h4>
                         <span className="text-xs text-slate-500 mt-1 inline-block font-mono">{link.source}</span>
                         </div>

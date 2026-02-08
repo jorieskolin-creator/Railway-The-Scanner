@@ -143,6 +143,7 @@ class ScanRequest(BaseModel):
     companyUrl: Optional[str] = None
     reportText: str
     saveToDatabase: Optional[bool] = False
+    modelId: Optional[str] = None # Optional Model Override from Client
 
 @app.get("/admin/company-list")
 async def get_company_list():
@@ -173,6 +174,8 @@ async def run_scan(request: ScanRequest):
     """
     try:
         print(f"--- LIVE SCAN INITIATED FOR: {request.companyName} ---")
+        # HARDCODED UPGRADE: Default to Gemini 3 Pro Preview
+        target_model = request.modelId or "gemini-3-pro-preview"
         
         # --- STEP 1: SCANNER 1 (Intent) ---
         target_text = request.reportText
@@ -191,7 +194,7 @@ async def run_scan(request: ScanRequest):
         intent_results = analyze_intent(target_text)
 
         # --- STEP 2: SCANNER 2 (Reality) ---
-        reality_results = x_ray_search(request.companyName, target_url)
+        reality_results = x_ray_search(request.companyName, target_url, model_id=target_model)
         gap = intent_results["score"] - reality_results["score"]
         
         # --- STEP 3: SYNTHESIS ---
@@ -215,8 +218,9 @@ async def run_scan(request: ScanRequest):
 
                 Task: Write a 175-word forensic executive summary.
                 """
-                # UPGRADE: Gemini 2.5 Pro (Production)
-                response = client.models.generate_content(model='gemini-2.5-pro', contents=prompt)
+                
+                # Use the user-selected model for summary as well
+                response = client.models.generate_content(model=target_model, contents=prompt)
                 if response.text: summary = response.text
             except Exception as e:
                 print(f"Gemini Error: {e}")

@@ -1,5 +1,4 @@
 
-
 const { useState, useEffect, useRef } = (window as any).React;
 
 const LucideRaw = (window as any).Lucide || {};
@@ -10,7 +9,7 @@ const Icons = new Proxy(LucideRaw, {
     }
 });
 
-const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock, HardDrive, Terminal, Radio, Play, Pause, StopCircle } = Icons;
+const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock, HardDrive, Terminal, Radio, Play, Pause, StopCircle, TestTube, Cpu } = Icons;
 
 const TruthMatrix = (window as any).TruthMatrix;
 const ScannerInput = (window as any).ScannerInput;
@@ -32,6 +31,9 @@ const App = () => {
   const [sortConfig, setSortConfig] = useState({ key: 'reality_score', direction: 'desc' });
   const [systemStatus, setSystemStatus] = useState({ online: false, storage: false, google: false, ai: false });
   
+  // ADMIN SETTINGS
+  const [adminModel, setAdminModel] = useState('gemini-3-pro-preview');
+
   // BATCH STATE
   const [isBatchOpen, setIsBatchOpen] = useState(false);
   const [batchStatus, setBatchStatus] = useState({ current: 0, total: 0, isRunning: false, currentName: '', logs: [] });
@@ -184,31 +186,22 @@ const App = () => {
   };
 
   // --- CLIENT-SIDE BATCH ORCHESTRATION ---
-  // This replaces the server-side batch to avoid Vercel timeouts.
-  // The browser controls the loop.
-  const handleStartBatch = async () => {
-    if (!IS_ADMIN_MODE) return;
-    
-    const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to initiate Batch Scan:");
-    if (!password) return; 
-    
-    if (password !== "CoolScanner2026!!!!!") {
-        alert("ACCESS DENIED: Incorrect Password.");
-        return;
-    }
-
-    if (!confirm("⚠️ START CLIENT-SIDE BATCH SCAN?\n\nThis will scan companies one-by-one in YOUR browser.\n\nDO NOT CLOSE THIS TAB until finished.")) return;
-    
-    setIsBatchOpen(true);
-    stopBatchRef.current = false;
-    setBatchStatus({ current: 0, total: 0, isRunning: true, currentName: 'Initializing...', logs: ['Fetching Target List...'] });
-
-    try {
-        // 1. Get List
-        const listRes = await fetch('/admin/company-list');
-        const listJson = await listRes.json();
-        const targets = listJson.companies || [];
-
+  const executeBatch = async (targets, mode = "FULL") => {
+      setIsBatchOpen(true);
+      stopBatchRef.current = false;
+      
+      const modelLabel = adminModel === 'gemini-3-pro-preview' ? 'Gemini 3 Pro' : 
+                         adminModel === 'gemini-3-flash-preview' ? 'Gemini 3 Flash' : 'Gemini 2.5 Pro';
+      
+      setBatchStatus({ 
+          current: 0, 
+          total: 0, 
+          isRunning: true, 
+          currentName: 'Initializing...', 
+          logs: [`Starting ${mode} Batch using ${modelLabel}...`] 
+      });
+      
+      try {
         setBatchStatus(prev => ({ ...prev, total: targets.length, logs: [...prev.logs, `Loaded ${targets.length} targets.`] }));
 
         // 2. Iterate
@@ -219,7 +212,6 @@ const App = () => {
             }
 
             const target = targets[i];
-            const logPrefix = `[${i + 1}/${targets.length}] ${target.name}`;
             
             setBatchStatus(prev => ({ 
                 ...prev, 
@@ -230,6 +222,7 @@ const App = () => {
 
             try {
                 // Perform Scan
+                // NOTE: Using selected adminModel
                 const res = await fetch('/scan', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -237,7 +230,8 @@ const App = () => {
                         companyName: target.name, 
                         companyUrl: target.url, 
                         reportText: "", 
-                        saveToDatabase: true 
+                        saveToDatabase: true,
+                        modelId: adminModel 
                     })
                 });
 
@@ -263,6 +257,60 @@ const App = () => {
         console.error(e);
         setBatchStatus(prev => ({ ...prev, isRunning: false }));
     }
+  };
+
+  const handleStartBatch = async () => {
+    if (!IS_ADMIN_MODE) return;
+    
+    const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to initiate FULL Batch Scan:");
+    if (!password) return; 
+    
+    if (password !== "CoolScanner2026!!!!!") {
+        alert("ACCESS DENIED: Incorrect Password.");
+        return;
+    }
+
+    if (!confirm(`⚠️ START FULL BATCH SCAN (100+ Companies)?\n\nModel: ${adminModel}\n\nThis will take a significant amount of time.\n\nDO NOT CLOSE THIS TAB until finished.`)) return;
+    
+    // Get List
+    try {
+        const listRes = await fetch('/admin/company-list');
+        const listJson = await listRes.json();
+        executeBatch(listJson.companies || [], "FULL");
+    } catch(e) { alert("Failed to fetch company list"); }
+  };
+  
+  const handleTestBatch = async () => {
+    if (!IS_ADMIN_MODE) return;
+    
+    const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password for TEST SCAN (5 Random):");
+    if (!password) return; 
+    
+    if (password !== "CoolScanner2026!!!!!") {
+        alert("ACCESS DENIED: Incorrect Password.");
+        return;
+    }
+    
+    // Get List and Shuffle
+    try {
+        const listRes = await fetch('/admin/company-list');
+        const listJson = await listRes.json();
+        const allCompanies = listJson.companies || [];
+        
+        // Shuffle and pick 5
+        const shuffled = [...allCompanies].sort(() => 0.5 - Math.random());
+        const selected = shuffled.slice(0, 5);
+        
+        executeBatch(selected, "TEST (5)");
+        
+    } catch(e) { alert("Failed to fetch company list"); }
+  };
+
+  const cycleAdminModel = () => {
+      const models = ['gemini-3-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro'];
+      const idx = models.indexOf(adminModel);
+      const nextIdx = (idx + 1) % models.length;
+      setAdminModel(models[nextIdx]);
   };
 
   const handleStopBatch = () => {
@@ -339,6 +387,22 @@ const App = () => {
             </div>
             {IS_ADMIN_MODE && (
                 <>
+                {/* ADMIN MODEL SWITCHER */}
+                <button 
+                  onClick={cycleAdminModel}
+                  className="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded transition-all text-[10px] font-mono"
+                  title="Switch Model for Batch Operations"
+                >
+                    <Cpu size={12} className={adminModel.includes('flash') ? 'text-amber-400' : 'text-cyan-400'} />
+                    <span className="text-slate-300">
+                        {adminModel === 'gemini-3-pro-preview' ? '3 PRO' : 
+                         adminModel === 'gemini-3-flash-preview' ? '3 FLASH' : '2.5 PRO'}
+                    </span>
+                </button>
+
+                <button onClick={handleTestBatch} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-cyan-900/40 hover:bg-cyan-800/60 border border-cyan-700/50 text-cyan-200 font-mono font-bold text-[10px] rounded transition-all">
+                    <TestTube size={12} /> TEST(5)
+                </button>
                 <button onClick={handleStartBatch} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-lg transition-all">
                     {batchStatus.isRunning ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
                     {batchStatus.isRunning ? "SCANNING..." : "REFRESH DB"}
