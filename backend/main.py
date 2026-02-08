@@ -264,7 +264,7 @@ async def run_scan(
                 ### SYNTHESIS
                 Target: {companyName}
                 Intent: {intent_results["score"]}, Reality: {reality_results["score"]}, Gap: {gap}
-                AI Confidence: {confidence}/100
+                Summary Confidence: {confidence}/100
                 Knowledge Base: {knowledge_context}
                 Evidence: {evidence_list}
                 Intent Data: {intent_narrative}
@@ -272,7 +272,7 @@ async def run_scan(
                 {washing_context}
 
                 Task: Write a 175-word forensic executive summary.
-                1. Explicitly mention the 'AI Confidence' level if it is low (below 50).
+                1. Explicitly mention the 'Summary Confidence' level if it is low (below 50).
                 2. If Washing is detected, use the term "{washing_type or 'Modernization Washing'}" explicitly.
                 """
                 

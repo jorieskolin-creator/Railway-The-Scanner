@@ -320,7 +320,7 @@ const CompanySummary = ({ data }) => {
                             <Eye size={20} />
                         </div>
                         <div>
-                            <h4 className="text-xs text-slate-400 font-bold uppercase tracking-wider">AI Confidence</h4>
+                            <h4 className="text-xs text-slate-400 font-bold uppercase tracking-wider">Summary Confidence</h4>
                             <p className={`text-lg font-bold ${confidenceColor}`}>{confidenceLabel} ({confidence}%)</p>
                         </div>
                     </div>
