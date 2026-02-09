@@ -104,11 +104,18 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     4. "Platform Thinking": Public API found?
     5. "Legacy Inertia": Failed transformations?
 
-    TEMPORAL WEIGHTING (STATUTE OF LIMITATIONS) - CRITICAL:
-    - Check the DATE of findings, especially in the Community Jury.
-    - If a negative finding (e.g., toxic culture complaint) is OLDER than 18 months, IGNORE IT or weight it very low (20% impact). Companies change.
-    - If a finding is RECENT (< 12 months), weight it at 100%.
-    - Favor FRESH evidence over legacy complaints.
+    SCORING LOGIC & TEMPORAL WEIGHTING (CRITICAL):
+    1. BASELINE: Start at 0 adjustment.
+    2. RECENCY WEIGHTING: 
+       - Evidence < 12 months old: 100% Impact (Heavy Weight).
+       - Evidence > 18 months old: 20% Impact (Ignore unless recurring/unresolved).
+       - Favor FRESH evidence over legacy complaints.
+    3. TECHNICAL DEBT PENALTY:
+       - If RECENT (< 12 months) evidence confirms "Technical Debt", "Legacy Systems", "Manual Workarounds", or "Excel Hell":
+       - APPLY A SIGNIFICANT PENALTY (-15 to -25 points) to the adjustment.
+       - This is a strong signal of low reality.
+    4. POSITIVE SIGNALS:
+       - Recent API docs, Developer Portals, or Open Source contributions: +10 to +20 points.
 
     DETECT "WASHING" (Logic Check):
     - Intent Score is {intent_score}. 
@@ -128,7 +135,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 "snippet": "Quote...",
                 "title": "Source Title",
                 "url": "URL",
-                "is_recent": boolean (True if < 18 months)
+                "is_recent": boolean (True if < 12 months)
             }}
         ],
         "reality_score_adjustment": (integer -40 to +40),
@@ -197,7 +204,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 "category": f.get("category", "General"),
                 "query": f.get("label", "Signal"),
                 "found": f.get("found", False),
-                "sentiment": f.get("sentiment", "neutral")
+                "sentiment": f.get("sentiment", "neutral"),
+                "is_recent": f.get("is_recent", False)
             })
             
             if f.get("found") and f.get("url"):
@@ -205,7 +213,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     "title": f.get("title", "Evidence Found"),
                     "snippet": f.get("snippet", ""),
                     "url": f.get("url", ""),
-                    "source": get_clean_domain(f.get("url", ""))
+                    "source": get_clean_domain(f.get("url", "")),
+                    "is_recent": f.get("is_recent", False)
                 })
         
         adjustment = data.get("reality_score_adjustment", 0)

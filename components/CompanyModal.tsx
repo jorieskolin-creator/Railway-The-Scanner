@@ -41,6 +41,14 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading }) => {
   };
 
   const handleRefresh = async () => {
+    // PASSWORD PROTECTION
+    const password = prompt("AUTHENTICATION REQUIRED\n\nDatabase is in Protected Mode to preserve freshness.\nEnter Admin Password to force a deep refresh:");
+    if (!password) return;
+    if (password !== "CoolScanner2026!!!!!") {
+        alert("ACCESS DENIED: Incorrect Password.\n\nTip: You can still run a fresh scan via 'New Diagnosis' on the main dashboard.");
+        return;
+    }
+
     setIsRefreshing(true);
     try {
       // Use FormData for file support
