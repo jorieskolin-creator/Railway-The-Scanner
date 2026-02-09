@@ -90,6 +90,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
        - Cloud Sourcing (Finland): `site:hankintailmoitukset.fi "{search_name}" AND ("Cloud" OR "Pilvi" OR "SaaS")`
        - Recurring Revenue Evidence: `site:{domain_hint} filetype:pdf "Recurring Revenue" OR "ARR" OR "Jatkuva laskutus"`
        - Modern Tech Investments: `site:crunchbase.com "{search_name}" "Acquisitions"`
+       - Leadership Thought Leadership: `site:medium.com "{search_name}" OR site:substack.com "{search_name}"`
 
     3. THE CULTURAL JURY (Talent & Psychological Safety)
        - Boomerang Employees (High Trust): `site:linkedin.com "{search_name}" AND ("returned to" OR "rejoined")`
