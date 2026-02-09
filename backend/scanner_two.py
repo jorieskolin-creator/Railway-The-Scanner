@@ -81,28 +81,34 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     
     CRITICAL: You must execute searches for ALL 4 JURIES. Do not skip any.
 
-    1. THE ARCHITECTURAL JURY (Tech & Structure)
-       - Public Developer Portals: `site:{domain_hint} "API documentation" OR "Developer Portal"`
-       - System Status Pages: `site:{domain_hint} "System Status" OR "Häiriötiedotteet"`
-       - Technical Communities: `site:stackoverflow.com "{search_name}"`
+    1. THE ARCHITECTURAL JURY (Engineering Reality)
+       - Public Code & APIs: `site:github.com "{search_name}" OR site:postman.com "{search_name}"`
+       - Engineering Culture: `site:{domain_hint} "engineering blog" OR "tech blog" OR "developers"`
+       - Design Systems: `site:{domain_hint} "Design System" OR "UI Kit"`
 
-    2. THE STRATEGIC JURY (Money & Intent)
-       - Capital Markets Day (CMD): `site:{domain_hint} filetype:pdf "Capital Markets Day" OR "Strategy"`
-       - Risk Reports: `site:{domain_hint} filetype:pdf "Annual Report" AND "Risk Management"`
+    2. THE STRATEGIC JURY (Business Model & Procurement)
+       - Cloud Sourcing (Finland): `site:hankintailmoitukset.fi "{search_name}" AND ("Cloud" OR "Pilvi" OR "SaaS")`
+       - Recurring Revenue Evidence: `site:{domain_hint} filetype:pdf "Recurring Revenue" OR "ARR" OR "Jatkuva laskutus"`
+       - Modern Tech Investments: `site:crunchbase.com "{search_name}" "Acquisitions"`
 
-    3. THE COMMUNITY JURY (Culture & Reality)
-       - TeamBlind & Reddit: `site:teamblind.com "{search_name}"` OR `site:reddit.com "{search_name}"`
-       - Employee Voice: `site:glassdoor.com "{search_name}"` OR `site:linkedin.com "{search_name}"`
+    3. THE CULTURAL JURY (Talent & Psychological Safety)
+       - Boomerang Employees (High Trust): `site:linkedin.com "{search_name}" AND ("returned to" OR "rejoined")`
+       - Inclusion Artifacts: `site:mimmitkoodaa.fi "{search_name}" OR "Women in Tech Finland" "{search_name}"`
+       - Community Hosting: `site:meetup.com "{search_name}" AND ("Host" OR "Sponsor")`
+       - Employee Voice: `site:glassdoor.com "{search_name}" OR site:teamblind.com "{search_name}"` (NO REDDIT)
 
-    4. THE ACADEMIC JURY (Deep Audits)
-       - Theses: `site:theseus.fi "{search_name}"`
+    4. THE AI & DATA JURY (Future Readiness)
+       - Real AI Models: `site:huggingface.co "{search_name}"`
+       - Tech Stack Verification: `site:stackshare.io "{search_name}"`
+       - Cloud Case Studies: `site:aws.amazon.com "Case Studies" "{search_name}" OR site:customers.microsoft.com "{search_name}"`
+       - Deep Academic Audits: `site:theseus.fi "{search_name}" OR site:research.aalto.fi "{search_name}"`
 
     VERIFY THESE 5 HYPOTHESES:
     1. "Surveillance": Micromanagement/tracking?
     2. "Silos": Bureaucracy complaints?
     3. "Fake Agile": "Waterfall" or "Zombie Scrum"?
-    4. "Platform Thinking": Public API found?
-    5. "Legacy Inertia": Failed transformations?
+    4. "Platform Thinking": Public API/Design System found?
+    5. "Legacy Inertia": Failed transformations or "Cloud Washing"?
 
     SCORING LOGIC & TEMPORAL WEIGHTING (CRITICAL):
     1. BASELINE: Start at 0 adjustment.
@@ -115,13 +121,13 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
        - APPLY A SIGNIFICANT PENALTY (-15 to -25 points) to the adjustment.
        - This is a strong signal of low reality.
     4. POSITIVE SIGNALS:
-       - Recent API docs, Developer Portals, or Open Source contributions: +10 to +20 points.
+       - Verified "Boomerang" hires, Hugging Face models, or Public Design Systems: +10 to +20 points.
 
     DETECT "WASHING" (Logic Check):
     - Intent Score is {intent_score}. 
     - RULE: "Washing" (Green/Agile/AI Washing) is ONLY possible if Intent Score is HIGH (>60) AND Reality is LOW.
     - IF Intent Score is LOW (<50), you CANNOT flag this as Washing.
-    - AI WASHING: Claims of "AI-driven" but no technical evidence (docs/repos) or complaints of "manual excel work".
+    - AI WASHING: Claims of "AI-driven" but no technical evidence (Hugging Face/StackShare) found.
     - AGILE WASHING: Claims of "Tribes/Squads" but evidence of "Waterfall", "Approvals", "Bureaucracy".
 
     RETURN STRICT JSON:
