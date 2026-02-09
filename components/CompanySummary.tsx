@@ -1,6 +1,4 @@
 
-
-
 const { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Tooltip: RechartsTooltip, LineChart, Line, XAxis, YAxis, CartesianGrid, ReferenceLine } = (window as any).Recharts;
 const { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash, RefreshCw, XCircle, Search, Zap, Scale, Activity, Download, Copy, FileJson, FileCode, Check, Eye, AlertOctagon, Info } = (window as any).Lucide;
 const { useRef, useState } = (window as any).React;
@@ -409,6 +407,57 @@ const CompanySummary = ({ data }) => {
                 <HighlightText text={data.summary_text} />
             </p>
         </div>
+
+        {/* NEW REALITY CHECKLIST SECTION */}
+        {data.reality_checklist && data.reality_checklist.length > 0 && (
+            <div className="bg-white/5 p-6 rounded-2xl border border-white/10 backdrop-blur-md">
+                <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                    <CheckCircle className="text-emerald-400" size={20} />
+                    Forensic Reality Checklist
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {data.reality_checklist.map((item, idx) => {
+                        let borderColor = "border-white/5";
+                        let bgColor = "bg-black/20";
+                        let icon = <div className="w-2 h-2 rounded-full bg-slate-600" />;
+                        let textColor = "text-slate-400";
+                        
+                        if (item.found) {
+                            if (item.sentiment === 'negative') {
+                                borderColor = "border-rose-500/30";
+                                bgColor = "bg-rose-500/10";
+                                icon = <AlertTriangle size={14} className="text-rose-400" />;
+                                textColor = "text-rose-200";
+                            } else {
+                                borderColor = "border-emerald-500/30";
+                                bgColor = "bg-emerald-500/10";
+                                icon = <CheckCircle size={14} className="text-emerald-400" />;
+                                textColor = "text-emerald-200";
+                            }
+                        }
+
+                        return (
+                            <div key={idx} className={`flex items-center justify-between p-3 rounded-lg border ${borderColor} ${bgColor}`}>
+                                <div className="flex items-center gap-3 overflow-hidden">
+                                    <div className="shrink-0">{icon}</div>
+                                    <div className="flex flex-col min-w-0">
+                                        <span className={`text-xs font-medium ${textColor} truncate`}>
+                                            {item.query || item.category}
+                                        </span>
+                                        <span className="text-[10px] text-slate-500 uppercase tracking-wider">{item.category}</span>
+                                    </div>
+                                </div>
+                                {item.found && item.is_recent && (
+                                    <span className="shrink-0 text-[9px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 px-1.5 py-0.5 rounded ml-2">
+                                        RECENT
+                                    </span>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             <div className="bg-white/5 p-6 rounded-2xl border border-white/10 backdrop-blur-md">
