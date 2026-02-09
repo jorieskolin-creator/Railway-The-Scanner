@@ -481,13 +481,13 @@ const CompanySummary = ({ data }) => {
             </div>
             </div>
 
-            <div className="bg-white/5 p-6 rounded-2xl border border-white/10 backdrop-blur-md flex flex-col">
+            <div className="bg-white/5 p-6 rounded-2xl border border-white/10 backdrop-blur-md flex flex-col h-full">
             <h3 className="text-lg font-bold text-white mb-6 flex items-center gap-2">
                 <span className="w-1 h-6 bg-emerald-500 rounded-full"></span>
                 Deep Dive Findings
             </h3>
             
-            <div className="flex-grow overflow-y-auto max-h-[300px] pr-2 space-y-3 custom-scrollbar">
+            <div className="flex-grow overflow-y-auto max-h-[450px] pr-2 space-y-3 custom-scrollbar">
                 {data.evidence_links.length > 0 ? (
                 data.evidence_links.map((link, idx) => (
                     <a 
@@ -514,38 +514,6 @@ const CompanySummary = ({ data }) => {
                     <p className="text-sm">No specific evidence returned.</p>
                 </div>
                 )}
-            </div>
-            
-            <div className="mt-6 pt-4 border-t border-white/10">
-                <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
-                    <Search size={12} />
-                    Methodology Checklist
-                </h4>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {data.reality_checklist && data.reality_checklist.slice(0, 8).map((item, idx) => {
-                    let icon = <div className="w-3.5 h-3.5 rounded-full border border-slate-700 bg-slate-800/50 shrink-0" />;
-                    let textColor = "opacity-60";
-                    
-                    if (item.found) {
-                        if (item.sentiment === 'negative') {
-                            icon = <AlertTriangle size={14} className="text-rose-500 shrink-0" />;
-                            textColor = "text-rose-300";
-                        } else {
-                            icon = <CheckCircle size={14} className="text-emerald-500 shrink-0" />;
-                            textColor = "text-emerald-300";
-                        }
-                    }
-
-                    return (
-                        <div key={idx} className={`flex items-center gap-2 text-xs text-slate-400 p-1.5 rounded bg-black/20 border border-transparent ${item.found ? 'bg-white/5 border-white/5' : ''}`}>
-                        {icon}
-                        <span className={`${textColor} truncate`}>
-                            {item.query || item.category} 
-                        </span>
-                        </div>
-                    );
-                })}
-                </div>
             </div>
             </div>
         </div>

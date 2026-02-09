@@ -68,7 +68,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     
     if not api_key:
         print("   [Scanner 2] CRITICAL: No GEMINI_API_KEY found. Using simulation fallback.")
-        return { "score": 60, "checklist": [], "links": [], "is_simulated": True, "confidence_score": 0, "washing_flag": False }
+        return { "score": 60, "checklist": [], "links": [], "key_people": [], "is_simulated": True, "confidence_score": 0, "washing_flag": False }
 
     # --- DEFINING THE PROMPT ONCE ---
     prompt = f"""
@@ -103,6 +103,13 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
        - Tech Stack Verification: `site:stackshare.io "{search_name}"`
        - Cloud Case Studies: `site:aws.amazon.com "Case Studies" "{search_name}" OR site:customers.microsoft.com "{search_name}"`
        - Deep Academic Audits: `site:theseus.fi "{search_name}" OR site:research.aalto.fi "{search_name}"`
+
+    ALSO: IDENTIFY 4 KEY MODERNIZATION STAKEHOLDERS:
+    Search for real names of current executives in these roles:
+    1. Technology (CTO, CIO, VP Engineering)
+    2. People/Culture (CPO, HR Director)
+    3. Transformation (CDO, Head of Strategy)
+    4. Product/Innovation (CPO, Head of Product)
 
     VERIFY THESE 5 HYPOTHESES:
     1. "Surveillance": Micromanagement/tracking?
@@ -143,6 +150,13 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 "title": "Source Title",
                 "url": "URL",
                 "is_recent": boolean (True if < 12 months)
+            }}
+        ],
+        "key_people": [
+            {{
+                "name": "Full Name",
+                "role": "Exact Title",
+                "relevance": "Why relevant?"
             }}
         ],
         "reality_score_adjustment": (integer -40 to +40),
@@ -231,12 +245,15 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         washing_flag = data.get("washing_flag", False)
         washing_type = data.get("washing_type", None)
         
+        key_people = data.get("key_people", [])
+
         final_score = max(0, min(100, base_score + adjustment))
         
         return {
             "score": int(final_score),
             "checklist": checklist,
             "links": raw_findings,
+            "key_people": key_people,
             "is_simulated": False,
             "confidence_score": int(confidence),
             "washing_flag": washing_flag,
@@ -247,17 +264,18 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     print(f"   [Scanner 2] All models failed. Engaging AI Simulation for {company_name} (Fallback)...")
     try:
         client = genai.Client(api_key=api_key)
-        sim_prompt = f"Generate 3 REALISTIC forensic search findings for {company_name}. Return JSON with 'findings', 'score' (0-100), 'confidence_score' (0-100), and 'washing_flag' (boolean)."
+        sim_prompt = f"Generate 3 REALISTIC forensic search findings for {company_name}. Return JSON with 'findings', 'score' (0-100), 'confidence_score' (0-100), 'washing_flag' (boolean), and 'key_people' (array)."
         response = client.models.generate_content(model="gemini-3-flash-preview", contents=sim_prompt)
         sim_data = json.loads(extract_json_from_text(response.text))
         return {
             "score": sim_data.get("score", 60),
             "checklist": [],
             "links": sim_data.get("findings", []),
+            "key_people": sim_data.get("key_people", []),
             "is_simulated": True,
             "confidence_score": sim_data.get("confidence_score", 40),
             "washing_flag": sim_data.get("washing_flag", False),
             "washing_type": sim_data.get("washing_type", None)
         }
     except:
-        return { "score": 60, "checklist": [], "links": [], "is_simulated": True, "confidence_score": 0, "washing_flag": False }
+        return { "score": 60, "checklist": [], "links": [], "key_people": [], "is_simulated": True, "confidence_score": 0, "washing_flag": False }

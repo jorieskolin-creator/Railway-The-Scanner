@@ -190,6 +190,7 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None):
             print(f"   -> Reality Score: {reality_results['score']}")
 
             gap = intent_results["score"] - reality_results["score"]
+            key_people = reality_results.get("key_people", [])
 
             # 4. REAL AI SYNTHESIS
             summary_text = "Automated Analysis Complete."
@@ -235,6 +236,7 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None):
                 "metrics": intent_results.get("metrics", {}),
                 "reality_checklist": reality_results["checklist"],
                 "evidence_links": reality_results["links"],
+                "key_people": key_people,
                 "summary_text": summary_text,
                 "lastUpdated": timestamp,
                 "history": [],

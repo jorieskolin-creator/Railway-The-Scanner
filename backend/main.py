@@ -235,6 +235,7 @@ async def run_scan(
         confidence = reality_results.get("confidence_score", 50)
         washing_flag = reality_results.get("washing_flag", False)
         washing_type = reality_results.get("washing_type", None)
+        key_people = reality_results.get("key_people", [])
         
         # --- LOGIC CONSISTENCY CHECK ---
         # CRITICAL FIX: "Washing" is impossible if Reality >= Intent.
@@ -341,6 +342,7 @@ async def run_scan(
             "metrics": intent_results.get("metrics", {}),
             "reality_checklist": reality_results["checklist"],
             "evidence_links": reality_results["links"],
+            "key_people": key_people,
             "summary_text": summary,
             "lastUpdated": new_timestamp,
             "history": history,

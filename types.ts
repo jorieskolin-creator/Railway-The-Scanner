@@ -14,6 +14,12 @@ interface EvidenceLink {
   source: string;
 }
 
+interface KeyPerson {
+  name: string;
+  role: string;
+  relevance: string;
+}
+
 interface ScannerCategoryScore {
   name: string;
   score: number;
@@ -39,6 +45,7 @@ interface AnalysisResult {
   washing_flag?: boolean; // NEW: Washing Flag
   washing_type?: string | null; // NEW: AI Washing, Agile Washing, etc.
   evidence_links: EvidenceLink[];
+  key_people?: KeyPerson[];
   summary_text: string;
   lastUpdated: string; 
   intent_breakdown: ScannerCategoryScore[];

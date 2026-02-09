@@ -1,6 +1,6 @@
 
 const { useState, useRef } = (window as any).React;
-const { X, RefreshCw, Calendar, Clock, Loader2: Loader2Icon, UploadCloud, File, Trash2, Cpu, Sparkles, Zap, Settings, AlertCircle, AlertOctagon } = (window as any).Lucide;
+const { X, RefreshCw, Calendar, Clock, Loader2: Loader2Icon, UploadCloud, File, Trash2, Cpu, Sparkles, Zap, Settings, AlertCircle, AlertOctagon, Users, ExternalLink } = (window as any).Lucide;
 
 const CompanySummary = (window as any).CompanySummary;
 
@@ -136,14 +136,46 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading }) => {
         </div>
 
         {/* BODY */}
-        <div className="flex-1 overflow-y-auto p-8 custom-scrollbar bg-gradient-to-b from-slate-900 to-[#0f172a]">
+        <div className="flex-1 overflow-y-auto p-8 custom-scrollbar bg-gradient-to-b from-slate-900 to-[#0f172a] space-y-8">
            {(isLoading || company.partial) ? (
                <div className="h-full flex flex-col items-center justify-center space-y-4">
                    <Loader2Icon className="animate-spin text-cyan-400" size={48} />
                    <p className="text-slate-400 text-sm">Loading full forensic report...</p>
                </div>
            ) : (
-               <CompanySummary data={company} />
+               <>
+                  <CompanySummary data={company} />
+
+                  {/* KEY STAKEHOLDERS SECTION */}
+                  {company.key_people && company.key_people.length > 0 && (
+                      <div className="bg-white/5 p-6 rounded-2xl border border-white/10 backdrop-blur-md">
+                          <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                              <Users className="text-indigo-400" size={20} />
+                              Key Modernization Stakeholders
+                          </h3>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              {company.key_people.map((person, idx) => (
+                                  <div key={idx} className="flex items-center justify-between p-3 rounded-lg border border-white/5 bg-black/20 hover:border-indigo-500/30 transition-colors group">
+                                      <div className="flex flex-col min-w-0 mr-2">
+                                          <span className="font-bold text-sm text-slate-200 truncate">{person.name}</span>
+                                          <span className="text-xs text-indigo-300 truncate">{person.role}</span>
+                                          {person.relevance && <span className="text-[10px] text-slate-500 mt-1 line-clamp-1">{person.relevance}</span>}
+                                      </div>
+                                      <a 
+                                          href={`https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(person.name + " " + company.companyName)}`}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="shrink-0 p-2 rounded-full bg-white/5 hover:bg-[#0077b5] hover:text-white text-slate-500 transition-all"
+                                          title="Find on LinkedIn"
+                                      >
+                                          <ExternalLink size={16} />
+                                      </a>
+                                  </div>
+                              ))}
+                          </div>
+                      </div>
+                  )}
+               </>
            )}
         </div>
 
