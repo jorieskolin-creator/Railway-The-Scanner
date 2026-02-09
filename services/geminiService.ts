@@ -32,7 +32,7 @@ const getGeminiClient = () => {
     ${data.evidence_links.slice(0, 5).map(l => `- ${l.title}`).join('\n')}
 
     Task:
-    Write a concise, professional executive summary (max 150 words).
+    Write a concise, professional executive summary (max 175 words).
     1. Diagnose the company's adaptability.
     2. Highlight if there is "AI Washing" or "Agile Washing" (High Intent, Low Reality).
     3. Highlight if they are "Silent Executors" (Low Intent, High Reality).
