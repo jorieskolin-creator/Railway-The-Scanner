@@ -3,15 +3,18 @@ const { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveC
 
 const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] }) => {
   if (active && payload && payload.length) {
-    const data = payload[0].payload; // This is now our aggregated object
-    const companies = data.companies || [data]; // Fallback if not aggregated
+    const data = payload[0].payload; 
+    const companies = data.companies || [data]; 
+    
+    // Check if any in this group is a reference (though usually refs should be unique points)
+    const isRef = companies.some(c => c.isReference);
     
     // Use coordinates from the first company
     const gap = data.reality_gap;
     const intent = data.intent_score;
     const reality = data.reality_score;
 
-    // Strict Quadrant Classification (Coordinate-based)
+    // Strict Quadrant Classification
     let gapLabel = "Stagnation";
     let gapColor = "text-slate-400";
     
@@ -33,28 +36,28 @@ const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] 
         }
     }
 
-    // LIST LIMIT: Increased to 12 to accommodate larger clusters like 8 companies
+    if (isRef) {
+        gapLabel = "GLOBAL REFERENCE";
+        gapColor = "text-blue-400";
+    }
+
     const DISPLAY_LIMIT = 12;
 
     return (
       <div 
-        className="bg-[#020617]/95 backdrop-blur-md border border-slate-700/50 p-4 rounded-xl shadow-2xl text-xs text-white min-w-[220px] max-w-[300px] z-50 animate-in fade-in zoom-in-95 duration-200"
+        className={`backdrop-blur-md border p-4 rounded-xl shadow-2xl text-xs text-white min-w-[220px] max-w-[300px] z-50 animate-in fade-in zoom-in-95 duration-200 ${isRef ? 'bg-blue-950/90 border-blue-500/50' : 'bg-[#020617]/95 border-slate-700/50'}`}
       >
         <div className="border-b border-white/10 pb-2 mb-2">
-            <span className="text-[10px] font-mono uppercase text-slate-500 block mb-1">
+            <span className={`text-[10px] font-mono uppercase block mb-1 ${isRef ? 'text-blue-300' : 'text-slate-500'}`}>
                 {companies.length > 1 ? `${companies.length} Entities at this position` : "Entity"}
             </span>
             <ul className="space-y-1">
                 {companies.slice(0, DISPLAY_LIMIT).map((c: any, i: number) => (
-                    <li key={i} className="font-bold text-xs text-white truncate border-b border-white/5 last:border-0 pb-1 mb-1 last:mb-0 last:pb-0">
+                    <li key={i} className="font-bold text-xs text-white truncate border-b border-white/5 last:border-0 pb-1 mb-1 last:mb-0 last:pb-0 flex items-center gap-2">
                         {c.companyName}
+                        {c.isReference && <span className="text-[9px] bg-blue-500/30 text-blue-200 px-1 rounded uppercase">(Reference)</span>}
                     </li>
                 ))}
-                {companies.length > DISPLAY_LIMIT && (
-                    <li className="text-[10px] text-slate-400 italic pt-1 border-t border-white/5 mt-1">
-                        ...and {companies.length - DISPLAY_LIMIT} more
-                    </li>
-                )}
             </ul>
         </div>
 
@@ -74,13 +77,14 @@ const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] 
   return null;
 };
 
-// CUSTOM DOT RENDERER for Bigger Spots & Stability
+// CUSTOM DOT RENDERER with Reference Pulse Support
 const renderCustomDot = (props: any) => {
     const { cx, cy, payload } = props;
     const { intent_score: i, reality_score: r, companies } = payload;
     const count = companies ? companies.length : 1;
+    const isReference = companies ? companies.some(c => c.isReference) : payload.isReference;
 
-    // Color Logic (Strict Quadrant)
+    // Color Logic
     let fillColor = '#fb7185'; 
     if (r >= 50) {
         if (i >= 50) fillColor = '#10b981'; // Walk-and-Talk (Emerald)
@@ -90,22 +94,32 @@ const renderCustomDot = (props: any) => {
         else fillColor = '#fb7185'; // Stagnation (Rose)
     }
 
-    // Size Logic: Bigger spots
-    // Base 8px (was ~5px default), add size for clusters
+    if (isReference) {
+        fillColor = '#3b82f6'; // Blue for References
+    }
+
+    // Size Logic
     const radius = Math.min(18, 8 + (count - 1) * 3);
 
     return (
         <g>
+            {isReference && (
+                <circle cx={cx} cy={cy} r={radius + 8} fill={fillColor} opacity="0.3">
+                    <animate attributeName="r" from={radius} to={radius + 15} dur="2s" repeatCount="indefinite" />
+                    <animate attributeName="opacity" from="0.6" to="0" dur="2s" repeatCount="indefinite" />
+                </circle>
+            )}
+            
             <circle 
                 cx={cx} 
                 cy={cy} 
                 r={radius} 
                 fill={fillColor} 
                 stroke="#fff" 
-                strokeWidth={count > 1 ? 2 : 1.5} 
+                strokeWidth={count > 1 || isReference ? 2 : 1.5} 
                 fillOpacity={0.9}
                 style={{ 
-                    filter: count > 1 ? 'drop-shadow(0 0 8px rgba(255,255,255,0.4))' : 'drop-shadow(0 0 4px rgba(0,0,0,0.5))',
+                    filter: isReference ? 'drop-shadow(0 0 10px rgba(59, 130, 246, 0.6))' : 'drop-shadow(0 0 4px rgba(0,0,0,0.5))',
                     cursor: 'pointer',
                     transition: 'all 0.3s ease'
                 }}
@@ -121,7 +135,6 @@ const renderCustomDot = (props: any) => {
 
 const TruthMatrix = ({ data, onSelectCompany }) => {
   
-  // 1. GROUP DATA LOGIC
   const groupedData = (window as any).React.useMemo(() => {
       const groups: { [key: string]: any } = {};
       
@@ -141,7 +154,6 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
 
   return (
     <div className="w-full h-[400px] relative overflow-hidden bg-[#0f172a]/40 rounded-xl border border-white/5 group">
-      {/* Subtle Background Grid Animation */}
       <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:20px_20px] [mask-image:radial-gradient(ellipse_60%_60%_at_50%_50%,black,transparent)] pointer-events-none"></div>
 
       <ResponsiveContainer width="100%" height="100%">
@@ -194,7 +206,6 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
             label={{ value: 'OPERATIONAL REALITY (Evidence)', angle: -90, position: 'left', fill: '#475569', fontSize: 10, dx: -20, letterSpacing: '0.1em' }}
           />
           
-          {/* TOOLTIP FIX: wrapperStyle={{ pointerEvents: 'none' }} prevents the flashing loop */}
           <Tooltip 
             content={<CustomTooltip />} 
             cursor={{ strokeDasharray: '3 3', stroke: '#cbd5e1' }}
@@ -228,7 +239,6 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
             data={groupedData} 
             shape={renderCustomDot}
             onClick={(node) => {
-                // If cluster has multiple, we default to the first one for now
                 if (node.payload.companies && node.payload.companies.length > 0) {
                     onSelectCompany(node.payload.companies[0]);
                 }

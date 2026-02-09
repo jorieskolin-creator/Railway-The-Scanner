@@ -3,13 +3,17 @@
 # Used for the 'Refresh Database' batch process.
 
 TOP_100_COMPANIES = [
+    # --- GLOBAL REFERENCES (DYNAMICALLY UPDATED) ---
+    {"name": "Tesla", "url": "https://www.tesla.com"},
+    {"name": "Buurtzorg", "url": "https://www.buurtzorg.com"},
+
     # --- The Giants & Major Brands ---
     {"name": "Nokia Oyj", "url": "https://www.nokia.com"},
-    {"name": "Neste Oyj", "url": "https://www.neste.com"},
+    {"name": "Neste Oyj", "url": "https://www.neste.com/fi-fi"},
     {"name": "S-ryhmä", "url": "https://s-ryhma.fi"},
     {"name": "Kesko Oyj", "url": "https://www.kesko.fi"},
     {"name": "Nordea Bank Abp", "url": "https://www.nordea.com"},
-    {"name": "Kone Oyj", "url": "https://www.kone.com"},
+    {"name": "Kone Oyj", "url": "https://www.kone.fi"},
     {"name": "UPM-Kymmene Oyj", "url": "https://www.upm.com"},
     {"name": "Stora Enso Oyj", "url": "https://www.storaenso.com"},
     {"name": "Sampo Oyj", "url": "https://www.sampo.com"},
@@ -54,9 +58,9 @@ TOP_100_COMPANIES = [
     {"name": "Ahlstrom", "url": "https://www.ahlstrom.com"},
     {"name": "Olvi Oyj", "url": "https://www.olvi.fi"},
     {"name": "Paulig", "url": "https://www.pauliggroup.com"},
-    {"name": "DNA", "url": "https://www.dna.fi"},
+    {"name": "DNA", "url": "https://corporate.dna.fi"},
     {"name": "Fazer", "url": "https://www.fazergroup.com"},
-    {"name": "Supercell", "url": "https://supercell.com"},
+    {"name": "Supercell", "url": "https://supercell.com/en"},
     {"name": "Mehiläinen", "url": "https://www.mehilainen.fi"},
     {"name": "Terveystalo Oyj", "url": "https://www.terveystalo.com"},
     {"name": "Ponsse Oyj", "url": "https://www.ponsse.com"},
@@ -107,5 +111,5 @@ TOP_100_COMPANIES = [
     
     # --- Special Additions ---
     {"name": "Vivicta", "url": "https://www.vivicta.fi"},
-    {"name": "Vincit Oyj", "url": "https://www.vincit.com"} # Added as a likely intended peer if Vivicta is unknown
+    {"name": "Vincit Oyj", "url": "https://www.vincit.com"}
 ]

@@ -1,7 +1,7 @@
 
 
 
-const { useState, useEffect, useRef } = (window as any).React;
+const { useState, useEffect, useRef, useMemo } = (window as any).React;
 
 const LucideRaw = (window as any).Lucide || {};
 const Icons = new Proxy(LucideRaw, {
@@ -19,6 +19,18 @@ const CompanyModal = (window as any).CompanyModal;
 
 const IS_ADMIN_MODE = true; 
 
+// DYNAMIC REFERENCE CONFIG
+// These names will be highlighted as References in the UI, 
+// but their Data (Scores/Summary) will come from the Backend (Live Scan).
+const REFERENCE_NAMES = [
+    "Tesla",
+    "Buurtzorg",
+    "Supercell",
+    "DNA",
+    "Neste",
+    "Kone"
+];
+
 const App = () => {
   const [data, setData] = useState([]); // Lightweight Summary Data
   const [loading, setLoading] = useState(true);
@@ -34,7 +46,6 @@ const App = () => {
   const [systemStatus, setSystemStatus] = useState({ online: false, storage: false, google: false, ai: false });
   
   // ADMIN SETTINGS
-  // Default to '' (Empty String) which triggers the "Hybrid Auto-Pilot" in the backend.
   const [adminModel, setAdminModel] = useState('');
 
   // BATCH STATE
@@ -42,7 +53,6 @@ const App = () => {
   const [batchStatus, setBatchStatus] = useState({ current: 0, total: 0, isRunning: false, currentName: '', logs: [] });
   const stopBatchRef = useRef(false);
 
-  // Track previous data length to detect when new items arrive
   const prevDataLengthRef = useRef(0);
 
   const checkHealth = async () => {
@@ -69,7 +79,6 @@ const App = () => {
     checkHealth();
   }, []);
 
-  // Fetch LIGHTWEIGHT Summary Data (Initial Load)
   const fetchSummaryData = async (silent = false) => {
     try {
         if (!silent) setLoading(true);
@@ -78,10 +87,17 @@ const App = () => {
         if (response.ok) {
             const json = await response.json();
             const newData = json || [];
-            
             prevDataLengthRef.current = newData.length;
             
-            setData(newData);
+            // PROCESS REFERENCES: Flag them if they exist in the live data
+            const processed = newData.map(item => {
+                const isRef = REFERENCE_NAMES.some(refName => 
+                    item.companyName.toLowerCase().includes(refName.toLowerCase())
+                );
+                return isRef ? { ...item, isReference: true } : item;
+            });
+
+            setData(processed);
             setLastSynced(new Date().toLocaleTimeString('en-US', { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }));
         } else {
             throw new Error("Failed to fetch summary data");
@@ -94,12 +110,10 @@ const App = () => {
     }
   };
 
-  // INITIAL LOAD
   useEffect(() => {
     fetchSummaryData();
   }, []);
 
-  // Warn user before closing tab if batch is running
   useEffect(() => {
     const handleBeforeUnload = (e) => {
         if (batchStatus.isRunning) {
@@ -113,45 +127,33 @@ const App = () => {
   }, [batchStatus.isRunning]);
 
 
-  // Fetch DETAILED Data for a specific company
   const handleCompanyClick = async (summaryItem) => {
     if (!summaryItem) return;
     
     setIsLoadingDetails(true);
-    // Optimistic UI: Open modal with summary data first
     setSelectedCompany({ ...summaryItem, partial: true });
     setIsModalOpen(true);
 
     try {
         let fullData = null;
-        
-        // METHOD 1: Use the explicit URL if available
         if (summaryItem.detailsUrl) {
-            console.log("Fetching details via direct URL:", summaryItem.detailsUrl);
             const res = await fetch(`${summaryItem.detailsUrl}?t=${Date.now()}`);
-            if (res.ok) {
-                fullData = await res.json();
-            }
+            if (res.ok) fullData = await res.json();
         }
         
-        // METHOD 2: Fallback to Backend Proxy
         if (!fullData) {
-            console.log("Direct fetch failed, trying backend proxy...");
             const res = await fetch(`/company/${encodeURIComponent(summaryItem.companyName)}?t=${Date.now()}`);
-            if (res.ok) {
-                fullData = await res.json();
-            }
+            if (res.ok) fullData = await res.json();
         }
 
         if (fullData) {
-            setSelectedCompany(fullData);
+            // Apply Reference Flag to details as well to keep UI consistent (e.g. if we add badges later)
+            const isRef = REFERENCE_NAMES.some(refName => 
+                fullData.companyName.toLowerCase().includes(refName.toLowerCase())
+            );
+            setSelectedCompany({ ...fullData, isReference: isRef });
         } else {
-            console.warn("Full detailed report not found.");
-            setSelectedCompany(prev => ({ 
-                ...prev, 
-                partial: false, 
-                summary_text: "Detailed forensic report unavailable. Displaying summary index data." 
-            }));
+            setSelectedCompany(prev => ({ ...prev, partial: false, summary_text: "Detailed forensic report unavailable. Displaying summary index data." }));
         }
     } catch (e) {
         console.error("Error fetching details", e);
@@ -164,36 +166,25 @@ const App = () => {
   const handleRunScan = async (input, isFormData = false) => {
     setIsScanning(true);
     try {
-      // If it's already FormData (from ScannerInput), use it directly.
-      // If it's a JSON object (from automated calls?), convert it.
-      
       let body;
       let headers = {};
       
       if (isFormData) {
           body = input;
-          // Don't set Content-Type for FormData; browser handles it
       } else {
-          // Fallback for old JSON calls if any exist
           body = JSON.stringify({ ...input, saveToDatabase: true });
           headers = { 'Content-Type': 'application/json' };
       }
 
-      const response = await fetch(`/scan`, {
-        method: 'POST',
-        headers: headers,
-        body: body
-      });
-      
+      const response = await fetch(`/scan`, { method: 'POST', headers: headers, body: body });
       if (!response.ok) throw new Error("Scan failed");
       const json = await response.json();
       const newResult = json.data;
 
-      // Optimistically open modal and refresh background list
       setIsScannerOpen(false);
       setSelectedCompany(newResult); 
       setIsModalOpen(true);
-      fetchSummaryData(true); // Silent refresh of the main list
+      fetchSummaryData(true); 
       
     } catch (error) {
       console.error(error);
@@ -203,7 +194,7 @@ const App = () => {
     }
   };
 
-  // --- CLIENT-SIDE BATCH ORCHESTRATION ---
+  // --- BATCH LOGIC ---
   const executeBatch = async (targets, mode = "FULL") => {
       setIsBatchOpen(true);
       stopBatchRef.current = false;
@@ -213,18 +204,11 @@ const App = () => {
       if (adminModel === 'gemini-3-flash-preview') modelLabel = 'Gemini 3 Flash';
       if (adminModel === 'gemini-2.5-pro') modelLabel = 'Gemini 2.5 Pro';
       
-      setBatchStatus({ 
-          current: 0, 
-          total: 0, 
-          isRunning: true, 
-          currentName: 'Initializing...', 
-          logs: [`Starting ${mode} Batch using ${modelLabel}...`] 
-      });
+      setBatchStatus({ current: 0, total: 0, isRunning: true, currentName: 'Initializing...', logs: [`Starting ${mode} Batch using ${modelLabel}...`] });
       
       try {
         setBatchStatus(prev => ({ ...prev, total: targets.length, logs: [...prev.logs, `Loaded ${targets.length} targets.`] }));
 
-        // 2. Iterate
         for (let i = 0; i < targets.length; i++) {
             if (stopBatchRef.current) {
                  setBatchStatus(prev => ({ ...prev, isRunning: false, logs: [...prev.logs, '⛔ Batch Stopped by User.'] }));
@@ -232,32 +216,17 @@ const App = () => {
             }
 
             const target = targets[i];
-            
-            setBatchStatus(prev => ({ 
-                ...prev, 
-                current: i + 1, 
-                currentName: target.name,
-                logs: [...prev.logs, `Processing: ${target.name}...`] 
-            }));
+            setBatchStatus(prev => ({ ...prev, current: i + 1, currentName: target.name, logs: [...prev.logs, `Processing: ${target.name}...`] }));
 
             try {
-                // Perform Scan (Batch uses FormData now too for consistency, though empty files)
                 const formData = new FormData();
                 formData.append('companyName', target.name);
                 formData.append('companyUrl', target.url);
                 formData.append('reportText', "");
                 formData.append('saveToDatabase', 'true');
+                if (adminModel) formData.append('modelId', adminModel);
                 
-                // If adminModel is empty, we send empty (triggering Hybrid on backend)
-                // If it has a value, we force that model.
-                if (adminModel) {
-                    formData.append('modelId', adminModel);
-                }
-                
-                const res = await fetch('/scan', {
-                    method: 'POST',
-                    body: formData
-                });
+                const res = await fetch('/scan', { method: 'POST', body: formData });
 
                 if (res.ok) {
                     setBatchStatus(prev => ({ ...prev, logs: [...prev.logs, `✅ Success: ${target.name}`] }));
@@ -267,12 +236,9 @@ const App = () => {
             } catch (err) {
                  setBatchStatus(prev => ({ ...prev, logs: [...prev.logs, `⚠️ Network Error: ${target.name}`] }));
             }
-
-            // Small delay to let React render and not choke Vercel rate limits too hard
             await new Promise(r => setTimeout(r, 2000));
         }
         
-        // Done
         fetchSummaryData(true);
         setBatchStatus(prev => ({ ...prev, isRunning: false, currentName: 'Complete', logs: [...prev.logs, '✨ BATCH EXECUTION FINISHED.'] }));
 
@@ -285,20 +251,13 @@ const App = () => {
 
   const handleStartBatch = async () => {
     if (!IS_ADMIN_MODE) return;
-    
     const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to initiate FULL Batch Scan:");
     if (!password) return; 
-    
-    if (password !== "CoolScanner2026!!!!!") {
-        alert("ACCESS DENIED: Incorrect Password.");
-        return;
-    }
+    if (password !== "CoolScanner2026!!!!!") { alert("ACCESS DENIED: Incorrect Password."); return; }
     
     const modelLabel = adminModel === '' ? 'AUTO (Hybrid)' : adminModel;
-
     if (!confirm(`⚠️ START FULL BATCH SCAN (100+ Companies)?\n\nModel: ${modelLabel}\n\nThis will take a significant amount of time.\n\nDO NOT CLOSE THIS TAB until finished.`)) return;
     
-    // Get List
     try {
         const listRes = await fetch('/admin/company-list');
         const listJson = await listRes.json();
@@ -308,50 +267,34 @@ const App = () => {
   
   const handleTestBatch = async () => {
     if (!IS_ADMIN_MODE) return;
-    
     const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password for TEST SCAN (5 Random):");
     if (!password) return; 
+    if (password !== "CoolScanner2026!!!!!") { alert("ACCESS DENIED: Incorrect Password."); return; }
     
-    if (password !== "CoolScanner2026!!!!!") {
-        alert("ACCESS DENIED: Incorrect Password.");
-        return;
-    }
-    
-    // Get List and Shuffle
     try {
         const listRes = await fetch('/admin/company-list');
         const listJson = await listRes.json();
         const allCompanies = listJson.companies || [];
-        
-        // Shuffle and pick 5
         const shuffled = [...allCompanies].sort(() => 0.5 - Math.random());
-        const selected = shuffled.slice(0, 5);
-        
-        executeBatch(selected, "TEST (5)");
-        
+        executeBatch(shuffled.slice(0, 5), "TEST (5)");
     } catch(e) { alert("Failed to fetch company list"); }
   };
 
   const cycleAdminModel = () => {
-      // Added '' (Empty) as the first option for Hybrid Mode
       const models = ['', 'gemini-3-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro'];
       const idx = models.indexOf(adminModel);
-      const nextIdx = (idx + 1) % models.length;
-      setAdminModel(models[nextIdx]);
+      setAdminModel(models[(idx + 1) % models.length]);
   };
 
-  // Helper to get display label for Admin Button
   const getAdminModelLabel = () => {
-      if (adminModel === '') return 'DEFAULT (HYBRID: 3 PRO + 2.5 PRO)';
-      if (adminModel === 'gemini-3-pro-preview') return 'FORCE: GEMINI 3 PRO';
-      if (adminModel === 'gemini-3-flash-preview') return 'FORCE: GEMINI 3 FLASH';
-      if (adminModel === 'gemini-2.5-pro') return 'FORCE: GEMINI 2.5 PRO';
+      if (adminModel === '') return 'DEFAULT (HYBRID)';
+      if (adminModel === 'gemini-3-pro-preview') return 'FORCE: 3 PRO';
+      if (adminModel === 'gemini-3-flash-preview') return 'FORCE: 3 FLASH';
+      if (adminModel === 'gemini-2.5-pro') return 'FORCE: 2.5 PRO';
       return adminModel;
   };
 
-  const handleStopBatch = () => {
-      stopBatchRef.current = true;
-  };
+  const handleStopBatch = () => { stopBatchRef.current = true; };
 
   const handleSort = (key) => {
     let direction = 'desc';
@@ -363,39 +306,25 @@ const App = () => {
     item.companyName.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  // Helper for Archetype Logic (Strict Coordinate System)
   const getArchetype = (intent, reality) => {
       if (reality >= 50) {
-          // Upper Half
-          if (intent >= 50) {
-              // Upper Right
-              return { label: "Walk-and-Talk", color: "text-emerald-400", bg: "bg-emerald-400/10", border: "border-emerald-400/20" };
-          } else {
-              // Upper Left
-              return { label: "Silent Doer", color: "text-cyan-400", bg: "bg-cyan-400/10", border: "border-cyan-400/20" };
-          }
+          return intent >= 50 
+            ? { label: "Walk-and-Talk", color: "text-emerald-400", bg: "bg-emerald-400/10", border: "border-emerald-400/20" }
+            : { label: "Silent Doer", color: "text-cyan-400", bg: "bg-cyan-400/10", border: "border-cyan-400/20" };
       } else {
-          // Lower Half
-          if (intent >= 50) {
-              // Lower Right
-              return { label: "Talk-not-Walk", color: "text-amber-400", bg: "bg-amber-400/10", border: "border-amber-400/20" };
-          } else {
-              // Lower Left
-              return { label: "Stagnation", color: "text-slate-400", bg: "bg-slate-400/10", border: "border-slate-400/20" };
-          }
+          return intent >= 50 
+            ? { label: "Talk-not-Walk", color: "text-amber-400", bg: "bg-amber-400/10", border: "border-amber-400/20" }
+            : { label: "Stagnation", color: "text-slate-400", bg: "bg-slate-400/10", border: "border-slate-400/20" };
       }
   };
 
   const sortedData = [...filteredData].sort((a, b) => {
     if (!sortConfig) return 0;
-    
-    // Sort by computed Archetype string
     if (sortConfig.key === 'archetype') {
          const archA = getArchetype(a.intent_score, a.reality_score).label;
          const archB = getArchetype(b.intent_score, b.reality_score).label;
          return sortConfig.direction === 'asc' ? archA.localeCompare(archB) : archB.localeCompare(archA);
     }
-
     const aVal = a[sortConfig.key];
     const bVal = b[sortConfig.key];
     if (typeof aVal === 'string' && typeof bVal === 'string') return sortConfig.direction === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
@@ -435,11 +364,9 @@ const App = () => {
             </div>
             {IS_ADMIN_MODE && (
                 <>
-                {/* ADMIN MODEL SWITCHER */}
                 <button 
                   onClick={cycleAdminModel}
                   className={`hidden md:flex items-center gap-1.5 px-3 py-1.5 border rounded transition-all text-[10px] font-mono font-bold tracking-tight ${adminModel === '' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 shadow-[0_0_10px_rgba(16,185,129,0.2)]' : 'bg-amber-500/10 text-amber-300 border-amber-500/30'}`}
-                  title="Click to cycle Model Strategy (Default vs Forced)"
                 >
                     {adminModel === '' ? <Sparkles size={12} className="text-emerald-300" /> : <Cpu size={12} className="text-amber-400" />}
                     <span>{getAdminModelLabel()}</span>
@@ -490,25 +417,14 @@ const App = () => {
                 ) : (
                     <AlertTriangle size={48} className="text-amber-500/50" />
                 )}
-                
                 <div className="text-center">
-                    <h3 className="text-white font-bold text-lg">
-                        {systemStatus.storage ? "Database Ready (Empty)" : "Storage Disconnected"}
-                    </h3>
+                    <h3 className="text-white font-bold text-lg">{systemStatus.storage ? "Database Ready (Empty)" : "Storage Disconnected"}</h3>
                     <p className="text-sm max-w-md mt-2">
                         {systemStatus.storage 
-                           ? "Vercel Blob Storage is connected but contains no data. Folders will be automatically recreated upon initialization." 
-                           : "Could not connect to Vercel Blob. Please check your token or internet connection."}
+                           ? "Vercel Blob Storage is connected. Initialize via Admin Batch." 
+                           : "Could not connect to Vercel Blob."}
                     </p>
                 </div>
-                {IS_ADMIN_MODE && systemStatus.storage && (
-                    <div className="flex gap-4 mt-6">
-                        <button onClick={handleStartBatch} className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold rounded-lg transition-all flex items-center gap-2">
-                           <Database size={16} />
-                           Initialize & Seed Database
-                        </button>
-                    </div>
-                )}
              </div>
           ) : (
              <div className="bg-[#0f172a]/60 border border-white/10 rounded-2xl p-1 shadow-2xl backdrop-blur-xl">
@@ -522,51 +438,45 @@ const App = () => {
             <h2 className="text-lg font-bold text-white">Forensic Index</h2>
           </div>
           <div className="bg-[#0f172a]/70 border border-white/10 rounded-2xl overflow-hidden min-h-[200px]">
-              {data.length === 0 && !loading ? (
-                  <div className="flex items-center justify-center h-48 text-slate-500 text-sm italic">
-                      No Index Data Available.
-                  </div>
-              ) : (
-                  <table className="w-full text-sm text-left">
-                    <thead className="text-[10px] text-indigo-200 uppercase bg-black/30 border-b border-white/5">
-                      <tr>
-                        <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('companyName')}>Entity</th>
-                        <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('intent_score')}>Ambition</th>
-                        <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('reality_score')}>Reality</th>
-                        <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('archetype')}>Archetype</th>
-                        <th className="px-6 py-4">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-white/5 text-slate-300">
-                      {sortedData.map((row) => {
-                        const archetype = getArchetype(row.intent_score, row.reality_score);
-                        return (
-                        <tr key={row.id} className="hover:bg-white/5 transition-colors">
-                          <td className="px-6 py-4 font-medium text-white flex items-center gap-2">
-                              {row.companyName}
-                              {row.has_docs && <Cpu size={12} className="text-indigo-400" title="Deep Dive Docs Used" />}
-                          </td>
-                          <td className="px-6 py-4">{row.intent_score}</td>
-                          <td className="px-6 py-4">{row.reality_score}</td>
-                          <td className="px-6 py-4 font-mono text-xs">
-                             <span className={`px-2.5 py-1 rounded-md border ${archetype.bg} ${archetype.border} ${archetype.color} font-semibold uppercase tracking-wider text-[10px]`}>
-                                {archetype.label}
-                             </span>
-                          </td>
-                          <td className="px-6 py-4">
-                            <button onClick={() => handleCompanyClick(row)} className="text-cyan-400 hover:text-cyan-300 text-xs font-medium">View Report</button>
-                          </td>
-                        </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-              )}
+              <table className="w-full text-sm text-left">
+                <thead className="text-[10px] text-indigo-200 uppercase bg-black/30 border-b border-white/5">
+                  <tr>
+                    <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('companyName')}>Entity</th>
+                    <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('intent_score')}>Ambition</th>
+                    <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('reality_score')}>Reality</th>
+                    <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('archetype')}>Archetype</th>
+                    <th className="px-6 py-4">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5 text-slate-300">
+                  {sortedData.map((row) => {
+                    const archetype = getArchetype(row.intent_score, row.reality_score);
+                    return (
+                    <tr key={row.id} className="hover:bg-white/5 transition-colors">
+                      <td className="px-6 py-4 font-medium text-white flex items-center gap-2">
+                          {row.companyName}
+                          {row.isReference && <span className="text-[9px] bg-blue-500/30 text-blue-200 px-1 rounded uppercase font-bold">(Ref)</span>}
+                          {row.has_docs && <Cpu size={12} className="text-indigo-400" title="Deep Dive Docs Used" />}
+                      </td>
+                      <td className="px-6 py-4">{row.intent_score}</td>
+                      <td className="px-6 py-4">{row.reality_score}</td>
+                      <td className="px-6 py-4 font-mono text-xs">
+                         <span className={`px-2.5 py-1 rounded-md border ${archetype.bg} ${archetype.border} ${archetype.color} font-semibold uppercase tracking-wider text-[10px]`}>
+                            {archetype.label}
+                         </span>
+                      </td>
+                      <td className="px-6 py-4">
+                        <button onClick={() => handleCompanyClick(row)} className="text-cyan-400 hover:text-cyan-300 text-xs font-medium">View Report</button>
+                      </td>
+                    </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
           </div>
         </section>
       </main>
 
-      {/* SINGLE SCANNER MODAL */}
       {isScannerOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
            <div className="absolute inset-0 bg-black/90 backdrop-blur-sm" onClick={() => !isScanning && setIsScannerOpen(false)} />
@@ -588,7 +498,6 @@ const App = () => {
         </div>
       )}
 
-      {/* BATCH PROGRESS MODAL (NEW) */}
       {isBatchOpen && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
             <div className="absolute inset-0 bg-black/95 backdrop-blur-md" />
