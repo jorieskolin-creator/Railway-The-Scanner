@@ -38,24 +38,24 @@ const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] 
 
     if (isRef) {
         gapLabel = "GLOBAL REFERENCE";
-        gapColor = "text-blue-400";
+        gapColor = "text-green-400";
     }
 
     const DISPLAY_LIMIT = 12;
 
     return (
       <div 
-        className={`backdrop-blur-md border p-4 rounded-xl shadow-2xl text-xs text-white min-w-[220px] max-w-[300px] z-50 animate-in fade-in zoom-in-95 duration-200 ${isRef ? 'bg-blue-950/90 border-blue-500/50' : 'bg-[#020617]/95 border-slate-700/50'}`}
+        className={`backdrop-blur-md border p-4 rounded-xl shadow-2xl text-xs text-white min-w-[220px] max-w-[300px] z-50 animate-in fade-in zoom-in-95 duration-200 ${isRef ? 'bg-green-950/90 border-green-500/50' : 'bg-[#020617]/95 border-slate-700/50'}`}
       >
         <div className="border-b border-white/10 pb-2 mb-2">
-            <span className={`text-[10px] font-mono uppercase block mb-1 ${isRef ? 'text-blue-300' : 'text-slate-500'}`}>
+            <span className={`text-[10px] font-mono uppercase block mb-1 ${isRef ? 'text-green-300' : 'text-slate-500'}`}>
                 {companies.length > 1 ? `${companies.length} Entities at this position` : "Entity"}
             </span>
             <ul className="space-y-1">
                 {companies.slice(0, DISPLAY_LIMIT).map((c: any, i: number) => (
                     <li key={i} className="font-bold text-xs text-white truncate border-b border-white/5 last:border-0 pb-1 mb-1 last:mb-0 last:pb-0 flex items-center gap-2">
                         {c.companyName}
-                        {c.isReference && <span className="text-[9px] bg-blue-500/30 text-blue-200 px-1 rounded uppercase">(Reference)</span>}
+                        {c.isReference && <span className="text-[9px] bg-green-500/30 text-green-200 px-1 rounded uppercase">(Reference)</span>}
                     </li>
                 ))}
             </ul>
@@ -95,7 +95,7 @@ const renderCustomDot = (props: any) => {
     }
 
     if (isReference) {
-        fillColor = '#3b82f6'; // Blue for References
+        fillColor = '#22c55e'; // Green for References (Green-500)
     }
 
     // Size Logic
@@ -119,7 +119,7 @@ const renderCustomDot = (props: any) => {
                 strokeWidth={count > 1 || isReference ? 2 : 1.5} 
                 fillOpacity={0.9}
                 style={{ 
-                    filter: isReference ? 'drop-shadow(0 0 10px rgba(59, 130, 246, 0.6))' : 'drop-shadow(0 0 4px rgba(0,0,0,0.5))',
+                    filter: isReference ? 'drop-shadow(0 0 10px rgba(34, 197, 94, 0.6))' : 'drop-shadow(0 0 4px rgba(0,0,0,0.5))',
                     cursor: 'pointer',
                     transition: 'all 0.3s ease'
                 }}

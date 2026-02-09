@@ -1,6 +1,8 @@
 
+
+
 const { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Tooltip: RechartsTooltip, LineChart, Line, XAxis, YAxis, CartesianGrid, ReferenceLine } = (window as any).Recharts;
-const { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash, RefreshCw, XCircle, Search, Zap, Scale, Activity, Download, Copy, FileJson, FileCode, Check, Eye, AlertOctagon } = (window as any).Lucide;
+const { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash, RefreshCw, XCircle, Search, Zap, Scale, Activity, Download, Copy, FileJson, FileCode, Check, Eye, AlertOctagon, Info } = (window as any).Lucide;
 const { useRef, useState } = (window as any).React;
 
 const HighlightText = ({ text }) => {
@@ -63,24 +65,36 @@ const CompanySummary = ({ data }) => {
   // STRICT COORDINATE LOGIC (X=50, Y=50 Split)
   let gapColor = '#94a3b8';
   let gapLabel = "Stagnation";
+  let gapKey = "Stagnation"; // Key for looking up definition
   
   if (data.reality_score >= 50) {
       if (data.intent_score >= 50) {
           gapLabel = "Walk-and-Talk (Aligned)";
+          gapKey = "Walk-and-Talk";
           gapColor = '#10b981'; // Emerald
       } else {
           gapLabel = "Silent Doers (Surplus)";
+          gapKey = "Silent Doers";
           gapColor = '#22d3ee'; // Cyan
       }
   } else {
       if (data.intent_score >= 50) {
           gapLabel = "Talk-not-Walk (Hype)";
+          gapKey = "Talk-not-Walk";
           gapColor = '#f59e0b'; // Amber
       } else {
           gapLabel = "Stagnation (Low/Low)";
+          gapKey = "Stagnation";
           gapColor = '#fb7185'; // Rose/Red (Specific for Stagnation now)
       }
   }
+
+  const ARCHETYPE_DESCRIPTIONS = {
+    "Walk-and-Talk": "High Ambition, High Reality. Strategy is coherent with operational evidence.",
+    "Silent Doers": "Low Ambition, High Reality. Strong execution without marketing hype.",
+    "Talk-not-Walk": "High Ambition, Low Reality. 'Modernization Washing' detected.",
+    "Stagnation": "Low Ambition, Low Reality. Traditional, slow-moving, honest about limitations."
+  };
   
   let gapValueDisplay = data.reality_gap > 0 ? `+${data.reality_gap}` : `${data.reality_gap}`;
 
@@ -264,13 +278,24 @@ const CompanySummary = ({ data }) => {
             <span className="text-xs text-slate-400 mt-2 font-mono">Evidence Check</span>
             </div>
             
-            <div className="bg-white/5 backdrop-blur-md p-6 rounded-2xl border border-white/10 flex flex-col items-center justify-center relative overflow-hidden group">
-            <div className="absolute inset-0 bg-gradient-to-br from-transparent to-white/5 opacity-0 group-hover:opacity-100 transition-opacity"></div>
-            <span className="text-slate-300 font-medium mb-1 text-sm tracking-widest uppercase">Integrity Delta</span>
-            <span className="text-6xl font-black tracking-tighter" style={{ color: gapColor, textShadow: `0 0 20px ${gapColor}40` }}>
-                {gapValueDisplay}
-            </span>
-            <span className="text-xs text-slate-400 mt-2 font-mono" style={{ color: gapColor }}>{gapLabel}</span>
+            <div className="bg-white/5 backdrop-blur-md p-6 rounded-2xl border border-white/10 flex flex-col items-center justify-center relative overflow-hidden group/tooltip">
+                <div className="absolute inset-0 bg-gradient-to-br from-transparent to-white/5 opacity-0 group-hover/tooltip:opacity-100 transition-opacity"></div>
+                <span className="text-slate-300 font-medium mb-1 text-sm tracking-widest uppercase">Integrity Delta</span>
+                <span className="text-6xl font-black tracking-tighter" style={{ color: gapColor, textShadow: `0 0 20px ${gapColor}40` }}>
+                    {gapValueDisplay}
+                </span>
+                
+                {/* TOOLTIP CONTAINER */}
+                <div className="flex items-center gap-1.5 mt-2 z-10 relative cursor-help">
+                    <span className="text-xs font-mono" style={{ color: gapColor }}>{gapLabel}</span>
+                    <Info size={12} className="text-slate-500 hover:text-white transition-colors" />
+                    
+                    {/* HOVER CONTENT */}
+                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 p-3 bg-slate-900 border border-white/20 rounded-lg shadow-xl text-[10px] text-slate-300 pointer-events-none opacity-0 group-hover/tooltip:opacity-100 transition-opacity z-50 text-center leading-relaxed backdrop-blur-xl">
+                        {ARCHETYPE_DESCRIPTIONS[gapKey] || "No definition available."}
+                        <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-slate-900 border-b border-r border-white/20 rotate-45"></div>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -410,7 +435,7 @@ const CompanySummary = ({ data }) => {
             <div className="bg-white/5 p-6 rounded-2xl border border-white/10 backdrop-blur-md flex flex-col">
             <h3 className="text-lg font-bold text-white mb-6 flex items-center gap-2">
                 <span className="w-1 h-6 bg-emerald-500 rounded-full"></span>
-                Forensic Findings
+                Deep Dive Findings
             </h3>
             
             <div className="flex-grow overflow-y-auto max-h-[300px] pr-2 space-y-3 custom-scrollbar">

@@ -33,8 +33,10 @@ def get_page_text(url, timeout=10):
         response = requests.get(url, headers=headers, timeout=timeout)
         if response.status_code == 200:
             return response.text
+        else:
+            print(f"   [Scanner 1] ⚠️ HTTP Error {response.status_code} accessing {url}")
     except Exception as e:
-        pass
+        print(f"   [Scanner 1] ⚠️ Connection failed for {url}: {str(e)[:100]}...")
     return ""
 
 def extract_content_from_html(html):
@@ -56,8 +58,39 @@ def extract_content_from_html(html):
 def scrape_strategic_content(base_url: str, company_name: str = "Unknown"):
     if not base_url: return ""
     print(f"   [Scanner 1] Deep Crawl Started for: {base_url}...")
+    
     home_html = get_page_text(base_url)
-    if not home_html: return f"Automatic scraping failed for {base_url}."
+    
+    # --- FALLBACK MECHANISM ---
+    if not home_html: 
+        print(f"   [Scanner 1] ⛔ SCRAPING BLOCKED/FAILED for {base_url}.")
+        print(f"   [Scanner 1] 🔄 Initiating AI Context Retrieval (Fallback) for '{company_name}'...")
+        
+        api_key = clean_env_var(os.environ.get("API_KEY") or os.environ.get("GEMINI_API_KEY"))
+        if api_key:
+             try:
+                client = genai.Client(api_key=api_key)
+                # Ask Gemini to hallucinate (grounded) the strategy page content based on its knowledge
+                prompt = f"""
+                Write a detailed, factual summary of the corporate strategy, operating model, and core values for '{company_name}' (Domain: {base_url}).
+                
+                Simulate the content typically found on an 'About Us', 'Strategy', or 'Investor Relations' page.
+                Include specific details on:
+                1. Strategic Vision & Mission
+                2. Organizational Structure (e.g. Teams, Hierarchies, Agile models)
+                3. Business Model & Service Portfolio
+                4. Technology Approach (AI, Cloud, Digital Transformation)
+                
+                Output plain text only.
+                """
+                resp = client.models.generate_content(model='gemini-3-flash-preview', contents=prompt)
+                if resp.text:
+                    print(f"   [Scanner 1] ✅ AI Successfully retrieved strategic context for {company_name}.")
+                    return f"--- AI GENERATED CONTEXT FOR {company_name} (SCRAPE FALLBACK) ---\n{resp.text}"
+             except Exception as e:
+                print(f"   [Scanner 1] ❌ AI Fallback failed: {e}")
+
+        return f"Automatic scraping failed for {base_url}. Analyzing {company_name} based on general market knowledge."
 
     soup = BeautifulSoup(home_html, 'html.parser')
     
