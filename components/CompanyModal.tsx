@@ -1,6 +1,7 @@
 
+
 const { useState, useRef } = (window as any).React;
-const { X, RefreshCw, Calendar, Clock, Loader2: Loader2Icon, UploadCloud, File, Trash2, Cpu, Sparkles, Zap, Settings, AlertCircle, AlertOctagon, Users, ExternalLink } = (window as any).Lucide;
+const { X, RefreshCw, Calendar, Clock, Loader2: Loader2Icon, UploadCloud, File, Trash2, Cpu, Sparkles, Zap, Settings, AlertCircle, AlertOctagon, Users, ExternalLink, Copy, Info, Check } = (window as any).Lucide;
 
 const CompanySummary = (window as any).CompanySummary;
 
@@ -12,6 +13,9 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading }) => {
   // NEW: Model Strategy State
   const [showModelSelect, setShowModelSelect] = useState(false);
   const [selectedModel, setSelectedModel] = useState(''); // '' = Default Hybrid
+
+  // Pitch Copy State
+  const [pitchCopied, setPitchCopied] = useState(false);
 
   const fileInputRef = useRef(null);
 
@@ -87,6 +91,15 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading }) => {
       alert("Failed to connect to the backend scanner.");
     } finally {
       setIsRefreshing(false);
+    }
+  };
+
+  const handleCopyPitch = () => {
+    if (company.pitch_text) {
+        navigator.clipboard.writeText(company.pitch_text).then(() => {
+            setPitchCopied(true);
+            setTimeout(() => setPitchCopied(false), 2000);
+        });
     }
   };
 
@@ -173,6 +186,33 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading }) => {
                                   </div>
                               ))}
                           </div>
+                      </div>
+                  )}
+
+                  {/* STRATEGIC PITCH SECTION */}
+                  {company.pitch_text && (
+                      <div className="bg-gradient-to-r from-cyan-900/30 to-blue-900/30 p-6 rounded-2xl border border-cyan-500/30 backdrop-blur-md mt-4 shadow-lg shadow-cyan-900/10">
+                          <h3 className="text-lg font-bold text-white mb-3 flex items-center gap-2">
+                              <Sparkles className="text-cyan-400" size={20} />
+                              Strategic Outreach Pitch
+                          </h3>
+                          <div className="relative group">
+                              <div className="bg-black/40 p-5 rounded-xl border border-white/10 font-mono text-xs text-slate-300 leading-relaxed whitespace-pre-wrap">
+                                  "{company.pitch_text}"
+                              </div>
+                              <button 
+                                  onClick={handleCopyPitch}
+                                  className={`absolute top-2 right-2 p-2 rounded transition-all shadow-md flex items-center gap-2 ${pitchCopied ? 'bg-emerald-600 text-white' : 'bg-white/10 hover:bg-cyan-600 hover:text-white text-slate-400'}`}
+                                  title="Copy Pitch to Clipboard"
+                              >
+                                  {pitchCopied ? <Check size={14} /> : <Copy size={14} />}
+                                  {pitchCopied && <span className="text-[10px] font-bold">COPIED</span>}
+                              </button>
+                          </div>
+                          <p className="text-[10px] text-slate-500 mt-3 flex items-center gap-1.5 opacity-70">
+                               <Info size={12} />
+                               Generated based on detected constraints: {company.reality_checklist ? company.reality_checklist.filter(i => i.sentiment === 'negative').slice(0, 3).map(i => i.query).join(", ") : "General constraints"}
+                          </p>
                       </div>
                   )}
                </>

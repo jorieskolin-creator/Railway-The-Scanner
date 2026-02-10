@@ -9,7 +9,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 from finland_list import TOP_100_COMPANIES
 from scanner_one import analyze_intent
-from scanner_two import x_ray_search
+from scanner_two import x_ray_search, extract_json_from_text
 from knowledge_base import get_evolving_framework
 from storage import BlobStorage
 from google import genai
@@ -194,6 +194,8 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None):
 
             # 4. REAL AI SYNTHESIS
             summary_text = "Automated Analysis Complete."
+            pitch_text = "Pitch unavailable."
+            
             if gemini_client:
                 try:
                     intent_narrative = json.dumps(intent_results["breakdown"])
@@ -211,13 +213,24 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None):
                     
                     Knowledge Base Context: {knowledge_context}
 
-                    Task: Write a 175-word forensic executive summary. Be direct.
+                    Task: Generate a JSON object with 'summary' (175 words) and 'pitch' (100 words).
+                    - Summary: Diagnosis of their adaptability and gap.
+                    - Pitch: Professional cold outreach pitch proposing a Forensic Audit based on findings.
+                    
+                    Output JSON only.
                     """
                     # HYBRID STRATEGY: 
                     # Use Gemini 2.5 Pro for Synthesis.
                     # It creates better text than Flash, but uses a different quota bucket than 3 Pro.
                     resp = gemini_client.models.generate_content(model='gemini-2.5-pro', contents=prompt)
-                    if resp.text: summary_text = resp.text
+                    if resp.text: 
+                        payload = extract_json_from_text(resp.text)
+                        if payload:
+                             json_data = json.loads(payload)
+                             summary_text = json_data.get("summary", summary_text)
+                             pitch_text = json_data.get("pitch", "")
+                        else:
+                             summary_text = resp.text
                 except Exception as e:
                     print(f"   [Synthesis Error] {e}")
 
@@ -238,6 +251,7 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None):
                 "evidence_links": reality_results["links"],
                 "key_people": key_people,
                 "summary_text": summary_text,
+                "pitch_text": pitch_text,
                 "lastUpdated": timestamp,
                 "history": [],
                 "is_simulated": False 

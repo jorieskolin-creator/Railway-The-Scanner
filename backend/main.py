@@ -18,14 +18,14 @@ from google import genai
 from google.genai import types
 
 from scanner_one import analyze_intent
-from scanner_two import x_ray_search
+from scanner_two import x_ray_search, extract_json_from_text
 from storage import BlobStorage
 from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES
 from knowledge_base import get_evolving_framework
 
-# VERIFICATION LOG: v4.4.0 - Strict Coordinate Logic
-print("Starting Adaptability Scanner Backend (v4.4.0 - Strict Archetypes)...", flush=True)
+# VERIFICATION LOG: v4.5.0 - Strategic Pitch Integration
+print("Starting Adaptability Scanner Backend (v4.5.0 - Strategic Pitch)...", flush=True)
 
 def clean_env_var(value):
     if not value: return ""
@@ -97,7 +97,7 @@ async def read_root(): return FileResponse("../index.html")
 def health_check():
     token = clean_env_var(os.environ.get("BLOB_READ_WRITE_TOKEN"))
     return {
-        "status": "Adaptability Scanner API Online (v4.2.0)", 
+        "status": "Adaptability Scanner API Online (v4.5.0)", 
         "timestamp": datetime.utcnow().isoformat(),
         "storage_connected": bool(token)
     }
@@ -255,6 +255,8 @@ async def run_scan(
 
         # --- STEP 3: SYNTHESIS ---
         summary = "AI Summary Unavailable"
+        pitch = "Pitch Unavailable"
+        
         api_key = clean_env_var(os.environ.get("API_KEY") or os.environ.get("GEMINI_API_KEY"))
         
         if api_key:
@@ -303,15 +305,34 @@ async def run_scan(
                 {doc_context}
                 {washing_context}
 
-                Task: Write a 175-word forensic executive summary.
-                1. STATE THE ARCHETYPE ({archetype}) explicitly in the first sentence.
-                2. Explicitly mention the 'Summary Confidence' level if it is low (below 50).
-                3. If Washing is detected, use the term "{washing_type or 'Modernization Washing'}" explicitly.
-                4. Focus on why they are in this specific quadrant.
+                Task: Generate a JSON object with two fields: 'summary' and 'pitch'.
+
+                1. 'summary' (max 175 words):
+                   - STATE THE ARCHETYPE ({archetype}) explicitly in the first sentence.
+                   - Explicitly mention 'Summary Confidence' if low (<50).
+                   - If Washing detected, use term "{washing_type or 'Modernization Washing'}".
+                   - Focus on why they are in this quadrant.
+
+                2. 'pitch' (max 100 words):
+                   - A direct, cold-outreach pitch to a C-level executive at {companyName}.
+                   - Reference specific challenges found (e.g. silos, legacy tech, washing).
+                   - Propose a "Forensic Modernization Audit" to fix the gap.
+                   - Tone: Professional, provocative, insight-led.
+                
+                Output valid JSON only.
                 """
                 
                 response = client.models.generate_content(model=synthesis_model, contents=prompt)
-                if response.text: summary = response.text
+                
+                if response.text:
+                    payload = extract_json_from_text(response.text)
+                    if payload:
+                         json_data = json.loads(payload)
+                         summary = json_data.get("summary", summary)
+                         pitch = json_data.get("pitch", "")
+                    else:
+                         summary = response.text # Fallback for non-JSON models
+                         
             except Exception as e:
                 print(f"Gemini Synthesis Error: {e}")
 
@@ -344,6 +365,7 @@ async def run_scan(
             "evidence_links": reality_results["links"],
             "key_people": key_people,
             "summary_text": summary,
+            "pitch_text": pitch,
             "lastUpdated": new_timestamp,
             "history": history,
             "is_simulated": reality_results.get("is_simulated", False),

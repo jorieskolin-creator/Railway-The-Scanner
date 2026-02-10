@@ -47,6 +47,7 @@ interface AnalysisResult {
   evidence_links: EvidenceLink[];
   key_people?: KeyPerson[];
   summary_text: string;
+  pitch_text?: string; // NEW: Strategic Pitch
   lastUpdated: string; 
   intent_breakdown: ScannerCategoryScore[];
   metrics?: ScannerMetrics;
