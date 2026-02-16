@@ -1,6 +1,6 @@
 
 const { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Tooltip: RechartsTooltip, LineChart, Line, XAxis, YAxis, CartesianGrid, ReferenceLine } = (window as any).Recharts;
-const { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash, RefreshCw, XCircle, Search, Zap, Scale, Activity, Download, Copy, FileJson, FileCode, Check, Eye, AlertOctagon, Info } = (window as any).Lucide;
+const { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash, RefreshCw, XCircle, Search, Zap, Scale, Activity, Download, Copy, FileJson, FileCode, Check, Eye, AlertOctagon, Info, Users, Sparkles, TrendingUp } = (window as any).Lucide;
 const { useRef, useState } = (window as any).React;
 
 const HighlightText = ({ text }) => {
@@ -59,6 +59,7 @@ const HighlightText = ({ text }) => {
 const CompanySummary = ({ data }) => {
   const summaryRef = useRef(null);
   const [copied, setCopied] = useState(false);
+  const [pitchCopied, setPitchCopied] = useState(false);
 
   // STRICT COORDINATE LOGIC (X=50, Y=50 Split)
   let gapColor = '#94a3b8';
@@ -173,6 +174,15 @@ const CompanySummary = ({ data }) => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
+  };
+
+  const handleCopyPitch = () => {
+    if (data.pitch_text) {
+        navigator.clipboard.writeText(data.pitch_text).then(() => {
+            setPitchCopied(true);
+            setTimeout(() => setPitchCopied(false), 2000);
+        });
+    }
   };
 
   const handleDownloadHTML = () => {
@@ -398,6 +408,57 @@ const CompanySummary = ({ data }) => {
             </div>
         </div>
 
+        {/* FINANCIAL HEALTH INDEX */}
+        {data.financial_index != null && (
+            <div className="bg-white/5 p-6 rounded-2xl border border-white/10 backdrop-blur-md">
+                <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                    <TrendingUp className="text-cyan-400" size={20} />
+                    Financial Health Index
+                </h3>
+                <div className="flex flex-col md:flex-row items-center gap-6">
+                    {/* Big score */}
+                    <div className="flex flex-col items-center justify-center min-w-[120px]">
+                        <span className={`text-5xl font-black tracking-tighter ${
+                            data.financial_index >= 70 ? 'text-emerald-400 drop-shadow-[0_0_15px_rgba(16,185,129,0.5)]' :
+                            data.financial_index >= 45 ? 'text-amber-400 drop-shadow-[0_0_15px_rgba(245,158,11,0.5)]' :
+                            'text-rose-400 drop-shadow-[0_0_15px_rgba(244,63,94,0.5)]'
+                        }`}>{data.financial_index}</span>
+                        <span className="text-xs text-slate-400 mt-1 font-mono">/ 100</span>
+                    </div>
+
+                    {/* Sub-score bars */}
+                    <div className="flex-grow w-full grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {[
+                            { key: 'revenue_trend', label: 'Revenue Trend', icon: '📈' },
+                            { key: 'profitability', label: 'Profitability', icon: '💰' },
+                            { key: 'efficiency', label: 'Efficiency', icon: '⚡' },
+                            { key: 'investment_signal', label: 'Investment Signal', icon: '🔬' }
+                        ].map(dim => {
+                            const score = data.financial_sub_scores?.[dim.key] ?? 0;
+                            const pct = Math.round((score / 25) * 100);
+                            const barColor = score >= 18 ? 'bg-emerald-500' : score >= 12 ? 'bg-amber-500' : 'bg-rose-500';
+                            return (
+                                <div key={dim.key} className="bg-black/20 p-3 rounded-lg border border-white/5">
+                                    <div className="flex items-center justify-between mb-1.5">
+                                        <span className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">{dim.icon} {dim.label}</span>
+                                        <span className="text-xs font-mono font-bold text-slate-300">{score}/25</span>
+                                    </div>
+                                    <div className="w-full h-1.5 bg-slate-700 rounded-full">
+                                        <div className={`h-full ${barColor} rounded-full transition-all duration-500`} style={{ width: `${pct}%` }}></div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+                {data.financial_confidence != null && (
+                    <div className="mt-3 text-[10px] text-slate-500 font-mono flex items-center gap-1.5">
+                        <Eye size={10} /> Data Confidence: {data.financial_confidence}%
+                    </div>
+                )}
+            </div>
+        )}
+
         <div className="bg-gradient-to-r from-indigo-900/30 to-purple-900/30 p-8 rounded-2xl border-l-4 border-indigo-500 backdrop-blur-sm">
             <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
             <ShieldCheck className="text-indigo-400" />
@@ -517,6 +578,63 @@ const CompanySummary = ({ data }) => {
             </div>
             </div>
         </div>
+
+        {/* KEY STAKEHOLDERS SECTION */}
+        {data.key_people && data.key_people.length > 0 && (
+            <div className="bg-white/5 p-6 rounded-2xl border border-white/10 backdrop-blur-md">
+                <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                    <Users className="text-indigo-400" size={20} />
+                    Key Modernization Stakeholders
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {data.key_people.map((person, idx) => (
+                        <div key={idx} className="flex items-center justify-between p-3 rounded-lg border border-white/5 bg-black/20 hover:border-indigo-500/30 transition-colors group">
+                            <div className="flex flex-col min-w-0 mr-2">
+                                <span className="font-bold text-sm text-slate-200 truncate">{person.name}</span>
+                                <span className="text-xs text-indigo-300 truncate">{person.role}</span>
+                                {person.relevance && <span className="text-[10px] text-slate-500 mt-1 line-clamp-1">{person.relevance}</span>}
+                            </div>
+                            <a
+                                href={`https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(person.name + " " + data.companyName)}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="shrink-0 p-2 rounded-full bg-white/5 hover:bg-[#0077b5] hover:text-white text-slate-500 transition-all"
+                                title="Find on LinkedIn"
+                            >
+                                <ExternalLink size={16} />
+                            </a>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        )}
+
+        {/* STRATEGIC PITCH SECTION */}
+        {data.pitch_text && (
+            <div className="bg-gradient-to-r from-cyan-900/30 to-blue-900/30 p-6 rounded-2xl border border-cyan-500/30 backdrop-blur-md shadow-lg shadow-cyan-900/10">
+                <h3 className="text-lg font-bold text-white mb-3 flex items-center gap-2">
+                    <Sparkles className="text-cyan-400" size={20} />
+                    Strategic Outreach Pitch
+                </h3>
+                <div className="relative group">
+                    <div className="bg-black/40 p-5 rounded-xl border border-white/10 font-mono text-xs text-slate-300 leading-relaxed whitespace-pre-wrap">
+                        "{data.pitch_text}"
+                    </div>
+                    <button
+                        onClick={handleCopyPitch}
+                        className={`absolute top-2 right-2 p-2 rounded transition-all shadow-md flex items-center gap-2 ${pitchCopied ? 'bg-emerald-600 text-white' : 'bg-white/10 hover:bg-cyan-600 hover:text-white text-slate-400'}`}
+                        title="Copy Pitch to Clipboard"
+                    >
+                        {pitchCopied ? <Check size={14} /> : <Copy size={14} />}
+                        {pitchCopied && <span className="text-[10px] font-bold">COPIED</span>}
+                    </button>
+                </div>
+                <p className="text-[10px] text-slate-500 mt-3 flex items-center gap-1.5 opacity-70">
+                     <Info size={12} />
+                     Generated based on detected constraints: {data.reality_checklist ? data.reality_checklist.filter(i => i.sentiment === 'negative').slice(0, 3).map(i => i.query).join(", ") : "General constraints"}
+                </p>
+            </div>
+        )}
       </div>
     </div>
   );

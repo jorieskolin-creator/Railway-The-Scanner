@@ -10,28 +10,28 @@ const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] 
     const isRef = companies.some(c => c.isReference);
     
     // Use coordinates from the first company
-    const gap = data.reality_gap;
-    const intent = data.intent_score;
+    const financial = data.financial_index ?? data.intent_score ?? 0;
     const reality = data.reality_score;
+    const gap = financial - reality;
 
-    // Strict Quadrant Classification
-    let gapLabel = "Stagnation";
+    // Quadrant Classification (X=Financial Health, Y=Reality)
+    let gapLabel = "At Risk";
     let gapColor = "text-slate-400";
-    
+
     if (reality >= 50) {
-        if (intent >= 50) {
-            gapLabel = "Walk-and-Talk";
+        if (financial >= 50) {
+            gapLabel = "Thriving";
             gapColor = "text-emerald-400";
         } else {
-            gapLabel = "Silent Doers";
+            gapLabel = "Modernizing";
             gapColor = "text-cyan-400";
         }
     } else {
-        if (intent >= 50) {
-            gapLabel = "Talk-not-Walk";
+        if (financial >= 50) {
+            gapLabel = "Cash Cow";
             gapColor = "text-amber-400";
         } else {
-            gapLabel = "Stagnation";
+            gapLabel = "At Risk";
             gapColor = "text-rose-400";
         }
     }
@@ -77,49 +77,76 @@ const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] 
   return null;
 };
 
-// CUSTOM DOT RENDERER with Reference Pulse Support
+// Revenue tier to radius multiplier
+const getRevenueRadius = (companies: any[]) => {
+    if (!companies || companies.length === 0) return 0;
+    // Use max revenue in the group
+    const maxRev = Math.max(...companies.map(c => c.revenue_avg_3yr || 0));
+    if (maxRev >= 2000) return 4;   // XL
+    if (maxRev >= 500) return 2;    // L
+    if (maxRev >= 100) return 1;    // M
+    return 0;                        // S
+};
+
+// CUSTOM DOT RENDERER with Reference Pulse + Revenue Sizing
 const renderCustomDot = (props: any) => {
     const { cx, cy, payload } = props;
-    const { intent_score: i, reality_score: r, companies } = payload;
+    const { reality_score: r, companies } = payload;
+    const f = payload.financial_index ?? payload.intent_score ?? 0;
     const count = companies ? companies.length : 1;
     const isReference = companies ? companies.some(c => c.isReference) : payload.isReference;
 
-    // Color Logic
-    let fillColor = '#fb7185'; 
+    // Color Logic (X=Financial Health, Y=Reality)
+    let fillColor = '#fb7185';
     if (r >= 50) {
-        if (i >= 50) fillColor = '#10b981'; // Walk-and-Talk (Emerald)
-        else fillColor = '#22d3ee'; // Silent Doers (Cyan)
+        if (f >= 50) fillColor = '#10b981'; // Thriving (Emerald)
+        else fillColor = '#22d3ee'; // Modernizing (Cyan)
     } else {
-        if (i >= 50) fillColor = '#f59e0b'; // Talk-not-Walk (Amber)
-        else fillColor = '#fb7185'; // Stagnation (Rose)
+        if (f >= 50) fillColor = '#f59e0b'; // Cash Cow (Amber)
+        else fillColor = '#fb7185'; // At Risk (Rose)
     }
 
     if (isReference) {
         fillColor = '#22c55e'; // Green for References (Green-500)
     }
 
-    // Size Logic
-    const radius = Math.min(18, 8 + (count - 1) * 3);
+    // Size Logic: base from cluster count + revenue boost
+    const revenueBoost = getRevenueRadius(companies || [payload]);
+    const radius = Math.min(22, 7 + (count - 1) * 3 + revenueBoost);
 
     return (
         <g>
             {isReference && (
-                <circle cx={cx} cy={cy} r={radius + 8} fill={fillColor} opacity="0.3">
-                    <animate attributeName="r" from={radius} to={radius + 15} dur="2s" repeatCount="indefinite" />
-                    <animate attributeName="opacity" from="0.6" to="0" dur="2s" repeatCount="indefinite" />
-                </circle>
+                <>
+                    <circle
+                        cx={cx} cy={cy} r={radius + 2}
+                        fill="none" stroke="#22c55e" strokeWidth={2}
+                        style={{
+                            transformOrigin: `${cx}px ${cy}px`,
+                            animation: 'ref-pulse 2s ease-out infinite'
+                        }}
+                    />
+                    <circle
+                        cx={cx} cy={cy} r={radius + 2}
+                        fill="none" stroke="#22c55e" strokeWidth={1.5}
+                        style={{
+                            transformOrigin: `${cx}px ${cy}px`,
+                            animation: 'ref-pulse-delayed 2s ease-out infinite 0.6s'
+                        }}
+                    />
+                </>
             )}
-            
-            <circle 
-                cx={cx} 
-                cy={cy} 
-                r={radius} 
-                fill={fillColor} 
-                stroke="#fff" 
-                strokeWidth={count > 1 || isReference ? 2 : 1.5} 
+
+            <circle
+                cx={cx}
+                cy={cy}
+                r={radius}
+                fill={fillColor}
+                stroke={isReference ? '#22c55e' : '#fff'}
+                strokeWidth={isReference ? 2.5 : (count > 1 ? 2 : 1.5)}
                 fillOpacity={0.9}
-                style={{ 
-                    filter: isReference ? 'drop-shadow(0 0 10px rgba(34, 197, 94, 0.6))' : 'drop-shadow(0 0 4px rgba(0,0,0,0.5))',
+                style={{
+                    filter: isReference ? 'drop-shadow(0 0 12px rgba(34, 197, 94, 0.7)) drop-shadow(0 0 4px rgba(34, 197, 94, 0.4))' : 'drop-shadow(0 0 4px rgba(0,0,0,0.5))',
                     cursor: 'pointer',
                     transition: 'all 0.3s ease'
                 }}
@@ -139,10 +166,12 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
       const groups: { [key: string]: any } = {};
       
       data.forEach((item: any) => {
-          const key = `${item.intent_score}-${item.reality_score}`;
+          const fi = item.financial_index ?? item.intent_score;
+          const displayItem = { ...item, financial_index: fi };
+          const key = `${fi}-${item.reality_score}`;
           if (!groups[key]) {
               groups[key] = {
-                  ...item, 
+                  ...displayItem,
                   companies: [item]
               };
           } else {
@@ -183,16 +212,16 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
 
           <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.2} />
           
-          <XAxis 
-            type="number" 
-            dataKey="intent_score" 
-            name="Ambition" 
-            domain={[0, 100]} 
+          <XAxis
+            type="number"
+            dataKey="financial_index"
+            name="Financial Health"
+            domain={[0, 100]}
             stroke="#475569"
             tickLine={false}
             axisLine={{ stroke: '#334155', opacity: 0.5 }}
             tick={{ fontSize: 10, fill: '#64748b' }}
-            label={{ value: 'AMBITION INDEX (Narrative)', position: 'bottom', fill: '#475569', fontSize: 10, dy: 20, letterSpacing: '0.1em' }} 
+            label={{ value: 'FINANCIAL HEALTH INDEX', position: 'bottom', fill: '#475569', fontSize: 10, dy: 20, letterSpacing: '0.1em' }}
           />
           <YAxis 
             type="number" 
@@ -222,16 +251,16 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
           <ReferenceLine x={50} stroke="#6366f1" strokeDasharray="4 4" strokeOpacity={0.3} />
 
           <ReferenceArea x1={80} x2={98} y1={92} y2={98} stroke="none" fill="none">
-             <Label value="WALK-AND-TALK" position="insideTopRight" fill="#34d399" fontSize={10} fontWeight={900} opacity={0.8} letterSpacing="0.05em" />
+             <Label value="THRIVING" position="insideTopRight" fill="#34d399" fontSize={10} fontWeight={900} opacity={0.8} letterSpacing="0.05em" />
           </ReferenceArea>
           <ReferenceArea x1={2} x2={20} y1={92} y2={98} stroke="none" fill="none">
-             <Label value="SILENT DOERS" position="insideTopLeft" fill="#22d3ee" fontSize={10} fontWeight={700} opacity={0.7} letterSpacing="0.05em" />
+             <Label value="MODERNIZING" position="insideTopLeft" fill="#22d3ee" fontSize={10} fontWeight={700} opacity={0.7} letterSpacing="0.05em" />
           </ReferenceArea>
           <ReferenceArea x1={80} x2={98} y1={2} y2={8} stroke="none" fill="none">
-             <Label value="TALK-NOT-WALK" position="insideBottomRight" fill="#fbbf24" fontSize={10} fontWeight={700} opacity={0.7} letterSpacing="0.05em" />
+             <Label value="CASH COW" position="insideBottomRight" fill="#fbbf24" fontSize={10} fontWeight={700} opacity={0.7} letterSpacing="0.05em" />
           </ReferenceArea>
-           <ReferenceArea x1={2} x2={20} y1={2} y2={8} stroke="none" fill="none">
-             <Label value="STAGNATION" position="insideBottomLeft" fill="#fb7185" fontSize={10} fontWeight={900} opacity={0.8} letterSpacing="0.05em" />
+          <ReferenceArea x1={2} x2={20} y1={2} y2={8} stroke="none" fill="none">
+             <Label value="AT RISK" position="insideBottomLeft" fill="#fb7185" fontSize={10} fontWeight={900} opacity={0.8} letterSpacing="0.05em" />
           </ReferenceArea>
 
           <Scatter 

@@ -24,6 +24,16 @@
       .animate-pulse-glow {
         animation: pulse-glow 12s ease-in-out infinite;
       }
+      @keyframes ref-pulse {
+        0% { transform: scale(1); opacity: 0.5; }
+        80% { transform: scale(2.2); opacity: 0; }
+        100% { transform: scale(2.2); opacity: 0; }
+      }
+      @keyframes ref-pulse-delayed {
+        0% { transform: scale(1); opacity: 0.3; }
+        80% { transform: scale(2.5); opacity: 0; }
+        100% { transform: scale(2.5); opacity: 0; }
+      }
       ::-webkit-scrollbar { width: 8px; height: 8px; }
       ::-webkit-scrollbar-track { background: #1e1b4b; }
       ::-webkit-scrollbar-thumb { background: #4f46e5; border-radius: 4px; border: 2px solid #1e1b4b; }
@@ -36,34 +46,26 @@
       import { createRoot } from 'https://esm.sh/react-dom@18.2.0/client?deps=react@18.2.0';
       import * as Lucide from 'https://esm.sh/lucide-react@0.344.0?deps=react@18.2.0';
       import * as Recharts from 'https://esm.sh/recharts@2.12.3?deps=react@18.2.0,react-dom@18.2.0';
-      import { GoogleGenAI } from 'https://esm.sh/@google/genai';
-
       // 1. Set Globals and Normalize Modules
       window.React = React;
       window.ReactDOM = { createRoot };
-      
+
       // Handle ESM modules that might export via 'default' or named exports
       window.Lucide = Lucide.default || Lucide;
       window.Recharts = Recharts.default || Recharts;
-      window.GoogleGenAI = GoogleGenAI;
-      
-      // Polyfill process.env for geminiService.ts
-      window.process = { env: { API_KEY: '' } };
 
       // Debugging
       console.log("Globals initialized:", {
         React: !!window.React,
         ReactDOM: !!window.ReactDOM,
         LucideKeys: Object.keys(window.Lucide).length,
-        RechartsKeys: Object.keys(window.Recharts).length,
-        GoogleGenAI: !!window.GoogleGenAI
+        RechartsKeys: Object.keys(window.Recharts).length
       });
 
       // 2. Define App Scripts in dependency order
       const scripts = [
         "/types.ts",
         "/constants.ts",
-        "/services/geminiService.ts",
         "/components/ScannerInput.tsx",
         "/components/TruthMatrix.tsx",
         "/components/CompanySummary.tsx",

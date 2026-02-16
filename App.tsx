@@ -28,7 +28,9 @@ const REFERENCE_NAMES = [
     "Supercell",
     "DNA",
     "Neste",
-    "Kone"
+    "Kone",
+    "Rebase Consulting",
+    "Oura"
 ];
 
 const App = () => {
@@ -44,6 +46,7 @@ const App = () => {
   const [lastSynced, setLastSynced] = useState(null);
   const [sortConfig, setSortConfig] = useState({ key: 'reality_score', direction: 'desc' });
   const [systemStatus, setSystemStatus] = useState({ online: false, storage: false, google: false, ai: false });
+  const [selectedDomain, setSelectedDomain] = useState('All');
   
   // ADMIN SETTINGS
   const [adminModel, setAdminModel] = useState('');
@@ -52,6 +55,7 @@ const App = () => {
   const [isBatchOpen, setIsBatchOpen] = useState(false);
   const [batchStatus, setBatchStatus] = useState({ current: 0, total: 0, isRunning: false, currentName: '', logs: [] });
   const stopBatchRef = useRef(false);
+  const adminTokenRef = useRef('');
 
   const prevDataLengthRef = useRef(0);
 
@@ -194,29 +198,30 @@ const App = () => {
     }
   };
 
-  // --- BATCH LOGIC ---
+  // --- BATCH LOGIC (PARALLEL — 5 concurrent scans) ---
   const executeBatch = async (targets, mode = "FULL") => {
       setIsBatchOpen(true);
       stopBatchRef.current = false;
-      
-      let modelLabel = "Auto (Hybrid)";
-      if (adminModel === 'gemini-3-pro-preview') modelLabel = 'Gemini 3 Pro';
-      if (adminModel === 'gemini-3-flash-preview') modelLabel = 'Gemini 3 Flash';
-      if (adminModel === 'gemini-2.5-pro') modelLabel = 'Gemini 2.5 Pro';
-      
-      setBatchStatus({ current: 0, total: 0, isRunning: true, currentName: 'Initializing...', logs: [`Starting ${mode} Batch using ${modelLabel}...`] });
-      
+
+      let modelLabel = "Default (Gemini 3 Pro + Opus 4.6)";
+      if (adminModel === 'gemini-only') modelLabel = 'Gemini 3 Pro Only';
+      if (adminModel === 'sonnet-opus') modelLabel = 'Sonnet 4.5 + Opus 4.6';
+      if (adminModel === 'gemini-hybrid') modelLabel = 'Gemini 3 Pro + Gemini 2.5 Pro';
+
+      const MAX_PARALLEL = 5;
+      setBatchStatus({ current: 0, total: 0, isRunning: true, currentName: 'Initializing...', logs: [`Starting ${mode} Batch using ${modelLabel} (${MAX_PARALLEL} parallel)...`] });
+
       try {
         setBatchStatus(prev => ({ ...prev, total: targets.length, logs: [...prev.logs, `Loaded ${targets.length} targets.`] }));
 
-        for (let i = 0; i < targets.length; i++) {
-            if (stopBatchRef.current) {
-                 setBatchStatus(prev => ({ ...prev, isRunning: false, logs: [...prev.logs, '⛔ Batch Stopped by User.'] }));
-                 break;
-            }
+        let completed = 0;
+        let activeNames: string[] = [];
 
-            const target = targets[i];
-            setBatchStatus(prev => ({ ...prev, current: i + 1, currentName: target.name, logs: [...prev.logs, `Processing: ${target.name}...`] }));
+        const scanOne = async (target) => {
+            if (stopBatchRef.current) return;
+
+            activeNames = [...activeNames, target.name];
+            setBatchStatus(prev => ({ ...prev, currentName: activeNames.join(', '), logs: [...prev.logs, `🔄 Starting: ${target.name}...`] }));
 
             try {
                 const formData = new FormData();
@@ -225,22 +230,54 @@ const App = () => {
                 formData.append('reportText', "");
                 formData.append('saveToDatabase', 'true');
                 if (adminModel) formData.append('modelId', adminModel);
-                
-                const res = await fetch('/scan', { method: 'POST', body: formData });
+
+                const res = await fetch('/scan', {
+                    method: 'POST',
+                    body: formData,
+                    headers: { 'Authorization': `Bearer ${adminTokenRef.current}` }
+                });
+                completed++;
+                activeNames = activeNames.filter(n => n !== target.name);
 
                 if (res.ok) {
-                    setBatchStatus(prev => ({ ...prev, logs: [...prev.logs, `✅ Success: ${target.name}`] }));
+                    setBatchStatus(prev => ({ ...prev, current: completed, currentName: activeNames.join(', ') || 'waiting...', logs: [...prev.logs, `✅ Success: ${target.name} (${completed}/${targets.length})`] }));
                 } else {
-                     setBatchStatus(prev => ({ ...prev, logs: [...prev.logs, `❌ Failed: ${target.name}`] }));
+                    setBatchStatus(prev => ({ ...prev, current: completed, currentName: activeNames.join(', ') || 'waiting...', logs: [...prev.logs, `❌ Failed: ${target.name} (${completed}/${targets.length})`] }));
                 }
             } catch (err) {
-                 setBatchStatus(prev => ({ ...prev, logs: [...prev.logs, `⚠️ Network Error: ${target.name}`] }));
+                completed++;
+                activeNames = activeNames.filter(n => n !== target.name);
+                setBatchStatus(prev => ({ ...prev, current: completed, currentName: activeNames.join(', ') || 'waiting...', logs: [...prev.logs, `⚠️ Network Error: ${target.name} (${completed}/${targets.length})`] }));
             }
-            await new Promise(r => setTimeout(r, 2000));
+        };
+
+        // Parallel execution with concurrency limit
+        const queue = [...targets];
+        const running: Promise<void>[] = [];
+
+        while (queue.length > 0 || running.length > 0) {
+            if (stopBatchRef.current) {
+                setBatchStatus(prev => ({ ...prev, isRunning: false, logs: [...prev.logs, '⛔ Batch Stopped by User.'] }));
+                break;
+            }
+
+            // Fill up to MAX_PARALLEL
+            while (running.length < MAX_PARALLEL && queue.length > 0) {
+                const target = queue.shift()!;
+                const promise = scanOne(target).then(() => {
+                    running.splice(running.indexOf(promise), 1);
+                });
+                running.push(promise);
+            }
+
+            // Wait for at least one to finish before continuing
+            if (running.length > 0) {
+                await Promise.race(running);
+            }
         }
-        
+
         fetchSummaryData(true);
-        setBatchStatus(prev => ({ ...prev, isRunning: false, currentName: 'Complete', logs: [...prev.logs, '✨ BATCH EXECUTION FINISHED.'] }));
+        setBatchStatus(prev => ({ ...prev, isRunning: false, currentName: 'Complete', logs: [...prev.logs, `✨ BATCH COMPLETE: ${completed}/${targets.length} companies processed.`] }));
 
     } catch (e) {
         alert("Error starting batch.");
@@ -252,14 +289,18 @@ const App = () => {
   const handleStartBatch = async () => {
     if (!IS_ADMIN_MODE) return;
     const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to initiate FULL Batch Scan:");
-    if (!password) return; 
-    if (password !== "CoolScanner2026!!!!!") { alert("ACCESS DENIED: Incorrect Password."); return; }
-    
-    const modelLabel = adminModel === '' ? 'AUTO (Hybrid)' : adminModel;
+    if (!password) return;
+
+    const modelLabel = adminModel === '' ? 'Default (Gemini 3 Pro + Opus 4.6)' : getAdminModelLabel();
     if (!confirm(`⚠️ START FULL BATCH SCAN (100+ Companies)?\n\nModel: ${modelLabel}\n\nThis will take a significant amount of time.\n\nDO NOT CLOSE THIS TAB until finished.`)) return;
-    
+
     try {
-        const listRes = await fetch('/admin/company-list');
+        const listRes = await fetch('/admin/company-list', {
+            headers: { 'Authorization': `Bearer ${password}` }
+        });
+        if (listRes.status === 401) { alert("ACCESS DENIED: Incorrect Password."); return; }
+        if (!listRes.ok) throw new Error("Failed to fetch company list");
+        adminTokenRef.current = password;
         const listJson = await listRes.json();
         executeBatch(listJson.companies || [], "FULL");
     } catch(e) { alert("Failed to fetch company list"); }
@@ -268,11 +309,15 @@ const App = () => {
   const handleTestBatch = async () => {
     if (!IS_ADMIN_MODE) return;
     const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password for TEST SCAN (5 Random):");
-    if (!password) return; 
-    if (password !== "CoolScanner2026!!!!!") { alert("ACCESS DENIED: Incorrect Password."); return; }
-    
+    if (!password) return;
+
     try {
-        const listRes = await fetch('/admin/company-list');
+        const listRes = await fetch('/admin/company-list', {
+            headers: { 'Authorization': `Bearer ${password}` }
+        });
+        if (listRes.status === 401) { alert("ACCESS DENIED: Incorrect Password."); return; }
+        if (!listRes.ok) throw new Error("Failed to fetch company list");
+        adminTokenRef.current = password;
         const listJson = await listRes.json();
         const allCompanies = listJson.companies || [];
         const shuffled = [...allCompanies].sort(() => 0.5 - Math.random());
@@ -281,16 +326,16 @@ const App = () => {
   };
 
   const cycleAdminModel = () => {
-      const models = ['', 'gemini-3-pro-preview', 'gemini-3-flash-preview', 'gemini-2.5-pro'];
+      const models = ['', 'gemini-only', 'sonnet-opus', 'gemini-hybrid'];
       const idx = models.indexOf(adminModel);
       setAdminModel(models[(idx + 1) % models.length]);
   };
 
   const getAdminModelLabel = () => {
-      if (adminModel === '') return 'DEFAULT (HYBRID)';
-      if (adminModel === 'gemini-3-pro-preview') return 'FORCE: 3 PRO';
-      if (adminModel === 'gemini-3-flash-preview') return 'FORCE: 3 FLASH';
-      if (adminModel === 'gemini-2.5-pro') return 'FORCE: 2.5 PRO';
+      if (adminModel === '') return 'GEMINI 3 PRO + OPUS 4.6';
+      if (adminModel === 'gemini-only') return 'GEMINI 3 PRO ONLY';
+      if (adminModel === 'sonnet-opus') return 'SONNET 4.5 + OPUS 4.6';
+      if (adminModel === 'gemini-hybrid') return 'GEMINI 3 PRO + 2.5 PRO';
       return adminModel;
   };
 
@@ -302,27 +347,63 @@ const App = () => {
     setSortConfig({ key, direction });
   };
 
-  const filteredData = data.filter(item => 
-    item.companyName.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  // Revenue tier helper
+  const getRevenueTier = (revenue) => {
+    if (!revenue) return { label: '-', size: 'S' };
+    if (revenue >= 2000) return { label: 'XL', size: 'XL' };
+    if (revenue >= 500) return { label: 'L', size: 'L' };
+    if (revenue >= 100) return { label: 'M', size: 'M' };
+    return { label: 'S', size: 'S' };
+  };
 
-  const getArchetype = (intent, reality) => {
+  // Collect unique domains from data
+  const availableDomains = useMemo(() => {
+    const domains = new Set();
+    data.forEach(item => { if (item.domain) domains.add(item.domain); });
+    return ['All', ...Array.from(domains).sort()];
+  }, [data]);
+
+  // Domain-level stats for gauge cards
+  const domainStats = useMemo(() => {
+    const items = selectedDomain === 'All' ? data : data.filter(d => d.domain === selectedDomain);
+    if (items.length === 0) return null;
+    const avgIntent = Math.round(items.reduce((s, i) => s + (i.intent_score || 0), 0) / items.length);
+    const avgReality = Math.round(items.reduce((s, i) => s + (i.reality_score || 0), 0) / items.length);
+    const financialItems = items.filter(i => i.financial_index != null);
+    const avgFinancial = financialItems.length > 0 ? Math.round(financialItems.reduce((s, i) => s + i.financial_index, 0) / financialItems.length) : null;
+    let archetypes = { 'Thriving': 0, 'Modernizing': 0, 'Cash Cow': 0, 'At Risk': 0 };
+    items.forEach(i => {
+      const r = i.reality_score || 0;
+      const f = i.financial_index ?? i.intent_score ?? 0;
+      if (r >= 50) { f >= 50 ? archetypes['Thriving']++ : archetypes['Modernizing']++; }
+      else { f >= 50 ? archetypes['Cash Cow']++ : archetypes['At Risk']++; }
+    });
+    return { count: items.length, avgIntent, avgReality, avgFinancial, archetypes };
+  }, [data, selectedDomain]);
+
+  const filteredData = data.filter(item => {
+    const matchesSearch = item.companyName.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesDomain = selectedDomain === 'All' || item.domain === selectedDomain;
+    return matchesSearch && matchesDomain;
+  });
+
+  const getArchetype = (reality: number, financial: number) => {
       if (reality >= 50) {
-          return intent >= 50 
-            ? { label: "Walk-and-Talk", color: "text-emerald-400", bg: "bg-emerald-400/10", border: "border-emerald-400/20" }
-            : { label: "Silent Doer", color: "text-cyan-400", bg: "bg-cyan-400/10", border: "border-cyan-400/20" };
+          return financial >= 50
+            ? { label: "Thriving", color: "text-emerald-400", bg: "bg-emerald-400/10", border: "border-emerald-400/20" }
+            : { label: "Modernizing", color: "text-cyan-400", bg: "bg-cyan-400/10", border: "border-cyan-400/20" };
       } else {
-          return intent >= 50 
-            ? { label: "Talk-not-Walk", color: "text-amber-400", bg: "bg-amber-400/10", border: "border-amber-400/20" }
-            : { label: "Stagnation", color: "text-slate-400", bg: "bg-slate-400/10", border: "border-slate-400/20" };
+          return financial >= 50
+            ? { label: "Cash Cow", color: "text-amber-400", bg: "bg-amber-400/10", border: "border-amber-400/20" }
+            : { label: "At Risk", color: "text-rose-400", bg: "bg-rose-400/10", border: "border-rose-400/20" };
       }
   };
 
   const sortedData = [...filteredData].sort((a, b) => {
     if (!sortConfig) return 0;
     if (sortConfig.key === 'archetype') {
-         const archA = getArchetype(a.intent_score, a.reality_score).label;
-         const archB = getArchetype(b.intent_score, b.reality_score).label;
+         const archA = getArchetype(a.reality_score, a.financial_index ?? a.intent_score ?? 0).label;
+         const archB = getArchetype(b.reality_score, b.financial_index ?? b.intent_score ?? 0).label;
          return sortConfig.direction === 'asc' ? archA.localeCompare(archB) : archB.localeCompare(archA);
     }
     const aVal = a[sortConfig.key];
@@ -428,44 +509,139 @@ const App = () => {
              </div>
           ) : (
              <div className="bg-[#0f172a]/60 border border-white/10 rounded-2xl p-1 shadow-2xl backdrop-blur-xl">
-                <TruthMatrix data={data} onSelectCompany={handleCompanyClick} />
+                <TruthMatrix data={filteredData} onSelectCompany={handleCompanyClick} />
              </div>
+          )}
+
+          {/* --- DOMAIN FILTER TABS --- */}
+          {data.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-3">
+              {availableDomains.map(domain => (
+                <button
+                  key={domain}
+                  onClick={() => setSelectedDomain(domain)}
+                  className={`px-3 py-1 rounded-full text-[10px] font-mono font-semibold uppercase tracking-wide transition-all border ${
+                    selectedDomain === domain
+                      ? 'bg-cyan-500/20 text-cyan-200 border-cyan-500/50 shadow-[0_0_8px_rgba(34,211,238,0.15)]'
+                      : 'bg-white/5 text-slate-400 border-white/10 hover:bg-white/10 hover:text-slate-200'
+                  }`}
+                >
+                  {domain}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* --- DOMAIN GAUGE CARDS --- */}
+          {domainStats && data.length > 0 && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-2">
+              <div className="bg-[#0f172a]/70 border border-white/10 rounded-xl p-4">
+                <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono mb-2">Avg Ambition</div>
+                <div className="text-2xl font-bold text-indigo-300">{domainStats.avgIntent}</div>
+                <div className="w-full h-1.5 bg-slate-800 rounded-full mt-2 overflow-hidden">
+                  <div className="h-full bg-indigo-500 rounded-full transition-all" style={{ width: `${domainStats.avgIntent}%` }}></div>
+                </div>
+              </div>
+              <div className="bg-[#0f172a]/70 border border-white/10 rounded-xl p-4">
+                <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono mb-2">Avg Reality</div>
+                <div className="text-2xl font-bold text-cyan-300">{domainStats.avgReality}</div>
+                <div className="w-full h-1.5 bg-slate-800 rounded-full mt-2 overflow-hidden">
+                  <div className="h-full bg-cyan-500 rounded-full transition-all" style={{ width: `${domainStats.avgReality}%` }}></div>
+                </div>
+              </div>
+              <div className="bg-[#0f172a]/70 border border-white/10 rounded-xl p-4">
+                <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono mb-2">Companies</div>
+                <div className="text-2xl font-bold text-white">{domainStats.count}</div>
+                <div className="text-[10px] text-slate-500 mt-2 font-mono">
+                  {selectedDomain === 'All' ? 'All domains' : selectedDomain}
+                </div>
+              </div>
+              <div className="bg-[#0f172a]/70 border border-white/10 rounded-xl p-4">
+                <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono mb-2">Archetype Split</div>
+                <div className="flex gap-1 mt-1">
+                  {Object.entries(domainStats.archetypes).map(([arch, count]) => {
+                    const total = domainStats.count;
+                    const pct = total > 0 ? Math.round(((count as number) / total) * 100) : 0;
+                    const colors = {
+                      'Thriving': 'bg-emerald-500',
+                      'Modernizing': 'bg-cyan-500',
+                      'Cash Cow': 'bg-amber-500',
+                      'At Risk': 'bg-rose-500'
+                    };
+                    if (pct === 0) return null;
+                    return <div key={arch} className={`h-6 rounded ${colors[arch]}`} style={{ width: `${pct}%`, minWidth: pct > 0 ? '8px' : '0' }} title={`${arch}: ${count} (${pct}%)`}></div>;
+                  })}
+                </div>
+                <div className="flex justify-between text-[8px] text-slate-600 mt-1.5 font-mono">
+                  <span className="text-emerald-500">{domainStats.archetypes['Thriving']} Thr</span>
+                  <span className="text-cyan-500">{domainStats.archetypes['Modernizing']} Mod</span>
+                  <span className="text-amber-500">{domainStats.archetypes['Cash Cow']} CC</span>
+                  <span className="text-rose-500">{domainStats.archetypes['At Risk']} AR</span>
+                </div>
+              </div>
+            </div>
           )}
         </section>
 
         <section className="space-y-4">
-          <div className="flex justify-between items-center">
+          <div className="flex flex-col md:flex-row justify-between md:items-center gap-2">
             <h2 className="text-lg font-bold text-white">Forensic Index</h2>
+            <div className="flex gap-3 text-[10px] font-mono text-slate-500">
+              <span><span className="text-slate-300 font-bold">S</span> &lt;100M</span>
+              <span><span className="text-slate-300 font-bold">M</span> 100-499M</span>
+              <span><span className="text-slate-300 font-bold">L</span> 500M-2B</span>
+              <span><span className="text-slate-300 font-bold">XL</span> &gt;2B revenue (EUR)</span>
+            </div>
           </div>
           <div className="bg-[#0f172a]/70 border border-white/10 rounded-2xl overflow-hidden min-h-[200px]">
               <table className="w-full text-sm text-left">
                 <thead className="text-[10px] text-indigo-200 uppercase bg-black/30 border-b border-white/5">
                   <tr>
-                    <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('companyName')}>Entity</th>
-                    <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('intent_score')}>Ambition</th>
-                    <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('reality_score')}>Reality</th>
-                    <th className="px-6 py-4 cursor-pointer" onClick={() => handleSort('archetype')}>Archetype</th>
-                    <th className="px-6 py-4">Action</th>
+                    <th className="px-4 py-4 cursor-pointer" onClick={() => handleSort('companyName')}>Entity</th>
+                    <th className="px-3 py-4 cursor-pointer hidden md:table-cell" onClick={() => handleSort('domain')}>Domain</th>
+                    <th className="px-3 py-4 cursor-pointer" onClick={() => handleSort('intent_score')}>Ambition</th>
+                    <th className="px-3 py-4 cursor-pointer" onClick={() => handleSort('reality_score')}>Reality</th>
+                    <th className="px-3 py-4 cursor-pointer hidden md:table-cell" onClick={() => handleSort('financial_index')}>Financial</th>
+                    <th className="px-3 py-4 cursor-pointer hidden lg:table-cell" onClick={() => handleSort('revenue_avg_3yr')}>Size</th>
+                    <th className="px-3 py-4 cursor-pointer" onClick={() => handleSort('archetype')}>Archetype</th>
+                    <th className="px-3 py-4">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5 text-slate-300">
                   {sortedData.map((row) => {
-                    const archetype = getArchetype(row.intent_score, row.reality_score);
+                    const archetype = getArchetype(row.reality_score, row.financial_index ?? row.intent_score ?? 0);
+                    const revTier = getRevenueTier(row.revenue_avg_3yr);
+                    const lowConfidence = row.confidence_score != null && row.confidence_score < 50;
+                    const tierColors = { XL: 'text-violet-300 bg-violet-500/15 border-violet-500/30', L: 'text-blue-300 bg-blue-500/15 border-blue-500/30', M: 'text-slate-300 bg-slate-500/15 border-slate-500/30', S: 'text-slate-500 bg-slate-500/10 border-slate-500/20' };
                     return (
                     <tr key={row.id} className="hover:bg-white/5 transition-colors">
-                      <td className="px-6 py-4 font-medium text-white flex items-center gap-2">
+                      <td className="px-4 py-3 font-medium text-white">
+                        <div className="flex items-center gap-2">
                           {row.companyName}
-                          {row.isReference && <span className="text-[9px] bg-blue-500/30 text-blue-200 px-1 rounded uppercase font-bold">(Ref)</span>}
+                          {row.isReference && <span className="text-[9px] bg-green-500/30 text-green-200 px-1 rounded uppercase font-bold">(Ref)</span>}
                           {row.has_docs && <Cpu size={12} className="text-indigo-400" title="Deep Dive Docs Used" />}
+                          {lowConfidence && <span className="text-[9px] bg-amber-500/20 text-amber-300 px-1 rounded font-mono" title={`Confidence: ${row.confidence_score}/100`}>?</span>}
+                        </div>
                       </td>
-                      <td className="px-6 py-4">{row.intent_score}</td>
-                      <td className="px-6 py-4">{row.reality_score}</td>
-                      <td className="px-6 py-4 font-mono text-xs">
+                      <td className="px-3 py-3 hidden md:table-cell">
+                        <span className="text-[10px] font-mono text-slate-500 truncate block max-w-[120px]">{row.domain || '-'}</span>
+                      </td>
+                      <td className="px-3 py-3">{row.intent_score}</td>
+                      <td className="px-3 py-3">{row.reality_score}</td>
+                      <td className="px-3 py-3 hidden md:table-cell">
+                        {row.financial_index != null ? <span className="font-mono">{row.financial_index}</span> : <span className="text-slate-600">-</span>}
+                      </td>
+                      <td className="px-3 py-3 hidden lg:table-cell">
+                        <span className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded border ${tierColors[revTier.size]}`}>
+                          {revTier.label}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3 font-mono text-xs">
                          <span className={`px-2.5 py-1 rounded-md border ${archetype.bg} ${archetype.border} ${archetype.color} font-semibold uppercase tracking-wider text-[10px]`}>
                             {archetype.label}
                          </span>
                       </td>
-                      <td className="px-6 py-4">
+                      <td className="px-3 py-3">
                         <button onClick={() => handleCompanyClick(row)} className="text-cyan-400 hover:text-cyan-300 text-xs font-medium">View Report</button>
                       </td>
                     </tr>

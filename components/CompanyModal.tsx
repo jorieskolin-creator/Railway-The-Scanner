@@ -1,7 +1,7 @@
 
 
 const { useState, useRef } = (window as any).React;
-const { X, RefreshCw, Calendar, Clock, Loader2: Loader2Icon, UploadCloud, File, Trash2, Cpu, Sparkles, Zap, Settings, AlertCircle, AlertOctagon, Users, ExternalLink, Copy, Info, Check } = (window as any).Lucide;
+const { X, RefreshCw, Calendar, Clock, Loader2: Loader2Icon, UploadCloud, File, Trash2, Cpu, Sparkles, Zap, Settings, AlertCircle, AlertOctagon } = (window as any).Lucide;
 
 const CompanySummary = (window as any).CompanySummary;
 
@@ -13,9 +13,6 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading }) => {
   // NEW: Model Strategy State
   const [showModelSelect, setShowModelSelect] = useState(false);
   const [selectedModel, setSelectedModel] = useState(''); // '' = Default Hybrid
-
-  // Pitch Copy State
-  const [pitchCopied, setPitchCopied] = useState(false);
 
   const fileInputRef = useRef(null);
 
@@ -45,13 +42,9 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading }) => {
   };
 
   const handleRefresh = async () => {
-    // PASSWORD PROTECTION
+    // PASSWORD PROTECTION — validated server-side via ADMIN_SECRET env var
     const password = prompt("AUTHENTICATION REQUIRED\n\nDatabase is in Protected Mode to preserve freshness.\nEnter Admin Password to force a deep refresh:");
     if (!password) return;
-    if (password !== "CoolScanner2026!!!!!") {
-        alert("ACCESS DENIED: Incorrect Password.\n\nTip: You can still run a fresh scan via 'New Diagnosis' on the main dashboard.");
-        return;
-    }
 
     setIsRefreshing(true);
     try {
@@ -59,14 +52,20 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading }) => {
       const formData = new FormData();
       formData.append('companyName', company.companyName);
       formData.append('companyUrl', company.companyUrl || "");
-      formData.append('reportText', "");
+
+      // Include existing summary + pitch as context for the rescan
+      const contextParts = [];
+      if (company.summary_text) contextParts.push(`--- PREVIOUS SUMMARY ---\n${company.summary_text}`);
+      if (company.pitch_text) contextParts.push(`--- PREVIOUS PITCH ---\n${company.pitch_text}`);
+      formData.append('reportText', contextParts.join('\n\n'));
+
       formData.append('saveToDatabase', 'true');
-      
-      // NEW: Append Model ID if selected
+
+      // Append Model ID if selected
       if (selectedModel) {
           formData.append('modelId', selectedModel);
       }
-      
+
       // Append files if any
       refreshFiles.forEach(file => {
           formData.append('files', file);
@@ -74,9 +73,14 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading }) => {
 
       const response = await fetch(`/scan`, {
         method: 'POST',
-        body: formData // No Content-Type header needed (browser sets it with boundary)
+        body: formData,
+        headers: { 'Authorization': `Bearer ${password}` }
       });
 
+      if (response.status === 401) {
+        alert("ACCESS DENIED: Incorrect Password.\n\nTip: You can still run a fresh scan via 'New Diagnosis' on the main dashboard.");
+        return;
+      }
       if (!response.ok) throw new Error("Refresh failed");
       const json = await response.json();
       onUpdate(json.data);
@@ -91,15 +95,6 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading }) => {
       alert("Failed to connect to the backend scanner.");
     } finally {
       setIsRefreshing(false);
-    }
-  };
-
-  const handleCopyPitch = () => {
-    if (company.pitch_text) {
-        navigator.clipboard.writeText(company.pitch_text).then(() => {
-            setPitchCopied(true);
-            setTimeout(() => setPitchCopied(false), 2000);
-        });
     }
   };
 
@@ -158,63 +153,6 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading }) => {
            ) : (
                <>
                   <CompanySummary data={company} />
-
-                  {/* KEY STAKEHOLDERS SECTION */}
-                  {company.key_people && company.key_people.length > 0 && (
-                      <div className="bg-white/5 p-6 rounded-2xl border border-white/10 backdrop-blur-md">
-                          <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                              <Users className="text-indigo-400" size={20} />
-                              Key Modernization Stakeholders
-                          </h3>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                              {company.key_people.map((person, idx) => (
-                                  <div key={idx} className="flex items-center justify-between p-3 rounded-lg border border-white/5 bg-black/20 hover:border-indigo-500/30 transition-colors group">
-                                      <div className="flex flex-col min-w-0 mr-2">
-                                          <span className="font-bold text-sm text-slate-200 truncate">{person.name}</span>
-                                          <span className="text-xs text-indigo-300 truncate">{person.role}</span>
-                                          {person.relevance && <span className="text-[10px] text-slate-500 mt-1 line-clamp-1">{person.relevance}</span>}
-                                      </div>
-                                      <a 
-                                          href={`https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(person.name + " " + company.companyName)}`}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                          className="shrink-0 p-2 rounded-full bg-white/5 hover:bg-[#0077b5] hover:text-white text-slate-500 transition-all"
-                                          title="Find on LinkedIn"
-                                      >
-                                          <ExternalLink size={16} />
-                                      </a>
-                                  </div>
-                              ))}
-                          </div>
-                      </div>
-                  )}
-
-                  {/* STRATEGIC PITCH SECTION */}
-                  {company.pitch_text && (
-                      <div className="bg-gradient-to-r from-cyan-900/30 to-blue-900/30 p-6 rounded-2xl border border-cyan-500/30 backdrop-blur-md mt-4 shadow-lg shadow-cyan-900/10">
-                          <h3 className="text-lg font-bold text-white mb-3 flex items-center gap-2">
-                              <Sparkles className="text-cyan-400" size={20} />
-                              Strategic Outreach Pitch
-                          </h3>
-                          <div className="relative group">
-                              <div className="bg-black/40 p-5 rounded-xl border border-white/10 font-mono text-xs text-slate-300 leading-relaxed whitespace-pre-wrap">
-                                  "{company.pitch_text}"
-                              </div>
-                              <button 
-                                  onClick={handleCopyPitch}
-                                  className={`absolute top-2 right-2 p-2 rounded transition-all shadow-md flex items-center gap-2 ${pitchCopied ? 'bg-emerald-600 text-white' : 'bg-white/10 hover:bg-cyan-600 hover:text-white text-slate-400'}`}
-                                  title="Copy Pitch to Clipboard"
-                              >
-                                  {pitchCopied ? <Check size={14} /> : <Copy size={14} />}
-                                  {pitchCopied && <span className="text-[10px] font-bold">COPIED</span>}
-                              </button>
-                          </div>
-                          <p className="text-[10px] text-slate-500 mt-3 flex items-center gap-1.5 opacity-70">
-                               <Info size={12} />
-                               Generated based on detected constraints: {company.reality_checklist ? company.reality_checklist.filter(i => i.sentiment === 'negative').slice(0, 3).map(i => i.query).join(", ") : "General constraints"}
-                          </p>
-                      </div>
-                  )}
                </>
            )}
         </div>
@@ -255,36 +193,36 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading }) => {
                        <button onClick={() => setShowModelSelect(false)}><X size={12} className="text-indigo-400 hover:text-white" /></button>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
-                    <button 
-                        onClick={() => setSelectedModel('')} 
+                    <button
+                        onClick={() => setSelectedModel('')}
                         className={`px-2 py-2 rounded text-[10px] border transition-all flex flex-col items-center gap-1 ${selectedModel === '' ? 'bg-emerald-600 text-white border-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
                     >
-                        <span className="font-bold flex items-center gap-1"><Sparkles size={10} /> HYBRID (DEFAULT)</span>
-                        <span className="text-[9px] opacity-90 scale-90">3 Pro (Logic) + 2.5 Pro (Text)</span>
+                        <span className="font-bold flex items-center gap-1"><Sparkles size={10} /> DEFAULT</span>
+                        <span className="text-[9px] opacity-90 scale-90">Gemini 3 Pro + Opus 4.6</span>
                     </button>
-                    
-                    <button 
-                        onClick={() => setSelectedModel('gemini-3-pro-preview')} 
-                        className={`px-2 py-2 rounded text-[10px] border transition-all flex flex-col items-center gap-1 ${selectedModel === 'gemini-3-pro-preview' ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
+
+                    <button
+                        onClick={() => setSelectedModel('gemini-only')}
+                        className={`px-2 py-2 rounded text-[10px] border transition-all flex flex-col items-center gap-1 ${selectedModel === 'gemini-only' ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
                     >
-                        <span className="font-bold">FORCE 3 PRO</span>
-                        <span className="text-[9px] opacity-70 scale-90">Max Logic & Reasoning</span>
+                        <span className="font-bold">GEMINI 3 PRO</span>
+                        <span className="text-[9px] opacity-70 scale-90">Search + Synthesis</span>
                     </button>
-                    
-                    <button 
-                        onClick={() => setSelectedModel('gemini-3-flash-preview')} 
-                        className={`px-2 py-2 rounded text-[10px] border transition-all flex flex-col items-center gap-1 ${selectedModel === 'gemini-3-flash-preview' ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
+
+                    <button
+                        onClick={() => setSelectedModel('sonnet-opus')}
+                        className={`px-2 py-2 rounded text-[10px] border transition-all flex flex-col items-center gap-1 ${selectedModel === 'sonnet-opus' ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
                     >
-                        <span className="font-bold">FORCE 3 FLASH</span>
-                        <span className="text-[9px] opacity-70 scale-90">Max Speed & Througput</span>
+                        <span className="font-bold">SONNET + OPUS</span>
+                        <span className="text-[9px] opacity-70 scale-90">Sonnet 4.5 + Opus 4.6</span>
                     </button>
-                    
-                    <button 
-                        onClick={() => setSelectedModel('gemini-2.5-pro')} 
-                        className={`px-2 py-2 rounded text-[10px] border transition-all flex flex-col items-center gap-1 ${selectedModel === 'gemini-2.5-pro' ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
+
+                    <button
+                        onClick={() => setSelectedModel('gemini-hybrid')}
+                        className={`px-2 py-2 rounded text-[10px] border transition-all flex flex-col items-center gap-1 ${selectedModel === 'gemini-hybrid' ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
                     >
-                        <span className="font-bold">FORCE 2.5 PRO</span>
-                        <span className="text-[9px] opacity-70 scale-90">Balanced Legacy</span>
+                        <span className="font-bold">GEMINI HYBRID</span>
+                        <span className="text-[9px] opacity-70 scale-90">3 Pro + 2.5 Pro</span>
                     </button>
                   </div>
               </div>
@@ -295,7 +233,7 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading }) => {
                 onClick={() => { setShowModelSelect(!showModelSelect); setShowUpload(false); }}
                 disabled={isRefreshing}
                 className={`px-3 py-3 rounded-lg border flex items-center justify-center gap-2 transition-all min-w-[50px] ${showModelSelect || selectedModel !== '' ? 'bg-amber-500/10 text-amber-300 border-amber-500/30' : 'bg-white/5 text-slate-400 border-white/10 hover:bg-white/10'}`}
-                title="Select Gemini Model"
+                title="Select Model Strategy"
               >
                  <Settings size={16} />
                  {selectedModel && <span className="text-[10px] font-bold">OVERRIDE</span>}
@@ -327,7 +265,7 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading }) => {
                 ) : (
                   <>
                     <RefreshCw size={16} />
-                    {refreshFiles.length > 0 ? "Deep Scan (Docs)" : selectedModel ? "Scan (Custom Model)" : "Refresh Scan (Hybrid)"}
+                    {refreshFiles.length > 0 ? "Deep Scan (Docs)" : selectedModel ? "Refresh Scan (Custom)" : "Refresh Scan (Default)"}
                   </>
                 )}
               </button>

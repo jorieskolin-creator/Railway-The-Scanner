@@ -11,6 +11,10 @@ It fetches the 'Single Source of Truth' from the external URL provided.
 # The Single Source of Truth URL provided
 REMOTE_KNOWLEDGE_URL = "https://l9fgwjm9p1o6atow.public.blob.vercel-storage.com/tactics.json"
 
+# In-memory cache: avoids re-fetching the same JSON on every company during batch runs.
+# Cleared automatically on process restart (Railway redeploy).
+_kb_cache = {"content": None}
+
 # Hardcoded fallback in case the URL is unreachable
 FALLBACK_FRAMEWORK = """
 # ROLE & METHODOLOGY
@@ -58,7 +62,12 @@ def get_evolving_framework():
     """
     Fetches the latest Evolving Modernization framework from the remote JSON source.
     Falls back to hardcoded text if the remote source is unreachable.
+    Uses in-memory cache to avoid redundant HTTP fetches during batch runs.
     """
+    # Return cached version if available (same process / same batch run)
+    if _kb_cache["content"]:
+        return _kb_cache["content"]
+
     try:
         # 1. Try to fetch from the URL
         print(f"Fetching Knowledge Base from {REMOTE_KNOWLEDGE_URL}...")
@@ -66,12 +75,12 @@ def get_evolving_framework():
         
         if response.status_code == 200:
             data = response.json()
-            
+
             # 2. Format JSON into a prompt string
             # We assume the JSON contains the detailed Tactics/Methodology.
             kb_content = json.dumps(data, indent=2)
-            
-            return f"""
+
+            result = f"""
 # ROLE & METHODOLOGY
 You are a Senior Market Forensics Analyst specializing in the "Evolving Modernization" framework.
 Your task is to diagnose the "Reality Gap" between a company's stated Intent (Narrative) and their Operational Reality (Evidence).
@@ -97,6 +106,8 @@ Classify the company into one of these buckets based on the Data:
 - **Evidence First:** If the Reality Score is low, trust the evidence (e.g., "micromanagement searches") over the narrative.
 - **Language:** Use the terminology found in the KNOWLEDGE BASE JSON above (e.g., "Digital Taylorism", "Flow Efficiency").
 """
+            _kb_cache["content"] = result
+            return result
 
     except Exception as e:
         print(f"Knowledge Base Fetch Failed ({e}). Using Fallback.")

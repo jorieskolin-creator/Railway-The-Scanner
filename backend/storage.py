@@ -112,22 +112,43 @@ class BlobStorage:
             print(f"   [Storage Exception] _get failed: {e}")
         return None
 
-    def _delete(self, url):
+    def _delete(self, urls):
         """
-        Deletes a blob by its public URL.
+        Deletes one or more blobs by their public URLs.
+        Accepts a single URL string or a list of URL strings.
+        Uses Vercel Blob API: POST /delete with JSON body.
         """
-        if not url: return
+        if not urls: return
+        if isinstance(urls, str):
+            urls = [urls]
+        urls = [u for u in urls if u]
+        if not urls: return
         try:
-            # Vercel Blob API Delete: DELETE /?url=...
-            params = {"url": url}
-            resp = requests.delete(self.api_url, headers=self._get_headers(), params=params)
+            resp = requests.post(
+                f"{self.api_url}/delete",
+                headers={**self._get_headers(), "Content-Type": "application/json"},
+                json={"urls": urls}
+            )
             if resp.status_code == 200:
-                # print(f"   [Storage] Cleaned up: {url}")
                 pass
             else:
-                print(f"   [Storage Warning] Delete failed for {url}: {resp.status_code}")
+                print(f"   [Storage Warning] Delete failed ({resp.status_code}): {resp.text[:200]}")
         except Exception as e:
             print(f"   [Storage Exception] _delete failed: {e}")
+
+    def _prune_old_versions(self, prefix, keep=3):
+        """
+        Keeps only the newest `keep` files for a given prefix.
+        Deletes the rest in a single batch call. Self-healing: runs after every save.
+        """
+        blobs = self._list(prefix=prefix, limit=50)
+        if len(blobs) <= keep:
+            return
+        blobs.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
+        to_delete = blobs[keep:]
+        urls = [b.get("url") for b in to_delete if b.get("url")]
+        print(f"   [Storage] Pruning {len(urls)} old versions (keeping {keep}) for '{prefix}'...")
+        self._delete(urls)
 
     # --- ARCHITECTURE METHODS ---
 
@@ -144,26 +165,19 @@ class BlobStorage:
 
     def save_company_data(self, company_name, full_data):
         """
-        Saves company data and deletes ANY previous versions of this company's file.
+        Saves company data and keeps max 3 versions per company.
         """
         clean_name = self.sanitize_filename(company_name)
         prefix = f"companies/{clean_name}"
-        
-        # 1. Find old files BEFORE saving (so we know what to delete)
-        old_blobs = self._list(prefix=prefix, limit=20)
-        
-        # 2. Save NEW file
+
+        # 1. Save NEW file
         filename = f"{prefix}.json"
         new_url = self._put(filename, full_data)
-        
-        # 3. Delete OLD files
-        if new_url and old_blobs:
-            print(f"   [Storage] Housekeeping: Deleting {len(old_blobs)} old versions for {company_name}...")
-            for b in old_blobs:
-                # Safety check: Don't delete the file we just created if it appears in the list
-                if b.get("url") != new_url:
-                    self._delete(b.get("url"))
-                    
+
+        # 2. Prune: keep only the 3 newest versions
+        if new_url:
+            self._prune_old_versions(prefix, keep=3)
+
         return new_url
 
     def get_company_data(self, company_name):
@@ -187,34 +201,26 @@ class BlobStorage:
         
         print(f"   [Storage] Found company file: {target_url}")
         
-        # Optional: Self-healing if too many duplicates exist
+        # Self-healing: prune if too many versions accumulated
         if len(blobs) > 3:
-             print(f"   [Storage] Note: Found {len(blobs)} duplicates for {company_name}. Cleanup will occur on next write.")
+            self._prune_old_versions(prefix, keep=3)
 
         return self._get(target_url)
 
     def save_global_index_direct(self, full_list):
-        # When creating a new list directly, assume we want to clean up ANY old lists
-        old_blobs = self._list("index/summary_list", limit=50)
-        
+        """Saves global index and keeps max 3 index versions."""
         new_url = self._put("index/summary_list.json", full_list)
-        
-        # Cleanup
-        if new_url and old_blobs:
-            print(f"   [Storage] Index Housekeeping: Purging {len(old_blobs)} old index files...")
-            for b in old_blobs:
-                if b.get("url") != new_url:
-                    self._delete(b.get("url"))
-                
+
+        if new_url:
+            self._prune_old_versions("index/summary_list", keep=3)
+
         return new_url
 
     def update_global_index(self, summary_entry):
         print(f"   [Storage] Updating Global Index for {summary_entry['companyName']}...")
-        
-        # 1. FIND ALL existing index files (to read AND delete later)
-        blobs = self._list("index/summary_list", limit=50)
-        
-        # 2. READ the content of the most recent one
+
+        # 1. Read current index (latest version)
+        blobs = self._list("index/summary_list", limit=10)
         current_index = []
         if blobs:
             blobs.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
@@ -223,30 +229,25 @@ class BlobStorage:
             data = self._get(latest_url)
             if data and isinstance(data, list):
                 current_index = data
-        
-        # 3. MODIFY the list in memory
+
+        # 2. Upsert company in the list
         found = False
         for i, item in enumerate(current_index):
             if item["companyName"] == summary_entry["companyName"]:
                 current_index[i] = summary_entry
                 found = True
                 break
-        
         if not found:
             current_index.append(summary_entry)
-            
-        # 4. SAVE NEW file (Vercel will give it a new name like summary_list-XyZ.json)
+
+        # 3. Save new index version
         print("   [Storage] Uploading new index version...")
         new_url = self._put("index/summary_list.json", current_index)
-        
-        # 5. PURGE OLD files (Cleanup the "quite many files" issue)
-        if new_url and blobs:
-            print(f"   [Storage] Index Housekeeping: Purging {len(blobs)} obsolete index files...")
-            for b in blobs:
-                # Safety: Don't delete the file we just uploaded
-                if b.get("url") != new_url:
-                    self._delete(b.get("url"))
-        
+
+        # 4. Prune: keep only the 3 newest index files
+        if new_url:
+            self._prune_old_versions("index/summary_list", keep=3)
+
         return new_url
 
     def retrieve_latest_data(self, filename_prefix="index/summary_list"):
@@ -280,14 +281,12 @@ class BlobStorage:
         print("   [Storage] INITIATING COMPLETE DATABASE WIPE...")
         count = 0
         while True:
-            # Fetch in batches
             blobs = self._list(prefix="", limit=500)
             if not blobs:
                 break
-                
-            for b in blobs:
-                self._delete(b['url'])
-                count += 1
-                
+            urls = [b['url'] for b in blobs if b.get('url')]
+            self._delete(urls)
+            count += len(urls)
+
         print(f"   [Storage] Wipe Complete. Deleted {count} files.")
         return count
