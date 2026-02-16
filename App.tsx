@@ -408,6 +408,11 @@ const App = () => {
     }
     const aVal = a[sortConfig.key];
     const bVal = b[sortConfig.key];
+    const aNull = aVal == null;
+    const bNull = bVal == null;
+    if (aNull && bNull) return 0;
+    if (aNull) return 1;
+    if (bNull) return -1;
     if (typeof aVal === 'string' && typeof bVal === 'string') return sortConfig.direction === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
     if (typeof aVal === 'number' && typeof bVal === 'number') return sortConfig.direction === 'asc' ? aVal - bVal : bVal - aVal;
     return 0;
