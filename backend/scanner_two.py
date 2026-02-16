@@ -971,16 +971,23 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
     SCORING LOGIC & TEMPORAL WEIGHTING (CRITICAL):
     1. BASELINE: Start at 0 adjustment.
-    2. RECENCY WEIGHTING: 
+    2. RECENCY WEIGHTING:
        - Evidence < 12 months old: 100% Impact (Heavy Weight).
        - Evidence > 18 months old: 20% Impact (Ignore unless recurring/unresolved).
        - Favor FRESH evidence over legacy complaints.
     3. TECHNICAL DEBT PENALTY:
        - If RECENT (< 12 months) evidence confirms "Technical Debt", "Legacy Systems", "Manual Workarounds", or "Excel Hell":
-       - APPLY A SIGNIFICANT PENALTY (-15 to -25 points) to the adjustment.
+       - APPLY A SIGNIFICANT PENALTY (-20 to -35 points) to the adjustment.
        - This is a strong signal of low reality.
-    4. POSITIVE SIGNALS:
-       - Verified "Boomerang" hires, Hugging Face models, or Public Design Systems: +10 to +20 points.
+       - SEVERE: If near-zero evidence across all juries (company is invisible): -35 to -50 points.
+    4. POSITIVE SIGNALS (USE THE FULL RANGE — do NOT be conservative):
+       - GOOD: Verified evidence in 2-3 juries, some recent: +15 to +25 points.
+       - STRONG: Verified evidence in 3-4 juries, mostly recent, real tech stack visible: +25 to +35 points.
+       - OUTSTANDING: 4-5 juries confirm strong, recent, verifiable evidence (public repos,
+         design systems, real case studies, active hiring for modern roles): +35 to +45 points.
+       - You MUST use high adjustments (+30 to +45) for companies with genuinely strong evidence.
+         A top Finnish tech company with public GitHub repos, active hiring, and verified case
+         studies across multiple juries deserves +35 or higher. Do NOT cap at +20.
 
     DETECT "WASHING" (Logic Check):
     - Intent Score is {intent_score}. 
@@ -1010,7 +1017,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 "relevance": "Why relevant?"
             }}
         ],
-        "reality_score_adjustment": (integer -40 to +40),
+        "reality_score_adjustment": (integer -50 to +50),
         "confidence_score": (integer 0 to 100),
         "washing_flag": boolean (True if significant contradiction/washing found AND Intent > 60),
         "washing_type": "AI Washing" or "Agile Washing" or "Green Washing" or null
@@ -1219,10 +1226,10 @@ For any URLs, use real URLs you know from training data. Mark confidence_score l
     # --- PROCESS RESULTS ---
     checklist = []
     raw_findings = []
-    # BASE SCORE UPDATE: Raised from 50 to 60.
-    # Assumption: Companies are slightly "Good" until proven "Bad".
-    # This prevents neutral search results from dragging a good company into Stagnation.
-    base_score = 60
+    # BASE SCORE: Set to 50 for symmetric headroom (50 down, 50 up).
+    # Combined with expanded adjustment range (±50), this allows the full
+    # 0-100 scale to be utilized. Top performers can reach ~90, poor ones ~10.
+    base_score = 50
 
     if data:
         findings = data.get("findings", [])
