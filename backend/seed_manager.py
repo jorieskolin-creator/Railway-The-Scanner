@@ -346,11 +346,13 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
                 washing_flag = False
                 washing_type = None
 
-            # --- ARCHETYPE CALCULATION ---
+            # --- ARCHETYPE CALCULATION (Reality vs Financial) ---
+            fin_score = financial_results.get("financial_index")
+            fin_for_archetype = fin_score if fin_score is not None else intent_results["score"]
             if reality_results["score"] >= 50:
-                archetype = "Walk-and-Talk (Aligned)" if intent_results["score"] >= 50 else "Silent Doers (Surplus)"
+                archetype = "Thriving" if fin_for_archetype >= 50 else "Modernizing"
             else:
-                archetype = "Talk-not-Walk (Hype)" if intent_results["score"] >= 50 else "Stagnation (Low/Low)"
+                archetype = "Cash Cow" if fin_for_archetype >= 50 else "At Risk"
 
             # 4. SYNTHESIS (Claude Opus 4.6)
             summary_text = "Automated Analysis Complete."
@@ -365,7 +367,7 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
 
                     washing_context = ""
                     if washing_flag:
-                        washing_context = f"CRITICAL: The forensic scanner DETECTED {washing_type or 'WASHING'}. This confirms the 'Talk-not-Walk' diagnosis."
+                        washing_context = f"CRITICAL: The forensic scanner DETECTED {washing_type or 'WASHING'}. High ambition narrative but low operational evidence."
 
                     financial_context = ""
                     if financial_results.get("financial_index") is not None:
@@ -444,6 +446,11 @@ NEVER use internal codes (TAC-xxx, DIM-xxx, etc.) in any output — always write
 ### SCAN DATA
 Target: {company_name}
 DIAGNOSIS ARCHETYPE: {archetype.upper()}
+Archetype definitions (Reality vs Financial health):
+  - THRIVING: High Reality + Strong Financials. Modern operations AND healthy business.
+  - MODERNIZING: High Reality + Weak Financials. Strong operations but financial pressure.
+  - CASH COW: Low Reality + Strong Financials. Profitable but operationally outdated.
+  - AT RISK: Low Reality + Weak Financials. Both operations and finances under pressure.
 Summary Confidence: {confidence}/100
 NOTE: Do NOT cite specific numeric scores in the summary text. The scores are displayed separately in the UI. Describe performance qualitatively only (e.g. "low reality evidence", "strong intent narrative").
 
@@ -477,12 +484,13 @@ THEN — WRITE THE NARRATIVE:
 
 1. 'summary' (180-220 words):
    - STATE THE ARCHETYPE ({archetype}) explicitly in the first sentence.
+   - Use ONLY the four archetype labels: Thriving, Modernizing, Cash Cow, At Risk.
    - MAP findings to Knowledge Base dimensions (Operating Model, Strategy, Culture, Service Portfolio, AI Readiness).
    - USE Knowledge Base terminology (e.g. "Digital Taylorism", "Flow Efficiency", "Pilot Purgatory").
    - NEVER use internal Knowledge Base codes (e.g. TAC-003, TAC-008, DIM-xx). Always write the full concept name instead.
    - Explicitly mention 'Summary Confidence' if low (<50).
    - If Washing detected, use term "{washing_type or 'Modernization Washing'}".
-   - Focus on WHY they are in this quadrant, grounded in evidence.
+   - Focus on WHY they fit this archetype, grounded in evidence.
 
 2. 'pitch' (90-110 words):
    - A direct, cold-outreach pitch to a C-level executive at {company_name}.
@@ -535,10 +543,6 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
 
                                  if reality_results["score"] != gemini_reality:
                                      gap = intent_results["score"] - reality_results["score"]
-                                     if reality_results["score"] >= 50:
-                                         archetype = "Walk-and-Talk (Aligned)" if intent_results["score"] >= 50 else "Silent Doers (Surplus)"
-                                     else:
-                                         archetype = "Talk-not-Walk (Hype)" if intent_results["score"] >= 50 else "Stagnation (Low/Low)"
                                      if reality_results["score"] >= intent_results["score"]:
                                          washing_flag = False
                                          washing_type = None
@@ -603,13 +607,17 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
 
             if intent_results["score"] != raw_intent or reality_results["score"] != raw_reality:
                 gap = intent_results["score"] - reality_results["score"]
-                if reality_results["score"] >= 50:
-                    archetype = "Walk-and-Talk (Aligned)" if intent_results["score"] >= 50 else "Silent Doers (Surplus)"
-                else:
-                    archetype = "Talk-not-Walk (Hype)" if intent_results["score"] >= 50 else "Stagnation (Low/Low)"
                 if reality_results["score"] >= intent_results["score"]:
                     washing_flag = False
                     washing_type = None
+
+            # --- FINAL ARCHETYPE (computed from finalized scores) ---
+            fin_score = financial_results.get("financial_index")
+            fin_for_archetype = fin_score if fin_score is not None else intent_results["score"]
+            if reality_results["score"] >= 50:
+                archetype = "Thriving" if fin_for_archetype >= 50 else "Modernizing"
+            else:
+                archetype = "Cash Cow" if fin_for_archetype >= 50 else "At Risk"
 
             full_data = {
                 "id": result_id,
@@ -624,6 +632,7 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                 "reality_score": reality_results["score"],
                 "reality_gap": gap,
                 "confidence_score": confidence,
+                "archetype": archetype,
                 "washing_flag": washing_flag,
                 "washing_type": washing_type,
                 "intent_breakdown": intent_results["breakdown"],
@@ -662,7 +671,8 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                 "reality_gap": gap,
                 "lastUpdated": timestamp,
                 "detailsUrl": saved_url,
-                "financial_index": financial_results.get("financial_index")
+                "financial_index": financial_results.get("financial_index"),
+                "archetype": archetype
             }
 
             # 7. UPDATE SHARED INDEX (needs lock — multiple threads write here)

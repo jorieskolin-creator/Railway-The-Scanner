@@ -419,10 +419,10 @@ def run_scan(
 
         # --- LOGIC CONSISTENCY CHECK ---
         # CRITICAL FIX: "Washing" is impossible if Reality >= Intent.
-        # It implies they are doing MORE than they say (Silent Doers).
+        # It implies they are doing MORE than they say.
         if reality_results["score"] >= intent_results["score"]:
             if washing_flag:
-                print(f"   [Logic Override] Washing Flag set to FALSE. Reality ({reality_results['score']}) >= Intent ({intent_results['score']}). This is a Surplus/Silent Doer.")
+                print(f"   [Logic Override] Washing Flag set to FALSE. Reality ({reality_results['score']}) >= Intent ({intent_results['score']}). Reality exceeds narrative.")
             washing_flag = False
             washing_type = None
         
@@ -452,28 +452,20 @@ def run_scan(
                 if uploaded_doc_names:
                     doc_context = f"NOTE: Analysis includes confidential internal documents: {', '.join(uploaded_doc_names)}. Treat this as high-fidelity intent data."
 
-                # --- COORDINATE LOGIC (STRICT) ---
-                # Lower-Left: Stagnation (Intent < 50, Reality < 50)
-                # Lower-Right: Talk-not-Walk (Intent >= 50, Reality < 50)
-                # Upper-Left: Silent Doers (Intent < 50, Reality >= 50)
-                # Upper-Right: Walk-and-Talk (Intent >= 50, Reality >= 50)
-
-                archetype = "Unknown"
+                # --- ARCHETYPE LOGIC (Reality vs Financial) ---
+                # Uses Reality Score and Financial Index to classify companies.
+                # Fallback: if Financial Index is unavailable, use Intent Score.
+                fin_score = financial_results.get("financial_index")
+                fin_for_archetype = fin_score if fin_score is not None else intent_results["score"]
                 if reality_results["score"] >= 50:
-                    if intent_results["score"] >= 50:
-                        archetype = "Walk-and-Talk (Aligned)"
-                    else:
-                        archetype = "Silent Doers (Surplus)"
+                    archetype = "Thriving" if fin_for_archetype >= 50 else "Modernizing"
                 else:
-                    if intent_results["score"] >= 50:
-                        archetype = "Talk-not-Walk (Hype)"
-                    else:
-                        archetype = "Stagnation (Low/Low)"
+                    archetype = "Cash Cow" if fin_for_archetype >= 50 else "At Risk"
 
                 # Logic-aware Context
                 washing_context = ""
                 if washing_flag:
-                    washing_context = f"CRITICAL: The forensic scanner DETECTED {washing_type or 'WASHING'}. This confirms the 'Talk-not-Walk' diagnosis."
+                    washing_context = f"CRITICAL: The forensic scanner DETECTED {washing_type or 'WASHING'}. High ambition narrative but low operational evidence."
 
                 # Financial context
                 financial_context = ""
@@ -561,6 +553,11 @@ NEVER use internal codes (TAC-xxx, DIM-xxx, etc.) in any output — always write
 ### SCAN DATA
 Target: {companyName}
 DIAGNOSIS ARCHETYPE: {archetype.upper()}
+Archetype definitions (Reality vs Financial health):
+  - THRIVING: High Reality + Strong Financials. Modern operations AND healthy business.
+  - MODERNIZING: High Reality + Weak Financials. Strong operations but financial pressure.
+  - CASH COW: Low Reality + Strong Financials. Profitable but operationally outdated.
+  - AT RISK: Low Reality + Weak Financials. Both operations and finances under pressure.
 Summary Confidence: {confidence}/100
 NOTE: Do NOT cite specific numeric scores in the summary text. The scores are displayed separately in the UI. Describe performance qualitatively only (e.g. "low reality evidence", "strong intent narrative").
 
@@ -595,12 +592,13 @@ THEN — WRITE THE NARRATIVE:
 
 1. 'summary' (180-220 words):
    - STATE THE ARCHETYPE ({archetype}) explicitly in the first sentence.
+   - Use ONLY the four archetype labels: Thriving, Modernizing, Cash Cow, At Risk.
    - MAP findings to Knowledge Base dimensions (Operating Model, Strategy, Culture, Service Portfolio, AI Readiness).
    - USE Knowledge Base terminology (e.g. "Digital Taylorism", "Flow Efficiency", "Pilot Purgatory").
    - NEVER use internal Knowledge Base codes (e.g. TAC-003, TAC-008, DIM-xx). Always write the full concept name instead.
    - Explicitly mention 'Summary Confidence' if low (<50).
    - If Washing detected, use term "{washing_type or 'Modernization Washing'}".
-   - Focus on WHY they are in this quadrant, grounded in evidence.
+   - Focus on WHY they fit this archetype, grounded in evidence.
 
 2. 'pitch' (90-110 words):
    - A direct, cold-outreach pitch to a C-level executive at {companyName}.
@@ -637,7 +635,7 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                         p2_start = time.time()
                         refine_prompt = f"""Review and refine this company analysis draft. Keep the JSON structure (summary + pitch fields).
 Improve clarity, sharpen the Knowledge Base terminology, and make the pitch more compelling.
-Do NOT change the scores or archetype — only improve the prose quality.
+Do NOT change the scores or archetype (Thriving/Modernizing/Cash Cow/At Risk) — only improve the prose quality.
 NEVER use internal Knowledge Base codes (TAC-xxx, DIM-xxx) — always write the full concept name.
 
 DRAFT:
@@ -755,15 +753,9 @@ Output valid JSON only."""
                                  reality_results["opus_reality_score"] = opus_reality
                                  reality_results["score_verification"] = "opus_override"
 
-                             # Recalculate gap and archetype if score changed
+                             # Recalculate gap if score changed
                              if reality_results["score"] != gemini_reality:
                                  gap = intent_results["score"] - reality_results["score"]
-
-                                 # Recalculate archetype
-                                 if reality_results["score"] >= 50:
-                                     archetype = "Walk-and-Talk (Aligned)" if intent_results["score"] >= 50 else "Silent Doers (Surplus)"
-                                 else:
-                                     archetype = "Talk-not-Walk (Hype)" if intent_results["score"] >= 50 else "Stagnation (Low/Low)"
 
                                  # Re-evaluate washing flag
                                  if reality_results["score"] >= intent_results["score"]:
@@ -778,12 +770,6 @@ Output valid JSON only."""
                                  intent_results["score"] = opus_intent
                                  intent_results["opus_intent_score"] = opus_intent
                                  gap = intent_results["score"] - reality_results["score"]
-
-                                 # Recalculate archetype
-                                 if reality_results["score"] >= 50:
-                                     archetype = "Walk-and-Talk (Aligned)" if intent_results["score"] >= 50 else "Silent Doers (Surplus)"
-                                 else:
-                                     archetype = "Talk-not-Walk (Hype)" if intent_results["score"] >= 50 else "Stagnation (Low/Low)"
                              elif delta_i <= 5:
                                  print(f"   ✅ [Score Verify] Intent: Scanner 1 {scanner_intent} ≈ Opus {opus_intent} (delta {delta_i}). Keeping Scanner 1 score.")
                              else:
@@ -842,13 +828,17 @@ Output valid JSON only."""
 
         if intent_results["score"] != raw_intent or reality_results["score"] != raw_reality:
             gap = intent_results["score"] - reality_results["score"]
-            if reality_results["score"] >= 50:
-                archetype = "Walk-and-Talk (Aligned)" if intent_results["score"] >= 50 else "Silent Doers (Surplus)"
-            else:
-                archetype = "Talk-not-Walk (Hype)" if intent_results["score"] >= 50 else "Stagnation (Low/Low)"
             if reality_results["score"] >= intent_results["score"]:
                 washing_flag = False
                 washing_type = None
+
+        # --- FINAL ARCHETYPE (computed from finalized scores) ---
+        fin_score = financial_results.get("financial_index")
+        fin_for_archetype = fin_score if fin_score is not None else intent_results["score"]
+        if reality_results["score"] >= 50:
+            archetype = "Thriving" if fin_for_archetype >= 50 else "Modernizing"
+        else:
+            archetype = "Cash Cow" if fin_for_archetype >= 50 else "At Risk"
 
         full_data = {
             "id": result_id,
@@ -863,6 +853,7 @@ Output valid JSON only."""
             "reality_score": reality_results["score"],
             "reality_gap": gap,
             "confidence_score": confidence,
+            "archetype": archetype,
             "washing_flag": washing_flag,
             "washing_type": washing_type,
             "intent_breakdown": intent_results["breakdown"],
@@ -907,14 +898,15 @@ Output valid JSON only."""
                 "lastUpdated": new_timestamp,
                 "detailsUrl": saved_url,
                 "has_docs": len(uploaded_doc_names) > 0,
-                "financial_index": financial_results.get("financial_index")
+                "financial_index": financial_results.get("financial_index"),
+                "archetype": archetype
             }
             # Update index
             storage.update_global_index(summary_entry)
 
         total_ms = int((time.time() - scan_start) * 1000)
         total_sec = round(total_ms / 1000, 1)
-        print(f"✅ --- SCAN COMPLETE: {companyName} --- Total: {total_sec}s | Intent: {intent_results['score']}/100 | Reality: {reality_results['score']}/100 | Gap: {gap} | Confidence: {confidence}/100 ---")
+        print(f"✅ --- SCAN COMPLETE: {companyName} --- Total: {total_sec}s | Intent: {intent_results['score']}/100 | Reality: {reality_results['score']}/100 | Gap: {gap} | Archetype: {archetype} | Confidence: {confidence}/100 ---")
 
         return {"success": True, "data": full_data}
 

@@ -44,13 +44,13 @@ Evaluate companies against these 5 Dimensions. Use these terms explicitly.
 - **Bad (Old Way):** "Pilot Purgatory". Endless PoCs without production value. "Excel Hell" (manual reporting).
 - **Good (Modern Way):** "AI-Augmented". Data democratization, platform engineering, and AI embedded in the core workflow.
 
-## 2. DIAGNOSTIC ARCHETYPES
-Classify the company into one of these buckets based on the Data:
+## 2. DIAGNOSTIC ARCHETYPES (Reality vs Financial Health)
+Classify the company into one of these buckets based on their Reality Score and Financial Index:
 
-1.  **"Talk-not-Walk" (High Intent / Low Reality):** formerly "Agile Theater". The company uses all the right buzzwords (Squads, AI, Platform) but evidence shows micromanagement and rigid silos. They are "Modernization Washing".
-2.  **"Stagnation" (Low Intent / Low Reality):** formerly "Legacy Incumbent". Honest about being traditional. Top-down, command-and-control, slow moving.
-3.  **"Silent Doers" (Low Intent / High Reality):** They don't brag about "Agile" on their website, but evidence shows high autonomy and happy engineering teams.
-4.  **"Walk-and-Talk" (High Intent / High Reality):** formerly "Adaptive Leader". Coherence between what they preach and how they operate.
+1.  **"Thriving" (High Reality + Strong Financials):** Modern operations AND healthy business. These companies prove that operational excellence drives financial performance.
+2.  **"Modernizing" (High Reality + Weak Financials):** Strong operations but under financial pressure. Investing in transformation but returns haven't materialized yet, or external market headwinds.
+3.  **"Cash Cow" (Low Reality + Strong Financials):** Profitable but operationally outdated. Making money from legacy advantages (market position, brand, regulation) but accumulating technical and organizational debt.
+4.  **"At Risk" (Low Reality + Weak Financials):** Both operations and finances under pressure. Urgently needs transformation — the status quo is unsustainable.
 
 ## 3. WRITING GUARDRAILS
 - **Tone:** Analytical, Direct, Forensic. No marketing fluff.
@@ -93,13 +93,13 @@ Refer to this data to identify if a company is displaying "Old Way" (Bad) or "Mo
 {kb_content}
 ```
 
-## 2. DIAGNOSTIC ARCHETYPES
-Classify the company into one of these buckets based on the Data:
+## 2. DIAGNOSTIC ARCHETYPES (Reality vs Financial Health)
+Classify the company into one of these buckets based on their Reality Score and Financial Index:
 
-1.  **"Talk-not-Walk" (High Intent / Low Reality):** formerly "Agile Theater". The company uses all the right buzzwords (Squads, AI, Platform) but evidence shows micromanagement and rigid silos. They are "Modernization Washing".
-2.  **"Stagnation" (Low Intent / Low Reality):** formerly "Legacy Incumbent". Honest about being traditional. Top-down, command-and-control, slow moving.
-3.  **"Silent Doers" (Low Intent / High Reality):** They don't brag about "Agile" on their website, but evidence shows high autonomy and happy engineering teams.
-4.  **"Walk-and-Talk" (High Intent / High Reality):** formerly "Adaptive Leader". Coherence between what they preach and how they operate.
+1.  **"Thriving" (High Reality + Strong Financials):** Modern operations AND healthy business. These companies prove that operational excellence drives financial performance.
+2.  **"Modernizing" (High Reality + Weak Financials):** Strong operations but under financial pressure. Investing in transformation but returns haven't materialized yet, or external market headwinds.
+3.  **"Cash Cow" (Low Reality + Strong Financials):** Profitable but operationally outdated. Making money from legacy advantages (market position, brand, regulation) but accumulating technical and organizational debt.
+4.  **"At Risk" (Low Reality + Weak Financials):** Both operations and finances under pressure. Urgently needs transformation — the status quo is unsustainable.
 
 ## 3. WRITING GUARDRAILS
 - **Tone:** Analytical, Direct, Forensic. No marketing fluff.

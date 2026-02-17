@@ -115,15 +115,12 @@ def _describe(values):
     }
 
 
-def classify_archetype(intent, reality):
-    if intent >= 50 and reality >= 50:
-        return "Walk-and-Talk (Aligned)"
-    elif intent >= 50 and reality < 50:
-        return "Talk-not-Walk (Hype)"
-    elif intent < 50 and reality >= 50:
-        return "Silent Doers"
+def classify_archetype(reality, financial):
+    """Classify using Reality vs Financial (unified archetype system)."""
+    if reality >= 50:
+        return "Thriving" if financial >= 50 else "Modernizing"
     else:
-        return "Stagnation"
+        return "Cash Cow" if financial >= 50 else "At Risk"
 
 
 # ---------------------------------------------------------------------------
@@ -231,12 +228,12 @@ def run_analysis(data):
     result["correlation_matrix"] = matrix
 
     # --- D. Archetype Distribution ---
-    archetypes = [classify_archetype(c["intent"], c["reality"]) for c in companies]
+    archetypes = [classify_archetype(c["reality"], c["financial"] if c["financial"] is not None else c["intent"]) for c in companies]
     counts = Counter(archetypes)
     total = len(archetypes)
     result["archetypes"] = {
         arch: {"count": counts.get(arch, 0), "pct": round(counts.get(arch, 0) / total * 100, 1)}
-        for arch in ["Walk-and-Talk (Aligned)", "Talk-not-Walk (Hype)", "Silent Doers", "Stagnation"]
+        for arch in ["Thriving", "Modernizing", "Cash Cow", "At Risk"]
     }
 
     # --- E. Domain Breakdown ---
@@ -372,7 +369,7 @@ def print_analysis(r):
     # D. Archetypes
     print("D. ARCHETYPE DISTRIBUTION")
     print("-" * 70)
-    for arch in ["Walk-and-Talk (Aligned)", "Talk-not-Walk (Hype)", "Silent Doers", "Stagnation"]:
+    for arch in ["Thriving", "Modernizing", "Cash Cow", "At Risk"]:
         a = r["archetypes"][arch]
         bar = "#" * int(a["pct"] / 100 * 40)
         print(f"  {arch:30s}  {a['count']:3d} ({a['pct']:4.1f}%)  {bar}")

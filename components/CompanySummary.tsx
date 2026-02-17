@@ -9,7 +9,7 @@ const HighlightText = ({ text }) => {
   const negativeTerms = [
     "Digital Taylorism", "Feature Factory", "Command and Control", "Zombie Scrum", 
     "Fake Agile", "Silos", "Micromanagement", "Project-based", "Fear", "Bureaucracy", 
-    "Legacy", "Talk-not-Walk", "Stagnation", "Surveillance", "Turf Wars", "Water-scrum-fall",
+    "Legacy", "Cash Cow", "At Risk", "Surveillance", "Turf Wars", "Water-scrum-fall",
     "Ticket-based", "Output-driven", "Gatekeeping", "Compliance-driven", "Blame Culture",
     "Risk-averse", "Siloed", "Waterfall", "Consulting-heavy", "Vendor Lock-in", "Burnout",
     "Change Control Board", "HiPPO", "Modernization Washing", "AI Washing", "Agile Washing"
@@ -18,7 +18,7 @@ const HighlightText = ({ text }) => {
   const positiveTerms = [
     "Psychological Safety", "Platform Engineering", "Flow Efficiency", "Autonomy", 
     "Value Streams", "Outcome-based", "Trust", "Innovation", "Modernization", 
-    "Walk-and-Talk", "Silent Doers", "Distributed Authority", "Sense and Respond",
+    "Thriving", "Modernizing", "Distributed Authority", "Sense and Respond",
     "Stream-aligned", "Zero Distance", "Customer Intimacy", "Continuous Delivery",
     "DevOps", "Data Mesh", "Empowerment", "Learning Organization", "Servant Leadership",
     "Cloud-native", "Ecosystem", "Open Source", "Self-organization", "Cross-functional",
@@ -61,38 +61,39 @@ const CompanySummary = ({ data }) => {
   const [copied, setCopied] = useState(false);
   const [pitchCopied, setPitchCopied] = useState(false);
 
-  // STRICT COORDINATE LOGIC (X=50, Y=50 Split)
+  // ARCHETYPE LOGIC (Reality vs Financial — unified with dashboard)
+  const fin = data.financial_index ?? data.intent_score ?? 0;
   let gapColor = '#94a3b8';
-  let gapLabel = "Stagnation";
-  let gapKey = "Stagnation"; // Key for looking up definition
-  
+  let gapLabel = "At Risk";
+  let gapKey = "At Risk";
+
   if (data.reality_score >= 50) {
-      if (data.intent_score >= 50) {
-          gapLabel = "Walk-and-Talk (Aligned)";
-          gapKey = "Walk-and-Talk";
+      if (fin >= 50) {
+          gapLabel = "Thriving";
+          gapKey = "Thriving";
           gapColor = '#10b981'; // Emerald
       } else {
-          gapLabel = "Silent Doers (Surplus)";
-          gapKey = "Silent Doers";
+          gapLabel = "Modernizing";
+          gapKey = "Modernizing";
           gapColor = '#22d3ee'; // Cyan
       }
   } else {
-      if (data.intent_score >= 50) {
-          gapLabel = "Talk-not-Walk (Hype)";
-          gapKey = "Talk-not-Walk";
+      if (fin >= 50) {
+          gapLabel = "Cash Cow";
+          gapKey = "Cash Cow";
           gapColor = '#f59e0b'; // Amber
       } else {
-          gapLabel = "Stagnation (Low/Low)";
-          gapKey = "Stagnation";
-          gapColor = '#fb7185'; // Rose/Red (Specific for Stagnation now)
+          gapLabel = "At Risk";
+          gapKey = "At Risk";
+          gapColor = '#fb7185'; // Rose/Red
       }
   }
 
   const ARCHETYPE_DESCRIPTIONS = {
-    "Walk-and-Talk": "High Ambition, High Reality. Strategy is coherent with operational evidence.",
-    "Silent Doers": "Low Ambition, High Reality. Strong execution without marketing hype.",
-    "Talk-not-Walk": "High Ambition, Low Reality. 'Modernization Washing' detected.",
-    "Stagnation": "Low Ambition, Low Reality. Traditional, slow-moving, honest about limitations."
+    "Thriving": "High Reality + Strong Financials. Modern operations AND healthy business.",
+    "Modernizing": "High Reality + Weak Financials. Strong operations but financial pressure.",
+    "Cash Cow": "Low Reality + Strong Financials. Profitable but operationally outdated.",
+    "At Risk": "Low Reality + Weak Financials. Both operations and finances under pressure."
   };
   
   let gapValueDisplay = data.reality_gap > 0 ? `+${data.reality_gap}` : `${data.reality_gap}`;
@@ -308,7 +309,7 @@ const CompanySummary = ({ data }) => {
         </div>
 
         {/* WASHING WARNING BANNER */}
-        {/* LOGIC FIX: Ensure Washing only displays if Intent > Reality. Silent Doers (Surplus) should NOT see this. */}
+        {/* LOGIC FIX: Ensure Washing only displays if Intent > Reality. */}
         {data.washing_flag && data.intent_score > data.reality_score && (
             <div className="animate-in slide-in-from-top-4 bg-rose-500/10 border-l-4 border-rose-500 p-4 rounded-r-xl flex items-start gap-4 shadow-lg shadow-rose-900/20">
                 <AlertOctagon className="text-rose-500 shrink-0 mt-0.5" size={24} />
