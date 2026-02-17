@@ -55,6 +55,7 @@ const App = () => {
   const [isAnalyticsOpen, setIsAnalyticsOpen] = useState(false);
   const [analyticsData, setAnalyticsData] = useState(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
+  const [analyticsView, setAnalyticsView] = useState('cleaned'); // 'raw' | 'cleaned'
 
   // BATCH STATE
   const [isBatchOpen, setIsBatchOpen] = useState(false);
@@ -758,7 +759,12 @@ const App = () => {
       )}
 
       {/* --- ANALYTICS PANEL --- */}
-      {isAnalyticsOpen && (
+      {isAnalyticsOpen && (() => {
+        const ad = analyticsData;
+        const view = ad?.[analyticsView] || ad;
+        const report = ad?.outlier_report;
+        const impact = report?.correlation_impact;
+        return (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/90 backdrop-blur-sm" onClick={() => setIsAnalyticsOpen(false)} />
           <div className="relative w-full max-w-4xl bg-[#0f172a] border border-violet-500/30 rounded-xl shadow-2xl z-10 flex flex-col max-h-[90vh] overflow-hidden">
@@ -767,9 +773,21 @@ const App = () => {
                 <BarChart3 size={18} className="text-violet-400" />
                 Statistical Analysis
               </h3>
-              <button onClick={() => setIsAnalyticsOpen(false)} className="text-slate-400 hover:text-white">
-                <X size={18} />
-              </button>
+              <div className="flex items-center gap-3">
+                {ad && !ad.error && ad.raw && (
+                  <div className="flex bg-black/40 rounded-lg border border-white/10 p-0.5">
+                    <button onClick={() => setAnalyticsView('cleaned')} className={`px-3 py-1 text-[10px] font-mono font-bold rounded-md transition-all ${analyticsView === 'cleaned' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'text-slate-500 hover:text-slate-300'}`}>
+                      CLEANED
+                    </button>
+                    <button onClick={() => setAnalyticsView('raw')} className={`px-3 py-1 text-[10px] font-mono font-bold rounded-md transition-all ${analyticsView === 'raw' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' : 'text-slate-500 hover:text-slate-300'}`}>
+                      RAW
+                    </button>
+                  </div>
+                )}
+                <button onClick={() => setIsAnalyticsOpen(false)} className="text-slate-400 hover:text-white">
+                  <X size={18} />
+                </button>
+              </div>
             </div>
 
             <div className="overflow-y-auto p-6 space-y-6">
@@ -778,56 +796,116 @@ const App = () => {
                   <Loader2 className="animate-spin text-violet-400 mb-4" size={32} />
                   <p className="text-slate-400 text-sm">Running analysis...</p>
                 </div>
-              ) : analyticsData?.error ? (
-                <div className="text-center py-16 text-slate-400">{analyticsData.error}</div>
-              ) : analyticsData ? (
+              ) : ad?.error ? (
+                <div className="text-center py-16 text-slate-400">{ad.error}</div>
+              ) : view ? (
                 <>
                   {/* HEADER */}
                   <div className="text-center">
-                    <div className="text-[10px] text-violet-400 uppercase tracking-widest font-mono mb-1">Correlation & Distribution Report</div>
-                    <div className="text-2xl font-bold text-white">{analyticsData.n} Companies Analyzed</div>
+                    <div className="text-[10px] text-violet-400 uppercase tracking-widest font-mono mb-1">
+                      {analyticsView === 'cleaned' ? 'Cleaned Dataset (Outliers Removed)' : 'Raw Dataset (All Companies)'}
+                    </div>
+                    <div className="text-2xl font-bold text-white">{view.n} Companies Analyzed</div>
+                    {report && analyticsView === 'cleaned' && report.outliers_removed > 0 && (
+                      <div className="text-[10px] text-amber-400 font-mono mt-1">
+                        {report.outliers_removed} outlier{report.outliers_removed > 1 ? 's' : ''} removed from {report.total_companies} total
+                      </div>
+                    )}
                   </div>
+
+                  {/* OUTLIER REPORT (shown in cleaned view when outliers exist) */}
+                  {report && report.outliers_removed > 0 && analyticsView === 'cleaned' && (
+                    <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-5">
+                      <h4 className="text-sm font-bold text-amber-300 uppercase tracking-wide mb-3 flex items-center gap-2">
+                        <AlertTriangle size={14} /> Outlier Detection Report
+                      </h4>
+                      <div className="text-[10px] text-slate-400 font-mono mb-3">{report.method}</div>
+
+                      {/* Correlation impact */}
+                      {impact && (
+                        <div className="grid grid-cols-3 gap-3 mb-4">
+                          <div className="bg-black/30 rounded-lg p-3 text-center">
+                            <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Raw Pearson r</div>
+                            <div className="text-lg font-bold text-amber-300">{impact.raw_pearson_r > 0 ? '+' : ''}{impact.raw_pearson_r}</div>
+                          </div>
+                          <div className="bg-black/30 rounded-lg p-3 text-center">
+                            <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Cleaned Pearson r</div>
+                            <div className="text-lg font-bold text-emerald-300">{impact.cleaned_pearson_r > 0 ? '+' : ''}{impact.cleaned_pearson_r}</div>
+                          </div>
+                          <div className="bg-black/30 rounded-lg p-3 text-center">
+                            <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Delta</div>
+                            <div className={`text-lg font-bold ${impact.direction_changed ? 'text-rose-400' : 'text-slate-300'}`}>
+                              {impact.delta > 0 ? '+' : ''}{impact.delta}
+                            </div>
+                            {impact.direction_changed && (
+                              <div className="text-[8px] text-rose-400 font-mono mt-0.5">DIRECTION CHANGED</div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Outlier list */}
+                      <div className="space-y-1.5">
+                        {report.outliers.map((o, i) => (
+                          <div key={i} className="bg-black/20 rounded px-3 py-2 border border-amber-500/10">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-mono text-amber-200 font-bold truncate max-w-[200px]">{o.name}</span>
+                              <div className="flex gap-3 text-[10px] font-mono">
+                                <span className="text-cyan-400">Reality: {o.reality}</span>
+                                <span className="text-emerald-400">Financial: {o.financial}</span>
+                                <span className="text-slate-500">z(F)={o.mad_z_financial > 0 ? '+' : ''}{o.mad_z_financial}</span>
+                                <span className="text-slate-500">z(R)={o.mad_z_reality > 0 ? '+' : ''}{o.mad_z_reality}</span>
+                              </div>
+                            </div>
+                            <div className="text-[9px] text-amber-500/70 font-mono mt-1">
+                              {o.flags.join(' | ')}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {/* CORE CORRELATION: Reality vs Financial */}
                   <div className="bg-violet-500/5 border border-violet-500/20 rounded-xl p-5">
                     <h4 className="text-sm font-bold text-violet-300 uppercase tracking-wide mb-3 flex items-center gap-2">
                       <TrendingUp size={14} /> Reality Score vs Financial Index
                     </h4>
-                    {analyticsData.reality_vs_financial?.pearson_r != null ? (
+                    {view.reality_vs_financial?.pearson_r != null ? (
                       <div className="space-y-3">
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                           <div className="bg-black/30 rounded-lg p-3 text-center">
                             <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Paired n</div>
-                            <div className="text-xl font-bold text-white">{analyticsData.reality_vs_financial.n}</div>
+                            <div className="text-xl font-bold text-white">{view.reality_vs_financial.n}</div>
                           </div>
                           <div className="bg-black/30 rounded-lg p-3 text-center">
                             <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Pearson r</div>
-                            <div className={`text-xl font-bold ${analyticsData.reality_vs_financial.pearson_r > 0.3 ? 'text-emerald-400' : analyticsData.reality_vs_financial.pearson_r < -0.3 ? 'text-rose-400' : 'text-amber-400'}`}>
-                              {analyticsData.reality_vs_financial.pearson_r > 0 ? '+' : ''}{analyticsData.reality_vs_financial.pearson_r}
+                            <div className={`text-xl font-bold ${view.reality_vs_financial.pearson_r > 0.3 ? 'text-emerald-400' : view.reality_vs_financial.pearson_r < -0.3 ? 'text-rose-400' : 'text-amber-400'}`}>
+                              {view.reality_vs_financial.pearson_r > 0 ? '+' : ''}{view.reality_vs_financial.pearson_r}
                             </div>
                           </div>
                           <div className="bg-black/30 rounded-lg p-3 text-center">
                             <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Spearman rho</div>
                             <div className="text-xl font-bold text-slate-200">
-                              {analyticsData.reality_vs_financial.spearman_rho > 0 ? '+' : ''}{analyticsData.reality_vs_financial.spearman_rho}
+                              {view.reality_vs_financial.spearman_rho > 0 ? '+' : ''}{view.reality_vs_financial.spearman_rho}
                             </div>
                           </div>
                           <div className="bg-black/30 rounded-lg p-3 text-center">
                             <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Interpretation</div>
-                            <div className="text-sm font-bold text-violet-300 uppercase">{analyticsData.reality_vs_financial.interpretation}</div>
+                            <div className="text-sm font-bold text-violet-300 uppercase">{view.reality_vs_financial.interpretation}</div>
                           </div>
                         </div>
-                        {analyticsData.reality_vs_financial.pearson_p != null && (
+                        {view.reality_vs_financial.pearson_p != null && (
                           <div className="text-[10px] text-slate-500 font-mono text-center">
-                            p-value = {analyticsData.reality_vs_financial.pearson_p} {analyticsData.reality_vs_financial.pearson_p < 0.05 ? '(statistically significant)' : '(not significant)'}
+                            p-value = {view.reality_vs_financial.pearson_p} {view.reality_vs_financial.pearson_p < 0.05 ? '(statistically significant)' : '(not significant)'}
                           </div>
                         )}
-                        {/* Outliers */}
-                        {analyticsData.reality_vs_financial.outliers?.length > 0 && (
+                        {/* Regression residuals */}
+                        {view.reality_vs_financial.outliers?.length > 0 && (
                           <div className="mt-3">
-                            <div className="text-[10px] text-slate-500 uppercase tracking-wider font-mono mb-2">Largest Outliers from Regression</div>
+                            <div className="text-[10px] text-slate-500 uppercase tracking-wider font-mono mb-2">Largest Residuals from Regression</div>
                             <div className="space-y-1">
-                              {analyticsData.reality_vs_financial.outliers.map((o, i) => (
+                              {view.reality_vs_financial.outliers.map((o, i) => (
                                 <div key={i} className="flex items-center justify-between text-xs font-mono bg-black/20 rounded px-3 py-1.5">
                                   <span className="text-slate-300 truncate max-w-[200px]">{o.name}</span>
                                   <div className="flex gap-4 text-[10px]">
@@ -849,7 +927,7 @@ const App = () => {
                   </div>
 
                   {/* CORRELATION MATRIX */}
-                  {analyticsData.correlation_matrix && (
+                  {view.correlation_matrix && (
                     <div className="bg-black/30 border border-white/10 rounded-xl p-5">
                       <h4 className="text-sm font-bold text-slate-300 uppercase tracking-wide mb-3">Correlation Matrix (Pearson)</h4>
                       <div className="overflow-x-auto">
@@ -867,7 +945,7 @@ const App = () => {
                               <tr key={ki}>
                                 <td className="text-slate-400 py-1 px-2 capitalize">{ki}</td>
                                 {['intent', 'reality', 'financial', 'confidence'].map((kj) => {
-                                  const v = analyticsData.correlation_matrix[ki]?.[kj];
+                                  const v = view.correlation_matrix[ki]?.[kj];
                                   const isIdentity = ki === kj;
                                   const color = v == null ? 'text-slate-600' : isIdentity ? 'text-slate-500' : v > 0.3 ? 'text-emerald-400' : v < -0.3 ? 'text-rose-400' : 'text-slate-300';
                                   return (
@@ -885,7 +963,7 @@ const App = () => {
                   )}
 
                   {/* DESCRIPTIVE STATS */}
-                  {analyticsData.descriptive && (
+                  {view.descriptive && (
                     <div className="bg-black/30 border border-white/10 rounded-xl p-5">
                       <h4 className="text-sm font-bold text-slate-300 uppercase tracking-wide mb-3">Descriptive Statistics</h4>
                       <div className="overflow-x-auto">
@@ -904,7 +982,7 @@ const App = () => {
                           </thead>
                           <tbody>
                             {[['Intent', 'intent'], ['Reality', 'reality'], ['Financial', 'financial'], ['Confidence', 'confidence'], ['Gap (I-R)', 'gap']].map(([label, key]) => {
-                              const d = analyticsData.descriptive[key];
+                              const d = view.descriptive[key];
                               if (!d) return null;
                               return (
                                 <tr key={key} className="border-t border-white/5">
@@ -926,7 +1004,7 @@ const App = () => {
                   )}
 
                   {/* ARCHETYPE DISTRIBUTION */}
-                  {analyticsData.archetypes && (
+                  {view.archetypes && (
                     <div className="bg-black/30 border border-white/10 rounded-xl p-5">
                       <h4 className="text-sm font-bold text-slate-300 uppercase tracking-wide mb-3">Archetype Distribution</h4>
                       <div className="space-y-2">
@@ -936,7 +1014,7 @@ const App = () => {
                           { key: 'Cash Cow', color: 'bg-amber-500', text: 'text-amber-400' },
                           { key: 'At Risk', color: 'bg-rose-500', text: 'text-rose-400' },
                         ].map(({ key, color, text }) => {
-                          const a = analyticsData.archetypes[key];
+                          const a = view.archetypes[key];
                           if (!a) return null;
                           return (
                             <div key={key} className="flex items-center gap-3">
@@ -953,7 +1031,7 @@ const App = () => {
                   )}
 
                   {/* DOMAIN BREAKDOWN */}
-                  {analyticsData.by_domain && (
+                  {view.by_domain && (
                     <div className="bg-black/30 border border-white/10 rounded-xl p-5">
                       <h4 className="text-sm font-bold text-slate-300 uppercase tracking-wide mb-3">Average Scores by Industry</h4>
                       <div className="overflow-x-auto">
@@ -969,7 +1047,7 @@ const App = () => {
                             </tr>
                           </thead>
                           <tbody>
-                            {Object.entries(analyticsData.by_domain).map(([domain, s]: [string, any]) => (
+                            {Object.entries(view.by_domain).map(([domain, s]: [string, any]) => (
                               <tr key={domain} className="border-t border-white/5">
                                 <td className="text-slate-300 py-1.5 px-2 max-w-[180px] truncate">{domain}</td>
                                 <td className="text-center text-slate-500 py-1.5 px-1">{s.n}</td>
@@ -988,7 +1066,7 @@ const App = () => {
                   )}
 
                   {/* OWNERSHIP BREAKDOWN */}
-                  {analyticsData.by_ownership && (
+                  {view.by_ownership && (
                     <div className="bg-black/30 border border-white/10 rounded-xl p-5">
                       <h4 className="text-sm font-bold text-slate-300 uppercase tracking-wide mb-3">Average Scores by Ownership</h4>
                       <div className="overflow-x-auto">
@@ -1003,7 +1081,7 @@ const App = () => {
                             </tr>
                           </thead>
                           <tbody>
-                            {Object.entries(analyticsData.by_ownership).map(([owner, s]: [string, any]) => (
+                            {Object.entries(view.by_ownership).map(([owner, s]: [string, any]) => (
                               <tr key={owner} className="border-t border-white/5">
                                 <td className="text-slate-300 py-1.5 px-2">{owner}</td>
                                 <td className="text-center text-slate-500 py-1.5 px-1">{s.n}</td>
@@ -1020,13 +1098,13 @@ const App = () => {
 
                   {/* TOP 10 / BOTTOM 10 */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {analyticsData.top_10_reality && (
+                    {view.top_10_reality && (
                       <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl p-4">
                         <h4 className="text-[10px] font-bold text-emerald-400 uppercase tracking-wide mb-2 flex items-center gap-1">
                           <TrendingUp size={12} /> Top 10 Reality Score
                         </h4>
                         <div className="space-y-1">
-                          {analyticsData.top_10_reality.map((c, i) => (
+                          {view.top_10_reality.map((c, i) => (
                             <div key={i} className="flex justify-between text-[11px] font-mono py-0.5">
                               <span className="text-slate-300 truncate max-w-[160px]">{i+1}. {c.name}</span>
                               <div className="flex gap-2 text-[10px]">
@@ -1038,13 +1116,13 @@ const App = () => {
                         </div>
                       </div>
                     )}
-                    {analyticsData.bottom_10_reality && (
+                    {view.bottom_10_reality && (
                       <div className="bg-rose-500/5 border border-rose-500/20 rounded-xl p-4">
                         <h4 className="text-[10px] font-bold text-rose-400 uppercase tracking-wide mb-2 flex items-center gap-1">
                           <TrendingDown size={12} /> Bottom 10 Reality Score
                         </h4>
                         <div className="space-y-1">
-                          {analyticsData.bottom_10_reality.map((c, i) => (
+                          {view.bottom_10_reality.map((c, i) => (
                             <div key={i} className="flex justify-between text-[11px] font-mono py-0.5">
                               <span className="text-slate-300 truncate max-w-[160px]">{i+1}. {c.name}</span>
                               <div className="flex gap-2 text-[10px]">
@@ -1059,7 +1137,7 @@ const App = () => {
                   </div>
 
                   {/* DISTRIBUTIONS */}
-                  {analyticsData.distributions && (
+                  {view.distributions && (
                     <div className="bg-black/30 border border-white/10 rounded-xl p-5">
                       <h4 className="text-sm font-bold text-slate-300 uppercase tracking-wide mb-3">Score Distributions</h4>
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -1068,7 +1146,7 @@ const App = () => {
                           { key: 'financial', label: 'Financial', color: 'bg-emerald-500' },
                           { key: 'intent', label: 'Intent', color: 'bg-indigo-500' },
                         ].map(({ key, label, color }) => {
-                          const dist = analyticsData.distributions[key];
+                          const dist = view.distributions[key];
                           if (!dist) return null;
                           const maxCount = Math.max(...dist.bins.map(b => b.count));
                           return (
@@ -1096,7 +1174,8 @@ const App = () => {
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       <CompanyModal
         company={selectedCompany}

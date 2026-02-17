@@ -124,36 +124,125 @@ def classify_archetype(reality, financial):
 
 
 # ---------------------------------------------------------------------------
+# 2b. OUTLIER DETECTION
+# ---------------------------------------------------------------------------
+
+def _mad_zscore(values):
+    """Modified Z-scores using Median Absolute Deviation.
+
+    More robust than standard Z-score because median is resistant
+    to the very outliers we're trying to detect (unlike mean/std).
+    MAD Z-score = 0.6745 * (x - median) / MAD
+    The 0.6745 factor makes MAD consistent with std for normal distributions.
+    """
+    if len(values) < 3:
+        return [0.0] * len(values)
+    med = statistics.median(values)
+    abs_devs = [abs(v - med) for v in values]
+    mad = statistics.median(abs_devs)
+    if mad == 0:
+        # Fall back to standard Z-score if MAD is zero (e.g., >50% identical values)
+        avg = statistics.mean(values)
+        std = statistics.stdev(values)
+        if std == 0:
+            return [0.0] * len(values)
+        return [(v - avg) / std for v in values]
+    return [0.6745 * (v - med) / mad for v in values]
+
+
+def _iqr_fences(values):
+    """Return (lower_fence, upper_fence) using 1.5 * IQR rule.
+
+    Non-parametric — works on skewed financial data without
+    assuming normal distribution.
+    """
+    if len(values) < 4:
+        return float('-inf'), float('inf')
+    sv = sorted(values)
+    n = len(sv)
+    q1 = sv[n // 4]
+    q3 = sv[(3 * n) // 4]
+    iqr = q3 - q1
+    return q1 - 1.5 * iqr, q3 + 1.5 * iqr
+
+
+def detect_outliers(companies, threshold=2.5):
+    """Detect outliers across financial_index using two methods:
+
+    1. Modified Z-score (MAD-based): |z| > threshold (default 2.5)
+    2. IQR fences: below Q1-1.5*IQR or above Q3+1.5*IQR
+
+    A company is flagged if EITHER method flags it (union).
+    Returns (clean_list, outlier_list) where each outlier has
+    metadata about why it was flagged.
+    """
+    # Only check financial_index — that's the score with known extreme outliers
+    fin_companies = [c for c in companies if c["financial"] is not None]
+    no_fin = [c for c in companies if c["financial"] is None]
+
+    if len(fin_companies) < 5:
+        # Not enough data to detect outliers reliably
+        return companies, []
+
+    fin_values = [c["financial"] for c in fin_companies]
+
+    # Method 1: MAD Z-scores
+    mad_z = _mad_zscore(fin_values)
+
+    # Method 2: IQR fences
+    lo_fence, hi_fence = _iqr_fences(fin_values)
+
+    # Also check reality_score for extreme outliers
+    real_values = [c["reality"] for c in fin_companies]
+    mad_z_reality = _mad_zscore(real_values)
+    lo_fence_r, hi_fence_r = _iqr_fences(real_values)
+
+    clean = []
+    outliers = []
+    med_fin = statistics.median(fin_values)
+    med_real = statistics.median(real_values)
+
+    for i, c in enumerate(fin_companies):
+        flags = []
+
+        # Financial outlier checks
+        if abs(mad_z[i]) > threshold:
+            flags.append(f"financial MAD-z={mad_z[i]:+.2f} (|z|>{threshold})")
+        if c["financial"] < lo_fence or c["financial"] > hi_fence:
+            flags.append(f"financial outside IQR fences [{lo_fence:.0f}, {hi_fence:.0f}]")
+
+        # Reality outlier checks
+        if abs(mad_z_reality[i]) > threshold:
+            flags.append(f"reality MAD-z={mad_z_reality[i]:+.2f} (|z|>{threshold})")
+        if c["reality"] < lo_fence_r or c["reality"] > hi_fence_r:
+            flags.append(f"reality outside IQR fences [{lo_fence_r:.0f}, {hi_fence_r:.0f}]")
+
+        if flags:
+            outliers.append({
+                **c,
+                "outlier_flags": flags,
+                "mad_z_financial": round(mad_z[i], 2),
+                "mad_z_reality": round(mad_z_reality[i], 2),
+            })
+        else:
+            clean.append(c)
+
+    # Companies without financial data are kept in clean set
+    clean.extend(no_fin)
+
+    return clean, outliers
+
+
+# ---------------------------------------------------------------------------
 # 3. ANALYSIS ENGINE (returns structured dict)
 # ---------------------------------------------------------------------------
 
-def run_analysis(data):
-    """Run full statistical analysis on dashboard data. Returns a structured dict."""
-
-    # --- Extract scores ---
-    companies = []
-    for c in data:
-        intent = c.get("intent_score")
-        reality = c.get("reality_score")
-        if intent is None or reality is None:
-            continue
-        companies.append({
-            "name": c.get("companyName", "?"),
-            "intent": float(intent),
-            "reality": float(reality),
-            "financial": float(c["financial_index"]) if c.get("financial_index") is not None else None,
-            "confidence": float(c["confidence_score"]) if c.get("confidence_score") is not None else None,
-            "gap": float(c["reality_gap"]) if c.get("reality_gap") is not None else None,
-            "revenue": float(c["revenue_avg_3yr"]) if c.get("revenue_avg_3yr") else None,
-            "employees": int(c["employees"]) if c.get("employees") else None,
-            "ownership": c.get("ownership", ""),
-            "domain": c.get("domain", ""),
-        })
-
+def _analyze_dataset(companies, label="full"):
+    """Core analysis logic on a list of company dicts. Returns a structured dict."""
     if len(companies) < 3:
-        return {"error": "Not enough companies with scores to analyze", "n": len(companies)}
+        return {"error": "Not enough companies with scores to analyze", "n": len(companies), "label": label}
 
-    result = {"n": len(companies)}
+    result = {"n": len(companies), "label": label}
 
     # --- A. Descriptive Statistics ---
     result["descriptive"] = {
@@ -190,7 +279,7 @@ def run_analysis(data):
             interp = "very strong"
         core_corr["interpretation"] = f"{interp} {'positive' if r_p and r_p > 0 else 'negative'}"
 
-        # Outliers from regression line
+        # Residuals from regression line
         if len(paired_rf) >= 5 and r_p is not None:
             sx_val = statistics.stdev(list(rx))
             slope = r_p * (statistics.stdev(list(ry)) / (sx_val + 1e-12)) if sx_val else 0
@@ -296,6 +385,89 @@ def run_analysis(data):
             "bins": [{"range": f"{i*10}-{(i+1)*10-1 if i < 9 else 100}", "count": bins[i]} for i in range(10)],
         }
     result["distributions"] = distributions
+
+    return result
+
+
+def run_analysis(data):
+    """Run full statistical analysis on dashboard data.
+
+    Returns a structured dict with:
+      - "raw": full analysis on all companies (no outlier removal)
+      - "cleaned": analysis after removing statistical outliers
+      - "outlier_report": details about which companies were removed and why
+      - Top-level keys for backward compatibility (= raw analysis)
+    """
+
+    # --- Extract scores ---
+    companies = []
+    for c in data:
+        intent = c.get("intent_score")
+        reality = c.get("reality_score")
+        if intent is None or reality is None:
+            continue
+        companies.append({
+            "name": c.get("companyName", "?"),
+            "intent": float(intent),
+            "reality": float(reality),
+            "financial": float(c["financial_index"]) if c.get("financial_index") is not None else None,
+            "confidence": float(c["confidence_score"]) if c.get("confidence_score") is not None else None,
+            "gap": float(c["reality_gap"]) if c.get("reality_gap") is not None else None,
+            "revenue": float(c["revenue_avg_3yr"]) if c.get("revenue_avg_3yr") else None,
+            "employees": int(c["employees"]) if c.get("employees") else None,
+            "ownership": c.get("ownership", ""),
+            "domain": c.get("domain", ""),
+        })
+
+    if len(companies) < 3:
+        return {"error": "Not enough companies with scores to analyze", "n": len(companies)}
+
+    # --- Step 1: Raw analysis (all data) ---
+    raw_result = _analyze_dataset(companies, label="raw")
+
+    # --- Step 2: Detect & remove outliers ---
+    clean_companies, outlier_list = detect_outliers(companies, threshold=2.5)
+
+    # --- Step 3: Cleaned analysis ---
+    cleaned_result = _analyze_dataset(clean_companies, label="cleaned")
+
+    # --- Build outlier report ---
+    outlier_report = {
+        "method": "Union of MAD Z-score (|z| > 2.5) and IQR fences (1.5x IQR)",
+        "threshold": 2.5,
+        "total_companies": len(companies),
+        "outliers_removed": len(outlier_list),
+        "clean_count": len(clean_companies),
+        "outliers": [
+            {
+                "name": o["name"],
+                "reality": o["reality"],
+                "financial": o["financial"],
+                "mad_z_financial": o["mad_z_financial"],
+                "mad_z_reality": o["mad_z_reality"],
+                "flags": o["outlier_flags"],
+            }
+            for o in outlier_list
+        ],
+    }
+
+    # Compare correlations before/after to highlight the impact
+    raw_r = raw_result.get("reality_vs_financial", {}).get("pearson_r")
+    clean_r = cleaned_result.get("reality_vs_financial", {}).get("pearson_r")
+    if raw_r is not None and clean_r is not None:
+        outlier_report["correlation_impact"] = {
+            "raw_pearson_r": raw_r,
+            "cleaned_pearson_r": clean_r,
+            "delta": round(clean_r - raw_r, 3),
+            "direction_changed": (raw_r > 0) != (clean_r > 0),
+        }
+
+    # --- Return both analyses + outlier report ---
+    # Top-level keys = raw analysis (backward compat with existing frontend)
+    result = {**raw_result}
+    result["raw"] = raw_result
+    result["cleaned"] = cleaned_result
+    result["outlier_report"] = outlier_report
 
     return result
 
