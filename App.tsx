@@ -108,6 +108,7 @@ const App = () => {
             });
 
             setData(processed);
+            setAnalyticsData(null); // Invalidate analytics cache so stats modal fetches fresh data
             setLastSynced(new Date().toLocaleTimeString('en-US', { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }));
         } else {
             throw new Error("Failed to fetch summary data");
@@ -349,7 +350,6 @@ const App = () => {
 
   const handleOpenAnalytics = async () => {
     setIsAnalyticsOpen(true);
-    if (analyticsData) return; // already loaded
     setAnalyticsLoading(true);
     try {
       const res = await fetch(`/api/analyze?t=${Date.now()}`);

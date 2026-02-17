@@ -4,10 +4,13 @@ import requests
 import json
 import time
 import re
+import threading
 from datetime import datetime
 import urllib.parse
 
 class BlobStorage:
+    _index_lock = threading.Lock()
+
     def __init__(self):
         self.api_url = "https://blob.vercel-storage.com"
         self.token = self._load_token()
@@ -217,38 +220,43 @@ class BlobStorage:
         return new_url
 
     def update_global_index(self, summary_entry):
-        print(f"   [Storage] Updating Global Index for {summary_entry['companyName']}...")
+        """
+        Thread-safe index update. Uses a lock to prevent concurrent scans
+        from clobbering each other's updates (read-modify-write race condition).
+        """
+        with BlobStorage._index_lock:
+            print(f"   [Storage] Updating Global Index for {summary_entry['companyName']}...")
 
-        # 1. Read current index (latest version)
-        blobs = self._list("index/summary_list", limit=10)
-        current_index = []
-        if blobs:
-            blobs.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
-            latest_url = blobs[0].get("url")
-            print(f"   [Storage] Reading latest index from: {latest_url}")
-            data = self._get(latest_url)
-            if data and isinstance(data, list):
-                current_index = data
+            # 1. Read current index (latest version)
+            blobs = self._list("index/summary_list", limit=10)
+            current_index = []
+            if blobs:
+                blobs.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
+                latest_url = blobs[0].get("url")
+                print(f"   [Storage] Reading latest index from: {latest_url}")
+                data = self._get(latest_url)
+                if data and isinstance(data, list):
+                    current_index = data
 
-        # 2. Upsert company in the list
-        found = False
-        for i, item in enumerate(current_index):
-            if item["companyName"] == summary_entry["companyName"]:
-                current_index[i] = summary_entry
-                found = True
-                break
-        if not found:
-            current_index.append(summary_entry)
+            # 2. Upsert company in the list
+            found = False
+            for i, item in enumerate(current_index):
+                if item["companyName"] == summary_entry["companyName"]:
+                    current_index[i] = summary_entry
+                    found = True
+                    break
+            if not found:
+                current_index.append(summary_entry)
 
-        # 3. Save new index version
-        print("   [Storage] Uploading new index version...")
-        new_url = self._put("index/summary_list.json", current_index)
+            # 3. Save new index version
+            print("   [Storage] Uploading new index version...")
+            new_url = self._put("index/summary_list.json", current_index)
 
-        # 4. Prune: keep only the 3 newest index files
-        if new_url:
-            self._prune_old_versions("index/summary_list", keep=3)
+            # 4. Prune: keep only the 3 newest index files
+            if new_url:
+                self._prune_old_versions("index/summary_list", keep=3)
 
-        return new_url
+            return new_url
 
     def retrieve_latest_data(self, filename_prefix="index/summary_list"):
         """
