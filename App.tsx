@@ -55,7 +55,7 @@ const App = () => {
   const [isAnalyticsOpen, setIsAnalyticsOpen] = useState(false);
   const [analyticsData, setAnalyticsData] = useState(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
-  const [analyticsView, setAnalyticsView] = useState('winsorized'); // 'raw' | 'cleaned' | 'winsorized'
+  const [analyticsMatrixType, setAnalyticsMatrixType] = useState('spearman'); // 'spearman' | 'pearson'
 
   // BATCH STATE
   const [isBatchOpen, setIsBatchOpen] = useState(false);
@@ -761,9 +761,7 @@ const App = () => {
       {/* --- ANALYTICS PANEL --- */}
       {isAnalyticsOpen && (() => {
         const ad = analyticsData;
-        const view = ad?.[analyticsView] || ad;
-        const report = ad?.outlier_report;
-        const impact = report?.correlation_impact;
+        const view = ad;
         return (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/90 backdrop-blur-sm" onClick={() => setIsAnalyticsOpen(false)} />
@@ -774,19 +772,6 @@ const App = () => {
                 Statistical Analysis
               </h3>
               <div className="flex items-center gap-3">
-                {ad && !ad.error && ad.raw && (
-                  <div className="flex bg-black/40 rounded-lg border border-white/10 p-0.5">
-                    <button onClick={() => setAnalyticsView('winsorized')} className={`px-3 py-1 text-[10px] font-mono font-bold rounded-md transition-all ${analyticsView === 'winsorized' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40' : 'text-slate-500 hover:text-slate-300'}`}>
-                      WINSORIZED
-                    </button>
-                    <button onClick={() => setAnalyticsView('cleaned')} className={`px-3 py-1 text-[10px] font-mono font-bold rounded-md transition-all ${analyticsView === 'cleaned' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'text-slate-500 hover:text-slate-300'}`}>
-                      CLEANED
-                    </button>
-                    <button onClick={() => setAnalyticsView('raw')} className={`px-3 py-1 text-[10px] font-mono font-bold rounded-md transition-all ${analyticsView === 'raw' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' : 'text-slate-500 hover:text-slate-300'}`}>
-                      RAW
-                    </button>
-                  </div>
-                )}
                 <button onClick={() => setIsAnalyticsOpen(false)} className="text-slate-400 hover:text-white">
                   <X size={18} />
                 </button>
@@ -806,77 +791,25 @@ const App = () => {
                   {/* HEADER */}
                   <div className="text-center">
                     <div className="text-[10px] text-violet-400 uppercase tracking-widest font-mono mb-1">
-                      {analyticsView === 'winsorized' ? 'Winsorized Dataset (Extremes Capped at 5th/95th Percentile)'
-                        : analyticsView === 'cleaned' ? 'Cleaned Dataset (Outliers Removed)'
-                        : 'Raw Dataset (All Companies)'}
+                      All Companies — Non-parametric Analysis
                     </div>
                     <div className="text-2xl font-bold text-white">{view.n} Companies Analyzed</div>
-                    {report && analyticsView === 'cleaned' && report.outliers_removed > 0 && (
-                      <div className="text-[10px] text-amber-400 font-mono mt-1">
-                        {report.outliers_removed} outlier{report.outliers_removed > 1 ? 's' : ''} removed from {report.total_companies} total
-                      </div>
-                    )}
                   </div>
 
-                  {/* OUTLIER REPORT (shown in cleaned or winsorized view) */}
-                  {report && report.outliers_removed > 0 && analyticsView !== 'raw' && (
-                    <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-5">
-                      <h4 className="text-sm font-bold text-amber-300 uppercase tracking-wide mb-3 flex items-center gap-2">
-                        <AlertTriangle size={14} /> {analyticsView === 'winsorized' ? 'Outlier Treatment: Winsorization' : 'Outlier Treatment: Removal'}
+                  {/* DISTRIBUTION DIAGNOSTICS (shown when data is skewed) */}
+                  {view.distribution_diagnostics && (
+                    <div className="bg-violet-500/5 border border-violet-500/20 rounded-xl p-4">
+                      <h4 className="text-[10px] font-bold text-violet-300 uppercase tracking-wide mb-2 flex items-center gap-2">
+                        <AlertTriangle size={12} /> Distribution Shape
                       </h4>
-                      <div className="text-[10px] text-slate-400 font-mono mb-1">{report.method}</div>
-                      <div className="text-[10px] text-slate-500 font-mono mb-3">
-                        {analyticsView === 'winsorized'
-                          ? 'Winsorization caps extreme values at 5th/95th percentile — all companies kept, extreme influence reduced.'
-                          : `${report.outliers_removed} companies removed — only those flagged by BOTH methods simultaneously.`}
-                      </div>
-
-                      {/* Correlation impact — 3 columns */}
-                      {impact && (
-                        <div className="grid grid-cols-4 gap-2 mb-4">
-                          <div className="bg-black/30 rounded-lg p-3 text-center">
-                            <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Raw r</div>
-                            <div className="text-lg font-bold text-amber-300">{impact.raw_pearson_r > 0 ? '+' : ''}{impact.raw_pearson_r}</div>
-                          </div>
-                          <div className="bg-black/30 rounded-lg p-3 text-center">
-                            <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Winsorized r</div>
-                            <div className="text-lg font-bold text-cyan-300">{impact.winsorized_pearson_r != null ? (impact.winsorized_pearson_r > 0 ? '+' : '') + impact.winsorized_pearson_r : 'n/a'}</div>
-                            {impact.delta_winsorized != null && <div className="text-[8px] text-slate-500 font-mono mt-0.5">{impact.delta_winsorized > 0 ? '+' : ''}{impact.delta_winsorized}</div>}
-                          </div>
-                          <div className="bg-black/30 rounded-lg p-3 text-center">
-                            <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Cleaned r</div>
-                            <div className="text-lg font-bold text-emerald-300">{impact.cleaned_pearson_r != null ? (impact.cleaned_pearson_r > 0 ? '+' : '') + impact.cleaned_pearson_r : 'n/a'}</div>
-                            {impact.delta_cleaned != null && <div className="text-[8px] text-slate-500 font-mono mt-0.5">{impact.delta_cleaned > 0 ? '+' : ''}{impact.delta_cleaned}</div>}
-                          </div>
-                          <div className="bg-black/30 rounded-lg p-3 text-center">
-                            <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Verdict</div>
-                            {impact.direction_changed ? (
-                              <div className="text-sm font-bold text-rose-400 mt-1">SIGN FLIPPED</div>
-                            ) : (
-                              <div className="text-sm font-bold text-slate-400 mt-1">CONSISTENT</div>
-                            )}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Outlier list (only show in cleaned view) */}
-                      {analyticsView === 'cleaned' && (<div className="space-y-1.5">
-                        {report.outliers.map((o, i) => (
-                          <div key={i} className="bg-black/20 rounded px-3 py-2 border border-amber-500/10">
-                            <div className="flex items-center justify-between">
-                              <span className="text-xs font-mono text-amber-200 font-bold truncate max-w-[200px]">{o.name}</span>
-                              <div className="flex gap-3 text-[10px] font-mono">
-                                <span className="text-cyan-400">Reality: {o.reality}</span>
-                                <span className="text-emerald-400">Financial: {o.financial}</span>
-                                <span className="text-slate-500">z(F)={o.mad_z_financial > 0 ? '+' : ''}{o.mad_z_financial}</span>
-                              </div>
-                            </div>
-                            <div className="text-[9px] text-amber-500/70 font-mono mt-1">
-                              {o.flags.join(' | ')}
-                            </div>
+                      <div className="space-y-1">
+                        {Object.entries(view.distribution_diagnostics).map(([key, diag]: [string, any]) => (
+                          <div key={key} className="text-[10px] text-slate-400 font-mono">
+                            <span className="text-violet-300 capitalize">{key}</span>: {diag.shape} (skew={diag.skew > 0 ? '+' : ''}{diag.skew})
+                            {' — '}<span className="text-slate-500">Spearman/Kendall preferred over Pearson</span>
                           </div>
                         ))}
-                      </div>)}
+                      </div>
                     </div>
                   )}
 
@@ -885,41 +818,55 @@ const App = () => {
                     <h4 className="text-sm font-bold text-violet-300 uppercase tracking-wide mb-3 flex items-center gap-2">
                       <TrendingUp size={14} /> Reality Score vs Financial Index
                     </h4>
-                    {view.reality_vs_financial?.pearson_r != null ? (
+                    {view.reality_vs_financial?.spearman_rho != null ? (
                       <div className="space-y-3">
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                           <div className="bg-black/30 rounded-lg p-3 text-center">
                             <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Paired n</div>
                             <div className="text-xl font-bold text-white">{view.reality_vs_financial.n}</div>
                           </div>
+                          <div className="bg-black/30 rounded-lg p-3 text-center border border-violet-500/20">
+                            <div className="text-[9px] text-violet-400 uppercase tracking-wider font-mono">Spearman rho</div>
+                            <div className={`text-xl font-bold ${view.reality_vs_financial.spearman_rho > 0.3 ? 'text-emerald-400' : view.reality_vs_financial.spearman_rho < -0.3 ? 'text-rose-400' : 'text-amber-400'}`}>
+                              {view.reality_vs_financial.spearman_rho > 0 ? '+' : ''}{view.reality_vs_financial.spearman_rho}
+                            </div>
+                            <div className="text-[8px] text-violet-400/60 font-mono mt-0.5">PRIMARY</div>
+                          </div>
                           <div className="bg-black/30 rounded-lg p-3 text-center">
-                            <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Pearson r</div>
-                            <div className={`text-xl font-bold ${view.reality_vs_financial.pearson_r > 0.3 ? 'text-emerald-400' : view.reality_vs_financial.pearson_r < -0.3 ? 'text-rose-400' : 'text-amber-400'}`}>
-                              {view.reality_vs_financial.pearson_r > 0 ? '+' : ''}{view.reality_vs_financial.pearson_r}
+                            <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Kendall tau</div>
+                            <div className={`text-xl font-bold ${(view.reality_vs_financial.kendall_tau ?? 0) > 0.3 ? 'text-emerald-400' : (view.reality_vs_financial.kendall_tau ?? 0) < -0.3 ? 'text-rose-400' : 'text-amber-400'}`}>
+                              {view.reality_vs_financial.kendall_tau != null ? ((view.reality_vs_financial.kendall_tau > 0 ? '+' : '') + view.reality_vs_financial.kendall_tau) : 'n/a'}
                             </div>
                           </div>
                           <div className="bg-black/30 rounded-lg p-3 text-center">
-                            <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Spearman rho</div>
-                            <div className="text-xl font-bold text-slate-200">
-                              {view.reality_vs_financial.spearman_rho > 0 ? '+' : ''}{view.reality_vs_financial.spearman_rho}
+                            <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Pearson r</div>
+                            <div className="text-xl font-bold text-slate-400">
+                              {view.reality_vs_financial.pearson_r > 0 ? '+' : ''}{view.reality_vs_financial.pearson_r}
                             </div>
+                            <div className="text-[8px] text-slate-600 font-mono mt-0.5">assumes normality</div>
                           </div>
                           <div className="bg-black/30 rounded-lg p-3 text-center">
                             <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Interpretation</div>
                             <div className="text-sm font-bold text-violet-300 uppercase">{view.reality_vs_financial.interpretation}</div>
                           </div>
                         </div>
-                        {view.reality_vs_financial.pearson_p != null && (
+                        {view.reality_vs_financial.spearman_p != null && (
                           <div className="text-[10px] text-slate-500 font-mono text-center">
-                            p-value = {view.reality_vs_financial.pearson_p} {view.reality_vs_financial.pearson_p < 0.05 ? '(statistically significant)' : '(not significant)'}
+                            Spearman p-value = {view.reality_vs_financial.spearman_p} {view.reality_vs_financial.spearman_p < 0.05 ? '(statistically significant)' : '(not significant)'}
+                            {view.reality_vs_financial.kendall_p != null && (<span> | Kendall p-value = {view.reality_vs_financial.kendall_p}</span>)}
+                          </div>
+                        )}
+                        {view.reality_vs_financial.divergence_note && (
+                          <div className="text-[10px] text-amber-400/80 font-mono text-center bg-amber-500/5 rounded-lg p-2 border border-amber-500/10">
+                            {view.reality_vs_financial.divergence_note}
                           </div>
                         )}
                         {/* Regression residuals */}
-                        {view.reality_vs_financial.outliers?.length > 0 && (
+                        {view.reality_vs_financial.residuals?.length > 0 && (
                           <div className="mt-3">
                             <div className="text-[10px] text-slate-500 uppercase tracking-wider font-mono mb-2">Largest Residuals from Regression</div>
                             <div className="space-y-1">
-                              {view.reality_vs_financial.outliers.map((o, i) => (
+                              {view.reality_vs_financial.residuals.map((o, i) => (
                                 <div key={i} className="flex items-center justify-between text-xs font-mono bg-black/20 rounded px-3 py-1.5">
                                   <span className="text-slate-300 truncate max-w-[200px]">{o.name}</span>
                                   <div className="flex gap-4 text-[10px]">
@@ -943,7 +890,19 @@ const App = () => {
                   {/* CORRELATION MATRIX */}
                   {view.correlation_matrix && (
                     <div className="bg-black/30 border border-white/10 rounded-xl p-5">
-                      <h4 className="text-sm font-bold text-slate-300 uppercase tracking-wide mb-3">Correlation Matrix (Pearson)</h4>
+                      <div className="flex items-center justify-between mb-3">
+                        <h4 className="text-sm font-bold text-slate-300 uppercase tracking-wide">
+                          Correlation Matrix ({analyticsMatrixType === 'spearman' ? 'Spearman' : 'Pearson'})
+                        </h4>
+                        <div className="flex bg-black/40 rounded-lg border border-white/10 p-0.5">
+                          <button onClick={() => setAnalyticsMatrixType('spearman')} className={`px-2.5 py-0.5 text-[9px] font-mono font-bold rounded-md transition-all ${analyticsMatrixType === 'spearman' ? 'bg-violet-500/20 text-violet-300 border border-violet-500/40' : 'text-slate-500 hover:text-slate-300'}`}>
+                            SPEARMAN
+                          </button>
+                          <button onClick={() => setAnalyticsMatrixType('pearson')} className={`px-2.5 py-0.5 text-[9px] font-mono font-bold rounded-md transition-all ${analyticsMatrixType === 'pearson' ? 'bg-slate-500/20 text-slate-300 border border-slate-500/40' : 'text-slate-500 hover:text-slate-300'}`}>
+                            PEARSON
+                          </button>
+                        </div>
+                      </div>
                       <div className="overflow-x-auto">
                         <table className="w-full text-xs font-mono">
                           <thead>
@@ -955,11 +914,13 @@ const App = () => {
                             </tr>
                           </thead>
                           <tbody>
-                            {['intent', 'reality', 'financial', 'confidence'].map((ki, i) => (
+                            {['intent', 'reality', 'financial', 'confidence'].map((ki) => {
+                              const matrixData = analyticsMatrixType === 'spearman' ? view.correlation_matrix : (view.correlation_matrix_pearson || view.correlation_matrix);
+                              return (
                               <tr key={ki}>
                                 <td className="text-slate-400 py-1 px-2 capitalize">{ki}</td>
                                 {['intent', 'reality', 'financial', 'confidence'].map((kj) => {
-                                  const v = view.correlation_matrix[ki]?.[kj];
+                                  const v = matrixData[ki]?.[kj];
                                   const isIdentity = ki === kj;
                                   const color = v == null ? 'text-slate-600' : isIdentity ? 'text-slate-500' : v > 0.3 ? 'text-emerald-400' : v < -0.3 ? 'text-rose-400' : 'text-slate-300';
                                   return (
@@ -969,10 +930,16 @@ const App = () => {
                                   );
                                 })}
                               </tr>
-                            ))}
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>
+                      {analyticsMatrixType === 'pearson' && (
+                        <div className="text-[9px] text-amber-400/60 font-mono text-center mt-2">
+                          Pearson assumes normal distribution — use Spearman for skewed data
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -986,12 +953,13 @@ const App = () => {
                             <tr className="text-slate-500 text-[10px]">
                               <th className="text-left py-1 px-2"></th>
                               <th className="text-center py-1 px-1">n</th>
-                              <th className="text-center py-1 px-1">Mean</th>
                               <th className="text-center py-1 px-1">Median</th>
+                              <th className="text-center py-1 px-1">IQR</th>
+                              <th className="text-center py-1 px-1">Mean</th>
                               <th className="text-center py-1 px-1">Std</th>
-                              <th className="text-center py-1 px-1">Min</th>
-                              <th className="text-center py-1 px-1">Max</th>
+                              <th className="text-center py-1 px-1">Range</th>
                               <th className="text-center py-1 px-1">Skew</th>
+                              <th className="text-center py-1 px-1">Shape</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1002,12 +970,13 @@ const App = () => {
                                 <tr key={key} className="border-t border-white/5">
                                   <td className="text-slate-400 py-1.5 px-2">{label}</td>
                                   <td className="text-center text-slate-500 py-1.5 px-1">{d.n}</td>
-                                  <td className="text-center text-white py-1.5 px-1">{d.mean}</td>
-                                  <td className="text-center text-slate-300 py-1.5 px-1">{d.median}</td>
-                                  <td className="text-center text-slate-400 py-1.5 px-1">{d.std}</td>
-                                  <td className="text-center text-slate-400 py-1.5 px-1">{d.min}</td>
-                                  <td className="text-center text-slate-400 py-1.5 px-1">{d.max}</td>
+                                  <td className="text-center text-white py-1.5 px-1 font-bold">{d.median}</td>
+                                  <td className="text-center text-slate-300 py-1.5 px-1">{d.q1 != null ? `${d.q1}-${d.q3}` : '-'}</td>
+                                  <td className="text-center text-slate-400 py-1.5 px-1">{d.mean}</td>
+                                  <td className="text-center text-slate-500 py-1.5 px-1">{d.std}</td>
+                                  <td className="text-center text-slate-500 py-1.5 px-1">{d.min}-{d.max}</td>
                                   <td className={`text-center py-1.5 px-1 ${d.skew > 0.5 ? 'text-amber-400' : d.skew < -0.5 ? 'text-cyan-400' : 'text-slate-400'}`}>{d.skew > 0 ? '+' : ''}{d.skew}</td>
+                                  <td className={`text-center py-1.5 px-1 text-[9px] ${d.skew > 0.5 ? 'text-amber-400/70' : d.skew < -0.5 ? 'text-cyan-400/70' : 'text-slate-500'}`}>{d.shape || '-'}</td>
                                 </tr>
                               );
                             })}

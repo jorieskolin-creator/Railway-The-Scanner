@@ -2,13 +2,20 @@
 Score Correlation & Statistical Analysis
 =========================================
 Analyzes all company scores from the dashboard index and runs:
-  1. Pearson & Spearman correlation: Reality Score vs Financial Index
-  2. Correlation matrix across all numeric scores
-  3. Descriptive statistics (mean, median, std, min, max, skew)
-  4. Archetype distribution
-  5. Outlier detection (companies far from the regression line)
-  6. Domain/industry and ownership breakdowns
-  7. Score distributions
+  1. Spearman, Kendall & Pearson correlation: Reality Score vs Financial Index
+  2. Correlation matrix across all numeric scores (Spearman + Pearson)
+  3. Descriptive statistics (median, IQR, mean, std, min, max, skew)
+  4. Distribution shape diagnostics (skewness-aware)
+  5. Archetype distribution
+  6. Regression residuals (companies furthest from fit line)
+  7. Domain/industry and ownership breakdowns
+  8. Score distributions
+
+Statistical note: Reality Score and Financial Index are right-skewed
+(Poisson-like) distributions bounded at zero. Non-parametric methods
+(Spearman, Kendall) are used as primary correlation measures since
+they don't assume normality. Pearson is kept for reference but should
+be interpreted with caution on skewed data.
 
 Can be used as:
   - API: imported by main.py and called via /api/analyze endpoint
@@ -95,24 +102,95 @@ def _norm_cdf(z):
 
 
 def _describe(values):
-    """Return descriptive statistics as a dict."""
+    """Return descriptive statistics as a dict.
+
+    Includes IQR and distribution shape diagnosis because our score
+    distributions (Reality, Financial) tend to be right-skewed rather
+    than normal.  Median/IQR are more informative than mean/std for
+    skewed data.
+    """
     if not values:
         return None
     n = len(values)
     avg = statistics.mean(values)
+    med = statistics.median(values)
     std = statistics.stdev(values) if n > 1 else 0
     skew = 0
     if std > 0 and n > 2:
         skew = (n / ((n-1)*(n-2))) * sum(((v - avg)/std)**3 for v in values)
+
+    sv = sorted(values)
+    q1 = sv[n // 4] if n >= 4 else sv[0]
+    q3 = sv[(3 * n) // 4] if n >= 4 else sv[-1]
+    iqr = round(q3 - q1, 1)
+
+    # Distribution shape diagnosis
+    if abs(skew) < 0.5:
+        shape = "approximately symmetric"
+    elif skew > 1.0:
+        shape = "strongly right-skewed"
+    elif skew > 0.5:
+        shape = "moderately right-skewed"
+    elif skew < -1.0:
+        shape = "strongly left-skewed"
+    else:
+        shape = "moderately left-skewed"
+
     return {
         "n": n,
+        "median": round(med, 1),
+        "q1": round(q1, 1),
+        "q3": round(q3, 1),
+        "iqr": iqr,
         "mean": round(avg, 1),
-        "median": round(statistics.median(values), 1),
         "std": round(std, 1),
         "min": round(min(values), 1),
         "max": round(max(values), 1),
         "skew": round(skew, 2),
+        "shape": shape,
     }
+
+
+def kendall_tau(x, y):
+    """Kendall's tau-b rank correlation (handles ties).
+
+    Non-parametric — makes no distributional assumptions.
+    More robust than Spearman with small samples and many ties.
+    O(n^2) but fine for our dataset sizes (15-30 companies).
+    """
+    n = len(x)
+    if n < 3:
+        return None, None
+    concordant = 0
+    discordant = 0
+    tied_x = 0
+    tied_y = 0
+    for i in range(n):
+        for j in range(i + 1, n):
+            dx = x[i] - x[j]
+            dy = y[i] - y[j]
+            if dx * dy > 0:
+                concordant += 1
+            elif dx * dy < 0:
+                discordant += 1
+            else:
+                if dx == 0:
+                    tied_x += 1
+                if dy == 0:
+                    tied_y += 1
+    n_pairs = n * (n - 1) / 2
+    denom = math.sqrt((n_pairs - tied_x) * (n_pairs - tied_y))
+    if denom == 0:
+        return 0.0, 1.0
+    tau = (concordant - discordant) / denom
+    # Normal approximation for p-value (reasonable for n >= 10)
+    if n >= 10:
+        var = (2 * (2 * n + 5)) / (9 * n * (n - 1))
+        z = tau / math.sqrt(var) if var > 0 else 0
+        p = 2 * (1 - _norm_cdf(abs(z)))
+    else:
+        p = None
+    return round(tau, 3), round(p, 4) if p is not None else None
 
 
 def classify_archetype(reality, financial):
@@ -121,133 +199,6 @@ def classify_archetype(reality, financial):
         return "Thriving" if financial >= 50 else "Modernizing"
     else:
         return "Cash Cow" if financial >= 50 else "At Risk"
-
-
-# ---------------------------------------------------------------------------
-# 2b. OUTLIER DETECTION
-# ---------------------------------------------------------------------------
-
-def _mad_zscore(values):
-    """Modified Z-scores using Median Absolute Deviation.
-
-    More robust than standard Z-score because median is resistant
-    to the very outliers we're trying to detect (unlike mean/std).
-    MAD Z-score = 0.6745 * (x - median) / MAD
-    The 0.6745 factor makes MAD consistent with std for normal distributions.
-    """
-    if len(values) < 3:
-        return [0.0] * len(values)
-    med = statistics.median(values)
-    abs_devs = [abs(v - med) for v in values]
-    mad = statistics.median(abs_devs)
-    if mad == 0:
-        # Fall back to standard Z-score if MAD is zero (e.g., >50% identical values)
-        avg = statistics.mean(values)
-        std = statistics.stdev(values)
-        if std == 0:
-            return [0.0] * len(values)
-        return [(v - avg) / std for v in values]
-    return [0.6745 * (v - med) / mad for v in values]
-
-
-def _iqr_fences(values):
-    """Return (lower_fence, upper_fence) using 1.5 * IQR rule.
-
-    Non-parametric — works on skewed financial data without
-    assuming normal distribution.
-    """
-    if len(values) < 4:
-        return float('-inf'), float('inf')
-    sv = sorted(values)
-    n = len(sv)
-    q1 = sv[n // 4]
-    q3 = sv[(3 * n) // 4]
-    iqr = q3 - q1
-    return q1 - 1.5 * iqr, q3 + 1.5 * iqr
-
-
-def detect_outliers(companies, threshold=3.0):
-    """Detect outliers in financial_index using two methods:
-
-    1. Modified Z-score (MAD-based): |z| > threshold (default 3.0)
-    2. IQR fences: below Q1-1.5*IQR or above Q3+1.5*IQR
-
-    A company is only flagged if BOTH methods agree on the SAME variable
-    (intersection). This prevents over-removal of legitimate edge cases.
-    Only financial_index is checked — reality scores are AI-generated
-    on a controlled 0-100 scale and rarely produce true statistical outliers.
-
-    Returns (clean_list, outlier_list) where each outlier has
-    metadata about why it was flagged.
-    """
-    fin_companies = [c for c in companies if c["financial"] is not None]
-    no_fin = [c for c in companies if c["financial"] is None]
-
-    if len(fin_companies) < 5:
-        # Not enough data to detect outliers reliably
-        return companies, []
-
-    fin_values = [c["financial"] for c in fin_companies]
-
-    # Method 1: MAD Z-scores
-    mad_z = _mad_zscore(fin_values)
-
-    # Method 2: IQR fences
-    lo_fence, hi_fence = _iqr_fences(fin_values)
-
-    clean = []
-    outliers = []
-
-    for i, c in enumerate(fin_companies):
-        mad_flagged = abs(mad_z[i]) > threshold
-        iqr_flagged = c["financial"] < lo_fence or c["financial"] > hi_fence
-
-        # Only remove if BOTH methods agree (intersection = conservative)
-        if mad_flagged and iqr_flagged:
-            outliers.append({
-                **c,
-                "outlier_flags": [
-                    f"financial MAD-z={mad_z[i]:+.2f} (|z|>{threshold})",
-                    f"financial outside IQR fences [{lo_fence:.0f}, {hi_fence:.0f}]",
-                ],
-                "mad_z_financial": round(mad_z[i], 2),
-            })
-        else:
-            clean.append(c)
-
-    # Companies without financial data are kept in clean set
-    clean.extend(no_fin)
-
-    return clean, outliers
-
-
-def winsorize(companies, percentile=5):
-    """Cap extreme financial_index values at the p-th and (100-p)-th percentile.
-
-    Unlike outlier removal, Winsorization keeps ALL data points but
-    reduces the influence of extremes. This preserves sample size
-    while limiting leverage effects.
-    """
-    fin_companies = [c for c in companies if c["financial"] is not None]
-    no_fin = [c for c in companies if c["financial"] is None]
-
-    if len(fin_companies) < 10:
-        return companies
-
-    fin_values = sorted([c["financial"] for c in fin_companies])
-    n = len(fin_values)
-    lo_idx = max(0, int(n * percentile / 100))
-    hi_idx = min(n - 1, int(n * (100 - percentile) / 100))
-    lo_cap = fin_values[lo_idx]
-    hi_cap = fin_values[hi_idx]
-
-    result = []
-    for c in fin_companies:
-        capped = {**c}
-        capped["financial"] = max(lo_cap, min(hi_cap, c["financial"]))
-        result.append(capped)
-    result.extend(no_fin)
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -271,32 +222,51 @@ def _analyze_dataset(companies, label="full"):
     }
 
     # --- B. Core Correlation: Reality vs Financial ---
+    # Spearman (rank-based) is the primary metric because our data is
+    # right-skewed / Poisson-like, not normally distributed.
+    # Kendall's tau is included as a second non-parametric measure —
+    # it's more robust with small n and many ties.
+    # Pearson is kept for reference but may be misleading on skewed data.
     paired_rf = [(c["reality"], c["financial"]) for c in companies if c["financial"] is not None]
     core_corr = {"n": len(paired_rf)}
     if len(paired_rf) >= 3:
         rx, ry = zip(*paired_rf)
-        r_p, p_p = pearson(list(rx), list(ry))
         r_s, p_s = spearman(list(rx), list(ry))
-        core_corr["pearson_r"] = round(r_p, 3) if r_p is not None else None
-        core_corr["pearson_p"] = round(p_p, 4) if p_p is not None else None
+        tau, p_tau = kendall_tau(list(rx), list(ry))
+        r_p, p_p = pearson(list(rx), list(ry))
+
         core_corr["spearman_rho"] = round(r_s, 3) if r_s is not None else None
         core_corr["spearman_p"] = round(p_s, 4) if p_s is not None else None
+        core_corr["kendall_tau"] = tau
+        core_corr["kendall_p"] = p_tau
+        core_corr["pearson_r"] = round(r_p, 3) if r_p is not None else None
+        core_corr["pearson_p"] = round(p_p, 4) if p_p is not None else None
 
-        # Interpret
-        strength = abs(r_p) if r_p else 0
-        if strength < 0.1:
+        # Interpret based on Spearman (appropriate for skewed data)
+        primary = abs(r_s) if r_s else 0
+        if primary < 0.1:
             interp = "negligible"
-        elif strength < 0.3:
+        elif primary < 0.3:
             interp = "weak"
-        elif strength < 0.5:
+        elif primary < 0.5:
             interp = "moderate"
-        elif strength < 0.7:
+        elif primary < 0.7:
             interp = "strong"
         else:
             interp = "very strong"
-        core_corr["interpretation"] = f"{interp} {'positive' if r_p and r_p > 0 else 'negative'}"
+        direction = "positive" if r_s and r_s > 0 else "negative"
+        core_corr["interpretation"] = f"{interp} {direction}"
 
-        # Residuals from regression line
+        # Note if Pearson and Spearman disagree meaningfully
+        if r_p is not None and r_s is not None:
+            delta = abs(r_p - r_s)
+            if delta > 0.15:
+                core_corr["divergence_note"] = (
+                    f"Pearson ({r_p:+.3f}) and Spearman ({r_s:+.3f}) differ by {delta:.3f}. "
+                    f"This is expected with skewed distributions — Spearman is more reliable here."
+                )
+
+        # Residuals from regression line (Spearman-based rank regression)
         if len(paired_rf) >= 5 and r_p is not None:
             sx_val = statistics.stdev(list(rx))
             slope = r_p * (statistics.stdev(list(ry)) / (sx_val + 1e-12)) if sx_val else 0
@@ -313,25 +283,32 @@ def _analyze_dataset(companies, label="full"):
                         "residual": round(residual, 1),
                     })
             residuals.sort(key=lambda r: abs(r["residual"]), reverse=True)
-            core_corr["outliers"] = residuals[:5]
+            core_corr["residuals"] = residuals[:5]
 
     result["reality_vs_financial"] = core_corr
 
-    # --- C. Full Correlation Matrix ---
+    # --- C. Full Correlation Matrix (Spearman + Pearson) ---
     score_keys = ["intent", "reality", "financial", "confidence"]
-    matrix = {}
+    matrix_spearman = {}
+    matrix_pearson = {}
     for ki in score_keys:
-        row = {}
+        row_s = {}
+        row_p = {}
         for kj in score_keys:
             pairs = [(c[ki], c[kj]) for c in companies if c[ki] is not None and c[kj] is not None]
             if len(pairs) >= 3:
                 x, y = zip(*pairs)
-                r, _ = pearson(list(x), list(y))
-                row[kj] = round(r, 3) if r is not None else None
+                rs, _ = spearman(list(x), list(y))
+                rp, _ = pearson(list(x), list(y))
+                row_s[kj] = round(rs, 3) if rs is not None else None
+                row_p[kj] = round(rp, 3) if rp is not None else None
             else:
-                row[kj] = None
-        matrix[ki] = row
-    result["correlation_matrix"] = matrix
+                row_s[kj] = None
+                row_p[kj] = None
+        matrix_spearman[ki] = row_s
+        matrix_pearson[ki] = row_p
+    result["correlation_matrix"] = matrix_spearman
+    result["correlation_matrix_pearson"] = matrix_pearson
 
     # --- D. Archetype Distribution ---
     archetypes = [classify_archetype(c["reality"], c["financial"] if c["financial"] is not None else c["intent"]) for c in companies]
@@ -409,11 +386,15 @@ def _analyze_dataset(companies, label="full"):
 def run_analysis(data):
     """Run full statistical analysis on dashboard data.
 
-    Returns a structured dict with:
-      - "raw": full analysis on all companies (no outlier removal)
-      - "cleaned": analysis after removing statistical outliers
-      - "outlier_report": details about which companies were removed and why
-      - Top-level keys for backward compatibility (= raw analysis)
+    Returns a structured dict with all analysis at the top level.
+    No outlier removal or data cleaning is performed — all companies
+    with valid scores are analyzed as-is. Low-scoring companies are
+    legitimate data points (struggling companies), not statistical
+    artifacts to be removed.
+
+    Non-parametric methods (Spearman, Kendall) are used as primary
+    correlation measures because our score distributions are right-skewed
+    (Poisson-like), not normally distributed.
     """
 
     # --- Extract scores ---
@@ -439,59 +420,27 @@ def run_analysis(data):
     if len(companies) < 3:
         return {"error": "Not enough companies with scores to analyze", "n": len(companies)}
 
-    # --- Step 1: Raw analysis (all data) ---
-    raw_result = _analyze_dataset(companies, label="raw")
+    # Single-pass analysis on all data
+    result = _analyze_dataset(companies, label="full")
 
-    # --- Step 2: Detect & remove outliers (conservative: intersection + 3σ) ---
-    clean_companies, outlier_list = detect_outliers(companies, threshold=3.0)
-
-    # --- Step 3: Cleaned analysis (outliers removed) ---
-    cleaned_result = _analyze_dataset(clean_companies, label="cleaned")
-
-    # --- Step 4: Winsorized analysis (extremes capped at 5th/95th pct) ---
-    winsorized_companies = winsorize(companies, percentile=5)
-    winsorized_result = _analyze_dataset(winsorized_companies, label="winsorized")
-
-    # --- Build outlier report ---
-    outlier_report = {
-        "method": "Intersection of MAD Z-score (|z| > 3.0) and IQR fences (1.5x IQR) on Financial Index",
-        "threshold": 3.0,
-        "total_companies": len(companies),
-        "outliers_removed": len(outlier_list),
-        "clean_count": len(clean_companies),
-        "outliers": [
-            {
-                "name": o["name"],
-                "reality": o["reality"],
-                "financial": o["financial"],
-                "mad_z_financial": o["mad_z_financial"],
-                "flags": o["outlier_flags"],
+    # --- Distribution diagnostics ---
+    # Flag which variables are significantly skewed so the frontend
+    # can explain why non-parametric methods are used.
+    dist_notes = {}
+    for key in ["reality", "financial"]:
+        desc = result.get("descriptive", {}).get(key)
+        if desc and abs(desc["skew"]) > 0.5:
+            dist_notes[key] = {
+                "skew": desc["skew"],
+                "shape": desc["shape"],
+                "note": (
+                    f"{key.title()} distribution is {desc['shape']} (skew={desc['skew']:+.2f}). "
+                    f"Non-parametric correlations (Spearman, Kendall) are more reliable than "
+                    f"Pearson for this data shape."
+                ),
             }
-            for o in outlier_list
-        ],
-    }
-
-    # Compare correlations across all three methods
-    raw_r = raw_result.get("reality_vs_financial", {}).get("pearson_r")
-    clean_r = cleaned_result.get("reality_vs_financial", {}).get("pearson_r")
-    wins_r = winsorized_result.get("reality_vs_financial", {}).get("pearson_r")
-    if raw_r is not None:
-        outlier_report["correlation_impact"] = {
-            "raw_pearson_r": raw_r,
-            "cleaned_pearson_r": clean_r,
-            "winsorized_pearson_r": wins_r,
-            "delta_cleaned": round(clean_r - raw_r, 3) if clean_r is not None else None,
-            "delta_winsorized": round(wins_r - raw_r, 3) if wins_r is not None else None,
-            "direction_changed": clean_r is not None and (raw_r > 0) != (clean_r > 0),
-        }
-
-    # --- Return all three analyses + outlier report ---
-    # Top-level keys = raw analysis (backward compat)
-    result = {**raw_result}
-    result["raw"] = raw_result
-    result["cleaned"] = cleaned_result
-    result["winsorized"] = winsorized_result
-    result["outlier_report"] = outlier_report
+    if dist_notes:
+        result["distribution_diagnostics"] = dist_notes
 
     return result
 
@@ -518,8 +467,9 @@ def print_analysis(r):
                        ("Reality Gap (I-R)", "gap")]:
         d = r["descriptive"].get(key)
         if d:
-            print(f"  {label:25s}  n={d['n']:3d}  mean={d['mean']:5.1f}  median={d['median']:5.1f}  "
-                  f"std={d['std']:5.1f}  min={d['min']:5.1f}  max={d['max']:5.1f}  skew={d['skew']:+.2f}")
+            print(f"  {label:25s}  n={d['n']:3d}  median={d['median']:5.1f}  IQR=[{d['q1']:.1f}-{d['q3']:.1f}]({d['iqr']:.1f})  "
+                  f"mean={d['mean']:5.1f}  std={d['std']:5.1f}  range=[{d['min']:.1f}-{d['max']:.1f}]  "
+                  f"skew={d['skew']:+.2f}  [{d['shape']}]")
         else:
             print(f"  {label:25s}  no data")
     print()
@@ -528,16 +478,20 @@ def print_analysis(r):
     print("B. CORE CORRELATION: Reality Score vs Financial Index")
     print("-" * 70)
     cc = r["reality_vs_financial"]
-    if cc.get("pearson_r") is not None:
+    if cc.get("spearman_rho") is not None:
         print(f"  Paired observations:  n = {cc['n']}")
-        p_str = f"(p={cc['pearson_p']:.4f})" if cc.get('pearson_p') is not None else "(p: n/a, n<30)"
         s_str = f"(p={cc['spearman_p']:.4f})" if cc.get('spearman_p') is not None else "(p: n/a, n<30)"
-        print(f"  Pearson  r = {cc['pearson_r']:+.3f}  {p_str}")
-        print(f"  Spearman p = {cc['spearman_rho']:+.3f}  {s_str}")
-        print(f"\n  Interpretation: {cc['interpretation'].upper()}")
-        if cc.get("outliers"):
-            print(f"\n  Largest outliers from Reality->Financial regression:")
-            for i, o in enumerate(cc["outliers"]):
+        t_str = f"(p={cc['kendall_p']:.4f})" if cc.get('kendall_p') is not None else "(p: n/a, n<10)"
+        p_str = f"(p={cc['pearson_p']:.4f})" if cc.get('pearson_p') is not None else "(p: n/a, n<30)"
+        print(f"  Spearman rho = {cc['spearman_rho']:+.3f}  {s_str}  [PRIMARY — non-parametric]")
+        print(f"  Kendall  tau = {cc['kendall_tau']:+.3f}  {t_str}  [non-parametric]")
+        print(f"  Pearson  r   = {cc['pearson_r']:+.3f}  {p_str}  [assumes normality — use with caution]")
+        print(f"\n  Interpretation (Spearman): {cc['interpretation'].upper()}")
+        if cc.get("divergence_note"):
+            print(f"  NOTE: {cc['divergence_note']}")
+        if cc.get("residuals"):
+            print(f"\n  Largest residuals from Reality->Financial regression:")
+            for i, o in enumerate(cc["residuals"]):
                 label = "Financial > expected" if o["residual"] > 0 else "Financial < expected"
                 fin = f"{o['financial']:4.0f}"
                 print(f"    {i+1}. {o['name']:35s}  Reality={o['reality']:4.0f}  Financial={fin}  residual={o['residual']:+.1f}  ({label})")
@@ -546,7 +500,7 @@ def print_analysis(r):
     print()
 
     # C. Correlation Matrix
-    print("C. FULL CORRELATION MATRIX (Pearson)")
+    print("C. FULL CORRELATION MATRIX (Spearman)")
     print("-" * 70)
     labels = ["Intent", "Reality", "Financial", "Confidence"]
     keys = ["intent", "reality", "financial", "confidence"]
