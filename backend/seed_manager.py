@@ -286,8 +286,7 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
                     max_research_loops=1, subsidiaries=company.get("subsidiaries")
                 )
                 financial_future = sub_executor.submit(
-                    financial_health_search, company_name, company["url"],
-                    model_id="gemini-3-pro-preview"
+                    financial_health_search, company_name, company["url"]
                 )
                 reality_results = reality_future.result()
                 try:
@@ -521,15 +520,15 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                     except Exception as opus_err:
                         print(f"   [{company_name}] ❌ [Synthesis] Opus 4.6 failed: {opus_err}")
 
-                        # Fallback 1: Gemini 3 Pro
+                        # Fallback 1: Gemini 2.5 Pro
                         gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
                         if gemini_key:
                             try:
-                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Gemini 3 Pro...")
+                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Gemini 2.5 Pro...")
                                 g_start = time.time()
                                 gemini_client = genai.Client(api_key=gemini_key)
                                 gemini_resp = gemini_client.models.generate_content(
-                                    model="gemini-3-pro-preview",
+                                    model="gemini-2.5-pro",
                                     contents=synthesis_prompt,
                                     config=types.GenerateContentConfig(
                                         temperature=0.7,
@@ -537,9 +536,9 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                                     )
                                 )
                                 response_text = gemini_resp.text or ""
-                                print(f"   [{company_name}] ✅ [Synthesis] Gemini 3 Pro succeeded in {int((time.time() - g_start) * 1000)}ms")
+                                print(f"   [{company_name}] ✅ [Synthesis] Gemini 2.5 Pro succeeded in {int((time.time() - g_start) * 1000)}ms")
                             except Exception as gemini_err:
-                                print(f"   [{company_name}] ❌ [Synthesis] Gemini 3 Pro failed: {gemini_err}")
+                                print(f"   [{company_name}] ❌ [Synthesis] Gemini 2.5 Pro failed: {gemini_err}")
 
                         # Fallback 2: Sonnet 4.5
                         if not response_text:

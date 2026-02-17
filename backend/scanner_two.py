@@ -1631,7 +1631,7 @@ def financial_health_search(company_name: str, company_url: str = None, model_id
     Returns a 0-100 composite score with 4 sub-dimensions (0-25 each).
     """
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-    primary_model = model_id or "gemini-3-pro-preview"
+    primary_model = model_id or "gemini-2.5-pro"
 
     search_name = clean_company_name_for_search(company_name)
     domain_hint = get_clean_domain(company_url) if company_url else f"{search_name.lower().replace(' ', '')}.fi"
@@ -1732,9 +1732,9 @@ CONFIDENCE GUIDE:
     # Attempt 1: Primary model
     data = _execute_financial_search(api_key, primary_model, prompt, company_name)
 
-    # Attempt 2: Fallback to Gemini 2.5 Pro
-    if not data and primary_model != "gemini-2.5-pro":
-        data = _execute_financial_search(api_key, "gemini-2.5-pro", prompt, company_name)
+    # Attempt 2: Fallback to Gemini 3 Flash
+    if not data:
+        data = _execute_financial_search(api_key, "gemini-3-flash-preview", prompt, company_name)
 
     if not data:
         print(f"   [Financial Health] All models failed for {company_name}. Using defaults.")

@@ -348,8 +348,7 @@ def run_scan(
                 subsidiaries=company_subsidiaries
             )
             financial_future = executor.submit(
-                financial_health_search, companyName, target_url,
-                model_id=search_model
+                financial_health_search, companyName, target_url
             )
 
             reality_results = reality_future.result()
