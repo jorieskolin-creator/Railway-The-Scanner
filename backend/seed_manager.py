@@ -594,23 +594,6 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
             company_ownership = meta.get("ownership", None)
             company_hq = meta.get("hq_country", None)
 
-            # --- NOISE FLOOR: scores < 20 are not meaningful → zero them out ---
-            SCORE_NOISE_FLOOR = 20
-            raw_intent = intent_results["score"]
-            raw_reality = reality_results["score"]
-            if intent_results["score"] < SCORE_NOISE_FLOOR:
-                intent_results["score"] = 0
-                print(f"   📉 [Noise Floor] Intent {raw_intent} < {SCORE_NOISE_FLOOR} → 0")
-            if reality_results["score"] < SCORE_NOISE_FLOOR:
-                reality_results["score"] = 0
-                print(f"   📉 [Noise Floor] Reality {raw_reality} < {SCORE_NOISE_FLOOR} → 0")
-
-            if intent_results["score"] != raw_intent or reality_results["score"] != raw_reality:
-                gap = intent_results["score"] - reality_results["score"]
-                if reality_results["score"] >= intent_results["score"]:
-                    washing_flag = False
-                    washing_type = None
-
             # --- FINAL ARCHETYPE (computed from finalized scores) ---
             fin_score = financial_results.get("financial_index")
             fin_for_archetype = fin_score if fin_score is not None else intent_results["score"]
