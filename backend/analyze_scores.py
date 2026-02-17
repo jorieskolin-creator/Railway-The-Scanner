@@ -166,17 +166,20 @@ def _iqr_fences(values):
     return q1 - 1.5 * iqr, q3 + 1.5 * iqr
 
 
-def detect_outliers(companies, threshold=2.5):
-    """Detect outliers across financial_index using two methods:
+def detect_outliers(companies, threshold=3.0):
+    """Detect outliers in financial_index using two methods:
 
-    1. Modified Z-score (MAD-based): |z| > threshold (default 2.5)
+    1. Modified Z-score (MAD-based): |z| > threshold (default 3.0)
     2. IQR fences: below Q1-1.5*IQR or above Q3+1.5*IQR
 
-    A company is flagged if EITHER method flags it (union).
+    A company is only flagged if BOTH methods agree on the SAME variable
+    (intersection). This prevents over-removal of legitimate edge cases.
+    Only financial_index is checked — reality scores are AI-generated
+    on a controlled 0-100 scale and rarely produce true statistical outliers.
+
     Returns (clean_list, outlier_list) where each outlier has
     metadata about why it was flagged.
     """
-    # Only check financial_index — that's the score with known extreme outliers
     fin_companies = [c for c in companies if c["financial"] is not None]
     no_fin = [c for c in companies if c["financial"] is None]
 
@@ -192,37 +195,22 @@ def detect_outliers(companies, threshold=2.5):
     # Method 2: IQR fences
     lo_fence, hi_fence = _iqr_fences(fin_values)
 
-    # Also check reality_score for extreme outliers
-    real_values = [c["reality"] for c in fin_companies]
-    mad_z_reality = _mad_zscore(real_values)
-    lo_fence_r, hi_fence_r = _iqr_fences(real_values)
-
     clean = []
     outliers = []
-    med_fin = statistics.median(fin_values)
-    med_real = statistics.median(real_values)
 
     for i, c in enumerate(fin_companies):
-        flags = []
+        mad_flagged = abs(mad_z[i]) > threshold
+        iqr_flagged = c["financial"] < lo_fence or c["financial"] > hi_fence
 
-        # Financial outlier checks
-        if abs(mad_z[i]) > threshold:
-            flags.append(f"financial MAD-z={mad_z[i]:+.2f} (|z|>{threshold})")
-        if c["financial"] < lo_fence or c["financial"] > hi_fence:
-            flags.append(f"financial outside IQR fences [{lo_fence:.0f}, {hi_fence:.0f}]")
-
-        # Reality outlier checks
-        if abs(mad_z_reality[i]) > threshold:
-            flags.append(f"reality MAD-z={mad_z_reality[i]:+.2f} (|z|>{threshold})")
-        if c["reality"] < lo_fence_r or c["reality"] > hi_fence_r:
-            flags.append(f"reality outside IQR fences [{lo_fence_r:.0f}, {hi_fence_r:.0f}]")
-
-        if flags:
+        # Only remove if BOTH methods agree (intersection = conservative)
+        if mad_flagged and iqr_flagged:
             outliers.append({
                 **c,
-                "outlier_flags": flags,
+                "outlier_flags": [
+                    f"financial MAD-z={mad_z[i]:+.2f} (|z|>{threshold})",
+                    f"financial outside IQR fences [{lo_fence:.0f}, {hi_fence:.0f}]",
+                ],
                 "mad_z_financial": round(mad_z[i], 2),
-                "mad_z_reality": round(mad_z_reality[i], 2),
             })
         else:
             clean.append(c)
@@ -231,6 +219,35 @@ def detect_outliers(companies, threshold=2.5):
     clean.extend(no_fin)
 
     return clean, outliers
+
+
+def winsorize(companies, percentile=5):
+    """Cap extreme financial_index values at the p-th and (100-p)-th percentile.
+
+    Unlike outlier removal, Winsorization keeps ALL data points but
+    reduces the influence of extremes. This preserves sample size
+    while limiting leverage effects.
+    """
+    fin_companies = [c for c in companies if c["financial"] is not None]
+    no_fin = [c for c in companies if c["financial"] is None]
+
+    if len(fin_companies) < 10:
+        return companies
+
+    fin_values = sorted([c["financial"] for c in fin_companies])
+    n = len(fin_values)
+    lo_idx = max(0, int(n * percentile / 100))
+    hi_idx = min(n - 1, int(n * (100 - percentile) / 100))
+    lo_cap = fin_values[lo_idx]
+    hi_cap = fin_values[hi_idx]
+
+    result = []
+    for c in fin_companies:
+        capped = {**c}
+        capped["financial"] = max(lo_cap, min(hi_cap, c["financial"]))
+        result.append(capped)
+    result.extend(no_fin)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -425,16 +442,20 @@ def run_analysis(data):
     # --- Step 1: Raw analysis (all data) ---
     raw_result = _analyze_dataset(companies, label="raw")
 
-    # --- Step 2: Detect & remove outliers ---
-    clean_companies, outlier_list = detect_outliers(companies, threshold=2.5)
+    # --- Step 2: Detect & remove outliers (conservative: intersection + 3σ) ---
+    clean_companies, outlier_list = detect_outliers(companies, threshold=3.0)
 
-    # --- Step 3: Cleaned analysis ---
+    # --- Step 3: Cleaned analysis (outliers removed) ---
     cleaned_result = _analyze_dataset(clean_companies, label="cleaned")
+
+    # --- Step 4: Winsorized analysis (extremes capped at 5th/95th pct) ---
+    winsorized_companies = winsorize(companies, percentile=5)
+    winsorized_result = _analyze_dataset(winsorized_companies, label="winsorized")
 
     # --- Build outlier report ---
     outlier_report = {
-        "method": "Union of MAD Z-score (|z| > 2.5) and IQR fences (1.5x IQR)",
-        "threshold": 2.5,
+        "method": "Intersection of MAD Z-score (|z| > 3.0) and IQR fences (1.5x IQR) on Financial Index",
+        "threshold": 3.0,
         "total_companies": len(companies),
         "outliers_removed": len(outlier_list),
         "clean_count": len(clean_companies),
@@ -444,29 +465,32 @@ def run_analysis(data):
                 "reality": o["reality"],
                 "financial": o["financial"],
                 "mad_z_financial": o["mad_z_financial"],
-                "mad_z_reality": o["mad_z_reality"],
                 "flags": o["outlier_flags"],
             }
             for o in outlier_list
         ],
     }
 
-    # Compare correlations before/after to highlight the impact
+    # Compare correlations across all three methods
     raw_r = raw_result.get("reality_vs_financial", {}).get("pearson_r")
     clean_r = cleaned_result.get("reality_vs_financial", {}).get("pearson_r")
-    if raw_r is not None and clean_r is not None:
+    wins_r = winsorized_result.get("reality_vs_financial", {}).get("pearson_r")
+    if raw_r is not None:
         outlier_report["correlation_impact"] = {
             "raw_pearson_r": raw_r,
             "cleaned_pearson_r": clean_r,
-            "delta": round(clean_r - raw_r, 3),
-            "direction_changed": (raw_r > 0) != (clean_r > 0),
+            "winsorized_pearson_r": wins_r,
+            "delta_cleaned": round(clean_r - raw_r, 3) if clean_r is not None else None,
+            "delta_winsorized": round(wins_r - raw_r, 3) if wins_r is not None else None,
+            "direction_changed": clean_r is not None and (raw_r > 0) != (clean_r > 0),
         }
 
-    # --- Return both analyses + outlier report ---
-    # Top-level keys = raw analysis (backward compat with existing frontend)
+    # --- Return all three analyses + outlier report ---
+    # Top-level keys = raw analysis (backward compat)
     result = {**raw_result}
     result["raw"] = raw_result
     result["cleaned"] = cleaned_result
+    result["winsorized"] = winsorized_result
     result["outlier_report"] = outlier_report
 
     return result

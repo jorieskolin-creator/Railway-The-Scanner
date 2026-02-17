@@ -55,7 +55,7 @@ const App = () => {
   const [isAnalyticsOpen, setIsAnalyticsOpen] = useState(false);
   const [analyticsData, setAnalyticsData] = useState(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
-  const [analyticsView, setAnalyticsView] = useState('cleaned'); // 'raw' | 'cleaned'
+  const [analyticsView, setAnalyticsView] = useState('winsorized'); // 'raw' | 'cleaned' | 'winsorized'
 
   // BATCH STATE
   const [isBatchOpen, setIsBatchOpen] = useState(false);
@@ -776,6 +776,9 @@ const App = () => {
               <div className="flex items-center gap-3">
                 {ad && !ad.error && ad.raw && (
                   <div className="flex bg-black/40 rounded-lg border border-white/10 p-0.5">
+                    <button onClick={() => setAnalyticsView('winsorized')} className={`px-3 py-1 text-[10px] font-mono font-bold rounded-md transition-all ${analyticsView === 'winsorized' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40' : 'text-slate-500 hover:text-slate-300'}`}>
+                      WINSORIZED
+                    </button>
                     <button onClick={() => setAnalyticsView('cleaned')} className={`px-3 py-1 text-[10px] font-mono font-bold rounded-md transition-all ${analyticsView === 'cleaned' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40' : 'text-slate-500 hover:text-slate-300'}`}>
                       CLEANED
                     </button>
@@ -803,7 +806,9 @@ const App = () => {
                   {/* HEADER */}
                   <div className="text-center">
                     <div className="text-[10px] text-violet-400 uppercase tracking-widest font-mono mb-1">
-                      {analyticsView === 'cleaned' ? 'Cleaned Dataset (Outliers Removed)' : 'Raw Dataset (All Companies)'}
+                      {analyticsView === 'winsorized' ? 'Winsorized Dataset (Extremes Capped at 5th/95th Percentile)'
+                        : analyticsView === 'cleaned' ? 'Cleaned Dataset (Outliers Removed)'
+                        : 'Raw Dataset (All Companies)'}
                     </div>
                     <div className="text-2xl font-bold text-white">{view.n} Companies Analyzed</div>
                     {report && analyticsView === 'cleaned' && report.outliers_removed > 0 && (
@@ -813,39 +818,49 @@ const App = () => {
                     )}
                   </div>
 
-                  {/* OUTLIER REPORT (shown in cleaned view when outliers exist) */}
-                  {report && report.outliers_removed > 0 && analyticsView === 'cleaned' && (
+                  {/* OUTLIER REPORT (shown in cleaned or winsorized view) */}
+                  {report && report.outliers_removed > 0 && analyticsView !== 'raw' && (
                     <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-5">
                       <h4 className="text-sm font-bold text-amber-300 uppercase tracking-wide mb-3 flex items-center gap-2">
-                        <AlertTriangle size={14} /> Outlier Detection Report
+                        <AlertTriangle size={14} /> {analyticsView === 'winsorized' ? 'Outlier Treatment: Winsorization' : 'Outlier Treatment: Removal'}
                       </h4>
-                      <div className="text-[10px] text-slate-400 font-mono mb-3">{report.method}</div>
+                      <div className="text-[10px] text-slate-400 font-mono mb-1">{report.method}</div>
+                      <div className="text-[10px] text-slate-500 font-mono mb-3">
+                        {analyticsView === 'winsorized'
+                          ? 'Winsorization caps extreme values at 5th/95th percentile — all companies kept, extreme influence reduced.'
+                          : `${report.outliers_removed} companies removed — only those flagged by BOTH methods simultaneously.`}
+                      </div>
 
-                      {/* Correlation impact */}
+                      {/* Correlation impact — 3 columns */}
                       {impact && (
-                        <div className="grid grid-cols-3 gap-3 mb-4">
+                        <div className="grid grid-cols-4 gap-2 mb-4">
                           <div className="bg-black/30 rounded-lg p-3 text-center">
-                            <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Raw Pearson r</div>
+                            <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Raw r</div>
                             <div className="text-lg font-bold text-amber-300">{impact.raw_pearson_r > 0 ? '+' : ''}{impact.raw_pearson_r}</div>
                           </div>
                           <div className="bg-black/30 rounded-lg p-3 text-center">
-                            <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Cleaned Pearson r</div>
-                            <div className="text-lg font-bold text-emerald-300">{impact.cleaned_pearson_r > 0 ? '+' : ''}{impact.cleaned_pearson_r}</div>
+                            <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Winsorized r</div>
+                            <div className="text-lg font-bold text-cyan-300">{impact.winsorized_pearson_r != null ? (impact.winsorized_pearson_r > 0 ? '+' : '') + impact.winsorized_pearson_r : 'n/a'}</div>
+                            {impact.delta_winsorized != null && <div className="text-[8px] text-slate-500 font-mono mt-0.5">{impact.delta_winsorized > 0 ? '+' : ''}{impact.delta_winsorized}</div>}
                           </div>
                           <div className="bg-black/30 rounded-lg p-3 text-center">
-                            <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Delta</div>
-                            <div className={`text-lg font-bold ${impact.direction_changed ? 'text-rose-400' : 'text-slate-300'}`}>
-                              {impact.delta > 0 ? '+' : ''}{impact.delta}
-                            </div>
-                            {impact.direction_changed && (
-                              <div className="text-[8px] text-rose-400 font-mono mt-0.5">DIRECTION CHANGED</div>
+                            <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Cleaned r</div>
+                            <div className="text-lg font-bold text-emerald-300">{impact.cleaned_pearson_r != null ? (impact.cleaned_pearson_r > 0 ? '+' : '') + impact.cleaned_pearson_r : 'n/a'}</div>
+                            {impact.delta_cleaned != null && <div className="text-[8px] text-slate-500 font-mono mt-0.5">{impact.delta_cleaned > 0 ? '+' : ''}{impact.delta_cleaned}</div>}
+                          </div>
+                          <div className="bg-black/30 rounded-lg p-3 text-center">
+                            <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Verdict</div>
+                            {impact.direction_changed ? (
+                              <div className="text-sm font-bold text-rose-400 mt-1">SIGN FLIPPED</div>
+                            ) : (
+                              <div className="text-sm font-bold text-slate-400 mt-1">CONSISTENT</div>
                             )}
                           </div>
                         </div>
                       )}
 
-                      {/* Outlier list */}
-                      <div className="space-y-1.5">
+                      {/* Outlier list (only show in cleaned view) */}
+                      {analyticsView === 'cleaned' && (<div className="space-y-1.5">
                         {report.outliers.map((o, i) => (
                           <div key={i} className="bg-black/20 rounded px-3 py-2 border border-amber-500/10">
                             <div className="flex items-center justify-between">
@@ -854,7 +869,6 @@ const App = () => {
                                 <span className="text-cyan-400">Reality: {o.reality}</span>
                                 <span className="text-emerald-400">Financial: {o.financial}</span>
                                 <span className="text-slate-500">z(F)={o.mad_z_financial > 0 ? '+' : ''}{o.mad_z_financial}</span>
-                                <span className="text-slate-500">z(R)={o.mad_z_reality > 0 ? '+' : ''}{o.mad_z_reality}</span>
                               </div>
                             </div>
                             <div className="text-[9px] text-amber-500/70 font-mono mt-1">
@@ -862,7 +876,7 @@ const App = () => {
                             </div>
                           </div>
                         ))}
-                      </div>
+                      </div>)}
                     </div>
                   )}
 
