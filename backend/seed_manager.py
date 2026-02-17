@@ -15,6 +15,7 @@ from scanner_two import x_ray_search, extract_json_from_text, run_self_analysis,
 from knowledge_base import get_evolving_framework
 from storage import BlobStorage
 from google import genai
+from google.genai import types
 import anthropic
 
 # --- CONFIGURATION ---
@@ -505,15 +506,55 @@ THEN — WRITE THE NARRATIVE:
 
 Output valid JSON only. Must include all four fields: summary, pitch, reality_score, intent_score."""
 
-                    print(f"   [{company_name}] 🔄 [Synthesis] Attempting claude-opus-4-6...")
-                    synth_start = time.time()
-                    resp = claude_client.messages.create(
-                        model="claude-opus-4-6",
-                        max_tokens=1024,
-                        messages=[{"role": "user", "content": synthesis_prompt}]
-                    )
-                    response_text = resp.content[0].text if resp.content else ""
-                    print(f"   [{company_name}] ✅ [Synthesis] claude-opus-4-6 succeeded in {int((time.time() - synth_start) * 1000)}ms")
+                    # --- Synthesis with fallback chain: Opus 4.6 → Gemini 3 Pro → Sonnet 4.5 ---
+                    response_text = ""
+                    try:
+                        print(f"   [{company_name}] 🔄 [Synthesis] Attempting claude-opus-4-6...")
+                        synth_start = time.time()
+                        resp = claude_client.messages.create(
+                            model="claude-opus-4-6",
+                            max_tokens=1024,
+                            messages=[{"role": "user", "content": synthesis_prompt}]
+                        )
+                        response_text = resp.content[0].text if resp.content else ""
+                        print(f"   [{company_name}] ✅ [Synthesis] claude-opus-4-6 succeeded in {int((time.time() - synth_start) * 1000)}ms")
+                    except Exception as opus_err:
+                        print(f"   [{company_name}] ❌ [Synthesis] Opus 4.6 failed: {opus_err}")
+
+                        # Fallback 1: Gemini 3 Pro
+                        gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
+                        if gemini_key:
+                            try:
+                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Gemini 3 Pro...")
+                                g_start = time.time()
+                                gemini_client = genai.Client(api_key=gemini_key)
+                                gemini_resp = gemini_client.models.generate_content(
+                                    model="gemini-3-pro-preview",
+                                    contents=synthesis_prompt,
+                                    config=types.GenerateContentConfig(
+                                        temperature=0.7,
+                                        max_output_tokens=1024
+                                    )
+                                )
+                                response_text = gemini_resp.text or ""
+                                print(f"   [{company_name}] ✅ [Synthesis] Gemini 3 Pro succeeded in {int((time.time() - g_start) * 1000)}ms")
+                            except Exception as gemini_err:
+                                print(f"   [{company_name}] ❌ [Synthesis] Gemini 3 Pro failed: {gemini_err}")
+
+                        # Fallback 2: Sonnet 4.5
+                        if not response_text:
+                            try:
+                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Sonnet 4.5...")
+                                s_start = time.time()
+                                fallback_resp = claude_client.messages.create(
+                                    model="claude-sonnet-4-5-20250929",
+                                    max_tokens=1024,
+                                    messages=[{"role": "user", "content": synthesis_prompt}]
+                                )
+                                response_text = fallback_resp.content[0].text if fallback_resp.content else ""
+                                print(f"   [{company_name}] ✅ [Synthesis] Sonnet 4.5 succeeded in {int((time.time() - s_start) * 1000)}ms")
+                            except Exception as sonnet_err:
+                                print(f"   [{company_name}] ❌ [Synthesis] All models failed. Last error: {sonnet_err}")
                     if response_text:
                         payload = extract_json_from_text(response_text)
                         if payload:
