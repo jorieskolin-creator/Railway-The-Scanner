@@ -24,6 +24,7 @@ from scanner_two import x_ray_search, extract_json_from_text, run_self_analysis,
 from storage import BlobStorage
 from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES, get_company_metadata
+from analyze_scores import run_analysis
 from knowledge_base import get_evolving_framework
 
 # VERIFICATION LOG: v5.2.0 - Performance Optimizations
@@ -185,6 +186,15 @@ async def get_dashboard_data(response: Response):
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     data = storage.retrieve_latest_data("index/summary_list")
     return data or []
+
+@app.get("/api/analyze")
+async def analyze_scores(response: Response):
+    """Run statistical analysis across all company scores (correlations, distributions, archetypes)."""
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    data = storage.retrieve_latest_data("index/summary_list")
+    if not data:
+        raise HTTPException(status_code=404, detail="No dashboard data found.")
+    return run_analysis(data)
 
 @app.get("/company/{company_name}")
 async def get_company_details(company_name: str, response: Response):
