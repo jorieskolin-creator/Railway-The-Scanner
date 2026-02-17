@@ -1,0 +1,359 @@
+{
+  "document_type": "Architecture Thinking Process",
+  "application": "Forensic Modernization Scanner",
+  "purpose": "Describes step-by-step how the AI analysis pipeline works, without source code or credentials",
+  "safe_to_share": true,
+
+  "core_concept": {
+    "name": "The Reality Gap",
+    "description": "The scanner detects the gap between what a company SAYS it is (Intent) and what independent EVIDENCE shows it actually is (Reality).",
+    "formula": "Reality Gap = Intent Score - Reality Score",
+    "interpretations": {
+      "large_positive_gap_with_washing": "High-risk signal: ambitious promises, weak operations",
+      "small_gap": "Honest company: walks the walk",
+      "negative_gap": "Humble company: under-communicates its actual capabilities"
+    },
+    "three_layer_strategy": {
+      "layer_1_intent": "What they claim (narrative analysis)",
+      "layer_2_reality": "What evidence shows (forensic verification)",
+      "layer_3_synthesis": "Cross-verify both + reconcile the gap (wisdom layer)"
+    }
+  },
+
+  "knowledge_base": {
+    "description": "A centralized framework that grounds ALL analysis. Defines vocabulary, dimensions, archetypes, and patterns. Ensures consistency across scans and prevents AI from inventing its own categories.",
+    "five_dimensions": [
+      {
+        "name": "Operating Model",
+        "good_signals": "Autonomy, stream-aligned teams, flow efficiency, platform teams",
+        "bad_signals": "Command-and-control, silos, waterfall, micromanagement"
+      },
+      {
+        "name": "Strategy",
+        "good_signals": "Adaptive, customer-centric, digital transformation with execution",
+        "bad_signals": "Static, top-down, cost-cutting only, no digital roadmap"
+      },
+      {
+        "name": "Culture & Values",
+        "good_signals": "Psychological safety, learning culture, trust, talent retention",
+        "bad_signals": "Compliance-driven, fear culture, high turnover, control"
+      },
+      {
+        "name": "Service Portfolio",
+        "good_signals": "SaaS, API-first, platform, composable, product-led",
+        "bad_signals": "Legacy project-based, monolithic, consulting hours"
+      },
+      {
+        "name": "AI Readiness",
+        "good_signals": "Data platforms, ML adoption, R&D publications, augmentation",
+        "bad_signals": "Spreadsheets, legacy systems, AI buzzwords without adoption"
+      }
+    ],
+    "four_archetypes": [
+      {
+        "name": "Thriving",
+        "condition": "Reality >= 50 AND Financial >= 50",
+        "meaning": "Modern operations AND healthy business"
+      },
+      {
+        "name": "Modernizing",
+        "condition": "Reality >= 50 AND Financial < 50",
+        "meaning": "Strong operations but financial pressure. Investing in transformation, returns not yet materialized."
+      },
+      {
+        "name": "Cash Cow",
+        "condition": "Reality < 50 AND Financial >= 50",
+        "meaning": "Profitable but operationally outdated. Making money from legacy advantages. Accumulating technical debt."
+      },
+      {
+        "name": "At Risk",
+        "condition": "Reality < 50 AND Financial < 50",
+        "meaning": "Both operations and finances under pressure. Status quo unsustainable."
+      }
+    ],
+    "named_anti_patterns": [
+      "Digital Taylorism", "Pilot Purgatory", "Innovation Theatre",
+      "Modernization Washing", "Flow Efficiency", "AI Washing",
+      "Agile Washing", "Green Washing"
+    ]
+  },
+
+  "pipeline": {
+    "phase_1_intent_analysis": {
+      "name": "Scanner 1: Intent Analysis",
+      "question": "How ambitious is this company's narrative compared to typical companies?",
+      "inputs": [
+        "Website text (scraped)",
+        "Uploaded documents (PDF/HTML converted to text)",
+        "Optional report text"
+      ],
+      "thinking_process": {
+        "step_1": "Scan text for positive ('modernization') and negative ('legacy') keywords per Knowledge Base dimension",
+        "step_2": "Apply negation detection: 'we avoid waterfall' does NOT count as negative signal",
+        "step_3": "Apply word-boundary matching: prevent partial word false positives",
+        "step_4": "Calculate per-dimension: net_ambition = positive_signals - (negative_signals × friction_weight)",
+        "step_5": "Normalize for text length (short docs not penalized, long docs not inflated)",
+        "step_6": "Calculate Friction Index (0-1): degree of mixed/contradictory signals"
+      },
+      "outputs": {
+        "intent_score": "0-100, average ambition across all dimensions",
+        "per_dimension_breakdown": "Individual scores + matched keywords per dimension",
+        "friction_index": "0-1, degree of contradictory messaging",
+        "vibrancy_score": "0-100, keyword density / richness of narrative"
+      },
+      "accuracy_safeguards": [
+        "Negation detection prevents false positives",
+        "Word boundary checks prevent partial matches",
+        "Short vs long text normalization prevents length bias",
+        "High friction index flags contradictory messaging"
+      ],
+      "model_used": "Rule-based keyword analysis (no AI model needed)",
+      "supports_languages": ["English", "Finnish", "French"]
+    },
+
+    "phase_2_reality_check": {
+      "name": "Scanner 2: Reality Check (5-Jury Model)",
+      "question": "What does independent external evidence show about this company's actual operational maturity?",
+      "inputs": [
+        "Company name + URL",
+        "Intent Score (for washing detection)",
+        "Previous scan context (for rescan mode)",
+        "Subsidiary list (for holding companies)"
+      ],
+      "thinking_process": {
+        "step_1_jury_search": {
+          "description": "Five independent 'juries' each search for evidence in a different area using AI with live web search grounding",
+          "juries": {
+            "jury_1_architecture": "GitHub repos, engineering blogs, tech stacks, job postings. Modern vs legacy architecture evidence.",
+            "jury_2_strategy": "Annual reports, financial databases, investments. Are they investing in digital transformation?",
+            "jury_3_culture": "Glassdoor, LinkedIn hiring patterns, meetup sponsorships. Can they retain talent?",
+            "jury_4_ai_data": "Hugging Face models, tech stacks, cloud case studies, academic papers. Real ML adoption or pilot purgatory?",
+            "jury_5_service_portfolio": "Service pages, case studies, analyst reports. Can they deliver modern services?"
+          },
+          "scoring": {
+            "base_score": 50,
+            "adjustment_range": "-50 to +50 based on evidence",
+            "recency_weighting": "Recent (<12mo) = 100% impact, Old (>18mo) = 20% impact",
+            "technical_debt_penalty": "-20 to -35 for evidence of legacy/manual workarounds",
+            "near_zero_evidence_penalty": "-35 to -50 if almost no evidence across all juries"
+          }
+        },
+        "step_2_confidence_driven_research": {
+          "trigger": "Initial confidence < 45 OR evidence links < 3",
+          "process": "Identify weak juries, build broader search terms, re-search, merge new findings",
+          "per_new_finding": "+5 confidence",
+          "per_resolved_jury": "+10 confidence",
+          "max_loops": "2 (single scan) or 1 (batch scan)",
+          "stop_condition": "Confidence >= 45 or no new evidence found"
+        },
+        "step_3_evidence_validation": {
+          "description": "Every evidence URL verified via HTTP request",
+          "dead_link_threshold": "If >20% dead, trigger URL Recovery Re-Search",
+          "confidence_penalties": {
+            "over_50_percent_dead": "-30 confidence",
+            "over_25_percent_dead": "-15 confidence"
+          }
+        },
+        "step_4_delta_verification": {
+          "trigger": "Score changed >= 15 points from previous scan",
+          "process": "Run entire search again to verify",
+          "if_both_agree": "Accept as genuine change, average the two scores",
+          "if_disagree": "Use conservative score (closer to previous)"
+        },
+        "step_5_evidence_persistence": {
+          "principle": "Innocent until proven fixed",
+          "behavior": "Previous findings carry forward for 90 days",
+          "rationale": "Not re-finding something = search noise, not improvement"
+        }
+      },
+      "washing_detection": {
+        "condition": "Intent > 60 AND Reality significantly below Intent",
+        "types": [
+          "AI Washing: AI buzzwords without real adoption evidence",
+          "Agile Washing: Claims modern practices, evidence of waterfall",
+          "Green Washing: ESG narrative without sustainable operations evidence"
+        ],
+        "safety_checks": [
+          "Cannot flag washing if Intent < 40 (low ambition can't be called washing)",
+          "Re-checked after score verification: if Reality >= Intent, washing removed"
+        ]
+      },
+      "outputs": {
+        "reality_score": "0-100, evidence-based operational maturity",
+        "checklist": "Per-jury findings with sentiment, recency, source type",
+        "evidence_links": "Verified URLs with titles, snippets, domains",
+        "key_people": "Executives mentioned in evidence (name, role, relevance)",
+        "confidence_score": "0-100, how much evidence supports the assessment",
+        "washing_flag": "Boolean + type if detected"
+      },
+      "accuracy_safeguards": [
+        "5 independent juries ensure diverse evidence",
+        "All evidence URLs verified via HTTP",
+        "Dead link recovery prevents false low scores",
+        "Delta verification re-scans prevent noise from single-run search variance",
+        "Evidence persistence prevents lucky re-scans from hiding real problems",
+        "Recency weighting ensures stale evidence doesn't dominate"
+      ],
+      "model_used": "Gemini 3 Pro with Google Search grounding (live web search)"
+    },
+
+    "phase_2b_financial_health": {
+      "name": "Financial Health Index",
+      "runs": "In parallel with Scanner 2",
+      "question": "How financially healthy is this company?",
+      "four_dimensions": [
+        { "name": "Revenue Trend", "weight": "30%", "range": "0-25", "measures": "Declining, stable, or growing?" },
+        { "name": "Profitability", "weight": "40%", "range": "0-25", "measures": "Operating margins, net profit" },
+        { "name": "Efficiency", "weight": "15%", "range": "0-25", "measures": "Revenue per employee" },
+        { "name": "Investment Signal", "weight": "15%", "range": "0-25", "measures": "R&D spending, growth investment" }
+      ],
+      "core_health_gate": {
+        "description": "If both Revenue and Profitability are weak, composite score is dampened regardless of Efficiency/Investment",
+        "floor": "25% of weighted base when fundamentals are weak",
+        "fully_open": "When Revenue + Profitability reach 60% of maximum"
+      },
+      "outputs": {
+        "financial_index": "0-100 composite score",
+        "sub_scores": "Revenue Trend, Profitability, Efficiency, Investment Signal (each 0-25)",
+        "financial_findings": "Per-dimension evidence with quotes and sources",
+        "financial_confidence": "0-100"
+      },
+      "non_blocking": "If Financial search fails, scan continues with Financial = null"
+    },
+
+    "phase_2c_self_analysis": {
+      "name": "Self-Analysis Loop",
+      "trigger": "Score changed >= 15 points within 7 days of previous scan",
+      "question": "Why did the scanner produce different results? Search variance, evidence gaps, prompt sensitivity, or genuine change?",
+      "pre_computed_diagnostics": {
+        "source_diversity": "Unique domains in evidence, single-domain dominance detection",
+        "jury_coverage": "Which juries had evidence, which were empty",
+        "evidence_recency": "Ratio of recent (<12mo) vs old findings",
+        "url_overlap": "Shared URLs between previous and current scan (low overlap < 20% = strong search variance indicator)"
+      },
+      "root_cause_classification": [
+        "search_variance: Different Google results each time (most common)",
+        "evidence_gap: One scan found sources the other missed",
+        "prompt_sensitivity: Same evidence, model interpreted differently",
+        "genuine_change: Real company change (unlikely within 7 days)"
+      ],
+      "score_drift_guard": {
+        "max_drift_per_7_days": "15 points",
+        "action": "Dampen score to previous ± 15 max"
+      }
+    },
+
+    "phase_3_synthesis": {
+      "name": "Synthesis & Cross-Verification",
+      "question": "Do independent scores validate Scanner 1/2? What is the diagnosis and executive pitch?",
+      "thinking_process": {
+        "part_1_blind_scoring": {
+          "description": "Senior AI model reads ALL evidence but WITHOUT seeing Scanner scores. Independently evaluates Reality and Intent.",
+          "reality_scoring": "Scores each of 5 KB dimensions independently (0-20 each). No evidence = 10 (neutral).",
+          "intent_scoring": "Independently assesses narrative ambition."
+        },
+        "part_2_cross_verification": {
+          "delta_0_to_5": "Agreement: Keep Scanner score (search-grounded, reliable)",
+          "delta_6_to_10": "Mild disagreement: Blended average (60% Scanner, 40% Synthesis)",
+          "delta_over_10": "Strong disagreement: Synthesis overrides (broader context)"
+        },
+        "part_3_narrative": {
+          "diagnosis": "180-220 words. States archetype, maps findings to KB dimensions, uses KB terminology.",
+          "pitch": "90-110 words. C-level cold-outreach with exactly 2 concrete proposals from weakest KB dimensions."
+        }
+      },
+      "fallback_chain": [
+        "Claude Opus 4.6 (primary)",
+        "Gemini 3 Pro (fallback 1)",
+        "Claude Sonnet 4.5 (fallback 2)"
+      ],
+      "accuracy_safeguards": [
+        "Blind verification: Synthesis scores without seeing Scanner scores",
+        "Blending logic prevents any single model from dominating",
+        "Post-verification: if Reality >= Intent, washing flag removed",
+        "3-model fallback chain ensures synthesis completes under API pressure"
+      ]
+    },
+
+    "phase_4_archetype_classification": {
+      "name": "Company Archetype Determination",
+      "axes": ["Reality Score (operational maturity)", "Financial Index (business health)"],
+      "rules": {
+        "thriving": "Reality >= 50 AND Financial >= 50",
+        "modernizing": "Reality >= 50 AND Financial < 50",
+        "cash_cow": "Reality < 50 AND Financial >= 50",
+        "at_risk": "Reality < 50 AND Financial < 50"
+      },
+      "fallback": "If Financial unavailable, Intent Score used as proxy"
+    },
+
+    "phase_5_multi_scan_history": {
+      "name": "Longitudinal Trend Analysis",
+      "question": "How has this company evolved? Are issues persistent, resolving, or escalating?",
+      "lookback": "Up to 3 previous scans (rolling 12-scan history window)",
+      "trend_classification": {
+        "improving": "Reality score increased by >5 points",
+        "declining": "Reality score decreased by >5 points",
+        "stable": "Change within ±5 points"
+      },
+      "persistent_pattern_detection": {
+        "2_plus_scans": "High confidence — near-certain pattern",
+        "1_scan_only": "Could be search variance",
+        "getting_worse": "Escalating (urgent)",
+        "absent_in_recent": "Fading (possibly resolving)"
+      },
+      "rescan_verification": {
+        "confirmed": "Found same/similar evidence again",
+        "resolved": "Found new counter-evidence proving claim now fixed",
+        "unverified": "No evidence either way — carried forward as-is"
+      }
+    },
+
+    "phase_6_statistical_analysis": {
+      "name": "Cross-Company Statistical Intelligence",
+      "trigger": "On-demand, analyzes all scanned companies together",
+      "analyses": [
+        "Descriptive statistics: median, IQR, mean, std, skew per score type",
+        "Correlation analysis: Spearman (primary), Kendall's Tau, Pearson (reference)",
+        "Full correlation matrix: Intent × Reality × Financial × Confidence",
+        "Archetype distribution: count and percentage per archetype",
+        "Regression residuals: which companies deviate most from expected Reality-Financial relationship",
+        "Domain breakdown: average scores by industry vertical",
+        "Ownership breakdown: average scores by ownership type",
+        "Score distributions: 10-bin histograms",
+        "Top 10 / Bottom 10: ranked by Reality Score"
+      ],
+      "why_non_parametric": "Score distributions are often skewed. Spearman and Kendall are robust to outliers and non-normality. Pearson included only as reference."
+    }
+  },
+
+  "verification_mechanisms": {
+    "summary": "Six layers of accuracy assurance operate across the entire pipeline",
+    "layers": [
+      {
+        "name": "Jury Diversity",
+        "description": "Five independent evidence hunts. Confidence requires 3+ juries with evidence."
+      },
+      {
+        "name": "Evidence Validation",
+        "description": "Every URL verified via HTTP. Dead links trigger recovery. Remaining dead links penalize confidence."
+      },
+      {
+        "name": "Blind Cross-Verification",
+        "description": "Synthesis model scores independently without seeing Scanner scores. Disagreements trigger blending or override."
+      },
+      {
+        "name": "Score Drift Guard",
+        "description": "Limits score changes to ±15 per 7-day window. Large changes trigger self-analysis diagnostic."
+      },
+      {
+        "name": "Evidence Persistence",
+        "description": "Previous findings carry forward for 90 days. Not re-finding something = search noise, not improvement."
+      },
+      {
+        "name": "Logic Consistency",
+        "description": "Post-verification checks: washing impossible if Reality >= Intent. Archetype recalculated from final verified scores."
+      }
+    ]
+  }
+}

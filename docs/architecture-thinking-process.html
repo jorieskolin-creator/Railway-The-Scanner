@@ -1,0 +1,1130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Forensic Modernization Scanner — Thinking Process Architecture</title>
+<style>
+  :root {
+    --bg: #0a0e1a;
+    --surface: #111827;
+    --surface2: #1a2236;
+    --border: #2a3550;
+    --text: #e2e8f0;
+    --text-dim: #94a3b8;
+    --accent-cyan: #22d3ee;
+    --accent-green: #34d399;
+    --accent-amber: #fbbf24;
+    --accent-red: #f87171;
+    --accent-purple: #a78bfa;
+    --accent-blue: #60a5fa;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    padding: 2rem;
+  }
+  .container { max-width: 1100px; margin: 0 auto; }
+
+  /* Header */
+  .header {
+    text-align: center;
+    padding: 3rem 2rem;
+    margin-bottom: 3rem;
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    background: linear-gradient(135deg, #111827 0%, #1a1a3e 100%);
+  }
+  .header h1 {
+    font-size: 2.2rem;
+    font-weight: 700;
+    background: linear-gradient(90deg, var(--accent-cyan), var(--accent-purple));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 0.5rem;
+  }
+  .header .subtitle {
+    font-size: 1.1rem;
+    color: var(--text-dim);
+    margin-bottom: 1.5rem;
+  }
+  .header .meta {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    opacity: 0.7;
+  }
+
+  /* Section */
+  .section {
+    margin-bottom: 2.5rem;
+  }
+  .section-title {
+    font-size: 1.4rem;
+    font-weight: 700;
+    margin-bottom: 1.2rem;
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  .section-title .badge {
+    font-size: 0.7rem;
+    padding: 0.2rem 0.6rem;
+    border-radius: 99px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  /* Phase Cards */
+  .phase {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.8rem;
+    margin-bottom: 1.5rem;
+    position: relative;
+  }
+  .phase::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 4px;
+    border-radius: 12px 0 0 12px;
+  }
+  .phase-scanner1::before { background: var(--accent-cyan); }
+  .phase-scanner2::before { background: var(--accent-green); }
+  .phase-financial::before { background: var(--accent-amber); }
+  .phase-synthesis::before { background: var(--accent-purple); }
+  .phase-selfanalysis::before { background: var(--accent-red); }
+  .phase-stats::before { background: var(--accent-blue); }
+
+  .phase-header {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    margin-bottom: 1rem;
+  }
+  .phase-number {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.9rem;
+    flex-shrink: 0;
+  }
+  .phase-scanner1 .phase-number { background: rgba(34,211,238,0.15); color: var(--accent-cyan); }
+  .phase-scanner2 .phase-number { background: rgba(52,211,153,0.15); color: var(--accent-green); }
+  .phase-financial .phase-number { background: rgba(251,191,36,0.15); color: var(--accent-amber); }
+  .phase-synthesis .phase-number { background: rgba(167,139,250,0.15); color: var(--accent-purple); }
+  .phase-selfanalysis .phase-number { background: rgba(248,113,113,0.15); color: var(--accent-red); }
+  .phase-stats .phase-number { background: rgba(96,165,250,0.15); color: var(--accent-blue); }
+
+  .phase-name {
+    font-size: 1.15rem;
+    font-weight: 600;
+  }
+  .phase-question {
+    background: var(--surface2);
+    border-left: 3px solid var(--accent-purple);
+    padding: 0.8rem 1rem;
+    margin: 1rem 0;
+    border-radius: 0 8px 8px 0;
+    font-style: italic;
+    color: var(--accent-purple);
+    font-size: 0.95rem;
+  }
+
+  /* Sub-sections within phase */
+  .subsection {
+    margin-top: 1.2rem;
+  }
+  .subsection h4 {
+    font-size: 0.85rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    margin-bottom: 0.5rem;
+  }
+  .subsection p, .subsection li {
+    font-size: 0.93rem;
+    color: var(--text);
+  }
+  .subsection ul {
+    list-style: none;
+    padding: 0;
+  }
+  .subsection ul li {
+    padding: 0.3rem 0 0.3rem 1.2rem;
+    position: relative;
+  }
+  .subsection ul li::before {
+    content: '\25B8';
+    position: absolute;
+    left: 0;
+    color: var(--text-dim);
+  }
+
+  /* Jury Cards */
+  .jury-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 0.8rem;
+    margin: 1rem 0;
+  }
+  .jury-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+  }
+  .jury-card h5 {
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-bottom: 0.4rem;
+    color: var(--accent-green);
+  }
+  .jury-card p {
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+
+  /* Verification boxes */
+  .verification-box {
+    background: rgba(34,211,238,0.05);
+    border: 1px solid rgba(34,211,238,0.2);
+    border-radius: 8px;
+    padding: 1rem 1.2rem;
+    margin: 1rem 0;
+  }
+  .verification-box h4 {
+    font-size: 0.85rem;
+    color: var(--accent-cyan);
+    margin-bottom: 0.5rem;
+  }
+  .verification-box ul li::before {
+    content: '\2713';
+    color: var(--accent-cyan);
+  }
+
+  /* Flow connector */
+  .flow-connector {
+    display: flex;
+    justify-content: center;
+    padding: 0.5rem 0;
+  }
+  .flow-arrow {
+    width: 2px;
+    height: 30px;
+    background: var(--border);
+    position: relative;
+  }
+  .flow-arrow::after {
+    content: '\25BC';
+    position: absolute;
+    bottom: -8px;
+    left: -5px;
+    color: var(--text-dim);
+    font-size: 0.7rem;
+  }
+  .flow-label {
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    text-align: center;
+    margin-top: 0.3rem;
+  }
+
+  /* Archetype grid */
+  .archetype-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.8rem;
+    margin: 1rem 0;
+  }
+  .archetype-card {
+    padding: 1rem;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .archetype-card h5 { font-size: 0.9rem; margin-bottom: 0.3rem; }
+  .archetype-card p { font-size: 0.8rem; color: var(--text-dim); }
+  .archetype-thriving { background: rgba(52,211,153,0.08); border-color: rgba(52,211,153,0.3); }
+  .archetype-thriving h5 { color: var(--accent-green); }
+  .archetype-modernizing { background: rgba(34,211,238,0.08); border-color: rgba(34,211,238,0.3); }
+  .archetype-modernizing h5 { color: var(--accent-cyan); }
+  .archetype-cashcow { background: rgba(251,191,36,0.08); border-color: rgba(251,191,36,0.3); }
+  .archetype-cashcow h5 { color: var(--accent-amber); }
+  .archetype-atrisk { background: rgba(248,113,113,0.08); border-color: rgba(248,113,113,0.3); }
+  .archetype-atrisk h5 { color: var(--accent-red); }
+
+  /* Score verify table */
+  .verify-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0;
+    font-size: 0.85rem;
+  }
+  .verify-table th {
+    text-align: left;
+    padding: 0.5rem 0.8rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-dim);
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .verify-table td {
+    padding: 0.5rem 0.8rem;
+    border-bottom: 1px solid rgba(42,53,80,0.5);
+  }
+
+  /* Overview flow diagram */
+  .overview-flow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.3rem;
+    margin: 2rem 0;
+  }
+  .flow-step {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.8rem 1.5rem;
+    text-align: center;
+    min-width: 320px;
+    font-size: 0.9rem;
+    font-weight: 500;
+  }
+  .flow-step-parallel {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+  }
+  .flow-step-parallel .flow-step { min-width: 240px; }
+  .flow-step-parallel .parallel-label {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+  .flow-step.cyan { border-color: rgba(34,211,238,0.4); color: var(--accent-cyan); }
+  .flow-step.green { border-color: rgba(52,211,153,0.4); color: var(--accent-green); }
+  .flow-step.amber { border-color: rgba(251,191,36,0.4); color: var(--accent-amber); }
+  .flow-step.purple { border-color: rgba(167,139,250,0.4); color: var(--accent-purple); }
+  .flow-step.red { border-color: rgba(248,113,113,0.4); color: var(--accent-red); }
+  .flow-step.blue { border-color: rgba(96,165,250,0.4); color: var(--accent-blue); }
+
+  .mini-arrow {
+    width: 2px;
+    height: 18px;
+    background: var(--border);
+    position: relative;
+  }
+  .mini-arrow::after {
+    content: '\25BC';
+    position: absolute;
+    bottom: -6px;
+    left: -5px;
+    color: var(--text-dim);
+    font-size: 0.6rem;
+  }
+
+  /* Key insight box */
+  .insight-box {
+    background: linear-gradient(135deg, rgba(167,139,250,0.08), rgba(34,211,238,0.08));
+    border: 1px solid rgba(167,139,250,0.25);
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin: 2rem 0;
+  }
+  .insight-box h3 {
+    font-size: 1.05rem;
+    color: var(--accent-purple);
+    margin-bottom: 0.8rem;
+  }
+
+  /* Dimensions list */
+  .dim-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.6rem;
+    margin: 0.8rem 0;
+  }
+  .dim-item {
+    background: var(--surface2);
+    border-radius: 6px;
+    padding: 0.6rem 0.8rem;
+    font-size: 0.85rem;
+  }
+  .dim-item strong {
+    color: var(--accent-cyan);
+    font-size: 0.8rem;
+    display: block;
+    margin-bottom: 0.2rem;
+  }
+
+  /* Responsive */
+  @media (max-width: 768px) {
+    body { padding: 1rem; }
+    .header h1 { font-size: 1.6rem; }
+    .jury-grid { grid-template-columns: 1fr; }
+    .archetype-grid { grid-template-columns: 1fr; }
+    .flow-step-parallel { flex-direction: column; }
+    .flow-step { min-width: auto; width: 100%; }
+    .dim-grid { grid-template-columns: 1fr 1fr; }
+  }
+
+  /* TOC */
+  .toc {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin-bottom: 2.5rem;
+  }
+  .toc h3 {
+    font-size: 0.9rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    margin-bottom: 0.8rem;
+  }
+  .toc ol {
+    list-style: none;
+    counter-reset: toc;
+    padding: 0;
+  }
+  .toc ol li {
+    counter-increment: toc;
+    padding: 0.3rem 0;
+    font-size: 0.9rem;
+  }
+  .toc ol li::before {
+    content: counter(toc) ".";
+    color: var(--accent-cyan);
+    font-weight: 600;
+    margin-right: 0.5rem;
+  }
+  .toc ol li a {
+    color: var(--text);
+    text-decoration: none;
+  }
+  .toc ol li a:hover {
+    color: var(--accent-cyan);
+  }
+
+  .parallel-badge {
+    display: inline-block;
+    font-size: 0.65rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 99px;
+    background: rgba(251,191,36,0.15);
+    color: var(--accent-amber);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-left: 0.5rem;
+  }
+  .conditional-badge {
+    display: inline-block;
+    font-size: 0.65rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 99px;
+    background: rgba(248,113,113,0.15);
+    color: var(--accent-red);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-left: 0.5rem;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<!-- HEADER -->
+<div class="header">
+  <h1>Forensic Modernization Scanner</h1>
+  <div class="subtitle">Thinking Process Architecture &mdash; Step-by-Step Analysis Pipeline</div>
+  <div class="meta">Internal team reference document &bull; No source code &bull; No credentials &bull; Safe to share</div>
+</div>
+
+<!-- TOC -->
+<div class="toc">
+  <h3>Contents</h3>
+  <ol>
+    <li><a href="#overview">High-Level Flow Overview</a></li>
+    <li><a href="#core-idea">Core Idea: The Reality Gap</a></li>
+    <li><a href="#phase1">Phase 1 &mdash; Intent Analysis (Scanner 1)</a></li>
+    <li><a href="#phase2">Phase 2 &mdash; Reality Check (Scanner 2, 5-Jury Model)</a></li>
+    <li><a href="#phase2b">Phase 2b &mdash; Financial Health Index</a></li>
+    <li><a href="#phase2c">Phase 2c &mdash; Self-Analysis Loop (Score Delta Explanation)</a></li>
+    <li><a href="#phase3">Phase 3 &mdash; Synthesis &amp; Cross-Verification</a></li>
+    <li><a href="#phase4">Phase 4 &mdash; Archetype Classification</a></li>
+    <li><a href="#phase5">Phase 5 &mdash; Multi-Scan History &amp; Trend Detection</a></li>
+    <li><a href="#phase6">Phase 6 &mdash; Statistical Analysis Layer</a></li>
+    <li><a href="#verification">Cross-Cutting Verification Mechanisms</a></li>
+    <li><a href="#kb">Knowledge Base Grounding</a></li>
+  </ol>
+</div>
+
+<!-- OVERVIEW -->
+<div class="section" id="overview">
+  <div class="section-title">High-Level Flow Overview</div>
+
+  <div class="overview-flow">
+    <div class="flow-step" style="background: var(--surface2);">User Input: Company name + URL + optional documents</div>
+    <div class="mini-arrow"></div>
+    <div class="flow-step cyan">Phase 1: Intent Analysis &mdash; "What do they say they are?"</div>
+    <div class="mini-arrow"></div>
+    <div class="flow-step-parallel">
+      <div class="flow-step green">Phase 2: Reality Check &mdash; "What does evidence show?"</div>
+      <span class="parallel-label">parallel</span>
+      <div class="flow-step amber">Phase 2b: Financial Health &mdash; "How healthy is the business?"</div>
+    </div>
+    <div class="mini-arrow"></div>
+    <div class="flow-step red">Phase 2c: Self-Analysis (if score changed &ge;15 pts) &mdash; "Why did scores shift?"</div>
+    <div class="mini-arrow"></div>
+    <div class="flow-step purple">Phase 3: Synthesis &mdash; Cross-verify scores + generate narrative &amp; pitch</div>
+    <div class="mini-arrow"></div>
+    <div class="flow-step purple">Phase 4: Archetype Classification (Thriving / Modernizing / Cash Cow / At Risk)</div>
+    <div class="mini-arrow"></div>
+    <div class="flow-step" style="border-color: rgba(96,165,250,0.4); color: var(--accent-blue);">Storage: Save full report + update global index</div>
+    <div class="mini-arrow"></div>
+    <div class="flow-step blue">Phase 6: Statistical Analysis (on-demand, across all companies)</div>
+  </div>
+</div>
+
+<!-- CORE IDEA -->
+<div class="section" id="core-idea">
+  <div class="insight-box">
+    <h3>Core Idea: The Three-Layer Accuracy Strategy</h3>
+    <p style="margin-bottom: 1rem;">The scanner uses three independent intelligence layers to detect <strong>Reality Gaps</strong> &mdash; the difference between what a company <em>says</em> it is and what <em>evidence</em> shows it actually is.</p>
+    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
+      <div style="text-align: center;">
+        <div style="font-size: 1.5rem; margin-bottom: 0.3rem;">Layer 1</div>
+        <div style="color: var(--accent-cyan); font-weight: 600;">Intent</div>
+        <div style="font-size: 0.8rem; color: var(--text-dim);">What they claim</div>
+      </div>
+      <div style="text-align: center;">
+        <div style="font-size: 1.5rem; margin-bottom: 0.3rem;">Layer 2</div>
+        <div style="color: var(--accent-green); font-weight: 600;">Reality</div>
+        <div style="font-size: 0.8rem; color: var(--text-dim);">What evidence shows</div>
+      </div>
+      <div style="text-align: center;">
+        <div style="font-size: 1.5rem; margin-bottom: 0.3rem;">Layer 3</div>
+        <div style="color: var(--accent-purple); font-weight: 600;">Synthesis</div>
+        <div style="font-size: 0.8rem; color: var(--text-dim);">Cross-verify &amp; reconcile</div>
+      </div>
+    </div>
+    <p><strong>Reality Gap = Intent Score &minus; Reality Score.</strong><br>
+    Large gap + washing detected = high-risk signal (ambitious promises, weak operations).<br>
+    Small gap = honest company (walks the walk).<br>
+    Negative gap (reality &gt; intent) = humble, under-communicating company.</p>
+  </div>
+</div>
+
+<!-- PHASE 1 -->
+<div class="section" id="phase1">
+  <div class="section-title">Phase 1: Intent Analysis <span class="badge" style="background: rgba(34,211,238,0.15); color: var(--accent-cyan);">Scanner 1</span></div>
+
+  <div class="phase phase-scanner1">
+    <div class="phase-header">
+      <div class="phase-number">1</div>
+      <div class="phase-name">Narrative Ambition Assessment</div>
+    </div>
+
+    <div class="phase-question">
+      "How ambitious is this company's narrative compared to typical companies? What do they <em>say</em> they are?"
+    </div>
+
+    <div class="subsection">
+      <h4>What It Analyzes</h4>
+      <p>Reads the company's own words &mdash; website text, uploaded documents, reports &mdash; and scores their <em>stated intentions</em> across 5 dimensions defined in the Knowledge Base:</p>
+      <div class="dim-grid">
+        <div class="dim-item"><strong>Operating Model</strong> Autonomy, flow, teams vs. command-and-control, silos</div>
+        <div class="dim-item"><strong>Strategy</strong> Adaptive, customer-centric vs. static, top-down</div>
+        <div class="dim-item"><strong>Culture &amp; Values</strong> Psychological safety, learning vs. compliance, fear</div>
+        <div class="dim-item"><strong>Service Portfolio</strong> SaaS, API, platform vs. legacy project-based</div>
+        <div class="dim-item"><strong>AI Readiness</strong> Data platforms, ML adoption vs. spreadsheets</div>
+      </div>
+    </div>
+
+    <div class="subsection">
+      <h4>How It Thinks</h4>
+      <ul>
+        <li>Scans text for "modernization" keywords (positive signals) and "legacy" keywords (negative signals) per dimension</li>
+        <li>Applies <strong>negation detection</strong>: "we avoid waterfall" does NOT count as a negative signal for "waterfall"</li>
+        <li>Applies <strong>word-boundary matching</strong>: prevents false positives from partial word matches</li>
+        <li>Calculates net ambition per dimension: <em>positive signals &minus; (negative signals &times; friction weight)</em></li>
+        <li>Normalizes for text length (short documents aren't penalized, long documents don't inflate scores)</li>
+        <li>Computes a <strong>Friction Index</strong> (0&ndash;1) showing how mixed/contradictory the signals are</li>
+      </ul>
+    </div>
+
+    <div class="subsection">
+      <h4>Key Outputs</h4>
+      <ul>
+        <li><strong>Intent Score</strong> (0&ndash;100): Average ambition across all dimensions</li>
+        <li><strong>Per-dimension breakdown</strong>: Individual scores + matched keywords</li>
+        <li><strong>Friction Index</strong>: Degree of mixed signals (modern + legacy language together)</li>
+        <li><strong>Vibrancy Score</strong>: Keyword density / richness of narrative</li>
+      </ul>
+    </div>
+
+    <div class="verification-box">
+      <h4>Accuracy Safeguards</h4>
+      <ul>
+        <li>Negation detection prevents false positives ("eliminate silos" is positive, not negative)</li>
+        <li>Word boundary checks prevent partial matches ("streams" is not "stream-aligned teams")</li>
+        <li>Short vs. long text normalization prevents length bias</li>
+        <li>High friction index flags contradictory messaging</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="flow-connector"><div class="flow-arrow"></div></div>
+<div class="flow-label">Intent Score passed to Scanner 2 for washing detection</div>
+
+<!-- PHASE 2 -->
+<div class="section" id="phase2">
+  <div class="section-title">Phase 2: Reality Check <span class="badge" style="background: rgba(52,211,153,0.15); color: var(--accent-green);">Scanner 2</span></div>
+
+  <div class="phase phase-scanner2">
+    <div class="phase-header">
+      <div class="phase-number">2</div>
+      <div class="phase-name">5-Jury Forensic Evidence Search</div>
+    </div>
+
+    <div class="phase-question">
+      "What does independent, external evidence show about this company's <em>actual</em> operational maturity?"
+    </div>
+
+    <div class="subsection">
+      <h4>The 5-Jury Model</h4>
+      <p>Five independent, specialized "juries" each hunt for evidence in a different area. This ensures no single dimension dominates the assessment:</p>
+    </div>
+
+    <div class="jury-grid">
+      <div class="jury-card">
+        <h5>Jury 1: Architecture</h5>
+        <p>GitHub repos, engineering blogs, tech stacks, job postings. Evidence of modern vs. legacy architecture.</p>
+      </div>
+      <div class="jury-card">
+        <h5>Jury 2: Strategy</h5>
+        <p>Annual reports, financial databases, procurement, investments. Are they investing in digital transformation?</p>
+      </div>
+      <div class="jury-card">
+        <h5>Jury 3: Culture</h5>
+        <p>Glassdoor reviews, LinkedIn hiring patterns, meetup sponsorships. Can they retain talent? Do people rejoin?</p>
+      </div>
+      <div class="jury-card">
+        <h5>Jury 4: AI &amp; Data</h5>
+        <p>Hugging Face models, tech stacks, cloud case studies, R&amp;D publications. Real ML adoption or "pilot purgatory"?</p>
+      </div>
+      <div class="jury-card">
+        <h5>Jury 5: Service Portfolio</h5>
+        <p>Service pages, case studies, analyst reports. Can they deliver modern services or just legacy consulting?</p>
+      </div>
+    </div>
+
+    <div class="subsection">
+      <h4>How It Thinks</h4>
+      <ul>
+        <li>Uses AI with <strong>live web search grounding</strong> &mdash; the model can search the internet in real-time for each jury</li>
+        <li>Starts at a neutral base score of 50, then applies evidence-based adjustments (&minus;50 to +50)</li>
+        <li><strong>Recency weighting</strong>: Evidence less than 12 months old has full impact; evidence older than 18 months has only 20% impact</li>
+        <li><strong>Technical debt penalty</strong>: Recent evidence of legacy systems or manual workarounds applies &minus;20 to &minus;35 points</li>
+        <li><strong>Near-zero evidence penalty</strong>: If almost no evidence found across all juries, applies &minus;35 to &minus;50 points</li>
+        <li>Searches in both English and Finnish to cover Nordic companies</li>
+        <li>For holding companies, searches subsidiary companies separately</li>
+      </ul>
+    </div>
+
+    <div class="subsection">
+      <h4>Re-Search Loop (Confidence-Driven)</h4>
+      <p>If initial search returns low confidence (&lt;45) or very few evidence links (&lt;3):</p>
+      <ul>
+        <li>Identifies which juries came back empty (weak juries)</li>
+        <li>Builds targeted re-search with broader terms</li>
+        <li>Merges new findings with existing ones (deduplicated by URL)</li>
+        <li>Each new unique finding adds +5 confidence; each resolved jury adds +10</li>
+        <li>Repeats up to 2 times (single scan) or 1 time (batch scan)</li>
+        <li>Stops when confidence &ge;45 or no new evidence found</li>
+      </ul>
+    </div>
+
+    <div class="subsection">
+      <h4>Evidence Validation Gate</h4>
+      <ul>
+        <li>Every evidence URL is verified via HTTP request (does it actually exist?)</li>
+        <li>If more than 20% of links are dead, triggers a <strong>URL Recovery Re-Search</strong></li>
+        <li>Recovery searches specifically for real, verifiable links from actual web results</li>
+        <li>Remaining dead links apply confidence penalties (&gt;50% dead = &minus;30 confidence)</li>
+      </ul>
+    </div>
+
+    <div class="subsection">
+      <h4>Delta Verification (Large Score Changes)</h4>
+      <p>If the new Reality Score differs from the previous scan by &ge;15 points:</p>
+      <ul>
+        <li>Triggers a <strong>verification re-scan</strong> &mdash; runs the entire search again</li>
+        <li>If both scans agree on direction and magnitude, accepts as genuine change (averages the two)</li>
+        <li>If they disagree, uses the more conservative score (closer to previous)</li>
+      </ul>
+    </div>
+
+    <div class="subsection">
+      <h4>Evidence Persistence (Multi-Scan Memory)</h4>
+      <ul>
+        <li>Previous scan findings carry forward &mdash; "innocent until proven fixed"</li>
+        <li>Not re-finding something = search variance, not proof of improvement</li>
+        <li>Historical evidence expires only after 90 days</li>
+        <li>This prevents "lucky search results" from erasing real problems</li>
+      </ul>
+    </div>
+
+    <div class="subsection">
+      <h4>Washing Detection</h4>
+      <ul>
+        <li>If Intent Score &gt; 60 AND Reality Score significantly below Intent: potential washing</li>
+        <li>Classified by type: <strong>AI Washing</strong> (AI buzzwords, no real adoption), <strong>Agile Washing</strong> (claims modern practices, evidence of waterfall), <strong>Green Washing</strong> (ESG narrative, no real sustainable operations)</li>
+        <li>Cannot flag washing if Intent &lt; 40 (low ambition can't be called washing)</li>
+        <li>Re-checked after score verification &mdash; if final Reality &ge; Intent, washing flag is removed</li>
+      </ul>
+    </div>
+
+    <div class="subsection">
+      <h4>Key Outputs</h4>
+      <ul>
+        <li><strong>Reality Score</strong> (0&ndash;100): Evidence-based operational maturity</li>
+        <li><strong>Checklist</strong>: Per-jury findings with sentiment (positive/negative/neutral), recency, source</li>
+        <li><strong>Evidence Links</strong>: Verified URLs with titles, snippets, domains</li>
+        <li><strong>Key People</strong>: Executives mentioned in evidence (name, role, relevance)</li>
+        <li><strong>Confidence Score</strong> (0&ndash;100): How much evidence supports the assessment</li>
+        <li><strong>Washing Flag</strong>: Boolean + type if detected</li>
+      </ul>
+    </div>
+
+    <div class="verification-box">
+      <h4>Accuracy Safeguards</h4>
+      <ul>
+        <li>5 independent juries ensure diverse evidence (confidence requires 3+ juries with evidence)</li>
+        <li>All evidence URLs verified via HTTP</li>
+        <li>Dead link recovery prevents false low scores from broken links</li>
+        <li>Delta verification re-scans prevent noise from single-run search variance</li>
+        <li>Evidence persistence prevents "lucky" re-scans from hiding real problems</li>
+        <li>Recency weighting ensures stale evidence doesn't dominate</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- PHASE 2b -->
+<div class="section" id="phase2b">
+  <div class="section-title">Phase 2b: Financial Health Index <span class="badge" style="background: rgba(251,191,36,0.15); color: var(--accent-amber);">Parallel</span></div>
+
+  <div class="phase phase-financial">
+    <div class="phase-header">
+      <div class="phase-number">2b</div>
+      <div class="phase-name">Financial Health Assessment</div>
+      <span class="parallel-badge">Runs parallel to Scanner 2</span>
+    </div>
+
+    <div class="phase-question">
+      "How financially healthy is this company? Can they sustain their operations?"
+    </div>
+
+    <div class="subsection">
+      <h4>Four Dimensions (Each Scored 0&ndash;25)</h4>
+      <div class="dim-grid">
+        <div class="dim-item"><strong>Revenue Trend (30%)</strong> Declining, stable, or growing?</div>
+        <div class="dim-item"><strong>Profitability (40%)</strong> Operating margins, net profit</div>
+        <div class="dim-item"><strong>Efficiency (15%)</strong> Revenue per employee, operational efficiency</div>
+        <div class="dim-item"><strong>Investment Signal (15%)</strong> R&amp;D spending, growth investment, M&amp;A activity</div>
+      </div>
+    </div>
+
+    <div class="subsection">
+      <h4>How It Thinks</h4>
+      <ul>
+        <li>Searches public financial databases, annual reports, employee counts, R&amp;D data</li>
+        <li>Scores each of 4 dimensions independently (0&ndash;25 each)</li>
+        <li>Applies a <strong>Core Health Gate</strong>: If both Revenue and Profitability are weak, the composite score is dampened (floor at 25% of weighted base), regardless of Efficiency or Investment</li>
+        <li>The gate fully opens when Revenue + Profitability reach 60% of their maximum</li>
+        <li>Non-blocking: if Financial search fails, the scan continues with Financial = null</li>
+      </ul>
+    </div>
+
+    <div class="subsection">
+      <h4>Key Output</h4>
+      <ul>
+        <li><strong>Financial Index</strong> (0&ndash;100): Composite health score</li>
+        <li><strong>Sub-scores</strong>: Revenue Trend, Profitability, Efficiency, Investment Signal (each 0&ndash;25)</li>
+        <li><strong>Financial Findings</strong>: Per-dimension evidence with quotes and sources</li>
+        <li><strong>Financial Confidence</strong> (0&ndash;100): How much data was available</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- PHASE 2c -->
+<div class="section" id="phase2c">
+  <div class="section-title">Phase 2c: Self-Analysis Loop <span class="badge" style="background: rgba(248,113,113,0.15); color: var(--accent-red);">Conditional</span></div>
+
+  <div class="phase phase-selfanalysis">
+    <div class="phase-header">
+      <div class="phase-number">2c</div>
+      <div class="phase-name">Score Delta Explanation</div>
+      <span class="conditional-badge">Only if score changed &ge;15 pts in &lt;7 days</span>
+    </div>
+
+    <div class="phase-question">
+      "Why did the scanner produce different results this time? Is it search variance, evidence gaps, prompt sensitivity, or genuine company change?"
+    </div>
+
+    <div class="subsection">
+      <h4>Score Drift Guard</h4>
+      <p>If a rescan within 7 days shows a score change &ge;15 points, the system first <strong>dampens</strong> the score (limits change to &plusmn;15 max) and then runs a diagnostic analysis to understand why.</p>
+    </div>
+
+    <div class="subsection">
+      <h4>Pre-Computed Diagnostics (from actual data, not AI hallucination)</h4>
+      <ul>
+        <li><strong>Source diversity</strong>: How many unique domains in evidence? Is it dominated by one source?</li>
+        <li><strong>Jury coverage</strong>: Which juries had evidence, which were empty?</li>
+        <li><strong>Evidence recency</strong>: Ratio of recent (&lt;12 months) vs. old findings</li>
+        <li><strong>URL overlap</strong>: How many URLs are shared between previous and current scan? Low overlap (&lt;20%) = strong indicator of search variance</li>
+      </ul>
+    </div>
+
+    <div class="subsection">
+      <h4>Root Cause Classification</h4>
+      <ul>
+        <li><strong>Search Variance</strong>: Different Google results each time (most common; diagnosed by low URL overlap)</li>
+        <li><strong>Evidence Gap</strong>: One scan found sources the other missed</li>
+        <li><strong>Prompt Sensitivity</strong>: Same evidence, model interpreted differently</li>
+        <li><strong>Genuine Change</strong>: Real company change (unlikely within 7 days)</li>
+      </ul>
+    </div>
+
+    <div class="subsection">
+      <h4>Actionable Suggestions</h4>
+      <p>The system generates improvement recommendations: widen search to parent company, diversify sources, add more language terms, flag low-confidence juries, etc.</p>
+    </div>
+  </div>
+</div>
+
+<div class="flow-connector"><div class="flow-arrow"></div></div>
+<div class="flow-label">All scanner results flow into Synthesis</div>
+
+<!-- PHASE 3 -->
+<div class="section" id="phase3">
+  <div class="section-title">Phase 3: Synthesis &amp; Cross-Verification <span class="badge" style="background: rgba(167,139,250,0.15); color: var(--accent-purple);">Wisdom Layer</span></div>
+
+  <div class="phase phase-synthesis">
+    <div class="phase-header">
+      <div class="phase-number">3</div>
+      <div class="phase-name">Independent Score Verification + Narrative Generation</div>
+    </div>
+
+    <div class="phase-question">
+      "Do independent scores validate Scanner 1 and Scanner 2? What is the human-readable diagnosis and actionable business pitch?"
+    </div>
+
+    <div class="subsection">
+      <h4>Part 1: Independent Score Evaluation (Blind Verification)</h4>
+      <p>A senior AI model (Claude Opus) reads ALL evidence collected by Scanners 1 and 2, but <strong>without seeing their scores</strong>. It independently evaluates:</p>
+      <ul>
+        <li><strong>Reality Score</strong> (0&ndash;100): Scores each of the 5 Knowledge Base dimensions independently (0&ndash;20 each), based only on verified evidence. If no evidence exists for a dimension, scores it 10 (neutral, not generous).</li>
+        <li><strong>Intent Score</strong> (0&ndash;100): Independently assesses how ambitious the narrative is.</li>
+      </ul>
+    </div>
+
+    <div class="subsection">
+      <h4>Part 2: Score Cross-Verification</h4>
+      <p>The Synthesis scores are compared against Scanner 1/2 scores to catch disagreements:</p>
+      <table class="verify-table">
+        <thead>
+          <tr><th>Score Delta</th><th>Action</th><th>Rationale</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>&le; 5 points</td>
+            <td>Keep Scanner score</td>
+            <td>Agreement zone &mdash; search-grounded score is reliable</td>
+          </tr>
+          <tr>
+            <td>6&ndash;10 points</td>
+            <td>Blended average (60% Scanner, 40% Synthesis)</td>
+            <td>Mild disagreement &mdash; both have valid perspectives</td>
+          </tr>
+          <tr>
+            <td>&gt; 10 points</td>
+            <td>Synthesis overrides Scanner</td>
+            <td>Strong disagreement &mdash; Synthesis has broader context</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="subsection">
+      <h4>Part 3: Narrative Generation</h4>
+      <ul>
+        <li><strong>Diagnosis / Summary</strong> (180&ndash;220 words): States the archetype explicitly, maps findings to Knowledge Base dimensions, uses KB terminology (e.g., "Digital Taylorism", "Flow Efficiency", "Pilot Purgatory"), references washing if detected</li>
+        <li><strong>Executive Pitch</strong> (90&ndash;110 words): Cold-outreach pitch to C-level with exactly 2 concrete proposals derived from the weakest Knowledge Base dimensions. Must feel specific to this company, not a template.</li>
+      </ul>
+    </div>
+
+    <div class="subsection">
+      <h4>Fallback Chain (Resilience)</h4>
+      <p>If the primary model fails (rate limit, timeout, server error), the system cascades through fallback models:</p>
+      <ul>
+        <li>Claude Opus 4.6 (primary) &rarr; Gemini 3 Pro &rarr; Sonnet 4.5</li>
+        <li>All three must fail before diagnosis/pitch stay as defaults</li>
+      </ul>
+    </div>
+
+    <div class="verification-box">
+      <h4>Accuracy Safeguards</h4>
+      <ul>
+        <li>Blind verification: Synthesis scores without seeing Scanner scores</li>
+        <li>Blending logic prevents any single model from dominating</li>
+        <li>Post-verification consistency: if Reality &ge; Intent, washing flag automatically removed</li>
+        <li>Scores recalculated from verified final values (gap, archetype, washing)</li>
+        <li>3-model fallback chain ensures synthesis completes even under API pressure</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="flow-connector"><div class="flow-arrow"></div></div>
+
+<!-- PHASE 4 -->
+<div class="section" id="phase4">
+  <div class="section-title">Phase 4: Archetype Classification</div>
+
+  <div class="phase phase-synthesis">
+    <div class="phase-header">
+      <div class="phase-number">4</div>
+      <div class="phase-name">Company Archetype Determination</div>
+    </div>
+
+    <div class="phase-question">
+      "Given this company's operational reality and financial health, which archetype best describes their position?"
+    </div>
+
+    <div class="subsection">
+      <h4>The 2&times;2 Matrix</h4>
+      <p>Archetype is determined by two axes: <strong>Reality Score</strong> (operational maturity) and <strong>Financial Index</strong> (business health):</p>
+    </div>
+
+    <div class="archetype-grid">
+      <div class="archetype-card archetype-thriving">
+        <h5>Thriving</h5>
+        <p>Reality &ge; 50 AND Financial &ge; 50. Modern operations AND healthy business. The gold standard.</p>
+      </div>
+      <div class="archetype-card archetype-modernizing">
+        <h5>Modernizing</h5>
+        <p>Reality &ge; 50 AND Financial &lt; 50. Strong operations but financial pressure. Investing in transformation, returns haven't materialized yet.</p>
+      </div>
+      <div class="archetype-card archetype-cashcow">
+        <h5>Cash Cow</h5>
+        <p>Reality &lt; 50 AND Financial &ge; 50. Profitable but operationally outdated. Making money from legacy advantages. Accumulating technical debt.</p>
+      </div>
+      <div class="archetype-card archetype-atrisk">
+        <h5>At Risk</h5>
+        <p>Reality &lt; 50 AND Financial &lt; 50. Both operations and finances under pressure. Status quo is unsustainable.</p>
+      </div>
+    </div>
+
+    <p style="font-size: 0.85rem; color: var(--text-dim); margin-top: 0.5rem;">If Financial Index is unavailable (search failed), Intent Score is used as a proxy for the financial axis.</p>
+  </div>
+</div>
+
+<div class="flow-connector"><div class="flow-arrow"></div></div>
+
+<!-- PHASE 5 -->
+<div class="section" id="phase5">
+  <div class="section-title">Phase 5: Multi-Scan History &amp; Trend Detection</div>
+
+  <div class="phase phase-scanner2">
+    <div class="phase-header">
+      <div class="phase-number">5</div>
+      <div class="phase-name">Longitudinal Trend Analysis</div>
+    </div>
+
+    <div class="phase-question">
+      "How has this company evolved over time? Are issues persistent, resolving, or escalating?"
+    </div>
+
+    <div class="subsection">
+      <h4>How It Works</h4>
+      <ul>
+        <li>Loads up to 3 previous scans from storage (rolling 12-scan history window)</li>
+        <li>Builds a multi-point trend line: [Oldest] &rarr; [Mid] &rarr; [Recent] &rarr; [Now]</li>
+        <li>Classifies trend direction: <strong>Improving</strong> (Reality up &gt;5), <strong>Declining</strong> (Reality down &gt;5), or <strong>Stable</strong></li>
+      </ul>
+    </div>
+
+    <div class="subsection">
+      <h4>Persistent Pattern Detection</h4>
+      <ul>
+        <li>If a finding appears in 2+ scans: <strong>high confidence</strong> (near-certain pattern)</li>
+        <li>If it appears in 1 scan only: could be search variance</li>
+        <li>If getting worse across scans: <strong>escalating</strong> (urgent)</li>
+        <li>If absent in recent scans: <strong>fading</strong> (possibly resolving)</li>
+      </ul>
+    </div>
+
+    <div class="subsection">
+      <h4>Rescan Mode Verification</h4>
+      <p>For each specific claim from a previous scan, the current scan tries to:</p>
+      <ul>
+        <li><strong>Confirm</strong>: Found same/similar evidence again</li>
+        <li><strong>Resolve</strong>: Found new counter-evidence proving the claim is now fixed</li>
+        <li><strong>Leave unverified</strong>: Could not find evidence either way &mdash; carried forward as-is (not finding something doesn't mean it's fixed)</li>
+      </ul>
+    </div>
+
+    <div class="subsection">
+      <h4>What Synthesis Receives</h4>
+      <p>The synthesis prompt includes all trend data, previous summaries, and persistent patterns. It's instructed to note persistent issues, highlight positive trajectories, and avoid treating search variance as genuine improvement.</p>
+    </div>
+  </div>
+</div>
+
+<div class="flow-connector"><div class="flow-arrow"></div></div>
+
+<!-- PHASE 6 -->
+<div class="section" id="phase6">
+  <div class="section-title">Phase 6: Statistical Analysis Layer <span class="badge" style="background: rgba(96,165,250,0.15); color: var(--accent-blue);">On-Demand</span></div>
+
+  <div class="phase phase-stats">
+    <div class="phase-header">
+      <div class="phase-number">6</div>
+      <div class="phase-name">Cross-Company Statistical Intelligence</div>
+    </div>
+
+    <div class="phase-question">
+      "What patterns emerge across the entire scanned portfolio? How do companies relate to each other statistically?"
+    </div>
+
+    <div class="subsection">
+      <h4>Analyses Performed</h4>
+      <ul>
+        <li><strong>Descriptive Statistics</strong>: Median, IQR, mean, std, skew, and distribution shape for each score type (Intent, Reality, Financial, Confidence, Gap)</li>
+        <li><strong>Correlation Analysis</strong>: Spearman (primary, non-parametric, robust to outliers) + Kendall's Tau + Pearson (reference). Tests: Is there a monotonic relationship between Reality and Financial scores?</li>
+        <li><strong>Full Correlation Matrix</strong>: Intent &times; Reality &times; Financial &times; Confidence (both Spearman and Pearson)</li>
+        <li><strong>Archetype Distribution</strong>: Count and percentage of companies in each archetype category</li>
+        <li><strong>Regression Residuals</strong>: Which companies deviate most from the expected Reality&ndash;Financial relationship? (positive residual = financially stronger than expected; negative = weaker)</li>
+        <li><strong>Domain Breakdown</strong>: Average scores by industry vertical</li>
+        <li><strong>Ownership Breakdown</strong>: Average scores by ownership type (public, private, state-owned, etc.)</li>
+        <li><strong>Score Distributions</strong>: 10-bin histograms for Intent, Reality, and Financial scores</li>
+        <li><strong>Top 10 / Bottom 10</strong>: Ranked by Reality Score</li>
+      </ul>
+    </div>
+
+    <div class="subsection">
+      <h4>Why Non-Parametric Methods Primary?</h4>
+      <p>Spearman and Kendall are used as <strong>primary</strong> correlation measures because the score distributions are often skewed (not normally distributed). Pearson is included only as a reference point &mdash; if Pearson and Spearman differ by &gt;0.15, it indicates the data is significantly non-normal.</p>
+    </div>
+  </div>
+</div>
+
+<!-- VERIFICATION MECHANISMS -->
+<div class="section" id="verification">
+  <div class="section-title">Cross-Cutting Verification Mechanisms</div>
+
+  <div class="insight-box">
+    <h3>Six Layers of Accuracy Assurance</h3>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem;">
+      <div>
+        <p style="color: var(--accent-cyan); font-weight: 600; margin-bottom: 0.3rem;">1. Jury Diversity</p>
+        <p style="font-size: 0.85rem;">Five independent evidence hunts. Confidence only high if 3+ juries return evidence. No single dimension can dominate.</p>
+      </div>
+      <div>
+        <p style="color: var(--accent-green); font-weight: 600; margin-bottom: 0.3rem;">2. Evidence Validation</p>
+        <p style="font-size: 0.85rem;">Every URL verified via HTTP. Dead links trigger recovery. Remaining dead links penalize confidence score.</p>
+      </div>
+      <div>
+        <p style="color: var(--accent-amber); font-weight: 600; margin-bottom: 0.3rem;">3. Blind Cross-Verification</p>
+        <p style="font-size: 0.85rem;">Synthesis model scores Reality/Intent independently, without seeing Scanner scores. Disagreements trigger blending or override.</p>
+      </div>
+      <div>
+        <p style="color: var(--accent-purple); font-weight: 600; margin-bottom: 0.3rem;">4. Score Drift Guard</p>
+        <p style="font-size: 0.85rem;">Limits score changes to &plusmn;15 per 7-day window. Large changes trigger self-analysis to diagnose cause (search variance vs. genuine change).</p>
+      </div>
+      <div>
+        <p style="color: var(--accent-red); font-weight: 600; margin-bottom: 0.3rem;">5. Evidence Persistence</p>
+        <p style="font-size: 0.85rem;">"Innocent until proven fixed." Previous findings carry forward for 90 days. Not finding something again = search noise, not improvement.</p>
+      </div>
+      <div>
+        <p style="color: var(--accent-blue); font-weight: 600; margin-bottom: 0.3rem;">6. Logic Consistency</p>
+        <p style="font-size: 0.85rem;">Post-verification checks: washing impossible if Reality &ge; Intent. Low ambition can't be washing. Archetype recalculated from final verified scores.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- KNOWLEDGE BASE -->
+<div class="section" id="kb">
+  <div class="section-title">Knowledge Base Grounding</div>
+
+  <div class="phase phase-synthesis">
+    <div class="phase-header">
+      <div class="phase-number">KB</div>
+      <div class="phase-name">The Foundation: Evolving Knowledge Base</div>
+    </div>
+
+    <div class="subsection">
+      <h4>What It Is</h4>
+      <p>Every analysis is grounded in a centralized <strong>Knowledge Base</strong> that defines the vocabulary, dimensions, archetypes, and patterns the scanner uses. This ensures consistency across all scans and prevents the AI from inventing its own categories.</p>
+    </div>
+
+    <div class="subsection">
+      <h4>What It Contains</h4>
+      <ul>
+        <li><strong>5 Assessment Dimensions</strong>: Operating Model, Strategy, Culture, Service Portfolio, AI Readiness &mdash; each with clear good/bad pattern definitions</li>
+        <li><strong>4 Archetype Definitions</strong>: Thriving, Modernizing, Cash Cow, At Risk &mdash; with precise classification rules</li>
+        <li><strong>Anti-Pattern Library</strong>: "Digital Taylorism", "Pilot Purgatory", "Innovation Theatre", "Flow Efficiency", "Modernization Washing" &mdash; named patterns that map to specific evidence signals</li>
+        <li><strong>Scoring Guidelines</strong>: How to weight recency, technical debt, and positive signals consistently</li>
+      </ul>
+    </div>
+
+    <div class="subsection">
+      <h4>How It's Used</h4>
+      <ul>
+        <li>Scanner 1 uses it for keyword matching (which words are "modern" vs. "legacy")</li>
+        <li>Scanner 2's AI prompts include it to guide evidence search and scoring</li>
+        <li>Synthesis is explicitly instructed: "MUST use KB terminology", "NEVER invent your own categories", "MAP all findings to KB dimensions"</li>
+        <li>No internal codes (TAC-xxx, DIM-xxx) are ever shown to users &mdash; always the full concept name</li>
+        <li>Fetched remotely with local cache fallback to ensure availability</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- FOOTER -->
+<div style="text-align: center; padding: 3rem 0 2rem; color: var(--text-dim); font-size: 0.8rem;">
+  <p>Forensic Modernization Scanner &mdash; Architecture Thinking Process</p>
+  <p>This document describes the conceptual design and orchestration logic.</p>
+  <p>No source code, API keys, or confidential business data included.</p>
+</div>
+
+</div>
+</body>
+</html>
