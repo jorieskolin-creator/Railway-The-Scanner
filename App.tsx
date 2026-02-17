@@ -48,9 +48,6 @@ const App = () => {
   const [systemStatus, setSystemStatus] = useState({ online: false, storage: false, google: false, ai: false });
   const [selectedDomain, setSelectedDomain] = useState('All');
   
-  // ADMIN SETTINGS
-  const [adminModel, setAdminModel] = useState('');
-
   // ANALYTICS STATE
   const [isAnalyticsOpen, setIsAnalyticsOpen] = useState(false);
   const [analyticsData, setAnalyticsData] = useState(null);
@@ -210,13 +207,8 @@ const App = () => {
       setIsBatchOpen(true);
       stopBatchRef.current = false;
 
-      let modelLabel = "Default (Gemini 3 Pro + Opus 4.6)";
-      if (adminModel === 'gemini-only') modelLabel = 'Gemini 3 Pro Only';
-      if (adminModel === 'sonnet-opus') modelLabel = 'Sonnet 4.5 + Opus 4.6';
-      if (adminModel === 'gemini-hybrid') modelLabel = 'Gemini 3 Pro + Gemini 2.5 Pro';
-
       const MAX_PARALLEL = 5;
-      setBatchStatus({ current: 0, total: 0, isRunning: true, currentName: 'Initializing...', logs: [`Starting ${mode} Batch using ${modelLabel} (${MAX_PARALLEL} parallel)...`] });
+      setBatchStatus({ current: 0, total: 0, isRunning: true, currentName: 'Initializing...', logs: [`Starting ${mode} Batch (${MAX_PARALLEL} parallel)...`] });
 
       try {
         setBatchStatus(prev => ({ ...prev, total: targets.length, logs: [...prev.logs, `Loaded ${targets.length} targets.`] }));
@@ -236,7 +228,6 @@ const App = () => {
                 formData.append('companyUrl', target.url);
                 formData.append('reportText', "");
                 formData.append('saveToDatabase', 'true');
-                if (adminModel) formData.append('modelId', adminModel);
 
                 const res = await fetch('/scan', {
                     method: 'POST',
@@ -298,8 +289,7 @@ const App = () => {
     const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to initiate FULL Batch Scan:");
     if (!password) return;
 
-    const modelLabel = adminModel === '' ? 'Default (Gemini 3 Pro + Opus 4.6)' : getAdminModelLabel();
-    if (!confirm(`⚠️ START FULL BATCH SCAN (100+ Companies)?\n\nModel: ${modelLabel}\n\nThis will take a significant amount of time.\n\nDO NOT CLOSE THIS TAB until finished.`)) return;
+    if (!confirm(`⚠️ START FULL BATCH SCAN (100+ Companies)?\n\nThis will take a significant amount of time.\n\nDO NOT CLOSE THIS TAB until finished.`)) return;
 
     try {
         const listRes = await fetch('/admin/company-list', {
@@ -330,20 +320,6 @@ const App = () => {
         const shuffled = [...allCompanies].sort(() => 0.5 - Math.random());
         executeBatch(shuffled.slice(0, 5), "TEST (5)");
     } catch(e) { alert("Failed to fetch company list"); }
-  };
-
-  const cycleAdminModel = () => {
-      const models = ['', 'gemini-only', 'sonnet-opus', 'gemini-hybrid'];
-      const idx = models.indexOf(adminModel);
-      setAdminModel(models[(idx + 1) % models.length]);
-  };
-
-  const getAdminModelLabel = () => {
-      if (adminModel === '') return 'GEMINI 3 PRO + OPUS 4.6';
-      if (adminModel === 'gemini-only') return 'GEMINI 3 PRO ONLY';
-      if (adminModel === 'sonnet-opus') return 'SONNET 4.5 + OPUS 4.6';
-      if (adminModel === 'gemini-hybrid') return 'GEMINI 3 PRO + 2.5 PRO';
-      return adminModel;
   };
 
   const handleStopBatch = () => { stopBatchRef.current = true; };
@@ -473,14 +449,6 @@ const App = () => {
             </div>
             {IS_ADMIN_MODE && (
                 <>
-                <button 
-                  onClick={cycleAdminModel}
-                  className={`hidden md:flex items-center gap-1.5 px-3 py-1.5 border rounded transition-all text-[10px] font-mono font-bold tracking-tight ${adminModel === '' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 shadow-[0_0_10px_rgba(16,185,129,0.2)]' : 'bg-amber-500/10 text-amber-300 border-amber-500/30'}`}
-                >
-                    {adminModel === '' ? <Sparkles size={12} className="text-emerald-300" /> : <Cpu size={12} className="text-amber-400" />}
-                    <span>{getAdminModelLabel()}</span>
-                </button>
-
                 <button onClick={handleOpenAnalytics} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-violet-900/40 hover:bg-violet-800/60 border border-violet-700/50 text-violet-200 font-mono font-bold text-[10px] rounded transition-all">
                     <BarChart3 size={12} /> ANALYZE
                 </button>

@@ -5,7 +5,6 @@ interface ScannerInputData {
   companyName: string;
   companyUrl: string;
   reportText: string;
-  modelId?: string; // Optional Model Override
 }
 
 interface EvidenceLink {

@@ -169,18 +169,6 @@ async def find_company_url(name: str):
             print(f"   [API] Find URL Sonnet fallback also failed: {e2}")
         return {"url": ""}
 
-@app.get("/api/models")
-def list_models():
-    api_key = clean_env_var(os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY"))
-    if not api_key: return {"error": "No API Key configured on server."}
-    try:
-        client = genai.Client(api_key=api_key)
-        models = list(client.models.list())
-        available = [m.name for m in models if "generateContent" in m.supported_generation_methods]
-        return {"count": len(available), "models": sorted(available)}
-    except Exception as e:
-        return {"error": str(e)}
-
 @app.get("/dashboard-data")
 async def get_dashboard_data(response: Response):
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
@@ -223,7 +211,6 @@ def run_scan(
     companyUrl: Optional[str] = Form(None),
     reportText: str = Form(""),
     saveToDatabase: bool = Form(True),
-    modelId: Optional[str] = Form(None),
     files: List[UploadFile] = File(None)
 ):
     """
@@ -239,28 +226,8 @@ def run_scan(
         scan_start = time.time()
         print(f"🚀 --- LIVE SCAN INITIATED FOR: {companyName} ---")
         
-        # --- MODEL SELECTION STRATEGY ---
-        # Scanner 2 (Search) always uses Gemini 3 Pro (requires Google Search grounding)
-        # Synthesis model varies by strategy
+        # Fixed model pipeline: Gemini 3 Pro (search) + Claude Opus 4.6 (synthesis)
         search_model = "gemini-3-pro-preview"
-        synth_model = "claude-opus-4-6"
-        synth_provider = "anthropic"
-        strategy = (modelId or "").strip()
-
-        if strategy == "gemini-only":
-            synth_model = "gemini-3-pro-preview"
-            synth_provider = "gemini"
-            print(f"   [Model Strategy] Gemini Only: Search=Gemini 3 Pro, Synthesis=Gemini 3 Pro")
-        elif strategy == "sonnet-opus":
-            synth_model = "claude-sonnet-4-5-20250929"
-            synth_provider = "anthropic"
-            print(f"   [Model Strategy] Sonnet+Opus: Search=Gemini 3 Pro, Draft=Sonnet 4.5, Final=Opus 4.6")
-        elif strategy == "gemini-hybrid":
-            synth_model = "gemini-2.5-pro"
-            synth_provider = "gemini"
-            print(f"   [Model Strategy] Gemini Hybrid: Search=Gemini 3 Pro, Synthesis=Gemini 2.5 Pro")
-        else:
-            print(f"   [Model Strategy] Default: Search=Gemini 3 Pro, Synthesis=Claude Opus 4.6")
 
         # --- PROCESS FILES ---
         combined_text = reportText if reportText else ""
@@ -437,7 +404,7 @@ def run_scan(
         pitch = "Pitch Unavailable"
 
         anthropic_key = clean_env_var(os.environ.get("ANTHROPIC_API_KEY"))
-        has_synth_key = anthropic_key if synth_provider == "anthropic" else (os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY"))
+        has_synth_key = anthropic_key
 
         if has_synth_key:
             try:
@@ -612,111 +579,56 @@ THEN — WRITE THE NARRATIVE:
 
 Output valid JSON only. Must include all four fields: summary, pitch, reality_score, intent_score."""
 
+                # --- Synthesis with fallback chain: Opus 4.6 → Gemini 2.5 Pro → Sonnet 4.5 ---
                 response_text = ""
-
                 synth_start = time.time()
 
-                if synth_provider == "anthropic":
-                    # --- Anthropic Synthesis (Opus or Sonnet) ---
-                    if strategy == "sonnet-opus":
-                        # Two-pass: Sonnet 4.5 drafts, Opus 4.6 refines
-                        print(f"   🔄 [Synthesis] Attempting Sonnet 4.5 (draft pass)...")
-                        p1_start = time.time()
-                        draft_resp = claude_client.messages.create(
-                            model="claude-sonnet-4-5-20250929",
-                            max_tokens=1024,
-                            messages=[{"role": "user", "content": synthesis_prompt}]
-                        )
-                        draft_text = draft_resp.content[0].text if draft_resp.content else ""
-                        print(f"   ✅ [Synthesis] Sonnet 4.5 draft succeeded in {int((time.time() - p1_start) * 1000)}ms")
+                try:
+                    print(f"   🔄 [Synthesis] Attempting claude-opus-4-6...")
+                    response = claude_client.messages.create(
+                        model="claude-opus-4-6",
+                        max_tokens=1024,
+                        messages=[{"role": "user", "content": synthesis_prompt}]
+                    )
+                    response_text = response.content[0].text if response.content else ""
+                    print(f"   ✅ [Synthesis] claude-opus-4-6 succeeded in {int((time.time() - synth_start) * 1000)}ms")
+                except Exception as opus_err:
+                    print(f"   ❌ [Synthesis] Opus 4.6 failed: {opus_err}")
 
-                        print(f"   🔄 [Synthesis] Attempting Opus 4.6 (refine pass)...")
-                        p2_start = time.time()
-                        refine_prompt = f"""Review and refine this company analysis draft. Keep the JSON structure (summary + pitch fields).
-Improve clarity, sharpen the Knowledge Base terminology, and make the pitch more compelling.
-Do NOT change the scores or archetype (Thriving/Modernizing/Cash Cow/At Risk) — only improve the prose quality.
-NEVER use internal Knowledge Base codes (TAC-xxx, DIM-xxx) — always write the full concept name.
-
-DRAFT:
-{draft_text}
-
-Output valid JSON only."""
-                        refine_resp = claude_client.messages.create(
-                            model="claude-opus-4-6",
-                            max_tokens=1024,
-                            messages=[{"role": "user", "content": refine_prompt}]
-                        )
-                        response_text = refine_resp.content[0].text if refine_resp.content else draft_text
-                        print(f"   ✅ [Synthesis] Opus 4.6 refine succeeded in {int((time.time() - p2_start) * 1000)}ms")
-                    else:
-                        # Single-pass Anthropic (default = Opus 4.6)
-                        print(f"   🔄 [Synthesis] Attempting {synth_model}...")
-                        response = claude_client.messages.create(
-                            model=synth_model,
-                            max_tokens=1024,
-                            messages=[{"role": "user", "content": synthesis_prompt}]
-                        )
-                        response_text = response.content[0].text if response.content else ""
-                        print(f"   ✅ [Synthesis] {synth_model} succeeded in {int((time.time() - synth_start) * 1000)}ms")
-
-                elif synth_provider == "gemini":
-                    # --- Gemini Synthesis with fallback chain: selected model → 2.5 Pro → Sonnet 4.5 ---
-                    print(f"   🔄 [Synthesis] Attempting {synth_model} (Gemini)...")
+                    # Fallback 1: Gemini 2.5 Pro
                     gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-                    try:
-                        g_start = time.time()
-                        gemini_client = genai.Client(api_key=gemini_key)
-                        gemini_resp = gemini_client.models.generate_content(
-                            model=synth_model,
-                            contents=synthesis_prompt,
-                            config=types.GenerateContentConfig(
-                                temperature=0.7,
-                                max_output_tokens=1024
+                    if gemini_key:
+                        try:
+                            print(f"   🔄 [Synthesis] Falling back to Gemini 2.5 Pro...")
+                            g_start = time.time()
+                            gemini_client = genai.Client(api_key=gemini_key)
+                            gemini_resp = gemini_client.models.generate_content(
+                                model="gemini-2.5-pro",
+                                contents=synthesis_prompt,
+                                config=types.GenerateContentConfig(
+                                    temperature=0.7,
+                                    max_output_tokens=1024
+                                )
                             )
-                        )
-                        response_text = gemini_resp.text or ""
-                        print(f"   ✅ [Synthesis] {synth_model} succeeded in {int((time.time() - g_start) * 1000)}ms")
-                    except Exception as gemini_err:
-                        print(f"   ❌ [Synthesis] {synth_model} failed: {gemini_err}")
-                        # Try Gemini 2.5 Pro as backup (if not already the selected model)
-                        if synth_model != "gemini-2.5-pro":
-                            try:
-                                print(f"   🔄 [Synthesis] Falling back to Gemini 2.5 Pro...")
-                                g2_start = time.time()
-                                gemini_client = genai.Client(api_key=gemini_key)
-                                gemini_resp = gemini_client.models.generate_content(
-                                    model="gemini-2.5-pro",
-                                    contents=synthesis_prompt,
-                                    config=types.GenerateContentConfig(
-                                        temperature=0.7,
-                                        max_output_tokens=1024
-                                    )
-                                )
-                                response_text = gemini_resp.text or ""
-                                print(f"   ✅ [Synthesis] Gemini 2.5 Pro succeeded in {int((time.time() - g2_start) * 1000)}ms")
-                            except Exception as gemini_err2:
-                                print(f"   ❌ [Synthesis] Gemini 2.5 Pro also failed: {gemini_err2}")
-                                if claude_client:
-                                    print(f"   🔄 [Synthesis] Falling back to Sonnet 4.5...")
-                                    s_start = time.time()
-                                    fallback_resp = claude_client.messages.create(
-                                        model="claude-sonnet-4-5-20250929",
-                                        max_tokens=1024,
-                                        messages=[{"role": "user", "content": synthesis_prompt}]
-                                    )
-                                    response_text = fallback_resp.content[0].text if fallback_resp.content else ""
-                                    print(f"   ✅ [Synthesis] Sonnet 4.5 fallback succeeded in {int((time.time() - s_start) * 1000)}ms")
-                        else:
-                            if claude_client:
-                                print(f"   🔄 [Synthesis] Falling back to Sonnet 4.5...")
-                                s_start = time.time()
-                                fallback_resp = claude_client.messages.create(
-                                    model="claude-sonnet-4-5-20250929",
-                                    max_tokens=1024,
-                                    messages=[{"role": "user", "content": synthesis_prompt}]
-                                )
-                                response_text = fallback_resp.content[0].text if fallback_resp.content else ""
-                                print(f"   ✅ [Synthesis] Sonnet 4.5 fallback succeeded in {int((time.time() - s_start) * 1000)}ms")
+                            response_text = gemini_resp.text or ""
+                            print(f"   ✅ [Synthesis] Gemini 2.5 Pro succeeded in {int((time.time() - g_start) * 1000)}ms")
+                        except Exception as gemini_err:
+                            print(f"   ❌ [Synthesis] Gemini 2.5 Pro failed: {gemini_err}")
+
+                    # Fallback 2: Sonnet 4.5
+                    if not response_text and claude_client:
+                        try:
+                            print(f"   🔄 [Synthesis] Falling back to Sonnet 4.5...")
+                            s_start = time.time()
+                            fallback_resp = claude_client.messages.create(
+                                model="claude-sonnet-4-5-20250929",
+                                max_tokens=1024,
+                                messages=[{"role": "user", "content": synthesis_prompt}]
+                            )
+                            response_text = fallback_resp.content[0].text if fallback_resp.content else ""
+                            print(f"   ✅ [Synthesis] Sonnet 4.5 succeeded in {int((time.time() - s_start) * 1000)}ms")
+                        except Exception as sonnet_err:
+                            print(f"   ❌ [Synthesis] All models failed. Last error: {sonnet_err}")
 
                 if response_text:
                     payload = extract_json_from_text(response_text)
@@ -783,7 +695,7 @@ Output valid JSON only."""
             except Exception as e:
                 print(f"   [Synthesis Error] {e}")
         else:
-            print(f"   [Synthesis] WARNING: No API key found for {synth_provider}. Summary unavailable.")
+            print(f"   [Synthesis] WARNING: No ANTHROPIC_API_KEY found. Summary unavailable.")
 
         new_timestamp = datetime.utcnow().isoformat()
         result_id = str(uuid.uuid4())
