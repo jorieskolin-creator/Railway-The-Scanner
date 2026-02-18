@@ -683,20 +683,18 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                                      washing_flag = False
                                      washing_type = None
 
+                         # Intent score is IMMUTABLE — Scanner 1's website analysis is the
+                         # sole source of intent. Opus may disagree, but overriding intent
+                         # would destroy the integrity delta (intent vs reality gap).
+                         # Log Opus's opinion for diagnostics only.
                          if opus_intent is not None and isinstance(opus_intent, (int, float)):
                              opus_intent = max(0, min(100, int(opus_intent)))
                              delta_i = abs(opus_intent - scanner_intent)
-                             if delta_i > 10:
-                                 print(f"   ⚠️ [Score Verify] Intent: Scanner 1 {scanner_intent} vs Opus {opus_intent} (delta {delta_i}). Opus override → {opus_intent}")
-                                 intent_results["score"] = opus_intent
-                                 intent_results["opus_intent_score"] = opus_intent
-                                 gap = intent_results["score"] - reality_results["score"]
-                             elif delta_i <= 5:
+                             intent_results["opus_intent_score"] = opus_intent
+                             if delta_i <= 5:
                                  print(f"   ✅ [Score Verify] Intent: Scanner 1 {scanner_intent} ≈ Opus {opus_intent} (delta {delta_i}). Keeping Scanner 1 score.")
                              else:
-                                 blended_i = int(scanner_intent * 0.6 + opus_intent * 0.4)
-                                 print(f"   🔄 [Score Verify] Intent: Scanner 1 {scanner_intent} vs Opus {opus_intent} (delta {delta_i}). Blended → {blended_i}")
-                                 intent_results["score"] = blended_i
+                                 print(f"   ℹ️ [Score Verify] Intent: Scanner 1 {scanner_intent} vs Opus {opus_intent} (delta {delta_i}). Keeping Scanner 1 score (immutable).")
                                  gap = intent_results["score"] - reality_results["score"]
 
                     else:

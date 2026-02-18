@@ -1598,9 +1598,13 @@ RETURN STRICT JSON:
     "washing_type": null
 }}"""
 
-            recovery_data = execute_with_model(primary_model, custom_prompt=recovery_prompt)
+            # Use the SAME model (Sonnet) that did the original scan for recovery.
+            # Same-model consistency: if Sonnet's URLs are dead, Sonnet's web search
+            # is the best tool to find real replacements (live Brave Search grounding).
+            recovery_data = execute_with_anthropic(recovery_prompt)
             if not recovery_data:
-                recovery_data = execute_with_model("gemini-2.5-pro", custom_prompt=recovery_prompt)
+                # Sonnet unavailable — fall back to Gemini as last resort
+                recovery_data = execute_with_model(primary_model, custom_prompt=recovery_prompt)
 
             if recovery_data:
                 new_findings = recovery_data.get("findings", [])
