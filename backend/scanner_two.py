@@ -1196,19 +1196,59 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     messages=continuation_messages
                 )
 
-            # Extract text from response content blocks (skip tool_use and search result blocks)
+            # Extract text AND web search citations from response content blocks
             text_parts = []
+            web_citations = []  # URLs from web search results & inline citations
             for block in response.content:
                 if hasattr(block, 'text'):
                     text_parts.append(block.text)
+                    # Harvest inline citations from text blocks
+                    if hasattr(block, 'citations') and block.citations:
+                        for cite in block.citations:
+                            if hasattr(cite, 'url') and cite.url:
+                                web_citations.append({
+                                    "url": cite.url,
+                                    "title": getattr(cite, 'title', ''),
+                                })
+                # Harvest URLs from raw web search result blocks
+                if getattr(block, 'type', None) == 'web_search_tool_result':
+                    content = getattr(block, 'content', None)
+                    if isinstance(content, list):
+                        for sr in content:
+                            if getattr(sr, 'type', None) == 'web_search_result' and hasattr(sr, 'url'):
+                                web_citations.append({
+                                    "url": sr.url,
+                                    "title": getattr(sr, 'title', ''),
+                                })
             text_content = "\n".join(text_parts)
+
+            # Deduplicate citations by URL
+            seen_urls = set()
+            unique_citations = []
+            for c in web_citations:
+                if c["url"] not in seen_urls:
+                    seen_urls.add(c["url"])
+                    unique_citations.append(c)
+            if unique_citations:
+                print(f"   🔗 [Web Search] Harvested {len(unique_citations)} citation URLs from Sonnet web search")
 
             json_payload = extract_json_from_text(text_content)
             elapsed = int((time.time() - start) * 1000)
             if json_payload:
                 try:
                     result = json.loads(json_payload, strict=False)
-                    print(f"   ✅ [Forensic Scan] claude-sonnet-4-5 + Web Search succeeded in {elapsed}ms (grounded)")
+                    # Enrich findings with web search citations:
+                    # 1. Fill in missing URLs on findings that have no url
+                    # 2. Add remaining citations as supplementary evidence
+                    if unique_citations and "findings" in result:
+                        citation_pool = list(unique_citations)
+                        for finding in result["findings"]:
+                            if finding.get("found") and not finding.get("url") and citation_pool:
+                                donor = citation_pool.pop(0)
+                                finding["url"] = donor["url"]
+                                if not finding.get("title"):
+                                    finding["title"] = donor["title"]
+                    print(f"   ✅ [Forensic Scan] claude-sonnet-4-5 + Web Search succeeded in {elapsed}ms (grounded, {len(unique_citations)} citations)")
                     return result
                 except json.JSONDecodeError as je:
                     print(f"   ⚠️ [Forensic Scan] claude-sonnet-4-5 JSON parse failed: {je}")
@@ -1243,14 +1283,14 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     print(f"   🏁 [Forensic Scan] Starting parallel race: Sonnet + Web Search vs Gemini 3 Pro for {company_name}...")
     race_start = time.time()
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as race_pool:
-        sonnet_future = race_pool.submit(execute_with_anthropic, prompt)
-        gemini_future = race_pool.submit(execute_with_model, "gemini-3-pro-preview", None, 150)
+    race_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+    sonnet_future = race_pool.submit(execute_with_anthropic, prompt)
+    gemini_future = race_pool.submit(execute_with_model, "gemini-3-pro-preview", None, 150)
+    futures = [sonnet_future, gemini_future]
 
-        # Process results as they arrive — first valid result wins
-        for completed_future in concurrent.futures.as_completed(
-            [sonnet_future, gemini_future], timeout=160
-        ):
+    # Process results as they arrive — first valid result wins
+    try:
+        for completed_future in concurrent.futures.as_completed(futures, timeout=160):
             try:
                 result = completed_future.result(timeout=0)  # Already done, just retrieve
                 if result:
@@ -1258,12 +1298,19 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     race_elapsed = int((time.time() - race_start) * 1000)
                     print(f"   🏆 [Race] {winner} won in {race_elapsed}ms")
                     data = result
+                    # Cancel the loser — don't wait for it to finish
+                    loser_future = gemini_future if completed_future is sonnet_future else sonnet_future
+                    loser_future.cancel()
                     break
                 else:
                     loser = "Sonnet + Web Search" if completed_future is sonnet_future else "Gemini 3 Pro"
                     print(f"   [Race] {loser} returned no data, waiting for other model...")
             except Exception as e:
                 print(f"   [Race] Future raised exception: {e}")
+    except concurrent.futures.TimeoutError:
+        print(f"   ⏰ [Race] Race ceiling timeout (160s) hit")
+    finally:
+        race_pool.shutdown(wait=False)  # Don't block waiting for the loser
 
     race_elapsed = int((time.time() - race_start) * 1000)
     if not data:
