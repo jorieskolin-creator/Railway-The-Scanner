@@ -650,32 +650,32 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                          # --- OPUS SCORE VERIFICATION ---
                          opus_reality = json_data.get("reality_score")
                          opus_intent = json_data.get("intent_score")
-                         gemini_reality = reality_results["score"]
+                         scanner2_reality = reality_results["score"]
                          scanner_intent = intent_results["score"]
 
                          if opus_reality is not None and isinstance(opus_reality, (int, float)):
                              opus_reality = max(0, min(100, int(opus_reality)))
-                             delta_r = abs(opus_reality - gemini_reality)
+                             delta_r = abs(opus_reality - scanner2_reality)
 
                              if delta_r <= 5:
-                                 # Agreement zone — keep Gemini's search-grounded score
-                                 print(f"   ✅ [Score Verify] Reality: Gemini {gemini_reality} ≈ Opus {opus_reality} (delta {delta_r}). Keeping Gemini score.")
+                                 # Agreement zone — keep Scanner 2's search-grounded score
+                                 print(f"   ✅ [Score Verify] Reality: Scanner 2 {scanner2_reality} ≈ Opus {opus_reality} (delta {delta_r}). Keeping Scanner 2 score.")
                              elif delta_r <= 10:
-                                 # Mild disagreement — weighted average (60% Gemini, 40% Opus)
-                                 blended = int(gemini_reality * 0.6 + opus_reality * 0.4)
-                                 print(f"   🔄 [Score Verify] Reality: Gemini {gemini_reality} vs Opus {opus_reality} (delta {delta_r}). Blended → {blended}")
+                                 # Mild disagreement — weighted average (60% Scanner 2, 40% Opus)
+                                 blended = int(scanner2_reality * 0.6 + opus_reality * 0.4)
+                                 print(f"   🔄 [Score Verify] Reality: Scanner 2 {scanner2_reality} vs Opus {opus_reality} (delta {delta_r}). Blended → {blended}")
                                  reality_results["score"] = blended
                                  reality_results["opus_reality_score"] = opus_reality
                                  reality_results["score_verification"] = "blended"
                              else:
                                  # Strong disagreement — Opus has more context, use its score
-                                 print(f"   ⚠️ [Score Verify] Reality: Gemini {gemini_reality} vs Opus {opus_reality} (delta {delta_r}). Opus override → {opus_reality}")
+                                 print(f"   ⚠️ [Score Verify] Reality: Scanner 2 {scanner2_reality} vs Opus {opus_reality} (delta {delta_r}). Opus override → {opus_reality}")
                                  reality_results["score"] = opus_reality
                                  reality_results["opus_reality_score"] = opus_reality
                                  reality_results["score_verification"] = "opus_override"
 
                              # Recalculate gap if score changed
-                             if reality_results["score"] != gemini_reality:
+                             if reality_results["score"] != scanner2_reality:
                                  gap = intent_results["score"] - reality_results["score"]
 
                                  # Re-evaluate washing flag
