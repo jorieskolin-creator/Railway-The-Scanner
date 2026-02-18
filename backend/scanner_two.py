@@ -518,6 +518,7 @@ def _build_research_prompt(search_name, domain_hint, weak_juries, loop_number, i
 
     juries_text = "\n\n    ".join(jury_sections)
 
+    num_weak = len(weak_juries)
     return f"""
     TARGETED RE-SEARCH for "{search_name}" (Domain: {domain_hint}).
     CONTEXT: Intent Score is {intent_score}/100.
@@ -526,6 +527,14 @@ def _build_research_prompt(search_name, domain_hint, weak_juries, loop_number, i
     Your job is to find ADDITIONAL evidence using BROADER search terms.
     Do NOT use strict site: filters. Search openly across the web.
     Use BOTH English and Finnish search terms (target is a Finnish company).
+
+    SEARCH LIMIT: Use MAX {min(num_weak + 1, 4)} web searches total for this re-search.
+    Combine queries for related juries into a single search with OR operators.
+    After {min(num_weak + 1, 4)} searches, STOP and return what you found.
+
+    URL QUALITY RULE: ONLY include URLs from actual Google Search results.
+    Do NOT construct or guess URLs. If you cannot find a real URL for a finding,
+    set "url" to "" and "found" to false. Never fabricate links.
 
     SEARCH THESE AREAS ONLY (the ones that previously returned weak results):
 
@@ -541,7 +550,7 @@ def _build_research_prompt(search_name, domain_hint, weak_juries, loop_number, i
                 "sentiment": "negative" or "positive",
                 "snippet": "Quote...",
                 "title": "Source Title",
-                "url": "URL",
+                "url": "URL from search results ONLY (or empty string if none found)",
                 "is_recent": boolean (True if < 12 months)
             }}
         ],
@@ -1080,10 +1089,17 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         active_prompt = custom_prompt if custom_prompt else prompt
         # Prepend search budget instruction for Gemini models (no native max_uses support)
         search_budget_prefix = (
-            "IMPORTANT SEARCH CONSTRAINT: You must complete your entire analysis using "
-            "no more than 8 web search queries total. Prioritize targeted, specific searches "
-            "over broad exploratory ones. Synthesize your findings after 6-8 searches rather "
-            "than continuing to search. Do NOT repeat similar queries.\n\n"
+            "IMPORTANT CONSTRAINTS FOR THIS SEARCH:\n"
+            "1. SEARCH LIMIT: Complete your analysis in MAX 6 web searches. After 6 searches, "
+            "STOP searching and synthesize what you have. Do NOT repeat similar queries.\n"
+            "2. URL QUALITY: ONLY include URLs that appear in actual Google Search results. "
+            "Do NOT construct URLs from memory or guess URL patterns. If you did not find a "
+            "URL in a search result, do NOT include it. Three real URLs are worth more than "
+            "ten guessed ones.\n"
+            "3. EFFICIENCY: Combine related queries with OR operators into single searches. "
+            "For example: `\"CompanyName\" technology strategy OR digital transformation OR \"teknologia\"`\n"
+            "4. STOP CONDITION: If after 4 searches you have found 3+ verified findings, "
+            "write your JSON response. Do NOT keep searching for marginal improvements.\n\n"
         )
         active_prompt = search_budget_prefix + active_prompt
         print(f"   🔄 [Forensic Scan] Attempting {target_model_name} for {company_name}...")
