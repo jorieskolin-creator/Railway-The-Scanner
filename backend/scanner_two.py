@@ -255,7 +255,7 @@ Return ONLY valid JSON, no explanation."""
 
         response = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=4096,
+            max_tokens=12000,
             messages=[{"role": "user", "content": structuring_prompt}]
         )
         response_text = response.content[0].text if response.content else ""
@@ -1321,7 +1321,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             def _call_sonnet_web():
                 return claude_client.messages.create(
                     model="claude-sonnet-4-6",
-                    max_tokens=4096,
+                    max_tokens=12000,
                     temperature=0,
                     tools=[{
                         "type": "web_search_20250305",
