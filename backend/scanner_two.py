@@ -1206,18 +1206,28 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             json_payload = extract_json_from_text(text_content)
             elapsed = int((time.time() - start) * 1000)
             if json_payload:
-                result = json.loads(json_payload, strict=False)
-                print(f"   ✅ [Forensic Scan] claude-sonnet-4-5 + Web Search succeeded in {elapsed}ms (grounded)")
-                return result
+                try:
+                    result = json.loads(json_payload, strict=False)
+                    print(f"   ✅ [Forensic Scan] claude-sonnet-4-5 + Web Search succeeded in {elapsed}ms (grounded)")
+                    return result
+                except json.JSONDecodeError as je:
+                    print(f"   ⚠️ [Forensic Scan] claude-sonnet-4-5 JSON parse failed: {je}")
+                    # Fall through to JSON repair gate
+
+            if text_content and len(text_content) > 100:
+                # --- JSON REPAIR GATE ---
+                # Sonnet returned search-grounded data but not as valid JSON.
+                # Use a lightweight Sonnet call to extract/restructure it.
+                print(f"   ⚠️ [Forensic Scan] claude-sonnet-4-5 returned unstructured text ({elapsed}ms, {len(text_content)} chars). Attempting JSON repair...")
+                repaired = _repair_json_with_sonnet(text_content, company_name)
+                if repaired:
+                    repair_elapsed = int((time.time() - start) * 1000)
+                    print(f"   ✅ [JSON Repair] Recovered structured data from Sonnet + Web Search response ({repair_elapsed}ms total)")
+                    return repaired
+                else:
+                    print(f"   ⚠️ [JSON Repair] Could not recover JSON from Sonnet + Web Search response")
+                    return None
             else:
-                # Attempt JSON repair if substantial text was returned
-                if text_content and len(text_content) > 100:
-                    print(f"   ⚠️ [Forensic Scan] claude-sonnet-4-5 returned unstructured text ({elapsed}ms, {len(text_content)} chars). Attempting JSON repair...")
-                    repaired = _repair_json_with_sonnet(text_content, company_name)
-                    if repaired:
-                        repair_elapsed = int((time.time() - start) * 1000)
-                        print(f"   ✅ [JSON Repair] Recovered structured data from Sonnet + Web Search response ({repair_elapsed}ms total)")
-                        return repaired
                 print(f"   ⚠️ [Forensic Scan] claude-sonnet-4-5 + Web Search returned no parseable JSON ({elapsed}ms)")
                 return None
         except Exception as e:
