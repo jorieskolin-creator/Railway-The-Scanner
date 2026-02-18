@@ -1140,10 +1140,10 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
     def execute_with_anthropic(active_prompt):
         """PRIMARY: Use Sonnet 4.5 with web search (Brave Search grounding) for forensic scan."""
-        # Elapsed time guard
+        # Elapsed time guard — leave ~70s buffer for URL validation + response
         elapsed_total = time.time() - _fn_start
-        if elapsed_total > 200:
-            print(f"   ⏰ [Forensic Scan] Skipping Sonnet + Web Search — elapsed {int(elapsed_total)}s exceeds 200s guard")
+        if elapsed_total > 280:
+            print(f"   ⏰ [Forensic Scan] Skipping Sonnet + Web Search — elapsed {int(elapsed_total)}s exceeds 280s guard")
             return None
 
         anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -1501,16 +1501,21 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
             if abs(delta) >= 15:
                 # Elapsed time guard — skip verification if running out of time.
-                # Delta re-scan can take 100-150s, plus URL validation ~20s after.
-                # Guard at 150s to stay within main.py's 350s timeout.
+                # Delta re-scan + URL validation can fit in remaining ~130s.
+                # Guard at 220s to stay within main.py's 350s timeout.
                 elapsed_total = time.time() - _fn_start
-                if elapsed_total > 150:
-                    print(f"   ⏰ [Delta Verification] Skipping — elapsed {int(elapsed_total)}s exceeds 150s guard. Keeping score {final_score}.")
+                if elapsed_total > 220:
+                    print(f"   ⏰ [Delta Verification] Skipping — elapsed {int(elapsed_total)}s exceeds 220s guard. Keeping score {final_score}.")
                 else:
-                    print(f"   [Delta Verification] Large score change detected: {prev_reality} → {final_score} (delta {delta}). Running verification re-scan...")
-                    verify_data = execute_with_model(primary_model)
+                    print(f"   [Delta Verification] Large score change detected: {prev_reality} → {final_score} (delta {delta}). Running verification re-scan with Sonnet (same methodology)...")
+                    # Use the SAME model (Sonnet) for verification.
+                    # Old scores were often from Gemini — verifying with Gemini
+                    # just reproduces the old bias. Same-model consistency is
+                    # the correct test: if Sonnet says 85 twice, the delta is real.
+                    verify_data = execute_with_anthropic(prompt)
                     if not verify_data:
-                        verify_data = execute_with_model("gemini-2.5-pro")
+                        # Sonnet unavailable — fall back to Gemini as last resort
+                        verify_data = execute_with_model(primary_model)
 
                     if verify_data:
                         verify_adjustment = verify_data.get("reality_score_adjustment", 0)
