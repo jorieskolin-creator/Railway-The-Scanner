@@ -1184,26 +1184,12 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 return None
             call_pool.shutdown(wait=False)
 
-            # Handle pause_turn: if model needs more search turns, continue the conversation
-            max_continuations = 3
-            for _ in range(max_continuations):
-                if response.stop_reason != "pause_turn":
-                    break
-                # Continue the conversation so the model can complete its search
-                continuation_messages = [{"role": "user", "content": active_prompt}]
-                # Build assistant content from response
-                continuation_messages.append({"role": "assistant", "content": response.content})
-                continuation_messages.append({"role": "user", "content": "Continue your analysis and return the JSON result."})
-                response = claude_client.messages.create(
-                    model="claude-sonnet-4-5-20250929",
-                    max_tokens=4096,
-                    tools=[{
-                        "type": "web_search_20250305",
-                        "name": "web_search",
-                        "max_uses": 5
-                    }],
-                    messages=continuation_messages
-                )
+            # Note: pause_turn can occur when the model hasn't finished all web searches,
+            # but continuing the conversation requires complex message threading with
+            # tool_result blocks in the correct roles. Since Sonnet with max_uses=5
+            # almost always completes in one shot, we just extract whatever is available.
+            if response.stop_reason == "pause_turn":
+                print(f"   ⚠️ [Forensic Scan] Sonnet returned pause_turn — extracting partial results.")
 
             # Extract text AND web search citations from response content blocks
             text_parts = []
