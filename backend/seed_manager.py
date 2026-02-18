@@ -91,22 +91,22 @@ def scrape_strategic_content(base_url: str, company_name: str = "Unknown", subsi
                     print(f"   [Scanner 1] ✅ AI Successfully retrieved strategic context for {company_name}.")
                     return f"--- AI GENERATED CONTEXT FOR {company_name} (SCRAPE FALLBACK) ---\n{resp.text}"
              except Exception as e:
-                print(f"   [Scanner 1] ⚠️ Gemini fallback failed: {e}. Trying Sonnet 4.5...")
+                print(f"   [Scanner 1] ⚠️ Gemini fallback failed: {e}. Trying Sonnet 4.6...")
 
-        # Sonnet 4.5 fallback for AI context retrieval
+        # Sonnet 4.6 fallback for AI context retrieval
         try:
             anthropic_key = clean_env_var(os.environ.get("ANTHROPIC_API_KEY", ""))
             if anthropic_key:
                 import anthropic
                 claude_client = anthropic.Anthropic(api_key=anthropic_key)
                 resp = claude_client.messages.create(
-                    model="claude-sonnet-4-5-20250929",
+                    model="claude-sonnet-4-6",
                     max_tokens=2048,
                     messages=[{"role": "user", "content": fallback_prompt}]
                 )
                 text = resp.content[0].text if resp.content else ""
                 if text:
-                    print(f"   [Scanner 1] ✅ AI Context via Sonnet 4.5 for {company_name}.")
+                    print(f"   [Scanner 1] ✅ AI Context via Sonnet 4.6 for {company_name}.")
                     return f"--- AI GENERATED CONTEXT FOR {company_name} (SONNET FALLBACK) ---\n{text}"
         except Exception as e2:
             print(f"   [Scanner 1] ❌ Sonnet fallback also failed: {e2}")
@@ -505,7 +505,7 @@ THEN — WRITE THE NARRATIVE:
 
 Output valid JSON only. Must include all four fields: summary, pitch, reality_score, intent_score."""
 
-                    # --- Synthesis with fallback chain: Opus 4.6 → Gemini 3 Pro → Sonnet 4.5 ---
+                    # --- Synthesis with fallback chain: Opus 4.6 → Gemini 3 Pro → Sonnet 4.6 ---
                     response_text = ""
                     try:
                         print(f"   [{company_name}] 🔄 [Synthesis] Attempting claude-opus-4-6...")
@@ -540,18 +540,18 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                             except Exception as gemini_err:
                                 print(f"   [{company_name}] ❌ [Synthesis] Gemini 2.5 Pro failed: {gemini_err}")
 
-                        # Fallback 2: Sonnet 4.5
+                        # Fallback 2: Sonnet 4.6
                         if not response_text:
                             try:
-                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Sonnet 4.5...")
+                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Sonnet 4.6...")
                                 s_start = time.time()
                                 fallback_resp = claude_client.messages.create(
-                                    model="claude-sonnet-4-5-20250929",
+                                    model="claude-sonnet-4-6",
                                     max_tokens=1024,
                                     messages=[{"role": "user", "content": synthesis_prompt}]
                                 )
                                 response_text = fallback_resp.content[0].text if fallback_resp.content else ""
-                                print(f"   [{company_name}] ✅ [Synthesis] Sonnet 4.5 succeeded in {int((time.time() - s_start) * 1000)}ms")
+                                print(f"   [{company_name}] ✅ [Synthesis] Sonnet 4.6 succeeded in {int((time.time() - s_start) * 1000)}ms")
                             except Exception as sonnet_err:
                                 print(f"   [{company_name}] ❌ [Synthesis] All models failed. Last error: {sonnet_err}")
                     if response_text:

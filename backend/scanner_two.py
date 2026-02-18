@@ -178,7 +178,7 @@ TEXT TO PARSE:
 Return ONLY valid JSON, no explanation."""
 
         response = client.messages.create(
-            model="claude-sonnet-4-5-20250929",
+            model="claude-sonnet-4-6",
             max_tokens=2048,
             messages=[{"role": "user", "content": repair_prompt}]
         )
@@ -1139,7 +1139,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             return None
 
     def execute_with_anthropic(active_prompt):
-        """PRIMARY: Use Sonnet 4.5 with web search (Brave Search grounding) for forensic scan."""
+        """PRIMARY: Use Sonnet 4.6 with web search (Brave Search grounding) for forensic scan."""
         # Elapsed time guard — leave ~70s buffer for URL validation + response
         elapsed_total = time.time() - _fn_start
         if elapsed_total > 280:
@@ -1155,14 +1155,14 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             print("   [Scanner 2] No ANTHROPIC_API_KEY for Sonnet + Web Search.")
             return None
         try:
-            print(f"   🔄 [Forensic Scan] Attempting claude-sonnet-4-5 + Web Search for {company_name}...")
+            print(f"   🔄 [Forensic Scan] Attempting claude-sonnet-4-6 + Web Search for {company_name}...")
             start = time.time()
             claude_client = anthropic.Anthropic(api_key=anthropic_key)
 
             # Enforce 150s per-call timeout via thread pool (Sonnet + web search typically 30-90s)
             def _call_sonnet_web():
                 return claude_client.messages.create(
-                    model="claude-sonnet-4-5-20250929",
+                    model="claude-sonnet-4-6",
                     max_tokens=4096,
                     temperature=0,
                     tools=[{
@@ -1180,7 +1180,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             except concurrent.futures.TimeoutError:
                 call_pool.shutdown(wait=False)
                 elapsed = int((time.time() - start) * 1000)
-                print(f"   ⏰ [Forensic Scan] claude-sonnet-4-5 + Web Search timed out after 150s ({elapsed}ms). Skipping to next model.")
+                print(f"   ⏰ [Forensic Scan] claude-sonnet-4-6 + Web Search timed out after 150s ({elapsed}ms). Skipping to next model.")
                 return None
             call_pool.shutdown(wait=False)
 
@@ -1245,17 +1245,17 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                                     finding["title"] = donor["title"]
                     result["_web_grounded"] = True
                     result["_citation_count"] = len(unique_citations)
-                    print(f"   ✅ [Forensic Scan] claude-sonnet-4-5 + Web Search succeeded in {elapsed}ms (grounded, {len(unique_citations)} citations)")
+                    print(f"   ✅ [Forensic Scan] claude-sonnet-4-6 + Web Search succeeded in {elapsed}ms (grounded, {len(unique_citations)} citations)")
                     return result
                 except json.JSONDecodeError as je:
-                    print(f"   ⚠️ [Forensic Scan] claude-sonnet-4-5 JSON parse failed: {je}")
+                    print(f"   ⚠️ [Forensic Scan] claude-sonnet-4-6 JSON parse failed: {je}")
                     # Fall through to JSON repair gate
 
             if text_content and len(text_content) > 100:
                 # --- JSON REPAIR GATE ---
                 # Sonnet returned search-grounded data but not as valid JSON.
                 # Use a lightweight Sonnet call to extract/restructure it.
-                print(f"   ⚠️ [Forensic Scan] claude-sonnet-4-5 returned unstructured text ({elapsed}ms, {len(text_content)} chars). Attempting JSON repair...")
+                print(f"   ⚠️ [Forensic Scan] claude-sonnet-4-6 returned unstructured text ({elapsed}ms, {len(text_content)} chars). Attempting JSON repair...")
                 repaired = _repair_json_with_sonnet(text_content, company_name)
                 if repaired:
                     repaired["_web_grounded"] = True
@@ -1267,26 +1267,26 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     print(f"   ⚠️ [JSON Repair] Could not recover JSON from Sonnet + Web Search response")
                     return None
             else:
-                print(f"   ⚠️ [Forensic Scan] claude-sonnet-4-5 + Web Search returned no parseable JSON ({elapsed}ms)")
+                print(f"   ⚠️ [Forensic Scan] claude-sonnet-4-6 + Web Search returned no parseable JSON ({elapsed}ms)")
                 return None
         except Exception as e:
             elapsed = int((time.time() - start) * 1000)
-            print(f"   ❌ [Forensic Scan] claude-sonnet-4-5 + Web Search failed in {elapsed}ms: {e}")
+            print(f"   ❌ [Forensic Scan] claude-sonnet-4-6 + Web Search failed in {elapsed}ms: {e}")
             return None
 
-    # --- SEQUENTIAL FALLBACK: Sonnet 4.5 → Gemini 3 Pro → Gemini 2.5 Pro ---
-    # Sonnet 4.5 + Brave Web Search is the primary model (fast, grounded, 5-search budget).
+    # --- SEQUENTIAL FALLBACK: Sonnet 4.6 → Gemini 3 Pro → Gemini 2.5 Pro ---
+    # Sonnet 4.6 + Brave Web Search is the primary model (fast, grounded, 5-search budget).
     # Gemini 3 Pro is the first backup if Sonnet fails or returns nothing.
     # Gemini 2.5 Pro is the second backup as a last resort.
     data = None
-    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Sonnet 4.5 → Gemini 3 Pro → Gemini 2.5 Pro")
+    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Sonnet 4.6 → Gemini 3 Pro → Gemini 2.5 Pro")
 
-    # --- PRIMARY: Sonnet 4.5 + Web Search ---
+    # --- PRIMARY: Sonnet 4.6 + Web Search ---
     data = execute_with_anthropic(prompt)
 
     # --- BACKUP 1: Gemini 3 Pro (only if Sonnet failed) ---
     if not data:
-        print(f"   ⚠️ [Forensic Scan] Sonnet 4.5 returned no data. Falling back to Gemini 3 Pro...")
+        print(f"   ⚠️ [Forensic Scan] Sonnet 4.6 returned no data. Falling back to Gemini 3 Pro...")
         data = execute_with_model("gemini-3-pro-preview", None, 150)
 
     # --- BACKUP 2: Gemini 2.5 Pro (only if Gemini 3 Pro also failed) ---
@@ -1672,7 +1672,7 @@ RETURN STRICT JSON:
     # --- FALLBACK: SIMULATION ---
     print(f"   [Scanner 2] All models failed. Engaging AI Simulation for {company_name} (Fallback)...")
     try:
-        # Try Sonnet 4.5 first for simulation (Gemini may be rate-limited)
+        # Try Sonnet 4.6 first for simulation (Gemini may be rate-limited)
         anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
         if "=" in anthropic_key:
             try: anthropic_key = anthropic_key.split("=", 1)[1]
@@ -1683,7 +1683,7 @@ RETURN STRICT JSON:
             claude_client = anthropic.Anthropic(api_key=anthropic_key)
             sim_prompt = f"Generate 3 REALISTIC forensic search findings for {company_name}. Return JSON with 'findings' (array of objects with label, found, sentiment, category, snippet, url, is_recent), 'reality_score_adjustment' (-40 to +40), 'confidence_score' (0-100), 'washing_flag' (boolean), and 'key_people' (array)."
             response = claude_client.messages.create(
-                model="claude-sonnet-4-5-20250929",
+                model="claude-sonnet-4-6",
                 max_tokens=2048,
                 messages=[{"role": "user", "content": sim_prompt}]
             )

@@ -152,13 +152,13 @@ async def find_company_url(name: str):
 
         return {"url": ""}
     except Exception as gemini_err:
-        print(f"   [API] Find URL Gemini failed: {gemini_err}. Trying Sonnet 4.5...")
+        print(f"   [API] Find URL Gemini failed: {gemini_err}. Trying Sonnet 4.6...")
         try:
             anthropic_key = clean_env_var(os.environ.get("ANTHROPIC_API_KEY", ""))
             if anthropic_key:
                 claude_client = anthropic.Anthropic(api_key=anthropic_key)
                 resp = claude_client.messages.create(
-                    model="claude-sonnet-4-5-20250929",
+                    model="claude-sonnet-4-6",
                     max_tokens=100,
                     messages=[{"role": "user", "content": f"What is the official website homepage URL for '{name}'? Return ONLY the URL, nothing else."}]
                 )
@@ -226,7 +226,7 @@ def run_scan(
         scan_start = time.time()
         print(f"🚀 --- LIVE SCAN INITIATED FOR: {companyName} ---")
         
-        # Model pipeline: Sonnet 4.5 + Web Search (forensic) | Gemini 2.5 Pro (financial) | Opus 4.6 (synthesis)
+        # Model pipeline: Sonnet 4.6 + Web Search (forensic) | Gemini 2.5 Pro (financial) | Opus 4.6 (synthesis)
         # Forensic fallback: Gemini 3 Pro. Synthesis fallback: Gemini 3 Pro → Gemini 2.5 Pro
         search_model = "gemini-3-pro-preview"  # Used as forensic fallback if Sonnet fails
 
