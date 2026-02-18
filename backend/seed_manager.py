@@ -362,7 +362,7 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
                 try:
                     intent_narrative = json.dumps(intent_results["breakdown"])
                     verified_links = [l for l in reality_results['links'] if l.get('verified', True)]
-                    evidence_list = ', '.join([f"{l['title']}: {l.get('snippet', '')}" for l in verified_links[:20]])
+                    evidence_list = ', '.join([f"{l.get('title', 'Unknown')}: {l.get('snippet', '')}" for l in verified_links[:20]])
                     knowledge_context = get_evolving_framework()
 
                     washing_context = ""

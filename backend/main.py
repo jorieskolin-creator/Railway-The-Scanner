@@ -416,7 +416,7 @@ def run_scan(
                 claude_client = anthropic.Anthropic(api_key=anthropic_key) if anthropic_key else None
                 intent_narrative = json.dumps(intent_results["breakdown"])
                 verified_links = [l for l in reality_results['links'] if l.get('verified', True)]
-                evidence_list = ', '.join([f"{l['title']}: {l.get('snippet', '')}" for l in verified_links[:20]])
+                evidence_list = ', '.join([f"{l.get('title', 'Unknown')}: {l.get('snippet', '')}" for l in verified_links[:20]])
                 knowledge_context = get_evolving_framework()
 
                 doc_context = ""

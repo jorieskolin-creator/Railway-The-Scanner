@@ -37,22 +37,50 @@ def get_clean_domain(url):
 def extract_json_from_text(text):
     """
     Robustly extracts the first JSON object found in a string.
-    Handles Markdown code blocks, conversational filler, etc.
+    Handles Markdown code blocks, conversational filler, trailing commas, etc.
     """
-    if not text: 
+    if not text:
         return None
-    
+
     # 1. Try finding a markdown block first
     markdown_match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if markdown_match:
-        return markdown_match.group(1)
+    candidate = markdown_match.group(1) if markdown_match else None
 
     # 2. Fallback: Find the first outer curly braces
-    match = re.search(r'\{.*\}', text, re.DOTALL)
-    if match:
-        return match.group(0)
-        
-    return None
+    if not candidate:
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if match:
+            candidate = match.group(0)
+
+    if not candidate:
+        return None
+
+    # 3. Try parsing as-is first (fast path)
+    try:
+        json.loads(candidate, strict=False)
+        return candidate
+    except json.JSONDecodeError:
+        pass
+
+    # 4. Auto-repair common LLM JSON errors before giving up
+    repaired = candidate
+    # Remove trailing commas before } or ] (most common LLM error)
+    repaired = re.sub(r',\s*([}\]])', r'\1', repaired)
+    # Fix missing commas between } { or } " or ] { patterns (second most common)
+    repaired = re.sub(r'(\})\s*(\{)', r'\1,\2', repaired)
+    repaired = re.sub(r'(\})\s*(")', r'\1,\2', repaired)
+    repaired = re.sub(r'(\])\s*(")', r'\1,\2', repaired)
+    # Remove control characters that break JSON (newlines inside strings)
+    repaired = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', ' ', repaired)
+
+    try:
+        json.loads(repaired, strict=False)
+        return repaired
+    except json.JSONDecodeError:
+        pass
+
+    # 5. Return original candidate for downstream repair gate
+    return candidate
 
 def _verify_url(url, timeout=4):
     """
@@ -155,22 +183,19 @@ def _repair_json_with_sonnet(raw_text, company_name):
 
 The expected JSON structure is:
 {{
-  "reality_score_adjustment": <integer 0-100>,
-  "confidence_score": <integer 0-100>,
-  "washing_flag": <boolean>,
-  "washing_type": <string or null>,
-  "checklist": [
-    {{"query": "<search query>", "jury": "<jury name>", "found": <boolean>, "sentiment": "positive|negative|neutral", "snippet": "<evidence snippet>", "source_url": "<url>"}}
-  ],
-  "links": [
-    {{"title": "<source title>", "url": "<source url>", "snippet": "<brief description>"}}
+  "findings": [
+    {{"category": "Operating Model", "label": "Brief Label", "found": true, "sentiment": "positive", "snippet": "Evidence quote...", "title": "Source Title", "url": "https://...", "is_recent": true}}
   ],
   "key_people": [
-    {{"name": "<person name>", "role": "<role>", "context": "<relevance>"}}
-  ]
+    {{"name": "Full Name", "role": "Exact Title", "relevance": "Why relevant"}}
+  ],
+  "reality_score_adjustment": <integer -50 to +50>,
+  "confidence_score": <integer 0-100>,
+  "washing_flag": <boolean>,
+  "washing_type": <string or null>
 }}
 
-Extract as much data as possible from the text below. If a field cannot be determined, use sensible defaults (0 for scores, empty arrays for lists, false for booleans).
+Extract as much data as possible from the text below. Preserve all findings, URLs, and evidence. If a field cannot be determined, use sensible defaults (0 for scores, empty arrays for lists, false for booleans).
 
 TEXT TO PARSE:
 {raw_text[:8000]}
