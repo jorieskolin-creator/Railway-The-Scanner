@@ -1500,10 +1500,12 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             delta = final_score - prev_reality
 
             if abs(delta) >= 15:
-                # Elapsed time guard — skip verification if running out of time
+                # Elapsed time guard — skip verification if running out of time.
+                # Delta re-scan can take 100-150s, plus URL validation ~20s after.
+                # Guard at 150s to stay within main.py's 350s timeout.
                 elapsed_total = time.time() - _fn_start
-                if elapsed_total > 200:
-                    print(f"   ⏰ [Delta Verification] Skipping — elapsed {int(elapsed_total)}s exceeds 200s guard. Keeping score {final_score}.")
+                if elapsed_total > 150:
+                    print(f"   ⏰ [Delta Verification] Skipping — elapsed {int(elapsed_total)}s exceeds 150s guard. Keeping score {final_score}.")
                 else:
                     print(f"   [Delta Verification] Large score change detected: {prev_reality} → {final_score} (delta {delta}). Running verification re-scan...")
                     verify_data = execute_with_model(primary_model)
@@ -1546,7 +1548,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         url_total = url_verified + url_dead
         dead_ratio = url_dead / url_total if url_total > 0 else 0
 
-        if dead_ratio > 0.20 and url_dead >= 2 and (time.time() - _fn_start) <= 200:
+        if dead_ratio > 0.20 and url_dead >= 2 and (time.time() - _fn_start) <= 250:
             # Identify categories where evidence URLs failed
             dead_categories = set()
             for item in raw_findings:
