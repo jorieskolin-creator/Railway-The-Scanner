@@ -1035,8 +1035,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         """Execute a search with the given model. Uses main prompt by default, or a custom one for re-search."""
         # Elapsed time guard — skip if function has been running too long
         elapsed_total = time.time() - _fn_start
-        if elapsed_total > 150:
-            print(f"   ⏰ [Forensic Scan] Skipping {target_model_name} — elapsed {int(elapsed_total)}s exceeds 150s guard")
+        if elapsed_total > 200:
+            print(f"   ⏰ [Forensic Scan] Skipping {target_model_name} — elapsed {int(elapsed_total)}s exceeds 200s guard")
             return None
 
         active_prompt = custom_prompt if custom_prompt else prompt
@@ -1067,11 +1067,11 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             call_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             future = call_pool.submit(_call_gemini)
             try:
-                response = future.result(timeout=120)
+                response = future.result(timeout=150)
             except concurrent.futures.TimeoutError:
                 call_pool.shutdown(wait=False)
                 elapsed = int((time.time() - start) * 1000)
-                print(f"   ⏰ [Forensic Scan] {target_model_name} timed out after 120s ({elapsed}ms). Skipping to next model.")
+                print(f"   ⏰ [Forensic Scan] {target_model_name} timed out after 150s ({elapsed}ms). Skipping to next model.")
                 return None
             call_pool.shutdown(wait=False)
 
@@ -1113,8 +1113,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         """Fallback: Use Sonnet 4.5 when Gemini is rate-limited or unavailable."""
         # Elapsed time guard
         elapsed_total = time.time() - _fn_start
-        if elapsed_total > 150:
-            print(f"   ⏰ [Forensic Scan] Skipping Sonnet fallback — elapsed {int(elapsed_total)}s exceeds 150s guard")
+        if elapsed_total > 200:
+            print(f"   ⏰ [Forensic Scan] Skipping Sonnet fallback — elapsed {int(elapsed_total)}s exceeds 200s guard")
             return None
 
         anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -1196,8 +1196,8 @@ For any URLs, use real URLs you know from training data. Mark confidence_score l
             for loop in range(1, max_research_loops + 1):
                 # Elapsed time guard — return what we have rather than risk timeout
                 elapsed_total = time.time() - _fn_start
-                if elapsed_total > 150:
-                    print(f"   ⏰ [Re-Search] Skipping loop {loop} — elapsed {int(elapsed_total)}s exceeds 150s guard. Returning current results.")
+                if elapsed_total > 200:
+                    print(f"   ⏰ [Re-Search] Skipping loop {loop} — elapsed {int(elapsed_total)}s exceeds 200s guard. Returning current results.")
                     break
 
                 weak_juries = _identify_weak_juries(all_findings)
@@ -1381,8 +1381,8 @@ For any URLs, use real URLs you know from training data. Mark confidence_score l
             if abs(delta) >= 15:
                 # Elapsed time guard — skip verification if running out of time
                 elapsed_total = time.time() - _fn_start
-                if elapsed_total > 150:
-                    print(f"   ⏰ [Delta Verification] Skipping — elapsed {int(elapsed_total)}s exceeds 150s guard. Keeping score {final_score}.")
+                if elapsed_total > 200:
+                    print(f"   ⏰ [Delta Verification] Skipping — elapsed {int(elapsed_total)}s exceeds 200s guard. Keeping score {final_score}.")
                 else:
                     print(f"   [Delta Verification] Large score change detected: {prev_reality} → {final_score} (delta {delta}). Running verification re-scan...")
                     verify_data = execute_with_model(primary_model)
@@ -1425,7 +1425,7 @@ For any URLs, use real URLs you know from training data. Mark confidence_score l
         url_total = url_verified + url_dead
         dead_ratio = url_dead / url_total if url_total > 0 else 0
 
-        if dead_ratio > 0.20 and url_dead >= 2 and (time.time() - _fn_start) <= 150:
+        if dead_ratio > 0.20 and url_dead >= 2 and (time.time() - _fn_start) <= 200:
             # Identify categories where evidence URLs failed
             dead_categories = set()
             for item in raw_findings:
