@@ -86,7 +86,8 @@ def extract_json_from_text(text):
     # 5. Iterative position-based repair: use JSONDecodeError.pos to surgically
     #    insert missing commas/colons at the exact failure point. Handles deeply
     #    nested errors that regex patterns miss (e.g. char 10267 in a 12K payload).
-    for _attempt in range(10):
+    #    30 iterations handles large JSON (13K+) with many scattered comma errors.
+    for _attempt in range(30):
         try:
             json.loads(repaired, strict=False)
             return repaired
@@ -111,8 +112,9 @@ def extract_json_from_text(text):
     except json.JSONDecodeError:
         pass
 
-    # 6. Return original candidate for downstream repair gate
-    return candidate
+    # 6. Return best-effort repaired text for downstream handling
+    #    (preserves partial repair progress rather than discarding it)
+    return repaired
 
 def _verify_url(url, timeout=4):
     """
@@ -258,14 +260,32 @@ Return ONLY valid JSON, no explanation."""
         )
         response_text = response.content[0].text if response.content else ""
         json_payload = extract_json_from_text(response_text)
-        if json_payload:
+        if not json_payload:
+            return None
+
+        mode_label = "Structuring" if is_structuring else "JSON Repair"
+        try:
             result = json.loads(json_payload, strict=False)
-            # Only cap confidence for repair mode (unexpected format recovery)
-            # Structuring mode is the designed flow — no penalty
-            if not is_structuring and result.get("confidence_score", 0) > 70:
-                result["confidence_score"] = 70
-            return result
-        return None
+        except json.JSONDecodeError as je:
+            # extract_json_from_text already tried 30 repair iterations.
+            # Try one more aggressive pass: re-run regex + position repair
+            # on the already-partially-repaired output.
+            print(f"   ⚠️ [{mode_label}] Nearly valid JSON ({je}). Running extra repair pass...")
+            re_repaired = extract_json_from_text(json_payload)
+            if re_repaired:
+                try:
+                    result = json.loads(re_repaired, strict=False)
+                except json.JSONDecodeError as je2:
+                    print(f"   ❌ [{mode_label}] Extra repair pass also failed: {je2}")
+                    return None
+            else:
+                return None
+
+        # Only cap confidence for repair mode (unexpected format recovery)
+        # Structuring mode is the designed flow — no penalty
+        if not is_structuring and result.get("confidence_score", 0) > 70:
+            result["confidence_score"] = 70
+        return result
     except Exception as e:
         mode_label = "Structuring" if is_structuring else "JSON Repair"
         print(f"   ❌ [{mode_label}] Sonnet call failed: {e}")
