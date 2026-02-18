@@ -1067,11 +1067,11 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             call_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             future = call_pool.submit(_call_gemini)
             try:
-                response = future.result(timeout=60)
+                response = future.result(timeout=120)
             except concurrent.futures.TimeoutError:
                 call_pool.shutdown(wait=False)
                 elapsed = int((time.time() - start) * 1000)
-                print(f"   ⏰ [Forensic Scan] {target_model_name} timed out after 60s ({elapsed}ms). Skipping to next model.")
+                print(f"   ⏰ [Forensic Scan] {target_model_name} timed out after 120s ({elapsed}ms). Skipping to next model.")
                 return None
             call_pool.shutdown(wait=False)
 
