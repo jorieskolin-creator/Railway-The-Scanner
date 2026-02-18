@@ -1248,6 +1248,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                                 finding["url"] = donor["url"]
                                 if not finding.get("title"):
                                     finding["title"] = donor["title"]
+                    result["_web_grounded"] = True
+                    result["_citation_count"] = len(unique_citations)
                     print(f"   ✅ [Forensic Scan] claude-sonnet-4-5 + Web Search succeeded in {elapsed}ms (grounded, {len(unique_citations)} citations)")
                     return result
                 except json.JSONDecodeError as je:
@@ -1261,6 +1263,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 print(f"   ⚠️ [Forensic Scan] claude-sonnet-4-5 returned unstructured text ({elapsed}ms, {len(text_content)} chars). Attempting JSON repair...")
                 repaired = _repair_json_with_sonnet(text_content, company_name)
                 if repaired:
+                    repaired["_web_grounded"] = True
+                    repaired["_citation_count"] = len(unique_citations)
                     repair_elapsed = int((time.time() - start) * 1000)
                     print(f"   ✅ [JSON Repair] Recovered structured data from Sonnet + Web Search response ({repair_elapsed}ms total)")
                     return repaired
@@ -1318,17 +1322,22 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
     # --- BEST-OF-TWO SELECTION ---
     # Score each result by evidence quality, then pick the stronger one.
+    # Ranking tuple: (evidence_count, grounded_bonus, confidence)
+    #   - evidence_count: findings with found=True and a URL (most important)
+    #   - grounded_bonus: 1 if URLs come from live web search, 0 if model-generated
+    #     (model-generated URLs are often hallucinated and fail validation later)
+    #   - confidence: self-reported, used only as final tiebreaker
     def _race_quality(result):
-        """Score a result by evidence grounding: evidence links count most, confidence second."""
+        """Score a result for best-of-two comparison."""
         findings = result.get("findings", [])
         evidence_count = len([f for f in findings if f.get("found") and f.get("url")])
+        grounded = 1 if result.get("_web_grounded") else 0
         confidence = result.get("confidence_score", 0)
-        return (evidence_count, confidence)
+        return (evidence_count, grounded, confidence)
 
     if sonnet_result and gemini_result:
         sq = _race_quality(sonnet_result)
         gq = _race_quality(gemini_result)
-        # Sonnet wins ties because its URLs come from live web search (grounded)
         if sq >= gq:
             data = sonnet_result
             winner, loser = "Sonnet + Web Search", "Gemini 3 Pro"
@@ -1338,8 +1347,10 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             winner, loser = "Gemini 3 Pro", "Sonnet + Web Search"
             winner_q, loser_q = gq, sq
         race_elapsed = int((time.time() - race_start) * 1000)
-        print(f"   🏆 [Race] Best-of-two → {winner} ({winner_q[0]} evidence, confidence {winner_q[1]}) "
-              f"over {loser} ({loser_q[0]} evidence, confidence {loser_q[1]}) in {race_elapsed}ms")
+        w_grounded = "grounded" if winner_q[1] else "ungrounded"
+        l_grounded = "grounded" if loser_q[1] else "ungrounded"
+        print(f"   🏆 [Race] Best-of-two → {winner} ({winner_q[0]} evidence, {w_grounded}, confidence {winner_q[2]}) "
+              f"over {loser} ({loser_q[0]} evidence, {l_grounded}, confidence {loser_q[2]}) in {race_elapsed}ms")
     elif sonnet_result:
         data = sonnet_result
         race_elapsed = int((time.time() - race_start) * 1000)
