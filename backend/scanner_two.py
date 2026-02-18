@@ -194,12 +194,16 @@ def _validate_evidence_urls(links, checklist, max_workers=6):
     return links, checklist, verified_count, dead_count
 
 
-def _repair_json_with_sonnet(raw_text, company_name):
+def _repair_json_with_sonnet(raw_text, company_name, is_structuring=False, citations=None):
     """
-    JSON Repair Gate: When a Gemini model returns grounded search data as
-    unstructured text, use a fast Sonnet call to extract and restructure it
-    into the expected JSON format. This preserves evidence from Google Search
-    grounding that would otherwise be discarded.
+    JSON Structuring / Repair Gate.
+
+    Two modes:
+    - Structuring (is_structuring=True): Standard Pass 2 of the two-pass pipeline.
+      Sonnet's web search produced free-form evidence; this call converts it to JSON.
+      No confidence penalty — this is the designed flow.
+    - Repair (is_structuring=False): Fallback when Gemini returns unstructured text
+      instead of JSON. Caps confidence at 70 to signal reduced reliability.
     """
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if "=" in anthropic_key:
@@ -211,7 +215,19 @@ def _repair_json_with_sonnet(raw_text, company_name):
 
     try:
         client = anthropic.Anthropic(api_key=anthropic_key)
-        repair_prompt = f"""The following text is a forensic reality-check analysis for "{company_name}" that was returned by a search-grounded AI model, but it is NOT valid JSON. Your job is to extract the data and return it as valid JSON.
+
+        # Build citation context if available (helps structuring pass match URLs to findings)
+        citations_section = ""
+        if citations:
+            citation_lines = [f"  - {c.get('title', 'Source')}: {c['url']}" for c in citations[:30]]
+            citations_section = "\n\nVERIFIED SOURCE URLs harvested from web search (use these to match findings to real URLs):\n" + "\n".join(citation_lines)
+
+        if is_structuring:
+            intro = f"""The following text is a forensic reality-check analysis for "{company_name}" produced by a web-search-grounded AI model. Your job is to structure this analysis into valid JSON, preserving ALL evidence, scores, and assessments exactly as stated."""
+        else:
+            intro = f"""The following text is a forensic reality-check analysis for "{company_name}" that was returned by a search-grounded AI model, but it is NOT valid JSON. Your job is to extract the data and return it as valid JSON."""
+
+        structuring_prompt = f"""{intro}
 
 The expected JSON structure is:
 {{
@@ -228,28 +244,31 @@ The expected JSON structure is:
 }}
 
 Extract as much data as possible from the text below. Preserve all findings, URLs, and evidence. If a field cannot be determined, use sensible defaults (0 for scores, empty arrays for lists, false for booleans).
+{citations_section}
 
 TEXT TO PARSE:
-{raw_text[:8000]}
+{raw_text[:12000]}
 
 Return ONLY valid JSON, no explanation."""
 
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=4096,
-            messages=[{"role": "user", "content": repair_prompt}]
+            messages=[{"role": "user", "content": structuring_prompt}]
         )
         response_text = response.content[0].text if response.content else ""
         json_payload = extract_json_from_text(response_text)
         if json_payload:
             result = json.loads(json_payload, strict=False)
-            # Cap confidence since this went through a repair step
-            if result.get("confidence_score", 0) > 70:
+            # Only cap confidence for repair mode (unexpected format recovery)
+            # Structuring mode is the designed flow — no penalty
+            if not is_structuring and result.get("confidence_score", 0) > 70:
                 result["confidence_score"] = 70
             return result
         return None
     except Exception as e:
-        print(f"   ❌ [JSON Repair] Sonnet repair failed: {e}")
+        mode_label = "Structuring" if is_structuring else "JSON Repair"
+        print(f"   ❌ [{mode_label}] Sonnet call failed: {e}")
         return None
 
 
@@ -1230,7 +1249,18 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             return None
 
     def execute_with_anthropic(active_prompt):
-        """PRIMARY: Use Sonnet 4.6 with web search (Brave Search grounding) for forensic scan."""
+        """
+        PRIMARY: Two-pass pipeline using Sonnet 4.6 + Brave Web Search.
+
+        Pass 1 (Search): Sonnet searches the web and reports findings freely.
+                         Format requirements are relaxed so the model can focus
+                         on evidence quality rather than JSON syntax.
+        Pass 2 (Structure): A fast Sonnet call converts the free-form analysis
+                           into the expected JSON schema. Focused on one task,
+                           this rarely fails.
+
+        Fast path: If Pass 1 happens to return valid JSON, Pass 2 is skipped.
+        """
         # Elapsed time guard — leave ~70s buffer for URL validation + response
         elapsed_total = time.time() - _fn_start
         if elapsed_total > 280:
@@ -1246,7 +1276,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             print("   [Scanner 2] No ANTHROPIC_API_KEY for Sonnet + Web Search.")
             return None
         try:
-            print(f"   🔄 [Forensic Scan] Attempting claude-sonnet-4-6 + Web Search for {company_name}...")
+            print(f"   🔄 [Forensic Scan] Attempting claude-sonnet-4-6 + Web Search (two-pass) for {company_name}...")
             start = time.time()
             claude_client = anthropic.Anthropic(api_key=anthropic_key)
 
@@ -1256,6 +1286,16 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             search_budget = 10 if is_rescan else 5
             if is_rescan:
                 print(f"   📊 [Forensic Scan] RESCAN: search budget raised to {search_budget} (verification + juries)")
+
+            # --- PASS 1: Web Search (format-relaxed) ---
+            # Replace strict JSON requirement with flexible format instruction.
+            # The model still sees the data schema as a reference, but is free to
+            # report in any clear structure — accuracy over format.
+            sonnet_prompt = re.sub(
+                r'RETURN STRICT JSON[^:]*:',
+                'REPORT YOUR FINDINGS (any clear structured format — JSON, markdown, or text):',
+                active_prompt
+            )
 
             # Enforce 150s per-call timeout via thread pool (Sonnet + web search typically 30-90s)
             def _call_sonnet_web():
@@ -1268,7 +1308,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                         "name": "web_search",
                         "max_uses": search_budget
                     }],
-                    messages=[{"role": "user", "content": active_prompt}]
+                    messages=[{"role": "user", "content": sonnet_prompt}]
                 )
 
             call_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -1281,6 +1321,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 print(f"   ⏰ [Forensic Scan] claude-sonnet-4-6 + Web Search timed out after 150s ({elapsed}ms). Skipping to next model.")
                 return None
             call_pool.shutdown(wait=False)
+
+            pass1_elapsed = int((time.time() - start) * 1000)
 
             # Note: pause_turn can occur when the model hasn't finished all web searches,
             # but continuing the conversation requires complex message threading with
@@ -1325,8 +1367,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             if unique_citations:
                 print(f"   🔗 [Web Search] Harvested {len(unique_citations)} citation URLs from Sonnet web search")
 
+            # --- FAST PATH: If Pass 1 returned valid JSON, skip Pass 2 ---
             json_payload = extract_json_from_text(text_content)
-            elapsed = int((time.time() - start) * 1000)
             if json_payload:
                 try:
                     result = json.loads(json_payload, strict=False)
@@ -1343,29 +1385,40 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                                     finding["title"] = donor["title"]
                     result["_web_grounded"] = True
                     result["_citation_count"] = len(unique_citations)
-                    print(f"   ✅ [Forensic Scan] claude-sonnet-4-6 + Web Search succeeded in {elapsed}ms (grounded, {len(unique_citations)} citations)")
+                    elapsed = int((time.time() - start) * 1000)
+                    print(f"   ✅ [Forensic Scan] Pass 1 returned valid JSON — skipping Pass 2 ({elapsed}ms, {len(unique_citations)} citations)")
                     return result
                 except json.JSONDecodeError as je:
-                    print(f"   ⚠️ [Forensic Scan] claude-sonnet-4-6 JSON parse failed: {je}")
-                    # Fall through to JSON repair gate
+                    print(f"   ⚠️ [Forensic Scan] Pass 1 JSON parse failed: {je} — proceeding to Pass 2")
 
+            # --- PASS 2: Structure free-form response into JSON ---
             if text_content and len(text_content) > 100:
-                # --- JSON REPAIR GATE ---
-                # Sonnet returned search-grounded data but not as valid JSON.
-                # Use a lightweight Sonnet call to extract/restructure it.
-                print(f"   ⚠️ [Forensic Scan] claude-sonnet-4-6 returned unstructured text ({elapsed}ms, {len(text_content)} chars). Attempting JSON repair...")
-                repaired = _repair_json_with_sonnet(text_content, company_name)
-                if repaired:
-                    repaired["_web_grounded"] = True
-                    repaired["_citation_count"] = len(unique_citations)
-                    repair_elapsed = int((time.time() - start) * 1000)
-                    print(f"   ✅ [JSON Repair] Recovered structured data from Sonnet + Web Search response ({repair_elapsed}ms total)")
-                    return repaired
+                print(f"   🔄 [Two-Pass] Pass 1 complete ({pass1_elapsed}ms, {len(text_content)} chars). Structuring into JSON (Pass 2)...")
+                structured = _repair_json_with_sonnet(
+                    text_content, company_name,
+                    is_structuring=True, citations=unique_citations
+                )
+                if structured:
+                    # Enrich with citation metadata
+                    if unique_citations and "findings" in structured:
+                        citation_pool = list(unique_citations)
+                        for finding in structured["findings"]:
+                            if finding.get("found") and not finding.get("url") and citation_pool:
+                                donor = citation_pool.pop(0)
+                                finding["url"] = donor["url"]
+                                if not finding.get("title"):
+                                    finding["title"] = donor["title"]
+                    structured["_web_grounded"] = True
+                    structured["_citation_count"] = len(unique_citations)
+                    total_elapsed = int((time.time() - start) * 1000)
+                    print(f"   ✅ [Two-Pass] Pass 2 structured successfully ({total_elapsed}ms total, {len(unique_citations)} citations)")
+                    return structured
                 else:
-                    print(f"   ⚠️ [JSON Repair] Could not recover JSON from Sonnet + Web Search response")
+                    print(f"   ⚠️ [Two-Pass] Pass 2 structuring failed — could not convert to JSON")
                     return None
             else:
-                print(f"   ⚠️ [Forensic Scan] claude-sonnet-4-6 + Web Search returned no parseable JSON ({elapsed}ms)")
+                elapsed = int((time.time() - start) * 1000)
+                print(f"   ⚠️ [Forensic Scan] claude-sonnet-4-6 + Web Search returned no usable text ({elapsed}ms)")
                 return None
         except Exception as e:
             elapsed = int((time.time() - start) * 1000)
@@ -1590,14 +1643,17 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         final_score = max(0, min(100, base_score + adjustment))
 
         # --- DELTA VERIFICATION RE-SCAN ---
-        # If score changed by more than ±15 from previous, re-run the scan once.
+        # If score changed by more than ±25 from previous, re-run the scan once.
+        # Temporarily raised from ±15 to ±25 to accommodate model migration
+        # (old scores from Gemini vs new scores from Sonnet two-pass pipeline).
+        # TODO: Restore to ±15 after a full database refresh cycle.
         # If re-scan confirms the change → accept as fact (genuine change).
         # If re-scan contradicts → use the more conservative (closer to previous) result.
         if previous_context and previous_context.get("previous_reality") is not None:
             prev_reality = previous_context["previous_reality"]
             delta = final_score - prev_reality
 
-            if abs(delta) >= 15:
+            if abs(delta) >= 25:
                 # Elapsed time guard — skip verification if running out of time.
                 # Delta re-scan + URL validation can fit in remaining ~130s.
                 # Guard at 220s to stay within main.py's 350s timeout.
@@ -1620,7 +1676,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                         verify_score = max(0, min(100, base_score + verify_adjustment))
                         verify_delta = verify_score - prev_reality
 
-                        if abs(verify_delta) >= 15 and (delta > 0) == (verify_delta > 0):
+                        if abs(verify_delta) >= 25 and (delta > 0) == (verify_delta > 0):
                             # Both scans agree on direction and magnitude — accept as genuine change
                             # Use average of both for stability
                             final_score = int((final_score + verify_score) / 2)
