@@ -70,6 +70,10 @@ def extract_json_from_text(text):
     repaired = re.sub(r'(\})\s*(\{)', r'\1,\2', repaired)
     repaired = re.sub(r'(\})\s*(")', r'\1,\2', repaired)
     repaired = re.sub(r'(\])\s*(")', r'\1,\2', repaired)
+    # Fix missing commas after true/false/null before next key
+    repaired = re.sub(r'(true|false|null)\s*\n\s*(")', r'\1,\2', repaired)
+    # Fix missing commas after numbers before next key (e.g. `50\n  "key"`)
+    repaired = re.sub(r'(\d)\s*\n\s*(")', r'\1,\2', repaired)
     # Remove control characters that break JSON (newlines inside strings)
     repaired = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', ' ', repaired)
 
@@ -79,7 +83,35 @@ def extract_json_from_text(text):
     except json.JSONDecodeError:
         pass
 
-    # 5. Return original candidate for downstream repair gate
+    # 5. Iterative position-based repair: use JSONDecodeError.pos to surgically
+    #    insert missing commas/colons at the exact failure point. Handles deeply
+    #    nested errors that regex patterns miss (e.g. char 10267 in a 12K payload).
+    for _attempt in range(10):
+        try:
+            json.loads(repaired, strict=False)
+            return repaired
+        except json.JSONDecodeError as e:
+            msg = str(e)
+            pos = e.pos
+            if pos is None or pos >= len(repaired):
+                break
+            if "Expecting ',' delimiter" in msg:
+                repaired = repaired[:pos] + ',' + repaired[pos:]
+            elif "Expecting ':' delimiter" in msg:
+                repaired = repaired[:pos] + ':' + repaired[pos:]
+            elif "Expecting value" in msg and pos > 0 and repaired[pos-1] == ',':
+                # Trailing comma before unexpected token — remove it
+                repaired = repaired[:pos-1] + repaired[pos:]
+            else:
+                break  # Unknown error type, stop
+
+    try:
+        json.loads(repaired, strict=False)
+        return repaired
+    except json.JSONDecodeError:
+        pass
+
+    # 6. Return original candidate for downstream repair gate
     return candidate
 
 def _verify_url(url, timeout=4):
@@ -204,7 +236,7 @@ Return ONLY valid JSON, no explanation."""
 
         response = client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=2048,
+            max_tokens=4096,
             messages=[{"role": "user", "content": repair_prompt}]
         )
         response_text = response.content[0].text if response.content else ""
@@ -1106,9 +1138,10 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     def execute_with_model(target_model_name, custom_prompt=None, call_timeout=150):
         """Execute a search with the given model. Uses main prompt by default, or a custom one for re-search."""
         # Elapsed time guard — skip if function has been running too long
+        # 300s allows Gemini fallback even when Sonnet+repair takes 100-150s
         elapsed_total = time.time() - _fn_start
-        if elapsed_total > 200:
-            print(f"   ⏰ [Forensic Scan] Skipping {target_model_name} — elapsed {int(elapsed_total)}s exceeds 200s guard")
+        if elapsed_total > 300:
+            print(f"   ⏰ [Forensic Scan] Skipping {target_model_name} — elapsed {int(elapsed_total)}s exceeds 300s guard")
             return None
 
         active_prompt = custom_prompt if custom_prompt else prompt
@@ -1382,8 +1415,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             for loop in range(1, max_research_loops + 1):
                 # Elapsed time guard — return what we have rather than risk timeout
                 elapsed_total = time.time() - _fn_start
-                if elapsed_total > 200:
-                    print(f"   ⏰ [Re-Search] Skipping loop {loop} — elapsed {int(elapsed_total)}s exceeds 200s guard. Returning current results.")
+                if elapsed_total > 280:
+                    print(f"   ⏰ [Re-Search] Skipping loop {loop} — elapsed {int(elapsed_total)}s exceeds 280s guard. Returning current results.")
                     break
 
                 weak_juries = _identify_weak_juries(all_findings)
