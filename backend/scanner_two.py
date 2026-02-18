@@ -293,6 +293,21 @@ def _build_previous_context_block(previous_context):
 
     RESCAN INSTRUCTIONS (VERIFICATION-FIRST — CRITICAL):
 
+    SEARCH BUDGET ALLOCATION (YOU HAVE 10 WEB SEARCHES — USE THEM IN THIS ORDER):
+    ┌─────────────────────────────────────────────────────────────────┐
+    │ Searches 1-3:  VERIFICATION (Steps 1-3 below)                 │
+    │   → Re-verify previous evidence URLs and key claims           │
+    │   → Combine multiple verifications into single broad searches  │
+    │     e.g. `"{previous_context.get('company_name', 'company')}" site:linkedin.com OR site:kauppalehti.fi` │
+    │                                                                │
+    │ Searches 4-10: NEW JURY EVIDENCE (Step 4 below)               │
+    │   → One search per jury, combine sub-queries with OR           │
+    │   → Prioritize juries where previous evidence was weakest      │
+    └─────────────────────────────────────────────────────────────────┘
+    YOU MUST USE YOUR FIRST SEARCHES FOR VERIFICATION. Do NOT skip to juries.
+    If you run out of searches before covering all juries, that is acceptable —
+    verification of existing evidence is MORE IMPORTANT than finding new evidence.
+
     STEP 1 - VERIFY THE MOST RECENT SUMMARY (YOUR #1 PRIORITY):
     Read SCAN -1 SUMMARY above carefully. It contains specific claims,
     themes, diagnoses, and terminology about this company. These are your verification targets.
@@ -320,7 +335,7 @@ def _build_previous_context_block(previous_context):
     If the same URL/source still exists and says the same thing → CONFIRMED.
     If you cannot find it → UNVERIFIED (carry forward).
 
-    STEP 4 - SEARCH FOR NEW EVIDENCE:
+    STEP 4 - SEARCH FOR NEW EVIDENCE (USE REMAINING SEARCHES):
     ONLY AFTER completing Steps 1-3, run the normal jury searches for any
     NEW evidence not covered by the previous analyses.
 
@@ -934,6 +949,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     evidence (real tech stacks, team structures, actual service delivery) not marketing fluff.
     Otherwise, look at evidence from these specific 'JURIES' defined below.
 
+    {"SEARCH BUDGET: You have 10 web searches. The FIRST 3 MUST be used for verification (see RESCAN INSTRUCTIONS above). The remaining 7 are for jury searches below. Combine sub-queries with OR to cover multiple juries per search." if history_block else "SEARCH BUDGET: You have 5 web searches. Combine sub-queries with OR to cover all 5 juries efficiently (e.g. one search per jury)."}
+
     CRITICAL: You must execute searches for ALL 5 JURIES. Do not skip any.
     NOTE: Target companies are primarily Finnish. Use BOTH English and Finnish search terms.
 
@@ -1159,6 +1176,13 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             start = time.time()
             claude_client = anthropic.Anthropic(api_key=anthropic_key)
 
+            # Rescan gets more searches: 3-4 for verifying old evidence + 6-7 for new juries.
+            # First scan only needs 5 (one per jury).
+            is_rescan = bool(previous_context and previous_context.get("previous_reality") is not None)
+            search_budget = 10 if is_rescan else 5
+            if is_rescan:
+                print(f"   📊 [Forensic Scan] RESCAN: search budget raised to {search_budget} (verification + juries)")
+
             # Enforce 150s per-call timeout via thread pool (Sonnet + web search typically 30-90s)
             def _call_sonnet_web():
                 return claude_client.messages.create(
@@ -1168,7 +1192,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     tools=[{
                         "type": "web_search_20250305",
                         "name": "web_search",
-                        "max_uses": 5
+                        "max_uses": search_budget
                     }],
                     messages=[{"role": "user", "content": active_prompt}]
                 )
