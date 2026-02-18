@@ -1052,7 +1052,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     - 71-100: Multiple independent sources (Juries) confirm findings, evidence is recent (<12mo) and specific.
     """
 
-    def execute_with_model(target_model_name, custom_prompt=None):
+    def execute_with_model(target_model_name, custom_prompt=None, call_timeout=150):
         """Execute a search with the given model. Uses main prompt by default, or a custom one for re-search."""
         # Elapsed time guard — skip if function has been running too long
         elapsed_total = time.time() - _fn_start
@@ -1066,7 +1066,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         try:
             client = genai.Client(api_key=api_key)
 
-            # Enforce 150s per-call timeout via thread pool.
+            # Enforce per-call timeout via thread pool.
             # Google GenAI SDK's built-in HttpOptions timeout is unreliable
             # (SDK passes timeout=None internally, overriding client-level timeout).
             def _call_gemini():
@@ -1088,11 +1088,11 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             call_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             future = call_pool.submit(_call_gemini)
             try:
-                response = future.result(timeout=150)
+                response = future.result(timeout=call_timeout)
             except concurrent.futures.TimeoutError:
                 call_pool.shutdown(wait=False)
                 elapsed = int((time.time() - start) * 1000)
-                print(f"   ⏰ [Forensic Scan] {target_model_name} timed out after 150s ({elapsed}ms). Skipping to next model.")
+                print(f"   ⏰ [Forensic Scan] {target_model_name} timed out after {call_timeout}s ({elapsed}ms). Skipping to next model.")
                 return None
             call_pool.shutdown(wait=False)
 
@@ -1151,7 +1151,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             start = time.time()
             claude_client = anthropic.Anthropic(api_key=anthropic_key)
 
-            # Enforce 90s per-call timeout via thread pool (Sonnet + web search typically 30-60s)
+            # Enforce 150s per-call timeout via thread pool (Sonnet + web search typically 30-90s)
             def _call_sonnet_web():
                 return claude_client.messages.create(
                     model="claude-sonnet-4-5-20250929",
@@ -1167,11 +1167,11 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             call_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             future = call_pool.submit(_call_sonnet_web)
             try:
-                response = future.result(timeout=90)
+                response = future.result(timeout=150)
             except concurrent.futures.TimeoutError:
                 call_pool.shutdown(wait=False)
                 elapsed = int((time.time() - start) * 1000)
-                print(f"   ⏰ [Forensic Scan] claude-sonnet-4-5 + Web Search timed out after 90s ({elapsed}ms). Skipping to next model.")
+                print(f"   ⏰ [Forensic Scan] claude-sonnet-4-5 + Web Search timed out after 150s ({elapsed}ms). Skipping to next model.")
                 return None
             call_pool.shutdown(wait=False)
 
@@ -1235,16 +1235,43 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             print(f"   ❌ [Forensic Scan] claude-sonnet-4-5 + Web Search failed in {elapsed}ms: {e}")
             return None
 
-    # --- ATTEMPT 1: Sonnet 4.5 + Web Search (PRIMARY — Anthropic infra, Brave Search grounding) ---
-    # Runs on separate infrastructure from Financial Health Check (Gemini), ensuring zero contention.
-    data = execute_with_anthropic(prompt)
+    # --- PARALLEL RACE: Sonnet + Web Search vs Gemini 3 Pro ---
+    # Both models start at t=0 on separate infrastructure (Anthropic vs Google).
+    # First valid JSON result wins; loser is abandoned.
+    # Both 150s per-call | Race ceiling ~150s | Gemini 2.5 Pro gets 50s under 200s guard.
+    data = None
+    print(f"   🏁 [Forensic Scan] Starting parallel race: Sonnet + Web Search vs Gemini 3 Pro for {company_name}...")
+    race_start = time.time()
 
-    # --- ATTEMPT 2: Gemini 3 Pro Preview (Google Search grounding fallback) ---
-    # Only fires if Sonnet + Web Search failed. By this point, Financial Health Check
-    # (Gemini 2.5 Pro) is likely done, so no provider contention.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as race_pool:
+        sonnet_future = race_pool.submit(execute_with_anthropic, prompt)
+        gemini_future = race_pool.submit(execute_with_model, "gemini-3-pro-preview", None, 150)
+
+        # Process results as they arrive — first valid result wins
+        for completed_future in concurrent.futures.as_completed(
+            [sonnet_future, gemini_future], timeout=160
+        ):
+            try:
+                result = completed_future.result(timeout=0)  # Already done, just retrieve
+                if result:
+                    winner = "Sonnet + Web Search" if completed_future is sonnet_future else "Gemini 3 Pro"
+                    race_elapsed = int((time.time() - race_start) * 1000)
+                    print(f"   🏆 [Race] {winner} won in {race_elapsed}ms")
+                    data = result
+                    break
+                else:
+                    loser = "Sonnet + Web Search" if completed_future is sonnet_future else "Gemini 3 Pro"
+                    print(f"   [Race] {loser} returned no data, waiting for other model...")
+            except Exception as e:
+                print(f"   [Race] Future raised exception: {e}")
+
+    race_elapsed = int((time.time() - race_start) * 1000)
     if not data:
-        print("   [Scanner 2] Sonnet + Web Search failed. FALLING BACK to Gemini 3 Pro Preview (Google grounding)...")
-        data = execute_with_model("gemini-3-pro-preview")
+        print(f"   ❌ [Race] Both models failed ({race_elapsed}ms). Falling back to Gemini 2.5 Pro...")
+
+    # --- FALLBACK: Gemini 2.5 Pro (sequential, only if race produced nothing) ---
+    if not data:
+        data = execute_with_model("gemini-2.5-pro")
 
     # --- CONFIDENCE-DRIVEN RE-SEARCH LOOP ---
     # Only triggers when initial results have low confidence AND weak coverage.
