@@ -1277,8 +1277,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
     # --- PARALLEL RACE: Sonnet + Web Search vs Gemini 3 Pro ---
     # Both models start at t=0 on separate infrastructure (Anthropic vs Google).
-    # First valid JSON result wins; loser is abandoned.
-    # Both 150s per-call | Race ceiling ~150s | Gemini 2.5 Pro gets 50s under 200s guard.
+    # Best-of-two: wait for both results, pick the one with better evidence grounding.
+    # Both 150s per-call | Race ceiling ~160s | Gemini 2.5 Pro gets 50s under 200s guard.
     data = None
     print(f"   🏁 [Forensic Scan] Starting parallel race: Sonnet + Web Search vs Gemini 3 Pro for {company_name}...")
     race_start = time.time()
@@ -1286,31 +1286,68 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     race_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
     sonnet_future = race_pool.submit(execute_with_anthropic, prompt)
     gemini_future = race_pool.submit(execute_with_model, "gemini-3-pro-preview", None, 150)
-    futures = [sonnet_future, gemini_future]
 
-    # Process results as they arrive — first valid result wins
+    # Wait for both models to finish (or timeout)
+    sonnet_result = None
+    gemini_result = None
     try:
-        for completed_future in concurrent.futures.as_completed(futures, timeout=160):
-            try:
-                result = completed_future.result(timeout=0)  # Already done, just retrieve
-                if result:
-                    winner = "Sonnet + Web Search" if completed_future is sonnet_future else "Gemini 3 Pro"
-                    race_elapsed = int((time.time() - race_start) * 1000)
-                    print(f"   🏆 [Race] {winner} won in {race_elapsed}ms")
-                    data = result
-                    # Cancel the loser — don't wait for it to finish
-                    loser_future = gemini_future if completed_future is sonnet_future else sonnet_future
-                    loser_future.cancel()
-                    break
+        concurrent.futures.wait([sonnet_future, gemini_future], timeout=160)
+    except Exception as e:
+        print(f"   [Race] Wait error: {e}")
+
+    # Collect results
+    for future, name in [(sonnet_future, "Sonnet + Web Search"), (gemini_future, "Gemini 3 Pro")]:
+        try:
+            if future.done():
+                res = future.result(timeout=0)
+                elapsed_ms = int((time.time() - race_start) * 1000)
+                if res:
+                    print(f"   ✅ [Race] {name} finished with data ({elapsed_ms}ms)")
+                    if future is sonnet_future:
+                        sonnet_result = res
+                    else:
+                        gemini_result = res
                 else:
-                    loser = "Sonnet + Web Search" if completed_future is sonnet_future else "Gemini 3 Pro"
-                    print(f"   [Race] {loser} returned no data, waiting for other model...")
-            except Exception as e:
-                print(f"   [Race] Future raised exception: {e}")
-    except concurrent.futures.TimeoutError:
-        print(f"   ⏰ [Race] Race ceiling timeout (160s) hit")
-    finally:
-        race_pool.shutdown(wait=False)  # Don't block waiting for the loser
+                    print(f"   ⚠️ [Race] {name} returned no data ({elapsed_ms}ms)")
+            else:
+                print(f"   ⏰ [Race] {name} timed out")
+        except Exception as e:
+            print(f"   ❌ [Race] {name} raised exception: {e}")
+
+    race_pool.shutdown(wait=False)
+
+    # --- BEST-OF-TWO SELECTION ---
+    # Score each result by evidence quality, then pick the stronger one.
+    def _race_quality(result):
+        """Score a result by evidence grounding: evidence links count most, confidence second."""
+        findings = result.get("findings", [])
+        evidence_count = len([f for f in findings if f.get("found") and f.get("url")])
+        confidence = result.get("confidence_score", 0)
+        return (evidence_count, confidence)
+
+    if sonnet_result and gemini_result:
+        sq = _race_quality(sonnet_result)
+        gq = _race_quality(gemini_result)
+        # Sonnet wins ties because its URLs come from live web search (grounded)
+        if sq >= gq:
+            data = sonnet_result
+            winner, loser = "Sonnet + Web Search", "Gemini 3 Pro"
+            winner_q, loser_q = sq, gq
+        else:
+            data = gemini_result
+            winner, loser = "Gemini 3 Pro", "Sonnet + Web Search"
+            winner_q, loser_q = gq, sq
+        race_elapsed = int((time.time() - race_start) * 1000)
+        print(f"   🏆 [Race] Best-of-two → {winner} ({winner_q[0]} evidence, confidence {winner_q[1]}) "
+              f"over {loser} ({loser_q[0]} evidence, confidence {loser_q[1]}) in {race_elapsed}ms")
+    elif sonnet_result:
+        data = sonnet_result
+        race_elapsed = int((time.time() - race_start) * 1000)
+        print(f"   🏆 [Race] Only Sonnet + Web Search returned data ({race_elapsed}ms)")
+    elif gemini_result:
+        data = gemini_result
+        race_elapsed = int((time.time() - race_start) * 1000)
+        print(f"   🏆 [Race] Only Gemini 3 Pro returned data ({race_elapsed}ms)")
 
     race_elapsed = int((time.time() - race_start) * 1000)
     if not data:
