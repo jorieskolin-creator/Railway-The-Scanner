@@ -202,12 +202,12 @@ const App = () => {
     }
   };
 
-  // --- BATCH LOGIC (PARALLEL — 5 concurrent scans) ---
+  // --- BATCH LOGIC (PARALLEL — 3 concurrent scans) ---
   const executeBatch = async (targets, mode = "FULL") => {
       setIsBatchOpen(true);
       stopBatchRef.current = false;
 
-      const MAX_PARALLEL = 5;
+      const MAX_PARALLEL = 3;
       setBatchStatus({ current: 0, total: 0, isRunning: true, currentName: 'Initializing...', logs: [`Starting ${mode} Batch (${MAX_PARALLEL} parallel)...`] });
 
       try {
@@ -216,6 +216,21 @@ const App = () => {
         let completed = 0;
         let activeNames: string[] = [];
 
+        const attemptScan = async (target): Promise<boolean> => {
+            const formData = new FormData();
+            formData.append('companyName', target.name);
+            formData.append('companyUrl', target.url);
+            formData.append('reportText', "");
+            formData.append('saveToDatabase', 'true');
+
+            const res = await fetch('/scan', {
+                method: 'POST',
+                body: formData,
+                headers: { 'Authorization': `Bearer ${adminTokenRef.current}` }
+            });
+            return res.ok;
+        };
+
         const scanOne = async (target) => {
             if (stopBatchRef.current) return;
 
@@ -223,29 +238,53 @@ const App = () => {
             setBatchStatus(prev => ({ ...prev, currentName: activeNames.join(', '), logs: [...prev.logs, `🔄 Starting: ${target.name}...`] }));
 
             try {
-                const formData = new FormData();
-                formData.append('companyName', target.name);
-                formData.append('companyUrl', target.url);
-                formData.append('reportText', "");
-                formData.append('saveToDatabase', 'true');
+                const ok = await attemptScan(target);
 
-                const res = await fetch('/scan', {
-                    method: 'POST',
-                    body: formData,
-                    headers: { 'Authorization': `Bearer ${adminTokenRef.current}` }
-                });
-                completed++;
-                activeNames = activeNames.filter(n => n !== target.name);
-
-                if (res.ok) {
+                if (ok) {
+                    completed++;
+                    activeNames = activeNames.filter(n => n !== target.name);
                     setBatchStatus(prev => ({ ...prev, current: completed, currentName: activeNames.join(', ') || 'waiting...', logs: [...prev.logs, `✅ Success: ${target.name} (${completed}/${targets.length})`] }));
                 } else {
-                    setBatchStatus(prev => ({ ...prev, current: completed, currentName: activeNames.join(', ') || 'waiting...', logs: [...prev.logs, `❌ Failed: ${target.name} (${completed}/${targets.length})`] }));
+                    // Retry once after 10s delay
+                    setBatchStatus(prev => ({ ...prev, logs: [...prev.logs, `⏳ Retrying in 10s: ${target.name}...`] }));
+                    await new Promise(r => setTimeout(r, 10000));
+                    if (stopBatchRef.current) return;
+
+                    try {
+                        const retryOk = await attemptScan(target);
+                        completed++;
+                        activeNames = activeNames.filter(n => n !== target.name);
+                        if (retryOk) {
+                            setBatchStatus(prev => ({ ...prev, current: completed, currentName: activeNames.join(', ') || 'waiting...', logs: [...prev.logs, `✅ Success (retry): ${target.name} (${completed}/${targets.length})`] }));
+                        } else {
+                            setBatchStatus(prev => ({ ...prev, current: completed, currentName: activeNames.join(', ') || 'waiting...', logs: [...prev.logs, `❌ Failed (after retry): ${target.name} (${completed}/${targets.length})`] }));
+                        }
+                    } catch (retryErr) {
+                        completed++;
+                        activeNames = activeNames.filter(n => n !== target.name);
+                        setBatchStatus(prev => ({ ...prev, current: completed, currentName: activeNames.join(', ') || 'waiting...', logs: [...prev.logs, `❌ Failed (retry error): ${target.name} (${completed}/${targets.length})`] }));
+                    }
                 }
             } catch (err) {
-                completed++;
-                activeNames = activeNames.filter(n => n !== target.name);
-                setBatchStatus(prev => ({ ...prev, current: completed, currentName: activeNames.join(', ') || 'waiting...', logs: [...prev.logs, `⚠️ Network Error: ${target.name} (${completed}/${targets.length})`] }));
+                // Network error — retry once after 10s
+                setBatchStatus(prev => ({ ...prev, logs: [...prev.logs, `⏳ Network error, retrying in 10s: ${target.name}...`] }));
+                await new Promise(r => setTimeout(r, 10000));
+                if (stopBatchRef.current) return;
+
+                try {
+                    const retryOk = await attemptScan(target);
+                    completed++;
+                    activeNames = activeNames.filter(n => n !== target.name);
+                    if (retryOk) {
+                        setBatchStatus(prev => ({ ...prev, current: completed, currentName: activeNames.join(', ') || 'waiting...', logs: [...prev.logs, `✅ Success (retry): ${target.name} (${completed}/${targets.length})`] }));
+                    } else {
+                        setBatchStatus(prev => ({ ...prev, current: completed, currentName: activeNames.join(', ') || 'waiting...', logs: [...prev.logs, `❌ Failed (after retry): ${target.name} (${completed}/${targets.length})`] }));
+                    }
+                } catch (retryErr2) {
+                    completed++;
+                    activeNames = activeNames.filter(n => n !== target.name);
+                    setBatchStatus(prev => ({ ...prev, current: completed, currentName: activeNames.join(', ') || 'waiting...', logs: [...prev.logs, `⚠️ Network Error (after retry): ${target.name} (${completed}/${targets.length})`] }));
+                }
             }
         };
 

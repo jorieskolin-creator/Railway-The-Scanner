@@ -318,7 +318,11 @@ def run_scan(
                 financial_health_search, companyName, target_url
             )
 
-            reality_results = reality_future.result()
+            try:
+                reality_results = reality_future.result(timeout=240)
+            except concurrent.futures.TimeoutError:
+                print(f"   ❌ [Scanner 2] Reality search timed out after 240s for {companyName}")
+                reality_results = { "score": 50, "checklist": [], "links": [], "key_people": [], "is_simulated": True, "confidence_score": 0, "washing_flag": False }
 
             # Financial search is non-blocking — if it fails, use defaults
             try:
