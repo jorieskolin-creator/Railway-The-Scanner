@@ -666,8 +666,9 @@ def run_self_analysis(company_name, previous_scan_data, current_scan_data, days_
     SELF-ANALYSIS: Triggered when scanner produces significantly different results
     for the same company within a short timeframe.
 
-    Pre-computes diagnostics from actual data, then asks Gemini Flash to interpret
-    them and select from a constrained set of actionable suggestion types.
+    Pre-computes diagnostics from actual data, then asks Gemini 2.5 Pro (with Google
+    Search grounding) to interpret them and select from a constrained set of
+    actionable suggestion types. This keeps Opus free for Synthesis only.
 
     Returns a dict with analysis results, or None if analysis fails.
     """
@@ -771,27 +772,46 @@ Return STRICT JSON:
 """
 
     try:
-        anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        # Clean the key (same logic as main.py)
-        if "=" in anthropic_key:
-            try: anthropic_key = anthropic_key.split("=", 1)[1]
-            except: pass
-        anthropic_key = anthropic_key.strip().strip('"').strip("'")
-
-        if not anthropic_key:
-            print("   [Self-Analysis] No ANTHROPIC_API_KEY found. Skipping.")
+        api_key_val = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
+        if not api_key_val:
+            print("   [Self-Analysis] No GEMINI_API_KEY found. Skipping.")
             return None
 
-        claude_client = anthropic.Anthropic(api_key=anthropic_key)
-        print(f"   [Self-Analysis] Running via Claude Sonnet 4.5...")
-        response = claude_client.messages.create(
-            model="claude-sonnet-4-5-20250929",
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}]
-        )
+        print(f"   [Self-Analysis] Running via Gemini 2.5 Pro (Google Search grounding)...")
+        start = time.time()
+        client = genai.Client(api_key=api_key_val)
 
-        text = response.content[0].text if response.content else ""
+        # Enforce 60s timeout — self-analysis is a lightweight diagnostic task
+        def _call_self_analysis():
+            return client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=prompt,
+                config={
+                    'tools': [{'google_search': {}}],
+                    'temperature': 0.0,
+                    'safety_settings': [
+                        {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
+                        {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
+                        {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
+                        {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
+                    ]
+                }
+            )
+
+        call_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = call_pool.submit(_call_self_analysis)
+        try:
+            response = future.result(timeout=60)
+        except concurrent.futures.TimeoutError:
+            call_pool.shutdown(wait=False)
+            elapsed = int((time.time() - start) * 1000)
+            print(f"   ⏰ [Self-Analysis] Gemini 2.5 Pro timed out after 60s ({elapsed}ms). Skipping.")
+            return None
+        call_pool.shutdown(wait=False)
+
+        text = response.text if response.text else ""
         json_payload = extract_json_from_text(text)
+        elapsed = int((time.time() - start) * 1000)
         if json_payload:
             analysis = json.loads(json_payload, strict=False)
             analysis["company"] = company_name
@@ -799,7 +819,7 @@ Return STRICT JSON:
             analysis["diagnostics"] = diagnostics
             analysis["score_delta"] = curr_reality - prev_reality if isinstance(curr_reality, (int, float)) and isinstance(prev_reality, (int, float)) else None
 
-            print(f"   [Self-Analysis] Cause: {analysis.get('primary_cause', 'unknown')} | Reliability: {analysis.get('reliability', '?')}")
+            print(f"   [Self-Analysis] Cause: {analysis.get('primary_cause', 'unknown')} | Reliability: {analysis.get('reliability', '?')} ({elapsed}ms)")
             print(f"   [Self-Analysis] {analysis.get('cause_explanation', '')}")
 
             # Log actionable suggestions with their types
@@ -816,6 +836,7 @@ Return STRICT JSON:
             ]
 
             return analysis
+        print(f"   [Self-Analysis] No parseable JSON from Gemini 2.5 Pro ({elapsed}ms)")
         return None
     except Exception as e:
         print(f"   [Self-Analysis] Failed: {e}")
@@ -1045,7 +1066,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         try:
             client = genai.Client(api_key=api_key)
 
-            # Enforce 60s per-call timeout via thread pool.
+            # Enforce 150s per-call timeout via thread pool.
             # Google GenAI SDK's built-in HttpOptions timeout is unreliable
             # (SDK passes timeout=None internally, overriding client-level timeout).
             def _call_gemini():
@@ -1110,11 +1131,11 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             return None
 
     def execute_with_anthropic(active_prompt):
-        """Fallback: Use Sonnet 4.5 when Gemini is rate-limited or unavailable."""
+        """PRIMARY: Use Sonnet 4.5 with web search (Brave Search grounding) for forensic scan."""
         # Elapsed time guard
         elapsed_total = time.time() - _fn_start
         if elapsed_total > 200:
-            print(f"   ⏰ [Forensic Scan] Skipping Sonnet fallback — elapsed {int(elapsed_total)}s exceeds 200s guard")
+            print(f"   ⏰ [Forensic Scan] Skipping Sonnet + Web Search — elapsed {int(elapsed_total)}s exceeds 200s guard")
             return None
 
         anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -1123,55 +1144,97 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             except: pass
         anthropic_key = anthropic_key.strip().strip('"').strip("'")
         if not anthropic_key:
-            print("   [Scanner 2] No ANTHROPIC_API_KEY for Sonnet fallback.")
+            print("   [Scanner 2] No ANTHROPIC_API_KEY for Sonnet + Web Search.")
             return None
         try:
-            print(f"   🔄 [Forensic Scan] Attempting claude-sonnet-4-5 (knowledge-based fallback)...")
+            print(f"   🔄 [Forensic Scan] Attempting claude-sonnet-4-5 + Web Search for {company_name}...")
             start = time.time()
-            fallback_prefix = f"""You are a forensic company analyst. Answer based on your training knowledge.
-NOTE: You do NOT have live web search. Provide the best analysis you can from your existing knowledge of {company_name}.
-For any URLs, use real URLs you know from training data. Mark confidence_score lower (max 60) since this is knowledge-based, not search-verified.
-
-"""
             claude_client = anthropic.Anthropic(api_key=anthropic_key)
-            response = claude_client.messages.create(
-                model="claude-sonnet-4-5-20250929",
-                max_tokens=4096,
-                messages=[{"role": "user", "content": fallback_prefix + active_prompt}]
-            )
-            text_content = response.content[0].text if response.content else ""
+
+            # Enforce 90s per-call timeout via thread pool (Sonnet + web search typically 30-60s)
+            def _call_sonnet_web():
+                return claude_client.messages.create(
+                    model="claude-sonnet-4-5-20250929",
+                    max_tokens=4096,
+                    tools=[{
+                        "type": "web_search_20250305",
+                        "name": "web_search",
+                        "max_uses": 5
+                    }],
+                    messages=[{"role": "user", "content": active_prompt}]
+                )
+
+            call_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            future = call_pool.submit(_call_sonnet_web)
+            try:
+                response = future.result(timeout=90)
+            except concurrent.futures.TimeoutError:
+                call_pool.shutdown(wait=False)
+                elapsed = int((time.time() - start) * 1000)
+                print(f"   ⏰ [Forensic Scan] claude-sonnet-4-5 + Web Search timed out after 90s ({elapsed}ms). Skipping to next model.")
+                return None
+            call_pool.shutdown(wait=False)
+
+            # Handle pause_turn: if model needs more search turns, continue the conversation
+            max_continuations = 3
+            for _ in range(max_continuations):
+                if response.stop_reason != "pause_turn":
+                    break
+                # Continue the conversation so the model can complete its search
+                continuation_messages = [{"role": "user", "content": active_prompt}]
+                # Build assistant content from response
+                continuation_messages.append({"role": "assistant", "content": response.content})
+                continuation_messages.append({"role": "user", "content": "Continue your analysis and return the JSON result."})
+                response = claude_client.messages.create(
+                    model="claude-sonnet-4-5-20250929",
+                    max_tokens=4096,
+                    tools=[{
+                        "type": "web_search_20250305",
+                        "name": "web_search",
+                        "max_uses": 5
+                    }],
+                    messages=continuation_messages
+                )
+
+            # Extract text from response content blocks (skip tool_use and search result blocks)
+            text_parts = []
+            for block in response.content:
+                if hasattr(block, 'text'):
+                    text_parts.append(block.text)
+            text_content = "\n".join(text_parts)
+
             json_payload = extract_json_from_text(text_content)
             elapsed = int((time.time() - start) * 1000)
             if json_payload:
                 result = json.loads(json_payload, strict=False)
-                if result.get("confidence_score", 0) > 60:
-                    result["confidence_score"] = 60
-                print(f"   ✅ [Forensic Scan] claude-sonnet-4-5 succeeded in {elapsed}ms (knowledge-based)")
+                print(f"   ✅ [Forensic Scan] claude-sonnet-4-5 + Web Search succeeded in {elapsed}ms (grounded)")
                 return result
             else:
-                print(f"   ⚠️ [Forensic Scan] claude-sonnet-4-5 returned no parseable JSON ({elapsed}ms)")
+                # Attempt JSON repair if substantial text was returned
+                if text_content and len(text_content) > 100:
+                    print(f"   ⚠️ [Forensic Scan] claude-sonnet-4-5 returned unstructured text ({elapsed}ms, {len(text_content)} chars). Attempting JSON repair...")
+                    repaired = _repair_json_with_sonnet(text_content, company_name)
+                    if repaired:
+                        repair_elapsed = int((time.time() - start) * 1000)
+                        print(f"   ✅ [JSON Repair] Recovered structured data from Sonnet + Web Search response ({repair_elapsed}ms total)")
+                        return repaired
+                print(f"   ⚠️ [Forensic Scan] claude-sonnet-4-5 + Web Search returned no parseable JSON ({elapsed}ms)")
                 return None
         except Exception as e:
-            print(f"   ❌ [Forensic Scan] claude-sonnet-4-5 fallback failed: {e}")
+            elapsed = int((time.time() - start) * 1000)
+            print(f"   ❌ [Forensic Scan] claude-sonnet-4-5 + Web Search failed in {elapsed}ms: {e}")
             return None
 
-    # --- ATTEMPT 1: User Selected Model (UNCHANGED) ---
-    data = execute_with_model(primary_model)
+    # --- ATTEMPT 1: Sonnet 4.5 + Web Search (PRIMARY — Anthropic infra, Brave Search grounding) ---
+    # Runs on separate infrastructure from Financial Health Check (Gemini), ensuring zero contention.
+    data = execute_with_anthropic(prompt)
 
-    # --- ATTEMPT 2: Smart Upgrade (if initial model failed completely) ---
-    if not data and primary_model != "gemini-3-pro-preview":
-        print("   [Scanner 2] Primary model failed to return JSON. AUTO-UPGRADING to Gemini 3 Pro Preview...")
+    # --- ATTEMPT 2: Gemini 3 Pro Preview (Google Search grounding fallback) ---
+    # Only fires if Sonnet + Web Search failed. By this point, Financial Health Check
+    # (Gemini 2.5 Pro) is likely done, so no provider contention.
+    if not data:
+        print("   [Scanner 2] Sonnet + Web Search failed. FALLING BACK to Gemini 3 Pro Preview (Google grounding)...")
         data = execute_with_model("gemini-3-pro-preview")
-
-    # --- ATTEMPT 3: Gemini 2.5 Pro Fallback (preserves Google Search grounding) ---
-    if not data:
-        print("   [Scanner 2] Gemini 3 Pro exhausted. FALLING BACK to Gemini 2.5 Pro (grounding preserved)...")
-        data = execute_with_model("gemini-2.5-pro")
-
-    # --- ATTEMPT 4: Sonnet 4.5 Fallback (no grounding — knowledge-based only) ---
-    if not data:
-        print("   [Scanner 2] All Gemini models exhausted. FALLING BACK to Sonnet 4.5 (knowledge-based)...")
-        data = execute_with_anthropic(prompt)
 
     # --- CONFIDENCE-DRIVEN RE-SEARCH LOOP ---
     # Only triggers when initial results have low confidence AND weak coverage.
@@ -1215,8 +1278,8 @@ For any URLs, use real URLs you know from training data. Mark confidence_score l
                 if not research_prompt:
                     break
 
-                # Use the same model for re-search, with 2.5 Pro fallback
-                research_data = execute_with_model(primary_model, custom_prompt=research_prompt)
+                # Re-search uses Gemini models (targeted follow-up with Google Search grounding)
+                research_data = execute_with_model("gemini-3-pro-preview", custom_prompt=research_prompt)
                 if not research_data:
                     research_data = execute_with_model("gemini-2.5-pro", custom_prompt=research_prompt)
 

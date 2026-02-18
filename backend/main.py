@@ -226,8 +226,9 @@ def run_scan(
         scan_start = time.time()
         print(f"🚀 --- LIVE SCAN INITIATED FOR: {companyName} ---")
         
-        # Fixed model pipeline: Gemini 3 Pro (search) + Claude Opus 4.6 (synthesis)
-        search_model = "gemini-3-pro-preview"
+        # Model pipeline: Sonnet 4.5 + Web Search (forensic) | Gemini 2.5 Pro (financial) | Opus 4.6 (synthesis)
+        # Forensic fallback: Gemini 3 Pro. Synthesis fallback: Gemini 3 Pro → Gemini 2.5 Pro
+        search_model = "gemini-3-pro-preview"  # Used as forensic fallback if Sonnet fails
 
         # --- PROCESS FILES ---
         combined_text = reportText if reportText else ""
@@ -583,7 +584,8 @@ THEN — WRITE THE NARRATIVE:
 
 Output valid JSON only. Must include all four fields: summary, pitch, reality_score, intent_score."""
 
-                # --- Synthesis with fallback chain: Opus 4.6 → Gemini 2.5 Pro → Sonnet 4.5 ---
+                # --- Synthesis with fallback chain: Opus 4.6 → Gemini 3 Pro → Gemini 2.5 Pro ---
+                # Opus is the judge — it does ONE thing: synthesize. Fallbacks degrade gracefully.
                 response_text = ""
                 synth_start = time.time()
 
@@ -599,12 +601,31 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                 except Exception as opus_err:
                     print(f"   ❌ [Synthesis] Opus 4.6 failed: {opus_err}")
 
-                    # Fallback 1: Gemini 2.5 Pro
+                    # Fallback 1: Gemini 3 Pro Preview (strongest Google model)
                     gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
                     if gemini_key:
                         try:
-                            print(f"   🔄 [Synthesis] Falling back to Gemini 2.5 Pro...")
+                            print(f"   🔄 [Synthesis] Falling back to Gemini 3 Pro Preview...")
                             g_start = time.time()
+                            gemini_client = genai.Client(api_key=gemini_key)
+                            gemini_resp = gemini_client.models.generate_content(
+                                model="gemini-3-pro-preview",
+                                contents=synthesis_prompt,
+                                config=types.GenerateContentConfig(
+                                    temperature=0.7,
+                                    max_output_tokens=1024
+                                )
+                            )
+                            response_text = gemini_resp.text or ""
+                            print(f"   ✅ [Synthesis] Gemini 3 Pro Preview succeeded in {int((time.time() - g_start) * 1000)}ms")
+                        except Exception as gemini3_err:
+                            print(f"   ❌ [Synthesis] Gemini 3 Pro Preview failed: {gemini3_err}")
+
+                    # Fallback 2: Gemini 2.5 Pro
+                    if not response_text and gemini_key:
+                        try:
+                            print(f"   🔄 [Synthesis] Falling back to Gemini 2.5 Pro...")
+                            g2_start = time.time()
                             gemini_client = genai.Client(api_key=gemini_key)
                             gemini_resp = gemini_client.models.generate_content(
                                 model="gemini-2.5-pro",
@@ -615,24 +636,9 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                                 )
                             )
                             response_text = gemini_resp.text or ""
-                            print(f"   ✅ [Synthesis] Gemini 2.5 Pro succeeded in {int((time.time() - g_start) * 1000)}ms")
-                        except Exception as gemini_err:
-                            print(f"   ❌ [Synthesis] Gemini 2.5 Pro failed: {gemini_err}")
-
-                    # Fallback 2: Sonnet 4.5
-                    if not response_text and claude_client:
-                        try:
-                            print(f"   🔄 [Synthesis] Falling back to Sonnet 4.5...")
-                            s_start = time.time()
-                            fallback_resp = claude_client.messages.create(
-                                model="claude-sonnet-4-5-20250929",
-                                max_tokens=1024,
-                                messages=[{"role": "user", "content": synthesis_prompt}]
-                            )
-                            response_text = fallback_resp.content[0].text if fallback_resp.content else ""
-                            print(f"   ✅ [Synthesis] Sonnet 4.5 succeeded in {int((time.time() - s_start) * 1000)}ms")
-                        except Exception as sonnet_err:
-                            print(f"   ❌ [Synthesis] All models failed. Last error: {sonnet_err}")
+                            print(f"   ✅ [Synthesis] Gemini 2.5 Pro succeeded in {int((time.time() - g2_start) * 1000)}ms")
+                        except Exception as gemini25_err:
+                            print(f"   ❌ [Synthesis] All models failed. Last error: {gemini25_err}")
 
                 if response_text:
                     payload = extract_json_from_text(response_text)
