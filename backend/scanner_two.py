@@ -1664,9 +1664,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
         # --- DELTA VERIFICATION RE-SCAN ---
         # If score changed by more than ±25 from previous, re-run the scan once.
-        # Temporarily raised from ±15 to ±25 to accommodate model migration
-        # (old scores from Gemini vs new scores from Sonnet two-pass pipeline).
-        # TODO: Restore to ±15 after a full database refresh cycle.
+        # ±25 is the permanent threshold — matches Opus Final Judge design.
         # If re-scan confirms the change → accept as fact (genuine change).
         # If re-scan contradicts → use the more conservative (closer to previous) result.
         if previous_context and previous_context.get("previous_reality") is not None:

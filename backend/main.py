@@ -342,13 +342,14 @@ def run_scan(
         if financial_results.get("financial_index") is not None:
             print(f"   ✅ [Financial Health] Index: {financial_results['financial_index']}/100, Confidence: {financial_results['financial_confidence']}/100")
 
-        # --- SCORE DRIFT GUARD ---
-        # Prevents unrealistic score swings between rescans done within a short timeframe.
-        # Latest scan is always the baseline — it's the current "snapshot" in the index.
+        # --- SCORE DRIFT DIAGNOSTIC ---
+        # Detects large score swings between rescans for diagnostic purposes.
+        # Does NOT dampen scores — Opus is the Final Judge and its score is authoritative.
+        # When delta >= 25 within 7 days, triggers Self-Analysis to understand why.
         if previous_context and previous_context.get("previous_reality") is not None:
             prev_reality = previous_context["previous_reality"]
             new_reality = reality_results["score"]
-            max_drift = 15  # Maximum allowed score change per rescan within 7 days
+            drift_threshold = 25  # Matches the rescan trigger threshold in scanner_two
 
             try:
                 last_scanned = previous_context.get("last_scanned", "")
@@ -358,14 +359,10 @@ def run_scan(
 
             if days_since < 7 and isinstance(prev_reality, (int, float)):
                 raw_delta = new_reality - prev_reality
-                if abs(raw_delta) >= max_drift:
-                    direction = 1 if raw_delta > 0 else -1
-                    dampened = int(prev_reality + (direction * max_drift))
-                    dampened = max(0, min(100, dampened))
-                    print(f"   [Drift Guard] Score change too large for {days_since}d window: {prev_reality} → {new_reality} (delta {raw_delta}). Dampened to {dampened}.")
-                    reality_results["score"] = dampened
-                    reality_results["drift_guard_applied"] = True
-                    reality_results["raw_score_before_dampening"] = new_reality
+                if abs(raw_delta) >= drift_threshold:
+                    print(f"   ⚠️ [Drift Diagnostic] Large score change in {days_since}d window: {prev_reality} → {new_reality} (delta {raw_delta}). Opus will be final judge.")
+                    reality_results["large_drift_detected"] = True
+                    reality_results["drift_delta"] = raw_delta
 
                     # --- SELF-ANALYSIS: Why did the scanner produce different results? ---
                     print(f"   🔄 [Self-Analysis] Triggered: score delta {raw_delta} within {days_since}d.")
@@ -648,6 +645,12 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                          pitch = json_data.get("pitch", pitch) or pitch
 
                          # --- OPUS SCORE VERIFICATION ---
+                         # Opus is the Final Judge for Reality Score. It has the most
+                         # complete picture: Scanner 1 intent + Scanner 2 evidence +
+                         # its own synthesis. Its score is always authoritative.
+                         # (The 25-point delta threshold in the rescan trigger is a
+                         # separate concern — it flags companies for re-evaluation,
+                         # not score override.)
                          opus_reality = json_data.get("reality_score")
                          opus_intent = json_data.get("intent_score")
                          scanner2_reality = reality_results["score"]
@@ -656,23 +659,18 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                          if opus_reality is not None and isinstance(opus_reality, (int, float)):
                              opus_reality = max(0, min(100, int(opus_reality)))
                              delta_r = abs(opus_reality - scanner2_reality)
+                             reality_results["scanner2_reality_score"] = scanner2_reality
+                             reality_results["opus_reality_score"] = opus_reality
 
                              if delta_r <= 5:
-                                 # Agreement zone — keep Scanner 2's search-grounded score
-                                 print(f"   ✅ [Score Verify] Reality: Scanner 2 {scanner2_reality} ≈ Opus {opus_reality} (delta {delta_r}). Keeping Scanner 2 score.")
-                             elif delta_r <= 10:
-                                 # Mild disagreement — weighted average (60% Scanner 2, 40% Opus)
-                                 blended = int(scanner2_reality * 0.6 + opus_reality * 0.4)
-                                 print(f"   🔄 [Score Verify] Reality: Scanner 2 {scanner2_reality} vs Opus {opus_reality} (delta {delta_r}). Blended → {blended}")
-                                 reality_results["score"] = blended
-                                 reality_results["opus_reality_score"] = opus_reality
-                                 reality_results["score_verification"] = "blended"
+                                 # Agreement — Opus confirms Scanner 2's finding
+                                 print(f"   ✅ [Score Verify] Reality: Scanner 2 {scanner2_reality} ≈ Opus {opus_reality} (delta {delta_r}). Final score: {opus_reality}")
                              else:
-                                 # Strong disagreement — Opus has more context, use its score
-                                 print(f"   ⚠️ [Score Verify] Reality: Scanner 2 {scanner2_reality} vs Opus {opus_reality} (delta {delta_r}). Opus override → {opus_reality}")
-                                 reality_results["score"] = opus_reality
-                                 reality_results["opus_reality_score"] = opus_reality
-                                 reality_results["score_verification"] = "opus_override"
+                                 # Divergence — Opus is the final judge, log the delta for diagnostics
+                                 print(f"   ⚖️ [Score Verify] Reality: Scanner 2 {scanner2_reality} vs Opus {opus_reality} (delta {delta_r}). Opus is final judge → {opus_reality}")
+
+                             reality_results["score"] = opus_reality
+                             reality_results["score_verification"] = "opus_final_judge"
 
                              # Recalculate gap if score changed
                              if reality_results["score"] != scanner2_reality:
