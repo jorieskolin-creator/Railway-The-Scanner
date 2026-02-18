@@ -1061,6 +1061,14 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             return None
 
         active_prompt = custom_prompt if custom_prompt else prompt
+        # Prepend search budget instruction for Gemini models (no native max_uses support)
+        search_budget_prefix = (
+            "IMPORTANT SEARCH CONSTRAINT: You must complete your entire analysis using "
+            "no more than 8 web search queries total. Prioritize targeted, specific searches "
+            "over broad exploratory ones. Synthesize your findings after 6-8 searches rather "
+            "than continuing to search. Do NOT repeat similar queries.\n\n"
+        )
+        active_prompt = search_budget_prefix + active_prompt
         print(f"   🔄 [Forensic Scan] Attempting {target_model_name} for {company_name}...")
         start = time.time()
         try:
@@ -1156,6 +1164,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 return claude_client.messages.create(
                     model="claude-sonnet-4-5-20250929",
                     max_tokens=4096,
+                    temperature=0,
                     tools=[{
                         "type": "web_search_20250305",
                         "name": "web_search",
@@ -1279,93 +1288,24 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             print(f"   ❌ [Forensic Scan] claude-sonnet-4-5 + Web Search failed in {elapsed}ms: {e}")
             return None
 
-    # --- PARALLEL RACE: Sonnet + Web Search vs Gemini 3 Pro ---
-    # Both models start at t=0 on separate infrastructure (Anthropic vs Google).
-    # Best-of-two: wait for both results, pick the one with better evidence grounding.
-    # Both 150s per-call | Race ceiling ~160s | Gemini 2.5 Pro gets 50s under 200s guard.
+    # --- SEQUENTIAL FALLBACK: Sonnet 4.5 → Gemini 3 Pro → Gemini 2.5 Pro ---
+    # Sonnet 4.5 + Brave Web Search is the primary model (fast, grounded, 5-search budget).
+    # Gemini 3 Pro is the first backup if Sonnet fails or returns nothing.
+    # Gemini 2.5 Pro is the second backup as a last resort.
     data = None
-    print(f"   🏁 [Forensic Scan] Starting parallel race: Sonnet + Web Search vs Gemini 3 Pro for {company_name}...")
-    race_start = time.time()
+    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Sonnet 4.5 → Gemini 3 Pro → Gemini 2.5 Pro")
 
-    race_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
-    sonnet_future = race_pool.submit(execute_with_anthropic, prompt)
-    gemini_future = race_pool.submit(execute_with_model, "gemini-3-pro-preview", None, 150)
+    # --- PRIMARY: Sonnet 4.5 + Web Search ---
+    data = execute_with_anthropic(prompt)
 
-    # Wait for both models to finish (or timeout)
-    sonnet_result = None
-    gemini_result = None
-    try:
-        concurrent.futures.wait([sonnet_future, gemini_future], timeout=160)
-    except Exception as e:
-        print(f"   [Race] Wait error: {e}")
-
-    # Collect results
-    for future, name in [(sonnet_future, "Sonnet + Web Search"), (gemini_future, "Gemini 3 Pro")]:
-        try:
-            if future.done():
-                res = future.result(timeout=0)
-                elapsed_ms = int((time.time() - race_start) * 1000)
-                if res:
-                    print(f"   ✅ [Race] {name} finished with data ({elapsed_ms}ms)")
-                    if future is sonnet_future:
-                        sonnet_result = res
-                    else:
-                        gemini_result = res
-                else:
-                    print(f"   ⚠️ [Race] {name} returned no data ({elapsed_ms}ms)")
-            else:
-                print(f"   ⏰ [Race] {name} timed out")
-        except Exception as e:
-            print(f"   ❌ [Race] {name} raised exception: {e}")
-
-    race_pool.shutdown(wait=False)
-
-    # --- BEST-OF-TWO SELECTION ---
-    # Score each result by evidence quality, then pick the stronger one.
-    # Ranking tuple: (evidence_count, grounded_bonus, confidence)
-    #   - evidence_count: findings with found=True and a URL (most important)
-    #   - grounded_bonus: 1 if URLs come from live web search, 0 if model-generated
-    #     (model-generated URLs are often hallucinated and fail validation later)
-    #   - confidence: self-reported, used only as final tiebreaker
-    def _race_quality(result):
-        """Score a result for best-of-two comparison."""
-        findings = result.get("findings", [])
-        evidence_count = len([f for f in findings if f.get("found") and f.get("url")])
-        grounded = 1 if result.get("_web_grounded") else 0
-        confidence = result.get("confidence_score", 0)
-        return (evidence_count, grounded, confidence)
-
-    if sonnet_result and gemini_result:
-        sq = _race_quality(sonnet_result)
-        gq = _race_quality(gemini_result)
-        if sq >= gq:
-            data = sonnet_result
-            winner, loser = "Sonnet + Web Search", "Gemini 3 Pro"
-            winner_q, loser_q = sq, gq
-        else:
-            data = gemini_result
-            winner, loser = "Gemini 3 Pro", "Sonnet + Web Search"
-            winner_q, loser_q = gq, sq
-        race_elapsed = int((time.time() - race_start) * 1000)
-        w_grounded = "grounded" if winner_q[1] else "ungrounded"
-        l_grounded = "grounded" if loser_q[1] else "ungrounded"
-        print(f"   🏆 [Race] Best-of-two → {winner} ({winner_q[0]} evidence, {w_grounded}, confidence {winner_q[2]}) "
-              f"over {loser} ({loser_q[0]} evidence, {l_grounded}, confidence {loser_q[2]}) in {race_elapsed}ms")
-    elif sonnet_result:
-        data = sonnet_result
-        race_elapsed = int((time.time() - race_start) * 1000)
-        print(f"   🏆 [Race] Only Sonnet + Web Search returned data ({race_elapsed}ms)")
-    elif gemini_result:
-        data = gemini_result
-        race_elapsed = int((time.time() - race_start) * 1000)
-        print(f"   🏆 [Race] Only Gemini 3 Pro returned data ({race_elapsed}ms)")
-
-    race_elapsed = int((time.time() - race_start) * 1000)
+    # --- BACKUP 1: Gemini 3 Pro (only if Sonnet failed) ---
     if not data:
-        print(f"   ❌ [Race] Both models failed ({race_elapsed}ms). Falling back to Gemini 2.5 Pro...")
+        print(f"   ⚠️ [Forensic Scan] Sonnet 4.5 returned no data. Falling back to Gemini 3 Pro...")
+        data = execute_with_model("gemini-3-pro-preview", None, 150)
 
-    # --- FALLBACK: Gemini 2.5 Pro (sequential, only if race produced nothing) ---
+    # --- BACKUP 2: Gemini 2.5 Pro (only if Gemini 3 Pro also failed) ---
     if not data:
+        print(f"   ⚠️ [Forensic Scan] Gemini 3 Pro returned no data. Falling back to Gemini 2.5 Pro...")
         data = execute_with_model("gemini-2.5-pro")
 
     # --- CONFIDENCE-DRIVEN RE-SEARCH LOOP ---
