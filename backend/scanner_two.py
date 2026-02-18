@@ -835,6 +835,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
               Set to 0 to disable re-search entirely.
     """
 
+    _fn_start = time.time()  # Track total function elapsed time for guards
+
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
     # Default to the chosen model, or fallback to the reliable 3-pro
     primary_model = model_id or "gemini-3-pro-preview"
@@ -1031,25 +1033,47 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
     def execute_with_model(target_model_name, custom_prompt=None):
         """Execute a search with the given model. Uses main prompt by default, or a custom one for re-search."""
+        # Elapsed time guard — skip if function has been running too long
+        elapsed_total = time.time() - _fn_start
+        if elapsed_total > 150:
+            print(f"   ⏰ [Forensic Scan] Skipping {target_model_name} — elapsed {int(elapsed_total)}s exceeds 150s guard")
+            return None
+
         active_prompt = custom_prompt if custom_prompt else prompt
         print(f"   🔄 [Forensic Scan] Attempting {target_model_name} for {company_name}...")
         start = time.time()
         try:
             client = genai.Client(api_key=api_key)
-            response = client.models.generate_content(
-                model=target_model_name,
-                contents=active_prompt,
-                config={
-                    'tools': [{'google_search': {}}],
-                    'temperature': 0.0,
-                    'safety_settings': [
-                        {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
-                        {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
-                        {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
-                        {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
-                    ]
-                }
-            )
+
+            # Enforce 60s per-call timeout via thread pool.
+            # Google GenAI SDK's built-in HttpOptions timeout is unreliable
+            # (SDK passes timeout=None internally, overriding client-level timeout).
+            def _call_gemini():
+                return client.models.generate_content(
+                    model=target_model_name,
+                    contents=active_prompt,
+                    config={
+                        'tools': [{'google_search': {}}],
+                        'temperature': 0.0,
+                        'safety_settings': [
+                            {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
+                            {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
+                            {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
+                            {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
+                        ]
+                    }
+                )
+
+            call_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            future = call_pool.submit(_call_gemini)
+            try:
+                response = future.result(timeout=60)
+            except concurrent.futures.TimeoutError:
+                call_pool.shutdown(wait=False)
+                elapsed = int((time.time() - start) * 1000)
+                print(f"   ⏰ [Forensic Scan] {target_model_name} timed out after 60s ({elapsed}ms). Skipping to next model.")
+                return None
+            call_pool.shutdown(wait=False)
 
             text_content = response.text if response.text else ""
             json_payload = extract_json_from_text(text_content)
@@ -1087,6 +1111,12 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
     def execute_with_anthropic(active_prompt):
         """Fallback: Use Sonnet 4.5 when Gemini is rate-limited or unavailable."""
+        # Elapsed time guard
+        elapsed_total = time.time() - _fn_start
+        if elapsed_total > 150:
+            print(f"   ⏰ [Forensic Scan] Skipping Sonnet fallback — elapsed {int(elapsed_total)}s exceeds 150s guard")
+            return None
+
         anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
         if "=" in anthropic_key:
             try: anthropic_key = anthropic_key.split("=", 1)[1]
@@ -1164,6 +1194,12 @@ For any URLs, use real URLs you know from training data. Mark confidence_score l
             current_confidence = initial_confidence
 
             for loop in range(1, max_research_loops + 1):
+                # Elapsed time guard — return what we have rather than risk timeout
+                elapsed_total = time.time() - _fn_start
+                if elapsed_total > 150:
+                    print(f"   ⏰ [Re-Search] Skipping loop {loop} — elapsed {int(elapsed_total)}s exceeds 150s guard. Returning current results.")
+                    break
+
                 weak_juries = _identify_weak_juries(all_findings)
 
                 if not weak_juries:
@@ -1343,28 +1379,33 @@ For any URLs, use real URLs you know from training data. Mark confidence_score l
             delta = final_score - prev_reality
 
             if abs(delta) >= 15:
-                print(f"   [Delta Verification] Large score change detected: {prev_reality} → {final_score} (delta {delta}). Running verification re-scan...")
-                verify_data = execute_with_model(primary_model)
-                if not verify_data:
-                    verify_data = execute_with_model("gemini-2.5-pro")
-
-                if verify_data:
-                    verify_adjustment = verify_data.get("reality_score_adjustment", 0)
-                    verify_score = max(0, min(100, base_score + verify_adjustment))
-                    verify_delta = verify_score - prev_reality
-
-                    if abs(verify_delta) >= 15 and (delta > 0) == (verify_delta > 0):
-                        # Both scans agree on direction and magnitude — accept as genuine change
-                        # Use average of both for stability
-                        final_score = int((final_score + verify_score) / 2)
-                        print(f"   [Delta Verification] CONFIRMED: Re-scan also shows large delta ({verify_delta}). Accepted as genuine change. Final: {final_score}")
-                    else:
-                        # Re-scan disagrees — use the score closer to previous (more conservative)
-                        if abs(verify_score - prev_reality) < abs(final_score - prev_reality):
-                            final_score = verify_score
-                        print(f"   [Delta Verification] NOT CONFIRMED: Re-scan score {verify_score} (delta {verify_delta}). Using conservative: {final_score}")
+                # Elapsed time guard — skip verification if running out of time
+                elapsed_total = time.time() - _fn_start
+                if elapsed_total > 150:
+                    print(f"   ⏰ [Delta Verification] Skipping — elapsed {int(elapsed_total)}s exceeds 150s guard. Keeping score {final_score}.")
                 else:
-                    print(f"   [Delta Verification] Re-scan failed. Keeping original score {final_score}.")
+                    print(f"   [Delta Verification] Large score change detected: {prev_reality} → {final_score} (delta {delta}). Running verification re-scan...")
+                    verify_data = execute_with_model(primary_model)
+                    if not verify_data:
+                        verify_data = execute_with_model("gemini-2.5-pro")
+
+                    if verify_data:
+                        verify_adjustment = verify_data.get("reality_score_adjustment", 0)
+                        verify_score = max(0, min(100, base_score + verify_adjustment))
+                        verify_delta = verify_score - prev_reality
+
+                        if abs(verify_delta) >= 15 and (delta > 0) == (verify_delta > 0):
+                            # Both scans agree on direction and magnitude — accept as genuine change
+                            # Use average of both for stability
+                            final_score = int((final_score + verify_score) / 2)
+                            print(f"   [Delta Verification] CONFIRMED: Re-scan also shows large delta ({verify_delta}). Accepted as genuine change. Final: {final_score}")
+                        else:
+                            # Re-scan disagrees — use the score closer to previous (more conservative)
+                            if abs(verify_score - prev_reality) < abs(final_score - prev_reality):
+                                final_score = verify_score
+                            print(f"   [Delta Verification] NOT CONFIRMED: Re-scan score {verify_score} (delta {verify_delta}). Using conservative: {final_score}")
+                    else:
+                        print(f"   [Delta Verification] Re-scan failed. Keeping original score {final_score}.")
 
         # Determine Washing based on AI flag OR raw gap if flag is missing
         washing_flag = data.get("washing_flag", False)
@@ -1384,7 +1425,7 @@ For any URLs, use real URLs you know from training data. Mark confidence_score l
         url_total = url_verified + url_dead
         dead_ratio = url_dead / url_total if url_total > 0 else 0
 
-        if dead_ratio > 0.20 and url_dead >= 2:
+        if dead_ratio > 0.20 and url_dead >= 2 and (time.time() - _fn_start) <= 150:
             # Identify categories where evidence URLs failed
             dead_categories = set()
             for item in raw_findings:
