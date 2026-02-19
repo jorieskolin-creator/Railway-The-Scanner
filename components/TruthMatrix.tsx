@@ -1,75 +1,57 @@
 
 const { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Label, ReferenceLine } = (window as any).Recharts;
+const { useState, useMemo, useCallback, useEffect, useRef } = (window as any).React;
 
 const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] }) => {
   if (active && payload && payload.length) {
-    const data = payload[0].payload; 
-    const companies = data.companies || [data]; 
-    
-    // Check if any in this group is a reference (though usually refs should be unique points)
+    const data = payload[0].payload;
+    const companies = data.companies || [data];
     const isRef = companies.some(c => c.isReference);
-    
-    // Use coordinates from the first company
+
+    // Quadrant from first company's coordinates
     const financial = data.financial_index ?? data.intent_score ?? 0;
     const reality = data.reality_score;
-    const gap = financial - reality;
 
-    // Quadrant Classification (X=Financial Health, Y=Reality)
     let gapLabel = "At Risk";
     let gapColor = "text-slate-400";
-
     if (reality >= 50) {
-        if (financial >= 50) {
-            gapLabel = "Thriving";
-            gapColor = "text-emerald-400";
-        } else {
-            gapLabel = "Modernizing";
-            gapColor = "text-cyan-400";
-        }
+        gapLabel = financial >= 50 ? "Thriving" : "Modernizing";
+        gapColor = financial >= 50 ? "text-emerald-400" : "text-cyan-400";
     } else {
-        if (financial >= 50) {
-            gapLabel = "Cash Cow";
-            gapColor = "text-amber-400";
-        } else {
-            gapLabel = "At Risk";
-            gapColor = "text-rose-400";
-        }
+        gapLabel = financial >= 50 ? "Cash Cow" : "At Risk";
+        gapColor = financial >= 50 ? "text-amber-400" : "text-rose-400";
     }
-
-    if (isRef) {
-        gapLabel = "GLOBAL REFERENCE";
-        gapColor = "text-green-400";
-    }
+    if (isRef) { gapLabel = "GLOBAL REFERENCE"; gapColor = "text-green-400"; }
 
     const DISPLAY_LIMIT = 12;
 
     return (
-      <div 
-        className={`backdrop-blur-md border p-4 rounded-xl shadow-2xl text-xs text-white min-w-[220px] max-w-[300px] z-50 animate-in fade-in zoom-in-95 duration-200 ${isRef ? 'bg-green-950/90 border-green-500/50' : 'bg-[#020617]/95 border-slate-700/50'}`}
+      <div
+        className={`backdrop-blur-md border p-4 rounded-xl shadow-2xl text-xs text-white min-w-[240px] max-w-[320px] z-50 animate-in fade-in zoom-in-95 duration-200 ${isRef ? 'bg-green-950/90 border-green-500/50' : 'bg-[#020617]/95 border-slate-700/50'}`}
       >
         <div className="border-b border-white/10 pb-2 mb-2">
             <span className={`text-[10px] font-mono uppercase block mb-1 ${isRef ? 'text-green-300' : 'text-slate-500'}`}>
-                {companies.length > 1 ? `${companies.length} Entities at this position` : "Entity"}
+                {companies.length > 1 ? `${companies.length} Entities — click dot to select` : "Entity — click to open"}
             </span>
-            <ul className="space-y-1">
-                {companies.slice(0, DISPLAY_LIMIT).map((c: any, i: number) => (
-                    <li key={i} className="font-bold text-xs text-white truncate border-b border-white/5 last:border-0 pb-1 mb-1 last:mb-0 last:pb-0 flex items-center gap-2">
-                        {c.companyName}
-                        {c.isReference && <span className="text-[9px] bg-green-500/30 text-green-200 px-1 rounded uppercase">(Reference)</span>}
-                    </li>
-                ))}
-            </ul>
+            {companies.slice(0, DISPLAY_LIMIT).map((c: any, i: number) => {
+                const cFin = c.financial_index ?? c.intent_score ?? 0;
+                return (
+                    <div key={i} className="flex items-center justify-between gap-2 py-1 border-b border-white/5 last:border-0">
+                        <span className="font-bold text-xs text-white truncate max-w-[140px] flex items-center gap-1">
+                            {c.companyName}
+                            {c.isReference && <span className="text-[8px] bg-green-500/30 text-green-200 px-1 rounded uppercase">(Ref)</span>}
+                        </span>
+                        <div className="flex gap-2 text-[10px] font-mono shrink-0">
+                            <span className="text-cyan-300" title="Reality Score">R:{c.reality_score ?? '—'}</span>
+                            <span className="text-emerald-300" title="Financial Health">{c.financial_index != null ? `F:${c.financial_index}` : 'F:—'}</span>
+                        </div>
+                    </div>
+                );
+            })}
         </div>
 
-        <div className="grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[10px] uppercase tracking-wider">
-            <span className="text-slate-500">Integrity Delta</span>
-            <span className={`text-right font-bold ${gap > 0 ? 'text-emerald-400' : gap < 0 ? 'text-rose-400' : 'text-slate-400'}`}>
-                {gap > 0 ? '+' : ''}{gap}
-            </span>
-            
-            <div className={`col-span-2 text-center mt-2 py-1.5 rounded bg-white/5 ${gapColor} font-bold border border-white/5`}>
-                {gapLabel}
-            </div>
+        <div className={`text-center py-1.5 rounded bg-white/5 ${gapColor} font-bold border border-white/5 font-mono text-[10px] uppercase tracking-wider`}>
+            {gapLabel}
         </div>
       </div>
     );
@@ -161,10 +143,25 @@ const renderCustomDot = (props: any) => {
 };
 
 const TruthMatrix = ({ data, onSelectCompany }) => {
-  
-  const groupedData = (window as any).React.useMemo(() => {
+  const [popover, setPopover] = useState<{ companies: any[], x: number, y: number } | null>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Close popover on click outside
+  useEffect(() => {
+      if (!popover) return;
+      const handleClick = (e: MouseEvent) => {
+          if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+              setPopover(null);
+          }
+      };
+      document.addEventListener('mousedown', handleClick);
+      return () => document.removeEventListener('mousedown', handleClick);
+  }, [popover]);
+
+  const groupedData = useMemo(() => {
       const groups: { [key: string]: any } = {};
-      
+
       data.forEach((item: any) => {
           const fi = item.financial_index ?? item.intent_score;
           const displayItem = { ...item, financial_index: fi };
@@ -181,9 +178,58 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
       return Object.values(groups);
   }, [data]);
 
+  const handleDotClick = useCallback((node: any, e?: any) => {
+      const companies = node.payload?.companies || [node.payload];
+      if (companies.length === 1) {
+          // Single company — open directly
+          onSelectCompany(companies[0]);
+          setPopover(null);
+      } else {
+          // Multiple companies — show popover for selection
+          const rect = containerRef.current?.getBoundingClientRect();
+          const mouseX = e?.clientX ?? 0;
+          const mouseY = e?.clientY ?? 0;
+          const relX = rect ? mouseX - rect.left : 200;
+          const relY = rect ? mouseY - rect.top : 200;
+          setPopover({ companies, x: relX, y: relY });
+      }
+  }, [onSelectCompany]);
+
   return (
-    <div className="w-full h-[400px] relative overflow-hidden bg-[#0f172a]/40 rounded-xl border border-white/5 group">
+    <div ref={containerRef} className="w-full h-[400px] relative overflow-hidden bg-[#0f172a]/40 rounded-xl border border-white/5 group">
       <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.02)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.02)_1px,transparent_1px)] bg-[size:20px_20px] [mask-image:radial-gradient(ellipse_60%_60%_at_50%_50%,black,transparent)] pointer-events-none"></div>
+
+      {/* Click-to-select popover for clustered dots */}
+      {popover && (
+          <div
+              ref={popoverRef}
+              className="absolute z-50 backdrop-blur-md bg-[#020617]/95 border border-slate-700/50 rounded-xl shadow-2xl p-3 min-w-[260px] max-w-[340px] animate-in fade-in zoom-in-95 duration-200"
+              style={{
+                  left: Math.min(popover.x, (containerRef.current?.clientWidth || 400) - 280),
+                  top: Math.min(popover.y - 10, (containerRef.current?.clientHeight || 400) - 200),
+              }}
+          >
+              <div className="text-[10px] font-mono text-slate-500 uppercase mb-2">
+                  {popover.companies.length} Entities — select one
+              </div>
+              {popover.companies.map((c: any, i: number) => (
+                  <button
+                      key={i}
+                      onClick={() => { onSelectCompany(c); setPopover(null); }}
+                      className="w-full flex items-center justify-between gap-2 py-1.5 px-2 rounded-md hover:bg-white/10 transition-colors text-left border-b border-white/5 last:border-0"
+                  >
+                      <span className="font-bold text-xs text-white truncate max-w-[150px] flex items-center gap-1">
+                          {c.companyName}
+                          {c.isReference && <span className="text-[8px] bg-green-500/30 text-green-200 px-1 rounded uppercase">(Ref)</span>}
+                      </span>
+                      <div className="flex gap-2 text-[10px] font-mono shrink-0">
+                          <span className="text-cyan-300">R:{c.reality_score ?? '—'}</span>
+                          <span className="text-emerald-300">{c.financial_index != null ? `F:${c.financial_index}` : 'F:—'}</span>
+                      </div>
+                  </button>
+              ))}
+          </div>
+      )}
 
       <ResponsiveContainer width="100%" height="100%">
         <ScatterChart margin={{ top: 20, right: 20, bottom: 40, left: 0 }}>
@@ -211,7 +257,7 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
           </defs>
 
           <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.2} />
-          
+
           <XAxis
             type="number"
             dataKey="financial_index"
@@ -223,26 +269,26 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
             tick={{ fontSize: 10, fill: '#64748b' }}
             label={{ value: 'FINANCIAL HEALTH INDEX', position: 'bottom', fill: '#475569', fontSize: 10, dy: 20, letterSpacing: '0.1em' }}
           />
-          <YAxis 
-            type="number" 
-            dataKey="reality_score" 
-            name="Reality" 
-            domain={[0, 100]} 
+          <YAxis
+            type="number"
+            dataKey="reality_score"
+            name="Reality"
+            domain={[0, 100]}
             stroke="#475569"
             tickLine={false}
             axisLine={{ stroke: '#334155', opacity: 0.5 }}
             tick={{ fontSize: 10, fill: '#64748b' }}
             label={{ value: 'OPERATIONAL REALITY (Evidence)', angle: -90, position: 'left', fill: '#475569', fontSize: 10, dx: -20, letterSpacing: '0.1em' }}
           />
-          
-          <Tooltip 
-            content={<CustomTooltip />} 
+
+          <Tooltip
+            content={<CustomTooltip />}
             cursor={{ strokeDasharray: '3 3', stroke: '#cbd5e1' }}
             isAnimationActive={false}
             offset={25}
             wrapperStyle={{ pointerEvents: 'none', zIndex: 100 }}
           />
-          
+
           <ReferenceArea x1={0} x2={100} y1={50} y2={100} fill="url(#greenZone)" stroke="none" />
           <ReferenceArea x1={0} x2={100} y1={0} y2={50} fill="url(#redZone)" stroke="none" />
           <ReferenceArea x1={50} x2={100} y1={50} y2={100} fill="url(#sweetSpot)" stroke="none" />
@@ -263,15 +309,11 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
              <Label value="AT RISK" position="insideBottomLeft" fill="#fb7185" fontSize={10} fontWeight={900} opacity={0.8} letterSpacing="0.05em" />
           </ReferenceArea>
 
-          <Scatter 
-            name="Companies" 
-            data={groupedData} 
+          <Scatter
+            name="Companies"
+            data={groupedData}
             shape={renderCustomDot}
-            onClick={(node) => {
-                if (node.payload.companies && node.payload.companies.length > 0) {
-                    onSelectCompany(node.payload.companies[0]);
-                }
-            }} 
+            onClick={(node, _idx, e) => handleDotClick(node, e)}
             cursor="pointer"
           />
         </ScatterChart>
