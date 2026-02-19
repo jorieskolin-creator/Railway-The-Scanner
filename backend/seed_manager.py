@@ -295,8 +295,9 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as sub_executor:
                 reality_future = sub_executor.submit(
                     x_ray_search, company_name, company["url"],
-                    model_id="gemini-3-pro-preview", previous_context=previous_context,
-                    max_research_loops=1, subsidiaries=company.get("subsidiaries")
+                    model_id="gemini-3-pro-preview", intent_score=intent_results["score"],
+                    previous_context=previous_context, max_research_loops=2,
+                    subsidiaries=company.get("subsidiaries")
                 )
                 financial_future = sub_executor.submit(
                     financial_health_search, company_name, company["url"]
@@ -342,11 +343,14 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
             if financial_results.get("financial_index") is not None:
                 print(f"   [{company_name}] Financial Index: {financial_results['financial_index']}/100")
 
-            # --- SCORE DRIFT GUARD ---
+            # --- SCORE DRIFT DIAGNOSTIC ---
+            # Detects large score swings between rescans for diagnostic purposes.
+            # Does NOT dampen scores — Opus is the Final Judge and its score is authoritative.
+            # When delta >= 25 within 7 days, triggers Self-Analysis to understand why.
             if previous_context and previous_context.get("previous_reality") is not None:
                 prev_reality = previous_context["previous_reality"]
                 new_reality = reality_results["score"]
-                max_drift = 15
+                drift_threshold = 25  # Matches live scan threshold
 
                 try:
                     last_scanned = previous_context.get("last_scanned", "")
@@ -356,16 +360,13 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
 
                 if days_since < 7 and isinstance(prev_reality, (int, float)):
                     raw_delta = new_reality - prev_reality
-                    if abs(raw_delta) >= max_drift:
-                        direction = 1 if raw_delta > 0 else -1
-                        dampened = int(prev_reality + (direction * max_drift))
-                        dampened = max(0, min(100, dampened))
-                        print(f"   [{company_name}] [Drift Guard] {prev_reality} → {new_reality} (delta {raw_delta}) dampened to {dampened} ({days_since}d).")
-                        reality_results["score"] = dampened
-                        reality_results["drift_guard_applied"] = True
-                        reality_results["raw_score_before_dampening"] = new_reality
+                    if abs(raw_delta) >= drift_threshold:
+                        print(f"   [{company_name}] ⚠️ [Drift Diagnostic] Large score change in {days_since}d window: {prev_reality} → {new_reality} (delta {raw_delta}). Opus will be final judge.")
+                        reality_results["large_drift_detected"] = True
+                        reality_results["drift_delta"] = raw_delta
 
-                        print(f"   [{company_name}] [Self-Analysis] Triggered: score delta {raw_delta} within {days_since}d.")
+                        print(f"   [{company_name}] 🔄 [Self-Analysis] Triggered: score delta {raw_delta} within {days_since}d.")
+                        sa_start = time.time()
                         self_analysis = run_self_analysis(
                             company_name=company_name,
                             previous_scan_data=previous_context,
@@ -374,6 +375,9 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
                         )
                         if self_analysis:
                             reality_results["self_analysis"] = self_analysis
+                            print(f"   [{company_name}] ✅ [Self-Analysis] Complete in {int((time.time() - sa_start) * 1000)}ms → Cause: {self_analysis.get('primary_cause', '?')}")
+                        else:
+                            print(f"   [{company_name}] ⚠️ [Self-Analysis] No result ({int((time.time() - sa_start) * 1000)}ms)")
 
             gap = intent_results["score"] - reality_results["score"]
             confidence = reality_results.get("confidence_score", 50)
@@ -563,12 +567,31 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                     except Exception as opus_err:
                         print(f"   [{company_name}] ❌ [Synthesis] Opus 4.6 failed: {opus_err}")
 
-                        # Fallback 1: Gemini 2.5 Pro
+                        # Fallback 1: Gemini 3 Pro Preview (strongest Google model)
                         gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
                         if gemini_key:
                             try:
-                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Gemini 2.5 Pro...")
+                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Gemini 3 Pro Preview...")
                                 g_start = time.time()
+                                gemini_client = genai.Client(api_key=gemini_key)
+                                gemini_resp = gemini_client.models.generate_content(
+                                    model="gemini-3-pro-preview",
+                                    contents=synthesis_prompt,
+                                    config=types.GenerateContentConfig(
+                                        temperature=0.7,
+                                        max_output_tokens=1024
+                                    )
+                                )
+                                response_text = gemini_resp.text or ""
+                                print(f"   [{company_name}] ✅ [Synthesis] Gemini 3 Pro Preview succeeded in {int((time.time() - g_start) * 1000)}ms")
+                            except Exception as gemini3_err:
+                                print(f"   [{company_name}] ❌ [Synthesis] Gemini 3 Pro Preview failed: {gemini3_err}")
+
+                        # Fallback 2: Gemini 2.5 Pro
+                        if not response_text and gemini_key:
+                            try:
+                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Gemini 2.5 Pro...")
+                                g2_start = time.time()
                                 gemini_client = genai.Client(api_key=gemini_key)
                                 gemini_resp = gemini_client.models.generate_content(
                                     model="gemini-2.5-pro",
@@ -579,24 +602,9 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                                     )
                                 )
                                 response_text = gemini_resp.text or ""
-                                print(f"   [{company_name}] ✅ [Synthesis] Gemini 2.5 Pro succeeded in {int((time.time() - g_start) * 1000)}ms")
-                            except Exception as gemini_err:
-                                print(f"   [{company_name}] ❌ [Synthesis] Gemini 2.5 Pro failed: {gemini_err}")
-
-                        # Fallback 2: Sonnet 4.6
-                        if not response_text:
-                            try:
-                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Sonnet 4.6...")
-                                s_start = time.time()
-                                fallback_resp = claude_client.messages.create(
-                                    model="claude-sonnet-4-6",
-                                    max_tokens=1024,
-                                    messages=[{"role": "user", "content": synthesis_prompt}]
-                                )
-                                response_text = fallback_resp.content[0].text if fallback_resp.content else ""
-                                print(f"   [{company_name}] ✅ [Synthesis] Sonnet 4.6 succeeded in {int((time.time() - s_start) * 1000)}ms")
-                            except Exception as sonnet_err:
-                                print(f"   [{company_name}] ❌ [Synthesis] All models failed. Last error: {sonnet_err}")
+                                print(f"   [{company_name}] ✅ [Synthesis] Gemini 2.5 Pro succeeded in {int((time.time() - g2_start) * 1000)}ms")
+                            except Exception as gemini25_err:
+                                print(f"   [{company_name}] ❌ [Synthesis] All models failed. Last error: {gemini25_err}")
                     if response_text:
                         payload = extract_json_from_text(response_text)
                         if payload:
@@ -613,16 +621,16 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                              if opus_reality is not None and isinstance(opus_reality, (int, float)):
                                  opus_reality = max(0, min(100, int(opus_reality)))
                                  delta_r = abs(opus_reality - scanner2_reality)
+                                 reality_results["scanner2_reality_score"] = scanner2_reality
+                                 reality_results["opus_reality_score"] = opus_reality
 
                                  if delta_r <= 5:
-                                     print(f"   [{company_name}] ✅ [Score Verify] Reality: Scanner 2 {scanner2_reality} ≈ Opus {opus_reality} (delta {delta_r}). Keeping Scanner 2 score.")
-                                 elif delta_r <= 10:
-                                     blended = int(scanner2_reality * 0.6 + opus_reality * 0.4)
-                                     print(f"   [{company_name}] 🔄 [Score Verify] Reality: Scanner 2 {scanner2_reality} vs Opus {opus_reality} (delta {delta_r}). Blended → {blended}")
-                                     reality_results["score"] = blended
+                                     print(f"   [{company_name}] ✅ [Score Verify] Reality: Scanner 2 {scanner2_reality} ≈ Opus {opus_reality} (delta {delta_r}). Final score: {opus_reality}")
                                  else:
-                                     print(f"   [{company_name}] ⚠️ [Score Verify] Reality: Scanner 2 {scanner2_reality} vs Opus {opus_reality} (delta {delta_r}). Opus override → {opus_reality}")
-                                     reality_results["score"] = opus_reality
+                                     print(f"   [{company_name}] ⚖️ [Score Verify] Reality: Scanner 2 {scanner2_reality} vs Opus {opus_reality} (delta {delta_r}). Opus is final judge → {opus_reality}")
+
+                                 reality_results["score"] = opus_reality
+                                 reality_results["score_verification"] = "opus_final_judge"
 
                                  if reality_results["score"] != scanner2_reality:
                                      gap = intent_results["score"] - reality_results["score"]
