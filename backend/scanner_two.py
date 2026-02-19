@@ -1177,10 +1177,10 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     def execute_with_model(target_model_name, custom_prompt=None, call_timeout=150):
         """Execute a search with the given model. Uses main prompt by default, or a custom one for re-search."""
         # Elapsed time guard — skip if function has been running too long
-        # 300s allows Gemini fallback even when Sonnet+repair takes 100-150s
+        # 330s leaves ~20s buffer within main.py's 350s outer timeout for URL validation + response
         elapsed_total = time.time() - _fn_start
-        if elapsed_total > 300:
-            print(f"   ⏰ [Forensic Scan] Skipping {target_model_name} — elapsed {int(elapsed_total)}s exceeds 300s guard")
+        if elapsed_total > 330:
+            print(f"   ⏰ [Forensic Scan] Skipping {target_model_name} — elapsed {int(elapsed_total)}s exceeds 330s guard")
             return None
 
         active_prompt = custom_prompt if custom_prompt else prompt
@@ -1281,10 +1281,10 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
         Fast path: If Pass 1 happens to return valid JSON, Pass 2 is skipped.
         """
-        # Elapsed time guard — leave ~70s buffer for URL validation + response
+        # Elapsed time guard — leave ~50s buffer for URL validation + response
         elapsed_total = time.time() - _fn_start
-        if elapsed_total > 280:
-            print(f"   ⏰ [Forensic Scan] Skipping Sonnet + Web Search — elapsed {int(elapsed_total)}s exceeds 280s guard")
+        if elapsed_total > 300:
+            print(f"   ⏰ [Forensic Scan] Skipping Sonnet + Web Search — elapsed {int(elapsed_total)}s exceeds 300s guard")
             return None
 
         anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -1317,7 +1317,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 active_prompt
             )
 
-            # Enforce 150s per-call timeout via thread pool (Sonnet + web search typically 30-90s)
+            # Enforce 180s per-call timeout via thread pool (Sonnet + web search typically 30-90s, up to 150s with rescans)
             def _call_sonnet_web():
                 return claude_client.messages.create(
                     model="claude-sonnet-4-6",
@@ -1334,11 +1334,11 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             call_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             future = call_pool.submit(_call_sonnet_web)
             try:
-                response = future.result(timeout=150)
+                response = future.result(timeout=180)
             except concurrent.futures.TimeoutError:
                 call_pool.shutdown(wait=False)
                 elapsed = int((time.time() - start) * 1000)
-                print(f"   ⏰ [Forensic Scan] claude-sonnet-4-6 + Web Search timed out after 150s ({elapsed}ms). Skipping to next model.")
+                print(f"   ⏰ [Forensic Scan] claude-sonnet-4-6 + Web Search timed out after 180s ({elapsed}ms). Skipping to next model.")
                 return None
             call_pool.shutdown(wait=False)
 
@@ -1463,7 +1463,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     # --- BACKUP 2: Gemini 2.5 Pro (only if Gemini 3 Pro also failed) ---
     if not data:
         print(f"   ⚠️ [Forensic Scan] Gemini 3 Pro returned no data. Falling back to Gemini 2.5 Pro...")
-        data = execute_with_model("gemini-2.5-pro")
+        data = execute_with_model("gemini-2.5-pro", call_timeout=120)
 
     # --- CONFIDENCE-DRIVEN RE-SEARCH LOOP ---
     # Only triggers when initial results have low confidence AND weak coverage.
@@ -1488,8 +1488,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             for loop in range(1, max_research_loops + 1):
                 # Elapsed time guard — return what we have rather than risk timeout
                 elapsed_total = time.time() - _fn_start
-                if elapsed_total > 280:
-                    print(f"   ⏰ [Re-Search] Skipping loop {loop} — elapsed {int(elapsed_total)}s exceeds 280s guard. Returning current results.")
+                if elapsed_total > 300:
+                    print(f"   ⏰ [Re-Search] Skipping loop {loop} — elapsed {int(elapsed_total)}s exceeds 300s guard. Returning current results.")
                     break
 
                 weak_juries = _identify_weak_juries(all_findings)
