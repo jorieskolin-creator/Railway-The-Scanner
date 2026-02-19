@@ -464,17 +464,17 @@ const App = () => {
           {domainStats && data.length > 0 && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-2">
               <div className="bg-[#0f172a]/70 border border-white/10 rounded-xl p-4">
-                <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono mb-2">Avg Ambition</div>
-                <div className="text-2xl font-bold text-indigo-300">{domainStats.avgIntent}</div>
-                <div className="w-full h-1.5 bg-slate-800 rounded-full mt-2 overflow-hidden">
-                  <div className="h-full bg-indigo-500 rounded-full transition-all" style={{ width: `${domainStats.avgIntent}%` }}></div>
-                </div>
-              </div>
-              <div className="bg-[#0f172a]/70 border border-white/10 rounded-xl p-4">
                 <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono mb-2">Avg Reality</div>
                 <div className="text-2xl font-bold text-cyan-300">{domainStats.avgReality}</div>
                 <div className="w-full h-1.5 bg-slate-800 rounded-full mt-2 overflow-hidden">
                   <div className="h-full bg-cyan-500 rounded-full transition-all" style={{ width: `${domainStats.avgReality}%` }}></div>
+                </div>
+              </div>
+              <div className="bg-[#0f172a]/70 border border-white/10 rounded-xl p-4">
+                <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono mb-2">Avg Financial</div>
+                <div className="text-2xl font-bold text-emerald-300">{domainStats.avgFinancial ?? '—'}</div>
+                <div className="w-full h-1.5 bg-slate-800 rounded-full mt-2 overflow-hidden">
+                  <div className="h-full bg-emerald-500 rounded-full transition-all" style={{ width: `${domainStats.avgFinancial ?? 0}%` }}></div>
                 </div>
               </div>
               <div className="bg-[#0f172a]/70 border border-white/10 rounded-xl p-4">

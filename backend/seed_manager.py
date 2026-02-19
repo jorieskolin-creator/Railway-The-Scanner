@@ -301,12 +301,42 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
                 financial_future = sub_executor.submit(
                     financial_health_search, company_name, company["url"]
                 )
-                reality_results = reality_future.result()
+                try:
+                    reality_results = reality_future.result(timeout=350)
+                except Exception as e:
+                    print(f"   [{company_name}] ❌ Reality search failed: {e}")
+                    if existing_company_data and existing_company_data.get("reality_score") is not None:
+                        print(f"   [{company_name}] 🔄 Reusing previous reality data (score: {existing_company_data['reality_score']})")
+                        reality_results = {
+                            "score": existing_company_data["reality_score"],
+                            "checklist": existing_company_data.get("reality_checklist", []),
+                            "links": existing_company_data.get("evidence_links", []),
+                            "key_people": existing_company_data.get("key_people", []),
+                            "is_simulated": False,
+                            "confidence_score": existing_company_data.get("confidence_score", 0),
+                            "washing_flag": existing_company_data.get("washing_flag", False),
+                            "washing_type": existing_company_data.get("washing_type"),
+                            "reused_from_previous": True,
+                        }
+                    else:
+                        reality_results = {"score": 50, "checklist": [], "links": [], "key_people": [], "is_simulated": True, "confidence_score": 0, "washing_flag": False}
+
                 try:
                     financial_results = financial_future.result(timeout=120)
                 except Exception as e:
                     print(f"   [{company_name}] Financial Health failed (non-critical): {e}")
-                    financial_results = {"financial_index": None, "sub_scores": {}, "financial_findings": [], "financial_confidence": 0, "is_simulated": True}
+                    if existing_company_data and existing_company_data.get("financial_index") is not None:
+                        print(f"   [{company_name}] 🔄 Reusing previous financial data (index: {existing_company_data['financial_index']})")
+                        financial_results = {
+                            "financial_index": existing_company_data["financial_index"],
+                            "sub_scores": existing_company_data.get("financial_sub_scores", {}),
+                            "financial_findings": existing_company_data.get("financial_findings", []),
+                            "financial_confidence": existing_company_data.get("financial_confidence", 0),
+                            "is_simulated": False,
+                            "reused_from_previous": True,
+                        }
+                    else:
+                        financial_results = {"financial_index": None, "sub_scores": {}, "financial_findings": [], "financial_confidence": 0, "is_simulated": True}
 
             print(f"   [{company_name}] Reality Score: {reality_results['score']}")
             if financial_results.get("financial_index") is not None:

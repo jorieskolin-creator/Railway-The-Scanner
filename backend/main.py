@@ -411,22 +411,48 @@ def run_scan(
 
             try:
                 reality_results = reality_future.result(timeout=350)
-            except concurrent.futures.TimeoutError:
-                print(f"   ❌ [Scanner 2] Reality search timed out after 350s for {companyName}")
-                reality_results = { "score": 50, "checklist": [], "links": [], "key_people": [], "is_simulated": True, "confidence_score": 0, "washing_flag": False }
+            except (concurrent.futures.TimeoutError, Exception) as e:
+                print(f"   ❌ [Scanner 2] Reality search failed for {companyName}: {e}")
+                # PARTIAL UPDATE: reuse existing reality data if available
+                if existing_data and existing_data.get("reality_score") is not None:
+                    print(f"   🔄 [Scanner 2] Reusing previous reality data (score: {existing_data['reality_score']}, confidence: {existing_data.get('confidence_score', 0)})")
+                    reality_results = {
+                        "score": existing_data["reality_score"],
+                        "checklist": existing_data.get("reality_checklist", []),
+                        "links": existing_data.get("evidence_links", []),
+                        "key_people": existing_data.get("key_people", []),
+                        "is_simulated": False,
+                        "confidence_score": existing_data.get("confidence_score", 0),
+                        "washing_flag": existing_data.get("washing_flag", False),
+                        "washing_type": existing_data.get("washing_type"),
+                        "reused_from_previous": True,
+                    }
+                else:
+                    reality_results = { "score": 50, "checklist": [], "links": [], "key_people": [], "is_simulated": True, "confidence_score": 0, "washing_flag": False }
 
-            # Financial search is non-blocking — if it fails, use defaults
+            # Financial search is non-blocking — if it fails, use existing data or defaults
             try:
                 financial_results = financial_future.result(timeout=120)
             except Exception as e:
                 print(f"   [Financial Health] Failed (non-critical): {e}")
-                financial_results = {
-                    "financial_index": None,
-                    "sub_scores": {"revenue_trend": None, "profitability": None, "efficiency": None, "investment_signal": None},
-                    "financial_findings": [],
-                    "financial_confidence": 0,
-                    "is_simulated": True
-                }
+                if existing_data and existing_data.get("financial_index") is not None:
+                    print(f"   🔄 [Financial Health] Reusing previous financial data (index: {existing_data['financial_index']})")
+                    financial_results = {
+                        "financial_index": existing_data["financial_index"],
+                        "sub_scores": existing_data.get("financial_sub_scores", {}),
+                        "financial_findings": existing_data.get("financial_findings", []),
+                        "financial_confidence": existing_data.get("financial_confidence", 0),
+                        "is_simulated": False,
+                        "reused_from_previous": True,
+                    }
+                else:
+                    financial_results = {
+                        "financial_index": None,
+                        "sub_scores": {"revenue_trend": None, "profitability": None, "efficiency": None, "investment_signal": None},
+                        "financial_findings": [],
+                        "financial_confidence": 0,
+                        "is_simulated": True
+                    }
 
         print(f"   ✅ [Scanner 2] Reality check complete in {int((time.time() - s2_start) * 1000)}ms → Score: {reality_results['score']}/100, Confidence: {reality_results.get('confidence_score', 0)}/100")
         if financial_results.get("financial_index") is not None:
