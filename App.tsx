@@ -182,19 +182,23 @@ const App = () => {
   };
 
   const handleRunScan = async (input, isFormData = false) => {
+    const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to run diagnosis:");
+    if (!password) return;
+
     setIsScanning(true);
     try {
       let body;
-      let headers = {};
-      
+      let headers: Record<string, string> = { 'Authorization': `Bearer ${password}` };
+
       if (isFormData) {
           body = input;
       } else {
           body = JSON.stringify({ ...input, saveToDatabase: true });
-          headers = { 'Content-Type': 'application/json' };
+          headers['Content-Type'] = 'application/json';
       }
 
       const response = await fetch(`/scan`, { method: 'POST', headers: headers, body: body });
+      if (response.status === 401) { alert("ACCESS DENIED: Incorrect Password."); return; }
       if (!response.ok) throw new Error("Scan failed");
       const json = await response.json();
       const newResult = json.data;

@@ -2,7 +2,7 @@
 
 
 const { useState, useRef } = (window as any).React;
-const { Search, FileText, Globe, Zap, Link, AlertCircle, Database, Settings, Cpu, UploadCloud, File, X, Sparkles, Loader2 } = (window as any).Lucide;
+const { Search, FileText, Globe, Zap, Link, AlertCircle, Database, Settings, Cpu, UploadCloud, File, X, Loader2 } = (window as any).Lucide;
 
 const ScannerInput = ({ onScan }) => {
   const [companyName, setCompanyName] = useState('');
@@ -134,11 +134,6 @@ const ScannerInput = ({ onScan }) => {
             <Zap className="text-cyan-400" size={18} /> Configure Diagnosis
             </h3>
             <p className="text-[10px] text-slate-400 mt-1 uppercase tracking-widest font-semibold">Forensic Parameters (Finland Top 100)</p>
-        </div>
-        <div className="flex gap-2 text-xs">
-           <div className="px-3 py-1.5 rounded border transition-all font-mono text-[10px] flex items-center gap-1 font-bold bg-emerald-500/10 text-emerald-400 border-emerald-500/30">
-            <Sparkles size={10} /> GEMINI 3 PRO + OPUS 4.6
-           </div>
         </div>
       </div>
 

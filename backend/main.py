@@ -305,12 +305,9 @@ def run_scan(
 ):
     """
     Hybrid Forensic Scan: Accepts Text + URLs + Uploaded Documents (PDF/HTML).
-    If Authorization header is present, validates it (admin refresh/batch).
-    If absent, scan runs freely (New Diagnosis — public feature).
+    Requires admin authentication.
     """
-    auth_header = request.headers.get("authorization", "")
-    if auth_header:
-        verify_admin(request)
+    verify_admin(request)
 
     try:
         scan_start = time.time()
