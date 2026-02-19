@@ -197,16 +197,23 @@ def scrape_strategic_content(base_url: str, company_name: str = "Unknown", subsi
     combined_text = "\n\n".join(final_text)
     return combined_text[:100000]
 
-def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_workers=5):
+def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_workers=5,
+                    batch_progress=None, stop_event=None):
     """
     Runs the batch seed process with PARALLEL execution.
     max_workers controls concurrency (default 5).
     If progress_callback is provided, it calls it with the updated summary_list after every save.
+    If batch_progress (dict) is provided, updates it in-place with current/total/current_name/failed.
+    If stop_event (threading.Event) is provided, checks it before each company to allow graceful stop.
     """
     target_list = TOP_100_COMPANIES[:limit] if limit else TOP_100_COMPANIES
     total_count = len(target_list)
 
+    if batch_progress is not None:
+        batch_progress["total"] = total_count
+
     batch_start = time.time()
+    batch_start_iso = datetime.utcnow().isoformat()
     print(f"🚀 === STARTING PARALLEL BATCH SCAN (Count: {total_count}, Workers: {max_workers}) ===")
 
     storage = BlobStorage()
@@ -234,8 +241,14 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
 
     def process_company(i, company):
         """Process a single company. Thread-safe — only index update needs lock."""
+        if stop_event and stop_event.is_set():
+            print(f"   [{company['name']}] Skipped (batch stop requested)")
+            return
+
         company_start = time.time()
         company_name = company['name']
+        if batch_progress is not None:
+            batch_progress["current_name"] = company_name
         print(f"\n🚀 [{i+1}/{total_count}] Processing: {company_name} ...")
 
         try:
@@ -676,7 +689,11 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
             }
 
             # 6. SAVE INDIVIDUAL COMPANY (thread-safe — unique path per company)
-            saved_url = storage.save_company_data(company_name, full_data)
+            # Use timestamp conflict resolution: skip save if a manual scan happened after batch started
+            saved_url = storage.save_company_data(
+                company_name, full_data,
+                skip_if_newer_than=batch_start_iso if batch_progress is not None else None
+            )
 
             summary_entry = {
                 "id": result_id,
@@ -698,10 +715,14 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
 
             # 7. UPDATE SHARED INDEX (needs lock — multiple threads write here)
             with index_lock:
-                batch_summary_list[:] = [x for x in batch_summary_list if x['companyName'] != company_name]
-                batch_summary_list.append(summary_entry)
-                storage.save_global_index_direct(list(batch_summary_list))
+                # Only update index entry if we actually saved (conflict resolution may skip)
+                if saved_url is not None:
+                    batch_summary_list[:] = [x for x in batch_summary_list if x['companyName'] != company_name]
+                    batch_summary_list.append(summary_entry)
+                    storage.save_global_index_direct(list(batch_summary_list))
                 completed_count[0] += 1
+                if batch_progress is not None:
+                    batch_progress["current"] = completed_count[0]
                 if progress_callback:
                     progress_callback(list(batch_summary_list))
 
@@ -710,11 +731,19 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
 
         except Exception as e:
             print(f"   ❌ [CRITICAL BATCH ERROR] Failed to process {company_name}: {e}")
+            with index_lock:
+                completed_count[0] += 1
+                if batch_progress is not None:
+                    batch_progress["current"] = completed_count[0]
+                    batch_progress["failed"].append(company_name)
 
     # --- PARALLEL EXECUTION ---
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {}
         for i, company in enumerate(target_list):
+            if stop_event and stop_event.is_set():
+                print(f"   [Batch] Stop requested — not submitting remaining companies.")
+                break
             future = executor.submit(process_company, i, company)
             futures[future] = company['name']
             time.sleep(0.5)  # Stagger starts to avoid simultaneous Gemini hits

@@ -11,7 +11,7 @@ const Icons = new Proxy(LucideRaw, {
     }
 });
 
-const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock, HardDrive, Terminal, Radio, Play, Pause, StopCircle, TestTube, Cpu, BarChart3, TrendingUp, TrendingDown, Minus } = Icons;
+const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock, HardDrive, Radio, Cpu, BarChart3, TrendingUp, TrendingDown, Minus } = Icons;
 
 const TruthMatrix = (window as any).TruthMatrix;
 const ScannerInput = (window as any).ScannerInput;
@@ -54,11 +54,8 @@ const App = () => {
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [analyticsMatrixType, setAnalyticsMatrixType] = useState('spearman'); // 'spearman' | 'pearson'
 
-  // BATCH STATE
-  const [isBatchOpen, setIsBatchOpen] = useState(false);
-  const [batchStatus, setBatchStatus] = useState({ current: 0, total: 0, isRunning: false, currentName: '', logs: [] });
-  const stopBatchRef = useRef(false);
-  const adminTokenRef = useRef('');
+  // SERVER-SIDE BATCH STATE
+  const [batchStatus, setBatchStatus] = useState({ is_running: false, current: 0, total: 0, current_name: '' });
 
   const prevDataLengthRef = useRef(0);
 
@@ -84,6 +81,10 @@ const App = () => {
 
   useEffect(() => {
     checkHealth();
+    // Check if a batch refresh is already running on the server
+    fetch(`/batch-status?t=${Date.now()}`).then(r => r.ok ? r.json() : null).then(status => {
+      if (status && status.is_running) setBatchStatus(status);
+    }).catch(() => {});
   }, []);
 
   const fetchSummaryData = async (silent = false) => {
@@ -122,17 +123,26 @@ const App = () => {
     fetchSummaryData();
   }, []);
 
+  // Poll batch status when a refresh is running
   useEffect(() => {
-    const handleBeforeUnload = (e) => {
-        if (batchStatus.isRunning) {
-            e.preventDefault();
-            e.returnValue = "Diagnosis in progress. Leaving will stop the scanner.";
-            return e.returnValue;
+    if (!batchStatus.is_running) return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/batch-status?t=${Date.now()}`);
+        if (res.ok) {
+          const status = await res.json();
+          setBatchStatus(status);
+          // When batch finishes, refresh dashboard data
+          if (!status.is_running) {
+            fetchSummaryData(true);
+          }
         }
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [batchStatus.isRunning]);
+      } catch (e) {
+        console.warn("Batch status poll failed", e);
+      }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [batchStatus.is_running]);
 
 
   const handleCompanyClick = async (summaryItem) => {
@@ -202,166 +212,37 @@ const App = () => {
     }
   };
 
-  // --- BATCH LOGIC (PARALLEL — 3 concurrent scans) ---
-  const executeBatch = async (targets, mode = "FULL") => {
-      setIsBatchOpen(true);
-      stopBatchRef.current = false;
-
-      const MAX_PARALLEL = 3;
-      setBatchStatus({ current: 0, total: 0, isRunning: true, currentName: 'Initializing...', logs: [`Starting ${mode} Batch (${MAX_PARALLEL} parallel)...`] });
-
-      try {
-        setBatchStatus(prev => ({ ...prev, total: targets.length, logs: [...prev.logs, `Loaded ${targets.length} targets.`] }));
-
-        let completed = 0;
-        let activeNames: string[] = [];
-
-        const attemptScan = async (target): Promise<boolean> => {
-            const formData = new FormData();
-            formData.append('companyName', target.name);
-            formData.append('companyUrl', target.url);
-            formData.append('reportText', "");
-            formData.append('saveToDatabase', 'true');
-
-            const res = await fetch('/scan', {
-                method: 'POST',
-                body: formData,
-                headers: { 'Authorization': `Bearer ${adminTokenRef.current}` }
-            });
-            return res.ok;
-        };
-
-        const scanOne = async (target) => {
-            if (stopBatchRef.current) return;
-
-            activeNames = [...activeNames, target.name];
-            setBatchStatus(prev => ({ ...prev, currentName: activeNames.join(', '), logs: [...prev.logs, `🔄 Starting: ${target.name}...`] }));
-
-            try {
-                const ok = await attemptScan(target);
-
-                if (ok) {
-                    completed++;
-                    activeNames = activeNames.filter(n => n !== target.name);
-                    setBatchStatus(prev => ({ ...prev, current: completed, currentName: activeNames.join(', ') || 'waiting...', logs: [...prev.logs, `✅ Success: ${target.name} (${completed}/${targets.length})`] }));
-                } else {
-                    // Retry once after 10s delay
-                    setBatchStatus(prev => ({ ...prev, logs: [...prev.logs, `⏳ Retrying in 10s: ${target.name}...`] }));
-                    await new Promise(r => setTimeout(r, 10000));
-                    if (stopBatchRef.current) return;
-
-                    try {
-                        const retryOk = await attemptScan(target);
-                        completed++;
-                        activeNames = activeNames.filter(n => n !== target.name);
-                        if (retryOk) {
-                            setBatchStatus(prev => ({ ...prev, current: completed, currentName: activeNames.join(', ') || 'waiting...', logs: [...prev.logs, `✅ Success (retry): ${target.name} (${completed}/${targets.length})`] }));
-                        } else {
-                            setBatchStatus(prev => ({ ...prev, current: completed, currentName: activeNames.join(', ') || 'waiting...', logs: [...prev.logs, `❌ Failed (after retry): ${target.name} (${completed}/${targets.length})`] }));
-                        }
-                    } catch (retryErr) {
-                        completed++;
-                        activeNames = activeNames.filter(n => n !== target.name);
-                        setBatchStatus(prev => ({ ...prev, current: completed, currentName: activeNames.join(', ') || 'waiting...', logs: [...prev.logs, `❌ Failed (retry error): ${target.name} (${completed}/${targets.length})`] }));
-                    }
-                }
-            } catch (err) {
-                // Network error — retry once after 10s
-                setBatchStatus(prev => ({ ...prev, logs: [...prev.logs, `⏳ Network error, retrying in 10s: ${target.name}...`] }));
-                await new Promise(r => setTimeout(r, 10000));
-                if (stopBatchRef.current) return;
-
-                try {
-                    const retryOk = await attemptScan(target);
-                    completed++;
-                    activeNames = activeNames.filter(n => n !== target.name);
-                    if (retryOk) {
-                        setBatchStatus(prev => ({ ...prev, current: completed, currentName: activeNames.join(', ') || 'waiting...', logs: [...prev.logs, `✅ Success (retry): ${target.name} (${completed}/${targets.length})`] }));
-                    } else {
-                        setBatchStatus(prev => ({ ...prev, current: completed, currentName: activeNames.join(', ') || 'waiting...', logs: [...prev.logs, `❌ Failed (after retry): ${target.name} (${completed}/${targets.length})`] }));
-                    }
-                } catch (retryErr2) {
-                    completed++;
-                    activeNames = activeNames.filter(n => n !== target.name);
-                    setBatchStatus(prev => ({ ...prev, current: completed, currentName: activeNames.join(', ') || 'waiting...', logs: [...prev.logs, `⚠️ Network Error (after retry): ${target.name} (${completed}/${targets.length})`] }));
-                }
-            }
-        };
-
-        // Parallel execution with concurrency limit
-        const queue = [...targets];
-        const running: Promise<void>[] = [];
-
-        while (queue.length > 0 || running.length > 0) {
-            if (stopBatchRef.current) {
-                setBatchStatus(prev => ({ ...prev, isRunning: false, logs: [...prev.logs, '⛔ Batch Stopped by User.'] }));
-                break;
-            }
-
-            // Fill up to MAX_PARALLEL
-            while (running.length < MAX_PARALLEL && queue.length > 0) {
-                const target = queue.shift()!;
-                const promise = scanOne(target).then(() => {
-                    running.splice(running.indexOf(promise), 1);
-                });
-                running.push(promise);
-            }
-
-            // Wait for at least one to finish before continuing
-            if (running.length > 0) {
-                await Promise.race(running);
-            }
-        }
-
-        fetchSummaryData(true);
-        setBatchStatus(prev => ({ ...prev, isRunning: false, currentName: 'Complete', logs: [...prev.logs, `✨ BATCH COMPLETE: ${completed}/${targets.length} companies processed.`] }));
-
-    } catch (e) {
-        alert("Error starting batch.");
-        console.error(e);
-        setBatchStatus(prev => ({ ...prev, isRunning: false }));
-    }
-  };
-
+  // --- SERVER-SIDE BATCH LOGIC ---
   const handleStartBatch = async () => {
     if (!IS_ADMIN_MODE) return;
-    const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to initiate FULL Batch Scan:");
+    const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to start a full database refresh:");
     if (!password) return;
 
-    if (!confirm(`⚠️ START FULL BATCH SCAN (100+ Companies)?\n\nThis will take a significant amount of time.\n\nDO NOT CLOSE THIS TAB until finished.`)) return;
+    if (!confirm("Start full database refresh?\n\nThis runs on the server — you can close this tab safely.\nProgress will be shown in the header.")) return;
 
     try {
-        const listRes = await fetch('/admin/company-list', {
+        const res = await fetch('/batch-refresh', {
+            method: 'POST',
             headers: { 'Authorization': `Bearer ${password}` }
         });
-        if (listRes.status === 401) { alert("ACCESS DENIED: Incorrect Password."); return; }
-        if (!listRes.ok) throw new Error("Failed to fetch company list");
-        adminTokenRef.current = password;
-        const listJson = await listRes.json();
-        executeBatch(listJson.companies || [], "FULL");
-    } catch(e) { alert("Failed to fetch company list"); }
+        if (res.status === 401) { alert("ACCESS DENIED: Incorrect Password."); return; }
+        if (res.status === 409) { alert("A batch refresh is already in progress."); return; }
+        if (!res.ok) throw new Error("Failed to start batch");
+        const json = await res.json();
+        setBatchStatus({ is_running: true, current: 0, total: json.total, current_name: 'Starting...' });
+    } catch(e) { alert("Failed to start batch refresh."); console.error(e); }
   };
-  
-  const handleTestBatch = async () => {
-    if (!IS_ADMIN_MODE) return;
-    const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password for TEST SCAN (5 Random):");
+
+  const handleStopBatch = async () => {
+    const password = prompt("Enter Admin Password to stop the batch:");
     if (!password) return;
-
     try {
-        const listRes = await fetch('/admin/company-list', {
+        await fetch('/batch-refresh/stop', {
+            method: 'POST',
             headers: { 'Authorization': `Bearer ${password}` }
         });
-        if (listRes.status === 401) { alert("ACCESS DENIED: Incorrect Password."); return; }
-        if (!listRes.ok) throw new Error("Failed to fetch company list");
-        adminTokenRef.current = password;
-        const listJson = await listRes.json();
-        const allCompanies = listJson.companies || [];
-        const shuffled = [...allCompanies].sort(() => 0.5 - Math.random());
-        executeBatch(shuffled.slice(0, 5), "TEST (5)");
-    } catch(e) { alert("Failed to fetch company list"); }
+    } catch(e) { console.error(e); }
   };
-
-  const handleStopBatch = () => { stopBatchRef.current = true; };
 
   const handleOpenAnalytics = async () => {
     setIsAnalyticsOpen(true);
@@ -491,13 +372,22 @@ const App = () => {
                 <button onClick={handleOpenAnalytics} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-violet-900/40 hover:bg-violet-800/60 border border-violet-700/50 text-violet-200 font-mono font-bold text-[10px] rounded transition-all">
                     <BarChart3 size={12} /> ANALYZE
                 </button>
-                <button onClick={handleTestBatch} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-cyan-900/40 hover:bg-cyan-800/60 border border-cyan-700/50 text-cyan-200 font-mono font-bold text-[10px] rounded transition-all">
-                    <TestTube size={12} /> TEST(5)
-                </button>
-                <button onClick={handleStartBatch} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-lg transition-all">
-                    {batchStatus.isRunning ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
-                    {batchStatus.isRunning ? "SCANNING..." : "REFRESH DB"}
-                </button>
+                {batchStatus.is_running ? (
+                    <div className="flex items-center gap-2 px-3 py-1.5 bg-cyan-900/40 border border-cyan-500/40 rounded-lg">
+                        <Loader2 size={14} className="animate-spin text-cyan-400" />
+                        <span className="text-cyan-200 font-mono font-bold text-[10px]">
+                            REFRESH {batchStatus.current}/{batchStatus.total}
+                        </span>
+                        <button onClick={handleStopBatch} className="text-rose-400 hover:text-rose-300 text-[10px] font-mono font-bold ml-1">
+                            STOP
+                        </button>
+                    </div>
+                ) : (
+                    <button onClick={handleStartBatch} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-lg transition-all">
+                        <Database size={14} />
+                        REFRESH DB
+                    </button>
+                )}
                 </>
             )}
             <div className="flex items-center gap-2">
@@ -709,59 +599,6 @@ const App = () => {
                     </>
                )}
            </div>
-        </div>
-      )}
-
-      {isBatchOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-            <div className="absolute inset-0 bg-black/95 backdrop-blur-md" />
-            <div className="relative w-full max-w-lg bg-[#0f172a] border border-cyan-500/30 rounded-xl shadow-2xl z-10 flex flex-col max-h-[80vh]">
-                <div className="p-4 border-b border-white/10 flex justify-between items-center bg-black/20">
-                    <h3 className="font-bold text-white flex items-center gap-2">
-                        <Terminal size={18} className="text-cyan-400" />
-                        Batch Diagnosis Terminal
-                    </h3>
-                    <div className="flex gap-2">
-                        {batchStatus.isRunning ? (
-                             <button onClick={handleStopBatch} className="text-rose-400 hover:text-white px-2 py-1 text-xs border border-rose-500/30 rounded">
-                                STOP
-                             </button>
-                        ) : (
-                             <button onClick={() => setIsBatchOpen(false)} className="text-slate-400 hover:text-white">
-                                <X size={18} />
-                             </button>
-                        )}
-                    </div>
-                </div>
-                
-                <div className="p-6 space-y-4">
-                    <div className="flex justify-between text-xs font-mono text-cyan-300 uppercase">
-                        <span>Progress</span>
-                        <span>{batchStatus.current} / {batchStatus.total}</span>
-                    </div>
-                    <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
-                        <div 
-                            className="h-full bg-cyan-500 transition-all duration-300 ease-out"
-                            style={{ width: `${(batchStatus.current / (batchStatus.total || 1)) * 100}%` }}
-                        ></div>
-                    </div>
-                    <div className="text-center py-4">
-                        <h4 className="text-lg font-bold text-white animate-pulse">
-                            {batchStatus.isRunning ? `Analyzing: ${batchStatus.currentName}` : "Execution Halted"}
-                        </h4>
-                        <p className="text-xs text-slate-500 mt-1">
-                            {batchStatus.isRunning ? "Please keep this tab open to prevent timeouts." : "Process completed or stopped manually."}
-                        </p>
-                    </div>
-                </div>
-
-                <div className="flex-grow bg-black/50 p-4 font-mono text-[10px] text-slate-400 overflow-y-auto border-t border-white/10 space-y-1">
-                    {batchStatus.logs.map((log, i) => (
-                        <div key={i} className="border-b border-white/5 pb-0.5">{log}</div>
-                    ))}
-                    <div ref={(el) => el && el.scrollIntoView({ behavior: "smooth" })} />
-                </div>
-            </div>
         </div>
       )}
 

@@ -11,6 +11,7 @@ import json
 import requests
 import io
 import time
+import threading
 import concurrent.futures
 from datetime import datetime
 from bs4 import BeautifulSoup
@@ -67,6 +68,19 @@ app.add_middleware(
 )
 
 storage = BlobStorage()
+
+# --- SERVER-SIDE BATCH STATE ---
+_batch_state = {
+    "is_running": False,
+    "current": 0,
+    "total": 0,
+    "current_name": "",
+    "started_at": None,
+    "completed_at": None,
+    "failed": [],
+}
+_batch_lock = threading.Lock()
+_batch_stop_event = threading.Event()
 
 app.mount("/components", StaticFiles(directory="../components"), name="components")
 app.mount("/services", StaticFiles(directory="../services"), name="services")
@@ -202,6 +216,82 @@ async def reset_database(request: Request):
     verify_admin(request)
     count = storage.nuke_everything()
     return {"status": "Database Wiped", "deleted_count": count}
+
+# --- SERVER-SIDE BATCH REFRESH ---
+
+def _run_batch_background():
+    """Background thread: runs the full batch scan, updating _batch_state in-place."""
+    batch_progress = {
+        "current": 0,
+        "total": 0,
+        "current_name": "",
+        "failed": [],
+    }
+
+    def on_progress(summary_list):
+        """Called by run_batch_seed after each company save."""
+        with _batch_lock:
+            _batch_state["current"] = batch_progress["current"]
+            _batch_state["current_name"] = batch_progress["current_name"]
+            _batch_state["failed"] = batch_progress["failed"]
+
+    try:
+        run_batch_seed(
+            real_xray_mode=True,
+            limit=None,
+            progress_callback=on_progress,
+            max_workers=5,
+            batch_progress=batch_progress,
+            stop_event=_batch_stop_event,
+        )
+    except Exception as e:
+        print(f"   [Batch Background] Fatal error: {e}")
+    finally:
+        with _batch_lock:
+            _batch_state["is_running"] = False
+            _batch_state["completed_at"] = datetime.utcnow().isoformat()
+            _batch_state["current"] = batch_progress["current"]
+            _batch_state["current_name"] = ""
+            _batch_state["failed"] = batch_progress["failed"]
+
+
+@app.post("/batch-refresh")
+def start_batch_refresh(request: Request):
+    """Starts a full database refresh in a background thread. Returns immediately."""
+    verify_admin(request)
+
+    with _batch_lock:
+        if _batch_state["is_running"]:
+            raise HTTPException(status_code=409, detail="Batch refresh already in progress.")
+        _batch_stop_event.clear()
+        _batch_state["is_running"] = True
+        _batch_state["current"] = 0
+        _batch_state["total"] = len(TOP_100_COMPANIES)
+        _batch_state["current_name"] = "Starting..."
+        _batch_state["started_at"] = datetime.utcnow().isoformat()
+        _batch_state["completed_at"] = None
+        _batch_state["failed"] = []
+
+    thread = threading.Thread(target=_run_batch_background, daemon=True)
+    thread.start()
+
+    return {"status": "started", "total": len(TOP_100_COMPANIES)}
+
+
+@app.post("/batch-refresh/stop")
+def stop_batch_refresh(request: Request):
+    """Signals the running batch to stop after the current company finishes."""
+    verify_admin(request)
+    _batch_stop_event.set()
+    return {"status": "stop_requested"}
+
+
+@app.get("/batch-status")
+def get_batch_status():
+    """Returns current batch refresh progress. No auth required (read-only)."""
+    with _batch_lock:
+        return dict(_batch_state)
+
 
 # --- MAIN SCAN ENDPOINT (MULTIPART) ---
 @app.post("/scan")

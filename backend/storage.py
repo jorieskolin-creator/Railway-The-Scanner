@@ -166,12 +166,25 @@ class BlobStorage:
         clean = re.sub(r'_{2,}', '_', clean)
         return clean.strip('_')
 
-    def save_company_data(self, company_name, full_data):
+    def save_company_data(self, company_name, full_data, skip_if_newer_than=None):
         """
         Saves company data and keeps max 3 versions per company.
+        If skip_if_newer_than (ISO timestamp string) is provided, checks whether
+        a version uploaded after that timestamp already exists — if so, skips the
+        save to avoid overwriting a fresher manual scan during batch processing.
         """
         clean_name = self.sanitize_filename(company_name)
         prefix = f"companies/{clean_name}"
+
+        # Timestamp-based conflict resolution
+        if skip_if_newer_than:
+            blobs = self._list(prefix=prefix, limit=5)
+            if blobs:
+                blobs.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
+                latest_uploaded = blobs[0].get("uploadedAt", "")
+                if latest_uploaded and latest_uploaded > skip_if_newer_than:
+                    print(f"   [Storage] Conflict: existing data ({latest_uploaded}) is newer than batch start ({skip_if_newer_than}). Skipping save for '{company_name}'.")
+                    return None
 
         # 1. Save NEW file
         filename = f"{prefix}.json"
