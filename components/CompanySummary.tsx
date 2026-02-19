@@ -548,34 +548,71 @@ const CompanySummary = ({ data }) => {
                 <span className="w-1 h-6 bg-emerald-500 rounded-full"></span>
                 Deep Dive Findings
             </h3>
-            
+
             <div className="flex-grow overflow-y-auto max-h-[450px] pr-2 space-y-3 custom-scrollbar">
-                {data.evidence_links.length > 0 ? (
-                data.evidence_links.map((link, idx) => (
-                    <a 
-                    key={idx}
-                    href={link.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block p-4 rounded-xl bg-black/20 border border-white/5 hover:border-emerald-500/50 hover:bg-emerald-500/5 transition-all group"
-                    >
-                    <div className="flex items-start justify-between">
-                        <div>
-                        <h4 className="font-medium text-slate-200 group-hover:text-emerald-400 transition-colors text-sm line-clamp-1">
-                            <HighlightText text={link.title} />
-                        </h4>
-                        <span className="text-xs text-slate-500 mt-1 inline-block font-mono">{link.source}</span>
-                        </div>
-                        <ExternalLink size={16} className="text-slate-600 group-hover:text-emerald-400 mt-1" />
-                    </div>
-                    </a>
-                ))
-                ) : (
-                <div className="flex flex-col items-center justify-center h-full text-slate-600 border-2 border-dashed border-white/5 rounded-xl">
-                    <AlertTriangle size={32} className="mb-2 opacity-50" />
-                    <p className="text-sm">No specific evidence returned.</p>
-                </div>
-                )}
+                {(() => {
+                    // Merge current + historical evidence, de-duped by URL
+                    const currentLinks = (data.evidence_links || []).map(l => ({ ...l, _scan: 'current' }));
+                    const seenUrls = new Set(currentLinks.map(l => l.url).filter(Boolean));
+                    const historyLinks = [];
+                    if (data.history && data.history.length > 0) {
+                        for (const h of [...data.history].reverse()) {
+                            const scanDate = h.date ? new Date(h.date).toLocaleDateString('en-US', { month: 'short', year: '2-digit' }) : '?';
+                            for (const ev of (h.evidence || [])) {
+                                if (ev.url && !seenUrls.has(ev.url)) {
+                                    seenUrls.add(ev.url);
+                                    historyLinks.push({ ...ev, _scan: scanDate });
+                                }
+                            }
+                        }
+                    }
+                    const allLinks = [...currentLinks, ...historyLinks];
+                    const extractDomain = (url) => { try { return new URL(url).hostname.replace('www.', ''); } catch { return url; } };
+
+                    if (allLinks.length === 0) {
+                        return (
+                            <div className="flex flex-col items-center justify-center h-full text-slate-600 border-2 border-dashed border-white/5 rounded-xl">
+                                <AlertTriangle size={32} className="mb-2 opacity-50" />
+                                <p className="text-sm">No specific evidence returned.</p>
+                            </div>
+                        );
+                    }
+
+                    return allLinks.map((link, idx) => (
+                        <a
+                            key={idx}
+                            href={link.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="block p-4 rounded-xl bg-black/20 border border-white/5 hover:border-emerald-500/50 hover:bg-emerald-500/5 transition-all group"
+                        >
+                            <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0 flex-grow">
+                                    <h4 className="font-medium text-slate-200 group-hover:text-emerald-400 transition-colors text-sm line-clamp-1">
+                                        <HighlightText text={link.title || extractDomain(link.url)} />
+                                    </h4>
+                                    {link.snippet && (
+                                        <p className="text-[11px] text-slate-400 mt-1 line-clamp-2 leading-relaxed">{link.snippet}</p>
+                                    )}
+                                    <div className="flex items-center gap-2 mt-1">
+                                        <span className="text-[10px] text-slate-500 font-mono truncate">{link.source || extractDomain(link.url)}</span>
+                                        {link._scan !== 'current' && (
+                                            <span className="text-[9px] bg-slate-700/60 text-slate-400 px-1.5 py-0.5 rounded font-mono shrink-0">
+                                                {link._scan}
+                                            </span>
+                                        )}
+                                        {link.verified === false && (
+                                            <span className="text-[9px] bg-rose-500/20 text-rose-400 px-1.5 py-0.5 rounded font-mono shrink-0">
+                                                unverified
+                                            </span>
+                                        )}
+                                    </div>
+                                </div>
+                                <ExternalLink size={16} className="text-slate-600 group-hover:text-emerald-400 mt-1 shrink-0" />
+                            </div>
+                        </a>
+                    ));
+                })()}
             </div>
             </div>
         </div>
