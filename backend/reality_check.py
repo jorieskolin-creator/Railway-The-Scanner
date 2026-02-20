@@ -364,14 +364,21 @@ def _contradiction_check(summary_text, evidence_links, company_name, api_key):
     Only flags conflicting data (e.g. different numbers for the same metric).
     Does NOT flag claims that are absent from snippets — that just means
     Opus sourced them from full page content the snippets didn't capture.
+
+    Returns source_indices and source_urls for each contradiction so
+    only the specific sources that a false claim traces back to get purged.
     """
     evidence_text = ""
     verified_links = [l for l in evidence_links if l.get("verified", True)]
+    # Build an index→link map so we can resolve URLs from indices later
+    index_to_link = {}
     for i, link in enumerate(verified_links[:20], 1):
         title = link.get("title", "Unknown")
         snippet = link.get("snippet", "")
         source = link.get("source", "")
+        url = link.get("url", "")
         evidence_text += f"[{i}] {title} ({source}): {snippet}\n"
+        index_to_link[i] = link
 
     if not evidence_text.strip():
         return {
@@ -392,8 +399,8 @@ EVIDENCE SNIPPETS:
 
 RULES — READ CAREFULLY:
 1. A CONTRADICTION is when the summary states a specific fact (number, date, name, percentage) and an evidence snippet states a DIFFERENT value for THE SAME thing.
-   Example: Summary says "revenue €2.1B" but snippet says "revenue €1.5B" → CONTRADICTION.
-   Example: Summary says "CEO John Smith" but snippet says "CEO Jane Doe" → CONTRADICTION.
+   Example: Summary says "revenue €2.1B" but snippet [3] says "revenue €1.5B" → CONTRADICTION sourced from [3].
+   Example: Summary says "CEO John Smith" but snippet [7] says "CEO Jane Doe" → CONTRADICTION sourced from [7].
 
 2. If the summary mentions something that NO snippet covers at all, that is NOT a contradiction. The original AI had access to full web pages, not just snippets. Silence is not conflict.
    Example: Summary says "revenue €2.1B" and no snippet mentions revenue → NOT a contradiction, SKIP IT.
@@ -401,9 +408,14 @@ RULES — READ CAREFULLY:
 3. Do NOT flag qualitative statements, opinions, interpretations, or synthesis.
 4. Do NOT flag the company name or general industry knowledge.
 5. Only flag clear, specific data conflicts where both summary AND evidence mention the same topic with different facts.
+6. For EACH contradiction, you MUST identify which specific evidence snippet(s) [by index number] conflict with the summary claim. If you cannot point to a specific snippet, do NOT flag it.
 
 Output valid JSON only:
-{{"contradictions": ["Summary says X but evidence says Y", ...], "has_contradictions": true/false}}
+{{"contradictions": [{{"claim": "Summary says X but evidence says Y", "source_indices": [3, 7]}}], "has_contradictions": true/false}}
+
+Each contradiction object must have:
+  - "claim": string describing the contradiction
+  - "source_indices": array of integer indices (e.g. [3]) referring to the evidence snippets that conflict
 
 If there are NO contradictions, return:
 {{"contradictions": [], "has_contradictions": false}}"""
@@ -415,7 +427,7 @@ If there are NO contradictions, return:
         start = time.time()
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=512,
+            max_tokens=1024,
             messages=[{"role": "user", "content": prompt}]
         )
         elapsed_ms = int((time.time() - start) * 1000)
@@ -424,9 +436,28 @@ If there are NO contradictions, return:
 
         result = _robust_parse_json(response_text)
         if result and "contradictions" in result:
-            contradictions = result.get("contradictions", [])
+            raw_contradictions = result.get("contradictions", [])
+            contradictions = []
+            for c in raw_contradictions[:10]:
+                # Handle both old format (plain string) and new format (object with source_indices)
+                if isinstance(c, str):
+                    contradictions.append({"claim": c, "source_indices": [], "source_urls": []})
+                elif isinstance(c, dict):
+                    indices = c.get("source_indices", [])
+                    # Resolve indices to URLs
+                    source_urls = []
+                    for idx in indices:
+                        if isinstance(idx, int) and idx in index_to_link:
+                            url = index_to_link[idx].get("url", "")
+                            if url:
+                                source_urls.append(url)
+                    contradictions.append({
+                        "claim": c.get("claim", str(c)),
+                        "source_indices": indices,
+                        "source_urls": source_urls,
+                    })
             return {
-                "contradictions": contradictions[:10],
+                "contradictions": contradictions,
                 "model": "claude-haiku-4-5",
                 "time_ms": elapsed_ms,
             }
@@ -439,11 +470,14 @@ If there are NO contradictions, return:
         return {"contradictions": [], "model": f"error: {str(e)[:100]}", "time_ms": 0}
 
 
-def _fresh_search_verify(summary_text, company_name):
+def _fresh_search_verify(summary_text, company_name, evidence_links=None):
     """
     Phase 2: Send the summary to Gemini with Google Search grounding.
     Gemini searches the web independently and checks if the summary claims are true.
     This catches fabricated claims that have no basis anywhere on the internet.
+
+    Also receives the existing evidence_links so Gemini can identify which
+    stored source(s) each fabricated claim may have originated from.
     """
     import concurrent.futures
 
@@ -455,22 +489,44 @@ def _fresh_search_verify(summary_text, company_name):
             "time_ms": 0,
         }
 
+    # Build evidence reference list so Gemini can attribute fabricated claims to sources
+    evidence_ref = ""
+    if evidence_links:
+        verified_links = [l for l in evidence_links if l.get("verified", True)]
+        for i, link in enumerate(verified_links[:20], 1):
+            title = link.get("title", "Unknown")
+            url = link.get("url", "")
+            snippet = link.get("snippet", "")[:150]
+            evidence_ref += f"[{i}] {title} | URL: {url} | Snippet: {snippet}\n"
+
+    evidence_section = ""
+    if evidence_ref:
+        evidence_section = f"""
+STORED EVIDENCE SOURCES (these were used to generate the summary):
+{evidence_ref}
+"""
+
     prompt = f"""You are a fact-checker with access to Google Search. Your job is to verify the following AI-generated company analysis by searching the web.
 
 COMPANY: {company_name}
 
 AI-GENERATED SUMMARY TO VERIFY:
 {summary_text}
-
+{evidence_section}
 INSTRUCTIONS:
 1. Search for the key factual claims in this summary: revenue figures, employee counts, partnerships, product names, executive names, specific events, dates, percentages.
 2. For each specific claim, determine if it is TRUE, FALSE, or UNVERIFIABLE based on your search results.
 3. ONLY flag claims that are clearly FALSE — where your search results show different facts.
 4. Do NOT flag claims you simply cannot find — the company may be small or private. Absence of evidence is not evidence of fabrication.
 5. Do NOT flag qualitative statements, opinions, or general industry observations.
+6. For each false claim, check the STORED EVIDENCE SOURCES above. If you can identify which stored source(s) [by index number] likely contributed to the false claim, include those indices. If you cannot trace the false claim to any stored source, return an empty array for source_indices.
 
 Output ONLY valid JSON:
-{{"fabrications": ["Claim X is false because web shows Y instead", ...], "summary_accurate": true/false}}
+{{"fabrications": [{{"claim": "Claim X is false because web shows Y instead", "source_indices": [2, 5]}}], "summary_accurate": false}}
+
+Each fabrication object must have:
+  - "claim": string describing what is false and why
+  - "source_indices": array of integer indices referring to STORED EVIDENCE SOURCES that likely contributed to this false claim. Use an EMPTY array [] if you cannot trace the claim to any specific stored source.
 
 If the summary appears accurate or you found no clear falsehoods, return:
 {{"fabrications": [], "summary_accurate": true}}"""
@@ -511,11 +567,32 @@ If the summary appears accurate or you found no clear falsehoods, return:
         elapsed_ms = int((time.time() - start) * 1000)
         text = response.text if response.text else ""
 
+        # Resolve source indices to URLs
+        verified_links = [l for l in (evidence_links or []) if l.get("verified", True)][:20]
+
         result = _robust_parse_json(text)
         if result and "fabrications" in result:
-            fabrications = result.get("fabrications", [])
+            raw_fabrications = result.get("fabrications", [])
+            fabrications = []
+            for f in raw_fabrications[:10]:
+                if isinstance(f, str):
+                    # Old format (plain string) — no source attribution
+                    fabrications.append({"claim": f, "source_indices": [], "source_urls": []})
+                elif isinstance(f, dict):
+                    indices = f.get("source_indices", [])
+                    source_urls = []
+                    for idx in indices:
+                        if isinstance(idx, int) and 1 <= idx <= len(verified_links):
+                            url = verified_links[idx - 1].get("url", "")
+                            if url:
+                                source_urls.append(url)
+                    fabrications.append({
+                        "claim": f.get("claim", str(f)),
+                        "source_indices": indices,
+                        "source_urls": source_urls,
+                    })
             return {
-                "fabrications": fabrications[:10],
+                "fabrications": fabrications,
                 "model": "gemini-2.5-flash",
                 "time_ms": elapsed_ms,
             }
@@ -554,13 +631,15 @@ def ai_verify_summary(summary_text, evidence_links, company_name, anthropic_key=
         return {
             "verified": True,
             "unsupported_claims": [],
+            "unsupported_claims_detailed": [],
             "verification_model": "skipped",
             "verification_time_ms": 0,
         }
 
     api_key = _get_anthropic_key(anthropic_key)
     total_start = time.time()
-    all_issues = []
+    all_issues = []           # Legacy: flat string list for backward compat
+    all_issues_detailed = []  # New: structured list with source attribution
     models_used = []
 
     # --- Phase 1: Contradiction check (Haiku vs stored snippets) ---
@@ -572,21 +651,41 @@ def ai_verify_summary(summary_text, evidence_links, company_name, anthropic_key=
         if contradiction_result["contradictions"]:
             print(f"   ⚠️ [Phase 1] {len(contradiction_result['contradictions'])} contradiction(s) found")
             for c in contradiction_result["contradictions"]:
-                all_issues.append(f"[Contradiction] {c}")
-                print(f"      - {c}")
+                claim_text = c.get("claim", str(c)) if isinstance(c, dict) else str(c)
+                source_urls = c.get("source_urls", []) if isinstance(c, dict) else []
+                source_indices = c.get("source_indices", []) if isinstance(c, dict) else []
+                all_issues.append(f"[Contradiction] {claim_text}")
+                all_issues_detailed.append({
+                    "type": "contradiction",
+                    "claim": claim_text,
+                    "source_urls": source_urls,
+                    "source_indices": source_indices,
+                })
+                src_info = f" (sources: {source_urls})" if source_urls else " (no specific source identified)"
+                print(f"      - {claim_text}{src_info}")
         else:
             print(f"   ✅ [Phase 1] No contradictions ({contradiction_result['time_ms']}ms)")
 
     # --- Phase 2: Fresh search verification (Gemini + Google Search) ---
     print(f"   🌐 [Phase 2] Fresh web search verification...")
-    search_result = _fresh_search_verify(summary_text, company_name)
+    search_result = _fresh_search_verify(summary_text, company_name, evidence_links=evidence_links)
     models_used.append(f"search:{search_result['model']}")
 
     if search_result["fabrications"]:
         print(f"   ⚠️ [Phase 2] {len(search_result['fabrications'])} fabrication(s) found")
         for f in search_result["fabrications"]:
-            all_issues.append(f"[Fabrication] {f}")
-            print(f"      - {f}")
+            claim_text = f.get("claim", str(f)) if isinstance(f, dict) else str(f)
+            source_urls = f.get("source_urls", []) if isinstance(f, dict) else []
+            source_indices = f.get("source_indices", []) if isinstance(f, dict) else []
+            all_issues.append(f"[Fabrication] {claim_text}")
+            all_issues_detailed.append({
+                "type": "fabrication",
+                "claim": claim_text,
+                "source_urls": source_urls,
+                "source_indices": source_indices,
+            })
+            src_info = f" (sources: {source_urls})" if source_urls else " (no specific source identified)"
+            print(f"      - {claim_text}{src_info}")
     else:
         print(f"   ✅ [Phase 2] Summary checks out ({search_result['time_ms']}ms)")
 
@@ -595,6 +694,7 @@ def ai_verify_summary(summary_text, evidence_links, company_name, anthropic_key=
     return {
         "verified": len(all_issues) == 0,
         "unsupported_claims": all_issues[:10],
+        "unsupported_claims_detailed": all_issues_detailed[:10],
         "verification_model": " + ".join(models_used),
         "verification_time_ms": total_ms,
     }
@@ -843,64 +943,79 @@ def clean_summary(summary_text, pitch_text, unsupported_claims, company_name,
 # When false claims are found, remove the contaminated evidence from the database
 # so it doesn't poison future scans (Scanner 2 uses previous scan data as context).
 
-def purge_false_evidence(data, unsupported_claims):
+def purge_false_evidence(data, unsupported_claims, detailed_claims=None):
     """
-    Removes evidence_links and reality_checklist items that match false claims.
+    Removes evidence_links and reality_checklist items that the AI verification
+    step specifically traced back to false claims via source URLs.
 
-    When AI verification finds contradictions/fabrications, the underlying evidence
-    that contributed to those false claims must be removed from the stored data.
-    Otherwise, the next scan's 'previous scan context' will include the false data
-    and potentially regenerate the same bad summary.
+    KEY SAFETY PRINCIPLE: If the AI could not identify the specific source(s)
+    behind a false claim, NOTHING gets purged for that claim. We only remove
+    evidence that is explicitly linked to a false claim by the verification AI.
+    This prevents over-aggressive purging from keyword guesswork.
 
     Args:
         data: The full company data dict (modified in-place)
-        unsupported_claims: List of "[Contradiction] ..." / "[Fabrication] ..." strings
+        unsupported_claims: List of "[Contradiction] ..." / "[Fabrication] ..." strings (legacy, for logging)
+        detailed_claims: List of structured dicts from ai_verify_summary's unsupported_claims_detailed,
+                         each with: {"type", "claim", "source_urls", "source_indices"}
 
     Returns:
         dict with:
             - evidence_removed: int (number of evidence links removed)
             - checklist_removed: int (number of checklist items removed)
             - purged_items: list of removed items (for audit trail)
+            - skipped_claims: int (claims where no source was identified — nothing purged)
     """
-    if not unsupported_claims:
-        return {"evidence_removed": 0, "checklist_removed": 0, "purged_items": []}
+    if not unsupported_claims and not detailed_claims:
+        return {"evidence_removed": 0, "checklist_removed": 0, "purged_items": [], "skipped_claims": 0}
 
-    # Extract key terms from false claims for fuzzy matching
-    # e.g. "[Contradiction] Summary says revenue €2.1B but evidence says €1.5B"
-    #   → extract: "revenue", "€2.1B", "€1.5B"
-    claim_keywords = set()
-    for claim in unsupported_claims:
-        # Strip the [Contradiction] / [Fabrication] prefix
-        clean_claim = re.sub(r'^\[(Contradiction|Fabrication)\]\s*', '', claim)
-        # Extract significant words (numbers, proper nouns, specific terms)
-        words = re.findall(r'[€$£]?\d[\d.,]*[BMKbmk]?|\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b|\b\w{5,}\b', clean_claim)
-        for w in words:
-            claim_keywords.add(w.lower())
+    # Collect all source URLs that the AI explicitly attributed to false claims
+    urls_to_purge = set()
+    skipped_claims = 0
+    claims_with_sources = 0
 
-    if not claim_keywords:
-        return {"evidence_removed": 0, "checklist_removed": 0, "purged_items": []}
+    if detailed_claims:
+        for dc in detailed_claims:
+            source_urls = dc.get("source_urls", [])
+            claim_text = dc.get("claim", "")
+            if source_urls:
+                claims_with_sources += 1
+                for url in source_urls:
+                    urls_to_purge.add(url)
+                print(f"   🔗 [Purge] Claim traced to {len(source_urls)} source(s): '{claim_text[:80]}'")
+                for url in source_urls:
+                    print(f"      → {url}")
+            else:
+                skipped_claims += 1
+                print(f"   ⏭️ [Purge] No source identified for claim — skipping purge: '{claim_text[:80]}'")
+
+    if not urls_to_purge:
+        print(f"   ℹ️ [Purge] No specific source URLs identified for any false claim — nothing purged (safe mode)")
+        return {
+            "evidence_removed": 0,
+            "checklist_removed": 0,
+            "purged_items": [],
+            "skipped_claims": skipped_claims,
+        }
+
+    print(f"   🎯 [Purge] {len(urls_to_purge)} unique source URL(s) to purge from {claims_with_sources} claim(s)")
 
     purged_items = []
 
-    # --- Purge evidence_links ---
+    # --- Purge evidence_links by exact URL match ---
     evidence_links = data.get("evidence_links", [])
     if evidence_links:
         clean_links = []
         for link in evidence_links:
-            snippet = (link.get("snippet", "") or "").lower()
-            title = (link.get("title", "") or "").lower()
-            combined = f"{snippet} {title}"
-
-            # Check if this evidence link matches any false claim keywords
-            match_count = sum(1 for kw in claim_keywords if kw in combined)
-            if match_count >= 2:
-                # Multiple keyword matches — this evidence likely contributed to the false claim
+            link_url = (link.get("url", "") or "").strip()
+            if link_url and link_url in urls_to_purge:
                 purged_items.append({
                     "type": "evidence_link",
                     "title": link.get("title", ""),
-                    "reason": f"Matched {match_count} false-claim keywords",
+                    "url": link_url,
+                    "reason": "AI verification traced false claim to this source",
                 })
-                print(f"   🗑️ [Purge] Removing evidence: '{link.get('title', '')[:60]}' (matched {match_count} keywords)")
+                print(f"   🗑️ [Purge] Removing evidence: '{link.get('title', '')[:60]}' ({link_url})")
             else:
                 clean_links.append(link)
 
@@ -909,25 +1024,35 @@ def purge_false_evidence(data, unsupported_claims):
     else:
         evidence_removed = 0
 
-    # --- Purge reality_checklist items ---
+    # --- Purge reality_checklist items that reference purged URLs ---
     checklist = data.get("reality_checklist", [])
     if checklist:
         clean_checklist = []
         for item in checklist:
             item_text = ""
             if isinstance(item, dict):
-                item_text = (item.get("finding", "") or item.get("text", "") or "").lower()
-            elif isinstance(item, str):
-                item_text = item.lower()
-
-            match_count = sum(1 for kw in claim_keywords if kw in item_text)
-            if match_count >= 2:
+                item_text = (item.get("finding", "") or item.get("text", "") or "")
+                # Also check if the checklist item has a source/url field
+                item_url = (item.get("url", "") or item.get("source_url", "") or "").strip()
+                if item_url and item_url in urls_to_purge:
+                    purged_items.append({
+                        "type": "checklist_item",
+                        "text": item_text[:100],
+                        "url": item_url,
+                        "reason": "AI verification traced false claim to this source",
+                    })
+                    print(f"   🗑️ [Purge] Removing checklist item: '{item_text[:60]}' ({item_url})")
+                    continue
+            # Check if any purged URL appears in the item text (catches inline references)
+            item_text_lower = item_text.lower() if item_text else ""
+            url_found_in_text = any(url.lower() in item_text_lower for url in urls_to_purge if url)
+            if url_found_in_text:
                 purged_items.append({
                     "type": "checklist_item",
                     "text": item_text[:100],
-                    "reason": f"Matched {match_count} false-claim keywords",
+                    "reason": "Contains reference to purged source URL",
                 })
-                print(f"   🗑️ [Purge] Removing checklist item: '{item_text[:60]}' (matched {match_count} keywords)")
+                print(f"   🗑️ [Purge] Removing checklist item (URL ref): '{item_text[:60]}'")
             else:
                 clean_checklist.append(item)
 
@@ -938,12 +1063,16 @@ def purge_false_evidence(data, unsupported_claims):
 
     total = evidence_removed + checklist_removed
     if total > 0:
-        print(f"   ✅ [Purge] Removed {evidence_removed} evidence links + {checklist_removed} checklist items")
+        print(f"   ✅ [Purge] Removed {evidence_removed} evidence links + {checklist_removed} checklist items (from {len(urls_to_purge)} traced URLs)")
     else:
-        print(f"   ℹ️ [Purge] No matching evidence found to remove (false claims may have been hallucinated without evidence basis)")
+        print(f"   ℹ️ [Purge] URLs identified but no matching evidence found in stored data (sources may already have been removed)")
+
+    if skipped_claims > 0:
+        print(f"   🛡️ [Purge] {skipped_claims} claim(s) had no traceable source — their evidence was preserved (safe mode)")
 
     return {
         "evidence_removed": evidence_removed,
         "checklist_removed": checklist_removed,
         "purged_items": purged_items,
+        "skipped_claims": skipped_claims,
     }

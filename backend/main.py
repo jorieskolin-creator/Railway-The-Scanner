@@ -268,6 +268,7 @@ async def recheck_company(company_name: str, request: Request):
     data["ai_verification"] = {
         "verified": ai_result["verified"],
         "unsupported_claims": ai_result["unsupported_claims"],
+        "unsupported_claims_detailed": ai_result.get("unsupported_claims_detailed", []),
         "model": ai_result["verification_model"],
         "time_ms": ai_result["verification_time_ms"],
     }
@@ -323,6 +324,7 @@ async def recheck_all_companies(request: Request):
         data["ai_verification"] = {
             "verified": ai_result["verified"],
             "unsupported_claims": ai_result["unsupported_claims"],
+            "unsupported_claims_detailed": ai_result.get("unsupported_claims_detailed", []),
             "model": ai_result["verification_model"],
             "time_ms": ai_result["verification_time_ms"],
         }
@@ -377,6 +379,7 @@ def _clean_company_data(company_name: str, data: dict) -> dict:
     """
     ai_verification = data.get("ai_verification", {})
     unsupported_claims = ai_verification.get("unsupported_claims", [])
+    detailed_claims = ai_verification.get("unsupported_claims_detailed", [])
 
     if ai_verification.get("verified", True) or not unsupported_claims:
         return {
@@ -408,9 +411,13 @@ def _clean_company_data(company_name: str, data: dict) -> dict:
     # Only purge evidence if the clean actually removed claims.
     # If claims_removed == 0 the LLM found nothing to change — purging
     # would destroy legitimate evidence based on overly broad keyword matching.
-    purge_result = {"evidence_removed": 0, "checklist_removed": 0, "purged_items": []}
+    #
+    # NEW: purge_false_evidence now uses AI-attributed source URLs instead of
+    # keyword guessing. If a false claim has no traceable source, nothing gets
+    # purged for that claim (safe mode).
+    purge_result = {"evidence_removed": 0, "checklist_removed": 0, "purged_items": [], "skipped_claims": 0}
     if clean_result["claims_removed"] > 0:
-        purge_result = purge_false_evidence(data, unsupported_claims)
+        purge_result = purge_false_evidence(data, unsupported_claims, detailed_claims=detailed_claims)
     else:
         print(f"   ⏭️ [Clean] 0 claims removed — skipping evidence purge")
 
@@ -429,6 +436,7 @@ def _clean_company_data(company_name: str, data: dict) -> dict:
     data["ai_verification"] = {
         "verified": re_verify["verified"],
         "unsupported_claims": re_verify["unsupported_claims"],
+        "unsupported_claims_detailed": re_verify.get("unsupported_claims_detailed", []),
         "model": re_verify["verification_model"],
         "time_ms": re_verify["verification_time_ms"],
     }
@@ -1238,6 +1246,7 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
             full_data["ai_verification"] = {
                 "verified": ai_verification["verified"],
                 "unsupported_claims": ai_verification["unsupported_claims"],
+                "unsupported_claims_detailed": ai_verification.get("unsupported_claims_detailed", []),
                 "model": ai_verification["verification_model"],
                 "time_ms": ai_verification["verification_time_ms"],
             }
@@ -1266,10 +1275,18 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                     # Only purge evidence if the clean actually removed claims.
                     # If claims_removed == 0 the LLM found nothing to change — purging
                     # would destroy legitimate evidence based on overly broad keyword matching.
-                    purge_result = {"evidence_removed": 0, "checklist_removed": 0, "purged_items": []}
+                    #
+                    # NEW: purge uses AI-attributed source URLs. If a false claim has no
+                    # traceable source, nothing gets purged for that claim (safe mode).
+                    purge_result = {"evidence_removed": 0, "checklist_removed": 0, "purged_items": [], "skipped_claims": 0}
                     if auto_clean["claims_removed"] > 0:
                         print(f"   🗑️ [Purge] Removing false evidence from stored data...")
-                        purge_result = purge_false_evidence(full_data, ai_verification["unsupported_claims"])
+                        detailed_claims = ai_verification.get("unsupported_claims_detailed", [])
+                        purge_result = purge_false_evidence(
+                            full_data,
+                            ai_verification["unsupported_claims"],
+                            detailed_claims=detailed_claims,
+                        )
                     else:
                         print(f"   ⏭️ [Auto-Clean] 0 claims removed — skipping evidence purge")
 
@@ -1295,6 +1312,7 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                     full_data["ai_verification"] = {
                         "verified": re_verify["verified"],
                         "unsupported_claims": re_verify["unsupported_claims"],
+                        "unsupported_claims_detailed": re_verify.get("unsupported_claims_detailed", []),
                         "model": re_verify["verification_model"],
                         "time_ms": re_verify["verification_time_ms"],
                     }
