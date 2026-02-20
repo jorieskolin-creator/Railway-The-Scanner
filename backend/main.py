@@ -27,7 +27,7 @@ from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES, get_company_metadata
 from analyze_scores import run_analysis
 from knowledge_base import get_evolving_framework
-from reality_check import validate_summary, validate_pitch, ai_verify_summary, clean_summary
+from reality_check import validate_summary, validate_pitch, ai_verify_summary, clean_summary, purge_false_evidence
 
 # VERIFICATION LOG: v5.2.0 - Performance Optimizations
 print("Starting Adaptability Scanner Backend (v5.2.0 - Performance Optimizations)...", flush=True)
@@ -374,7 +374,10 @@ async def clean_company_summary(company_name: str, request: Request):
             "reason": "No false claims found — summary is already verified.",
         }
 
-    print(f"   🧹 [Clean] Cleaning {len(unsupported_claims)} false claim(s) from {company_name} via Gemini 3 Pro...")
+    print(f"   🧹 [Clean] Cleaning {len(unsupported_claims)} false claim(s) from {company_name}...")
+
+    # Purge false evidence from database first
+    purge_result = purge_false_evidence(data, unsupported_claims)
 
     # Clean the summary using Gemini 3 Pro (higher quality for standalone admin recheck)
     clean_result = clean_summary(
@@ -394,12 +397,10 @@ async def clean_company_summary(company_name: str, request: Request):
         }
 
     # Save cleaned summary
-    old_summary = data.get("summary_text", "")
-    old_pitch = data.get("pitch_text", "")
     data["summary_text"] = clean_result["cleaned_summary"]
     data["pitch_text"] = clean_result["cleaned_pitch"]
 
-    # Re-verify the cleaned summary
+    # Re-verify the cleaned summary against purged evidence
     print(f"   🔄 [Clean] Re-verifying cleaned summary...")
     re_verify = ai_verify_summary(
         summary_text=clean_result["cleaned_summary"],
@@ -419,6 +420,7 @@ async def clean_company_summary(company_name: str, request: Request):
         "original_claims": unsupported_claims,
         "clean_model": clean_result["model"],
         "clean_time_ms": clean_result["time_ms"],
+        "evidence_purged": purge_result,
     }
 
     storage.save_company_data(company_name, data)
@@ -472,7 +474,10 @@ async def clean_all_unverified(request: Request):
             skipped += 1
             continue
 
-        print(f"   🧹 [Clean All] Processing {name} ({len(unsupported_claims)} claims) via Gemini 3 Pro...")
+        print(f"   🧹 [Clean All] Processing {name} ({len(unsupported_claims)} claims)...")
+
+        # Purge false evidence first
+        purge_result = purge_false_evidence(data, unsupported_claims)
 
         clean_result = clean_summary(
             summary_text=data.get("summary_text", ""),
@@ -489,7 +494,7 @@ async def clean_all_unverified(request: Request):
         data["summary_text"] = clean_result["cleaned_summary"]
         data["pitch_text"] = clean_result["cleaned_pitch"]
 
-        # Re-verify
+        # Re-verify against purged evidence
         re_verify = ai_verify_summary(
             summary_text=clean_result["cleaned_summary"],
             evidence_links=data.get("evidence_links", []),
@@ -508,6 +513,7 @@ async def clean_all_unverified(request: Request):
             "original_claims": unsupported_claims,
             "clean_model": clean_result["model"],
             "clean_time_ms": clean_result["time_ms"],
+            "evidence_purged": purge_result,
         }
 
         storage.save_company_data(name, data)
@@ -1251,14 +1257,21 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                 for claim in ai_verification["unsupported_claims"]:
                     print(f"      - {claim}")
 
-                # --- AUTO-CLEAN: Remove false claims instead of just flagging ---
-                print(f"   🧹 [Auto-Clean] Attempting to remove false claims from summary...")
+                # --- PURGE FALSE EVIDENCE FROM DATABASE ---
+                # Remove contaminated evidence_links/reality_checklist so they
+                # don't poison the next scan's "previous scan context".
+                print(f"   🗑️ [Purge] Removing false evidence from stored data...")
+                purge_result = purge_false_evidence(full_data, ai_verification["unsupported_claims"])
+
+                # --- AUTO-CLEAN: Opus rewrites its own summary to remove false claims ---
+                print(f"   🧹 [Auto-Clean] Opus rewriting summary to remove false claims...")
                 auto_clean = clean_summary(
                     summary_text=full_data["summary_text"],
                     pitch_text=full_data["pitch_text"],
                     unsupported_claims=ai_verification["unsupported_claims"],
                     company_name=companyName,
                     anthropic_key=anthropic_key if has_synth_key else None,
+                    use_opus=True,
                 )
 
                 if auto_clean["success"]:
@@ -1270,13 +1283,14 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                         "original_claims": ai_verification["unsupported_claims"],
                         "clean_model": auto_clean["model"],
                         "clean_time_ms": auto_clean["time_ms"],
+                        "evidence_purged": purge_result,
                     }
 
-                    # Re-verify the cleaned summary
+                    # Re-verify the cleaned summary against the purged evidence
                     print(f"   🔄 [Auto-Clean] Re-verifying cleaned summary...")
                     re_verify = ai_verify_summary(
                         summary_text=auto_clean["cleaned_summary"],
-                        evidence_links=reality_results.get("links", []),
+                        evidence_links=full_data.get("evidence_links", []),
                         company_name=companyName,
                         anthropic_key=anthropic_key if has_synth_key else None,
                     )

@@ -543,7 +543,7 @@ Output ONLY valid JSON:
 
 
 def _clean_with_haiku(prompt, api_key):
-    """Rewrite summary using Haiku (fast, cheap — used in scan pipeline)."""
+    """Rewrite summary using Haiku (fast, cheap — used as fallback)."""
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
 
@@ -556,6 +556,23 @@ def _clean_with_haiku(prompt, api_key):
     elapsed_ms = int((time.time() - start) * 1000)
     response_text = response.content[0].text if response.content else ""
     return response_text, elapsed_ms, "claude-haiku-4-5"
+
+
+def _clean_with_opus(prompt, api_key):
+    """Rewrite summary using Opus (highest quality — used in scan pipeline).
+    Opus created the summary, so it's the best model to fix its own mistakes."""
+    import anthropic
+    client = anthropic.Anthropic(api_key=api_key)
+
+    start = time.time()
+    response = client.messages.create(
+        model="claude-opus-4-6",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    elapsed_ms = int((time.time() - start) * 1000)
+    response_text = response.content[0].text if response.content else ""
+    return response_text, elapsed_ms, "claude-opus-4-6"
 
 
 def _clean_with_gemini(prompt):
@@ -624,21 +641,23 @@ def _validate_clean_result(result, summary_text, pitch_text, model_name, elapsed
 
 
 def clean_summary(summary_text, pitch_text, unsupported_claims, company_name,
-                   anthropic_key=None, use_gemini=False):
+                   anthropic_key=None, use_gemini=False, use_opus=False):
     """
     Rewrites a summary and pitch to remove specific false claims found by AI verification.
 
-    Two modes:
-      - use_gemini=False (default): Haiku rewrites — fast & cheap, used in scan pipeline
-      - use_gemini=True: Gemini 3 Pro rewrites — higher quality, used in admin recheck
+    Three modes (pick one):
+      - use_opus=True: Opus rewrites — used in scan pipeline (Opus fixes its own mistakes)
+      - use_gemini=True: Gemini 3 Pro rewrites — used in admin recheck (high quality standalone)
+      - Both False: Haiku rewrites — cheap fallback
 
     Args:
         summary_text: The current summary containing false claims
         pitch_text: The current pitch (may reference false claims too)
         unsupported_claims: List of "[Contradiction] ..." / "[Fabrication] ..." strings
         company_name: The target company name
-        anthropic_key: Optional Anthropic API key (for Haiku mode)
-        use_gemini: If True, use Gemini 3 Pro instead of Haiku for rewriting
+        anthropic_key: Optional Anthropic API key (for Opus/Haiku mode)
+        use_gemini: If True, use Gemini 3 Pro for rewriting
+        use_opus: If True, use Opus for rewriting (highest quality, Opus fixes its own work)
 
     Returns:
         dict with:
@@ -662,12 +681,26 @@ def clean_summary(summary_text, pitch_text, unsupported_claims, company_name,
     prompt = _build_clean_prompt(summary_text, pitch_text, unsupported_claims, company_name)
 
     try:
-        if use_gemini:
-            # Admin recheck mode: Gemini 3 Pro for higher-quality rewriting
+        if use_opus:
+            # In-pipeline mode: Opus fixes its own summary (highest quality)
+            api_key = _get_anthropic_key(anthropic_key)
+            if not api_key:
+                return {
+                    "cleaned_summary": summary_text,
+                    "cleaned_pitch": pitch_text,
+                    "claims_removed": 0,
+                    "model": "skipped_no_api_key",
+                    "time_ms": 0,
+                    "success": False,
+                }
+            print(f"   🔄 [Clean] Using Opus to rewrite summary (fixing its own mistakes)...")
+            response_text, elapsed_ms, model_name = _clean_with_opus(prompt, api_key)
+        elif use_gemini:
+            # Admin recheck mode: Gemini 3 Pro for high-quality standalone rewriting
             print(f"   🔄 [Clean] Using Gemini 3 Pro for summary rewrite...")
             response_text, elapsed_ms, model_name = _clean_with_gemini(prompt)
         else:
-            # In-pipeline mode: Haiku for fast, cheap rewriting
+            # Fallback: Haiku for fast, cheap rewriting
             api_key = _get_anthropic_key(anthropic_key)
             if not api_key:
                 return {
@@ -707,3 +740,113 @@ def clean_summary(summary_text, pitch_text, unsupported_claims, company_name,
             "time_ms": 0,
             "success": False,
         }
+
+
+# --- EVIDENCE PURGING (Layer 4) ---
+# When false claims are found, remove the contaminated evidence from the database
+# so it doesn't poison future scans (Scanner 2 uses previous scan data as context).
+
+def purge_false_evidence(data, unsupported_claims):
+    """
+    Removes evidence_links and reality_checklist items that match false claims.
+
+    When AI verification finds contradictions/fabrications, the underlying evidence
+    that contributed to those false claims must be removed from the stored data.
+    Otherwise, the next scan's 'previous scan context' will include the false data
+    and potentially regenerate the same bad summary.
+
+    Args:
+        data: The full company data dict (modified in-place)
+        unsupported_claims: List of "[Contradiction] ..." / "[Fabrication] ..." strings
+
+    Returns:
+        dict with:
+            - evidence_removed: int (number of evidence links removed)
+            - checklist_removed: int (number of checklist items removed)
+            - purged_items: list of removed items (for audit trail)
+    """
+    if not unsupported_claims:
+        return {"evidence_removed": 0, "checklist_removed": 0, "purged_items": []}
+
+    # Extract key terms from false claims for fuzzy matching
+    # e.g. "[Contradiction] Summary says revenue €2.1B but evidence says €1.5B"
+    #   → extract: "revenue", "€2.1B", "€1.5B"
+    claim_keywords = set()
+    for claim in unsupported_claims:
+        # Strip the [Contradiction] / [Fabrication] prefix
+        clean_claim = re.sub(r'^\[(Contradiction|Fabrication)\]\s*', '', claim)
+        # Extract significant words (numbers, proper nouns, specific terms)
+        words = re.findall(r'[€$£]?\d[\d.,]*[BMKbmk]?|\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b|\b\w{5,}\b', clean_claim)
+        for w in words:
+            claim_keywords.add(w.lower())
+
+    if not claim_keywords:
+        return {"evidence_removed": 0, "checklist_removed": 0, "purged_items": []}
+
+    purged_items = []
+
+    # --- Purge evidence_links ---
+    evidence_links = data.get("evidence_links", [])
+    if evidence_links:
+        clean_links = []
+        for link in evidence_links:
+            snippet = (link.get("snippet", "") or "").lower()
+            title = (link.get("title", "") or "").lower()
+            combined = f"{snippet} {title}"
+
+            # Check if this evidence link matches any false claim keywords
+            match_count = sum(1 for kw in claim_keywords if kw in combined)
+            if match_count >= 2:
+                # Multiple keyword matches — this evidence likely contributed to the false claim
+                purged_items.append({
+                    "type": "evidence_link",
+                    "title": link.get("title", ""),
+                    "reason": f"Matched {match_count} false-claim keywords",
+                })
+                print(f"   🗑️ [Purge] Removing evidence: '{link.get('title', '')[:60]}' (matched {match_count} keywords)")
+            else:
+                clean_links.append(link)
+
+        evidence_removed = len(evidence_links) - len(clean_links)
+        data["evidence_links"] = clean_links
+    else:
+        evidence_removed = 0
+
+    # --- Purge reality_checklist items ---
+    checklist = data.get("reality_checklist", [])
+    if checklist:
+        clean_checklist = []
+        for item in checklist:
+            item_text = ""
+            if isinstance(item, dict):
+                item_text = (item.get("finding", "") or item.get("text", "") or "").lower()
+            elif isinstance(item, str):
+                item_text = item.lower()
+
+            match_count = sum(1 for kw in claim_keywords if kw in item_text)
+            if match_count >= 2:
+                purged_items.append({
+                    "type": "checklist_item",
+                    "text": item_text[:100],
+                    "reason": f"Matched {match_count} false-claim keywords",
+                })
+                print(f"   🗑️ [Purge] Removing checklist item: '{item_text[:60]}' (matched {match_count} keywords)")
+            else:
+                clean_checklist.append(item)
+
+        checklist_removed = len(checklist) - len(clean_checklist)
+        data["reality_checklist"] = clean_checklist
+    else:
+        checklist_removed = 0
+
+    total = evidence_removed + checklist_removed
+    if total > 0:
+        print(f"   ✅ [Purge] Removed {evidence_removed} evidence links + {checklist_removed} checklist items")
+    else:
+        print(f"   ℹ️ [Purge] No matching evidence found to remove (false claims may have been hallucinated without evidence basis)")
+
+    return {
+        "evidence_removed": evidence_removed,
+        "checklist_removed": checklist_removed,
+        "purged_items": purged_items,
+    }
