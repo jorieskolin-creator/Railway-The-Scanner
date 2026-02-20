@@ -805,6 +805,7 @@ def _clean_with_gemini(prompt):
                 config={
                     'temperature': 0.3,
                     'max_output_tokens': 2048,
+                    'response_mime_type': 'application/json',
                 }
             )
 
@@ -837,6 +838,7 @@ def _clean_with_gemini(prompt):
             config={
                 'temperature': 0.3,
                 'max_output_tokens': 2048,
+                'response_mime_type': 'application/json',
             }
         )
 
@@ -962,6 +964,20 @@ def clean_summary(summary_text, pitch_text, unsupported_claims, company_name,
         if result and "cleaned_summary" in result:
             return _validate_clean_result(result, summary_text, pitch_text, model_name, elapsed_ms)
         else:
+            # Fallback: if model says "no contradiction" / nothing to fix, treat as 0 claims removed
+            lower_resp = (response_text or "").lower()
+            no_fix_phrases = ["no contradiction", "no false claim", "nothing to remove",
+                              "no issues found", "all align", "cannot locate any"]
+            if any(phrase in lower_resp for phrase in no_fix_phrases):
+                print(f"   ℹ️ [Clean] {model_name} found no claims to remove — returning original text")
+                return {
+                    "cleaned_summary": summary_text,
+                    "cleaned_pitch": pitch_text,
+                    "claims_removed": 0,
+                    "model": f"{model_name}_no_claims_found",
+                    "time_ms": elapsed_ms,
+                    "success": True,
+                }
             print(f"   ⚠️ [Clean] Could not parse {model_name} response: {response_text[:200]}")
             return {
                 "cleaned_summary": summary_text,
