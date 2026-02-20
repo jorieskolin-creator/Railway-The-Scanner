@@ -19,7 +19,11 @@ def _strip_code_fences(text):
     """Strip markdown code fences (```json ... ```) from LLM responses."""
     if not text:
         return text
-    # Remove ```json ... ``` wrapping
+    # First try to extract content from a complete code block
+    block_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?\s*```', text, re.DOTALL)
+    if block_match:
+        return block_match.group(1).strip()
+    # Fallback: remove all code fence markers
     stripped = re.sub(r'```(?:json)?\s*', '', text).strip()
     return stripped
 
@@ -36,7 +40,8 @@ def _robust_parse_json(text):
     text = _strip_code_fences(text)
 
     # 1. Try finding a markdown block first (in case strip didn't catch it)
-    markdown_match = re.search(r'```json\s*(\{.*?\})\s*```', text, re.DOTALL)
+    # Use greedy match for inner content to handle nested braces correctly
+    markdown_match = re.search(r'```json\s*(\{.*\})\s*```', text, re.DOTALL)
     candidate = markdown_match.group(1) if markdown_match else None
 
     # 2. Fallback: Find the first outer { to last }
@@ -462,7 +467,7 @@ If there are NO contradictions, return:
                 "time_ms": elapsed_ms,
             }
         else:
-            print(f"   ⚠️ [Contradiction Check] Could not parse Haiku response: {response_text[:200]}")
+            print(f"   ⚠️ [Contradiction Check] Could not parse Haiku response (defaulting to no contradictions): {response_text[:100]}")
             return {"contradictions": [], "model": "haiku_parse_error", "time_ms": elapsed_ms}
 
     except Exception as e:
