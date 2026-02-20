@@ -307,10 +307,10 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
           <ReferenceArea x1={0} x2={50} y1={0} y2={50} fill="url(#dangerSpot)" stroke="none" />
           <ReferenceLine y={25} stroke="#64748b" strokeDasharray="4 4" strokeOpacity={0.7} strokeWidth={1.5} />
           <ReferenceLine y={75} stroke="#64748b" strokeDasharray="4 4" strokeOpacity={0.7} strokeWidth={1.5} />
-          <ReferenceLine y={50} stroke="#22d3ee" strokeDasharray="4 4" strokeOpacity={0.6} strokeWidth={2} />
+          <ReferenceLine y={50} stroke="#ffffff" strokeDasharray="4 4" strokeOpacity={0.5} strokeWidth={2} />
           <ReferenceLine x={25} stroke="#64748b" strokeDasharray="4 4" strokeOpacity={0.7} strokeWidth={1.5} />
           <ReferenceLine x={75} stroke="#64748b" strokeDasharray="4 4" strokeOpacity={0.7} strokeWidth={1.5} />
-          <ReferenceLine x={50} stroke="#6366f1" strokeDasharray="4 4" strokeOpacity={0.3} strokeWidth={2} />
+          <ReferenceLine x={50} stroke="#ffffff" strokeDasharray="4 4" strokeOpacity={0.5} strokeWidth={2} />
 
           <ReferenceArea x1={80} x2={98} y1={92} y2={98} stroke="none" fill="none">
              <Label value="THRIVING" position="insideTopRight" fill="#34d399" fontSize={10} fontWeight={900} opacity={0.8} letterSpacing="0.05em" />
