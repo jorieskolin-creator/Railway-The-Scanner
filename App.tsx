@@ -285,23 +285,22 @@ const App = () => {
       if (res.ok) {
         const json = await res.json();
         setDataReviewItems(json.companies || []);
-        // Store password for subsequent admin calls in this session
-        (window as any).__adminToken = password;
       }
     } catch (e) { console.error(e); alert("Failed to load review data."); }
     finally { setDataReviewLoading(false); }
   };
 
   const handleDeleteCompany = async (companyName) => {
-    const token = (window as any).__adminToken;
-    if (!token) { alert("Admin session expired. Please reopen Data Review."); return; }
+    const password = prompt(`AUTHENTICATION REQUIRED\n\nEnter Admin Password to DELETE "${companyName}":`);
+    if (!password) return;
     if (!confirm(`DELETE all data for "${companyName}"?\n\nThis removes the company from storage and the dashboard index.\nYou can rescan it later to regenerate fresh data.`)) return;
 
     try {
       const res = await fetch(`/admin/company/${encodeURIComponent(companyName)}`, {
         method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: { 'Authorization': `Bearer ${password}` }
       });
+      if (res.status === 401) { alert("ACCESS DENIED: Incorrect Password."); return; }
       if (res.ok) {
         setDataReviewItems(prev => prev.filter(c => c.companyName !== companyName));
         fetchSummaryData(true);
@@ -312,14 +311,15 @@ const App = () => {
   };
 
   const handleRecheckAll = async () => {
-    const token = (window as any).__adminToken;
-    if (!token) { alert("Admin session expired."); return; }
+    const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to run Reality Check on all companies:");
+    if (!password) return;
     setRecheckLoading(true);
     try {
       const res = await fetch('/admin/recheck-all', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: { 'Authorization': `Bearer ${password}` }
       });
+      if (res.status === 401) { alert("ACCESS DENIED: Incorrect Password."); setRecheckLoading(false); return; }
       if (res.ok) {
         const json = await res.json();
         setRecheckResults(json);
