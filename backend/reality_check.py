@@ -23,6 +23,96 @@ def _strip_code_fences(text):
     stripped = re.sub(r'```(?:json)?\s*', '', text).strip()
     return stripped
 
+
+def _robust_parse_json(text):
+    """
+    Robustly parse JSON from LLM response text.
+    Handles code fences, truncated responses, trailing commas, missing commas,
+    and other common LLM JSON errors. Returns parsed dict or None.
+    """
+    if not text:
+        return None
+
+    text = _strip_code_fences(text)
+
+    # 1. Try finding a markdown block first (in case strip didn't catch it)
+    markdown_match = re.search(r'```json\s*(\{.*?\})\s*```', text, re.DOTALL)
+    candidate = markdown_match.group(1) if markdown_match else None
+
+    # 2. Fallback: Find the first outer { to last }
+    if not candidate:
+        match = re.search(r'\{.*\}', text, re.DOTALL)
+        if match:
+            candidate = match.group(0)
+
+    # 3. If no closing brace found, try to complete truncated JSON
+    if not candidate and '{' in text:
+        # Extract from first { to end, then try adding closing braces
+        start_idx = text.index('{')
+        candidate = text[start_idx:]
+        # Count unclosed braces/brackets and close them
+        open_braces = candidate.count('{') - candidate.count('}')
+        open_brackets = candidate.count('[') - candidate.count(']')
+        # If the candidate ends mid-string, close the string first
+        in_string = candidate.count('"') % 2 == 1
+        if in_string:
+            candidate += '..."'
+        candidate += ']' * max(0, open_brackets)
+        candidate += '}' * max(0, open_braces)
+
+    if not candidate:
+        return None
+
+    # 4. Fast path: try parsing as-is
+    try:
+        return json.loads(candidate, strict=False)
+    except json.JSONDecodeError:
+        pass
+
+    # 5. Auto-repair common LLM JSON errors
+    repaired = candidate
+    # Remove trailing commas before } or ]
+    repaired = re.sub(r',\s*([}\]])', r'\1', repaired)
+    # Fix missing commas between }{ or }" or ]" patterns
+    repaired = re.sub(r'(\})\s*(\{)', r'\1,\2', repaired)
+    repaired = re.sub(r'(\})\s*(")', r'\1,\2', repaired)
+    repaired = re.sub(r'(\])\s*(")', r'\1,\2', repaired)
+    # Fix missing commas after true/false/null before next key
+    repaired = re.sub(r'(true|false|null)\s*\n\s*(")', r'\1,\2', repaired)
+    # Fix missing commas after numbers before next key
+    repaired = re.sub(r'(\d)\s*\n\s*(")', r'\1,\2', repaired)
+    # Remove control characters that break JSON
+    repaired = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', ' ', repaired)
+
+    try:
+        return json.loads(repaired, strict=False)
+    except json.JSONDecodeError:
+        pass
+
+    # 6. Iterative position-based repair (handles deeply nested errors)
+    for _attempt in range(30):
+        try:
+            return json.loads(repaired, strict=False)
+        except json.JSONDecodeError as e:
+            msg = str(e)
+            pos = e.pos
+            if pos is None or pos >= len(repaired):
+                break
+            if "Expecting ',' delimiter" in msg:
+                repaired = repaired[:pos] + ',' + repaired[pos:]
+            elif "Expecting ':' delimiter" in msg:
+                repaired = repaired[:pos] + ':' + repaired[pos:]
+            elif "Expecting value" in msg and pos > 0 and repaired[pos - 1] == ',':
+                repaired = repaired[:pos - 1] + repaired[pos:]
+            else:
+                break
+
+    # 7. Final attempt
+    try:
+        return json.loads(repaired, strict=False)
+    except json.JSONDecodeError:
+        return None
+
 # --- HEURISTIC PATTERNS ---
 # These patterns indicate the AI is fabricating events rather than synthesizing evidence
 
@@ -331,11 +421,9 @@ If there are NO contradictions, return:
         elapsed_ms = int((time.time() - start) * 1000)
 
         response_text = response.content[0].text if response.content else ""
-        response_text = _strip_code_fences(response_text)
 
-        json_match = re.search(r'\{[^{}]*\}', response_text, re.DOTALL)
-        if json_match:
-            result = json.loads(json_match.group())
+        result = _robust_parse_json(response_text)
+        if result and "contradictions" in result:
             contradictions = result.get("contradictions", [])
             return {
                 "contradictions": contradictions[:10],
@@ -422,11 +510,9 @@ If the summary appears accurate or you found no clear falsehoods, return:
 
         elapsed_ms = int((time.time() - start) * 1000)
         text = response.text if response.text else ""
-        text = _strip_code_fences(text)
 
-        json_match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
-        if json_match:
-            result = json.loads(json_match.group())
+        result = _robust_parse_json(text)
+        if result and "fabrications" in result:
             fabrications = result.get("fabrications", [])
             return {
                 "fabrications": fabrications[:10],
@@ -725,11 +811,9 @@ def clean_summary(summary_text, pitch_text, unsupported_claims, company_name,
             print(f"   🔄 [Clean] Using Haiku for summary rewrite...")
             response_text, elapsed_ms, model_name = _clean_with_haiku(prompt, api_key)
 
-        # Parse JSON from response (strip markdown code fences from LLM output)
-        response_text = _strip_code_fences(response_text)
-        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-        if json_match:
-            result = json.loads(json_match.group())
+        # Parse JSON from response (robust parsing with auto-repair)
+        result = _robust_parse_json(response_text)
+        if result and "cleaned_summary" in result:
             return _validate_clean_result(result, summary_text, pitch_text, model_name, elapsed_ms)
         else:
             print(f"   ⚠️ [Clean] Could not parse {model_name} response: {response_text[:200]}")
