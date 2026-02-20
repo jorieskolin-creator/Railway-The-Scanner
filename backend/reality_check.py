@@ -240,35 +240,15 @@ def validate_pitch(pitch_text, company_name):
 
 
 # --- AI-POWERED VERIFICATION (Layer 2) ---
-# Uses Haiku to cross-reference specific claims in the summary against evidence snippets.
-# Catches fabricated numbers, names, dates, and claims that appear in no snippet.
+# Two-phase verification:
+#   Phase 1 (Contradiction Check): Haiku checks if summary CONTRADICTS evidence snippets
+#           (e.g. snippet says "revenue €50M" but summary says "revenue €1M" → hallucination).
+#           Missing data is NOT a flag — Opus may have sourced it from full page content.
+#   Phase 2 (Fresh Search): Gemini + Google Search grounding independently verifies the summary
+#           against live web data, catching fabricated claims that have no basis anywhere.
 
-def ai_verify_summary(summary_text, evidence_links, company_name, anthropic_key=None):
-    """
-    AI-powered hallucination check: sends summary + evidence snippets to Haiku
-    and asks it to identify specific claims NOT supported by any evidence.
-
-    Args:
-        summary_text: The AI-generated summary
-        evidence_links: List of evidence_link dicts (with title, snippet, url)
-        company_name: Target company name
-        anthropic_key: Anthropic API key (if None, tries env var)
-
-    Returns:
-        dict with:
-            - verified: bool (True if no unsupported claims found)
-            - unsupported_claims: list of specific unsupported claims
-            - verification_model: str (model used)
-            - verification_time_ms: int
-    """
-    if not summary_text or not evidence_links:
-        return {
-            "verified": True,
-            "unsupported_claims": [],
-            "verification_model": "skipped",
-            "verification_time_ms": 0,
-        }
-
+def _get_anthropic_key(anthropic_key=None):
+    """Resolve Anthropic API key from argument or environment."""
     api_key = anthropic_key
     if not api_key:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -276,16 +256,16 @@ def ai_verify_summary(summary_text, evidence_links, company_name, anthropic_key=
             try: api_key = api_key.split("=", 1)[1]
             except: pass
         api_key = (api_key or "").strip().strip('"').strip("'")
+    return api_key
 
-    if not api_key:
-        return {
-            "verified": True,
-            "unsupported_claims": [],
-            "verification_model": "skipped_no_key",
-            "verification_time_ms": 0,
-        }
 
-    # Build evidence context from snippets
+def _contradiction_check(summary_text, evidence_links, company_name, api_key):
+    """
+    Phase 1: Check if the summary CONTRADICTS any evidence snippet.
+    Only flags conflicting data (e.g. different numbers for the same metric).
+    Does NOT flag claims that are absent from snippets — that just means
+    Opus sourced them from full page content the snippets didn't capture.
+    """
     evidence_text = ""
     verified_links = [l for l in evidence_links if l.get("verified", True)]
     for i, link in enumerate(verified_links[:20], 1):
@@ -296,13 +276,12 @@ def ai_verify_summary(summary_text, evidence_links, company_name, anthropic_key=
 
     if not evidence_text.strip():
         return {
-            "verified": True,
-            "unsupported_claims": [],
-            "verification_model": "skipped_no_evidence",
-            "verification_time_ms": 0,
+            "contradictions": [],
+            "model": "skipped_no_evidence",
+            "time_ms": 0,
         }
 
-    prompt = f"""You are a fact-checker. Your job is to find specific claims in the SUMMARY that are NOT supported by ANY of the EVIDENCE SNIPPETS.
+    prompt = f"""You are a contradiction detector. Your ONLY job is to find places where the SUMMARY says something that DIRECTLY CONFLICTS with the EVIDENCE SNIPPETS.
 
 COMPANY: {company_name}
 
@@ -312,18 +291,23 @@ SUMMARY:
 EVIDENCE SNIPPETS:
 {evidence_text}
 
-INSTRUCTIONS:
-- Focus ONLY on specific, verifiable claims: numbers, percentages, revenue figures, dates, named partnerships, named people, specific product names, specific events.
-- Do NOT flag general qualitative statements like "the company is modernizing" or "shows strong digital ambition" — these are synthesis/interpretation, not factual claims.
-- Do NOT flag the company name or common knowledge about the company.
-- A claim is "unsupported" ONLY if it contains a specific data point (number, name, date) that appears in ZERO snippets.
-- Be strict: if a snippet mentions the same topic but with different numbers, that IS a flag.
+RULES — READ CAREFULLY:
+1. A CONTRADICTION is when the summary states a specific fact (number, date, name, percentage) and an evidence snippet states a DIFFERENT value for THE SAME thing.
+   Example: Summary says "revenue €2.1B" but snippet says "revenue €1.5B" → CONTRADICTION.
+   Example: Summary says "CEO John Smith" but snippet says "CEO Jane Doe" → CONTRADICTION.
+
+2. If the summary mentions something that NO snippet covers at all, that is NOT a contradiction. The original AI had access to full web pages, not just snippets. Silence is not conflict.
+   Example: Summary says "revenue €2.1B" and no snippet mentions revenue → NOT a contradiction, SKIP IT.
+
+3. Do NOT flag qualitative statements, opinions, interpretations, or synthesis.
+4. Do NOT flag the company name or general industry knowledge.
+5. Only flag clear, specific data conflicts where both summary AND evidence mention the same topic with different facts.
 
 Output valid JSON only:
-{{"unsupported_claims": ["claim 1 text", "claim 2 text"], "all_claims_supported": true/false}}
+{{"contradictions": ["Summary says X but evidence says Y", ...], "has_contradictions": true/false}}
 
-If ALL specific claims trace back to at least one snippet, return:
-{{"unsupported_claims": [], "all_claims_supported": true}}"""
+If there are NO contradictions, return:
+{{"contradictions": [], "has_contradictions": false}}"""
 
     try:
         import anthropic
@@ -339,32 +323,181 @@ If ALL specific claims trace back to at least one snippet, return:
 
         response_text = response.content[0].text if response.content else ""
 
-        # Parse JSON from response
         json_match = re.search(r'\{[^{}]*\}', response_text, re.DOTALL)
         if json_match:
             result = json.loads(json_match.group())
-            claims = result.get("unsupported_claims", [])
-            all_ok = result.get("all_claims_supported", len(claims) == 0)
+            contradictions = result.get("contradictions", [])
             return {
-                "verified": all_ok and len(claims) == 0,
-                "unsupported_claims": claims[:10],  # Cap at 10
-                "verification_model": "claude-haiku-4-5",
-                "verification_time_ms": elapsed_ms,
+                "contradictions": contradictions[:10],
+                "model": "claude-haiku-4-5",
+                "time_ms": elapsed_ms,
             }
         else:
-            print(f"   ⚠️ [AI Verify] Could not parse Haiku response: {response_text[:200]}")
-            return {
-                "verified": True,
-                "unsupported_claims": [],
-                "verification_model": "haiku_parse_error",
-                "verification_time_ms": elapsed_ms,
-            }
+            print(f"   ⚠️ [Contradiction Check] Could not parse Haiku response: {response_text[:200]}")
+            return {"contradictions": [], "model": "haiku_parse_error", "time_ms": elapsed_ms}
 
     except Exception as e:
-        print(f"   ❌ [AI Verify] Haiku verification failed: {e}")
+        print(f"   ❌ [Contradiction Check] Haiku failed: {e}")
+        return {"contradictions": [], "model": f"error: {str(e)[:100]}", "time_ms": 0}
+
+
+def _fresh_search_verify(summary_text, company_name):
+    """
+    Phase 2: Send the summary to Gemini with Google Search grounding.
+    Gemini searches the web independently and checks if the summary claims are true.
+    This catches fabricated claims that have no basis anywhere on the internet.
+    """
+    import concurrent.futures
+
+    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
+    if not gemini_key:
+        return {
+            "fabrications": [],
+            "model": "skipped_no_gemini_key",
+            "time_ms": 0,
+        }
+
+    prompt = f"""You are a fact-checker with access to Google Search. Your job is to verify the following AI-generated company analysis by searching the web.
+
+COMPANY: {company_name}
+
+AI-GENERATED SUMMARY TO VERIFY:
+{summary_text}
+
+INSTRUCTIONS:
+1. Search for the key factual claims in this summary: revenue figures, employee counts, partnerships, product names, executive names, specific events, dates, percentages.
+2. For each specific claim, determine if it is TRUE, FALSE, or UNVERIFIABLE based on your search results.
+3. ONLY flag claims that are clearly FALSE — where your search results show different facts.
+4. Do NOT flag claims you simply cannot find — the company may be small or private. Absence of evidence is not evidence of fabrication.
+5. Do NOT flag qualitative statements, opinions, or general industry observations.
+
+Output ONLY valid JSON:
+{{"fabrications": ["Claim X is false because web shows Y instead", ...], "summary_accurate": true/false}}
+
+If the summary appears accurate or you found no clear falsehoods, return:
+{{"fabrications": [], "summary_accurate": true}}"""
+
+    try:
+        from google import genai
+
+        client = genai.Client(api_key=gemini_key)
+        start = time.time()
+
+        def _call():
+            return client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config={
+                    'tools': [{'google_search': {}}],
+                    'temperature': 0.0,
+                    'safety_settings': [
+                        {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
+                        {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
+                        {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
+                        {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
+                    ]
+                }
+            )
+
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = pool.submit(_call)
+        try:
+            response = future.result(timeout=30)
+        except concurrent.futures.TimeoutError:
+            pool.shutdown(wait=False)
+            elapsed_ms = int((time.time() - start) * 1000)
+            print(f"   ⏰ [Fresh Search] Gemini timed out after 30s ({elapsed_ms}ms)")
+            return {"fabrications": [], "model": "gemini_timeout", "time_ms": elapsed_ms}
+        pool.shutdown(wait=False)
+
+        elapsed_ms = int((time.time() - start) * 1000)
+        text = response.text if response.text else ""
+
+        json_match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
+        if json_match:
+            result = json.loads(json_match.group())
+            fabrications = result.get("fabrications", [])
+            return {
+                "fabrications": fabrications[:10],
+                "model": "gemini-2.5-flash",
+                "time_ms": elapsed_ms,
+            }
+        else:
+            print(f"   ⚠️ [Fresh Search] Could not parse Gemini response: {text[:200]}")
+            return {"fabrications": [], "model": "gemini_parse_error", "time_ms": elapsed_ms}
+
+    except Exception as e:
+        print(f"   ❌ [Fresh Search] Gemini verification failed: {e}")
+        return {"fabrications": [], "model": f"error: {str(e)[:100]}", "time_ms": 0}
+
+
+def ai_verify_summary(summary_text, evidence_links, company_name, anthropic_key=None):
+    """
+    AI-powered hallucination check — two phases:
+
+    Phase 1 (Contradiction Check — Haiku):
+        Compares summary against stored evidence snippets.
+        Only flags CONTRADICTIONS (summary says X, evidence says Y).
+        Does NOT flag missing data (silence ≠ hallucination).
+
+    Phase 2 (Fresh Search — Gemini + Google Search):
+        Independently verifies summary claims against live web data.
+        Catches fabricated facts that contradict reality.
+
+    A company is marked "unverified" ONLY if contradictions or fabrications are found.
+
+    Returns:
+        dict with:
+            - verified: bool
+            - unsupported_claims: list of contradictions + fabrications
+            - verification_model: str
+            - verification_time_ms: int
+    """
+    if not summary_text:
         return {
             "verified": True,
             "unsupported_claims": [],
-            "verification_model": f"error: {str(e)[:100]}",
+            "verification_model": "skipped",
             "verification_time_ms": 0,
         }
+
+    api_key = _get_anthropic_key(anthropic_key)
+    total_start = time.time()
+    all_issues = []
+    models_used = []
+
+    # --- Phase 1: Contradiction check (Haiku vs stored snippets) ---
+    if evidence_links and api_key:
+        print(f"   🔍 [Phase 1] Contradiction check against {len(evidence_links)} evidence snippets...")
+        contradiction_result = _contradiction_check(summary_text, evidence_links, company_name, api_key)
+        models_used.append(f"contradiction:{contradiction_result['model']}")
+
+        if contradiction_result["contradictions"]:
+            print(f"   ⚠️ [Phase 1] {len(contradiction_result['contradictions'])} contradiction(s) found")
+            for c in contradiction_result["contradictions"]:
+                all_issues.append(f"[Contradiction] {c}")
+                print(f"      - {c}")
+        else:
+            print(f"   ✅ [Phase 1] No contradictions ({contradiction_result['time_ms']}ms)")
+
+    # --- Phase 2: Fresh search verification (Gemini + Google Search) ---
+    print(f"   🌐 [Phase 2] Fresh web search verification...")
+    search_result = _fresh_search_verify(summary_text, company_name)
+    models_used.append(f"search:{search_result['model']}")
+
+    if search_result["fabrications"]:
+        print(f"   ⚠️ [Phase 2] {len(search_result['fabrications'])} fabrication(s) found")
+        for f in search_result["fabrications"]:
+            all_issues.append(f"[Fabrication] {f}")
+            print(f"      - {f}")
+    else:
+        print(f"   ✅ [Phase 2] Summary checks out ({search_result['time_ms']}ms)")
+
+    total_ms = int((time.time() - total_start) * 1000)
+
+    return {
+        "verified": len(all_issues) == 0,
+        "unsupported_claims": all_issues[:10],
+        "verification_model": " + ".join(models_used),
+        "verification_time_ms": total_ms,
+    }

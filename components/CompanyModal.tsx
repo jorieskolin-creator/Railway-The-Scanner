@@ -119,7 +119,7 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading }) => {
                {/* AI VERIFICATION BADGE IN HEADER */}
                {company.ai_verification && !company.ai_verification.verified && (
                    <span className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-orange-500/20 text-orange-300 border border-orange-500/30">
-                       <Search size={10} /> UNVERIFIED CLAIMS
+                       <Search size={10} /> DATA CONFLICT
                    </span>
                )}
             </div>

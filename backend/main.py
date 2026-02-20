@@ -276,7 +276,7 @@ async def recheck_company(company_name: str, request: Request):
     storage.update_global_index_field(company_name, "ai_verified", ai_result["verified"])
 
     recommendation = "DELETE and rescan" if summary_result["risk"] == "high" else \
-                     "Rescan — unsupported claims found" if not ai_result["verified"] else \
+                     "Rescan — contradictions or fabrications found" if not ai_result["verified"] else \
                      "Review manually" if summary_result["risk"] == "medium" else "OK"
 
     return {
@@ -1046,11 +1046,12 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
         else:
             print(f"   ✅ [Reality Check] Summary OK (score {summary_check['score']}/100)")
 
-        # --- AI VERIFICATION: Cross-reference summary claims against evidence snippets ---
-        # Uses Haiku to check if specific numbers, names, dates in summary are backed by evidence.
+        # --- AI VERIFICATION: Two-phase contradiction + fresh search check ---
+        # Phase 1: Haiku checks if summary CONTRADICTS stored evidence snippets
+        # Phase 2: Gemini + Google Search independently verifies summary against live web
         # Only runs if heuristic check passed (no point verifying an already-blocked summary).
         if summary_check["risk"] != "high":
-            print(f"   🔄 [AI Verify] Cross-referencing summary against {len(reality_results.get('links', []))} evidence snippets...")
+            print(f"   🔄 [AI Verify] Two-phase verification (contradiction check + fresh web search)...")
             ai_verification = ai_verify_summary(
                 summary_text=full_data["summary_text"],
                 evidence_links=reality_results.get("links", []),
@@ -1064,9 +1065,9 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                 "time_ms": ai_verification["verification_time_ms"],
             }
             if ai_verification["verified"]:
-                print(f"   ✅ [AI Verify] All claims verified ({ai_verification['verification_time_ms']}ms)")
+                print(f"   ✅ [AI Verify] No contradictions or fabrications ({ai_verification['verification_time_ms']}ms)")
             else:
-                print(f"   ⚠️ [AI Verify] {len(ai_verification['unsupported_claims'])} unsupported claim(s) found ({ai_verification['verification_time_ms']}ms):")
+                print(f"   ⚠️ [AI Verify] {len(ai_verification['unsupported_claims'])} issue(s) found ({ai_verification['verification_time_ms']}ms):")
                 for claim in ai_verification["unsupported_claims"]:
                     print(f"      - {claim}")
         else:
