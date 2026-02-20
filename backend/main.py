@@ -27,7 +27,7 @@ from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES, get_company_metadata
 from analyze_scores import run_analysis
 from knowledge_base import get_evolving_framework
-from reality_check import validate_summary, validate_pitch, ai_verify_summary
+from reality_check import validate_summary, validate_pitch, ai_verify_summary, clean_summary
 
 # VERIFICATION LOG: v5.2.0 - Performance Optimizations
 print("Starting Adaptability Scanner Backend (v5.2.0 - Performance Optimizations)...", flush=True)
@@ -348,6 +348,184 @@ async def recheck_all_companies(request: Request):
         "flagged_count": len(flagged),
         "flagged": flagged,
     }
+
+
+@app.post("/admin/clean-summary/{company_name}")
+async def clean_company_summary(company_name: str, request: Request):
+    """
+    Clean false claims from a company's summary without doing a full rescan.
+
+    If AI verification found unsupported_claims (verified=false), this endpoint
+    rewrites the summary to remove just the false parts, then re-verifies.
+    Much cheaper than a full rescan (1 Haiku call vs 3 scanners + Opus synthesis).
+    """
+    verify_admin(request)
+    data = storage.get_company_data(company_name)
+    if not data:
+        raise HTTPException(status_code=404, detail=f"Company '{company_name}' not found in database.")
+
+    ai_verification = data.get("ai_verification", {})
+    unsupported_claims = ai_verification.get("unsupported_claims", [])
+
+    if ai_verification.get("verified", True) or not unsupported_claims:
+        return {
+            "company": company_name,
+            "action": "skipped",
+            "reason": "No false claims found — summary is already verified.",
+        }
+
+    print(f"   🧹 [Clean] Cleaning {len(unsupported_claims)} false claim(s) from {company_name}...")
+
+    # Clean the summary
+    clean_result = clean_summary(
+        summary_text=data.get("summary_text", ""),
+        pitch_text=data.get("pitch_text", ""),
+        unsupported_claims=unsupported_claims,
+        company_name=company_name,
+    )
+
+    if not clean_result["success"]:
+        return {
+            "company": company_name,
+            "action": "failed",
+            "reason": f"Cleaning failed: {clean_result['model']}",
+            "original_claims": unsupported_claims,
+        }
+
+    # Save cleaned summary
+    old_summary = data.get("summary_text", "")
+    old_pitch = data.get("pitch_text", "")
+    data["summary_text"] = clean_result["cleaned_summary"]
+    data["pitch_text"] = clean_result["cleaned_pitch"]
+
+    # Re-verify the cleaned summary
+    print(f"   🔄 [Clean] Re-verifying cleaned summary...")
+    re_verify = ai_verify_summary(
+        summary_text=clean_result["cleaned_summary"],
+        evidence_links=data.get("evidence_links", []),
+        company_name=company_name,
+    )
+
+    data["ai_verification"] = {
+        "verified": re_verify["verified"],
+        "unsupported_claims": re_verify["unsupported_claims"],
+        "model": re_verify["verification_model"],
+        "time_ms": re_verify["verification_time_ms"],
+    }
+    data["summary_cleaned"] = {
+        "was_cleaned": True,
+        "claims_removed": clean_result["claims_removed"],
+        "original_claims": unsupported_claims,
+        "clean_model": clean_result["model"],
+        "clean_time_ms": clean_result["time_ms"],
+    }
+
+    storage.save_company_data(company_name, data)
+    storage.update_global_index_field(company_name, "ai_verified", re_verify["verified"])
+
+    print(f"   ✅ [Clean] {company_name}: Removed {clean_result['claims_removed']} false claims. Re-verified: {re_verify['verified']}")
+
+    return {
+        "company": company_name,
+        "action": "cleaned",
+        "claims_removed": clean_result["claims_removed"],
+        "original_claims": unsupported_claims,
+        "re_verified": re_verify["verified"],
+        "remaining_issues": re_verify["unsupported_claims"],
+        "clean_time_ms": clean_result["time_ms"],
+        "verify_time_ms": re_verify["verification_time_ms"],
+    }
+
+
+@app.post("/admin/clean-all-unverified")
+async def clean_all_unverified(request: Request):
+    """
+    Clean false claims from ALL unverified companies in the database.
+    Iterates through all companies, finds those with ai_verified=false,
+    and attempts to clean their summaries.
+    """
+    verify_admin(request)
+    companies = storage.get_all_companies_summary()
+    cleaned = []
+    skipped = 0
+    failed = []
+
+    for company in companies:
+        name = company.get("companyName", "")
+        if not name:
+            continue
+
+        # Only process unverified companies
+        if company.get("ai_verified", True):
+            skipped += 1
+            continue
+
+        data = storage.get_company_data(name)
+        if not data:
+            continue
+
+        ai_verification = data.get("ai_verification", {})
+        unsupported_claims = ai_verification.get("unsupported_claims", [])
+
+        if not unsupported_claims:
+            skipped += 1
+            continue
+
+        print(f"   🧹 [Clean All] Processing {name} ({len(unsupported_claims)} claims)...")
+
+        clean_result = clean_summary(
+            summary_text=data.get("summary_text", ""),
+            pitch_text=data.get("pitch_text", ""),
+            unsupported_claims=unsupported_claims,
+            company_name=name,
+        )
+
+        if not clean_result["success"]:
+            failed.append({"companyName": name, "reason": clean_result["model"]})
+            continue
+
+        data["summary_text"] = clean_result["cleaned_summary"]
+        data["pitch_text"] = clean_result["cleaned_pitch"]
+
+        # Re-verify
+        re_verify = ai_verify_summary(
+            summary_text=clean_result["cleaned_summary"],
+            evidence_links=data.get("evidence_links", []),
+            company_name=name,
+        )
+
+        data["ai_verification"] = {
+            "verified": re_verify["verified"],
+            "unsupported_claims": re_verify["unsupported_claims"],
+            "model": re_verify["verification_model"],
+            "time_ms": re_verify["verification_time_ms"],
+        }
+        data["summary_cleaned"] = {
+            "was_cleaned": True,
+            "claims_removed": clean_result["claims_removed"],
+            "original_claims": unsupported_claims,
+            "clean_model": clean_result["model"],
+            "clean_time_ms": clean_result["time_ms"],
+        }
+
+        storage.save_company_data(name, data)
+        storage.update_global_index_field(name, "ai_verified", re_verify["verified"])
+
+        cleaned.append({
+            "companyName": name,
+            "claims_removed": clean_result["claims_removed"],
+            "re_verified": re_verify["verified"],
+        })
+
+    return {
+        "total_checked": len(companies),
+        "cleaned": len(cleaned),
+        "skipped": skipped,
+        "failed": len(failed),
+        "results": cleaned,
+        "failures": failed,
+    }
+
 
 # --- SERVER-SIDE BATCH REFRESH ---
 
@@ -1070,6 +1248,48 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                 print(f"   ⚠️ [AI Verify] {len(ai_verification['unsupported_claims'])} issue(s) found ({ai_verification['verification_time_ms']}ms):")
                 for claim in ai_verification["unsupported_claims"]:
                     print(f"      - {claim}")
+
+                # --- AUTO-CLEAN: Remove false claims instead of just flagging ---
+                print(f"   🧹 [Auto-Clean] Attempting to remove false claims from summary...")
+                auto_clean = clean_summary(
+                    summary_text=full_data["summary_text"],
+                    pitch_text=full_data["pitch_text"],
+                    unsupported_claims=ai_verification["unsupported_claims"],
+                    company_name=companyName,
+                    anthropic_key=anthropic_key if has_synth_key else None,
+                )
+
+                if auto_clean["success"]:
+                    full_data["summary_text"] = auto_clean["cleaned_summary"]
+                    full_data["pitch_text"] = auto_clean["cleaned_pitch"]
+                    full_data["summary_cleaned"] = {
+                        "was_cleaned": True,
+                        "claims_removed": auto_clean["claims_removed"],
+                        "original_claims": ai_verification["unsupported_claims"],
+                        "clean_model": auto_clean["model"],
+                        "clean_time_ms": auto_clean["time_ms"],
+                    }
+
+                    # Re-verify the cleaned summary
+                    print(f"   🔄 [Auto-Clean] Re-verifying cleaned summary...")
+                    re_verify = ai_verify_summary(
+                        summary_text=auto_clean["cleaned_summary"],
+                        evidence_links=reality_results.get("links", []),
+                        company_name=companyName,
+                        anthropic_key=anthropic_key if has_synth_key else None,
+                    )
+                    full_data["ai_verification"] = {
+                        "verified": re_verify["verified"],
+                        "unsupported_claims": re_verify["unsupported_claims"],
+                        "model": re_verify["verification_model"],
+                        "time_ms": re_verify["verification_time_ms"],
+                    }
+                    if re_verify["verified"]:
+                        print(f"   ✅ [Auto-Clean] Cleaned summary passed verification!")
+                    else:
+                        print(f"   ⚠️ [Auto-Clean] Cleaned summary still has {len(re_verify['unsupported_claims'])} issue(s) — saving as unverified")
+                else:
+                    print(f"   ⚠️ [Auto-Clean] Could not clean summary: {auto_clean['model']}")
         else:
             full_data["ai_verification"] = {
                 "verified": False,
