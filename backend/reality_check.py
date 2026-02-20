@@ -698,10 +698,10 @@ def _clean_with_gemini(prompt):
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     future = pool.submit(_call)
     try:
-        response = future.result(timeout=30)
+        response = future.result(timeout=60)
     except concurrent.futures.TimeoutError:
         pool.shutdown(wait=False)
-        raise ValueError("Gemini 3 Pro Preview timed out after 30s")
+        raise ValueError("Gemini 3 Pro Preview timed out after 60s")
     pool.shutdown(wait=False)
 
     elapsed_ms = int((time.time() - start) * 1000)

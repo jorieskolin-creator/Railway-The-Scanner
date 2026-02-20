@@ -387,10 +387,8 @@ def _clean_company_data(company_name: str, data: dict) -> dict:
 
     print(f"   🧹 [Clean] Cleaning {len(unsupported_claims)} false claim(s) from {company_name}...")
 
-    # Purge false evidence from database first
-    purge_result = purge_false_evidence(data, unsupported_claims)
-
-    # Clean the summary using Gemini 3 Pro
+    # Clean the summary first — only purge evidence if clean succeeds
+    # (purge mutates data in-place, so a failed clean would leave evidence destroyed)
     clean_result = clean_summary(
         summary_text=data.get("summary_text", ""),
         pitch_text=data.get("pitch_text", ""),
@@ -406,6 +404,9 @@ def _clean_company_data(company_name: str, data: dict) -> dict:
             "reason": f"Cleaning failed: {clean_result['model']}",
             "original_claims": unsupported_claims,
         }
+
+    # Clean succeeded — now safe to purge contaminated evidence
+    purge_result = purge_false_evidence(data, unsupported_claims)
 
     # Save cleaned summary
     data["summary_text"] = clean_result["cleaned_summary"]
@@ -1241,13 +1242,10 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                 for claim in ai_verification["unsupported_claims"]:
                     print(f"      - {claim}")
 
-                # --- PURGE FALSE EVIDENCE FROM DATABASE ---
-                # Remove contaminated evidence_links/reality_checklist so they
-                # don't poison the next scan's "previous scan context".
-                print(f"   🗑️ [Purge] Removing false evidence from stored data...")
-                purge_result = purge_false_evidence(full_data, ai_verification["unsupported_claims"])
-
                 # --- AUTO-CLEAN: Opus rewrites its own summary to remove false claims ---
+                # Clean FIRST, then purge evidence only if clean succeeds.
+                # (purge mutates full_data in-place — if clean fails, evidence would be destroyed
+                #  while the uncleaned summary still references it)
                 print(f"   🧹 [Auto-Clean] Opus rewriting summary to remove false claims...")
                 auto_clean = clean_summary(
                     summary_text=full_data["summary_text"],
@@ -1259,6 +1257,10 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                 )
 
                 if auto_clean["success"]:
+                    # Clean succeeded — now safe to purge contaminated evidence
+                    print(f"   🗑️ [Purge] Removing false evidence from stored data...")
+                    purge_result = purge_false_evidence(full_data, ai_verification["unsupported_claims"])
+
                     full_data["summary_text"] = auto_clean["cleaned_summary"]
                     full_data["pitch_text"] = auto_clean["cleaned_pitch"]
                     full_data["summary_cleaned"] = {
