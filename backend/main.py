@@ -853,8 +853,6 @@ def run_scan(
 
         anthropic_key = clean_env_var(os.environ.get("ANTHROPIC_API_KEY"))
         has_synth_key = anthropic_key
-        pre_opus_archetype = None  # Tracks archetype before Opus may override scores
-
         if has_synth_key:
             try:
                 claude_client = anthropic.Anthropic(api_key=anthropic_key) if anthropic_key else None
@@ -876,7 +874,6 @@ def run_scan(
                     archetype = "Thriving" if fin_for_archetype >= 50 else "Modernizing"
                 else:
                     archetype = "Cash Cow" if fin_for_archetype >= 50 else "At Risk"
-                pre_opus_archetype = archetype  # Save for post-synthesis correction
 
                 # Logic-aware Context
                 washing_context = ""
@@ -968,12 +965,12 @@ NEVER use internal codes (TAC-xxx, DIM-xxx, etc.) in any output — always write
 
 ### SCAN DATA
 Target: {companyName}
-DIAGNOSIS ARCHETYPE: {archetype.upper()}
-Archetype definitions (Reality vs Financial health):
-  - THRIVING: High Reality + Strong Financials. Modern operations AND healthy business.
-  - MODERNIZING: High Reality + Weak Financials. Strong operations but financial pressure.
-  - CASH COW: Low Reality + Strong Financials. Profitable but operationally outdated.
-  - AT RISK: Low Reality + Weak Financials. Both operations and finances under pressure.
+Financial Health Index: {fin_for_archetype} ({"actual financial index" if fin_score is not None else "fallback: using intent score"})
+Archetype rules (computed from YOUR evaluated reality_score + Financial Health Index above):
+  - THRIVING: reality_score >= 50 AND Financial Health Index >= 50. High Reality + Strong Financials.
+  - MODERNIZING: reality_score >= 50 AND Financial Health Index < 50. High Reality + Weak Financials.
+  - CASH COW: reality_score < 50 AND Financial Health Index >= 50. Low Reality + Strong Financials.
+  - AT RISK: reality_score < 50 AND Financial Health Index < 50. Low Reality + Weak Financials.
 Summary Confidence: {confidence}/100
 NOTE: Do NOT cite specific numeric scores in the summary text. The scores are displayed separately in the UI. Describe performance qualitatively only (e.g. "low reality evidence", "strong intent narrative").
 
@@ -986,7 +983,7 @@ Intent Data: {intent_narrative}
 {prev_synthesis_block}
 
 ### TASK
-Generate a JSON object with four fields: 'summary', 'pitch', 'reality_score', and 'intent_score'.
+Generate a JSON object with five fields: 'summary', 'pitch', 'reality_score', 'intent_score', and 'archetype'.
 
 FIRST — INDEPENDENT SCORE EVALUATION:
 You have the Knowledge Base, the evidence, and the intent data above. Before writing the summary,
@@ -1004,10 +1001,18 @@ If no evidence exists for a dimension, score it 10 (neutral, not generous).
 For 'intent_score' (0-100), evaluate: How ambitious is their narrative vs. what's typical?
 Score based on the Intent Data provided above.
 
-THEN — WRITE THE NARRATIVE:
+SECOND — DERIVE THE ARCHETYPE:
+Apply the archetype rules using YOUR evaluated reality_score and the Financial Health Index ({fin_for_archetype}) provided above:
+  - reality_score >= 50 AND Financial Health Index >= 50 → 'archetype': "Thriving"
+  - reality_score >= 50 AND Financial Health Index < 50 → 'archetype': "Modernizing"
+  - reality_score < 50 AND Financial Health Index >= 50 → 'archetype': "Cash Cow"
+  - reality_score < 50 AND Financial Health Index < 50 → 'archetype': "At Risk"
+This MUST be a mechanical derivation from the scores — do not override based on narrative interpretation.
+
+THIRD — WRITE THE NARRATIVE:
 
 1. 'summary' (180-220 words):
-   - STATE THE ARCHETYPE ({archetype}) explicitly in the first sentence.
+   - STATE THE ARCHETYPE you derived above explicitly in the first sentence.
    - Use ONLY the four archetype labels: Thriving, Modernizing, Cash Cow, At Risk.
    - MAP findings to Knowledge Base dimensions (Operating Model, Strategy, Culture, Service Portfolio, AI Readiness).
    - USE Knowledge Base terminology (e.g. "Digital Taylorism", "Flow Efficiency", "Pilot Purgatory").
@@ -1027,7 +1032,7 @@ THEN — WRITE THE NARRATIVE:
    - The proposals must feel specific to THIS company, not a template.
    - Tone: Professional, provocative, insight-led.
 
-Output valid JSON only. Must include all four fields: summary, pitch, reality_score, intent_score."""
+Output valid JSON only. Must include all five fields: summary, pitch, reality_score, intent_score, archetype."""
 
                 # --- Synthesis with fallback chain: Opus 4.6 → Gemini 3 Pro → Gemini 2.5 Pro ---
                 # Opus is the judge — it does ONE thing: synthesize. Fallbacks degrade gracefully.
@@ -1143,6 +1148,24 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                                  print(f"   ℹ️ [Score Verify] Intent: Scanner 1 {scanner_intent} vs Opus {opus_intent} (delta {delta_i}). Keeping Scanner 1 score (immutable).")
                                  gap = intent_results["score"] - reality_results["score"]
 
+                         # --- ARCHETYPE VERIFICATION ---
+                         # Opus now derives the archetype from its own scores.
+                         # Verify it matches the deterministic rule; fix summary if not.
+                         opus_archetype = json_data.get("archetype")
+                         final_reality = reality_results["score"]
+                         expected_archetype = ("Thriving" if fin_for_archetype >= 50 else "Modernizing") if final_reality >= 50 else ("Cash Cow" if fin_for_archetype >= 50 else "At Risk")
+
+                         if opus_archetype and opus_archetype != expected_archetype:
+                             print(f"   ⚖️ [Archetype Verify] Opus wrote '{opus_archetype}' but scores dictate '{expected_archetype}' (reality={final_reality}, financial={fin_for_archetype}). Correcting summary.")
+                             valid_archetypes = ["Thriving", "Modernizing", "Cash Cow", "At Risk"]
+                             for wrong_label in valid_archetypes:
+                                 if wrong_label == expected_archetype:
+                                     continue
+                                 summary = summary.replace(wrong_label, expected_archetype)
+                                 summary = summary.replace(wrong_label.upper(), expected_archetype.upper())
+                         elif opus_archetype:
+                             print(f"   ✅ [Archetype Verify] Opus archetype '{opus_archetype}' matches score-derived '{expected_archetype}'")
+
                     else:
                          summary = response_text
 
@@ -1187,20 +1210,6 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
             archetype = "Thriving" if fin_for_archetype >= 50 else "Modernizing"
         else:
             archetype = "Cash Cow" if fin_for_archetype >= 50 else "At Risk"
-
-        # --- FIX STALE ARCHETYPE IN SUMMARY TEXT ---
-        # Opus writes the archetype into the summary narrative based on the
-        # pre-synthesis scores. If Opus's own score override changes the archetype,
-        # the summary text will contain the wrong label. Replace it.
-        if pre_opus_archetype and archetype != pre_opus_archetype and summary:
-            all_archetypes = ["Thriving", "Modernizing", "Cash Cow", "At Risk"]
-            for old_label in all_archetypes:
-                if old_label == archetype:
-                    continue
-                # Replace both exact case and uppercase variants
-                summary = summary.replace(old_label, archetype)
-                summary = summary.replace(old_label.upper(), archetype.upper())
-            print(f"   🔄 [Archetype Fix] Summary text updated: '{pre_opus_archetype}' → '{archetype}' (Opus score override changed archetype)")
 
         full_data = {
             "id": result_id,
