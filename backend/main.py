@@ -983,11 +983,11 @@ Intent Data: {intent_narrative}
 {prev_synthesis_block}
 
 ### TASK
-Generate a JSON object with five fields: 'summary', 'pitch', 'reality_score', 'intent_score', and 'archetype'.
+Generate a JSON object with four fields: 'summary', 'pitch', 'reality_score', and 'archetype'.
 
-FIRST — INDEPENDENT SCORE EVALUATION:
+FIRST — INDEPENDENT REALITY SCORE EVALUATION:
 You have the Knowledge Base, the evidence, and the intent data above. Before writing the summary,
-evaluate INDEPENDENTLY what the Reality Score and Intent Score should be on a 0-100 scale.
+evaluate INDEPENDENTLY what the Reality Score should be on a 0-100 scale.
 
 For 'reality_score' (0-100), evaluate across 5 Knowledge Base dimensions:
   - Operating Model (0-20): Is there evidence of modern practices? Or legacy/waterfall/silos?
@@ -998,8 +998,8 @@ For 'reality_score' (0-100), evaluate across 5 Knowledge Base dimensions:
 Sum the 5 dimensions (0-100). Score each dimension based on VERIFIED EVIDENCE ONLY.
 If no evidence exists for a dimension, score it 10 (neutral, not generous).
 
-For 'intent_score' (0-100), evaluate: How ambitious is their narrative vs. what's typical?
-Score based on the Intent Data provided above.
+NOTE: Do NOT evaluate or return an intent_score or financial_index. Those are computed by
+dedicated scanners and are immutable. You only evaluate reality_score.
 
 SECOND — DERIVE THE ARCHETYPE:
 Apply the archetype rules using YOUR evaluated reality_score and the Financial Health Index ({fin_for_archetype}) provided above:
@@ -1032,7 +1032,7 @@ THIRD — WRITE THE NARRATIVE:
    - The proposals must feel specific to THIS company, not a template.
    - Tone: Professional, provocative, insight-led.
 
-Output valid JSON only. Must include all five fields: summary, pitch, reality_score, intent_score, archetype."""
+Output valid JSON only. Must include all four fields: summary, pitch, reality_score, archetype."""
 
                 # --- Synthesis with fallback chain: Opus 4.6 → Gemini 3 Pro → Gemini 2.5 Pro ---
                 # Opus is the judge — it does ONE thing: synthesize. Fallbacks degrade gracefully.
