@@ -1121,15 +1121,31 @@ const App = () => {
                           Reality Check: {recheckResults.clean} clean, {recheckResults.flagged_count} flagged out of {recheckResults.total_checked}
                         </span>
                       </div>
+                      {recheckResults.auto_cleaned > 0 && (
+                        <div className="flex items-center gap-2 mb-3 px-3 py-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
+                          <CheckCircle2 size={14} className="text-emerald-400" />
+                          <span className="text-emerald-300 text-xs font-mono font-bold">
+                            Auto-cleaned {recheckResults.auto_cleaned} {recheckResults.auto_cleaned === 1 ? 'company' : 'companies'} — false claims removed and summaries rewritten
+                          </span>
+                        </div>
+                      )}
                       {recheckResults.flagged?.map((item, idx) => (
-                        <div key={idx} className="mt-2 bg-black/30 rounded-lg p-3 border border-rose-500/10">
+                        <div key={idx} className={`mt-2 bg-black/30 rounded-lg p-3 border ${item.clean_action === 'cleaned' ? 'border-emerald-500/20' : 'border-rose-500/10'}`}>
                           <div className="flex justify-between items-start">
-                            <div>
+                            <div className="flex items-center gap-2 flex-wrap">
                               <span className={`text-xs font-mono font-bold px-1.5 py-0.5 rounded ${item.risk === 'high' ? 'bg-rose-500/20 text-rose-300' : 'bg-amber-500/20 text-amber-300'}`}>
                                 {item.risk.toUpperCase()}
                               </span>
-                              <span className="text-white text-sm ml-2 font-medium">{item.companyName}</span>
-                              <span className="text-slate-500 text-[10px] ml-2 font-mono">score: {item.score}/100</span>
+                              <span className="text-white text-sm font-medium">{item.companyName}</span>
+                              <span className="text-slate-500 text-[10px] font-mono">score: {item.score}/100</span>
+                              {item.clean_action === 'cleaned' && (
+                                <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded font-mono font-bold">
+                                  CLEANED ({item.claims_removed} {item.claims_removed === 1 ? 'claim' : 'claims'} removed){item.re_verified ? ' — VERIFIED' : ' — STILL UNVERIFIED'}
+                                </span>
+                              )}
+                              {item.clean_action === 'failed' && (
+                                <span className="text-[9px] bg-rose-500/20 text-rose-300 px-1.5 py-0.5 rounded font-mono font-bold">CLEAN FAILED</span>
+                              )}
                             </div>
                             <button
                               onClick={() => handleDeleteCompany(item.companyName)}

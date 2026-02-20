@@ -289,10 +289,11 @@ async def recheck_company(company_name: str, request: Request):
 
 @app.post("/admin/recheck-all")
 async def recheck_all_companies(request: Request):
-    """Run reality check on ALL stored companies. Returns flagged ones."""
+    """Run reality check on ALL stored companies. Flags issues and auto-cleans them."""
     verify_admin(request)
     companies = storage.get_all_companies_summary()
     flagged = []
+    cleaned_results = []
     clean = 0
 
     for company in companies:
@@ -330,7 +331,7 @@ async def recheck_all_companies(request: Request):
 
         is_flagged = result["risk"] in ("medium", "high") or not ai_result["verified"]
         if is_flagged:
-            flagged.append({
+            flag_entry = {
                 "companyName": name,
                 "risk": result["risk"],
                 "score": result["score"],
@@ -338,7 +339,22 @@ async def recheck_all_companies(request: Request):
                 "ai_verified": ai_result["verified"],
                 "unsupported_claims": ai_result["unsupported_claims"],
                 "summary_preview": (data.get("summary_text", "") or "")[:200],
-            })
+            }
+
+            # Auto-clean if AI found false claims
+            if not ai_result["verified"] and ai_result["unsupported_claims"]:
+                clean_result = _clean_company_data(name, data)
+                flag_entry["clean_action"] = clean_result.get("action", "skipped")
+                flag_entry["claims_removed"] = clean_result.get("claims_removed", 0)
+                flag_entry["re_verified"] = clean_result.get("re_verified", False)
+                if clean_result.get("action") == "cleaned":
+                    cleaned_results.append({
+                        "companyName": name,
+                        "claims_removed": clean_result["claims_removed"],
+                        "re_verified": clean_result["re_verified"],
+                    })
+
+            flagged.append(flag_entry)
         else:
             clean += 1
 
@@ -347,23 +363,18 @@ async def recheck_all_companies(request: Request):
         "clean": clean,
         "flagged_count": len(flagged),
         "flagged": flagged,
+        "auto_cleaned": len(cleaned_results),
+        "cleaned": cleaned_results,
     }
 
 
-@app.post("/admin/clean-summary/{company_name}")
-async def clean_company_summary(company_name: str, request: Request):
+def _clean_company_data(company_name: str, data: dict) -> dict:
     """
-    Clean false claims from a company's summary without doing a full rescan.
+    Shared cleaning logic: purge false evidence, rewrite summary, re-verify, save.
+    Used by both single-company clean and recheck-all.
 
-    If AI verification found unsupported_claims (verified=false), this endpoint
-    rewrites the summary to remove just the false parts, then re-verifies.
-    Much cheaper than a full rescan (1 Haiku call vs 3 scanners + Opus synthesis).
+    Returns dict with action result (skipped/failed/cleaned).
     """
-    verify_admin(request)
-    data = storage.get_company_data(company_name)
-    if not data:
-        raise HTTPException(status_code=404, detail=f"Company '{company_name}' not found in database.")
-
     ai_verification = data.get("ai_verification", {})
     unsupported_claims = ai_verification.get("unsupported_claims", [])
 
@@ -379,7 +390,7 @@ async def clean_company_summary(company_name: str, request: Request):
     # Purge false evidence from database first
     purge_result = purge_false_evidence(data, unsupported_claims)
 
-    # Clean the summary using Gemini 3 Pro (higher quality for standalone admin recheck)
+    # Clean the summary using Gemini 3 Pro
     clean_result = clean_summary(
         summary_text=data.get("summary_text", ""),
         pitch_text=data.get("pitch_text", ""),
@@ -440,12 +451,29 @@ async def clean_company_summary(company_name: str, request: Request):
     }
 
 
+@app.post("/admin/clean-summary/{company_name}")
+async def clean_company_summary(company_name: str, request: Request):
+    """
+    Clean false claims from a company's summary without doing a full rescan.
+
+    If AI verification found unsupported_claims (verified=false), this endpoint
+    rewrites the summary to remove just the false parts, then re-verifies.
+    Much cheaper than a full rescan (1 Haiku call vs 3 scanners + Opus synthesis).
+    """
+    verify_admin(request)
+    data = storage.get_company_data(company_name)
+    if not data:
+        raise HTTPException(status_code=404, detail=f"Company '{company_name}' not found in database.")
+
+    return _clean_company_data(company_name, data)
+
+
 @app.post("/admin/clean-all-unverified")
 async def clean_all_unverified(request: Request):
     """
     Clean false claims from ALL unverified companies in the database.
     Iterates through all companies, finds those with ai_verified=false,
-    and attempts to clean their summaries.
+    and attempts to clean their summaries using the shared cleaning logic.
     """
     verify_admin(request)
     companies = storage.get_all_companies_summary()
@@ -467,63 +495,19 @@ async def clean_all_unverified(request: Request):
         if not data:
             continue
 
-        ai_verification = data.get("ai_verification", {})
-        unsupported_claims = ai_verification.get("unsupported_claims", [])
+        print(f"   🧹 [Clean All] Processing {name}...")
+        result = _clean_company_data(name, data)
 
-        if not unsupported_claims:
+        if result["action"] == "skipped":
             skipped += 1
-            continue
-
-        print(f"   🧹 [Clean All] Processing {name} ({len(unsupported_claims)} claims)...")
-
-        # Purge false evidence first
-        purge_result = purge_false_evidence(data, unsupported_claims)
-
-        clean_result = clean_summary(
-            summary_text=data.get("summary_text", ""),
-            pitch_text=data.get("pitch_text", ""),
-            unsupported_claims=unsupported_claims,
-            company_name=name,
-            use_gemini=True,
-        )
-
-        if not clean_result["success"]:
-            failed.append({"companyName": name, "reason": clean_result["model"]})
-            continue
-
-        data["summary_text"] = clean_result["cleaned_summary"]
-        data["pitch_text"] = clean_result["cleaned_pitch"]
-
-        # Re-verify against purged evidence
-        re_verify = ai_verify_summary(
-            summary_text=clean_result["cleaned_summary"],
-            evidence_links=data.get("evidence_links", []),
-            company_name=name,
-        )
-
-        data["ai_verification"] = {
-            "verified": re_verify["verified"],
-            "unsupported_claims": re_verify["unsupported_claims"],
-            "model": re_verify["verification_model"],
-            "time_ms": re_verify["verification_time_ms"],
-        }
-        data["summary_cleaned"] = {
-            "was_cleaned": True,
-            "claims_removed": clean_result["claims_removed"],
-            "original_claims": unsupported_claims,
-            "clean_model": clean_result["model"],
-            "clean_time_ms": clean_result["time_ms"],
-            "evidence_purged": purge_result,
-        }
-
-        storage.save_company_data(name, data)
-        storage.update_global_index_field(name, "ai_verified", re_verify["verified"])
-
-        cleaned.append({
-            "companyName": name,
-            "claims_removed": clean_result["claims_removed"],
-            "re_verified": re_verify["verified"],
-        })
+        elif result["action"] == "failed":
+            failed.append({"companyName": name, "reason": result.get("reason", "unknown")})
+        elif result["action"] == "cleaned":
+            cleaned.append({
+                "companyName": name,
+                "claims_removed": result["claims_removed"],
+                "re_verified": result["re_verified"],
+            })
 
     return {
         "total_checked": len(companies),
