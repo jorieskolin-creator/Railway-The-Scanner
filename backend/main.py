@@ -418,51 +418,54 @@ def _clean_company_data(company_name: str, data: dict) -> dict:
     purge_result = {"evidence_removed": 0, "checklist_removed": 0, "purged_items": [], "skipped_claims": 0}
     if clean_result["claims_removed"] > 0:
         purge_result = purge_false_evidence(data, unsupported_claims, detailed_claims=detailed_claims)
+
+        # Only replace summary/pitch when claims were actually removed.
+        # If 0 claims removed, the LLM found nothing wrong — keep the original
+        # to avoid Gemini subtly rewriting the text and introducing new issues.
+        data["summary_text"] = clean_result["cleaned_summary"]
+        data["pitch_text"] = clean_result["cleaned_pitch"]
+
+        # Re-verify the cleaned summary against purged evidence
+        print(f"   🔄 [Clean] Re-verifying cleaned summary...")
+        re_verify = ai_verify_summary(
+            summary_text=clean_result["cleaned_summary"],
+            evidence_links=data.get("evidence_links", []),
+            company_name=company_name,
+        )
+
+        data["ai_verification"] = {
+            "verified": re_verify["verified"],
+            "unsupported_claims": re_verify["unsupported_claims"],
+            "unsupported_claims_detailed": re_verify.get("unsupported_claims_detailed", []),
+            "model": re_verify["verification_model"],
+            "time_ms": re_verify["verification_time_ms"],
+        }
+        data["summary_cleaned"] = {
+            "was_cleaned": True,
+            "claims_removed": clean_result["claims_removed"],
+            "original_claims": unsupported_claims,
+            "clean_model": clean_result["model"],
+            "clean_time_ms": clean_result["time_ms"],
+            "evidence_purged": purge_result,
+        }
+
+        storage.save_company_data(company_name, data)
+        storage.update_global_index_field(company_name, "ai_verified", re_verify["verified"])
+
+        print(f"   ✅ [Clean] {company_name}: Removed {clean_result['claims_removed']} false claims. Re-verified: {re_verify['verified']}")
     else:
-        print(f"   ⏭️ [Clean] 0 claims removed — skipping evidence purge")
-
-    # Save cleaned summary
-    data["summary_text"] = clean_result["cleaned_summary"]
-    data["pitch_text"] = clean_result["cleaned_pitch"]
-
-    # Re-verify the cleaned summary against purged evidence
-    print(f"   🔄 [Clean] Re-verifying cleaned summary...")
-    re_verify = ai_verify_summary(
-        summary_text=clean_result["cleaned_summary"],
-        evidence_links=data.get("evidence_links", []),
-        company_name=company_name,
-    )
-
-    data["ai_verification"] = {
-        "verified": re_verify["verified"],
-        "unsupported_claims": re_verify["unsupported_claims"],
-        "unsupported_claims_detailed": re_verify.get("unsupported_claims_detailed", []),
-        "model": re_verify["verification_model"],
-        "time_ms": re_verify["verification_time_ms"],
-    }
-    data["summary_cleaned"] = {
-        "was_cleaned": True,
-        "claims_removed": clean_result["claims_removed"],
-        "original_claims": unsupported_claims,
-        "clean_model": clean_result["model"],
-        "clean_time_ms": clean_result["time_ms"],
-        "evidence_purged": purge_result,
-    }
-
-    storage.save_company_data(company_name, data)
-    storage.update_global_index_field(company_name, "ai_verified", re_verify["verified"])
-
-    print(f"   ✅ [Clean] {company_name}: Removed {clean_result['claims_removed']} false claims. Re-verified: {re_verify['verified']}")
+        print(f"   ⏭️ [Clean] 0 claims removed — keeping original summary untouched")
+        re_verify = {"verified": True, "unsupported_claims": [], "unsupported_claims_detailed": [], "verification_time_ms": 0, "verification_model": "skipped"}
 
     return {
         "company": company_name,
-        "action": "cleaned",
+        "action": "cleaned" if clean_result["claims_removed"] > 0 else "no_change",
         "claims_removed": clean_result["claims_removed"],
         "original_claims": unsupported_claims,
         "re_verified": re_verify["verified"],
         "remaining_issues": re_verify["unsupported_claims"],
         "clean_time_ms": clean_result["time_ms"],
-        "verify_time_ms": re_verify["verification_time_ms"],
+        "verify_time_ms": re_verify.get("verification_time_ms", 0),
     }
 
 
@@ -1040,7 +1043,7 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                                 contents=synthesis_prompt,
                                 config=types.GenerateContentConfig(
                                     temperature=0.7,
-                                    max_output_tokens=1024
+                                    max_output_tokens=2048
                                 )
                             )
                             response_text = gemini_resp.text or ""
@@ -1059,7 +1062,7 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                                 contents=synthesis_prompt,
                                 config=types.GenerateContentConfig(
                                     temperature=0.7,
-                                    max_output_tokens=1024
+                                    max_output_tokens=2048
                                 )
                             )
                             response_text = gemini_resp.text or ""
@@ -1287,39 +1290,42 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                             ai_verification["unsupported_claims"],
                             detailed_claims=detailed_claims,
                         )
-                    else:
-                        print(f"   ⏭️ [Auto-Clean] 0 claims removed — skipping evidence purge")
 
-                    full_data["summary_text"] = auto_clean["cleaned_summary"]
-                    full_data["pitch_text"] = auto_clean["cleaned_pitch"]
-                    full_data["summary_cleaned"] = {
-                        "was_cleaned": True,
-                        "claims_removed": auto_clean["claims_removed"],
-                        "original_claims": ai_verification["unsupported_claims"],
-                        "clean_model": auto_clean["model"],
-                        "clean_time_ms": auto_clean["time_ms"],
-                        "evidence_purged": purge_result,
-                    }
+                        # Only replace summary/pitch when claims were actually removed.
+                        # If 0 claims removed, the LLM found nothing wrong — keep the original
+                        # to avoid subtly rewriting the text and introducing new issues.
+                        full_data["summary_text"] = auto_clean["cleaned_summary"]
+                        full_data["pitch_text"] = auto_clean["cleaned_pitch"]
+                        full_data["summary_cleaned"] = {
+                            "was_cleaned": True,
+                            "claims_removed": auto_clean["claims_removed"],
+                            "original_claims": ai_verification["unsupported_claims"],
+                            "clean_model": auto_clean["model"],
+                            "clean_time_ms": auto_clean["time_ms"],
+                            "evidence_purged": purge_result,
+                        }
 
-                    # Re-verify the cleaned summary against the purged evidence
-                    print(f"   🔄 [Auto-Clean] Re-verifying cleaned summary...")
-                    re_verify = ai_verify_summary(
-                        summary_text=auto_clean["cleaned_summary"],
-                        evidence_links=full_data.get("evidence_links", []),
-                        company_name=companyName,
-                        anthropic_key=anthropic_key if has_synth_key else None,
-                    )
-                    full_data["ai_verification"] = {
-                        "verified": re_verify["verified"],
-                        "unsupported_claims": re_verify["unsupported_claims"],
-                        "unsupported_claims_detailed": re_verify.get("unsupported_claims_detailed", []),
-                        "model": re_verify["verification_model"],
-                        "time_ms": re_verify["verification_time_ms"],
-                    }
-                    if re_verify["verified"]:
-                        print(f"   ✅ [Auto-Clean] Cleaned summary passed verification!")
+                        # Re-verify the cleaned summary against the purged evidence
+                        print(f"   🔄 [Auto-Clean] Re-verifying cleaned summary...")
+                        re_verify = ai_verify_summary(
+                            summary_text=auto_clean["cleaned_summary"],
+                            evidence_links=full_data.get("evidence_links", []),
+                            company_name=companyName,
+                            anthropic_key=anthropic_key if has_synth_key else None,
+                        )
+                        full_data["ai_verification"] = {
+                            "verified": re_verify["verified"],
+                            "unsupported_claims": re_verify["unsupported_claims"],
+                            "unsupported_claims_detailed": re_verify.get("unsupported_claims_detailed", []),
+                            "model": re_verify["verification_model"],
+                            "time_ms": re_verify["verification_time_ms"],
+                        }
+                        if re_verify["verified"]:
+                            print(f"   ✅ [Auto-Clean] Cleaned summary passed verification!")
+                        else:
+                            print(f"   ⚠️ [Auto-Clean] Cleaned summary still has {len(re_verify['unsupported_claims'])} issue(s) — saving as unverified")
                     else:
-                        print(f"   ⚠️ [Auto-Clean] Cleaned summary still has {len(re_verify['unsupported_claims'])} issue(s) — saving as unverified")
+                        print(f"   ⏭️ [Auto-Clean] 0 claims removed — keeping original summary untouched")
                 else:
                     print(f"   ⚠️ [Auto-Clean] Could not clean summary: {auto_clean['model']}")
         else:

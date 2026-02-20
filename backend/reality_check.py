@@ -712,32 +712,34 @@ def _build_clean_prompt(summary_text, pitch_text, unsupported_claims, company_na
     """Build the shared cleaning prompt for both Haiku and Gemini."""
     claims_text = "\n".join(f"- {claim}" for claim in unsupported_claims)
 
-    return f"""You are a precision editor. Your job is to rewrite an AI-generated company summary to REMOVE specific false claims that were identified by a fact-checking system.
+    return f"""You are a precision editor. Your ONLY job is to surgically remove specific false claims from an AI-generated company summary. You must preserve the original text as much as possible.
 
 COMPANY: {company_name}
 
-ORIGINAL SUMMARY (180-220 words):
+ORIGINAL SUMMARY:
 {summary_text}
 
-ORIGINAL PITCH (90-110 words):
+ORIGINAL PITCH:
 {pitch_text or "N/A"}
 
 FALSE CLAIMS TO REMOVE:
 {claims_text}
 
 RULES — READ CAREFULLY:
-1. Remove ONLY the sentences or phrases that contain the false claims listed above.
-2. Do NOT add any new information or claims. You are only REMOVING, never ADDING.
-3. Keep all factual findings EXACTLY as-is — same tone, same structure.
-4. Do NOT change, add, or re-evaluate the archetype classification. The archetype label in the summary must remain EXACTLY as it appears in the original. You are not a judge — only an editor removing false claims.
-5. Smooth out the text so it reads naturally after removal (fix transitions, but don't add content).
-6. The cleaned summary should be 150-220 words. If removing false claims makes it too short, that's fine — a shorter honest summary is better than a padded one.
-7. The cleaned pitch should be 70-110 words. Same rules: only remove, don't add.
-8. If the pitch references any of the false claims, remove those parts too.
-9. Preserve the company name and any KB terminology that isn't part of a false claim.
+1. PRESERVE the original text word-for-word except for the specific false claims listed above.
+2. Remove ONLY the sentences or phrases that contain the false claims. Do NOT rephrase, reword, or restructure sentences that are not affected by false claims.
+3. Do NOT add any new information, claims, or analysis. You are only REMOVING, never ADDING or REWRITING.
+4. The archetype classification MUST remain EXACTLY as it appears in the original — do not change, re-evaluate, or remove it under any circumstances.
+5. After removing false claim sentences, fix only the immediately adjacent transitions so the text reads naturally. Do NOT rewrite surrounding paragraphs.
+6. If a false claim is embedded within an otherwise true sentence, remove only the false part and keep the true part intact.
+7. If the pitch references any of the false claims, remove those parts too.
+8. Preserve the company name, KB terminology, and all other factual content exactly as written.
+9. If NONE of the listed false claims actually appear in the summary, return the original text UNCHANGED and set claims_removed to 0.
+
+CRITICAL: Your output must be as close to the original as possible. A diff between the original and your output should show ONLY the removed false claims and minor transition fixes — nothing else.
 
 Output ONLY valid JSON:
-{{"cleaned_summary": "...", "cleaned_pitch": "...", "claims_removed": <number of false claims you addressed>}}"""
+{{"cleaned_summary": "...", "cleaned_pitch": "...", "claims_removed": <number of false claims you actually found and removed>}}"""
 
 
 def _clean_with_haiku(prompt, api_key):

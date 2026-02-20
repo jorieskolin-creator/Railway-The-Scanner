@@ -580,7 +580,7 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                                     contents=synthesis_prompt,
                                     config=types.GenerateContentConfig(
                                         temperature=0.7,
-                                        max_output_tokens=1024
+                                        max_output_tokens=2048
                                     )
                                 )
                                 response_text = gemini_resp.text or ""
@@ -599,7 +599,7 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                                     contents=synthesis_prompt,
                                     config=types.GenerateContentConfig(
                                         temperature=0.7,
-                                        max_output_tokens=1024
+                                        max_output_tokens=2048
                                     )
                                 )
                                 response_text = gemini_resp.text or ""
