@@ -145,6 +145,7 @@ const renderCustomDot = (props: any) => {
 const TruthMatrix = ({ data, onSelectCompany }) => {
   const [popover, setPopover] = useState<{ companies: any[], x: number, y: number } | null>(null);
   const [avgHovered, setAvgHovered] = useState(false);
+  const [avgDotPos, setAvgDotPos] = useState<{ cx: number, cy: number } | null>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -324,7 +325,15 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
              <Label value="AT RISK" position="insideBottomLeft" fill="#fb7185" fontSize={10} fontWeight={900} opacity={0.8} letterSpacing="0.05em" />
           </ReferenceArea>
 
-          {/* Market Average Dot */}
+          <Scatter
+            name="Companies"
+            data={groupedData}
+            shape={renderCustomDot}
+            onClick={(node, _idx, e) => handleDotClick(node, e)}
+            cursor="pointer"
+          />
+
+          {/* Market Average Dot — rendered AFTER Scatter so it paints on top */}
           {marketAvg && (
               <ReferenceDot
                   x={marketAvg.x}
@@ -332,6 +341,10 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
                   r={0}
                   shape={(props: any) => {
                       const { cx, cy } = props;
+                      // Track pixel position for the HTML overlay label
+                      if (!avgDotPos || avgDotPos.cx !== cx || avgDotPos.cy !== cy) {
+                          setTimeout(() => setAvgDotPos({ cx, cy }), 0);
+                      }
                       return (
                           <g
                               onMouseEnter={() => setAvgHovered(true)}
@@ -350,34 +363,28 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
                               >
                                   <animate attributeName="fillOpacity" values="0.95;0.75;0.95" dur="3s" repeatCount="indefinite" />
                               </circle>
-                              {avgHovered && (
-                                  <g style={{ pointerEvents: 'none' }}>
-                                      <rect
-                                          x={cx - 48} y={cy - 32} width={96} height={20} rx={6}
-                                          fill="#020617" fillOpacity={0.92} stroke="white" strokeWidth={1} strokeOpacity={0.3}
-                                      />
-                                      <text x={cx} y={cy - 18} textAnchor="middle" fill="white" fontSize={10} fontWeight={700}
-                                          letterSpacing="0.08em" fontFamily="monospace"
-                                      >
-                                          MARKET AVG
-                                      </text>
-                                  </g>
-                              )}
                           </g>
                       );
                   }}
               />
           )}
-
-          <Scatter
-            name="Companies"
-            data={groupedData}
-            shape={renderCustomDot}
-            onClick={(node, _idx, e) => handleDotClick(node, e)}
-            cursor="pointer"
-          />
         </ScatterChart>
       </ResponsiveContainer>
+
+      {/* HTML overlay for MARKET AVG label — renders above all SVG/chart layers */}
+      {avgHovered && avgDotPos && (
+          <div
+              className="absolute pointer-events-none z-[60]"
+              style={{
+                  left: avgDotPos.cx - 52,
+                  top: avgDotPos.cy - 36,
+              }}
+          >
+              <div className="bg-[#020617]/95 backdrop-blur-sm border border-white/30 rounded-md px-3 py-1 shadow-lg shadow-black/50">
+                  <span className="text-[10px] font-mono font-bold text-white tracking-widest">MARKET AVG</span>
+              </div>
+          </div>
+      )}
     </div>
   );
 };
