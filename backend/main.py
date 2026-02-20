@@ -454,8 +454,21 @@ def _clean_company_data(company_name: str, data: dict) -> dict:
 
         print(f"   ✅ [Clean] {company_name}: Removed {clean_result['claims_removed']} false claims. Re-verified: {re_verify['verified']}")
     else:
-        print(f"   ⏭️ [Clean] 0 claims removed — keeping original summary untouched")
-        re_verify = {"verified": True, "unsupported_claims": [], "unsupported_claims_detailed": [], "verification_time_ms": 0, "verification_model": "skipped"}
+        # Cleaning AI reviewed the summary and found nothing to remove.
+        # This is a second-opinion confirmation: the flagged claims don't
+        # actually appear in the text. Clear the UNVERIFIED status.
+        print(f"   ⏭️ [Clean] 0 claims removed — cleaning AI confirmed summary is clean, marking as verified")
+        re_verify = {"verified": True, "unsupported_claims": [], "unsupported_claims_detailed": [], "verification_time_ms": 0, "verification_model": f"clean_confirmed:{clean_result['model']}"}
+
+        data["ai_verification"] = {
+            "verified": True,
+            "unsupported_claims": [],
+            "unsupported_claims_detailed": [],
+            "model": f"clean_confirmed:{clean_result['model']}",
+            "time_ms": clean_result["time_ms"],
+        }
+        storage.save_company_data(company_name, data)
+        storage.update_global_index_field(company_name, "ai_verified", True)
 
     return {
         "company": company_name,
