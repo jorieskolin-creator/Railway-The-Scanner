@@ -506,56 +506,16 @@ def ai_verify_summary(summary_text, evidence_links, company_name, anthropic_key=
 # --- SUMMARY CLEANING (Layer 3) ---
 # When AI verification finds false claims, rewrite the summary without them
 # instead of requiring a full (expensive) rescan.
+#
+# Two modes:
+#   - In-pipeline (use_gemini=False): Haiku rewrites during normal scan (fast, cheap)
+#   - Admin recheck (use_gemini=True): Gemini 3 Pro rewrites standalone (higher quality)
 
-def clean_summary(summary_text, pitch_text, unsupported_claims, company_name, anthropic_key=None):
-    """
-    Rewrites a summary and pitch to remove specific false claims found by AI verification.
-
-    Instead of a full rescan (which costs multiple API calls across 3 scanners + synthesis),
-    this uses a single Haiku call to surgically remove the false parts and produce
-    a coherent cleaned summary.
-
-    Args:
-        summary_text: The current summary containing false claims
-        pitch_text: The current pitch (may reference false claims too)
-        unsupported_claims: List of "[Contradiction] ..." / "[Fabrication] ..." strings
-        company_name: The target company name
-        anthropic_key: Optional Anthropic API key
-
-    Returns:
-        dict with:
-            - cleaned_summary: str (rewritten summary without false claims)
-            - cleaned_pitch: str (rewritten pitch without false claims)
-            - claims_removed: int (number of false claims addressed)
-            - model: str
-            - time_ms: int
-            - success: bool
-    """
-    if not summary_text or not unsupported_claims:
-        return {
-            "cleaned_summary": summary_text,
-            "cleaned_pitch": pitch_text,
-            "claims_removed": 0,
-            "model": "skipped_nothing_to_clean",
-            "time_ms": 0,
-            "success": False,
-        }
-
-    api_key = _get_anthropic_key(anthropic_key)
-    if not api_key:
-        return {
-            "cleaned_summary": summary_text,
-            "cleaned_pitch": pitch_text,
-            "claims_removed": 0,
-            "model": "skipped_no_api_key",
-            "time_ms": 0,
-            "success": False,
-        }
-
-    # Build the list of false claims for the prompt
+def _build_clean_prompt(summary_text, pitch_text, unsupported_claims, company_name):
+    """Build the shared cleaning prompt for both Haiku and Gemini."""
     claims_text = "\n".join(f"- {claim}" for claim in unsupported_claims)
 
-    prompt = f"""You are a precision editor. Your job is to rewrite an AI-generated company summary to REMOVE specific false claims that were identified by a fact-checking system.
+    return f"""You are a precision editor. Your job is to rewrite an AI-generated company summary to REMOVE specific false claims that were identified by a fact-checking system.
 
 COMPANY: {company_name}
 
@@ -581,56 +541,158 @@ RULES — READ CAREFULLY:
 Output ONLY valid JSON:
 {{"cleaned_summary": "...", "cleaned_pitch": "...", "claims_removed": <number of false claims you addressed>}}"""
 
-    try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
 
-        start = time.time()
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}]
+def _clean_with_haiku(prompt, api_key):
+    """Rewrite summary using Haiku (fast, cheap — used in scan pipeline)."""
+    import anthropic
+    client = anthropic.Anthropic(api_key=api_key)
+
+    start = time.time()
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    elapsed_ms = int((time.time() - start) * 1000)
+    response_text = response.content[0].text if response.content else ""
+    return response_text, elapsed_ms, "claude-haiku-4-5"
+
+
+def _clean_with_gemini(prompt):
+    """Rewrite summary using Gemini 3 Pro (higher quality — used in admin recheck)."""
+    import concurrent.futures
+    from google import genai
+
+    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
+    if not gemini_key:
+        raise ValueError("No GEMINI_API_KEY configured")
+
+    client = genai.Client(api_key=gemini_key)
+    start = time.time()
+
+    def _call():
+        return client.models.generate_content(
+            model="gemini-3-pro",
+            contents=prompt,
+            config={
+                'temperature': 0.3,
+                'max_output_tokens': 1024,
+            }
         )
-        elapsed_ms = int((time.time() - start) * 1000)
 
-        response_text = response.content[0].text if response.content else ""
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(_call)
+    try:
+        response = future.result(timeout=30)
+    except concurrent.futures.TimeoutError:
+        pool.shutdown(wait=False)
+        raise ValueError("Gemini 3 Pro timed out after 30s")
+    pool.shutdown(wait=False)
 
-        # Parse JSON from response (handle markdown code blocks too)
-        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-        if json_match:
-            result = json.loads(json_match.group())
-            cleaned_summary = result.get("cleaned_summary", summary_text)
-            cleaned_pitch = result.get("cleaned_pitch", pitch_text)
-            claims_removed = result.get("claims_removed", 0)
+    elapsed_ms = int((time.time() - start) * 1000)
+    response_text = response.text if response.text else ""
+    return response_text, elapsed_ms, "gemini-3-pro"
 
-            # Sanity check: cleaned version shouldn't be longer than original
-            if len(cleaned_summary.split()) > len(summary_text.split()) + 10:
-                print(f"   ⚠️ [Clean] Cleaned summary is longer than original — LLM may have added content. Rejecting.")
+
+def _validate_clean_result(result, summary_text, pitch_text, model_name, elapsed_ms):
+    """Validate and return the cleaned result, with safety checks."""
+    cleaned_summary = result.get("cleaned_summary", summary_text)
+    cleaned_pitch = result.get("cleaned_pitch", pitch_text)
+    claims_removed = result.get("claims_removed", 0)
+
+    # Sanity check: cleaned version shouldn't be longer than original
+    if len(cleaned_summary.split()) > len(summary_text.split()) + 10:
+        print(f"   ⚠️ [Clean] Cleaned summary is longer than original — LLM may have added content. Rejecting.")
+        return {
+            "cleaned_summary": summary_text,
+            "cleaned_pitch": pitch_text,
+            "claims_removed": 0,
+            "model": "rejected_longer_output",
+            "time_ms": elapsed_ms,
+            "success": False,
+        }
+
+    print(f"   ✅ [Clean] Removed {claims_removed} false claim(s) from summary via {model_name} ({elapsed_ms}ms)")
+    return {
+        "cleaned_summary": cleaned_summary,
+        "cleaned_pitch": cleaned_pitch,
+        "claims_removed": claims_removed,
+        "model": model_name,
+        "time_ms": elapsed_ms,
+        "success": True,
+    }
+
+
+def clean_summary(summary_text, pitch_text, unsupported_claims, company_name,
+                   anthropic_key=None, use_gemini=False):
+    """
+    Rewrites a summary and pitch to remove specific false claims found by AI verification.
+
+    Two modes:
+      - use_gemini=False (default): Haiku rewrites — fast & cheap, used in scan pipeline
+      - use_gemini=True: Gemini 3 Pro rewrites — higher quality, used in admin recheck
+
+    Args:
+        summary_text: The current summary containing false claims
+        pitch_text: The current pitch (may reference false claims too)
+        unsupported_claims: List of "[Contradiction] ..." / "[Fabrication] ..." strings
+        company_name: The target company name
+        anthropic_key: Optional Anthropic API key (for Haiku mode)
+        use_gemini: If True, use Gemini 3 Pro instead of Haiku for rewriting
+
+    Returns:
+        dict with:
+            - cleaned_summary: str (rewritten summary without false claims)
+            - cleaned_pitch: str (rewritten pitch without false claims)
+            - claims_removed: int (number of false claims addressed)
+            - model: str
+            - time_ms: int
+            - success: bool
+    """
+    if not summary_text or not unsupported_claims:
+        return {
+            "cleaned_summary": summary_text,
+            "cleaned_pitch": pitch_text,
+            "claims_removed": 0,
+            "model": "skipped_nothing_to_clean",
+            "time_ms": 0,
+            "success": False,
+        }
+
+    prompt = _build_clean_prompt(summary_text, pitch_text, unsupported_claims, company_name)
+
+    try:
+        if use_gemini:
+            # Admin recheck mode: Gemini 3 Pro for higher-quality rewriting
+            print(f"   🔄 [Clean] Using Gemini 3 Pro for summary rewrite...")
+            response_text, elapsed_ms, model_name = _clean_with_gemini(prompt)
+        else:
+            # In-pipeline mode: Haiku for fast, cheap rewriting
+            api_key = _get_anthropic_key(anthropic_key)
+            if not api_key:
                 return {
                     "cleaned_summary": summary_text,
                     "cleaned_pitch": pitch_text,
                     "claims_removed": 0,
-                    "model": "rejected_longer_output",
-                    "time_ms": elapsed_ms,
+                    "model": "skipped_no_api_key",
+                    "time_ms": 0,
                     "success": False,
                 }
+            print(f"   🔄 [Clean] Using Haiku for summary rewrite...")
+            response_text, elapsed_ms, model_name = _clean_with_haiku(prompt, api_key)
 
-            print(f"   ✅ [Clean] Removed {claims_removed} false claim(s) from summary ({elapsed_ms}ms)")
-            return {
-                "cleaned_summary": cleaned_summary,
-                "cleaned_pitch": cleaned_pitch,
-                "claims_removed": claims_removed,
-                "model": "claude-haiku-4-5",
-                "time_ms": elapsed_ms,
-                "success": True,
-            }
+        # Parse JSON from response
+        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        if json_match:
+            result = json.loads(json_match.group())
+            return _validate_clean_result(result, summary_text, pitch_text, model_name, elapsed_ms)
         else:
-            print(f"   ⚠️ [Clean] Could not parse Haiku response: {response_text[:200]}")
+            print(f"   ⚠️ [Clean] Could not parse {model_name} response: {response_text[:200]}")
             return {
                 "cleaned_summary": summary_text,
                 "cleaned_pitch": pitch_text,
                 "claims_removed": 0,
-                "model": "haiku_parse_error",
+                "model": f"{model_name}_parse_error",
                 "time_ms": elapsed_ms,
                 "success": False,
             }

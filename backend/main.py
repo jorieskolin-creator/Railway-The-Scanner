@@ -374,14 +374,15 @@ async def clean_company_summary(company_name: str, request: Request):
             "reason": "No false claims found — summary is already verified.",
         }
 
-    print(f"   🧹 [Clean] Cleaning {len(unsupported_claims)} false claim(s) from {company_name}...")
+    print(f"   🧹 [Clean] Cleaning {len(unsupported_claims)} false claim(s) from {company_name} via Gemini 3 Pro...")
 
-    # Clean the summary
+    # Clean the summary using Gemini 3 Pro (higher quality for standalone admin recheck)
     clean_result = clean_summary(
         summary_text=data.get("summary_text", ""),
         pitch_text=data.get("pitch_text", ""),
         unsupported_claims=unsupported_claims,
         company_name=company_name,
+        use_gemini=True,
     )
 
     if not clean_result["success"]:
@@ -471,13 +472,14 @@ async def clean_all_unverified(request: Request):
             skipped += 1
             continue
 
-        print(f"   🧹 [Clean All] Processing {name} ({len(unsupported_claims)} claims)...")
+        print(f"   🧹 [Clean All] Processing {name} ({len(unsupported_claims)} claims) via Gemini 3 Pro...")
 
         clean_result = clean_summary(
             summary_text=data.get("summary_text", ""),
             pitch_text=data.get("pitch_text", ""),
             unsupported_claims=unsupported_claims,
             company_name=name,
+            use_gemini=True,
         )
 
         if not clean_result["success"]:
