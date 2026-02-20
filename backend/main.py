@@ -408,20 +408,22 @@ def _clean_company_data(company_name: str, data: dict) -> dict:
             "original_claims": unsupported_claims,
         }
 
-    # Only purge evidence if the clean actually removed claims.
-    # If claims_removed == 0 the LLM found nothing to change — purging
-    # would destroy legitimate evidence based on overly broad keyword matching.
-    #
-    # NEW: purge_false_evidence now uses AI-attributed source URLs instead of
-    # keyword guessing. If a false claim has no traceable source, nothing gets
-    # purged for that claim (safe mode).
+    # Detect text changes even when LLM misreports claims_removed=0.
+    # The cleaning LLM receives claim *descriptions* (not exact quotes) and may
+    # report 0 if it can't match them literally, even though it DID rewrite.
+    reported_removed = clean_result["claims_removed"]
+    text_actually_changed = (
+        clean_result["cleaned_summary"].strip() != data.get("summary_text", "").strip()
+    )
+    if reported_removed == 0 and text_actually_changed:
+        print(f"   ⚠️ [Clean] LLM reported 0 claims removed but text changed — correcting count")
+        reported_removed = len(unsupported_claims)
+        clean_result["claims_removed"] = reported_removed
+
     purge_result = {"evidence_removed": 0, "checklist_removed": 0, "purged_items": [], "skipped_claims": 0}
-    if clean_result["claims_removed"] > 0:
+    if reported_removed > 0 or text_actually_changed:
         purge_result = purge_false_evidence(data, unsupported_claims, detailed_claims=detailed_claims)
 
-        # Only replace summary/pitch when claims were actually removed.
-        # If 0 claims removed, the LLM found nothing wrong — keep the original
-        # to avoid Gemini subtly rewriting the text and introducing new issues.
         data["summary_text"] = clean_result["cleaned_summary"]
         data["pitch_text"] = clean_result["cleaned_pitch"]
 
@@ -461,24 +463,28 @@ def _clean_company_data(company_name: str, data: dict) -> dict:
 
         print(f"   ✅ [Clean] {company_name}: Removed {clean_result['claims_removed']} false claims. Re-verified: {re_verify['verified']}")
     else:
-        # Cleaning AI reviewed the summary and found nothing to remove.
-        # This is a second-opinion confirmation: the flagged claims don't
-        # actually appear in the text. Clear the UNVERIFIED status.
-        print(f"   ⏭️ [Clean] 0 claims removed — cleaning AI confirmed summary is clean, marking as verified")
-        re_verify = {"verified": True, "unsupported_claims": [], "unsupported_claims_detailed": [], "verification_time_ms": 0, "verification_model": f"clean_confirmed:{clean_result['model']}"}
-
-        data["ai_verification"] = {
-            "verified": True,
-            "unsupported_claims": [],
-            "unsupported_claims_detailed": [],
-            "model": f"clean_confirmed:{clean_result['model']}",
-            "time_ms": clean_result["time_ms"],
+        # Cleaning AI reviewed the summary AND didn't change the text.
+        # Don't auto-verify — the original false-claim detection stands.
+        # Requires manual review or a full rescan to resolve.
+        print(f"   ⏭️ [Clean] 0 claims removed and text unchanged — keeping original verification status (unverified)")
+        re_verify = {
+            "verified": False,
+            "unsupported_claims": unsupported_claims,
+            "unsupported_claims_detailed": detailed_claims,
+            "verification_time_ms": clean_result["time_ms"],
+            "verification_model": f"clean_no_change:{clean_result['model']}",
         }
-        # Cleaning AI confirmed summary is clean — clear any stale washing flags
-        data["washing_flag"] = False
-        data["washing_type"] = None
+        # Do NOT clear washing flags or mark as verified — the false claims
+        # still exist in the summary. Save the clean attempt for audit trail.
+        data["summary_cleaned"] = {
+            "was_cleaned": False,
+            "claims_removed": 0,
+            "original_claims": unsupported_claims,
+            "clean_model": clean_result["model"],
+            "clean_time_ms": clean_result["time_ms"],
+            "note": "Cleaning LLM could not match claim descriptions to summary text",
+        }
         storage.save_company_data(company_name, data)
-        storage.update_global_index_field(company_name, "ai_verified", True)
 
     return {
         "company": company_name,
@@ -1323,14 +1329,22 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                 )
 
                 if auto_clean["success"]:
-                    # Only purge evidence if the clean actually removed claims.
-                    # If claims_removed == 0 the LLM found nothing to change — purging
-                    # would destroy legitimate evidence based on overly broad keyword matching.
-                    #
-                    # NEW: purge uses AI-attributed source URLs. If a false claim has no
-                    # traceable source, nothing gets purged for that claim (safe mode).
+                    # Check whether claims were actually removed: trust the LLM count,
+                    # but also detect text changes when the LLM misreports 0.
+                    # The cleaning LLM receives claim *descriptions* (not exact quotes)
+                    # and may report claims_removed=0 if it can't match them literally,
+                    # even though it DID rewrite the text.
+                    reported_removed = auto_clean["claims_removed"]
+                    text_actually_changed = (
+                        auto_clean["cleaned_summary"].strip() != full_data["summary_text"].strip()
+                    )
+                    if reported_removed == 0 and text_actually_changed:
+                        print(f"   ⚠️ [Auto-Clean] LLM reported 0 claims removed but text changed — correcting count")
+                        reported_removed = len(ai_verification["unsupported_claims"])
+                        auto_clean["claims_removed"] = reported_removed
+
                     purge_result = {"evidence_removed": 0, "checklist_removed": 0, "purged_items": [], "skipped_claims": 0}
-                    if auto_clean["claims_removed"] > 0:
+                    if reported_removed > 0 or text_actually_changed:
                         print(f"   🗑️ [Purge] Removing false evidence from stored data...")
                         detailed_claims = ai_verification.get("unsupported_claims_detailed", [])
                         purge_result = purge_false_evidence(

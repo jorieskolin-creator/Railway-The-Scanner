@@ -730,8 +730,10 @@ ORIGINAL PITCH:
 FALSE CLAIMS TO REMOVE:
 {claims_text}
 
+IMPORTANT: The false claims above are DESCRIPTIONS of what is wrong, not exact quotes from the summary. Each one explains what the summary got wrong (e.g. "[Contradiction] Summary says revenue €2.1B but evidence says €1.5B"). You must find the corresponding sentence(s) in the summary that contain the incorrect information described and remove them. Match by MEANING, not by exact wording.
+
 RULES — READ CAREFULLY:
-1. PRESERVE the original text word-for-word except for the specific false claims listed above.
+1. PRESERVE the original text word-for-word except for sentences that contain the false claims described above.
 2. Remove ONLY the sentences or phrases that contain the false claims. Do NOT rephrase, reword, or restructure sentences that are not affected by false claims.
 3. Do NOT add any new information, claims, or analysis. You are only REMOVING, never ADDING or REWRITING.
 4. The archetype classification MUST remain EXACTLY as it appears in the original — do not change, re-evaluate, or remove it under any circumstances.
@@ -739,7 +741,7 @@ RULES — READ CAREFULLY:
 6. If a false claim is embedded within an otherwise true sentence, remove only the false part and keep the true part intact.
 7. If the pitch references any of the false claims, remove those parts too.
 8. Preserve the company name, KB terminology, and all other factual content exactly as written.
-9. If NONE of the listed false claims actually appear in the summary, return the original text UNCHANGED and set claims_removed to 0.
+9. You MUST set claims_removed to the number of false claims from the list above that you found and removed from the summary. If you genuinely cannot locate ANY of the described issues in the summary text after careful semantic matching, set claims_removed to 0 — but this should be rare since these claims were identified by a prior verification step.
 
 CRITICAL: Your output must be as close to the original as possible. A diff between the original and your output should show ONLY the removed false claims and minor transition fixes — nothing else.
 
