@@ -1,7 +1,7 @@
 
 
 const { useState, useRef } = (window as any).React;
-const { X, RefreshCw, Calendar, Clock, Loader2: Loader2Icon, UploadCloud, File, Trash2, Zap, AlertCircle, AlertOctagon, Search } = (window as any).Lucide;
+const { X, RefreshCw, Calendar, Clock, Loader2: Loader2Icon, UploadCloud, File, Trash2, Zap, AlertCircle, AlertOctagon } = (window as any).Lucide;
 
 const CompanySummary = (window as any).CompanySummary;
 
@@ -114,12 +114,6 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading }) => {
                {company.washing_flag && company.intent_score > company.reality_score && (
                    <span className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30 shadow-[0_0_10px_rgba(244,63,94,0.3)] animate-pulse">
                        <AlertOctagon size={10} /> {company.washing_type ? company.washing_type.toUpperCase() : "WASHING DETECTED"}
-                   </span>
-               )}
-               {/* AI VERIFICATION BADGE IN HEADER */}
-               {company.ai_verification && !company.ai_verification.verified && (
-                   <span className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-orange-500/20 text-orange-300 border border-orange-500/30">
-                       <Search size={10} /> DATA CONFLICT
                    </span>
                )}
             </div>

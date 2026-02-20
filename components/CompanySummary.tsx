@@ -489,37 +489,15 @@ const CompanySummary = ({ data }) => {
             </div>
         )}
 
-        {/* AI VERIFICATION BANNER */}
-        {data.ai_verification && !data.ai_verification.verified && data.ai_verification.unsupported_claims?.length > 0 && (
-            <div className="p-4 rounded-xl border-l-4 bg-orange-500/10 border-orange-500 text-orange-200">
-                <div className="flex items-center gap-2 mb-1">
-                    <Search size={16} className="text-orange-400" />
-                    <span className="font-bold text-sm uppercase">
-                        AI Fact-Check: {data.ai_verification.unsupported_claims.length} issue{data.ai_verification.unsupported_claims.length > 1 ? 's' : ''} detected
-                    </span>
-                </div>
-                <div className="text-[11px] font-mono opacity-70 mb-2">
-                    Two-phase verification: contradiction check against evidence + fresh web search.
-                    These issues were flagged:
-                </div>
-                <div className="space-y-0.5">
-                    {data.ai_verification.unsupported_claims.map((claim, i) => (
-                        <div key={i} className="text-[11px] font-mono opacity-80">- {claim}</div>
-                    ))}
-                </div>
-                <div className="mt-2 text-[11px] font-mono opacity-50">
-                    Rescan recommended to regenerate with verified data only.
-                </div>
-            </div>
-        )}
-
-        {/* AI VERIFIED BADGE (when clean) */}
-        {data.ai_verification && data.ai_verification.verified && data.ai_verification.model !== 'skipped' && (
-            <div className="flex items-center gap-2 text-[11px] font-mono text-emerald-400/70">
-                <CheckCircle size={12} />
-                <span>AI Fact-Check: No contradictions or fabrications found ({data.ai_verification.time_ms}ms)</span>
-            </div>
-        )}
+        <div className="bg-gradient-to-r from-indigo-900/30 to-purple-900/30 p-8 rounded-2xl border-l-4 border-indigo-500 backdrop-blur-sm">
+            <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+            <ShieldCheck className="text-indigo-400" />
+            AI Diagnosis
+            </h3>
+            <p className="text-slate-200 leading-relaxed whitespace-pre-line text-lg font-light">
+                <HighlightText text={data.summary_text} />
+            </p>
+        </div>
 
         {/* REALITY CHECKLIST SECTION */}
         {data.reality_checklist && data.reality_checklist.length > 0 && (
