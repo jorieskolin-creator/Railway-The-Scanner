@@ -449,6 +449,13 @@ def _clean_company_data(company_name: str, data: dict) -> dict:
             "evidence_purged": purge_result,
         }
 
+        # Clear washing flags if re-verification passes — the false claims that
+        # triggered washing detection have been removed from the summary.
+        if re_verify["verified"]:
+            data["washing_flag"] = False
+            data["washing_type"] = None
+            print(f"   ✅ [Clean] Cleared washing flags (false claims removed)")
+
         storage.save_company_data(company_name, data)
         storage.update_global_index_field(company_name, "ai_verified", re_verify["verified"])
 
@@ -467,6 +474,9 @@ def _clean_company_data(company_name: str, data: dict) -> dict:
             "model": f"clean_confirmed:{clean_result['model']}",
             "time_ms": clean_result["time_ms"],
         }
+        # Cleaning AI confirmed summary is clean — clear any stale washing flags
+        data["washing_flag"] = False
+        data["washing_type"] = None
         storage.save_company_data(company_name, data)
         storage.update_global_index_field(company_name, "ai_verified", True)
 
@@ -1360,6 +1370,12 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                         }
                         if re_verify["verified"]:
                             print(f"   ✅ [Auto-Clean] Cleaned summary passed verification!")
+                            # Clear washing flags — the false claims that triggered washing
+                            # detection have been removed. Keeping stale flags would show a
+                            # red washing banner for claims that no longer exist in the summary.
+                            full_data["washing_flag"] = False
+                            full_data["washing_type"] = None
+                            print(f"   ✅ [Auto-Clean] Cleared washing flags (false claims removed)")
                         else:
                             print(f"   ⚠️ [Auto-Clean] Cleaned summary still has {len(re_verify['unsupported_claims'])} issue(s) — saving as unverified")
                     else:
