@@ -1,5 +1,5 @@
 
-const { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Label, ReferenceLine } = (window as any).Recharts;
+const { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Label, ReferenceLine, ReferenceDot } = (window as any).Recharts;
 const { useState, useMemo, useCallback, useEffect, useRef } = (window as any).React;
 
 const CustomTooltip = ({ active, payload }: { active?: boolean, payload?: any[] }) => {
@@ -178,6 +178,16 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
       return Object.values(groups);
   }, [data]);
 
+  // Market average: center of gravity across all companies
+  const marketAvg = useMemo(() => {
+      if (!data || data.length === 0) return null;
+      const nonRef = data.filter((d: any) => !d.isReference);
+      if (nonRef.length === 0) return null;
+      const avgReality = Math.round(nonRef.reduce((sum: number, d: any) => sum + (d.reality_score ?? 0), 0) / nonRef.length);
+      const avgFinancial = Math.round(nonRef.reduce((sum: number, d: any) => sum + (d.financial_index ?? d.intent_score ?? 0), 0) / nonRef.length);
+      return { x: avgFinancial, y: avgReality };
+  }, [data]);
+
   const handleDotClick = useCallback((node: any, e?: any) => {
       const companies = node.payload?.companies || [node.payload];
       if (companies.length === 1) {
@@ -293,7 +303,11 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
           <ReferenceArea x1={0} x2={100} y1={0} y2={50} fill="url(#redZone)" stroke="none" />
           <ReferenceArea x1={50} x2={100} y1={50} y2={100} fill="url(#sweetSpot)" stroke="none" />
           <ReferenceArea x1={0} x2={50} y1={0} y2={50} fill="url(#dangerSpot)" stroke="none" />
+          <ReferenceLine y={25} stroke="#475569" strokeDasharray="2 6" strokeOpacity={0.4} />
+          <ReferenceLine y={75} stroke="#475569" strokeDasharray="2 6" strokeOpacity={0.4} />
           <ReferenceLine y={50} stroke="#22d3ee" strokeDasharray="4 4" strokeOpacity={0.6} />
+          <ReferenceLine x={25} stroke="#475569" strokeDasharray="2 6" strokeOpacity={0.4} />
+          <ReferenceLine x={75} stroke="#475569" strokeDasharray="2 6" strokeOpacity={0.4} />
           <ReferenceLine x={50} stroke="#6366f1" strokeDasharray="4 4" strokeOpacity={0.3} />
 
           <ReferenceArea x1={80} x2={98} y1={92} y2={98} stroke="none" fill="none">
@@ -308,6 +322,32 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
           <ReferenceArea x1={2} x2={20} y1={2} y2={8} stroke="none" fill="none">
              <Label value="AT RISK" position="insideBottomLeft" fill="#fb7185" fontSize={10} fontWeight={900} opacity={0.8} letterSpacing="0.05em" />
           </ReferenceArea>
+
+          {/* Market Average Dot */}
+          {marketAvg && (
+              <ReferenceDot
+                  x={marketAvg.x}
+                  y={marketAvg.y}
+                  r={0}
+                  shape={(props: any) => {
+                      const { cx, cy } = props;
+                      return (
+                          <g>
+                              <circle cx={cx} cy={cy} r={12} fill="white" fillOpacity={0.08} stroke="white" strokeWidth={1} strokeOpacity={0.25}>
+                                  <animate attributeName="r" values="12;18;12" dur="3s" repeatCount="indefinite" />
+                                  <animate attributeName="fillOpacity" values="0.08;0.02;0.08" dur="3s" repeatCount="indefinite" />
+                                  <animate attributeName="strokeOpacity" values="0.25;0.08;0.25" dur="3s" repeatCount="indefinite" />
+                              </circle>
+                              <circle cx={cx} cy={cy} r={5} fill="white" fillOpacity={0.95} stroke="white" strokeWidth={1.5}
+                                  style={{ filter: 'drop-shadow(0 0 6px rgba(255,255,255,0.6))' }}
+                              >
+                                  <animate attributeName="fillOpacity" values="0.95;0.7;0.95" dur="3s" repeatCount="indefinite" />
+                              </circle>
+                          </g>
+                      );
+                  }}
+              />
+          )}
 
           <Scatter
             name="Companies"
