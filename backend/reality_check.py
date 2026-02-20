@@ -576,7 +576,7 @@ def _clean_with_opus(prompt, api_key):
 
 
 def _clean_with_gemini(prompt):
-    """Rewrite summary using Gemini 3 Pro (higher quality — used in admin recheck)."""
+    """Rewrite summary using Gemini 3 Pro Preview (higher quality — used in admin recheck)."""
     import concurrent.futures
     from google import genai
 
@@ -589,7 +589,7 @@ def _clean_with_gemini(prompt):
 
     def _call():
         return client.models.generate_content(
-            model="gemini-3-pro",
+            model="gemini-3-pro-preview",
             contents=prompt,
             config={
                 'temperature': 0.3,
@@ -603,12 +603,12 @@ def _clean_with_gemini(prompt):
         response = future.result(timeout=30)
     except concurrent.futures.TimeoutError:
         pool.shutdown(wait=False)
-        raise ValueError("Gemini 3 Pro timed out after 30s")
+        raise ValueError("Gemini 3 Pro Preview timed out after 30s")
     pool.shutdown(wait=False)
 
     elapsed_ms = int((time.time() - start) * 1000)
     response_text = response.text if response.text else ""
-    return response_text, elapsed_ms, "gemini-3-pro"
+    return response_text, elapsed_ms, "gemini-3-pro-preview"
 
 
 def _validate_clean_result(result, summary_text, pitch_text, model_name, elapsed_ms):
