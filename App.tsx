@@ -62,6 +62,7 @@ const App = () => {
   const [dataReviewItems, setDataReviewItems] = useState([]);
   const [dataReviewLoading, setDataReviewLoading] = useState(false);
   const [recheckLoading, setRecheckLoading] = useState(false);
+  const [cleaningCompany, setCleaningCompany] = useState(null);
   const [recheckResults, setRecheckResults] = useState(null);
 
   const prevDataLengthRef = useRef(0);
@@ -310,6 +311,36 @@ const App = () => {
     } catch (e) { console.error(e); alert("Delete failed."); }
   };
 
+  const handleCleanCompany = async (companyName) => {
+    const password = prompt(`AUTHENTICATION REQUIRED\n\nEnter Admin Password to CLEAN false claims from "${companyName}":`);
+    if (!password) return;
+    setCleaningCompany(companyName);
+    try {
+      const res = await fetch(`/admin/clean-summary/${encodeURIComponent(companyName)}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${password}` }
+      });
+      if (res.status === 401) { alert("ACCESS DENIED: Incorrect Password."); return; }
+      if (res.ok) {
+        const json = await res.json();
+        if (json.action === 'cleaned') {
+          alert(`Cleaned "${companyName}": ${json.claims_removed} false claim(s) removed.\nRe-verified: ${json.re_verified ? 'PASSED' : 'Still has issues'}`);
+        } else if (json.action === 'skipped') {
+          alert(`"${companyName}" is already verified — nothing to clean.`);
+        } else {
+          alert(`Clean failed for "${companyName}": ${json.reason || 'unknown error'}`);
+        }
+        // Refresh the review list to show updated verification status
+        const reviewRes = await fetch('/admin/review-data', { headers: { 'Authorization': `Bearer ${password}` } });
+        if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
+        fetchSummaryData(true);
+      } else {
+        alert("Clean request failed.");
+      }
+    } catch (e) { console.error(e); alert("Clean failed."); }
+    finally { setCleaningCompany(null); }
+  };
+
   const handleRecheckAll = async () => {
     const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to run Reality Check on all companies:");
     if (!password) return;
@@ -323,6 +354,10 @@ const App = () => {
       if (res.ok) {
         const json = await res.json();
         setRecheckResults(json);
+        // Refresh review list since recheck-all now auto-cleans flagged companies
+        const reviewRes = await fetch('/admin/review-data', { headers: { 'Authorization': `Bearer ${password}` } });
+        if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
+        fetchSummaryData(true);
       }
     } catch (e) { console.error(e); alert("Recheck failed."); }
     finally { setRecheckLoading(false); }
@@ -1218,13 +1253,25 @@ const App = () => {
                               </div>
                             )}
                           </div>
-                          <button
-                            onClick={() => handleDeleteCompany(item.companyName)}
-                            className="shrink-0 text-slate-500 hover:text-rose-400 p-1.5 rounded hover:bg-rose-500/10 transition-all"
-                            title={`Delete ${item.companyName}`}
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                          <div className="flex items-center gap-1 shrink-0">
+                            {hasUnverifiedClaims && (
+                              <button
+                                onClick={() => handleCleanCompany(item.companyName)}
+                                disabled={cleaningCompany === item.companyName}
+                                className="text-orange-400 hover:text-emerald-400 p-1.5 rounded hover:bg-emerald-500/10 transition-all disabled:opacity-50"
+                                title={`Clean false claims from ${item.companyName}`}
+                              >
+                                {cleaningCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <ShieldAlert size={14} />}
+                              </button>
+                            )}
+                            <button
+                              onClick={() => handleDeleteCompany(item.companyName)}
+                              className="text-slate-500 hover:text-rose-400 p-1.5 rounded hover:bg-rose-500/10 transition-all"
+                              title={`Delete ${item.companyName}`}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
                         </div>
                       );
                     })}
