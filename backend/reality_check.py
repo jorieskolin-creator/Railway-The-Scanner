@@ -561,7 +561,7 @@ def _clean_with_haiku(prompt, api_key):
     start = time.time()
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=1024,
+        max_tokens=2048,
         messages=[{"role": "user", "content": prompt}]
     )
     elapsed_ms = int((time.time() - start) * 1000)
@@ -578,7 +578,7 @@ def _clean_with_opus(prompt, api_key):
     start = time.time()
     response = client.messages.create(
         model="claude-opus-4-6",
-        max_tokens=1024,
+        max_tokens=2048,
         messages=[{"role": "user", "content": prompt}]
     )
     elapsed_ms = int((time.time() - start) * 1000)
@@ -604,7 +604,7 @@ def _clean_with_gemini(prompt):
             contents=prompt,
             config={
                 'temperature': 0.3,
-                'max_output_tokens': 1024,
+                'max_output_tokens': 2048,
             }
         )
 
