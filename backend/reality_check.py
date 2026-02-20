@@ -441,13 +441,30 @@ If there are NO contradictions, return:
 
         result = _robust_parse_json(response_text)
         if result and "contradictions" in result:
+            # Respect the has_contradictions flag — if the LLM says false,
+            # treat the list as empty even if it contains explanatory entries
+            if result.get("has_contradictions") is False:
+                print(f"   ✅ [Contradiction Check] LLM explicitly said has_contradictions=false ({elapsed_ms}ms)")
+                return {"contradictions": [], "model": "claude-haiku-4-5", "time_ms": elapsed_ms}
+
             raw_contradictions = result.get("contradictions", [])
+            # Filter out bogus entries where the LLM put explanatory "no issue" text
+            # in the claim field instead of an actual contradiction
+            _not_real = ["no contradiction", "no conflict", "all align", "no issues",
+                         "no discrepanc", "nothing to flag", "no false"]
             contradictions = []
             for c in raw_contradictions[:10]:
                 # Handle both old format (plain string) and new format (object with source_indices)
                 if isinstance(c, str):
+                    if any(p in c.lower() for p in _not_real):
+                        print(f"   ⏭️ [Contradiction Check] Skipping non-contradiction entry: {c[:80]}")
+                        continue
                     contradictions.append({"claim": c, "source_indices": [], "source_urls": []})
                 elif isinstance(c, dict):
+                    claim_text = c.get("claim", str(c))
+                    if any(p in claim_text.lower() for p in _not_real):
+                        print(f"   ⏭️ [Contradiction Check] Skipping non-contradiction entry: {claim_text[:80]}")
+                        continue
                     indices = c.get("source_indices", [])
                     # Resolve indices to URLs
                     source_urls = []
@@ -457,7 +474,7 @@ If there are NO contradictions, return:
                             if url:
                                 source_urls.append(url)
                     contradictions.append({
-                        "claim": c.get("claim", str(c)),
+                        "claim": claim_text,
                         "source_indices": indices,
                         "source_urls": source_urls,
                     })
@@ -577,13 +594,28 @@ If the summary appears accurate or you found no clear falsehoods, return:
 
         result = _robust_parse_json(text)
         if result and "fabrications" in result:
+            # Respect the summary_accurate flag — if the LLM says true,
+            # treat the list as empty even if it contains explanatory entries
+            if result.get("summary_accurate") is True and result.get("fabrications"):
+                print(f"   ✅ [Fresh Search] LLM explicitly said summary_accurate=true ({elapsed_ms}ms)")
+                return {"fabrications": [], "model": "gemini-2.5-flash", "time_ms": elapsed_ms}
+
             raw_fabrications = result.get("fabrications", [])
+            # Filter out bogus entries where the LLM put "no issue" text in the claim field
+            _not_real = ["no fabrication", "no false", "appears accurate", "all accurate",
+                         "no issues", "could not find", "unable to verify", "summary is accurate"]
             fabrications = []
             for f in raw_fabrications[:10]:
                 if isinstance(f, str):
-                    # Old format (plain string) — no source attribution
+                    if any(p in f.lower() for p in _not_real):
+                        print(f"   ⏭️ [Fresh Search] Skipping non-fabrication entry: {f[:80]}")
+                        continue
                     fabrications.append({"claim": f, "source_indices": [], "source_urls": []})
                 elif isinstance(f, dict):
+                    claim_text = f.get("claim", str(f))
+                    if any(p in claim_text.lower() for p in _not_real):
+                        print(f"   ⏭️ [Fresh Search] Skipping non-fabrication entry: {claim_text[:80]}")
+                        continue
                     indices = f.get("source_indices", [])
                     source_urls = []
                     for idx in indices:
@@ -592,7 +624,7 @@ If the summary appears accurate or you found no clear falsehoods, return:
                             if url:
                                 source_urls.append(url)
                     fabrications.append({
-                        "claim": f.get("claim", str(f)),
+                        "claim": claim_text,
                         "source_indices": indices,
                         "source_urls": source_urls,
                     })
