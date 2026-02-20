@@ -853,6 +853,7 @@ def run_scan(
 
         anthropic_key = clean_env_var(os.environ.get("ANTHROPIC_API_KEY"))
         has_synth_key = anthropic_key
+        pre_opus_archetype = None  # Tracks archetype before Opus may override scores
 
         if has_synth_key:
             try:
@@ -875,6 +876,7 @@ def run_scan(
                     archetype = "Thriving" if fin_for_archetype >= 50 else "Modernizing"
                 else:
                     archetype = "Cash Cow" if fin_for_archetype >= 50 else "At Risk"
+                pre_opus_archetype = archetype  # Save for post-synthesis correction
 
                 # Logic-aware Context
                 washing_context = ""
@@ -1185,6 +1187,20 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
             archetype = "Thriving" if fin_for_archetype >= 50 else "Modernizing"
         else:
             archetype = "Cash Cow" if fin_for_archetype >= 50 else "At Risk"
+
+        # --- FIX STALE ARCHETYPE IN SUMMARY TEXT ---
+        # Opus writes the archetype into the summary narrative based on the
+        # pre-synthesis scores. If Opus's own score override changes the archetype,
+        # the summary text will contain the wrong label. Replace it.
+        if pre_opus_archetype and archetype != pre_opus_archetype and summary:
+            all_archetypes = ["Thriving", "Modernizing", "Cash Cow", "At Risk"]
+            for old_label in all_archetypes:
+                if old_label == archetype:
+                    continue
+                # Replace both exact case and uppercase variants
+                summary = summary.replace(old_label, archetype)
+                summary = summary.replace(old_label.upper(), archetype.upper())
+            print(f"   🔄 [Archetype Fix] Summary text updated: '{pre_opus_archetype}' → '{archetype}' (Opus score override changed archetype)")
 
         full_data = {
             "id": result_id,
