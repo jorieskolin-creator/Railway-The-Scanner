@@ -405,8 +405,14 @@ def _clean_company_data(company_name: str, data: dict) -> dict:
             "original_claims": unsupported_claims,
         }
 
-    # Clean succeeded — now safe to purge contaminated evidence
-    purge_result = purge_false_evidence(data, unsupported_claims)
+    # Only purge evidence if the clean actually removed claims.
+    # If claims_removed == 0 the LLM found nothing to change — purging
+    # would destroy legitimate evidence based on overly broad keyword matching.
+    purge_result = {"evidence_removed": 0, "checklist_removed": 0, "purged_items": []}
+    if clean_result["claims_removed"] > 0:
+        purge_result = purge_false_evidence(data, unsupported_claims)
+    else:
+        print(f"   ⏭️ [Clean] 0 claims removed — skipping evidence purge")
 
     # Save cleaned summary
     data["summary_text"] = clean_result["cleaned_summary"]
@@ -1257,9 +1263,15 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                 )
 
                 if auto_clean["success"]:
-                    # Clean succeeded — now safe to purge contaminated evidence
-                    print(f"   🗑️ [Purge] Removing false evidence from stored data...")
-                    purge_result = purge_false_evidence(full_data, ai_verification["unsupported_claims"])
+                    # Only purge evidence if the clean actually removed claims.
+                    # If claims_removed == 0 the LLM found nothing to change — purging
+                    # would destroy legitimate evidence based on overly broad keyword matching.
+                    purge_result = {"evidence_removed": 0, "checklist_removed": 0, "purged_items": []}
+                    if auto_clean["claims_removed"] > 0:
+                        print(f"   🗑️ [Purge] Removing false evidence from stored data...")
+                        purge_result = purge_false_evidence(full_data, ai_verification["unsupported_claims"])
+                    else:
+                        print(f"   ⏭️ [Auto-Clean] 0 claims removed — skipping evidence purge")
 
                     full_data["summary_text"] = auto_clean["cleaned_summary"]
                     full_data["pitch_text"] = auto_clean["cleaned_pitch"]
