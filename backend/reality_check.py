@@ -748,15 +748,17 @@ def ai_verify_summary(summary_text, evidence_links, company_name, anthropic_key=
 def _build_clean_prompt(summary_text, pitch_text, unsupported_claims, company_name):
     """Build the shared cleaning prompt for both Haiku and Gemini."""
     claims_text = "\n".join(f"- {claim}" for claim in unsupported_claims)
+    summary_word_count = len(summary_text.split())
+    pitch_word_count = len((pitch_text or "").split()) if pitch_text else 0
 
     return f"""You are a precision editor. Your ONLY job is to surgically remove specific false claims from an AI-generated company summary. You must preserve the original text as much as possible.
 
 COMPANY: {company_name}
 
-ORIGINAL SUMMARY:
+ORIGINAL SUMMARY ({summary_word_count} words):
 {summary_text}
 
-ORIGINAL PITCH:
+ORIGINAL PITCH ({pitch_word_count} words):
 {pitch_text or "N/A"}
 
 FALSE CLAIMS TO REMOVE:
@@ -774,8 +776,9 @@ RULES — READ CAREFULLY:
 7. If the pitch references any of the false claims, remove those parts too.
 8. Preserve the company name, KB terminology, and all other factual content exactly as written.
 9. You MUST set claims_removed to the number of false claims from the list above that you found and removed from the summary. If you genuinely cannot locate ANY of the described issues in the summary text after careful semantic matching, set claims_removed to 0 — but this should be rare since these claims were identified by a prior verification step.
+10. LENGTH PRESERVATION: The cleaned summary MUST remain close to its original length ({summary_word_count} words). You are removing individual false claim sentences, NOT rewriting or condensing the summary. Your output should be at least 65% of the original word count. Every sentence that is NOT related to a false claim must appear in your output UNCHANGED. Do NOT summarize, compress, or paraphrase the remaining text.
 
-CRITICAL: Your output must be as close to the original as possible. A diff between the original and your output should show ONLY the removed false claims and minor transition fixes — nothing else.
+CRITICAL: Your output must be as close to the original as possible. A diff between the original and your output should show ONLY the removed false claims and minor transition fixes — nothing else. If the original is {summary_word_count} words and you remove 2-3 false claim sentences, your output should still be roughly {summary_word_count - 30}-{summary_word_count} words.
 
 Output ONLY valid JSON:
 {{"cleaned_summary": "...", "cleaned_pitch": "...", "claims_removed": <number of false claims you actually found and removed>}}"""
@@ -902,6 +905,23 @@ def _validate_clean_result(result, summary_text, pitch_text, model_name, elapsed
             "cleaned_pitch": pitch_text,
             "claims_removed": 0,
             "model": "rejected_longer_output",
+            "time_ms": elapsed_ms,
+            "success": False,
+        }
+
+    # Sanity check: cleaned version shouldn't be drastically shorter than original.
+    # Removing a few false claim sentences should not lose more than ~30% of the text.
+    # If the model compressed the summary instead of surgically removing, reject it.
+    original_word_count = len(summary_text.split())
+    cleaned_word_count = len(cleaned_summary.split())
+    if original_word_count > 0 and cleaned_word_count < original_word_count * 0.65:
+        pct = int(cleaned_word_count / original_word_count * 100)
+        print(f"   ⚠️ [Clean] Cleaned summary is only {pct}% of original length ({cleaned_word_count} vs {original_word_count} words) — LLM compressed instead of surgically removing. Rejecting.")
+        return {
+            "cleaned_summary": summary_text,
+            "cleaned_pitch": pitch_text,
+            "claims_removed": 0,
+            "model": f"rejected_too_short_{pct}pct",
             "time_ms": elapsed_ms,
             "success": False,
         }
