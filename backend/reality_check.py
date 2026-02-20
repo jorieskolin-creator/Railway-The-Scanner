@@ -776,7 +776,8 @@ def _clean_with_opus(prompt, api_key):
 
 
 def _clean_with_gemini(prompt):
-    """Rewrite summary using Gemini 3 Pro Preview (higher quality — used in admin recheck)."""
+    """Rewrite summary using Gemini 3 Pro Preview (higher quality — used in admin recheck).
+    Falls back to Gemini 2.5 Pro if Gemini 3 Pro fails."""
     import concurrent.futures
     from google import genai
 
@@ -785,11 +786,46 @@ def _clean_with_gemini(prompt):
         raise ValueError("No GEMINI_API_KEY configured")
 
     client = genai.Client(api_key=gemini_key)
+
+    # --- Try Gemini 3 Pro Preview first ---
+    try:
+        start = time.time()
+
+        def _call():
+            return client.models.generate_content(
+                model="gemini-3-pro-preview",
+                contents=prompt,
+                config={
+                    'temperature': 0.3,
+                    'max_output_tokens': 2048,
+                }
+            )
+
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = pool.submit(_call)
+        try:
+            response = future.result(timeout=60)
+        except concurrent.futures.TimeoutError:
+            pool.shutdown(wait=False)
+            raise ValueError("Gemini 3 Pro Preview timed out after 60s")
+        pool.shutdown(wait=False)
+
+        elapsed_ms = int((time.time() - start) * 1000)
+        response_text = response.text if response.text else ""
+        if response_text:
+            return response_text, elapsed_ms, "gemini-3-pro-preview"
+        raise ValueError("Gemini 3 Pro Preview returned empty response")
+
+    except Exception as g3_err:
+        print(f"   ❌ [Clean] Gemini 3 Pro Preview failed: {g3_err}")
+
+    # --- Fallback: Gemini 2.5 Pro ---
+    print(f"   🔄 [Clean] Falling back to Gemini 2.5 Pro...")
     start = time.time()
 
-    def _call():
+    def _call_25():
         return client.models.generate_content(
-            model="gemini-3-pro-preview",
+            model="gemini-2.5-pro",
             contents=prompt,
             config={
                 'temperature': 0.3,
@@ -798,17 +834,17 @@ def _clean_with_gemini(prompt):
         )
 
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    future = pool.submit(_call)
+    future = pool.submit(_call_25)
     try:
         response = future.result(timeout=60)
     except concurrent.futures.TimeoutError:
         pool.shutdown(wait=False)
-        raise ValueError("Gemini 3 Pro Preview timed out after 60s")
+        raise ValueError("Gemini 2.5 Pro timed out after 60s")
     pool.shutdown(wait=False)
 
     elapsed_ms = int((time.time() - start) * 1000)
     response_text = response.text if response.text else ""
-    return response_text, elapsed_ms, "gemini-3-pro-preview"
+    return response_text, elapsed_ms, "gemini-2.5-pro"
 
 
 def _validate_clean_result(result, summary_text, pitch_text, model_name, elapsed_ms):

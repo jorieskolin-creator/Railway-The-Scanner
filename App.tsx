@@ -327,6 +327,8 @@ const App = () => {
           alert(`Cleaned "${companyName}": ${json.claims_removed} false claim(s) removed.\nRe-verified: ${json.re_verified ? 'PASSED' : 'Still has issues'}`);
         } else if (json.action === 'skipped') {
           alert(`"${companyName}" is already verified — nothing to clean.`);
+        } else if (json.action === 'no_change') {
+          alert(`"${companyName}": AI found nothing to remove — summary left unchanged.`);
         } else {
           alert(`Clean failed for "${companyName}": ${json.reason || 'unknown error'}`);
         }
