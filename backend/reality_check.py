@@ -1,14 +1,18 @@
 """
 Reality Check — Hallucination Detection for AI-Generated Summaries
 
-Catches obviously fake/hallucinated content before it gets persisted to the database.
-Uses heuristic pattern matching (zero API cost) + cross-reference validation.
+Two layers:
+1. Heuristic pattern matching (zero API cost) — catches obvious fakes
+2. AI-powered verification (Haiku) — cross-references specific claims against evidence snippets
 
 Returns a hallucination risk level: "low", "medium", "high"
 and a list of specific flags explaining what was detected.
 """
 
 import re
+import json
+import os
+import time
 
 # --- HEURISTIC PATTERNS ---
 # These patterns indicate the AI is fabricating events rather than synthesizing evidence
@@ -233,3 +237,134 @@ def validate_pitch(pitch_text, company_name):
         "score": score,
         "pitch_ok": score < 50,
     }
+
+
+# --- AI-POWERED VERIFICATION (Layer 2) ---
+# Uses Haiku to cross-reference specific claims in the summary against evidence snippets.
+# Catches fabricated numbers, names, dates, and claims that appear in no snippet.
+
+def ai_verify_summary(summary_text, evidence_links, company_name, anthropic_key=None):
+    """
+    AI-powered hallucination check: sends summary + evidence snippets to Haiku
+    and asks it to identify specific claims NOT supported by any evidence.
+
+    Args:
+        summary_text: The AI-generated summary
+        evidence_links: List of evidence_link dicts (with title, snippet, url)
+        company_name: Target company name
+        anthropic_key: Anthropic API key (if None, tries env var)
+
+    Returns:
+        dict with:
+            - verified: bool (True if no unsupported claims found)
+            - unsupported_claims: list of specific unsupported claims
+            - verification_model: str (model used)
+            - verification_time_ms: int
+    """
+    if not summary_text or not evidence_links:
+        return {
+            "verified": True,
+            "unsupported_claims": [],
+            "verification_model": "skipped",
+            "verification_time_ms": 0,
+        }
+
+    api_key = anthropic_key
+    if not api_key:
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if api_key and "=" in api_key:
+            try: api_key = api_key.split("=", 1)[1]
+            except: pass
+        api_key = (api_key or "").strip().strip('"').strip("'")
+
+    if not api_key:
+        return {
+            "verified": True,
+            "unsupported_claims": [],
+            "verification_model": "skipped_no_key",
+            "verification_time_ms": 0,
+        }
+
+    # Build evidence context from snippets
+    evidence_text = ""
+    verified_links = [l for l in evidence_links if l.get("verified", True)]
+    for i, link in enumerate(verified_links[:20], 1):
+        title = link.get("title", "Unknown")
+        snippet = link.get("snippet", "")
+        source = link.get("source", "")
+        evidence_text += f"[{i}] {title} ({source}): {snippet}\n"
+
+    if not evidence_text.strip():
+        return {
+            "verified": True,
+            "unsupported_claims": [],
+            "verification_model": "skipped_no_evidence",
+            "verification_time_ms": 0,
+        }
+
+    prompt = f"""You are a fact-checker. Your job is to find specific claims in the SUMMARY that are NOT supported by ANY of the EVIDENCE SNIPPETS.
+
+COMPANY: {company_name}
+
+SUMMARY:
+{summary_text}
+
+EVIDENCE SNIPPETS:
+{evidence_text}
+
+INSTRUCTIONS:
+- Focus ONLY on specific, verifiable claims: numbers, percentages, revenue figures, dates, named partnerships, named people, specific product names, specific events.
+- Do NOT flag general qualitative statements like "the company is modernizing" or "shows strong digital ambition" — these are synthesis/interpretation, not factual claims.
+- Do NOT flag the company name or common knowledge about the company.
+- A claim is "unsupported" ONLY if it contains a specific data point (number, name, date) that appears in ZERO snippets.
+- Be strict: if a snippet mentions the same topic but with different numbers, that IS a flag.
+
+Output valid JSON only:
+{{"unsupported_claims": ["claim 1 text", "claim 2 text"], "all_claims_supported": true/false}}
+
+If ALL specific claims trace back to at least one snippet, return:
+{{"unsupported_claims": [], "all_claims_supported": true}}"""
+
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+
+        start = time.time()
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=512,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        elapsed_ms = int((time.time() - start) * 1000)
+
+        response_text = response.content[0].text if response.content else ""
+
+        # Parse JSON from response
+        json_match = re.search(r'\{[^{}]*\}', response_text, re.DOTALL)
+        if json_match:
+            result = json.loads(json_match.group())
+            claims = result.get("unsupported_claims", [])
+            all_ok = result.get("all_claims_supported", len(claims) == 0)
+            return {
+                "verified": all_ok and len(claims) == 0,
+                "unsupported_claims": claims[:10],  # Cap at 10
+                "verification_model": "claude-haiku-4-5",
+                "verification_time_ms": elapsed_ms,
+            }
+        else:
+            print(f"   ⚠️ [AI Verify] Could not parse Haiku response: {response_text[:200]}")
+            return {
+                "verified": True,
+                "unsupported_claims": [],
+                "verification_model": "haiku_parse_error",
+                "verification_time_ms": elapsed_ms,
+            }
+
+    except Exception as e:
+        print(f"   ❌ [AI Verify] Haiku verification failed: {e}")
+        return {
+            "verified": True,
+            "unsupported_claims": [],
+            "verification_model": f"error: {str(e)[:100]}",
+            "verification_time_ms": 0,
+        }

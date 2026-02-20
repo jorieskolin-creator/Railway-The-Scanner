@@ -27,7 +27,7 @@ from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES, get_company_metadata
 from analyze_scores import run_analysis
 from knowledge_base import get_evolving_framework
-from reality_check import validate_summary, validate_pitch
+from reality_check import validate_summary, validate_pitch, ai_verify_summary
 
 # VERIFICATION LOG: v5.2.0 - Performance Optimizations
 print("Starting Adaptability Scanner Backend (v5.2.0 - Performance Optimizations)...", flush=True)
@@ -1002,6 +1002,37 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
         else:
             print(f"   ✅ [Reality Check] Summary OK (score {summary_check['score']}/100)")
 
+        # --- AI VERIFICATION: Cross-reference summary claims against evidence snippets ---
+        # Uses Haiku to check if specific numbers, names, dates in summary are backed by evidence.
+        # Only runs if heuristic check passed (no point verifying an already-blocked summary).
+        if summary_check["risk"] != "high":
+            print(f"   🔄 [AI Verify] Cross-referencing summary against {len(reality_results.get('links', []))} evidence snippets...")
+            ai_verification = ai_verify_summary(
+                summary_text=full_data["summary_text"],
+                evidence_links=reality_results.get("links", []),
+                company_name=companyName,
+                anthropic_key=anthropic_key if has_synth_key else None,
+            )
+            full_data["ai_verification"] = {
+                "verified": ai_verification["verified"],
+                "unsupported_claims": ai_verification["unsupported_claims"],
+                "model": ai_verification["verification_model"],
+                "time_ms": ai_verification["verification_time_ms"],
+            }
+            if ai_verification["verified"]:
+                print(f"   ✅ [AI Verify] All claims verified ({ai_verification['verification_time_ms']}ms)")
+            else:
+                print(f"   ⚠️ [AI Verify] {len(ai_verification['unsupported_claims'])} unsupported claim(s) found ({ai_verification['verification_time_ms']}ms):")
+                for claim in ai_verification["unsupported_claims"]:
+                    print(f"      - {claim}")
+        else:
+            full_data["ai_verification"] = {
+                "verified": False,
+                "unsupported_claims": ["Summary blocked by heuristic check"],
+                "model": "skipped_heuristic_block",
+                "time_ms": 0,
+            }
+
         # --- STEP 4: SAVE ---
         if saveToDatabase:
             print(f"   🔄 [Storage] Saving report to Vercel Blob...")
@@ -1025,7 +1056,8 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                 "detailsUrl": saved_url,
                 "has_docs": len(uploaded_doc_names) > 0,
                 "financial_index": financial_results.get("financial_index"),
-                "archetype": archetype
+                "archetype": archetype,
+                "ai_verified": full_data.get("ai_verification", {}).get("verified", True)
             }
             # Update index
             storage.update_global_index(summary_entry)

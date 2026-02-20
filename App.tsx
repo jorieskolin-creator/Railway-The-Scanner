@@ -620,6 +620,7 @@ const App = () => {
                           {row.isReference && <span className="text-[9px] bg-green-500/30 text-green-200 px-1 rounded uppercase font-bold">(Ref)</span>}
                           {row.has_docs && <Cpu size={12} className="text-indigo-400" title="Deep Dive Docs Used" />}
                           {lowConfidence && <span className="text-[9px] bg-amber-500/20 text-amber-300 px-1 rounded font-mono" title={`Confidence: ${row.confidence_score}/100`}>?</span>}
+                          {row.ai_verified === false && <span className="text-[9px] bg-rose-500/20 text-rose-300 px-1 rounded font-mono font-bold" title="AI verification found unsupported claims — rescan recommended">UNVERIFIED</span>}
                         </div>
                       </td>
                       <td className="px-3 py-3 hidden md:table-cell">

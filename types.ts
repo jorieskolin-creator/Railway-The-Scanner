@@ -33,21 +33,28 @@ interface ScannerMetrics {
   total_bad_mentions: number;
 }
 
+interface AIVerification {
+  verified: boolean;
+  unsupported_claims: string[];
+  model: string;
+  time_ms: number;
+}
+
 interface AnalysisResult {
-  id: string; 
+  id: string;
   companyName: string;
   companyUrl?: string; // Optional field for persistence
   intent_score: number;
   reality_score: number;
-  reality_gap: number; 
-  confidence_score?: number; 
+  reality_gap: number;
+  confidence_score?: number;
   washing_flag?: boolean; // NEW: Washing Flag
   washing_type?: string | null; // NEW: AI Washing, Agile Washing, etc.
   evidence_links: EvidenceLink[];
   key_people?: KeyPerson[];
   summary_text: string;
   pitch_text?: string; // NEW: Strategic Pitch
-  lastUpdated: string; 
+  lastUpdated: string;
   intent_breakdown: ScannerCategoryScore[];
   metrics?: ScannerMetrics;
   reality_checklist: {
@@ -56,6 +63,8 @@ interface AnalysisResult {
     query: string;
   }[];
   is_simulated?: boolean;
+  ai_verification?: AIVerification; // AI-powered claim verification
+  ai_verified?: boolean; // Summary field for landing page badge
 }
 
 // Attach Enums to window so they are available globally
