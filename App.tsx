@@ -1162,9 +1162,11 @@ const App = () => {
                       const isHighRisk = item.hallucination_risk === 'high';
                       const isMediumRisk = item.hallucination_risk === 'medium';
                       const isFlaggedSummary = (item.summary_preview || '').includes('[FLAGGED]');
+                      const hasUnverifiedClaims = item.ai_verified === false && item.unsupported_claims?.length > 0;
                       return (
                         <div key={idx} className={`flex items-center justify-between px-3 py-2 rounded-lg border transition-all ${
                           isHighRisk || isFlaggedSummary ? 'bg-rose-500/5 border-rose-500/20' :
+                          hasUnverifiedClaims ? 'bg-orange-500/5 border-orange-500/20' :
                           isMediumRisk ? 'bg-amber-500/5 border-amber-500/20' :
                           'bg-black/20 border-white/5 hover:border-white/10'
                         }`}>
@@ -1177,6 +1179,7 @@ const App = () => {
                               {isHighRisk && <span className="text-[9px] bg-rose-500/20 text-rose-300 px-1 rounded font-mono font-bold">HIGH RISK</span>}
                               {isMediumRisk && <span className="text-[9px] bg-amber-500/20 text-amber-300 px-1 rounded font-mono font-bold">MEDIUM</span>}
                               {isFlaggedSummary && <span className="text-[9px] bg-rose-500/30 text-rose-200 px-1 rounded font-mono font-bold">BLOCKED</span>}
+                              {hasUnverifiedClaims && <span className="text-[9px] bg-orange-500/20 text-orange-300 px-1 rounded font-mono font-bold">UNVERIFIED</span>}
                             </div>
                             <div className="text-[10px] text-slate-500 font-mono mt-0.5 truncate">
                               {item.archetype && <span className="mr-2">{item.archetype}</span>}
@@ -1189,6 +1192,13 @@ const App = () => {
                               <div className="mt-1 space-y-0.5">
                                 {item.hallucination_flags.slice(0, 3).map((flag, fi) => (
                                   <div key={fi} className="text-[9px] text-amber-400/70 font-mono">- {flag}</div>
+                                ))}
+                              </div>
+                            )}
+                            {hasUnverifiedClaims && (
+                              <div className="mt-1 space-y-0.5">
+                                {item.unsupported_claims.slice(0, 3).map((claim, ci) => (
+                                  <div key={ci} className="text-[9px] text-orange-400/70 font-mono">- {claim}</div>
                                 ))}
                               </div>
                             )}

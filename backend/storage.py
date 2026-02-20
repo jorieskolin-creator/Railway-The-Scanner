@@ -271,6 +271,32 @@ class BlobStorage:
 
             return new_url
 
+    def update_global_index_field(self, company_name, field_name, field_value):
+        """Update a single field for a company in the global index."""
+        with BlobStorage._index_lock:
+            blobs = self._list("index/summary_list", limit=10)
+            current_index = []
+            if blobs:
+                blobs.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
+                latest_url = blobs[0].get("url")
+                data = self._get(latest_url)
+                if data and isinstance(data, list):
+                    current_index = data
+
+            updated = False
+            for item in current_index:
+                if item.get("companyName") == company_name:
+                    item[field_name] = field_value
+                    updated = True
+                    break
+
+            if updated:
+                new_url = self._put("index/summary_list.json", current_index)
+                if new_url:
+                    self._prune_old_versions("index/summary_list", keep=3)
+                return new_url
+            return None
+
     def retrieve_latest_data(self, filename_prefix="index/summary_list"):
         """
         Robustly finds the latest index file by listing the directory,
@@ -360,6 +386,7 @@ class BlobStorage:
             latest_data = self._get(latest.get("url"))
             preview = {}
             if latest_data and isinstance(latest_data, dict):
+                ai_v = latest_data.get("ai_verification", {})
                 preview = {
                     "companyName": latest_data.get("companyName", company_key),
                     "lastUpdated": latest_data.get("lastUpdated"),
@@ -370,6 +397,8 @@ class BlobStorage:
                     "archetype": latest_data.get("archetype"),
                     "hallucination_flags": latest_data.get("hallucination_flags", []),
                     "hallucination_risk": latest_data.get("hallucination_risk", "unknown"),
+                    "ai_verified": ai_v.get("verified") if ai_v else None,
+                    "unsupported_claims": ai_v.get("unsupported_claims", []) if ai_v else [],
                     "versions": len(company_blobs),
                     "uploaded_at": latest.get("uploadedAt"),
                 }

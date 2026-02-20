@@ -256,12 +256,35 @@ async def recheck_company(company_name: str, request: Request):
         pitch_text=data.get("pitch_text", ""),
         company_name=company_name,
     )
+
+    # AI-powered cross-reference check (same as automatic scan pipeline)
+    ai_result = ai_verify_summary(
+        summary_text=data.get("summary_text", ""),
+        evidence_links=data.get("evidence_links", []),
+        company_name=company_name,
+    )
+
+    # Persist AI verification result back to stored data
+    data["ai_verification"] = {
+        "verified": ai_result["verified"],
+        "unsupported_claims": ai_result["unsupported_claims"],
+        "model": ai_result["verification_model"],
+        "time_ms": ai_result["verification_time_ms"],
+    }
+    storage.save_company_data(company_name, data)
+    # Update index with ai_verified flag
+    storage.update_global_index_field(company_name, "ai_verified", ai_result["verified"])
+
+    recommendation = "DELETE and rescan" if summary_result["risk"] == "high" else \
+                     "Rescan — unsupported claims found" if not ai_result["verified"] else \
+                     "Review manually" if summary_result["risk"] == "medium" else "OK"
+
     return {
         "company": company_name,
         "summary_check": summary_result,
         "pitch_check": pitch_result,
-        "recommendation": "DELETE and rescan" if summary_result["risk"] == "high" else
-                          "Review manually" if summary_result["risk"] == "medium" else "OK",
+        "ai_verification": ai_result,
+        "recommendation": recommendation,
     }
 
 @app.post("/admin/recheck-all")
@@ -287,12 +310,33 @@ async def recheck_all_companies(request: Request):
             evidence_links=data.get("evidence_links", []),
             confidence_score=data.get("confidence_score"),
         )
-        if result["risk"] in ("medium", "high"):
+
+        # AI-powered cross-reference check (same as automatic scan pipeline)
+        ai_result = ai_verify_summary(
+            summary_text=data.get("summary_text", ""),
+            evidence_links=data.get("evidence_links", []),
+            company_name=name,
+        )
+
+        # Persist AI verification result back to stored data
+        data["ai_verification"] = {
+            "verified": ai_result["verified"],
+            "unsupported_claims": ai_result["unsupported_claims"],
+            "model": ai_result["verification_model"],
+            "time_ms": ai_result["verification_time_ms"],
+        }
+        storage.save_company_data(name, data)
+        storage.update_global_index_field(name, "ai_verified", ai_result["verified"])
+
+        is_flagged = result["risk"] in ("medium", "high") or not ai_result["verified"]
+        if is_flagged:
             flagged.append({
                 "companyName": name,
                 "risk": result["risk"],
                 "score": result["score"],
                 "flags": result["flags"],
+                "ai_verified": ai_result["verified"],
+                "unsupported_claims": ai_result["unsupported_claims"],
                 "summary_preview": (data.get("summary_text", "") or "")[:200],
             })
         else:
