@@ -628,12 +628,13 @@ FALSE CLAIMS TO REMOVE:
 RULES — READ CAREFULLY:
 1. Remove ONLY the sentences or phrases that contain the false claims listed above.
 2. Do NOT add any new information or claims. You are only REMOVING, never ADDING.
-3. Keep all other content EXACTLY as-is — same tone, same structure, same archetype classification.
-4. Smooth out the text so it reads naturally after removal (fix transitions, but don't add content).
-5. The cleaned summary should be 150-220 words. If removing false claims makes it too short, that's fine — a shorter honest summary is better than a padded one.
-6. The cleaned pitch should be 70-110 words. Same rules: only remove, don't add.
-7. If the pitch references any of the false claims, remove those parts too.
-8. Preserve the company name, archetype label, and any KB terminology that isn't part of a false claim.
+3. Keep all factual findings EXACTLY as-is — same tone, same structure.
+4. Do NOT change, add, or re-evaluate the archetype classification. The archetype label in the summary must remain EXACTLY as it appears in the original. You are not a judge — only an editor removing false claims.
+5. Smooth out the text so it reads naturally after removal (fix transitions, but don't add content).
+6. The cleaned summary should be 150-220 words. If removing false claims makes it too short, that's fine — a shorter honest summary is better than a padded one.
+7. The cleaned pitch should be 70-110 words. Same rules: only remove, don't add.
+8. If the pitch references any of the false claims, remove those parts too.
+9. Preserve the company name and any KB terminology that isn't part of a false claim.
 
 Output ONLY valid JSON:
 {{"cleaned_summary": "...", "cleaned_pitch": "...", "claims_removed": <number of false claims you addressed>}}"""

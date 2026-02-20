@@ -521,17 +521,7 @@ const CompanySummary = ({ data }) => {
             </div>
         )}
 
-        <div className="bg-gradient-to-r from-indigo-900/30 to-purple-900/30 p-8 rounded-2xl border-l-4 border-indigo-500 backdrop-blur-sm">
-            <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
-            <ShieldCheck className="text-indigo-400" />
-            AI Diagnosis
-            </h3>
-            <p className="text-slate-200 leading-relaxed whitespace-pre-line text-lg font-light">
-                <HighlightText text={data.summary_text} />
-            </p>
-        </div>
-
-        {/* NEW REALITY CHECKLIST SECTION */}
+        {/* REALITY CHECKLIST SECTION */}
         {data.reality_checklist && data.reality_checklist.length > 0 && (
             <div className="bg-white/5 p-6 rounded-2xl border border-white/10 backdrop-blur-md">
                 <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
