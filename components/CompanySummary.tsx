@@ -460,6 +460,35 @@ const CompanySummary = ({ data }) => {
             </div>
         )}
 
+        {/* HALLUCINATION WARNING BANNER */}
+        {data.hallucination_risk && data.hallucination_risk !== 'low' && (
+            <div className={`p-4 rounded-xl border-l-4 ${
+                data.hallucination_risk === 'high'
+                    ? 'bg-rose-500/10 border-rose-500 text-rose-200'
+                    : 'bg-amber-500/10 border-amber-500 text-amber-200'
+            }`}>
+                <div className="flex items-center gap-2 mb-1">
+                    <AlertOctagon size={16} className={data.hallucination_risk === 'high' ? 'text-rose-400' : 'text-amber-400'} />
+                    <span className="font-bold text-sm uppercase">
+                        Reality Check: {data.hallucination_risk} hallucination risk
+                        {data.hallucination_score != null && ` (score: ${data.hallucination_score}/100)`}
+                    </span>
+                </div>
+                {data.hallucination_flags && data.hallucination_flags.length > 0 && (
+                    <div className="space-y-0.5 mt-2">
+                        {data.hallucination_flags.map((flag, i) => (
+                            <div key={i} className="text-[11px] font-mono opacity-80">- {flag}</div>
+                        ))}
+                    </div>
+                )}
+                {data.hallucination_risk === 'high' && (
+                    <div className="mt-2 text-[11px] font-mono opacity-60">
+                        This summary was automatically blocked. Rescan the company to generate fresh data.
+                    </div>
+                )}
+            </div>
+        )}
+
         <div className="bg-gradient-to-r from-indigo-900/30 to-purple-900/30 p-8 rounded-2xl border-l-4 border-indigo-500 backdrop-blur-sm">
             <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
             <ShieldCheck className="text-indigo-400" />

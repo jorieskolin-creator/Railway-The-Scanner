@@ -11,7 +11,7 @@ const Icons = new Proxy(LucideRaw, {
     }
 });
 
-const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock, HardDrive, Radio, Cpu, BarChart3, TrendingUp, TrendingDown, Minus } = Icons;
+const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock, HardDrive, Radio, Cpu, BarChart3, TrendingUp, TrendingDown, Minus, Trash2, Eye, ShieldAlert } = Icons;
 
 const TruthMatrix = (window as any).TruthMatrix;
 const ScannerInput = (window as any).ScannerInput;
@@ -56,6 +56,13 @@ const App = () => {
 
   // SERVER-SIDE BATCH STATE
   const [batchStatus, setBatchStatus] = useState({ is_running: false, current: 0, total: 0, current_name: '' });
+
+  // DATA REVIEW STATE
+  const [isDataReviewOpen, setIsDataReviewOpen] = useState(false);
+  const [dataReviewItems, setDataReviewItems] = useState([]);
+  const [dataReviewLoading, setDataReviewLoading] = useState(false);
+  const [recheckLoading, setRecheckLoading] = useState(false);
+  const [recheckResults, setRecheckResults] = useState(null);
 
   const prevDataLengthRef = useRef(0);
 
@@ -264,6 +271,63 @@ const App = () => {
     }
   };
 
+  const handleOpenDataReview = async () => {
+    const password = prompt("Enter Admin Password to review stored data:");
+    if (!password) return;
+    setIsDataReviewOpen(true);
+    setDataReviewLoading(true);
+    setRecheckResults(null);
+    try {
+      const res = await fetch('/admin/review-data', {
+        headers: { 'Authorization': `Bearer ${password}` }
+      });
+      if (res.status === 401) { alert("ACCESS DENIED"); setIsDataReviewOpen(false); return; }
+      if (res.ok) {
+        const json = await res.json();
+        setDataReviewItems(json.companies || []);
+        // Store password for subsequent admin calls in this session
+        (window as any).__adminToken = password;
+      }
+    } catch (e) { console.error(e); alert("Failed to load review data."); }
+    finally { setDataReviewLoading(false); }
+  };
+
+  const handleDeleteCompany = async (companyName) => {
+    const token = (window as any).__adminToken;
+    if (!token) { alert("Admin session expired. Please reopen Data Review."); return; }
+    if (!confirm(`DELETE all data for "${companyName}"?\n\nThis removes the company from storage and the dashboard index.\nYou can rescan it later to regenerate fresh data.`)) return;
+
+    try {
+      const res = await fetch(`/admin/company/${encodeURIComponent(companyName)}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setDataReviewItems(prev => prev.filter(c => c.companyName !== companyName));
+        fetchSummaryData(true);
+      } else {
+        alert("Failed to delete company.");
+      }
+    } catch (e) { console.error(e); alert("Delete failed."); }
+  };
+
+  const handleRecheckAll = async () => {
+    const token = (window as any).__adminToken;
+    if (!token) { alert("Admin session expired."); return; }
+    setRecheckLoading(true);
+    try {
+      const res = await fetch('/admin/recheck-all', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const json = await res.json();
+        setRecheckResults(json);
+      }
+    } catch (e) { console.error(e); alert("Recheck failed."); }
+    finally { setRecheckLoading(false); }
+  };
+
   const handleSort = (key) => {
     let direction = 'desc';
     if (sortConfig && sortConfig.key === key && sortConfig.direction === 'desc') direction = 'asc';
@@ -375,6 +439,9 @@ const App = () => {
                 <>
                 <button onClick={handleOpenAnalytics} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-violet-900/40 hover:bg-violet-800/60 border border-violet-700/50 text-violet-200 font-mono font-bold text-[10px] rounded transition-all">
                     <BarChart3 size={12} /> ANALYZE
+                </button>
+                <button onClick={handleOpenDataReview} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-amber-900/40 hover:bg-amber-800/60 border border-amber-700/50 text-amber-200 font-mono font-bold text-[10px] rounded transition-all">
+                    <ShieldAlert size={12} /> REVIEW
                 </button>
                 {batchStatus.is_running ? (
                     <div className="flex items-center gap-2 px-3 py-1.5 bg-cyan-900/40 border border-cyan-500/40 rounded-lg">
@@ -1007,6 +1074,141 @@ const App = () => {
         </div>
         );
       })()}
+
+      {/* --- DATA REVIEW PANEL --- */}
+      {isDataReviewOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/90 backdrop-blur-sm" onClick={() => setIsDataReviewOpen(false)} />
+          <div className="relative w-full max-w-4xl bg-[#0f172a] border border-amber-500/30 rounded-xl shadow-2xl z-10 flex flex-col max-h-[90vh] overflow-hidden">
+            <div className="p-4 border-b border-white/10 flex justify-between items-center bg-black/20 shrink-0">
+              <h3 className="font-bold text-white flex items-center gap-2">
+                <ShieldAlert size={18} className="text-amber-400" />
+                Data Review & Cleanup
+              </h3>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleRecheckAll}
+                  disabled={recheckLoading}
+                  className="flex items-center gap-1.5 px-3 py-1 bg-amber-900/40 hover:bg-amber-800/60 border border-amber-600/50 text-amber-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
+                >
+                  {recheckLoading ? <Loader2 size={12} className="animate-spin" /> : <Eye size={12} />}
+                  REALITY CHECK ALL
+                </button>
+                <button onClick={() => setIsDataReviewOpen(false)} className="text-slate-400 hover:text-white">
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            <div className="overflow-y-auto p-4 space-y-4">
+              {dataReviewLoading ? (
+                <div className="flex flex-col items-center justify-center py-16">
+                  <Loader2 className="animate-spin text-amber-400 mb-4" size={32} />
+                  <p className="text-slate-400 text-sm">Loading stored data...</p>
+                </div>
+              ) : (
+                <>
+                  {/* RECHECK RESULTS BANNER */}
+                  {recheckResults && (
+                    <div className={`rounded-xl p-4 border ${recheckResults.flagged_count > 0 ? 'bg-rose-500/5 border-rose-500/20' : 'bg-emerald-500/5 border-emerald-500/20'}`}>
+                      <div className="flex items-center gap-2 mb-2">
+                        {recheckResults.flagged_count > 0 ? (
+                          <AlertTriangle size={16} className="text-rose-400" />
+                        ) : (
+                          <CheckCircle2 size={16} className="text-emerald-400" />
+                        )}
+                        <span className="font-bold text-white text-sm">
+                          Reality Check: {recheckResults.clean} clean, {recheckResults.flagged_count} flagged out of {recheckResults.total_checked}
+                        </span>
+                      </div>
+                      {recheckResults.flagged?.map((item, idx) => (
+                        <div key={idx} className="mt-2 bg-black/30 rounded-lg p-3 border border-rose-500/10">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <span className={`text-xs font-mono font-bold px-1.5 py-0.5 rounded ${item.risk === 'high' ? 'bg-rose-500/20 text-rose-300' : 'bg-amber-500/20 text-amber-300'}`}>
+                                {item.risk.toUpperCase()}
+                              </span>
+                              <span className="text-white text-sm ml-2 font-medium">{item.companyName}</span>
+                              <span className="text-slate-500 text-[10px] ml-2 font-mono">score: {item.score}/100</span>
+                            </div>
+                            <button
+                              onClick={() => handleDeleteCompany(item.companyName)}
+                              className="text-rose-400 hover:text-rose-300 text-[10px] font-mono font-bold flex items-center gap-1"
+                            >
+                              <Trash2 size={12} /> DELETE
+                            </button>
+                          </div>
+                          <div className="mt-1.5 space-y-0.5">
+                            {item.flags.map((flag, fi) => (
+                              <div key={fi} className="text-[10px] text-rose-300/80 font-mono">- {flag}</div>
+                            ))}
+                          </div>
+                          {item.summary_preview && (
+                            <div className="mt-2 text-[10px] text-slate-500 font-mono italic truncate">{item.summary_preview}</div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* STORED COMPANIES LIST */}
+                  <div className="text-[10px] text-slate-500 font-mono uppercase tracking-wider">
+                    {dataReviewItems.length} companies in database
+                  </div>
+                  <div className="space-y-1">
+                    {dataReviewItems.map((item, idx) => {
+                      const hasFlags = item.hallucination_flags && item.hallucination_flags.length > 0;
+                      const isHighRisk = item.hallucination_risk === 'high';
+                      const isMediumRisk = item.hallucination_risk === 'medium';
+                      const isFlaggedSummary = (item.summary_preview || '').includes('[FLAGGED]');
+                      return (
+                        <div key={idx} className={`flex items-center justify-between px-3 py-2 rounded-lg border transition-all ${
+                          isHighRisk || isFlaggedSummary ? 'bg-rose-500/5 border-rose-500/20' :
+                          isMediumRisk ? 'bg-amber-500/5 border-amber-500/20' :
+                          'bg-black/20 border-white/5 hover:border-white/10'
+                        }`}>
+                          <div className="flex-grow min-w-0 mr-3">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm text-white font-medium truncate">{item.companyName}</span>
+                              {item.versions > 1 && (
+                                <span className="text-[9px] text-slate-600 font-mono">{item.versions}v</span>
+                              )}
+                              {isHighRisk && <span className="text-[9px] bg-rose-500/20 text-rose-300 px-1 rounded font-mono font-bold">HIGH RISK</span>}
+                              {isMediumRisk && <span className="text-[9px] bg-amber-500/20 text-amber-300 px-1 rounded font-mono font-bold">MEDIUM</span>}
+                              {isFlaggedSummary && <span className="text-[9px] bg-rose-500/30 text-rose-200 px-1 rounded font-mono font-bold">BLOCKED</span>}
+                            </div>
+                            <div className="text-[10px] text-slate-500 font-mono mt-0.5 truncate">
+                              {item.archetype && <span className="mr-2">{item.archetype}</span>}
+                              {item.intent_score != null && <span className="mr-2">I:{item.intent_score}</span>}
+                              {item.reality_score != null && <span className="mr-2">R:{item.reality_score}</span>}
+                              {item.confidence_score != null && <span className="mr-2">C:{item.confidence_score}</span>}
+                              {item.lastUpdated && <span className="text-slate-600">{item.lastUpdated.split('T')[0]}</span>}
+                            </div>
+                            {hasFlags && (
+                              <div className="mt-1 space-y-0.5">
+                                {item.hallucination_flags.slice(0, 3).map((flag, fi) => (
+                                  <div key={fi} className="text-[9px] text-amber-400/70 font-mono">- {flag}</div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => handleDeleteCompany(item.companyName)}
+                            className="shrink-0 text-slate-500 hover:text-rose-400 p-1.5 rounded hover:bg-rose-500/10 transition-all"
+                            title={`Delete ${item.companyName}`}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <CompanyModal
         company={selectedCompany}

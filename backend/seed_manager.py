@@ -14,6 +14,7 @@ from scanner_one import analyze_intent
 from scanner_two import x_ray_search, extract_json_from_text, run_self_analysis, financial_health_search
 from knowledge_base import get_evolving_framework
 from storage import BlobStorage
+from reality_check import validate_summary, validate_pitch
 from google import genai
 from google.genai import types
 import anthropic
@@ -725,6 +726,30 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                 "financial_findings": financial_results.get("financial_findings", []),
                 "financial_confidence": financial_results.get("financial_confidence", 0)
             }
+
+            # --- REALITY CHECK: Hallucination Detection ---
+            from reality_check import validate_summary, validate_pitch
+            summary_check = validate_summary(
+                summary_text=summary_text,
+                company_name=company_name,
+                key_people=key_people,
+                evidence_links=reality_results.get("links", []),
+                confidence_score=confidence,
+            )
+            pitch_check = validate_pitch(pitch_text=pitch_text, company_name=company_name)
+
+            full_data["hallucination_flags"] = summary_check["flags"] + pitch_check.get("flags", [])
+            full_data["hallucination_risk"] = summary_check["risk"]
+            full_data["hallucination_score"] = summary_check["score"]
+
+            if summary_check["risk"] == "high":
+                print(f"   [{company_name}] ⚠️ [Reality Check] HIGH risk (score {summary_check['score']}/100)! Flags: {summary_check['flags']}")
+                full_data["summary_text"] = f"[FLAGGED] Summary blocked by Reality Check (score: {summary_check['score']}/100). Flags: {'; '.join(summary_check['flags'])}. Rescan required."
+                full_data["pitch_text"] = "Pitch unavailable — summary flagged. Rescan required."
+            elif summary_check["risk"] == "medium":
+                print(f"   [{company_name}] ⚠️ [Reality Check] MEDIUM risk (score {summary_check['score']}/100). Flags: {summary_check['flags']}")
+            else:
+                print(f"   [{company_name}] ✅ [Reality Check] Summary OK (score {summary_check['score']}/100)")
 
             # 6. SAVE INDIVIDUAL COMPANY (thread-safe — unique path per company)
             # Use timestamp conflict resolution: skip save if a manual scan happened after batch started

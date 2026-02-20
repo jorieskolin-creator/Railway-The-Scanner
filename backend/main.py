@@ -27,6 +27,7 @@ from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES, get_company_metadata
 from analyze_scores import run_analysis
 from knowledge_base import get_evolving_framework
+from reality_check import validate_summary, validate_pitch
 
 # VERIFICATION LOG: v5.2.0 - Performance Optimizations
 print("Starting Adaptability Scanner Backend (v5.2.0 - Performance Optimizations)...", flush=True)
@@ -216,6 +217,93 @@ async def reset_database(request: Request):
     verify_admin(request)
     count = storage.nuke_everything()
     return {"status": "Database Wiped", "deleted_count": count}
+
+@app.delete("/admin/company/{company_name}")
+async def delete_company(company_name: str, request: Request):
+    """Delete a single company's data from blob storage and global index."""
+    verify_admin(request)
+    result = storage.delete_company(company_name)
+    return {
+        "status": "deleted",
+        "company": company_name,
+        "deleted_files": result["deleted_files"],
+        "removed_from_index": result["removed_from_index"]
+    }
+
+@app.get("/admin/review-data")
+async def review_data(request: Request):
+    """Returns all stored companies with summary previews and hallucination flags for admin review."""
+    verify_admin(request)
+    companies = storage.get_all_companies_summary()
+    return {"companies": companies, "total": len(companies)}
+
+@app.post("/admin/recheck-company/{company_name}")
+async def recheck_company(company_name: str, request: Request):
+    """Run reality check on an already-stored company's summary without rescanning."""
+    verify_admin(request)
+    data = storage.get_company_data(company_name)
+    if not data:
+        raise HTTPException(status_code=404, detail=f"Company '{company_name}' not found in database.")
+
+    summary_result = validate_summary(
+        summary_text=data.get("summary_text", ""),
+        company_name=company_name,
+        key_people=data.get("key_people", []),
+        evidence_links=data.get("evidence_links", []),
+        confidence_score=data.get("confidence_score"),
+    )
+    pitch_result = validate_pitch(
+        pitch_text=data.get("pitch_text", ""),
+        company_name=company_name,
+    )
+    return {
+        "company": company_name,
+        "summary_check": summary_result,
+        "pitch_check": pitch_result,
+        "recommendation": "DELETE and rescan" if summary_result["risk"] == "high" else
+                          "Review manually" if summary_result["risk"] == "medium" else "OK",
+    }
+
+@app.post("/admin/recheck-all")
+async def recheck_all_companies(request: Request):
+    """Run reality check on ALL stored companies. Returns flagged ones."""
+    verify_admin(request)
+    companies = storage.get_all_companies_summary()
+    flagged = []
+    clean = 0
+
+    for company in companies:
+        name = company.get("companyName", "")
+        if not name:
+            continue
+        data = storage.get_company_data(name)
+        if not data:
+            continue
+
+        result = validate_summary(
+            summary_text=data.get("summary_text", ""),
+            company_name=name,
+            key_people=data.get("key_people", []),
+            evidence_links=data.get("evidence_links", []),
+            confidence_score=data.get("confidence_score"),
+        )
+        if result["risk"] in ("medium", "high"):
+            flagged.append({
+                "companyName": name,
+                "risk": result["risk"],
+                "score": result["score"],
+                "flags": result["flags"],
+                "summary_preview": (data.get("summary_text", "") or "")[:200],
+            })
+        else:
+            clean += 1
+
+    return {
+        "total_checked": len(companies),
+        "clean": clean,
+        "flagged_count": len(flagged),
+        "flagged": flagged,
+    }
 
 # --- SERVER-SIDE BATCH REFRESH ---
 
@@ -888,6 +976,31 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
             "financial_findings": financial_results.get("financial_findings", []),
             "financial_confidence": financial_results.get("financial_confidence", 0)
         }
+
+        # --- REALITY CHECK: Hallucination Detection ---
+        summary_check = validate_summary(
+            summary_text=summary,
+            company_name=companyName,
+            key_people=key_people,
+            evidence_links=reality_results.get("links", []),
+            confidence_score=confidence,
+        )
+        pitch_check = validate_pitch(pitch_text=pitch, company_name=companyName)
+
+        full_data["hallucination_flags"] = summary_check["flags"] + pitch_check.get("flags", [])
+        full_data["hallucination_risk"] = summary_check["risk"]
+        full_data["hallucination_score"] = summary_check["score"]
+
+        if summary_check["risk"] == "high":
+            print(f"   ⚠️ [Reality Check] HIGH hallucination risk (score {summary_check['score']}/100)! Flags: {summary_check['flags']}")
+            print(f"   ⚠️ [Reality Check] Summary will be replaced with safety notice. Data saved with warning flag.")
+            # Replace hallucinated summary with safe fallback, preserving scores
+            full_data["summary_text"] = f"[FLAGGED] This summary was automatically blocked by the Reality Check system (hallucination score: {summary_check['score']}/100). Flags: {'; '.join(summary_check['flags'])}. Please rescan this company to generate a fresh analysis."
+            full_data["pitch_text"] = "Pitch unavailable — summary flagged by Reality Check. Rescan required."
+        elif summary_check["risk"] == "medium":
+            print(f"   ⚠️ [Reality Check] MEDIUM hallucination risk (score {summary_check['score']}/100). Flags: {summary_check['flags']}")
+        else:
+            print(f"   ✅ [Reality Check] Summary OK (score {summary_check['score']}/100)")
 
         # --- STEP 4: SAVE ---
         if saveToDatabase:

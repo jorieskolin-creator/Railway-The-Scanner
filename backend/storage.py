@@ -294,6 +294,98 @@ class BlobStorage:
         # 3. Fetch content
         return self._get(latest_url)
         
+    def delete_company(self, company_name):
+        """
+        Deletes a single company's data from blob storage AND removes it from the global index.
+        Returns dict with deletion counts.
+        """
+        clean_name = self.sanitize_filename(company_name)
+        prefix = f"companies/{clean_name}"
+        deleted_files = 0
+
+        # 1. Delete all company file versions
+        blobs = self._list(prefix=prefix, limit=50)
+        if blobs:
+            urls = [b.get("url") for b in blobs if b.get("url")]
+            if urls:
+                self._delete(urls)
+                deleted_files = len(urls)
+                print(f"   [Storage] Deleted {deleted_files} file(s) for '{company_name}'")
+
+        # 2. Remove from global index
+        removed_from_index = False
+        with BlobStorage._index_lock:
+            blobs = self._list("index/summary_list", limit=10)
+            if blobs:
+                blobs.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
+                latest_url = blobs[0].get("url")
+                data = self._get(latest_url)
+                if data and isinstance(data, list):
+                    original_len = len(data)
+                    data = [item for item in data if item.get("companyName", "").lower() != company_name.lower()]
+                    if len(data) < original_len:
+                        removed_from_index = True
+                        self._put("index/summary_list.json", data)
+                        self._prune_old_versions("index/summary_list", keep=3)
+                        print(f"   [Storage] Removed '{company_name}' from global index")
+
+        return {"deleted_files": deleted_files, "removed_from_index": removed_from_index}
+
+    def get_all_companies_summary(self):
+        """
+        Returns a list of all stored companies with metadata for admin review.
+        Scans the companies/ prefix and returns name, last updated, file count, and data size.
+        """
+        blobs = self._list(prefix="companies/", limit=500)
+        if not blobs:
+            return []
+
+        # Group blobs by company prefix
+        companies = {}
+        for blob in blobs:
+            pathname = blob.get("pathname", "")
+            # Extract company name from path like "companies/nokia_oyj.json"
+            parts = pathname.replace("companies/", "").split(".")
+            if parts:
+                company_key = parts[0]
+                if company_key not in companies:
+                    companies[company_key] = []
+                companies[company_key].append(blob)
+
+        result = []
+        for company_key, company_blobs in companies.items():
+            company_blobs.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
+            latest = company_blobs[0]
+            # Fetch latest data for preview
+            latest_data = self._get(latest.get("url"))
+            preview = {}
+            if latest_data and isinstance(latest_data, dict):
+                preview = {
+                    "companyName": latest_data.get("companyName", company_key),
+                    "lastUpdated": latest_data.get("lastUpdated"),
+                    "summary_preview": (latest_data.get("summary_text", "") or "")[:300],
+                    "intent_score": latest_data.get("intent_score"),
+                    "reality_score": latest_data.get("reality_score"),
+                    "confidence_score": latest_data.get("confidence_score"),
+                    "archetype": latest_data.get("archetype"),
+                    "hallucination_flags": latest_data.get("hallucination_flags", []),
+                    "hallucination_risk": latest_data.get("hallucination_risk", "unknown"),
+                    "versions": len(company_blobs),
+                    "uploaded_at": latest.get("uploadedAt"),
+                }
+            else:
+                preview = {
+                    "companyName": company_key,
+                    "lastUpdated": None,
+                    "summary_preview": "(could not read data)",
+                    "versions": len(company_blobs),
+                    "uploaded_at": latest.get("uploadedAt"),
+                }
+            result.append(preview)
+
+        result.sort(key=lambda x: x.get("companyName", "").lower())
+        return result
+
     def nuke_everything(self):
         """
         DANGEROUS: Deletes ALL files in the blob storage.
