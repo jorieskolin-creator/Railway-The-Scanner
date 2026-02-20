@@ -303,11 +303,11 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
           <ReferenceArea x1={0} x2={100} y1={0} y2={50} fill="url(#redZone)" stroke="none" />
           <ReferenceArea x1={50} x2={100} y1={50} y2={100} fill="url(#sweetSpot)" stroke="none" />
           <ReferenceArea x1={0} x2={50} y1={0} y2={50} fill="url(#dangerSpot)" stroke="none" />
-          <ReferenceLine y={25} stroke="#475569" strokeDasharray="2 6" strokeOpacity={0.4} />
-          <ReferenceLine y={75} stroke="#475569" strokeDasharray="2 6" strokeOpacity={0.4} />
+          <ReferenceLine y={25} stroke="#64748b" strokeDasharray="4 4" strokeOpacity={0.7} strokeWidth={1.5} />
+          <ReferenceLine y={75} stroke="#64748b" strokeDasharray="4 4" strokeOpacity={0.7} strokeWidth={1.5} />
           <ReferenceLine y={50} stroke="#22d3ee" strokeDasharray="4 4" strokeOpacity={0.6} />
-          <ReferenceLine x={25} stroke="#475569" strokeDasharray="2 6" strokeOpacity={0.4} />
-          <ReferenceLine x={75} stroke="#475569" strokeDasharray="2 6" strokeOpacity={0.4} />
+          <ReferenceLine x={25} stroke="#64748b" strokeDasharray="4 4" strokeOpacity={0.7} strokeWidth={1.5} />
+          <ReferenceLine x={75} stroke="#64748b" strokeDasharray="4 4" strokeOpacity={0.7} strokeWidth={1.5} />
           <ReferenceLine x={50} stroke="#6366f1" strokeDasharray="4 4" strokeOpacity={0.3} />
 
           <ReferenceArea x1={80} x2={98} y1={92} y2={98} stroke="none" fill="none">
@@ -333,16 +333,21 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
                       const { cx, cy } = props;
                       return (
                           <g>
-                              <circle cx={cx} cy={cy} r={12} fill="white" fillOpacity={0.08} stroke="white" strokeWidth={1} strokeOpacity={0.25}>
-                                  <animate attributeName="r" values="12;18;12" dur="3s" repeatCount="indefinite" />
-                                  <animate attributeName="fillOpacity" values="0.08;0.02;0.08" dur="3s" repeatCount="indefinite" />
-                                  <animate attributeName="strokeOpacity" values="0.25;0.08;0.25" dur="3s" repeatCount="indefinite" />
+                              <circle cx={cx} cy={cy} r={16} fill="white" fillOpacity={0.10} stroke="white" strokeWidth={1.5} strokeOpacity={0.3}>
+                                  <animate attributeName="r" values="16;24;16" dur="3s" repeatCount="indefinite" />
+                                  <animate attributeName="fillOpacity" values="0.10;0.03;0.10" dur="3s" repeatCount="indefinite" />
+                                  <animate attributeName="strokeOpacity" values="0.3;0.1;0.3" dur="3s" repeatCount="indefinite" />
                               </circle>
-                              <circle cx={cx} cy={cy} r={5} fill="white" fillOpacity={0.95} stroke="white" strokeWidth={1.5}
-                                  style={{ filter: 'drop-shadow(0 0 6px rgba(255,255,255,0.6))' }}
+                              <circle cx={cx} cy={cy} r={7} fill="white" fillOpacity={0.95} stroke="white" strokeWidth={2}
+                                  style={{ filter: 'drop-shadow(0 0 8px rgba(255,255,255,0.7)) drop-shadow(0 0 3px rgba(255,255,255,0.4))' }}
                               >
-                                  <animate attributeName="fillOpacity" values="0.95;0.7;0.95" dur="3s" repeatCount="indefinite" />
+                                  <animate attributeName="fillOpacity" values="0.95;0.75;0.95" dur="3s" repeatCount="indefinite" />
                               </circle>
+                              <text x={cx} y={cy - 16} textAnchor="middle" fill="white" fontSize={9} fontWeight={700} opacity={0.7}
+                                  letterSpacing="0.08em" fontFamily="monospace"
+                              >
+                                  MARKET AVG
+                              </text>
                           </g>
                       );
                   }}
