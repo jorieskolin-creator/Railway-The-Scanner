@@ -14,6 +14,15 @@ import json
 import os
 import time
 
+
+def _strip_code_fences(text):
+    """Strip markdown code fences (```json ... ```) from LLM responses."""
+    if not text:
+        return text
+    # Remove ```json ... ``` wrapping
+    stripped = re.sub(r'```(?:json)?\s*', '', text).strip()
+    return stripped
+
 # --- HEURISTIC PATTERNS ---
 # These patterns indicate the AI is fabricating events rather than synthesizing evidence
 
@@ -322,6 +331,7 @@ If there are NO contradictions, return:
         elapsed_ms = int((time.time() - start) * 1000)
 
         response_text = response.content[0].text if response.content else ""
+        response_text = _strip_code_fences(response_text)
 
         json_match = re.search(r'\{[^{}]*\}', response_text, re.DOTALL)
         if json_match:
@@ -412,6 +422,7 @@ If the summary appears accurate or you found no clear falsehoods, return:
 
         elapsed_ms = int((time.time() - start) * 1000)
         text = response.text if response.text else ""
+        text = _strip_code_fences(text)
 
         json_match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
         if json_match:
@@ -714,7 +725,8 @@ def clean_summary(summary_text, pitch_text, unsupported_claims, company_name,
             print(f"   🔄 [Clean] Using Haiku for summary rewrite...")
             response_text, elapsed_ms, model_name = _clean_with_haiku(prompt, api_key)
 
-        # Parse JSON from response
+        # Parse JSON from response (strip markdown code fences from LLM output)
+        response_text = _strip_code_fences(response_text)
         json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
         if json_match:
             result = json.loads(json_match.group())
