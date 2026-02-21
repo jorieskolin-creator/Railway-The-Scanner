@@ -380,6 +380,29 @@ const App = () => {
     return { label: 'S', size: 'S' };
   };
 
+  // Archetype styles and helpers (must be defined before useMemo hooks that reference them)
+  const ARCHETYPE_STYLES = {
+      "Thriving": { color: "text-emerald-400", bg: "bg-emerald-400/10", border: "border-emerald-400/20" },
+      "Modernizing": { color: "text-cyan-400", bg: "bg-cyan-400/10", border: "border-cyan-400/20" },
+      "Cash Cow": { color: "text-amber-400", bg: "bg-amber-400/10", border: "border-amber-400/20" },
+      "At Risk": { color: "text-rose-400", bg: "bg-rose-400/10", border: "border-rose-400/20" },
+  };
+
+  const getArchetypeFromScores = (reality: number, financial: number) => {
+      if (reality >= 50) {
+          return financial >= 50 ? "Thriving" : "Modernizing";
+      } else {
+          return financial >= 50 ? "Cash Cow" : "At Risk";
+      }
+  };
+
+  const getArchetype = (storedArchetype: string | null, reality: number, financial: number) => {
+      const label = (storedArchetype && ARCHETYPE_STYLES[storedArchetype])
+          ? storedArchetype
+          : getArchetypeFromScores(reality, financial);
+      return { label, ...ARCHETYPE_STYLES[label] };
+  };
+
   // Collect unique domains from data
   const availableDomains = useMemo(() => {
     const domains = new Set();
@@ -408,28 +431,6 @@ const App = () => {
     const matchesDomain = selectedDomain === 'All' || item.domain === selectedDomain;
     return matchesSearch && matchesDomain;
   });
-
-  const ARCHETYPE_STYLES = {
-      "Thriving": { color: "text-emerald-400", bg: "bg-emerald-400/10", border: "border-emerald-400/20" },
-      "Modernizing": { color: "text-cyan-400", bg: "bg-cyan-400/10", border: "border-cyan-400/20" },
-      "Cash Cow": { color: "text-amber-400", bg: "bg-amber-400/10", border: "border-amber-400/20" },
-      "At Risk": { color: "text-rose-400", bg: "bg-rose-400/10", border: "border-rose-400/20" },
-  };
-
-  const getArchetypeFromScores = (reality: number, financial: number) => {
-      if (reality >= 50) {
-          return financial >= 50 ? "Thriving" : "Modernizing";
-      } else {
-          return financial >= 50 ? "Cash Cow" : "At Risk";
-      }
-  };
-
-  const getArchetype = (storedArchetype: string | null, reality: number, financial: number) => {
-      const label = (storedArchetype && ARCHETYPE_STYLES[storedArchetype])
-          ? storedArchetype
-          : getArchetypeFromScores(reality, financial);
-      return { label, ...ARCHETYPE_STYLES[label] };
-  };
 
   const sortedData = [...filteredData].sort((a, b) => {
     if (!sortConfig) return 0;
