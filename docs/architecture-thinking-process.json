@@ -194,7 +194,7 @@
         "Evidence persistence prevents lucky re-scans from hiding real problems",
         "Recency weighting ensures stale evidence doesn't dominate"
       ],
-      "model_used": "Gemini 3 Pro with Google Search grounding (live web search)"
+      "model_used": "Gemini 3.1 Pro with Google Search grounding (live web search, fact-check + inline correction)"
     },
 
     "phase_2b_financial_health": {
@@ -264,7 +264,7 @@
       },
       "fallback_chain": [
         "Claude Opus 4.6 (primary)",
-        "Gemini 3 Pro (fallback 1)",
+        "Gemini 3.1 Pro (fallback 1)",
         "Claude Sonnet 4.5 (fallback 2)"
       ],
       "accuracy_safeguards": [

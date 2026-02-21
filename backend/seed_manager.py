@@ -567,7 +567,7 @@ A direct cold-outreach message to a C-level executive at {company_name}:
 Respond with valid JSON only. Four fields required:
 {{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "intent_score": <int 0-100>}}"""
 
-                    # --- Synthesis with fallback chain: Opus 4.6 → Gemini 3 Pro → Sonnet 4.6 ---
+                    # --- Synthesis with fallback chain: Opus 4.6 → Gemini 3.1 Pro → Gemini 3 Pro → Sonnet 4.6 ---
                     response_text = ""
                     try:
                         print(f"   [{company_name}] 🔄 [Synthesis] Attempting claude-opus-4-6...")

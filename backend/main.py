@@ -258,11 +258,12 @@ def _recheck_company_data(company_name: str, data: dict) -> dict:
         company_name=company_name,
     )
 
-    # Step 2: AI-powered fact-check (Gemini 3 Pro + Google Search grounding)
+    # Step 2: AI-powered fact-check (Gemini 3.1 Pro + Google Search grounding)
     ai_result = ai_fact_check_summary(
         summary_text=data.get("summary_text", ""),
         evidence_links=data.get("evidence_links", []),
         company_name=company_name,
+        pitch_text=data.get("pitch_text", ""),
     )
 
     # Step 3: Persist AI verification result back to stored data
@@ -277,9 +278,27 @@ def _recheck_company_data(company_name: str, data: dict) -> dict:
     storage.update_global_index_field(company_name, "ai_verified", ai_result["verified"])
 
     # Step 4: Auto-clean if AI found false claims
+    # Prefer corrected summary from fact-checker (inline correction) over separate clean
     clean_result = None
     if not ai_result["verified"] and ai_result["false_claims"]:
-        clean_result = _clean_company_data(company_name, data)
+        corrected_summary = ai_result.get("corrected_summary", "")
+        corrected_pitch = ai_result.get("corrected_pitch", "")
+        if corrected_summary:
+            # Fact-checker produced corrected summary — apply directly
+            data["summary_text"] = corrected_summary
+            if corrected_pitch:
+                data["pitch_text"] = corrected_pitch
+            data["ai_verification"]["verified"] = True
+            data["ai_verification"]["false_claims"] = []
+            data["ai_verification"]["note"] = "Corrected by Gemini 3.1 Pro fact-checker inline"
+            data["summary_cleaned"] = True
+            storage.save_company_data(company_name, data, post_clean=True)
+            storage.update_global_index_field(company_name, "ai_verified", True)
+            clean_result = {"action": "cleaned", "claims_removed": len(ai_result["false_claims"]), "re_verified": True, "remaining_issues": []}
+            print(f"   ✅ [Admin Recheck] Applied corrected summary from fact-checker for {company_name}")
+        else:
+            # Fallback: separate clean
+            clean_result = _clean_company_data(company_name, data)
 
     # Step 5: Determine recommendation
     if summary_result["risk"] == "high":
@@ -527,7 +546,7 @@ Respond with valid JSON only. Four fields required:
 {{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
 
 ### CRITICAL CONTEXT — FACT-CHECK CORRECTIONS
-The previous synthesis contained false claims detected by an independent fact-checker (Gemini with Google Search).
+The previous synthesis contained false claims detected by an independent fact-checker (Gemini 3.1 Pro with Google Search).
 The following claims were FALSE and must NOT appear in your output:
 {chr(10).join(f"- {c}" for c in false_claims)}
 
@@ -1295,7 +1314,7 @@ A direct cold-outreach message to a C-level executive at {companyName}:
 Respond with valid JSON only. Four fields required:
 {{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}"""
 
-                # --- Synthesis with fallback chain: Opus 4.6 → Gemini 3 Pro → Gemini 2.5 Pro ---
+                # --- Synthesis with fallback chain: Opus 4.6 → Gemini 3.1 Pro → Gemini 3 Pro → Gemini 2.5 Pro ---
                 # Opus is the judge — it does ONE thing: synthesize. Fallbacks degrade gracefully.
                 response_text = ""
                 synth_start = time.time()
@@ -1554,17 +1573,19 @@ Respond with valid JSON only. Four fields required:
         # --- AI FACT-CHECK: Always runs in Deep Scan (heuristic is diagnostic only) ---
         # Core insight: the problem is EVIDENCE CONTAMINATION, not hallucination.
         # Checking summary against stored evidence is circular when evidence itself may be wrong.
-        # Gemini 3 Pro with Google Search independently verifies claims against live web data.
+        # Gemini 3.1 Pro with Google Search independently verifies claims against live web data.
         #
         # Single-pass pipeline (no loops, no eternal fact-checking):
         #   1. Fact-check once → if clean, DONE (original synthesis stands)
-        #   2. If false claims → purge contaminated evidence → full re-synthesis → DONE
-        #   No second fact-check after re-synthesis — clean evidence produces clean output.
-        print(f"   🔄 [Fact-Check] Gemini 3 Pro fact-check against live web data...")
+        #   2. If false claims → Gemini 3.1 Pro produces corrected summary in same call
+        #      → purge contaminated evidence → apply corrected summary → DONE
+        #   No second fact-check after correction — fact-checker fixes what it finds.
+        print(f"   🔄 [Fact-Check] Gemini 3.1 Pro fact-check against live web data...")
         fact_check = ai_fact_check_summary(
             summary_text=full_data["summary_text"],
             evidence_links=reality_results.get("links", []),
             company_name=companyName,
+            pitch_text=full_data.get("pitch_text", ""),
         )
         full_data["ai_verification"] = {
             "verified": fact_check["verified"],
@@ -1578,7 +1599,9 @@ Respond with valid JSON only. Four fields required:
             # --- CLEAN: No false claims found. Original synthesis stands. Done. ---
             print(f"   ✅ [Fact-Check] Summary verified — no false claims ({fact_check['fact_check_time_ms']}ms)")
         else:
-            # --- FALSE CLAIMS FOUND: Purge contaminated evidence → Full Gemini re-synthesis ---
+            # --- FALSE CLAIMS FOUND: Apply corrected summary from fact-check + purge evidence ---
+            # Gemini 3.1 Pro produced the corrected summary in the same fact-check call.
+            # If fact-checker didn't produce a corrected summary, fall back to separate re-synthesis.
             print(f"   ⚠️ [Fact-Check] {len(fact_check['false_claims'])} false claim(s) found ({fact_check['fact_check_time_ms']}ms):")
             for claim in fact_check["false_claims"]:
                 print(f"      - {claim}")
@@ -1592,26 +1615,57 @@ Respond with valid JSON only. Four fields required:
                 detailed_claims=detailed_claims,
             )
 
-            # Step 2: Full Gemini re-synthesis from cleaned evidence
-            # Gemini builds a coherent narrative from clean evidence (same prompt,
-            # same KB, same tone, same length constraints as Opus deep scanning),
-            # rather than patching holes in a contaminated narrative.
-            print(f"   🔄 [Re-Synthesis] Gemini full re-synthesis from cleaned evidence...")
-            resynth_start = time.time()
+            # Step 2: Apply corrected summary from fact-check (or fall back to separate re-synthesis)
+            corrected_summary = fact_check.get("corrected_summary", "")
+            corrected_pitch = fact_check.get("corrected_pitch", "")
+            resynth_ms = 0
+            resynth_model_used = fact_check.get("fact_check_model", "")
 
-            # Rebuild evidence list from purged data
-            clean_evidence_links = full_data.get("evidence_links", [])
-            clean_verified = [l for l in clean_evidence_links if l.get('verified', True)]
-            clean_evidence_list = ', '.join([f"{l.get('title', 'Unknown')}: {l.get('snippet', '')}" for l in clean_verified[:20]])
+            if corrected_summary:
+                # --- Fact-checker produced corrected summary — use it directly ---
+                print(f"   ✅ [Fact-Check] Using corrected summary from Gemini 3.1 Pro fact-checker ({len(corrected_summary.split())} words)")
+                full_data["summary_text"] = corrected_summary
+                if corrected_pitch:
+                    full_data["pitch_text"] = corrected_pitch
+                    print(f"   ✅ [Fact-Check] Also applied corrected pitch ({len(corrected_pitch.split())} words)")
 
-            # Note which claims were removed so the model knows what to avoid
-            removed_claims_note = "\n".join(f"- {c}" for c in fact_check["false_claims"])
+                full_data["re_synthesis"] = {
+                    "was_resynthesized": True,
+                    "false_claims_found": fact_check["false_claims"],
+                    "evidence_purged": purge_result,
+                    "resynth_model": resynth_model_used,
+                    "resynth_time_ms": fact_check.get("fact_check_time_ms", 0),
+                    "method": "fact_check_inline_correction",
+                }
+                # Mark as verified — fact-checker fixed what it found.
+                # SINGLE-PASS GUARANTEE: No second fact-check runs here.
+                full_data["ai_verification"]["verified"] = True
+                full_data["ai_verification"]["false_claims"] = []
+                full_data["ai_verification"]["note"] = "Corrected by Gemini 3.1 Pro fact-checker in single pass (fact-check + fix)"
+                # Clear stale washing flags
+                full_data["washing_flag"] = False
+                full_data["washing_type"] = None
+                print(f"   ✅ [Fact-Check] Cleared washing flags (false claims corrected by fact-checker)")
 
-            resynth_prompt = f"""{synthesis_prompt}
+            else:
+                # --- Fallback: Fact-checker didn't produce corrected summary → separate re-synthesis ---
+                print(f"   ⚠️ [Fact-Check] No corrected summary from fact-checker — falling back to separate re-synthesis")
+                print(f"   🔄 [Re-Synthesis] Gemini full re-synthesis from cleaned evidence...")
+                resynth_start = time.time()
+
+                # Rebuild evidence list from purged data
+                clean_evidence_links = full_data.get("evidence_links", [])
+                clean_verified = [l for l in clean_evidence_links if l.get('verified', True)]
+                clean_evidence_list = ', '.join([f"{l.get('title', 'Unknown')}: {l.get('snippet', '')}" for l in clean_verified[:20]])
+
+                # Note which claims were removed so the model knows what to avoid
+                removed_claims_note = "\n".join(f"- {c}" for c in fact_check["false_claims"])
+
+                resynth_prompt = f"""{synthesis_prompt}
 
 CRITICAL CONTEXT — FACT-CHECK CORRECTIONS:
 The previous synthesis contained false claims that were detected by an independent fact-checker
-(Gemini with Google Search). The following claims were FALSE and must NOT appear in your output:
+(Gemini 3.1 Pro with Google Search). The following claims were FALSE and must NOT appear in your output:
 {removed_claims_note}
 
 The contaminated evidence sources have been removed. You are now working with CLEANED evidence only:
@@ -1621,143 +1675,143 @@ Generate a completely fresh synthesis from this cleaned evidence set. Do NOT ref
 re-introduce any of the false claims listed above. Build your narrative only from the
 verified evidence provided."""
 
-            resynth_text = ""
-            resynth_model_used = ""
-            gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
+                resynth_text = ""
+                resynth_model_used = ""
+                gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
 
-            # Primary: Gemini 3.1 Pro Preview (same prompt, same guardrails, same length constraints)
-            if gemini_key:
-                try:
-                    print(f"   🔄 [Re-Synthesis] Attempting gemini-3.1-pro-preview...")
-                    gemini_client = genai.Client(api_key=gemini_key)
-                    resynth_response = gemini_client.models.generate_content(
-                        model="gemini-3.1-pro-preview",
-                        contents=resynth_prompt,
-                        config=types.GenerateContentConfig(
-                            temperature=0.5,
-                            thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
-                            max_output_tokens=2048
+                # Primary: Gemini 3.1 Pro Preview
+                if gemini_key:
+                    try:
+                        print(f"   🔄 [Re-Synthesis] Attempting gemini-3.1-pro-preview...")
+                        gemini_client = genai.Client(api_key=gemini_key)
+                        resynth_response = gemini_client.models.generate_content(
+                            model="gemini-3.1-pro-preview",
+                            contents=resynth_prompt,
+                            config=types.GenerateContentConfig(
+                                temperature=0.5,
+                                thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
+                                max_output_tokens=2048
+                            )
                         )
-                    )
-                    resynth_text = resynth_response.text or ""
-                    resynth_model_used = "gemini-3.1-pro-preview"
-                    resynth_ms = int((time.time() - resynth_start) * 1000)
-                    print(f"   ✅ [Re-Synthesis] Gemini 3.1 Pro re-synthesis complete ({resynth_ms}ms)")
-                except Exception as g31_err:
-                    print(f"   ❌ [Re-Synthesis] Gemini 3.1 Pro failed: {g31_err}")
+                        resynth_text = resynth_response.text or ""
+                        resynth_model_used = "gemini-3.1-pro-preview"
+                        resynth_ms = int((time.time() - resynth_start) * 1000)
+                        print(f"   ✅ [Re-Synthesis] Gemini 3.1 Pro re-synthesis complete ({resynth_ms}ms)")
+                    except Exception as g31_err:
+                        print(f"   ❌ [Re-Synthesis] Gemini 3.1 Pro failed: {g31_err}")
 
-            # Fallback 1: Gemini 3 Pro Preview
-            if not resynth_text and gemini_key:
-                try:
-                    print(f"   🔄 [Re-Synthesis] Falling back to gemini-3-pro-preview...")
-                    gemini_client = genai.Client(api_key=gemini_key)
-                    resynth_response = gemini_client.models.generate_content(
-                        model="gemini-3-pro-preview",
-                        contents=resynth_prompt,
-                        config=types.GenerateContentConfig(
-                            temperature=1.0,  # Gemini 3 requires temp=1.0
-                            thinking_config=types.ThinkingConfig(thinking_level="LOW"),
-                            max_output_tokens=2048
+                # Fallback 1: Gemini 3 Pro Preview
+                if not resynth_text and gemini_key:
+                    try:
+                        print(f"   🔄 [Re-Synthesis] Falling back to gemini-3-pro-preview...")
+                        gemini_client = genai.Client(api_key=gemini_key)
+                        resynth_response = gemini_client.models.generate_content(
+                            model="gemini-3-pro-preview",
+                            contents=resynth_prompt,
+                            config=types.GenerateContentConfig(
+                                temperature=1.0,  # Gemini 3 requires temp=1.0
+                                thinking_config=types.ThinkingConfig(thinking_level="LOW"),
+                                max_output_tokens=2048
+                            )
                         )
-                    )
-                    resynth_text = resynth_response.text or ""
-                    resynth_model_used = "gemini-3-pro-preview"
-                    resynth_ms = int((time.time() - resynth_start) * 1000)
-                    print(f"   ✅ [Re-Synthesis] Gemini 3 Pro re-synthesis complete ({resynth_ms}ms)")
-                except Exception as g3_err:
-                    print(f"   ❌ [Re-Synthesis] Gemini 3 Pro failed: {g3_err}")
+                        resynth_text = resynth_response.text or ""
+                        resynth_model_used = "gemini-3-pro-preview"
+                        resynth_ms = int((time.time() - resynth_start) * 1000)
+                        print(f"   ✅ [Re-Synthesis] Gemini 3 Pro re-synthesis complete ({resynth_ms}ms)")
+                    except Exception as g3_err:
+                        print(f"   ❌ [Re-Synthesis] Gemini 3 Pro failed: {g3_err}")
 
-            # Fallback 2: Gemini 2.5 Pro (separate rate limits from 3.x family)
-            if not resynth_text and gemini_key:
-                try:
-                    print(f"   🔄 [Re-Synthesis] Falling back to gemini-2.5-pro...")
-                    gemini_client = genai.Client(api_key=gemini_key)
-                    resynth_response = gemini_client.models.generate_content(
-                        model="gemini-2.5-pro",
-                        contents=resynth_prompt,
-                        config=types.GenerateContentConfig(
-                            temperature=0.0,
-                            max_output_tokens=2048
+                # Fallback 2: Gemini 2.5 Pro (separate rate limits from 3.x family)
+                if not resynth_text and gemini_key:
+                    try:
+                        print(f"   🔄 [Re-Synthesis] Falling back to gemini-2.5-pro...")
+                        gemini_client = genai.Client(api_key=gemini_key)
+                        resynth_response = gemini_client.models.generate_content(
+                            model="gemini-2.5-pro",
+                            contents=resynth_prompt,
+                            config=types.GenerateContentConfig(
+                                temperature=0.0,
+                                max_output_tokens=2048
+                            )
                         )
-                    )
-                    resynth_text = resynth_response.text or ""
-                    resynth_model_used = "gemini-2.5-pro"
-                    resynth_ms = int((time.time() - resynth_start) * 1000)
-                    print(f"   ✅ [Re-Synthesis] Gemini 2.5 Pro re-synthesis complete ({resynth_ms}ms)")
-                except Exception as g25_err:
-                    resynth_ms = int((time.time() - resynth_start) * 1000)
-                    print(f"   ❌ [Re-Synthesis] All re-synthesis models failed. Last error: {g25_err} ({resynth_ms}ms)")
+                        resynth_text = resynth_response.text or ""
+                        resynth_model_used = "gemini-2.5-pro"
+                        resynth_ms = int((time.time() - resynth_start) * 1000)
+                        print(f"   ✅ [Re-Synthesis] Gemini 2.5 Pro re-synthesis complete ({resynth_ms}ms)")
+                    except Exception as g25_err:
+                        resynth_ms = int((time.time() - resynth_start) * 1000)
+                        print(f"   ❌ [Re-Synthesis] All re-synthesis models failed. Last error: {g25_err} ({resynth_ms}ms)")
 
-            if resynth_text:
-                resynth_payload = extract_json_from_text(resynth_text)
-                if resynth_payload:
-                    resynth_json = json.loads(resynth_payload)
-                    new_summary = resynth_json.get("summary", "")
-                    new_pitch = resynth_json.get("pitch", "")
+                if resynth_text:
+                    resynth_payload = extract_json_from_text(resynth_text)
+                    if resynth_payload:
+                        resynth_json = json.loads(resynth_payload)
+                        new_summary = resynth_json.get("summary", "")
+                        new_pitch = resynth_json.get("pitch", "")
 
-                    if new_summary:
-                        full_data["summary_text"] = new_summary
-                    if new_pitch:
-                        full_data["pitch_text"] = new_pitch
+                        if new_summary:
+                            full_data["summary_text"] = new_summary
+                        if new_pitch:
+                            full_data["pitch_text"] = new_pitch
 
-                    # Update reality score if Gemini re-evaluated it
-                    resynth_reality = resynth_json.get("reality_score")
-                    if resynth_reality is not None and isinstance(resynth_reality, (int, float)):
-                        resynth_reality = max(0, min(100, int(resynth_reality)))
-                        reality_results["score"] = resynth_reality
-                        full_data["reality_score"] = resynth_reality
-                        # Recalculate gap and archetype
-                        gap = intent_results["score"] - resynth_reality
-                        full_data["reality_gap"] = gap
-                        if resynth_reality >= 50:
-                            archetype = "Thriving" if fin_for_archetype >= 50 else "Modernizing"
-                        else:
-                            archetype = "Cash Cow" if fin_for_archetype >= 50 else "At Risk"
-                        full_data["archetype"] = archetype
-                        # Re-evaluate washing flag
-                        if resynth_reality >= intent_results["score"]:
-                            full_data["washing_flag"] = False
-                            full_data["washing_type"] = None
+                        # Update reality score if Gemini re-evaluated it
+                        resynth_reality = resynth_json.get("reality_score")
+                        if resynth_reality is not None and isinstance(resynth_reality, (int, float)):
+                            resynth_reality = max(0, min(100, int(resynth_reality)))
+                            reality_results["score"] = resynth_reality
+                            full_data["reality_score"] = resynth_reality
+                            # Recalculate gap and archetype
+                            gap = intent_results["score"] - resynth_reality
+                            full_data["reality_gap"] = gap
+                            if resynth_reality >= 50:
+                                archetype = "Thriving" if fin_for_archetype >= 50 else "Modernizing"
+                            else:
+                                archetype = "Cash Cow" if fin_for_archetype >= 50 else "At Risk"
+                            full_data["archetype"] = archetype
+                            # Re-evaluate washing flag
+                            if resynth_reality >= intent_results["score"]:
+                                full_data["washing_flag"] = False
+                                full_data["washing_type"] = None
 
-                    # Verify archetype from re-synthesis
-                    resynth_archetype = resynth_json.get("archetype")
-                    final_reality = full_data["reality_score"]
-                    expected_archetype = ("Thriving" if fin_for_archetype >= 50 else "Modernizing") if final_reality >= 50 else ("Cash Cow" if fin_for_archetype >= 50 else "At Risk")
-                    if resynth_archetype and resynth_archetype != expected_archetype:
-                        print(f"   ⚖️ [Re-Synthesis] Archetype '{resynth_archetype}' → corrected to '{expected_archetype}'")
-                        valid_archetypes = ["Thriving", "Modernizing", "Cash Cow", "At Risk"]
-                        for wrong_label in valid_archetypes:
-                            if wrong_label == expected_archetype:
-                                continue
-                            full_data["summary_text"] = full_data["summary_text"].replace(wrong_label, expected_archetype)
+                        # Verify archetype from re-synthesis
+                        resynth_archetype = resynth_json.get("archetype")
+                        final_reality = full_data["reality_score"]
+                        expected_archetype = ("Thriving" if fin_for_archetype >= 50 else "Modernizing") if final_reality >= 50 else ("Cash Cow" if fin_for_archetype >= 50 else "At Risk")
+                        if resynth_archetype and resynth_archetype != expected_archetype:
+                            print(f"   ⚖️ [Re-Synthesis] Archetype '{resynth_archetype}' → corrected to '{expected_archetype}'")
+                            valid_archetypes = ["Thriving", "Modernizing", "Cash Cow", "At Risk"]
+                            for wrong_label in valid_archetypes:
+                                if wrong_label == expected_archetype:
+                                    continue
+                                full_data["summary_text"] = full_data["summary_text"].replace(wrong_label, expected_archetype)
 
-                    print(f"   ✅ [Re-Synthesis] Full re-synthesis applied from cleaned evidence")
+                        print(f"   ✅ [Re-Synthesis] Full re-synthesis applied from cleaned evidence")
 
-                full_data["re_synthesis"] = {
-                    "was_resynthesized": True,
-                    "false_claims_found": fact_check["false_claims"],
-                    "evidence_purged": purge_result,
-                    "resynth_model": resynth_model_used or "gemini-3.1-pro-preview",
-                    "resynth_time_ms": resynth_ms,
-                }
-                # Mark as verified after re-synthesis — built from clean evidence.
-                # SINGLE-PASS GUARANTEE: No second fact-check runs here.
-                # Re-synthesis from purged evidence is the terminal state — no eternal loops.
-                full_data["ai_verification"]["verified"] = True
-                full_data["ai_verification"]["false_claims"] = []
-                full_data["ai_verification"]["note"] = "Re-synthesized from cleaned evidence after fact-check (single-pass)"
-                # Clear stale washing flags
-                full_data["washing_flag"] = False
-                full_data["washing_type"] = None
-                print(f"   ✅ [Re-Synthesis] Cleared washing flags (false claims removed, fresh synthesis)")
-            else:
-                print(f"   ⚠️ [Re-Synthesis] Could not re-synthesize — saving with false claims flagged")
-                full_data["re_synthesis"] = {
-                    "was_resynthesized": False,
-                    "false_claims_found": fact_check["false_claims"],
-                    "evidence_purged": purge_result,
-                    "reason": "Gemini re-synthesis failed",
-                }
+                    full_data["re_synthesis"] = {
+                        "was_resynthesized": True,
+                        "false_claims_found": fact_check["false_claims"],
+                        "evidence_purged": purge_result,
+                        "resynth_model": resynth_model_used or "gemini-3.1-pro-preview",
+                        "resynth_time_ms": resynth_ms,
+                        "method": "separate_re_synthesis_fallback",
+                    }
+                    # Mark as verified after re-synthesis — built from clean evidence.
+                    # SINGLE-PASS GUARANTEE: No second fact-check runs here.
+                    full_data["ai_verification"]["verified"] = True
+                    full_data["ai_verification"]["false_claims"] = []
+                    full_data["ai_verification"]["note"] = "Re-synthesized from cleaned evidence after fact-check (single-pass fallback)"
+                    # Clear stale washing flags
+                    full_data["washing_flag"] = False
+                    full_data["washing_type"] = None
+                    print(f"   ✅ [Re-Synthesis] Cleared washing flags (false claims removed, fresh synthesis)")
+                else:
+                    print(f"   ⚠️ [Re-Synthesis] Could not re-synthesize — saving with false claims flagged")
+                    full_data["re_synthesis"] = {
+                        "was_resynthesized": False,
+                        "false_claims_found": fact_check["false_claims"],
+                        "evidence_purged": purge_result,
+                        "reason": "Gemini re-synthesis failed",
+                    }
 
         # --- STEP 4: SAVE ---
         if saveToDatabase:

@@ -3,8 +3,9 @@ Reality Check — Hallucination Detection for AI-Generated Summaries
 
 Two layers:
 1. Heuristic pattern matching (zero API cost) — catches obvious fakes
-2. AI-powered fact-check (Gemini 3 Pro / 2.5 Pro backup + Google Search grounding)
+2. AI-powered fact-check (Gemini 3.1 Pro / 3 Pro / 2.5 Pro backup + Google Search grounding)
    — verifies synthesis claims against live web data
+   — if false claims found, also produces corrected summary in the same call
 
 Returns a hallucination risk level: "low", "medium", "high"
 and a list of specific flags explaining what was detected.
@@ -345,7 +346,7 @@ def validate_pitch(pitch_text, company_name):
 
 
 # --- AI-POWERED FACT-CHECK (Layer 2) ---
-# Single-phase verification using Gemini 3 Pro (backup: 2.5 Pro) with Google Search grounding.
+# Single-phase verification using Gemini 3.1 Pro (backup: 3 Pro / 2.5 Pro) with Google Search grounding.
 # Gemini searches the web independently and fact-checks the synthesis against live data.
 # This catches both evidence-sourced errors AND fabricated claims with no basis.
 #
@@ -353,10 +354,10 @@ def validate_pitch(pitch_text, company_name):
 #   - The core problem is EVIDENCE CONTAMINATION, not hallucination.
 #     Checking the summary against stored evidence is circular — if the evidence
 #     is wrong, the summary will be perfectly consistent with wrong evidence.
-#   - Gemini 3 Pro with Google Search grounding is the right tool: strong reasoning
+#   - Gemini 3.1 Pro with Google Search grounding is the right tool: strong reasoning
 #     capability AND direct access to live web data to verify claims independently.
-#   - After fact-check, if false claims found: contaminated evidence is purged and
-#     Opus does a FULL re-synthesis from clean evidence (in main.py).
+#   - If false claims found: Gemini 3.1 Pro also produces a corrected summary in the
+#     same call (fact-check + fix in one step). Evidence is still purged in main.py.
 #   - If no false claims found: pipeline is DONE, original synthesis stands.
 
 def _get_anthropic_key(anthropic_key=None):
@@ -371,15 +372,14 @@ def _get_anthropic_key(anthropic_key=None):
     return api_key
 
 
-def _gemini_fact_check(summary_text, company_name, evidence_links=None):
+def _gemini_fact_check(summary_text, company_name, evidence_links=None, pitch_text=None):
     """
-    Fact-check the synthesis using Gemini 3 Pro Preview (backup: 2.5 Pro) with
-    Google Search grounding. Gemini searches the web independently and checks
+    Fact-check the synthesis using Gemini 3.1 Pro Preview (backup: 3 Pro / 2.5 Pro)
+    with Google Search grounding. Gemini searches the web independently and checks
     if the summary claims are true.
 
-    This replaces both the old contradiction check (Haiku) and fresh search (2.5 Flash).
-    Gemini 3 Pro is a strong model with reasoning capability + live web access — the
-    right tool for catching both evidence-sourced errors and outright fabrications.
+    If false claims are found, the model also produces a corrected summary and pitch
+    in the same call — saving a separate re-synthesis API call.
 
     Returns source_indices and source_urls for each false claim so only the specific
     sources that a false claim traces back to get purged.
@@ -390,6 +390,8 @@ def _gemini_fact_check(summary_text, company_name, evidence_links=None):
     if not gemini_key:
         return {
             "false_claims": [],
+            "corrected_summary": "",
+            "corrected_pitch": "",
             "model": "skipped_no_gemini_key",
             "time_ms": 0,
         }
@@ -411,13 +413,20 @@ STORED EVIDENCE SOURCES (these were used to generate the summary):
 {evidence_ref}
 """
 
-    prompt = f"""You are an uncompromising Data Auditor. Your job is to evaluate the faithfulness and factual accuracy of an AI-generated company summary. You must ruthlessly identify hallucinations, fabrications, and contradictions.
+    pitch_section = ""
+    if pitch_text:
+        pitch_section = f"""
+AI-GENERATED PITCH TO VERIFY:
+{pitch_text}
+"""
+
+    prompt = f"""You are an uncompromising Data Auditor. Your job is to evaluate the faithfulness and factual accuracy of an AI-generated company summary. You must ruthlessly identify hallucinations, fabrications, and contradictions. If you find false claims, you must also produce a corrected version.
 
 COMPANY: {company_name}
 
 AI-GENERATED SUMMARY TO VERIFY:
 {summary_text}
-{evidence_section}
+{pitch_section}{evidence_section}
 INSTRUCTIONS:
 You must evaluate the summary using the following step-by-step logic:
 
@@ -436,17 +445,33 @@ B. [Contradiction]: The summary makes a claim that directly contradicts the STOR
 Do NOT ignore qualitative claims if they are based on fabricated underlying metrics.
 Do NOT flag Knowledge Base terminology or archetype labels (e.g. "Digital Taylorism", "Thriving", "At Risk") — these are analytical framework terms, not factual claims.
 
-Output ONLY valid JSON in the following format. If you find no false claims, return an empty array.
-{{"false_claims": [{{"claim": "Exact quote of the false claim from the summary", "error_type": "Fabrication OR Contradiction", "reasoning": "Briefly explain why this is false based on the sources or search results.", "source_indices": [2, 5]}}], "summary_accurate": true/false}}
+PART 1 — FACT-CHECK:
+Identify all false claims as described above.
+
+PART 2 — CORRECTED SUMMARY (only if false claims found):
+If you find ANY false claims, you MUST also produce a corrected summary (and corrected pitch if applicable).
+Rules for correction:
+- Surgically remove or fix ONLY the sentences containing false claims.
+- Preserve the original text word-for-word for all sentences that are NOT affected by false claims.
+- Do NOT add new information, analysis, or claims. You are correcting, not rewriting.
+- Do NOT change the archetype classification or Knowledge Base terminology.
+- After removing false claim sentences, fix only the immediately adjacent transitions so the text reads naturally.
+- The corrected summary must remain close to the original length (within 80% of original word count).
+- If the pitch references any false claims, fix those parts too.
+
+OUTPUT FORMAT — valid JSON only:
+
+If summary is accurate (no false claims):
+{{"false_claims": [], "summary_accurate": true}}
+
+If false claims found (MUST include corrected_summary):
+{{"false_claims": [{{"claim": "Exact quote of the false claim from the summary", "error_type": "Fabrication OR Contradiction", "reasoning": "Briefly explain why this is false based on the sources or search results.", "source_indices": [2, 5]}}], "summary_accurate": false, "corrected_summary": "The surgically corrected summary with false claims removed/fixed...", "corrected_pitch": "The corrected pitch if it referenced false claims, or the original pitch unchanged..."}}
 
 Each false_claims object must have:
   - "claim": string — the exact quote or close paraphrase of the false claim from the summary
   - "error_type": string — either "Fabrication" or "Contradiction"
   - "reasoning": string — brief explanation of why this is false
-  - "source_indices": array of integer indices referring to STORED EVIDENCE SOURCES that were contradicted or misrepresented. Use an EMPTY array [] if the claim is completely fabricated with no traceable source.
-
-If the summary appears accurate or you found no clear falsehoods, return:
-{{"false_claims": [], "summary_accurate": true}}"""
+  - "source_indices": array of integer indices referring to STORED EVIDENCE SOURCES that were contradicted or misrepresented. Use an EMPTY array [] if the claim is completely fabricated with no traceable source."""
 
     # --- Try Gemini 3.1 Pro → 3 Pro → 2.5 Pro (2.5 has separate rate limits) ---
     from google import genai
@@ -486,7 +511,7 @@ If the summary appears accurate or you found no clear falsehoods, return:
 
     models_to_try = [
         ("gemini-3.1-pro-preview", 90, gemini_31_config),  # Primary: Gemini 3.1 Pro, thinking_level=MEDIUM
-        ("gemini-3-pro-preview", 45, gemini_3_config),      # Backup 1: Gemini 3 Pro, thinking_level=LOW
+        ("gemini-3-pro-preview", 60, gemini_3_config),      # Backup 1: Gemini 3 Pro, thinking_level=LOW (60s for fact-check + correction)
         ("gemini-2.5-pro", 60, gemini_25_config),           # Backup 2: Gemini 2.5 Pro (separate rate limits)
     ]
 
@@ -526,7 +551,7 @@ If the summary appears accurate or you found no clear falsehoods, return:
                 # treat the list as empty even if it contains explanatory entries
                 if result.get("summary_accurate") is True and result.get("false_claims"):
                     print(f"   ✅ [Fact-Check] {model_name} explicitly said summary_accurate=true ({elapsed_ms}ms)")
-                    return {"false_claims": [], "model": model_name, "time_ms": elapsed_ms}
+                    return {"false_claims": [], "corrected_summary": "", "corrected_pitch": "", "model": model_name, "time_ms": elapsed_ms}
 
                 raw_claims = result.get("false_claims", [])
                 # Filter out bogus entries where the LLM put "no issue" text
@@ -562,9 +587,22 @@ If the summary appears accurate or you found no clear falsehoods, return:
                             "source_urls": source_urls,
                         })
 
+                # Extract corrected summary/pitch if false claims were found
+                corrected_summary = ""
+                corrected_pitch = ""
+                if false_claims:
+                    corrected_summary = result.get("corrected_summary", "")
+                    corrected_pitch = result.get("corrected_pitch", "")
+                    if corrected_summary:
+                        print(f"   ✏️ [Fact-Check] {model_name} also produced corrected summary ({len(corrected_summary.split())} words)")
+                    else:
+                        print(f"   ⚠️ [Fact-Check] {model_name} found false claims but did NOT produce corrected summary")
+
                 print(f"   {'⚠️' if false_claims else '✅'} [Fact-Check] {model_name}: {len(false_claims)} false claim(s) ({elapsed_ms}ms)")
                 return {
                     "false_claims": false_claims,
+                    "corrected_summary": corrected_summary,
+                    "corrected_pitch": corrected_pitch,
                     "model": model_name,
                     "time_ms": elapsed_ms,
                 }
@@ -578,12 +616,12 @@ If the summary appears accurate or you found no clear falsehoods, return:
 
     # All models failed
     print(f"   ❌ [Fact-Check] All Gemini models failed — skipping fact-check")
-    return {"false_claims": [], "model": "all_models_failed", "time_ms": 0}
+    return {"false_claims": [], "corrected_summary": "", "corrected_pitch": "", "model": "all_models_failed", "time_ms": 0}
 
 
-def ai_fact_check_summary(summary_text, evidence_links, company_name):
+def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text=None):
     """
-    AI-powered fact-check — single phase using Gemini 3 Pro (backup: 2.5 Pro)
+    AI-powered fact-check — single phase using Gemini 3.1 Pro (backup: 3 Pro / 2.5 Pro)
     with Google Search grounding.
 
     Gemini independently verifies the synthesis claims against live web data.
@@ -591,13 +629,17 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name):
     fabricated claims that have no basis anywhere.
 
     If no false claims found → pipeline DONE, original synthesis stands.
-    If false claims found → caller purges evidence + triggers full Opus re-synthesis.
+    If false claims found → Gemini 3.1 Pro also produces a corrected summary
+    in the same call (fact-check + fix in one step). Evidence purging still
+    happens in the caller (main.py).
 
     Returns:
         dict with:
             - verified: bool (True if no false claims found)
             - false_claims: list of false claim strings (for display/logging)
             - false_claims_detailed: list of structured dicts with source attribution
+            - corrected_summary: str (corrected summary if false claims found, else "")
+            - corrected_pitch: str (corrected pitch if false claims found, else "")
             - fact_check_model: str (which model was used)
             - fact_check_time_ms: int
     """
@@ -606,14 +648,16 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name):
             "verified": True,
             "false_claims": [],
             "false_claims_detailed": [],
+            "corrected_summary": "",
+            "corrected_pitch": "",
             "fact_check_model": "skipped",
             "fact_check_time_ms": 0,
         }
 
     total_start = time.time()
 
-    print(f"   🔍 [Fact-Check] Gemini fact-check against live web data...")
-    result = _gemini_fact_check(summary_text, company_name, evidence_links=evidence_links)
+    print(f"   🔍 [Fact-Check] Gemini 3.1 Pro fact-check against live web data...")
+    result = _gemini_fact_check(summary_text, company_name, evidence_links=evidence_links, pitch_text=pitch_text)
 
     all_claims = []
     all_claims_detailed = []
@@ -642,10 +686,15 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name):
 
     total_ms = int((time.time() - total_start) * 1000)
 
+    corrected_summary = result.get("corrected_summary", "")
+    corrected_pitch = result.get("corrected_pitch", "")
+
     return {
         "verified": len(all_claims) == 0,
         "false_claims": all_claims[:10],
         "false_claims_detailed": all_claims_detailed[:10],
+        "corrected_summary": corrected_summary,
+        "corrected_pitch": corrected_pitch,
         "fact_check_model": result["model"],
         "fact_check_time_ms": total_ms,
     }
@@ -696,8 +745,8 @@ Output ONLY valid JSON:
 
 
 def _clean_with_gemini(prompt):
-    """Rewrite summary using Gemini 3 Pro Preview (higher quality — used in admin recheck).
-    Falls back to Gemini 2.5 Pro if Gemini 3 Pro fails."""
+    """Rewrite summary using Gemini 3.1 Pro Preview (higher quality — used in admin recheck).
+    Falls back to Gemini 3 Pro → Gemini 2.5 Pro if Gemini 3.1 Pro fails."""
     import concurrent.futures
     from google import genai
     from google.genai import types
