@@ -3,7 +3,8 @@ Reality Check — Hallucination Detection for AI-Generated Summaries
 
 Two layers:
 1. Heuristic pattern matching (zero API cost) — catches obvious fakes
-2. AI-powered verification (Haiku) — cross-references specific claims against evidence snippets
+2. AI-powered fact-check (Gemini 3 Pro / 2.5 Pro backup + Google Search grounding)
+   — verifies synthesis claims against live web data
 
 Returns a hallucination risk level: "low", "medium", "high"
 and a list of specific flags explaining what was detected.
@@ -343,13 +344,20 @@ def validate_pitch(pitch_text, company_name):
     }
 
 
-# --- AI-POWERED VERIFICATION (Layer 2) ---
-# Two-phase verification:
-#   Phase 1 (Contradiction Check): Haiku checks if summary CONTRADICTS evidence snippets
-#           (e.g. snippet says "revenue €50M" but summary says "revenue €1M" → hallucination).
-#           Missing data is NOT a flag — Opus may have sourced it from full page content.
-#   Phase 2 (Fresh Search): Gemini + Google Search grounding independently verifies the summary
-#           against live web data, catching fabricated claims that have no basis anywhere.
+# --- AI-POWERED FACT-CHECK (Layer 2) ---
+# Single-phase verification using Gemini 3 Pro (backup: 2.5 Pro) with Google Search grounding.
+# Gemini searches the web independently and fact-checks the synthesis against live data.
+# This catches both evidence-sourced errors AND fabricated claims with no basis.
+#
+# Architecture rationale (replaces old two-phase Haiku contradiction + Flash fresh search):
+#   - The core problem is EVIDENCE CONTAMINATION, not hallucination.
+#     Checking the summary against stored evidence is circular — if the evidence
+#     is wrong, the summary will be perfectly consistent with wrong evidence.
+#   - Gemini 3 Pro with Google Search grounding is the right tool: strong reasoning
+#     capability AND direct access to live web data to verify claims independently.
+#   - After fact-check, if false claims found: contaminated evidence is purged and
+#     Opus does a FULL re-synthesis from clean evidence (in main.py).
+#   - If no false claims found: pipeline is DONE, original synthesis stands.
 
 def _get_anthropic_key(anthropic_key=None):
     """Resolve Anthropic API key from argument or environment."""
@@ -363,155 +371,30 @@ def _get_anthropic_key(anthropic_key=None):
     return api_key
 
 
-def _contradiction_check(summary_text, evidence_links, company_name, api_key):
+def _gemini_fact_check(summary_text, company_name, evidence_links=None):
     """
-    Phase 1: Check if the summary CONTRADICTS any evidence snippet.
-    Only flags conflicting data (e.g. different numbers for the same metric).
-    Does NOT flag claims that are absent from snippets — that just means
-    Opus sourced them from full page content the snippets didn't capture.
+    Fact-check the synthesis using Gemini 3 Pro Preview (backup: 2.5 Pro) with
+    Google Search grounding. Gemini searches the web independently and checks
+    if the summary claims are true.
 
-    Returns source_indices and source_urls for each contradiction so
-    only the specific sources that a false claim traces back to get purged.
-    """
-    evidence_text = ""
-    verified_links = [l for l in evidence_links if l.get("verified", True)]
-    # Build an index→link map so we can resolve URLs from indices later
-    index_to_link = {}
-    for i, link in enumerate(verified_links[:20], 1):
-        title = link.get("title", "Unknown")
-        snippet = link.get("snippet", "")
-        source = link.get("source", "")
-        url = link.get("url", "")
-        evidence_text += f"[{i}] {title} ({source}): {snippet}\n"
-        index_to_link[i] = link
+    This replaces both the old contradiction check (Haiku) and fresh search (2.5 Flash).
+    Gemini 3 Pro is a strong model with reasoning capability + live web access — the
+    right tool for catching both evidence-sourced errors and outright fabrications.
 
-    if not evidence_text.strip():
-        return {
-            "contradictions": [],
-            "model": "skipped_no_evidence",
-            "time_ms": 0,
-        }
-
-    prompt = f"""You are a contradiction detector. Your ONLY job is to find places where the SUMMARY says something that DIRECTLY CONFLICTS with the EVIDENCE SNIPPETS.
-
-COMPANY: {company_name}
-
-SUMMARY:
-{summary_text}
-
-EVIDENCE SNIPPETS:
-{evidence_text}
-
-RULES — READ CAREFULLY:
-1. A CONTRADICTION is when the summary states a specific fact (number, date, name, percentage) and an evidence snippet states a DIFFERENT value for THE SAME thing.
-   Example: Summary says "revenue €2.1B" but snippet [3] says "revenue €1.5B" → CONTRADICTION sourced from [3].
-   Example: Summary says "CEO John Smith" but snippet [7] says "CEO Jane Doe" → CONTRADICTION sourced from [7].
-
-2. If the summary mentions something that NO snippet covers at all, that is NOT a contradiction. The original AI had access to full web pages, not just snippets. Silence is not conflict.
-   Example: Summary says "revenue €2.1B" and no snippet mentions revenue → NOT a contradiction, SKIP IT.
-
-3. Do NOT flag qualitative statements, opinions, interpretations, or synthesis.
-4. Do NOT flag the company name or general industry knowledge.
-5. Only flag clear, specific data conflicts where both summary AND evidence mention the same topic with different facts.
-6. For EACH contradiction, you MUST identify which specific evidence snippet(s) [by index number] conflict with the summary claim. If you cannot point to a specific snippet, do NOT flag it.
-
-Output valid JSON only:
-{{"contradictions": [{{"claim": "Summary says X but evidence says Y", "source_indices": [3, 7]}}], "has_contradictions": true/false}}
-
-Each contradiction object must have:
-  - "claim": string describing the contradiction
-  - "source_indices": array of integer indices (e.g. [3]) referring to the evidence snippets that conflict
-
-If there are NO contradictions, return:
-{{"contradictions": [], "has_contradictions": false}}"""
-
-    try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-
-        start = time.time()
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        elapsed_ms = int((time.time() - start) * 1000)
-
-        response_text = response.content[0].text if response.content else ""
-
-        result = _robust_parse_json(response_text)
-        if result and "contradictions" in result:
-            # Respect the has_contradictions flag — if the LLM says false,
-            # treat the list as empty even if it contains explanatory entries
-            if result.get("has_contradictions") is False:
-                print(f"   ✅ [Contradiction Check] LLM explicitly said has_contradictions=false ({elapsed_ms}ms)")
-                return {"contradictions": [], "model": "claude-haiku-4-5", "time_ms": elapsed_ms}
-
-            raw_contradictions = result.get("contradictions", [])
-            # Filter out bogus entries where the LLM put explanatory "no issue" text
-            # in the claim field instead of an actual contradiction
-            _not_real = ["no contradiction", "no conflict", "all align", "no issues",
-                         "no discrepanc", "nothing to flag", "no false"]
-            contradictions = []
-            for c in raw_contradictions[:10]:
-                # Handle both old format (plain string) and new format (object with source_indices)
-                if isinstance(c, str):
-                    if any(p in c.lower() for p in _not_real):
-                        print(f"   ⏭️ [Contradiction Check] Skipping non-contradiction entry: {c[:80]}")
-                        continue
-                    contradictions.append({"claim": c, "source_indices": [], "source_urls": []})
-                elif isinstance(c, dict):
-                    claim_text = c.get("claim", str(c))
-                    if any(p in claim_text.lower() for p in _not_real):
-                        print(f"   ⏭️ [Contradiction Check] Skipping non-contradiction entry: {claim_text[:80]}")
-                        continue
-                    indices = c.get("source_indices", [])
-                    # Resolve indices to URLs
-                    source_urls = []
-                    for idx in indices:
-                        if isinstance(idx, int) and idx in index_to_link:
-                            url = index_to_link[idx].get("url", "")
-                            if url:
-                                source_urls.append(url)
-                    contradictions.append({
-                        "claim": claim_text,
-                        "source_indices": indices,
-                        "source_urls": source_urls,
-                    })
-            return {
-                "contradictions": contradictions,
-                "model": "claude-haiku-4-5",
-                "time_ms": elapsed_ms,
-            }
-        else:
-            print(f"   ⚠️ [Contradiction Check] Could not parse Haiku response (defaulting to no contradictions): {response_text[:100]}")
-            return {"contradictions": [], "model": "haiku_parse_error", "time_ms": elapsed_ms}
-
-    except Exception as e:
-        print(f"   ❌ [Contradiction Check] Haiku failed: {e}")
-        return {"contradictions": [], "model": f"error: {str(e)[:100]}", "time_ms": 0}
-
-
-def _fresh_search_verify(summary_text, company_name, evidence_links=None):
-    """
-    Phase 2: Send the summary to Gemini with Google Search grounding.
-    Gemini searches the web independently and checks if the summary claims are true.
-    This catches fabricated claims that have no basis anywhere on the internet.
-
-    Also receives the existing evidence_links so Gemini can identify which
-    stored source(s) each fabricated claim may have originated from.
+    Returns source_indices and source_urls for each false claim so only the specific
+    sources that a false claim traces back to get purged.
     """
     import concurrent.futures
 
     gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
     if not gemini_key:
         return {
-            "fabrications": [],
+            "false_claims": [],
             "model": "skipped_no_gemini_key",
             "time_ms": 0,
         }
 
-    # Build evidence reference list so Gemini can attribute fabricated claims to sources
+    # Build evidence reference list so Gemini can attribute false claims to sources
     evidence_ref = ""
     if evidence_links:
         verified_links = [l for l in evidence_links if l.get("verified", True)]
@@ -528,7 +411,7 @@ STORED EVIDENCE SOURCES (these were used to generate the summary):
 {evidence_ref}
 """
 
-    prompt = f"""You are a fact-checker with access to Google Search. Your job is to verify the following AI-generated company analysis by searching the web.
+    prompt = f"""You are a fact-checker with access to Google Search. Your job is to verify the following AI-generated company analysis by searching the web for the truth.
 
 COMPANY: {company_name}
 
@@ -539,214 +422,201 @@ INSTRUCTIONS:
 1. Search for the key factual claims in this summary: revenue figures, employee counts, partnerships, product names, executive names, specific events, dates, percentages.
 2. For each specific claim, determine if it is TRUE, FALSE, or UNVERIFIABLE based on your search results.
 3. ONLY flag claims that are clearly FALSE — where your search results show different facts.
+   This includes both:
+   - Claims that contradict your web search results (e.g. summary says "revenue €2.1B" but web shows €1.5B)
+   - Claims that appear completely fabricated (no basis found anywhere on the web)
 4. Do NOT flag claims you simply cannot find — the company may be small or private. Absence of evidence is not evidence of fabrication.
 5. Do NOT flag qualitative statements, opinions, or general industry observations.
-6. For each false claim, check the STORED EVIDENCE SOURCES above. If you can identify which stored source(s) [by index number] likely contributed to the false claim, include those indices. If you cannot trace the false claim to any stored source, return an empty array for source_indices.
+6. For each false claim, check the STORED EVIDENCE SOURCES above. If you can identify which stored source(s) [by index number] likely contributed to the false claim (e.g. the source itself contains wrong data that led to the error), include those indices. If you cannot trace the false claim to any stored source, return an empty array for source_indices.
 
 Output ONLY valid JSON:
-{{"fabrications": [{{"claim": "Claim X is false because web shows Y instead", "source_indices": [2, 5]}}], "summary_accurate": false}}
+{{"false_claims": [{{"claim": "Claim X is false because web shows Y instead", "source_indices": [2, 5]}}], "summary_accurate": true/false}}
 
-Each fabrication object must have:
+Each false_claims object must have:
   - "claim": string describing what is false and why
   - "source_indices": array of integer indices referring to STORED EVIDENCE SOURCES that likely contributed to this false claim. Use an EMPTY array [] if you cannot trace the claim to any specific stored source.
 
 If the summary appears accurate or you found no clear falsehoods, return:
-{{"fabrications": [], "summary_accurate": true}}"""
+{{"false_claims": [], "summary_accurate": true}}"""
 
-    try:
-        from google import genai
+    # --- Try Gemini 3 Pro Preview first, then 2.5 Pro as backup ---
+    from google import genai
+    client = genai.Client(api_key=gemini_key)
+    verified_links = [l for l in (evidence_links or []) if l.get("verified", True)][:20]
 
-        client = genai.Client(api_key=gemini_key)
-        start = time.time()
+    gemini_config = {
+        'tools': [{'google_search': {}}],
+        'temperature': 0.0,
+        'safety_settings': [
+            {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
+            {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
+            {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
+            {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
+        ]
+    }
 
-        def _call():
-            return client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config={
-                    'tools': [{'google_search': {}}],
-                    'temperature': 0.0,
-                    'safety_settings': [
-                        {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
-                        {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
-                        {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
-                        {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
-                    ]
-                }
-            )
+    models_to_try = [
+        ("gemini-3-pro-preview", 45),  # Primary: Gemini 3 Pro, 45s timeout
+        ("gemini-2.5-pro", 45),        # Backup: Gemini 2.5 Pro, 45s timeout
+    ]
 
-        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = pool.submit(_call)
+    for model_name, timeout_sec in models_to_try:
         try:
-            response = future.result(timeout=30)
-        except concurrent.futures.TimeoutError:
+            print(f"   🔄 [Fact-Check] Trying {model_name}...")
+            start = time.time()
+
+            def _call(m=model_name):
+                return client.models.generate_content(
+                    model=m,
+                    contents=prompt,
+                    config=gemini_config,
+                )
+
+            pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            future = pool.submit(_call)
+            try:
+                response = future.result(timeout=timeout_sec)
+            except concurrent.futures.TimeoutError:
+                pool.shutdown(wait=False)
+                elapsed_ms = int((time.time() - start) * 1000)
+                print(f"   ⏰ [Fact-Check] {model_name} timed out after {timeout_sec}s ({elapsed_ms}ms)")
+                continue  # Try next model
             pool.shutdown(wait=False)
+
             elapsed_ms = int((time.time() - start) * 1000)
-            print(f"   ⏰ [Fresh Search] Gemini timed out after 30s ({elapsed_ms}ms)")
-            return {"fabrications": [], "model": "gemini_timeout", "time_ms": elapsed_ms}
-        pool.shutdown(wait=False)
+            text = response.text if response.text else ""
 
-        elapsed_ms = int((time.time() - start) * 1000)
-        text = response.text if response.text else ""
+            if not text:
+                print(f"   ⚠️ [Fact-Check] {model_name} returned empty response ({elapsed_ms}ms)")
+                continue  # Try next model
 
-        # Resolve source indices to URLs
-        verified_links = [l for l in (evidence_links or []) if l.get("verified", True)][:20]
+            result = _robust_parse_json(text)
+            if result and "false_claims" in result:
+                # Respect the summary_accurate flag — if the LLM says true,
+                # treat the list as empty even if it contains explanatory entries
+                if result.get("summary_accurate") is True and result.get("false_claims"):
+                    print(f"   ✅ [Fact-Check] {model_name} explicitly said summary_accurate=true ({elapsed_ms}ms)")
+                    return {"false_claims": [], "model": model_name, "time_ms": elapsed_ms}
 
-        result = _robust_parse_json(text)
-        if result and "fabrications" in result:
-            # Respect the summary_accurate flag — if the LLM says true,
-            # treat the list as empty even if it contains explanatory entries
-            if result.get("summary_accurate") is True and result.get("fabrications"):
-                print(f"   ✅ [Fresh Search] LLM explicitly said summary_accurate=true ({elapsed_ms}ms)")
-                return {"fabrications": [], "model": "gemini-2.5-flash", "time_ms": elapsed_ms}
+                raw_claims = result.get("false_claims", [])
+                # Filter out bogus entries where the LLM put "no issue" text
+                _not_real = ["no fabrication", "no false", "appears accurate", "all accurate",
+                             "no issues", "could not find", "unable to verify", "summary is accurate",
+                             "no contradiction", "no conflict", "all align", "nothing to flag"]
+                false_claims = []
+                for fc in raw_claims[:10]:
+                    if isinstance(fc, str):
+                        if any(p in fc.lower() for p in _not_real):
+                            print(f"   ⏭️ [Fact-Check] Skipping non-issue entry: {fc[:80]}")
+                            continue
+                        false_claims.append({"claim": fc, "source_indices": [], "source_urls": []})
+                    elif isinstance(fc, dict):
+                        claim_text = fc.get("claim", str(fc))
+                        if any(p in claim_text.lower() for p in _not_real):
+                            print(f"   ⏭️ [Fact-Check] Skipping non-issue entry: {claim_text[:80]}")
+                            continue
+                        indices = fc.get("source_indices", [])
+                        source_urls = []
+                        for idx in indices:
+                            if isinstance(idx, int) and 1 <= idx <= len(verified_links):
+                                url = verified_links[idx - 1].get("url", "")
+                                if url:
+                                    source_urls.append(url)
+                        false_claims.append({
+                            "claim": claim_text,
+                            "source_indices": indices,
+                            "source_urls": source_urls,
+                        })
 
-            raw_fabrications = result.get("fabrications", [])
-            # Filter out bogus entries where the LLM put "no issue" text in the claim field
-            _not_real = ["no fabrication", "no false", "appears accurate", "all accurate",
-                         "no issues", "could not find", "unable to verify", "summary is accurate"]
-            fabrications = []
-            for f in raw_fabrications[:10]:
-                if isinstance(f, str):
-                    if any(p in f.lower() for p in _not_real):
-                        print(f"   ⏭️ [Fresh Search] Skipping non-fabrication entry: {f[:80]}")
-                        continue
-                    fabrications.append({"claim": f, "source_indices": [], "source_urls": []})
-                elif isinstance(f, dict):
-                    claim_text = f.get("claim", str(f))
-                    if any(p in claim_text.lower() for p in _not_real):
-                        print(f"   ⏭️ [Fresh Search] Skipping non-fabrication entry: {claim_text[:80]}")
-                        continue
-                    indices = f.get("source_indices", [])
-                    source_urls = []
-                    for idx in indices:
-                        if isinstance(idx, int) and 1 <= idx <= len(verified_links):
-                            url = verified_links[idx - 1].get("url", "")
-                            if url:
-                                source_urls.append(url)
-                    fabrications.append({
-                        "claim": claim_text,
-                        "source_indices": indices,
-                        "source_urls": source_urls,
-                    })
-            return {
-                "fabrications": fabrications,
-                "model": "gemini-2.5-flash",
-                "time_ms": elapsed_ms,
-            }
-        else:
-            print(f"   ⚠️ [Fresh Search] Could not parse Gemini response: {text[:200]}")
-            return {"fabrications": [], "model": "gemini_parse_error", "time_ms": elapsed_ms}
+                print(f"   {'⚠️' if false_claims else '✅'} [Fact-Check] {model_name}: {len(false_claims)} false claim(s) ({elapsed_ms}ms)")
+                return {
+                    "false_claims": false_claims,
+                    "model": model_name,
+                    "time_ms": elapsed_ms,
+                }
+            else:
+                print(f"   ⚠️ [Fact-Check] Could not parse {model_name} response: {text[:200]}")
+                continue  # Try next model
 
-    except Exception as e:
-        print(f"   ❌ [Fresh Search] Gemini verification failed: {e}")
-        return {"fabrications": [], "model": f"error: {str(e)[:100]}", "time_ms": 0}
+        except Exception as e:
+            print(f"   ❌ [Fact-Check] {model_name} failed: {e}")
+            continue  # Try next model
+
+    # All models failed
+    print(f"   ❌ [Fact-Check] All Gemini models failed — skipping fact-check")
+    return {"false_claims": [], "model": "all_models_failed", "time_ms": 0}
 
 
-def ai_verify_summary(summary_text, evidence_links, company_name, anthropic_key=None):
+def ai_fact_check_summary(summary_text, evidence_links, company_name):
     """
-    AI-powered hallucination check — two phases:
+    AI-powered fact-check — single phase using Gemini 3 Pro (backup: 2.5 Pro)
+    with Google Search grounding.
 
-    Phase 1 (Contradiction Check — Haiku):
-        Compares summary against stored evidence snippets.
-        Only flags CONTRADICTIONS (summary says X, evidence says Y).
-        Does NOT flag missing data (silence ≠ hallucination).
+    Gemini independently verifies the synthesis claims against live web data.
+    This catches both evidence-sourced errors (contaminated evidence) and
+    fabricated claims that have no basis anywhere.
 
-    Phase 2 (Fresh Search — Gemini + Google Search):
-        Independently verifies summary claims against live web data.
-        Catches fabricated facts that contradict reality.
-
-    A company is marked "unverified" ONLY if contradictions or fabrications are found.
+    If no false claims found → pipeline DONE, original synthesis stands.
+    If false claims found → caller purges evidence + triggers full Opus re-synthesis.
 
     Returns:
         dict with:
-            - verified: bool
-            - unsupported_claims: list of contradictions + fabrications
-            - verification_model: str
-            - verification_time_ms: int
+            - verified: bool (True if no false claims found)
+            - false_claims: list of false claim strings (for display/logging)
+            - false_claims_detailed: list of structured dicts with source attribution
+            - fact_check_model: str (which model was used)
+            - fact_check_time_ms: int
     """
     if not summary_text:
         return {
             "verified": True,
-            "unsupported_claims": [],
-            "unsupported_claims_detailed": [],
-            "verification_model": "skipped",
-            "verification_time_ms": 0,
+            "false_claims": [],
+            "false_claims_detailed": [],
+            "fact_check_model": "skipped",
+            "fact_check_time_ms": 0,
         }
 
-    api_key = _get_anthropic_key(anthropic_key)
     total_start = time.time()
-    all_issues = []           # Legacy: flat string list for backward compat
-    all_issues_detailed = []  # New: structured list with source attribution
-    models_used = []
 
-    # --- Phase 1: Contradiction check (Haiku vs stored snippets) ---
-    if evidence_links and api_key:
-        print(f"   🔍 [Phase 1] Contradiction check against {len(evidence_links)} evidence snippets...")
-        contradiction_result = _contradiction_check(summary_text, evidence_links, company_name, api_key)
-        models_used.append(f"contradiction:{contradiction_result['model']}")
+    print(f"   🔍 [Fact-Check] Gemini fact-check against live web data...")
+    result = _gemini_fact_check(summary_text, company_name, evidence_links=evidence_links)
 
-        if contradiction_result["contradictions"]:
-            print(f"   ⚠️ [Phase 1] {len(contradiction_result['contradictions'])} contradiction(s) found")
-            for c in contradiction_result["contradictions"]:
-                claim_text = c.get("claim", str(c)) if isinstance(c, dict) else str(c)
-                source_urls = c.get("source_urls", []) if isinstance(c, dict) else []
-                source_indices = c.get("source_indices", []) if isinstance(c, dict) else []
-                all_issues.append(f"[Contradiction] {claim_text}")
-                all_issues_detailed.append({
-                    "type": "contradiction",
-                    "claim": claim_text,
-                    "source_urls": source_urls,
-                    "source_indices": source_indices,
-                })
-                src_info = f" (sources: {source_urls})" if source_urls else " (no specific source identified)"
-                print(f"      - {claim_text}{src_info}")
-        else:
-            print(f"   ✅ [Phase 1] No contradictions ({contradiction_result['time_ms']}ms)")
+    all_claims = []
+    all_claims_detailed = []
 
-    # --- Phase 2: Fresh search verification (Gemini + Google Search) ---
-    print(f"   🌐 [Phase 2] Fresh web search verification...")
-    search_result = _fresh_search_verify(summary_text, company_name, evidence_links=evidence_links)
-    models_used.append(f"search:{search_result['model']}")
-
-    if search_result["fabrications"]:
-        print(f"   ⚠️ [Phase 2] {len(search_result['fabrications'])} fabrication(s) found")
-        for f in search_result["fabrications"]:
-            claim_text = f.get("claim", str(f)) if isinstance(f, dict) else str(f)
-            source_urls = f.get("source_urls", []) if isinstance(f, dict) else []
-            source_indices = f.get("source_indices", []) if isinstance(f, dict) else []
-            all_issues.append(f"[Fabrication] {claim_text}")
-            all_issues_detailed.append({
-                "type": "fabrication",
+    if result["false_claims"]:
+        for fc in result["false_claims"]:
+            claim_text = fc.get("claim", str(fc)) if isinstance(fc, dict) else str(fc)
+            source_urls = fc.get("source_urls", []) if isinstance(fc, dict) else []
+            source_indices = fc.get("source_indices", []) if isinstance(fc, dict) else []
+            all_claims.append(claim_text)
+            all_claims_detailed.append({
+                "type": "false_claim",
                 "claim": claim_text,
                 "source_urls": source_urls,
                 "source_indices": source_indices,
             })
             src_info = f" (sources: {source_urls})" if source_urls else " (no specific source identified)"
             print(f"      - {claim_text}{src_info}")
-    else:
-        print(f"   ✅ [Phase 2] Summary checks out ({search_result['time_ms']}ms)")
 
     total_ms = int((time.time() - total_start) * 1000)
 
     return {
-        "verified": len(all_issues) == 0,
-        "unsupported_claims": all_issues[:10],
-        "unsupported_claims_detailed": all_issues_detailed[:10],
-        "verification_model": " + ".join(models_used),
-        "verification_time_ms": total_ms,
+        "verified": len(all_claims) == 0,
+        "false_claims": all_claims[:10],
+        "false_claims_detailed": all_claims_detailed[:10],
+        "fact_check_model": result["model"],
+        "fact_check_time_ms": total_ms,
     }
 
 
-# --- SUMMARY CLEANING (Layer 3) ---
-# When AI verification finds false claims, rewrite the summary without them
-# instead of requiring a full (expensive) rescan.
-#
-# Two modes:
-#   - In-pipeline (use_gemini=False): Haiku rewrites during normal scan (fast, cheap)
-#   - Admin recheck (use_gemini=True): Gemini 3 Pro rewrites standalone (higher quality)
+# --- SUMMARY CLEANING (Layer 3) — Admin Recheck Only ---
+# In the scan pipeline, surgical cleaning is replaced by full Opus re-synthesis (main.py).
+# This clean_summary function is retained ONLY for the admin recheck endpoint,
+# which operates standalone outside the scan pipeline.
 
 def _build_clean_prompt(summary_text, pitch_text, unsupported_claims, company_name):
-    """Build the shared cleaning prompt for both Haiku and Gemini."""
+    """Build the cleaning prompt for admin recheck (Gemini-based)."""
     claims_text = "\n".join(f"- {claim}" for claim in unsupported_claims)
     summary_word_count = len(summary_text.split())
     pitch_word_count = len((pitch_text or "").split()) if pitch_text else 0
@@ -782,39 +652,6 @@ CRITICAL: Your output must be as close to the original as possible. A diff betwe
 
 Output ONLY valid JSON:
 {{"cleaned_summary": "...", "cleaned_pitch": "...", "claims_removed": <number of false claims you actually found and removed>}}"""
-
-
-def _clean_with_haiku(prompt, api_key):
-    """Rewrite summary using Haiku (fast, cheap — used as fallback)."""
-    import anthropic
-    client = anthropic.Anthropic(api_key=api_key)
-
-    start = time.time()
-    response = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=2048,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    elapsed_ms = int((time.time() - start) * 1000)
-    response_text = response.content[0].text if response.content else ""
-    return response_text, elapsed_ms, "claude-haiku-4-5"
-
-
-def _clean_with_opus(prompt, api_key):
-    """Rewrite summary using Opus (highest quality — used in scan pipeline).
-    Opus created the summary, so it's the best model to fix its own mistakes."""
-    import anthropic
-    client = anthropic.Anthropic(api_key=api_key)
-
-    start = time.time()
-    response = client.messages.create(
-        model="claude-opus-4-6",
-        max_tokens=2048,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    elapsed_ms = int((time.time() - start) * 1000)
-    response_text = response.content[0].text if response.content else ""
-    return response_text, elapsed_ms, "claude-opus-4-6"
 
 
 def _clean_with_gemini(prompt):
@@ -940,30 +777,22 @@ def _validate_clean_result(result, summary_text, pitch_text, model_name, elapsed
 def clean_summary(summary_text, pitch_text, unsupported_claims, company_name,
                    anthropic_key=None, use_gemini=False, use_opus=False):
     """
-    Rewrites a summary and pitch to remove specific false claims found by AI verification.
+    Rewrites a summary and pitch to remove specific false claims.
+    Used by admin recheck endpoint (standalone, outside scan pipeline).
 
-    Three modes (pick one):
-      - use_opus=True: Opus rewrites — used in scan pipeline (Opus fixes its own mistakes)
-      - use_gemini=True: Gemini 3 Pro rewrites — used in admin recheck (high quality standalone)
-      - Both False: Haiku rewrites — cheap fallback
+    In the scan pipeline, this is replaced by full Opus re-synthesis (main.py).
 
     Args:
         summary_text: The current summary containing false claims
         pitch_text: The current pitch (may reference false claims too)
-        unsupported_claims: List of "[Contradiction] ..." / "[Fabrication] ..." strings
+        unsupported_claims: List of false claim description strings
         company_name: The target company name
-        anthropic_key: Optional Anthropic API key (for Opus/Haiku mode)
-        use_gemini: If True, use Gemini 3 Pro for rewriting
-        use_opus: If True, use Opus for rewriting (highest quality, Opus fixes its own work)
+        anthropic_key: Unused (retained for backward compat)
+        use_gemini: Unused (always uses Gemini now)
+        use_opus: Unused (always uses Gemini now)
 
     Returns:
-        dict with:
-            - cleaned_summary: str (rewritten summary without false claims)
-            - cleaned_pitch: str (rewritten pitch without false claims)
-            - claims_removed: int (number of false claims addressed)
-            - model: str
-            - time_ms: int
-            - success: bool
+        dict with cleaned_summary, cleaned_pitch, claims_removed, model, time_ms, success
     """
     if not summary_text or not unsupported_claims:
         return {
@@ -978,38 +807,8 @@ def clean_summary(summary_text, pitch_text, unsupported_claims, company_name,
     prompt = _build_clean_prompt(summary_text, pitch_text, unsupported_claims, company_name)
 
     try:
-        if use_opus:
-            # In-pipeline mode: Opus fixes its own summary (highest quality)
-            api_key = _get_anthropic_key(anthropic_key)
-            if not api_key:
-                return {
-                    "cleaned_summary": summary_text,
-                    "cleaned_pitch": pitch_text,
-                    "claims_removed": 0,
-                    "model": "skipped_no_api_key",
-                    "time_ms": 0,
-                    "success": False,
-                }
-            print(f"   🔄 [Clean] Using Opus to rewrite summary (fixing its own mistakes)...")
-            response_text, elapsed_ms, model_name = _clean_with_opus(prompt, api_key)
-        elif use_gemini:
-            # Admin recheck mode: Gemini 3 Pro for high-quality standalone rewriting
-            print(f"   🔄 [Clean] Using Gemini 3 Pro for summary rewrite...")
-            response_text, elapsed_ms, model_name = _clean_with_gemini(prompt)
-        else:
-            # Fallback: Haiku for fast, cheap rewriting
-            api_key = _get_anthropic_key(anthropic_key)
-            if not api_key:
-                return {
-                    "cleaned_summary": summary_text,
-                    "cleaned_pitch": pitch_text,
-                    "claims_removed": 0,
-                    "model": "skipped_no_api_key",
-                    "time_ms": 0,
-                    "success": False,
-                }
-            print(f"   🔄 [Clean] Using Haiku for summary rewrite...")
-            response_text, elapsed_ms, model_name = _clean_with_haiku(prompt, api_key)
+        print(f"   🔄 [Clean] Using Gemini for summary rewrite...")
+        response_text, elapsed_ms, model_name = _clean_with_gemini(prompt)
 
         # Parse JSON from response (robust parsing with auto-repair)
         result = _robust_parse_json(response_text)
@@ -1058,18 +857,18 @@ def clean_summary(summary_text, pitch_text, unsupported_claims, company_name,
 
 def purge_false_evidence(data, unsupported_claims, detailed_claims=None):
     """
-    Removes evidence_links and reality_checklist items that the AI verification
+    Removes evidence_links and reality_checklist items that the AI fact-check
     step specifically traced back to false claims via source URLs.
 
     KEY SAFETY PRINCIPLE: If the AI could not identify the specific source(s)
     behind a false claim, NOTHING gets purged for that claim. We only remove
-    evidence that is explicitly linked to a false claim by the verification AI.
+    evidence that is explicitly linked to a false claim by the fact-check AI.
     This prevents over-aggressive purging from keyword guesswork.
 
     Args:
         data: The full company data dict (modified in-place)
-        unsupported_claims: List of "[Contradiction] ..." / "[Fabrication] ..." strings (legacy, for logging)
-        detailed_claims: List of structured dicts from ai_verify_summary's unsupported_claims_detailed,
+        unsupported_claims: List of false claim strings (for logging)
+        detailed_claims: List of structured dicts from ai_fact_check_summary's false_claims_detailed,
                          each with: {"type", "claim", "source_urls", "source_indices"}
 
     Returns:

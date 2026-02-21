@@ -398,7 +398,7 @@ class BlobStorage:
                     "hallucination_flags": latest_data.get("hallucination_flags", []),
                     "hallucination_risk": latest_data.get("hallucination_risk", "unknown"),
                     "ai_verified": ai_v.get("verified") if ai_v else None,
-                    "unsupported_claims": ai_v.get("unsupported_claims", []) if ai_v else [],
+                    "unsupported_claims": (ai_v.get("false_claims") or ai_v.get("unsupported_claims", [])) if ai_v else [],
                     "versions": len(company_blobs),
                     "uploaded_at": latest.get("uploadedAt"),
                 }
