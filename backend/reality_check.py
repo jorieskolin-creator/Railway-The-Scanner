@@ -411,7 +411,7 @@ STORED EVIDENCE SOURCES (these were used to generate the summary):
 {evidence_ref}
 """
 
-    prompt = f"""You are a fact-checker with access to Google Search. Your job is to verify the following AI-generated company analysis by searching the web for the truth.
+    prompt = f"""You are an uncompromising Data Auditor. Your job is to evaluate the faithfulness and factual accuracy of an AI-generated company summary. You must ruthlessly identify hallucinations, fabrications, and contradictions.
 
 COMPANY: {company_name}
 
@@ -419,22 +419,31 @@ AI-GENERATED SUMMARY TO VERIFY:
 {summary_text}
 {evidence_section}
 INSTRUCTIONS:
-1. Search for the key factual claims in this summary: revenue figures, employee counts, partnerships, product names, executive names, specific events, dates, percentages.
-2. For each specific claim, determine if it is TRUE, FALSE, or UNVERIFIABLE based on your search results.
-3. ONLY flag claims that are clearly FALSE — where your search results show different facts.
-   This includes both:
-   - Claims that contradict your web search results (e.g. summary says "revenue €2.1B" but web shows €1.5B)
-   - Claims that appear completely fabricated (no basis found anywhere on the web)
-4. Do NOT flag claims you simply cannot find — the company may be small or private. Absence of evidence is not evidence of fabrication.
-5. Do NOT flag qualitative statements, opinions, or general industry observations.
-6. For each false claim, check the STORED EVIDENCE SOURCES above. If you can identify which stored source(s) [by index number] likely contributed to the false claim (e.g. the source itself contains wrong data that led to the error), include those indices. If you cannot trace the false claim to any stored source, return an empty array for source_indices.
+You must evaluate the summary using the following step-by-step logic:
 
-Output ONLY valid JSON:
-{{"false_claims": [{{"claim": "Claim X is false because web shows Y instead", "source_indices": [2, 5]}}], "summary_accurate": true/false}}
+Step 1: Extract every definitive claim from the summary (including financial metrics, operational realities, "lack of evidence" claims, and strategic assessments).
+
+Step 2: Cross-reference each claim strictly against the STORED EVIDENCE SOURCES above.
+
+Step 3: Use Google Search to verify real-world accuracy if the claim cannot be proven/disproven by the stored sources alone.
+
+FLAG A CLAIM AS FALSE IF IT MEETS EITHER OF THESE CRITERIA:
+
+A. [Fabrication/Unsupported]: The summary states a specific metric, event, or operational fact (e.g., "no digital investments," "10 million euros") that is NOT explicitly supported by the STORED EVIDENCE SOURCES. In an AI summary, adding new unsourced facts is a hallucination.
+
+B. [Contradiction]: The summary makes a claim that directly contradicts the STORED EVIDENCE SOURCES or verifiable facts found via your Google Search.
+
+Do NOT ignore qualitative claims if they are based on fabricated underlying metrics.
+Do NOT flag Knowledge Base terminology or archetype labels (e.g. "Digital Taylorism", "Thriving", "At Risk") — these are analytical framework terms, not factual claims.
+
+Output ONLY valid JSON in the following format. If you find no false claims, return an empty array.
+{{"false_claims": [{{"claim": "Exact quote of the false claim from the summary", "error_type": "Fabrication OR Contradiction", "reasoning": "Briefly explain why this is false based on the sources or search results.", "source_indices": [2, 5]}}], "summary_accurate": true/false}}
 
 Each false_claims object must have:
-  - "claim": string describing what is false and why
-  - "source_indices": array of integer indices referring to STORED EVIDENCE SOURCES that likely contributed to this false claim. Use an EMPTY array [] if you cannot trace the claim to any specific stored source.
+  - "claim": string — the exact quote or close paraphrase of the false claim from the summary
+  - "error_type": string — either "Fabrication" or "Contradiction"
+  - "reasoning": string — brief explanation of why this is false
+  - "source_indices": array of integer indices referring to STORED EVIDENCE SOURCES that were contradicted or misrepresented. Use an EMPTY array [] if the claim is completely fabricated with no traceable source.
 
 If the summary appears accurate or you found no clear falsehoods, return:
 {{"false_claims": [], "summary_accurate": true}}"""
@@ -530,12 +539,14 @@ If the summary appears accurate or you found no clear falsehoods, return:
                         if any(p in fc.lower() for p in _not_real):
                             print(f"   ⏭️ [Fact-Check] Skipping non-issue entry: {fc[:80]}")
                             continue
-                        false_claims.append({"claim": fc, "source_indices": [], "source_urls": []})
+                        false_claims.append({"claim": fc, "error_type": "Unknown", "reasoning": "", "source_indices": [], "source_urls": []})
                     elif isinstance(fc, dict):
                         claim_text = fc.get("claim", str(fc))
                         if any(p in claim_text.lower() for p in _not_real):
                             print(f"   ⏭️ [Fact-Check] Skipping non-issue entry: {claim_text[:80]}")
                             continue
+                        error_type = fc.get("error_type", "Unknown")
+                        reasoning = fc.get("reasoning", "")
                         indices = fc.get("source_indices", [])
                         source_urls = []
                         for idx in indices:
@@ -545,6 +556,8 @@ If the summary appears accurate or you found no clear falsehoods, return:
                                     source_urls.append(url)
                         false_claims.append({
                             "claim": claim_text,
+                            "error_type": error_type,
+                            "reasoning": reasoning,
                             "source_indices": indices,
                             "source_urls": source_urls,
                         })
@@ -608,17 +621,24 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name):
     if result["false_claims"]:
         for fc in result["false_claims"]:
             claim_text = fc.get("claim", str(fc)) if isinstance(fc, dict) else str(fc)
+            error_type = fc.get("error_type", "Unknown") if isinstance(fc, dict) else "Unknown"
+            reasoning = fc.get("reasoning", "") if isinstance(fc, dict) else ""
             source_urls = fc.get("source_urls", []) if isinstance(fc, dict) else []
             source_indices = fc.get("source_indices", []) if isinstance(fc, dict) else []
             all_claims.append(claim_text)
             all_claims_detailed.append({
                 "type": "false_claim",
                 "claim": claim_text,
+                "error_type": error_type,
+                "reasoning": reasoning,
                 "source_urls": source_urls,
                 "source_indices": source_indices,
             })
             src_info = f" (sources: {source_urls})" if source_urls else " (no specific source identified)"
-            print(f"      - {claim_text}{src_info}")
+            error_info = f" [{error_type}]" if error_type != "Unknown" else ""
+            print(f"      -{error_info} {claim_text}{src_info}")
+            if reasoning:
+                print(f"        Reasoning: {reasoning}")
 
     total_ms = int((time.time() - total_start) * 1000)
 
