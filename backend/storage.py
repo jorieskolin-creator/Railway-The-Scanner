@@ -166,9 +166,14 @@ class BlobStorage:
         clean = re.sub(r'_{2,}', '_', clean)
         return clean.strip('_')
 
-    def save_company_data(self, company_name, full_data, skip_if_newer_than=None):
+    def save_company_data(self, company_name, full_data, skip_if_newer_than=None, post_clean=False):
         """
-        Saves company data and keeps max 3 versions per company.
+        Saves company data and prunes old versions.
+
+        Normal save: keeps max 3 versions per company.
+        Post-clean save (post_clean=True): keeps ONLY the cleaned version.
+        This ensures false data is truly gone from the database after cleaning.
+
         If skip_if_newer_than (ISO timestamp string) is provided, checks whether
         a version uploaded after that timestamp already exists — if so, skips the
         save to avoid overwriting a fresher manual scan during batch processing.
@@ -190,9 +195,15 @@ class BlobStorage:
         filename = f"{prefix}.json"
         new_url = self._put(filename, full_data)
 
-        # 2. Prune: keep only the 3 newest versions
+        # 2. Prune old versions
         if new_url:
-            self._prune_old_versions(prefix, keep=3)
+            if post_clean:
+                # STRICT CLEANING RULE: After a successful clean, delete ALL old versions.
+                # Only the freshly cleaned file remains. False data is truly gone.
+                self._prune_old_versions(prefix, keep=1)
+                print(f"   [Storage] 🧹 Post-clean prune: only cleaned version kept for '{company_name}'")
+            else:
+                self._prune_old_versions(prefix, keep=3)
 
         return new_url
 

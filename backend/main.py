@@ -689,7 +689,7 @@ Generate a completely fresh synthesis. Do NOT reference or re-introduce any of t
                 data["washing_type"] = None
                 print(f"   ✅ [Clean] Cleared washing flags (false claims removed, fresh synthesis)")
 
-            storage.save_company_data(company_name, data)
+            storage.save_company_data(company_name, data, post_clean=True)
             storage.update_global_index_field(company_name, "ai_verified", re_verify["verified"])
             storage.update_global_index_field(company_name, "archetype", expected_archetype)
 
@@ -1758,7 +1758,10 @@ verified evidence provided."""
         if saveToDatabase:
             print(f"   🔄 [Storage] Saving report to Vercel Blob...")
             save_start = time.time()
-            saved_url = storage.save_company_data(companyName, full_data)
+            # If data was cleaned via re-synthesis, use strict pruning (keep=1)
+            # to ensure false data versions are truly gone from the database
+            was_cleaned = full_data.get("re_synthesis", {}).get("was_resynthesized", False)
+            saved_url = storage.save_company_data(companyName, full_data, post_clean=was_cleaned)
             print(f"   ✅ [Storage] Saved in {int((time.time() - save_start) * 1000)}ms → {saved_url}")
 
             summary_entry = {
