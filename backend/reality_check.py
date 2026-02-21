@@ -446,28 +446,31 @@ If the summary appears accurate or you found no clear falsehoods, return:
 
     from google.genai import types
 
-    gemini_config = {
+    _safety = [
+        {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
+        {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
+        {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
+        {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
+    ]
+
+    gemini_31_config = {
         'tools': [{'google_search': {}}],
-        'temperature': 1.0,  # Gemini 3 requires temp=1.0 — lower values cause looping/timeouts
-        'thinking_config': types.ThinkingConfig(thinking_level="LOW"),  # LOW for fast fact-check
-        'safety_settings': [
-            {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
-            {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
-            {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
-            {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
-        ]
+        'temperature': 1.0,  # Gemini 3.x requires temp=1.0 — lower values cause looping/timeouts
+        'thinking_config': types.ThinkingConfig(thinking_level="MEDIUM"),  # MEDIUM for balanced fact-check
+        'safety_settings': _safety
     }
 
-    # Config for Gemini 2.5 Pro fallback (no thinking_config needed)
-    gemini_25_config = {
+    # Config for Gemini 3 Pro fallback (LOW thinking)
+    gemini_3_config = {
         'tools': [{'google_search': {}}],
-        'temperature': 0.0,
-        'safety_settings': gemini_config['safety_settings'],
+        'temperature': 1.0,
+        'thinking_config': types.ThinkingConfig(thinking_level="LOW"),
+        'safety_settings': _safety,
     }
 
     models_to_try = [
-        ("gemini-3-pro-preview", 90, gemini_config),      # Primary: Gemini 3 Pro, thinking_level=LOW
-        ("gemini-2.5-pro", 45, gemini_25_config),          # Backup: Gemini 2.5 Pro
+        ("gemini-3.1-pro-preview", 90, gemini_31_config),  # Primary: Gemini 3.1 Pro, thinking_level=MEDIUM
+        ("gemini-3-pro-preview", 45, gemini_3_config),      # Backup: Gemini 3 Pro, thinking_level=LOW
     ]
 
     for model_name, timeout_sec, model_config in models_to_try:
@@ -677,17 +680,17 @@ def _clean_with_gemini(prompt):
 
     client = genai.Client(api_key=gemini_key)
 
-    # --- Try Gemini 3 Pro Preview first ---
+    # --- Try Gemini 3.1 Pro Preview first (MEDIUM thinking) ---
     try:
         start = time.time()
 
         def _call():
             return client.models.generate_content(
-                model="gemini-3-pro-preview",
+                model="gemini-3.1-pro-preview",
                 contents=prompt,
                 config={
-                    'temperature': 1.0,  # Gemini 3 requires temp=1.0 — lower values cause looping
-                    'thinking_config': types.ThinkingConfig(thinking_level="LOW"),
+                    'temperature': 1.0,  # Gemini 3.x requires temp=1.0 with thinking
+                    'thinking_config': types.ThinkingConfig(thinking_level="MEDIUM"),
                     'max_output_tokens': 2048,
                     'response_mime_type': 'application/json',
                 }
@@ -699,45 +702,46 @@ def _clean_with_gemini(prompt):
             response = future.result(timeout=60)
         except concurrent.futures.TimeoutError:
             pool.shutdown(wait=False)
-            raise ValueError("Gemini 3 Pro Preview timed out after 60s")
+            raise ValueError("Gemini 3.1 Pro Preview timed out after 60s")
         pool.shutdown(wait=False)
 
         elapsed_ms = int((time.time() - start) * 1000)
         response_text = response.text if response.text else ""
         if response_text:
-            return response_text, elapsed_ms, "gemini-3-pro-preview"
-        raise ValueError("Gemini 3 Pro Preview returned empty response")
+            return response_text, elapsed_ms, "gemini-3.1-pro-preview"
+        raise ValueError("Gemini 3.1 Pro Preview returned empty response")
 
-    except Exception as g3_err:
-        print(f"   ❌ [Clean] Gemini 3 Pro Preview failed: {g3_err}")
+    except Exception as g31_err:
+        print(f"   ❌ [Clean] Gemini 3.1 Pro Preview failed: {g31_err}")
 
-    # --- Fallback: Gemini 2.5 Pro ---
-    print(f"   🔄 [Clean] Falling back to Gemini 2.5 Pro...")
+    # --- Fallback: Gemini 3 Pro Preview (LOW thinking) ---
+    print(f"   🔄 [Clean] Falling back to Gemini 3 Pro Preview...")
     start = time.time()
 
-    def _call_25():
+    def _call_3():
         return client.models.generate_content(
-            model="gemini-2.5-pro",
+            model="gemini-3-pro-preview",
             contents=prompt,
             config={
-                'temperature': 0.3,
+                'temperature': 1.0,  # Gemini 3 requires temp=1.0
+                'thinking_config': types.ThinkingConfig(thinking_level="LOW"),
                 'max_output_tokens': 2048,
                 'response_mime_type': 'application/json',
             }
         )
 
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    future = pool.submit(_call_25)
+    future = pool.submit(_call_3)
     try:
         response = future.result(timeout=60)
     except concurrent.futures.TimeoutError:
         pool.shutdown(wait=False)
-        raise ValueError("Gemini 2.5 Pro timed out after 60s")
+        raise ValueError("Gemini 3 Pro Preview timed out after 60s")
     pool.shutdown(wait=False)
 
     elapsed_ms = int((time.time() - start) * 1000)
     response_text = response.text if response.text else ""
-    return response_text, elapsed_ms, "gemini-2.5-pro"
+    return response_text, elapsed_ms, "gemini-3-pro-preview"
 
 
 def _validate_clean_result(result, summary_text, pitch_text, model_name, elapsed_ms):

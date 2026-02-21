@@ -296,7 +296,7 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as sub_executor:
                 reality_future = sub_executor.submit(
                     x_ray_search, company_name, company["url"],
-                    model_id="gemini-3-pro-preview", intent_score=intent_results["score"],
+                    model_id="gemini-3.1-pro-preview", intent_score=intent_results["score"],
                     previous_context=previous_context, max_research_loops=2,
                     subsidiaries=company.get("subsidiaries")
                 )
@@ -568,12 +568,32 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                     except Exception as opus_err:
                         print(f"   [{company_name}] ❌ [Synthesis] Opus 4.6 failed: {opus_err}")
 
-                        # Fallback 1: Gemini 3 Pro Preview (strongest Google model)
+                        # Fallback 1: Gemini 3.1 Pro Preview (strongest Google model, MEDIUM thinking)
                         gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
                         if gemini_key:
                             try:
-                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Gemini 3 Pro Preview...")
+                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Gemini 3.1 Pro Preview...")
                                 g_start = time.time()
+                                gemini_client = genai.Client(api_key=gemini_key)
+                                gemini_resp = gemini_client.models.generate_content(
+                                    model="gemini-3.1-pro-preview",
+                                    contents=synthesis_prompt,
+                                    config=types.GenerateContentConfig(
+                                        temperature=1.0,  # Gemini 3.x requires temp=1.0 with thinking
+                                        thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
+                                        max_output_tokens=2048
+                                    )
+                                )
+                                response_text = gemini_resp.text or ""
+                                print(f"   [{company_name}] ✅ [Synthesis] Gemini 3.1 Pro Preview succeeded in {int((time.time() - g_start) * 1000)}ms")
+                            except Exception as gemini31_err:
+                                print(f"   [{company_name}] ❌ [Synthesis] Gemini 3.1 Pro Preview failed: {gemini31_err}")
+
+                        # Fallback 2: Gemini 3 Pro Preview
+                        if not response_text and gemini_key:
+                            try:
+                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Gemini 3 Pro Preview...")
+                                g2_start = time.time()
                                 gemini_client = genai.Client(api_key=gemini_key)
                                 gemini_resp = gemini_client.models.generate_content(
                                     model="gemini-3-pro-preview",
@@ -585,28 +605,9 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                                     )
                                 )
                                 response_text = gemini_resp.text or ""
-                                print(f"   [{company_name}] ✅ [Synthesis] Gemini 3 Pro Preview succeeded in {int((time.time() - g_start) * 1000)}ms")
+                                print(f"   [{company_name}] ✅ [Synthesis] Gemini 3 Pro Preview succeeded in {int((time.time() - g2_start) * 1000)}ms")
                             except Exception as gemini3_err:
-                                print(f"   [{company_name}] ❌ [Synthesis] Gemini 3 Pro Preview failed: {gemini3_err}")
-
-                        # Fallback 2: Gemini 2.5 Pro
-                        if not response_text and gemini_key:
-                            try:
-                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Gemini 2.5 Pro...")
-                                g2_start = time.time()
-                                gemini_client = genai.Client(api_key=gemini_key)
-                                gemini_resp = gemini_client.models.generate_content(
-                                    model="gemini-2.5-pro",
-                                    contents=synthesis_prompt,
-                                    config=types.GenerateContentConfig(
-                                        temperature=0.7,
-                                        max_output_tokens=2048
-                                    )
-                                )
-                                response_text = gemini_resp.text or ""
-                                print(f"   [{company_name}] ✅ [Synthesis] Gemini 2.5 Pro succeeded in {int((time.time() - g2_start) * 1000)}ms")
-                            except Exception as gemini25_err:
-                                print(f"   [{company_name}] ❌ [Synthesis] All models failed. Last error: {gemini25_err}")
+                                print(f"   [{company_name}] ❌ [Synthesis] All models failed. Last error: {gemini3_err}")
                     if response_text:
                         payload = extract_json_from_text(response_text)
                         if payload:

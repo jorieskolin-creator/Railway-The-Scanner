@@ -29,8 +29,8 @@ from analyze_scores import run_analysis
 from knowledge_base import get_evolving_framework
 from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, clean_summary, purge_false_evidence
 
-# VERIFICATION LOG: v5.2.0 - Performance Optimizations
-print("Starting Adaptability Scanner Backend (v5.2.0 - Performance Optimizations)...", flush=True)
+# VERIFICATION LOG: v5.3.0 - Gemini 3.1 Pro Upgrade (MEDIUM thinking)
+print("Starting Adaptability Scanner Backend (v5.3.0 - Gemini 3.1 Pro Upgrade)...", flush=True)
 
 def clean_env_var(value):
     if not value: return ""
@@ -691,8 +691,8 @@ def run_scan(
         print(f"🚀 --- LIVE SCAN INITIATED FOR: {companyName} ---")
         
         # Model pipeline: Sonnet 4.6 + Web Search (forensic) | Gemini 2.5 Pro (financial) | Opus 4.6 (synthesis)
-        # Forensic fallback: Gemini 3 Pro. Synthesis fallback: Gemini 3 Pro → Gemini 2.5 Pro
-        search_model = "gemini-3-pro-preview"  # Used as forensic fallback if Sonnet fails
+        # Forensic fallback: Gemini 3.1 Pro. Synthesis fallback: Gemini 3.1 Pro → Gemini 3 Pro
+        search_model = "gemini-3.1-pro-preview"  # Used as forensic fallback if Sonnet fails
 
         # --- PROCESS FILES ---
         combined_text = reportText if reportText else ""
@@ -1095,12 +1095,32 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                 except Exception as opus_err:
                     print(f"   ❌ [Synthesis] Opus 4.6 failed: {opus_err}")
 
-                    # Fallback 1: Gemini 3 Pro Preview (strongest Google model)
+                    # Fallback 1: Gemini 3.1 Pro Preview (strongest Google model, MEDIUM thinking)
                     gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
                     if gemini_key:
                         try:
-                            print(f"   🔄 [Synthesis] Falling back to Gemini 3 Pro Preview...")
+                            print(f"   🔄 [Synthesis] Falling back to Gemini 3.1 Pro Preview...")
                             g_start = time.time()
+                            gemini_client = genai.Client(api_key=gemini_key)
+                            gemini_resp = gemini_client.models.generate_content(
+                                model="gemini-3.1-pro-preview",
+                                contents=synthesis_prompt,
+                                config=types.GenerateContentConfig(
+                                    temperature=1.0,  # Gemini 3.x requires temp=1.0 with thinking
+                                    thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
+                                    max_output_tokens=2048
+                                )
+                            )
+                            response_text = gemini_resp.text or ""
+                            print(f"   ✅ [Synthesis] Gemini 3.1 Pro Preview succeeded in {int((time.time() - g_start) * 1000)}ms")
+                        except Exception as gemini31_err:
+                            print(f"   ❌ [Synthesis] Gemini 3.1 Pro Preview failed: {gemini31_err}")
+
+                    # Fallback 2: Gemini 3 Pro Preview
+                    if not response_text and gemini_key:
+                        try:
+                            print(f"   🔄 [Synthesis] Falling back to Gemini 3 Pro Preview...")
+                            g2_start = time.time()
                             gemini_client = genai.Client(api_key=gemini_key)
                             gemini_resp = gemini_client.models.generate_content(
                                 model="gemini-3-pro-preview",
@@ -1112,28 +1132,9 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                                 )
                             )
                             response_text = gemini_resp.text or ""
-                            print(f"   ✅ [Synthesis] Gemini 3 Pro Preview succeeded in {int((time.time() - g_start) * 1000)}ms")
+                            print(f"   ✅ [Synthesis] Gemini 3 Pro Preview succeeded in {int((time.time() - g2_start) * 1000)}ms")
                         except Exception as gemini3_err:
-                            print(f"   ❌ [Synthesis] Gemini 3 Pro Preview failed: {gemini3_err}")
-
-                    # Fallback 2: Gemini 2.5 Pro
-                    if not response_text and gemini_key:
-                        try:
-                            print(f"   🔄 [Synthesis] Falling back to Gemini 2.5 Pro...")
-                            g2_start = time.time()
-                            gemini_client = genai.Client(api_key=gemini_key)
-                            gemini_resp = gemini_client.models.generate_content(
-                                model="gemini-2.5-pro",
-                                contents=synthesis_prompt,
-                                config=types.GenerateContentConfig(
-                                    temperature=0.7,
-                                    max_output_tokens=2048
-                                )
-                            )
-                            response_text = gemini_resp.text or ""
-                            print(f"   ✅ [Synthesis] Gemini 2.5 Pro succeeded in {int((time.time() - g2_start) * 1000)}ms")
-                        except Exception as gemini25_err:
-                            print(f"   ❌ [Synthesis] All models failed. Last error: {gemini25_err}")
+                            print(f"   ❌ [Synthesis] All models failed. Last error: {gemini3_err}")
 
                 if response_text:
                     payload = extract_json_from_text(response_text)
@@ -1392,10 +1393,31 @@ verified evidence provided."""
                 resynth_model_used = ""
                 gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
 
-                # Primary: Gemini 3 Pro Preview (same prompt, same guardrails, same length constraints)
+                # Primary: Gemini 3.1 Pro Preview (same prompt, same guardrails, same length constraints)
                 if gemini_key:
                     try:
-                        print(f"   🔄 [Re-Synthesis] Attempting gemini-3-pro-preview...")
+                        print(f"   🔄 [Re-Synthesis] Attempting gemini-3.1-pro-preview...")
+                        gemini_client = genai.Client(api_key=gemini_key)
+                        resynth_response = gemini_client.models.generate_content(
+                            model="gemini-3.1-pro-preview",
+                            contents=resynth_prompt,
+                            config=types.GenerateContentConfig(
+                                temperature=1.0,  # Gemini 3.x requires temp=1.0 with thinking
+                                thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
+                                max_output_tokens=2048
+                            )
+                        )
+                        resynth_text = resynth_response.text or ""
+                        resynth_model_used = "gemini-3.1-pro-preview"
+                        resynth_ms = int((time.time() - resynth_start) * 1000)
+                        print(f"   ✅ [Re-Synthesis] Gemini 3.1 Pro re-synthesis complete ({resynth_ms}ms)")
+                    except Exception as g31_err:
+                        print(f"   ❌ [Re-Synthesis] Gemini 3.1 Pro failed: {g31_err}")
+
+                # Fallback: Gemini 3 Pro Preview
+                if not resynth_text and gemini_key:
+                    try:
+                        print(f"   🔄 [Re-Synthesis] Falling back to gemini-3-pro-preview...")
                         gemini_client = genai.Client(api_key=gemini_key)
                         resynth_response = gemini_client.models.generate_content(
                             model="gemini-3-pro-preview",
@@ -1411,28 +1433,8 @@ verified evidence provided."""
                         resynth_ms = int((time.time() - resynth_start) * 1000)
                         print(f"   ✅ [Re-Synthesis] Gemini 3 Pro re-synthesis complete ({resynth_ms}ms)")
                     except Exception as g3_err:
-                        print(f"   ❌ [Re-Synthesis] Gemini 3 Pro failed: {g3_err}")
-
-                # Fallback: Gemini 2.5 Pro
-                if not resynth_text and gemini_key:
-                    try:
-                        print(f"   🔄 [Re-Synthesis] Falling back to gemini-2.5-pro...")
-                        gemini_client = genai.Client(api_key=gemini_key)
-                        resynth_response = gemini_client.models.generate_content(
-                            model="gemini-2.5-pro",
-                            contents=resynth_prompt,
-                            config=types.GenerateContentConfig(
-                                temperature=0.7,
-                                max_output_tokens=2048
-                            )
-                        )
-                        resynth_text = resynth_response.text or ""
-                        resynth_model_used = "gemini-2.5-pro"
                         resynth_ms = int((time.time() - resynth_start) * 1000)
-                        print(f"   ✅ [Re-Synthesis] Gemini 2.5 Pro re-synthesis complete ({resynth_ms}ms)")
-                    except Exception as g25_err:
-                        resynth_ms = int((time.time() - resynth_start) * 1000)
-                        print(f"   ❌ [Re-Synthesis] All re-synthesis models failed. Last error: {g25_err} ({resynth_ms}ms)")
+                        print(f"   ❌ [Re-Synthesis] All re-synthesis models failed. Last error: {g3_err} ({resynth_ms}ms)")
 
                 if resynth_text:
                     resynth_payload = extract_json_from_text(resynth_text)
@@ -1483,7 +1485,7 @@ verified evidence provided."""
                         "was_resynthesized": True,
                         "false_claims_found": fact_check["false_claims"],
                         "evidence_purged": purge_result,
-                        "resynth_model": resynth_model_used or "gemini-3-pro-preview",
+                        "resynth_model": resynth_model_used or "gemini-3.1-pro-preview",
                         "resynth_time_ms": resynth_ms,
                     }
                     # Mark as verified after re-synthesis — Gemini built from clean evidence

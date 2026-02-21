@@ -980,7 +980,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
     # Default to the chosen model, or fallback to the reliable 3-pro
-    primary_model = model_id or "gemini-3-pro-preview"
+    primary_model = model_id or "gemini-3.1-pro-preview"
 
     search_name = clean_company_name_for_search(company_name)
     domain_hint = get_clean_domain(company_url) if company_url else f"{search_name.lower().replace(' ', '')}.fi"
@@ -1207,7 +1207,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             # Enforce per-call timeout via thread pool.
             # Google GenAI SDK's built-in HttpOptions timeout is unreliable
             # (SDK passes timeout=None internally, overriding client-level timeout).
-            # Gemini 3 models need temp=1.0 + thinking_config (low temp causes looping)
+            # Gemini 3.x models need temp=1.0 + thinking_config (low temp causes looping)
             _safety = [
                 {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
                 {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
@@ -1215,10 +1215,12 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
             ]
             if "gemini-3" in target_model_name:
+                # Gemini 3.1 Pro gets MEDIUM thinking; Gemini 3 Pro gets LOW
+                _thinking_level = "MEDIUM" if "3.1" in target_model_name else "LOW"
                 _model_config = {
                     'tools': [{'google_search': {}}],
                     'temperature': 1.0,
-                    'thinking_config': types.ThinkingConfig(thinking_level="LOW"),
+                    'thinking_config': types.ThinkingConfig(thinking_level=_thinking_level),
                     'safety_settings': _safety,
                 }
             else:
@@ -1462,20 +1464,20 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     # Gemini 3 Pro is the first backup if Sonnet fails or returns nothing.
     # Gemini 2.5 Pro is the second backup as a last resort.
     data = None
-    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Sonnet 4.6 → Gemini 3 Pro → Gemini 2.5 Pro")
+    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Sonnet 4.6 → Gemini 3.1 Pro → Gemini 3 Pro")
 
     # --- PRIMARY: Sonnet 4.6 + Web Search ---
     data = execute_with_anthropic(prompt)
 
-    # --- BACKUP 1: Gemini 3 Pro (only if Sonnet failed) ---
+    # --- BACKUP 1: Gemini 3.1 Pro (only if Sonnet failed) ---
     if not data:
-        print(f"   ⚠️ [Forensic Scan] Sonnet 4.6 returned no data. Falling back to Gemini 3 Pro...")
-        data = execute_with_model("gemini-3-pro-preview", None, 150)
+        print(f"   ⚠️ [Forensic Scan] Sonnet 4.6 returned no data. Falling back to Gemini 3.1 Pro...")
+        data = execute_with_model("gemini-3.1-pro-preview", None, 150)
 
-    # --- BACKUP 2: Gemini 2.5 Pro (only if Gemini 3 Pro also failed) ---
+    # --- BACKUP 2: Gemini 3 Pro (only if Gemini 3.1 Pro also failed) ---
     if not data:
-        print(f"   ⚠️ [Forensic Scan] Gemini 3 Pro returned no data. Falling back to Gemini 2.5 Pro...")
-        data = execute_with_model("gemini-2.5-pro", call_timeout=120)
+        print(f"   ⚠️ [Forensic Scan] Gemini 3.1 Pro returned no data. Falling back to Gemini 3 Pro...")
+        data = execute_with_model("gemini-3-pro-preview", call_timeout=120)
 
     # --- CONFIDENCE-DRIVEN RE-SEARCH LOOP ---
     # Only triggers when initial results have low confidence AND weak coverage.
@@ -1520,9 +1522,9 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     break
 
                 # Re-search uses Gemini models (targeted follow-up with Google Search grounding)
-                research_data = execute_with_model("gemini-3-pro-preview", custom_prompt=research_prompt)
+                research_data = execute_with_model("gemini-3.1-pro-preview", custom_prompt=research_prompt)
                 if not research_data:
-                    research_data = execute_with_model("gemini-2.5-pro", custom_prompt=research_prompt)
+                    research_data = execute_with_model("gemini-3-pro-preview", custom_prompt=research_prompt)
 
                 if not research_data:
                     print(f"   [Re-Search] Loop {loop} returned no parseable data. Stopping.")
