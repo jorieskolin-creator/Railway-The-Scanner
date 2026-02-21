@@ -62,32 +62,28 @@ const CompanySummary = ({ data }) => {
   const [pitchCopied, setPitchCopied] = useState(false);
 
   // ARCHETYPE LOGIC (Reality vs Financial — unified with dashboard)
-  const fin = data.financial_index ?? data.intent_score ?? 0;
-  let gapColor = '#94a3b8';
-  let gapLabel = "At Risk";
-  let gapKey = "At Risk";
+  // Prefer the stored archetype from the backend (single source of truth).
+  // Fall back to score-based computation for backward compatibility with old data.
+  const ARCHETYPE_COLORS = {
+      "Thriving": '#10b981',    // Emerald
+      "Modernizing": '#22d3ee', // Cyan
+      "Cash Cow": '#f59e0b',    // Amber
+      "At Risk": '#fb7185',     // Rose/Red
+  };
 
-  if (data.reality_score >= 50) {
-      if (fin >= 50) {
-          gapLabel = "Thriving";
-          gapKey = "Thriving";
-          gapColor = '#10b981'; // Emerald
-      } else {
-          gapLabel = "Modernizing";
-          gapKey = "Modernizing";
-          gapColor = '#22d3ee'; // Cyan
-      }
+  let gapKey: string;
+  if (data.archetype && ARCHETYPE_COLORS[data.archetype]) {
+      gapKey = data.archetype;
   } else {
-      if (fin >= 50) {
-          gapLabel = "Cash Cow";
-          gapKey = "Cash Cow";
-          gapColor = '#f59e0b'; // Amber
+      const fin = data.financial_index ?? data.intent_score ?? 0;
+      if (data.reality_score >= 50) {
+          gapKey = fin >= 50 ? "Thriving" : "Modernizing";
       } else {
-          gapLabel = "At Risk";
-          gapKey = "At Risk";
-          gapColor = '#fb7185'; // Rose/Red
+          gapKey = fin >= 50 ? "Cash Cow" : "At Risk";
       }
   }
+  const gapLabel = gapKey;
+  const gapColor = ARCHETYPE_COLORS[gapKey] || '#94a3b8';
 
   const ARCHETYPE_DESCRIPTIONS = {
     "Thriving": "High Reality + Strong Financials. Modern operations AND healthy business.",

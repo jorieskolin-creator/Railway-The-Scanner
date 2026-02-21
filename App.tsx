@@ -397,10 +397,8 @@ const App = () => {
     const avgFinancial = financialItems.length > 0 ? Math.round(financialItems.reduce((s, i) => s + i.financial_index, 0) / financialItems.length) : null;
     let archetypes = { 'Thriving': 0, 'Modernizing': 0, 'Cash Cow': 0, 'At Risk': 0 };
     items.forEach(i => {
-      const r = i.reality_score || 0;
-      const f = i.financial_index ?? i.intent_score ?? 0;
-      if (r >= 50) { f >= 50 ? archetypes['Thriving']++ : archetypes['Modernizing']++; }
-      else { f >= 50 ? archetypes['Cash Cow']++ : archetypes['At Risk']++; }
+      const label = getArchetype(i.archetype, i.reality_score || 0, i.financial_index ?? i.intent_score ?? 0).label;
+      archetypes[label]++;
     });
     return { count: items.length, avgIntent, avgReality, avgFinancial, archetypes };
   }, [data, selectedDomain]);
@@ -411,23 +409,33 @@ const App = () => {
     return matchesSearch && matchesDomain;
   });
 
-  const getArchetype = (reality: number, financial: number) => {
+  const ARCHETYPE_STYLES = {
+      "Thriving": { color: "text-emerald-400", bg: "bg-emerald-400/10", border: "border-emerald-400/20" },
+      "Modernizing": { color: "text-cyan-400", bg: "bg-cyan-400/10", border: "border-cyan-400/20" },
+      "Cash Cow": { color: "text-amber-400", bg: "bg-amber-400/10", border: "border-amber-400/20" },
+      "At Risk": { color: "text-rose-400", bg: "bg-rose-400/10", border: "border-rose-400/20" },
+  };
+
+  const getArchetypeFromScores = (reality: number, financial: number) => {
       if (reality >= 50) {
-          return financial >= 50
-            ? { label: "Thriving", color: "text-emerald-400", bg: "bg-emerald-400/10", border: "border-emerald-400/20" }
-            : { label: "Modernizing", color: "text-cyan-400", bg: "bg-cyan-400/10", border: "border-cyan-400/20" };
+          return financial >= 50 ? "Thriving" : "Modernizing";
       } else {
-          return financial >= 50
-            ? { label: "Cash Cow", color: "text-amber-400", bg: "bg-amber-400/10", border: "border-amber-400/20" }
-            : { label: "At Risk", color: "text-rose-400", bg: "bg-rose-400/10", border: "border-rose-400/20" };
+          return financial >= 50 ? "Cash Cow" : "At Risk";
       }
+  };
+
+  const getArchetype = (storedArchetype: string | null, reality: number, financial: number) => {
+      const label = (storedArchetype && ARCHETYPE_STYLES[storedArchetype])
+          ? storedArchetype
+          : getArchetypeFromScores(reality, financial);
+      return { label, ...ARCHETYPE_STYLES[label] };
   };
 
   const sortedData = [...filteredData].sort((a, b) => {
     if (!sortConfig) return 0;
     if (sortConfig.key === 'archetype') {
-         const archA = getArchetype(a.reality_score, a.financial_index ?? a.intent_score ?? 0).label;
-         const archB = getArchetype(b.reality_score, b.financial_index ?? b.intent_score ?? 0).label;
+         const archA = getArchetype(a.archetype, a.reality_score, a.financial_index ?? a.intent_score ?? 0).label;
+         const archB = getArchetype(b.archetype, b.reality_score, b.financial_index ?? b.intent_score ?? 0).label;
          return sortConfig.direction === 'asc' ? archA.localeCompare(archB) : archB.localeCompare(archA);
     }
     const aVal = a[sortConfig.key];
@@ -645,7 +653,7 @@ const App = () => {
                 </thead>
                 <tbody className="divide-y divide-white/5 text-slate-300">
                   {sortedData.map((row) => {
-                    const archetype = getArchetype(row.reality_score, row.financial_index ?? row.intent_score ?? 0);
+                    const archetype = getArchetype(row.archetype, row.reality_score, row.financial_index ?? row.intent_score ?? 0);
                     const revTier = getRevenueTier(row.revenue_avg_3yr);
                     const lowConfidence = row.confidence_score != null && row.confidence_score < 50;
                     const tierColors = { XL: 'text-violet-300 bg-violet-500/15 border-violet-500/30', L: 'text-blue-300 bg-blue-500/15 border-blue-500/30', M: 'text-slate-300 bg-slate-500/15 border-slate-500/30', S: 'text-slate-500 bg-slate-500/10 border-slate-500/20' };
