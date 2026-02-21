@@ -689,9 +689,14 @@ Generate a completely fresh synthesis. Do NOT reference or re-introduce any of t
                 data["washing_type"] = None
                 print(f"   ✅ [Clean] Cleared washing flags (false claims removed, fresh synthesis)")
 
-            storage.save_company_data(company_name, data, post_clean=True)
-            storage.update_global_index_field(company_name, "ai_verified", re_verify["verified"])
-            storage.update_global_index_field(company_name, "archetype", expected_archetype)
+            saved_url = storage.save_company_data(company_name, data, post_clean=True)
+            storage.update_global_index_fields(company_name, {
+                "ai_verified": re_verify["verified"],
+                "archetype": expected_archetype,
+                "reality_score": data.get("reality_score", 0),
+                "reality_gap": data.get("reality_gap", 0),
+                "detailsUrl": saved_url,
+            })
 
             print(f"   ✅ [Clean] {company_name}: Full re-synthesis from cleaned evidence. Re-verified: {re_verify['verified']}")
 

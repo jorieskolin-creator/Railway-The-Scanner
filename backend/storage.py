@@ -284,6 +284,10 @@ class BlobStorage:
 
     def update_global_index_field(self, company_name, field_name, field_value):
         """Update a single field for a company in the global index."""
+        return self.update_global_index_fields(company_name, {field_name: field_value})
+
+    def update_global_index_fields(self, company_name, fields: dict):
+        """Update multiple fields for a company in the global index (single atomic read-modify-write)."""
         with BlobStorage._index_lock:
             blobs = self._list("index/summary_list", limit=10)
             current_index = []
@@ -297,7 +301,7 @@ class BlobStorage:
             updated = False
             for item in current_index:
                 if item.get("companyName") == company_name:
-                    item[field_name] = field_value
+                    item.update(fields)
                     updated = True
                     break
 
