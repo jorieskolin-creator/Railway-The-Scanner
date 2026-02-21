@@ -485,6 +485,30 @@ def _clean_company_data(company_name: str, data: dict) -> dict:
             "evidence_purged": purge_result,
         }
 
+        # --- ARCHETYPE RECALCULATION (must match scan pipeline logic) ---
+        # After cleaning, the archetype stored in data may be stale (computed from
+        # pre-clean scores or set by a synthesis model that hallucinated).
+        # Recalculate deterministically from current scores, same as scan pipeline.
+        reality = data.get("reality_score", 0)
+        fin_score = data.get("financial_index")
+        fin_for_arch = fin_score if fin_score is not None else data.get("intent_score", 0)
+        if reality >= 50:
+            expected_archetype = "Thriving" if fin_for_arch >= 50 else "Modernizing"
+        else:
+            expected_archetype = "Cash Cow" if fin_for_arch >= 50 else "At Risk"
+
+        old_archetype = data.get("archetype")
+        data["archetype"] = expected_archetype
+
+        if old_archetype and old_archetype != expected_archetype:
+            print(f"   ⚖️ [Clean] Archetype '{old_archetype}' → corrected to '{expected_archetype}' (scores: Reality={reality}, Financial={fin_for_arch})")
+            # Also fix the archetype label inside the summary text
+            valid_archetypes = ["Thriving", "Modernizing", "Cash Cow", "At Risk"]
+            for wrong_label in valid_archetypes:
+                if wrong_label == expected_archetype:
+                    continue
+                data["summary_text"] = data["summary_text"].replace(wrong_label, expected_archetype)
+
         # Clear washing flags if re-verification passes
         if re_verify["verified"]:
             data["washing_flag"] = False
@@ -493,6 +517,7 @@ def _clean_company_data(company_name: str, data: dict) -> dict:
 
         storage.save_company_data(company_name, data)
         storage.update_global_index_field(company_name, "ai_verified", re_verify["verified"])
+        storage.update_global_index_field(company_name, "archetype", expected_archetype)
 
         print(f"   ✅ [Clean] {company_name}: Removed {clean_result['claims_removed']} false claims. Re-verified: {re_verify['verified']}")
     else:

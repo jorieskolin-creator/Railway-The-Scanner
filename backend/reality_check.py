@@ -661,7 +661,7 @@ RULES — READ CAREFULLY:
 1. PRESERVE the original text word-for-word except for sentences that contain the false claims described above.
 2. Remove ONLY the sentences or phrases that contain the false claims. Do NOT rephrase, reword, or restructure sentences that are not affected by false claims.
 3. Do NOT add any new information, claims, or analysis. You are only REMOVING, never ADDING or REWRITING.
-4. The archetype classification MUST remain EXACTLY as it appears in the original — do not change, re-evaluate, or remove it under any circumstances.
+4. Do NOT change, re-evaluate, or remove the archetype classification yourself. Any necessary archetype correction will be handled separately after cleaning.
 5. After removing false claim sentences, fix only the immediately adjacent transitions so the text reads naturally. Do NOT rewrite surrounding paragraphs.
 6. If a false claim is embedded within an otherwise true sentence, remove only the false part and keep the true part intact.
 7. If the pitch references any of the false claims, remove those parts too.
