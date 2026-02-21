@@ -456,7 +456,7 @@ If the summary appears accurate or you found no clear falsehoods, return:
     }
 
     models_to_try = [
-        ("gemini-3-pro-preview", 45),  # Primary: Gemini 3 Pro, 45s timeout
+        ("gemini-3-pro-preview", 90),  # Primary: Gemini 3 Pro, 90s timeout (thinking + web grounding)
         ("gemini-2.5-pro", 45),        # Backup: Gemini 2.5 Pro, 45s timeout
     ]
 
