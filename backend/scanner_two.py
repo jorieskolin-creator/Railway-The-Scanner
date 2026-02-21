@@ -1215,11 +1215,12 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
             ]
             if "gemini-3" in target_model_name:
-                # Gemini 3.1 Pro gets MEDIUM thinking; Gemini 3 Pro gets LOW
+                # Gemini 3.1 Pro gets MEDIUM thinking + temp 0.5; Gemini 3 Pro gets LOW thinking + temp 1.0
                 _thinking_level = "MEDIUM" if "3.1" in target_model_name else "LOW"
+                _temperature = 0.5 if "3.1" in target_model_name else 1.0
                 _model_config = {
                     'tools': [{'google_search': {}}],
-                    'temperature': 1.0,
+                    'temperature': _temperature,
                     'thinking_config': types.ThinkingConfig(thinking_level=_thinking_level),
                     'safety_settings': _safety,
                 }

@@ -464,8 +464,8 @@ If the summary appears accurate or you found no clear falsehoods, return:
 
     gemini_31_config = {
         'tools': [{'google_search': {}}],
-        'temperature': 1.0,  # Gemini 3.x requires temp=1.0 — lower values cause looping/timeouts
-        'thinking_config': types.ThinkingConfig(thinking_level="MEDIUM"),  # MEDIUM for balanced fact-check
+        'temperature': 0.5,
+        'thinking_config': types.ThinkingConfig(thinking_level="MEDIUM"),
         'safety_settings': _safety
     }
 
@@ -717,7 +717,7 @@ def _clean_with_gemini(prompt):
                 model="gemini-3.1-pro-preview",
                 contents=prompt,
                 config={
-                    'temperature': 1.0,  # Gemini 3.x requires temp=1.0 with thinking
+                    'temperature': 0.5,
                     'thinking_config': types.ThinkingConfig(thinking_level="MEDIUM"),
                     'max_output_tokens': 2048,
                     'response_mime_type': 'application/json',
