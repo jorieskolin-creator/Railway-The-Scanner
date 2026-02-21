@@ -239,7 +239,11 @@ async def review_data(request: Request):
 
 @app.post("/admin/recheck-company/{company_name}")
 async def recheck_company(company_name: str, request: Request):
-    """Run reality check on an already-stored company's summary without rescanning."""
+    """
+    Run reality check on an already-stored company's summary.
+    Same procedure as recheck-all: heuristic check → AI fact-check → auto-clean if needed.
+    Returns recommendation on whether deep scan or full refresh is needed.
+    """
     verify_admin(request)
     data = storage.get_company_data(company_name)
     if not data:
@@ -276,17 +280,45 @@ async def recheck_company(company_name: str, request: Request):
     # Update index with ai_verified flag
     storage.update_global_index_field(company_name, "ai_verified", ai_result["verified"])
 
-    recommendation = "DELETE and rescan" if summary_result["risk"] == "high" else \
-                     "Rescan — false claims found by fact-check" if not ai_result["verified"] else \
-                     "Review manually" if summary_result["risk"] == "medium" else "OK"
+    # Auto-clean if AI found false claims (same as recheck-all)
+    clean_result = None
+    if not ai_result["verified"] and ai_result["false_claims"]:
+        clean_result = _clean_company_data(company_name, data)
 
-    return {
+    # Determine recommendation including deep scan / refresh guidance
+    if summary_result["risk"] == "high":
+        recommendation = "Refresh database — high hallucination risk, full rescan needed"
+    elif clean_result and clean_result.get("action") == "cleaned" and clean_result.get("re_verified"):
+        recommendation = "OK — cleaned successfully"
+    elif clean_result and clean_result.get("action") == "cleaned" and not clean_result.get("re_verified"):
+        recommendation = "Deep scan recommended — cleaned but still has unverified claims"
+    elif clean_result and clean_result.get("action") == "no_change":
+        recommendation = "Deep scan recommended — cleaning could not resolve false claims"
+    elif clean_result and clean_result.get("action") == "failed":
+        recommendation = "Refresh database — cleaning failed, full rescan needed"
+    elif not ai_result["verified"]:
+        recommendation = "Deep scan recommended — false claims found by fact-check"
+    elif summary_result["risk"] == "medium":
+        recommendation = "Review manually"
+    else:
+        recommendation = "OK"
+
+    response = {
         "company": company_name,
         "summary_check": summary_result,
         "pitch_check": pitch_result,
         "ai_verification": ai_result,
         "recommendation": recommendation,
     }
+
+    # Include cleaning results if auto-clean was performed
+    if clean_result:
+        response["clean_action"] = clean_result.get("action", "skipped")
+        response["claims_removed"] = clean_result.get("claims_removed", 0)
+        response["re_verified"] = clean_result.get("re_verified", False)
+        response["remaining_issues"] = clean_result.get("remaining_issues", [])
+
+    return response
 
 @app.post("/admin/recheck-all")
 async def recheck_all_companies(request: Request):

@@ -312,34 +312,38 @@ const App = () => {
   };
 
   const handleCleanCompany = async (companyName) => {
-    const password = prompt(`AUTHENTICATION REQUIRED\n\nEnter Admin Password to CLEAN false claims from "${companyName}":`);
+    const password = prompt(`AUTHENTICATION REQUIRED\n\nEnter Admin Password to run Reality Check + CLEAN on "${companyName}":`);
     if (!password) return;
     setCleaningCompany(companyName);
     try {
-      const res = await fetch(`/admin/clean-summary/${encodeURIComponent(companyName)}`, {
+      // Full reality check + auto-clean (same procedure as Reality Check All)
+      const res = await fetch(`/admin/recheck-company/${encodeURIComponent(companyName)}`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${password}` }
       });
       if (res.status === 401) { alert("ACCESS DENIED: Incorrect Password."); return; }
       if (res.ok) {
         const json = await res.json();
-        if (json.action === 'cleaned') {
-          alert(`Cleaned "${companyName}": ${json.claims_removed} false claim(s) removed.\nRe-verified: ${json.re_verified ? 'PASSED' : 'Still has issues'}`);
-        } else if (json.action === 'skipped') {
-          alert(`"${companyName}" is already verified — nothing to clean.`);
-        } else if (json.action === 'no_change') {
-          alert(`"${companyName}": AI found nothing to remove — summary left unchanged.`);
+        const rec = json.recommendation || '';
+        if (json.clean_action === 'cleaned') {
+          alert(`Reality Check + Clean "${companyName}":\n\n${json.claims_removed} false claim(s) removed.\nRe-verified: ${json.re_verified ? 'PASSED' : 'Still has issues'}\n\nRecommendation: ${rec}`);
+        } else if (json.clean_action === 'no_change') {
+          alert(`Reality Check "${companyName}":\n\nCleaning could not resolve false claims — summary unchanged.\n\nRecommendation: ${rec}`);
+        } else if (json.clean_action === 'failed') {
+          alert(`Reality Check "${companyName}":\n\nCleaning failed.\n\nRecommendation: ${rec}`);
+        } else if (rec === 'OK') {
+          alert(`Reality Check "${companyName}":\n\nAll checks passed — no cleaning needed.`);
         } else {
-          alert(`Clean failed for "${companyName}": ${json.reason || 'unknown error'}`);
+          alert(`Reality Check "${companyName}":\n\nRecommendation: ${rec}`);
         }
         // Refresh the review list to show updated verification status
         const reviewRes = await fetch('/admin/review-data', { headers: { 'Authorization': `Bearer ${password}` } });
         if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
         fetchSummaryData(true);
       } else {
-        alert("Clean request failed.");
+        alert("Reality Check + Clean request failed.");
       }
-    } catch (e) { console.error(e); alert("Clean failed."); }
+    } catch (e) { console.error(e); alert("Reality Check + Clean failed."); }
     finally { setCleaningCompany(null); }
   };
 
@@ -1270,7 +1274,7 @@ const App = () => {
                                 onClick={() => handleCleanCompany(item.companyName)}
                                 disabled={cleaningCompany === item.companyName}
                                 className="text-orange-400 hover:text-emerald-400 p-1.5 rounded hover:bg-emerald-500/10 transition-all disabled:opacity-50"
-                                title={`Clean false claims from ${item.companyName}`}
+                                title={`Reality Check + Clean ${item.companyName}`}
                               >
                                 {cleaningCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <ShieldAlert size={14} />}
                               </button>
