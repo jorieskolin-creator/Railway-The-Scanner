@@ -375,7 +375,7 @@ def _clean_company_data(company_name: str, data: dict) -> dict:
     Shared cleaning logic for admin recheck: purge false evidence, rewrite summary, re-verify, save.
     Used by both single-company clean and recheck-all.
 
-    Note: In the scan pipeline, this is replaced by full Opus re-synthesis.
+    Note: In the scan pipeline, this is replaced by full Gemini re-synthesis.
     This function is for standalone admin cleanup of existing stored data.
 
     Returns dict with action result (skipped/failed/cleaned).
@@ -1312,7 +1312,7 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                 # --- CLEAN: No false claims found. Original synthesis stands. Done. ---
                 print(f"   ✅ [Fact-Check] Summary verified — no false claims ({fact_check['fact_check_time_ms']}ms)")
             else:
-                # --- FALSE CLAIMS FOUND: Purge contaminated evidence → Full Opus re-synthesis ---
+                # --- FALSE CLAIMS FOUND: Purge contaminated evidence → Full Gemini re-synthesis ---
                 print(f"   ⚠️ [Fact-Check] {len(fact_check['false_claims'])} false claim(s) found ({fact_check['fact_check_time_ms']}ms):")
                 for claim in fact_check["false_claims"]:
                     print(f"      - {claim}")
@@ -1326,10 +1326,11 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                     detailed_claims=detailed_claims,
                 )
 
-                # Step 2: Full Opus re-synthesis from cleaned evidence
-                # Opus builds a coherent narrative from clean evidence, rather than
-                # patching holes in a contaminated narrative (which was the old approach).
-                print(f"   🔄 [Re-Synthesis] Opus full re-synthesis from cleaned evidence...")
+                # Step 2: Full Gemini re-synthesis from cleaned evidence
+                # Gemini builds a coherent narrative from clean evidence (same prompt,
+                # same KB, same tone, same length constraints as Opus deep scanning),
+                # rather than patching holes in a contaminated narrative.
+                print(f"   🔄 [Re-Synthesis] Gemini full re-synthesis from cleaned evidence...")
                 resynth_start = time.time()
 
                 # Rebuild evidence list from purged data
@@ -1337,7 +1338,7 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                 clean_verified = [l for l in clean_evidence_links if l.get('verified', True)]
                 clean_evidence_list = ', '.join([f"{l.get('title', 'Unknown')}: {l.get('snippet', '')}" for l in clean_verified[:20]])
 
-                # Note which claims were removed so Opus knows what to avoid
+                # Note which claims were removed so the model knows what to avoid
                 removed_claims_note = "\n".join(f"- {c}" for c in fact_check["false_claims"])
 
                 resynth_prompt = f"""{synthesis_prompt}
@@ -1355,19 +1356,49 @@ re-introduce any of the false claims listed above. Build your narrative only fro
 verified evidence provided."""
 
                 resynth_text = ""
-                try:
-                    print(f"   🔄 [Re-Synthesis] Attempting claude-opus-4-6...")
-                    resynth_response = claude_client.messages.create(
-                        model="claude-opus-4-6",
-                        max_tokens=1024,
-                        messages=[{"role": "user", "content": resynth_prompt}]
-                    )
-                    resynth_text = resynth_response.content[0].text if resynth_response.content else ""
-                    resynth_ms = int((time.time() - resynth_start) * 1000)
-                    print(f"   ✅ [Re-Synthesis] Opus re-synthesis complete ({resynth_ms}ms)")
-                except Exception as resynth_err:
-                    resynth_ms = int((time.time() - resynth_start) * 1000)
-                    print(f"   ❌ [Re-Synthesis] Opus failed: {resynth_err} ({resynth_ms}ms)")
+                resynth_model_used = ""
+                gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
+
+                # Primary: Gemini 3 Pro Preview (same prompt, same guardrails, same length constraints)
+                if gemini_key:
+                    try:
+                        print(f"   🔄 [Re-Synthesis] Attempting gemini-3-pro-preview...")
+                        gemini_client = genai.Client(api_key=gemini_key)
+                        resynth_response = gemini_client.models.generate_content(
+                            model="gemini-3-pro-preview",
+                            contents=resynth_prompt,
+                            config=types.GenerateContentConfig(
+                                temperature=0.7,
+                                max_output_tokens=2048
+                            )
+                        )
+                        resynth_text = resynth_response.text or ""
+                        resynth_model_used = "gemini-3-pro-preview"
+                        resynth_ms = int((time.time() - resynth_start) * 1000)
+                        print(f"   ✅ [Re-Synthesis] Gemini 3 Pro re-synthesis complete ({resynth_ms}ms)")
+                    except Exception as g3_err:
+                        print(f"   ❌ [Re-Synthesis] Gemini 3 Pro failed: {g3_err}")
+
+                # Fallback: Gemini 2.5 Pro
+                if not resynth_text and gemini_key:
+                    try:
+                        print(f"   🔄 [Re-Synthesis] Falling back to gemini-2.5-pro...")
+                        gemini_client = genai.Client(api_key=gemini_key)
+                        resynth_response = gemini_client.models.generate_content(
+                            model="gemini-2.5-pro",
+                            contents=resynth_prompt,
+                            config=types.GenerateContentConfig(
+                                temperature=0.7,
+                                max_output_tokens=2048
+                            )
+                        )
+                        resynth_text = resynth_response.text or ""
+                        resynth_model_used = "gemini-2.5-pro"
+                        resynth_ms = int((time.time() - resynth_start) * 1000)
+                        print(f"   ✅ [Re-Synthesis] Gemini 2.5 Pro re-synthesis complete ({resynth_ms}ms)")
+                    except Exception as g25_err:
+                        resynth_ms = int((time.time() - resynth_start) * 1000)
+                        print(f"   ❌ [Re-Synthesis] All re-synthesis models failed. Last error: {g25_err} ({resynth_ms}ms)")
 
                 if resynth_text:
                     resynth_payload = extract_json_from_text(resynth_text)
@@ -1381,7 +1412,7 @@ verified evidence provided."""
                         if new_pitch:
                             full_data["pitch_text"] = new_pitch
 
-                        # Update reality score if Opus re-evaluated it
+                        # Update reality score if Gemini re-evaluated it
                         resynth_reality = resynth_json.get("reality_score")
                         if resynth_reality is not None and isinstance(resynth_reality, (int, float)):
                             resynth_reality = max(0, min(100, int(resynth_reality)))
@@ -1418,10 +1449,10 @@ verified evidence provided."""
                         "was_resynthesized": True,
                         "false_claims_found": fact_check["false_claims"],
                         "evidence_purged": purge_result,
-                        "resynth_model": "claude-opus-4-6",
+                        "resynth_model": resynth_model_used or "gemini-3-pro-preview",
                         "resynth_time_ms": resynth_ms,
                     }
-                    # Mark as verified after re-synthesis — Opus built from clean evidence
+                    # Mark as verified after re-synthesis — Gemini built from clean evidence
                     full_data["ai_verification"]["verified"] = True
                     full_data["ai_verification"]["false_claims"] = []
                     full_data["ai_verification"]["note"] = "Re-synthesized from cleaned evidence after fact-check"
@@ -1435,7 +1466,7 @@ verified evidence provided."""
                         "was_resynthesized": False,
                         "false_claims_found": fact_check["false_claims"],
                         "evidence_purged": purge_result,
-                        "reason": "Opus re-synthesis failed",
+                        "reason": "Gemini re-synthesis failed",
                     }
         else:
             full_data["ai_verification"] = {
