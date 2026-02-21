@@ -483,13 +483,19 @@ Score trajectory (oldest → newest):
 Overall direction: {direction}
 Include the trend trajectory in the summary. Note persistent patterns or turning points."""
 
-                    synthesis_prompt = f"""### PRIMARY FRAMEWORK (KNOWLEDGE BASE — MANDATORY)
+                    synthesis_prompt = f"""You are a senior organizational analyst conducting a forensic modernization assessment.
+Your task: synthesize scanner evidence into a precise, evidence-grounded diagnosis using the Knowledge Base framework below.
+
+METHODOLOGY: Read ALL evidence first. Score ONLY what evidence supports. Write ONLY what scores justify.
+If evidence is thin, say so — a short honest analysis beats a long fabricated one.
+
+### PRIMARY FRAMEWORK (KNOWLEDGE BASE — MANDATORY)
 {knowledge_context}
 
-YOU MUST use the terminology, archetypes, and criteria defined in the Knowledge Base above.
-Every claim in the summary MUST map to a Knowledge Base dimension or pattern.
-Do NOT invent your own categories — use ONLY the vocabulary from the Knowledge Base.
-NEVER use internal codes (TAC-xxx, DIM-xxx, etc.) in any output — always write the full concept name in plain language.
+You MUST use the terminology, archetypes, and criteria defined in the Knowledge Base above.
+Every claim in the summary MUST trace back to specific evidence AND map to a Knowledge Base dimension.
+Do NOT invent categories — use ONLY Knowledge Base vocabulary.
+NEVER use internal codes (TAC-xxx, DIM-xxx, etc.) — always write the full concept name.
 
 ### SCAN DATA
 Target: {company_name}
@@ -500,7 +506,6 @@ Archetype definitions (Reality vs Financial health):
   - CASH COW: Low Reality + Strong Financials. Profitable but operationally outdated.
   - AT RISK: Low Reality + Weak Financials. Both operations and finances under pressure.
 Summary Confidence: {confidence}/100
-NOTE: Do NOT cite specific numeric scores in the summary text. The scores are displayed separately in the UI. Describe performance qualitatively only (e.g. "low reality evidence", "strong intent narrative").
 
 Evidence Found: {evidence_list}
 Intent Data: {intent_narrative}
@@ -509,49 +514,58 @@ Intent Data: {intent_narrative}
 {trend_block}
 {prev_synthesis_block}
 
-### TASK
-Generate a JSON object with four fields: 'summary', 'pitch', 'reality_score', and 'intent_score'.
+### ANALYSIS PROTOCOL
 
-FIRST — INDEPENDENT SCORE EVALUATION:
-You have the Knowledge Base, the evidence, and the intent data above. Before writing the summary,
-evaluate INDEPENDENTLY what the Reality Score and Intent Score should be on a 0-100 scale.
+STEP 1 — SCORE EVALUATION (evaluate before writing anything):
+Score each Knowledge Base dimension (0-20) for reality_score, based on VERIFIED EVIDENCE ONLY:
+  - Operating Model: Evidence of modern practices (DevOps, platform teams, stream-aligned)? Or legacy/waterfall/silos?
+  - Strategy: Clear digital/modernization strategy with visible execution? Or vague/absent?
+  - Culture: Learning culture, psychological safety, talent signals? Or hierarchy/control/fear?
+  - Service Portfolio: Product-led, API-first, composable architecture? Or monolithic/legacy?
+  - AI Readiness: Concrete AI/ML adoption with measurable outcomes? Or just buzzwords/pilot purgatory?
 
-For 'reality_score' (0-100), evaluate across 5 Knowledge Base dimensions:
-  - Operating Model (0-20): Is there evidence of modern practices? Or legacy/waterfall/silos?
-  - Strategy (0-20): Clear digital/modernization strategy with execution? Or vague/absent?
-  - Culture (0-20): Learning culture, psychological safety, talent signals? Or hierarchy/control?
-  - Service Portfolio (0-20): Product-led, API-first, composable? Or monolithic/legacy?
-  - AI Readiness (0-20): Concrete AI/ML adoption evidence? Or just buzzwords?
-Sum the 5 dimensions (0-100). Score each dimension based on VERIFIED EVIDENCE ONLY.
-If no evidence exists for a dimension, score it 10 (neutral, not generous).
+Scoring rules:
+  - No evidence for a dimension = score 10 (neutral). Never score generously without evidence.
+  - Evidence of aspiration (website claims, press releases) without execution evidence = score 8-12, not higher.
+  - Sum the 5 dimensions → 'reality_score' (0-100).
 
-For 'intent_score' (0-100), evaluate: How ambitious is their narrative vs. what's typical?
+For 'intent_score' (0-100): How ambitious is their narrative vs. what's typical?
 Score based on the Intent Data provided above.
 
-THEN — WRITE THE NARRATIVE:
+STEP 2 — SUMMARY (180-220 words):
+Write a diagnostic narrative that reads like an expert assessment, not a template:
+  - First sentence: State the archetype ({archetype}) and what defines this company's position.
+  - Body: Map 3-4 key findings to specific KB dimensions. For each finding, connect the evidence
+    to the KB pattern it reveals (e.g., "Job postings emphasize hierarchical reporting lines,
+    characteristic of Digital Taylorism in the Operating Model dimension").
+  - Use KB terminology naturally: "Digital Taylorism", "Flow Efficiency", "Pilot Purgatory",
+    "Modernization Washing" — but only where the evidence supports the pattern.
+  - If confidence < 50, state it: "Limited public evidence constrains this assessment."
+  - If washing detected, name it: "{washing_type or 'Modernization Washing'}" with the specific gap.
+  - Do NOT cite numeric scores in the text — scores display separately in the UI.
+  - Do NOT fabricate findings. If evidence is sparse, acknowledge gaps rather than inventing patterns.
+  - Use ONLY the four archetype labels: Thriving, Modernizing, Cash Cow, At Risk.
 
-1. 'summary' (180-220 words):
-   - STATE THE ARCHETYPE ({archetype}) explicitly in the first sentence.
-   - Use ONLY the four archetype labels: Thriving, Modernizing, Cash Cow, At Risk.
-   - MAP findings to Knowledge Base dimensions (Operating Model, Strategy, Culture, Service Portfolio, AI Readiness).
-   - USE Knowledge Base terminology (e.g. "Digital Taylorism", "Flow Efficiency", "Pilot Purgatory").
-   - NEVER use internal Knowledge Base codes (e.g. TAC-003, TAC-008, DIM-xx). Always write the full concept name instead.
-   - Explicitly mention 'Summary Confidence' if low (<50).
-   - If Washing detected, use term "{washing_type or 'Modernization Washing'}".
-   - Focus on WHY they fit this archetype, grounded in evidence.
+STEP 3 — PITCH (90-110 words):
+A direct cold-outreach message to a C-level executive at {company_name}:
+  - Open with a specific insight from the analysis that would make them stop and read.
+  - Derive exactly 2 CONCRETE PROPOSALS targeting the company's weakest KB dimensions.
+    Each proposal must name the dimension and suggest a specific transformation direction
+    (e.g., "Shift from Digital Taylorism toward Flow Efficiency by restructuring around
+    stream-aligned teams with end-to-end ownership").
+  - The proposals must feel specific to THIS company's situation, not generic consulting templates.
+  - Do NOT use "Forensic Modernization Audit" or any generic service names.
+  - Tone: Professional, provocative, insight-led. The recipient should feel understood, not sold to.
 
-2. 'pitch' (90-110 words):
-   - A direct, cold-outreach pitch to a C-level executive at {company_name}.
-   - Reference specific challenges found using Knowledge Base terminology.
-   - Derive exactly 2 CONCRETE PROPOSALS from the Knowledge Base dimensions where
-     the company scored weakest. Each proposal must name the KB dimension and suggest
-     a specific improvement direction (e.g. "Shift from Digital Taylorism toward
-     Flow Efficiency by restructuring around stream-aligned teams").
-   - Do NOT use the phrase "Forensic Modernization Audit" or any generic service names.
-   - The proposals must feel specific to THIS company, not a template.
-   - Tone: Professional, provocative, insight-led.
+### GUARDRAILS
+- NEVER fabricate evidence, people, events, partnerships, or metrics not present in the scan data.
+- NEVER invent temporal claims ("recently announced", "just launched", "this quarter").
+- If a KB dimension has no supporting evidence, score it neutrally and acknowledge the gap — do not speculate.
+- Every factual claim in the summary must be traceable to a specific piece of evidence above.
 
-Output valid JSON only. Must include all four fields: summary, pitch, reality_score, intent_score."""
+### OUTPUT
+Respond with valid JSON only. Four fields required:
+{{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "intent_score": <int 0-100>}}"""
 
                     # --- Synthesis with fallback chain: Opus 4.6 → Gemini 3 Pro → Sonnet 4.6 ---
                     response_text = ""
