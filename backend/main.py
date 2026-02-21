@@ -237,18 +237,15 @@ async def review_data(request: Request):
     companies = storage.get_all_companies_summary()
     return {"companies": companies, "total": len(companies)}
 
-@app.post("/admin/recheck-company/{company_name}")
-async def recheck_company(company_name: str, request: Request):
+def _recheck_company_data(company_name: str, data: dict) -> dict:
     """
-    Run reality check on an already-stored company's summary.
-    Same procedure as recheck-all: heuristic check → AI fact-check → auto-clean if needed.
-    Returns recommendation on whether deep scan or full refresh is needed.
-    """
-    verify_admin(request)
-    data = storage.get_company_data(company_name)
-    if not data:
-        raise HTTPException(status_code=404, detail=f"Company '{company_name}' not found in database.")
+    Shared per-company recheck logic: heuristic check → pitch check → AI fact-check → auto-clean.
+    Used by both single-company recheck and recheck-all to guarantee identical procedure.
 
+    Returns dict with summary_check, pitch_check, ai_verification, recommendation,
+    and cleaning results if auto-clean was performed.
+    """
+    # Step 1: Heuristic validation (summary + pitch)
     summary_result = validate_summary(
         summary_text=data.get("summary_text", ""),
         company_name=company_name,
@@ -261,14 +258,14 @@ async def recheck_company(company_name: str, request: Request):
         company_name=company_name,
     )
 
-    # AI-powered fact-check (Gemini 3 Pro + Google Search grounding)
+    # Step 2: AI-powered fact-check (Gemini 3 Pro + Google Search grounding)
     ai_result = ai_fact_check_summary(
         summary_text=data.get("summary_text", ""),
         evidence_links=data.get("evidence_links", []),
         company_name=company_name,
     )
 
-    # Persist AI verification result back to stored data
+    # Step 3: Persist AI verification result back to stored data
     data["ai_verification"] = {
         "verified": ai_result["verified"],
         "false_claims": ai_result["false_claims"],
@@ -277,15 +274,14 @@ async def recheck_company(company_name: str, request: Request):
         "time_ms": ai_result["fact_check_time_ms"],
     }
     storage.save_company_data(company_name, data)
-    # Update index with ai_verified flag
     storage.update_global_index_field(company_name, "ai_verified", ai_result["verified"])
 
-    # Auto-clean if AI found false claims (same as recheck-all)
+    # Step 4: Auto-clean if AI found false claims
     clean_result = None
     if not ai_result["verified"] and ai_result["false_claims"]:
         clean_result = _clean_company_data(company_name, data)
 
-    # Determine recommendation including deep scan / refresh guidance
+    # Step 5: Determine recommendation
     if summary_result["risk"] == "high":
         recommendation = "Refresh database — high hallucination risk, full rescan needed"
     elif clean_result and clean_result.get("action") == "cleaned" and clean_result.get("re_verified"):
@@ -303,7 +299,7 @@ async def recheck_company(company_name: str, request: Request):
     else:
         recommendation = "OK"
 
-    response = {
+    result = {
         "company": company_name,
         "summary_check": summary_result,
         "pitch_check": pitch_result,
@@ -311,14 +307,28 @@ async def recheck_company(company_name: str, request: Request):
         "recommendation": recommendation,
     }
 
-    # Include cleaning results if auto-clean was performed
     if clean_result:
-        response["clean_action"] = clean_result.get("action", "skipped")
-        response["claims_removed"] = clean_result.get("claims_removed", 0)
-        response["re_verified"] = clean_result.get("re_verified", False)
-        response["remaining_issues"] = clean_result.get("remaining_issues", [])
+        result["clean_action"] = clean_result.get("action", "skipped")
+        result["claims_removed"] = clean_result.get("claims_removed", 0)
+        result["re_verified"] = clean_result.get("re_verified", False)
+        result["remaining_issues"] = clean_result.get("remaining_issues", [])
 
-    return response
+    return result
+
+
+@app.post("/admin/recheck-company/{company_name}")
+async def recheck_company(company_name: str, request: Request):
+    """
+    Run reality check on an already-stored company's summary.
+    Same procedure as recheck-all: heuristic check → AI fact-check → auto-clean if needed.
+    Returns recommendation on whether deep scan or full refresh is needed.
+    """
+    verify_admin(request)
+    data = storage.get_company_data(company_name)
+    if not data:
+        raise HTTPException(status_code=404, detail=f"Company '{company_name}' not found in database.")
+
+    return _recheck_company_data(company_name, data)
 
 @app.post("/admin/recheck-all")
 async def recheck_all_companies(request: Request):
@@ -337,55 +347,33 @@ async def recheck_all_companies(request: Request):
         if not data:
             continue
 
-        result = validate_summary(
-            summary_text=data.get("summary_text", ""),
-            company_name=name,
-            key_people=data.get("key_people", []),
-            evidence_links=data.get("evidence_links", []),
-            confidence_score=data.get("confidence_score"),
-        )
+        result = _recheck_company_data(name, data)
 
-        # AI-powered fact-check (Gemini 3 Pro + Google Search grounding)
-        ai_result = ai_fact_check_summary(
-            summary_text=data.get("summary_text", ""),
-            evidence_links=data.get("evidence_links", []),
-            company_name=name,
-        )
+        summary_risk = result["summary_check"]["risk"]
+        ai_verified = result["ai_verification"]["verified"]
+        is_flagged = summary_risk in ("medium", "high") or not ai_verified
 
-        # Persist AI verification result back to stored data
-        data["ai_verification"] = {
-            "verified": ai_result["verified"],
-            "false_claims": ai_result["false_claims"],
-            "false_claims_detailed": ai_result.get("false_claims_detailed", []),
-            "model": ai_result["fact_check_model"],
-            "time_ms": ai_result["fact_check_time_ms"],
-        }
-        storage.save_company_data(name, data)
-        storage.update_global_index_field(name, "ai_verified", ai_result["verified"])
-
-        is_flagged = result["risk"] in ("medium", "high") or not ai_result["verified"]
         if is_flagged:
             flag_entry = {
                 "companyName": name,
-                "risk": result["risk"],
-                "score": result["score"],
-                "flags": result["flags"],
-                "ai_verified": ai_result["verified"],
-                "false_claims": ai_result["false_claims"],
+                "risk": summary_risk,
+                "score": result["summary_check"]["score"],
+                "flags": result["summary_check"]["flags"],
+                "ai_verified": ai_verified,
+                "false_claims": result["ai_verification"]["false_claims"],
+                "recommendation": result["recommendation"],
                 "summary_preview": (data.get("summary_text", "") or "")[:200],
             }
 
-            # Auto-clean if AI found false claims
-            if not ai_result["verified"] and ai_result["false_claims"]:
-                clean_result = _clean_company_data(name, data)
-                flag_entry["clean_action"] = clean_result.get("action", "skipped")
-                flag_entry["claims_removed"] = clean_result.get("claims_removed", 0)
-                flag_entry["re_verified"] = clean_result.get("re_verified", False)
-                if clean_result.get("action") == "cleaned":
+            if result.get("clean_action"):
+                flag_entry["clean_action"] = result["clean_action"]
+                flag_entry["claims_removed"] = result.get("claims_removed", 0)
+                flag_entry["re_verified"] = result.get("re_verified", False)
+                if result["clean_action"] == "cleaned":
                     cleaned_results.append({
                         "companyName": name,
-                        "claims_removed": clean_result["claims_removed"],
-                        "re_verified": clean_result["re_verified"],
+                        "claims_removed": result["claims_removed"],
+                        "re_verified": result["re_verified"],
                     })
 
             flagged.append(flag_entry)
