@@ -1106,7 +1106,8 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                                 model="gemini-3-pro-preview",
                                 contents=synthesis_prompt,
                                 config=types.GenerateContentConfig(
-                                    temperature=0.7,
+                                    temperature=1.0,  # Gemini 3 requires temp=1.0
+                                    thinking_config=types.ThinkingConfig(thinking_level="LOW"),
                                     max_output_tokens=2048
                                 )
                             )
@@ -1400,7 +1401,8 @@ verified evidence provided."""
                             model="gemini-3-pro-preview",
                             contents=resynth_prompt,
                             config=types.GenerateContentConfig(
-                                temperature=0.7,
+                                temperature=1.0,  # Gemini 3 requires temp=1.0
+                                thinking_config=types.ThinkingConfig(thinking_level="LOW"),
                                 max_output_tokens=2048
                             )
                         )

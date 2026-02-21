@@ -1207,20 +1207,32 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             # Enforce per-call timeout via thread pool.
             # Google GenAI SDK's built-in HttpOptions timeout is unreliable
             # (SDK passes timeout=None internally, overriding client-level timeout).
+            # Gemini 3 models need temp=1.0 + thinking_config (low temp causes looping)
+            _safety = [
+                {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
+                {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
+                {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
+                {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
+            ]
+            if "gemini-3" in target_model_name:
+                _model_config = {
+                    'tools': [{'google_search': {}}],
+                    'temperature': 1.0,
+                    'thinking_config': types.ThinkingConfig(thinking_level="LOW"),
+                    'safety_settings': _safety,
+                }
+            else:
+                _model_config = {
+                    'tools': [{'google_search': {}}],
+                    'temperature': 0.0,
+                    'safety_settings': _safety,
+                }
+
             def _call_gemini():
                 return client.models.generate_content(
                     model=target_model_name,
                     contents=active_prompt,
-                    config={
-                        'tools': [{'google_search': {}}],
-                        'temperature': 0.0,
-                        'safety_settings': [
-                            {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
-                            {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
-                            {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
-                            {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
-                        ]
-                    }
+                    config=_model_config,
                 )
 
             call_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)

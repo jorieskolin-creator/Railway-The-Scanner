@@ -444,9 +444,12 @@ If the summary appears accurate or you found no clear falsehoods, return:
     client = genai.Client(api_key=gemini_key)
     verified_links = [l for l in (evidence_links or []) if l.get("verified", True)][:20]
 
+    from google.genai import types
+
     gemini_config = {
         'tools': [{'google_search': {}}],
-        'temperature': 0.0,
+        'temperature': 1.0,  # Gemini 3 requires temp=1.0 — lower values cause looping/timeouts
+        'thinking_config': types.ThinkingConfig(thinking_level="LOW"),  # LOW for fast fact-check
         'safety_settings': [
             {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
             {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
@@ -455,21 +458,28 @@ If the summary appears accurate or you found no clear falsehoods, return:
         ]
     }
 
+    # Config for Gemini 2.5 Pro fallback (no thinking_config needed)
+    gemini_25_config = {
+        'tools': [{'google_search': {}}],
+        'temperature': 0.0,
+        'safety_settings': gemini_config['safety_settings'],
+    }
+
     models_to_try = [
-        ("gemini-3-pro-preview", 90),  # Primary: Gemini 3 Pro, 90s timeout (thinking + web grounding)
-        ("gemini-2.5-pro", 45),        # Backup: Gemini 2.5 Pro, 45s timeout
+        ("gemini-3-pro-preview", 90, gemini_config),      # Primary: Gemini 3 Pro, thinking_level=LOW
+        ("gemini-2.5-pro", 45, gemini_25_config),          # Backup: Gemini 2.5 Pro
     ]
 
-    for model_name, timeout_sec in models_to_try:
+    for model_name, timeout_sec, model_config in models_to_try:
         try:
             print(f"   🔄 [Fact-Check] Trying {model_name}...")
             start = time.time()
 
-            def _call(m=model_name):
+            def _call(m=model_name, cfg=model_config):
                 return client.models.generate_content(
                     model=m,
                     contents=prompt,
-                    config=gemini_config,
+                    config=cfg,
                 )
 
             pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -659,6 +669,7 @@ def _clean_with_gemini(prompt):
     Falls back to Gemini 2.5 Pro if Gemini 3 Pro fails."""
     import concurrent.futures
     from google import genai
+    from google.genai import types
 
     gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
     if not gemini_key:
@@ -675,7 +686,8 @@ def _clean_with_gemini(prompt):
                 model="gemini-3-pro-preview",
                 contents=prompt,
                 config={
-                    'temperature': 0.3,
+                    'temperature': 1.0,  # Gemini 3 requires temp=1.0 — lower values cause looping
+                    'thinking_config': types.ThinkingConfig(thinking_level="LOW"),
                     'max_output_tokens': 2048,
                     'response_mime_type': 'application/json',
                 }
