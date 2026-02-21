@@ -1459,12 +1459,13 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             print(f"   ❌ [Forensic Scan] claude-sonnet-4-6 + Web Search failed in {elapsed}ms: {e}")
             return None
 
-    # --- SEQUENTIAL FALLBACK: Sonnet 4.6 → Gemini 3 Pro → Gemini 2.5 Pro ---
+    # --- SEQUENTIAL FALLBACK: Sonnet 4.6 → Gemini 3.1 Pro → Gemini 3 Pro → Gemini 2.5 Pro ---
     # Sonnet 4.6 + Brave Web Search is the primary model (fast, grounded, 5-search budget).
-    # Gemini 3 Pro is the first backup if Sonnet fails or returns nothing.
-    # Gemini 2.5 Pro is the second backup as a last resort.
+    # Gemini 3.1 Pro is the first backup if Sonnet fails or returns nothing.
+    # Gemini 3 Pro is the second backup (shares rate limits with 3.1 Pro).
+    # Gemini 2.5 Pro is the last resort (separate rate limits from 3.x family).
     data = None
-    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Sonnet 4.6 → Gemini 3.1 Pro → Gemini 3 Pro")
+    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Sonnet 4.6 → Gemini 3.1 Pro → Gemini 3 Pro → Gemini 2.5 Pro")
 
     # --- PRIMARY: Sonnet 4.6 + Web Search ---
     data = execute_with_anthropic(prompt)
@@ -1478,6 +1479,11 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     if not data:
         print(f"   ⚠️ [Forensic Scan] Gemini 3.1 Pro returned no data. Falling back to Gemini 3 Pro...")
         data = execute_with_model("gemini-3-pro-preview", call_timeout=120)
+
+    # --- BACKUP 3: Gemini 2.5 Pro (separate rate limits from 3.x family) ---
+    if not data:
+        print(f"   ⚠️ [Forensic Scan] Gemini 3 Pro returned no data. Falling back to Gemini 2.5 Pro...")
+        data = execute_with_model("gemini-2.5-pro", call_timeout=120)
 
     # --- CONFIDENCE-DRIVEN RE-SEARCH LOOP ---
     # Only triggers when initial results have low confidence AND weak coverage.
@@ -1525,6 +1531,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 research_data = execute_with_model("gemini-3.1-pro-preview", custom_prompt=research_prompt)
                 if not research_data:
                     research_data = execute_with_model("gemini-3-pro-preview", custom_prompt=research_prompt)
+                if not research_data:
+                    research_data = execute_with_model("gemini-2.5-pro", custom_prompt=research_prompt)
 
                 if not research_data:
                     print(f"   [Re-Search] Loop {loop} returned no parseable data. Stopping.")

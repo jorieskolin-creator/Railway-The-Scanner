@@ -1134,7 +1134,26 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                             response_text = gemini_resp.text or ""
                             print(f"   ✅ [Synthesis] Gemini 3 Pro Preview succeeded in {int((time.time() - g2_start) * 1000)}ms")
                         except Exception as gemini3_err:
-                            print(f"   ❌ [Synthesis] All models failed. Last error: {gemini3_err}")
+                            print(f"   ❌ [Synthesis] Gemini 3 Pro Preview failed: {gemini3_err}")
+
+                    # Fallback 3: Gemini 2.5 Pro (separate rate limits from 3.x family)
+                    if not response_text and gemini_key:
+                        try:
+                            print(f"   🔄 [Synthesis] Falling back to Gemini 2.5 Pro...")
+                            g3_start = time.time()
+                            gemini_client = genai.Client(api_key=gemini_key)
+                            gemini_resp = gemini_client.models.generate_content(
+                                model="gemini-2.5-pro",
+                                contents=synthesis_prompt,
+                                config=types.GenerateContentConfig(
+                                    temperature=0.0,
+                                    max_output_tokens=2048
+                                )
+                            )
+                            response_text = gemini_resp.text or ""
+                            print(f"   ✅ [Synthesis] Gemini 2.5 Pro succeeded in {int((time.time() - g3_start) * 1000)}ms")
+                        except Exception as gemini25_err:
+                            print(f"   ❌ [Synthesis] All models failed. Last error: {gemini25_err}")
 
                 if response_text:
                     payload = extract_json_from_text(response_text)
@@ -1414,7 +1433,7 @@ verified evidence provided."""
                     except Exception as g31_err:
                         print(f"   ❌ [Re-Synthesis] Gemini 3.1 Pro failed: {g31_err}")
 
-                # Fallback: Gemini 3 Pro Preview
+                # Fallback 1: Gemini 3 Pro Preview
                 if not resynth_text and gemini_key:
                     try:
                         print(f"   🔄 [Re-Synthesis] Falling back to gemini-3-pro-preview...")
@@ -1433,8 +1452,28 @@ verified evidence provided."""
                         resynth_ms = int((time.time() - resynth_start) * 1000)
                         print(f"   ✅ [Re-Synthesis] Gemini 3 Pro re-synthesis complete ({resynth_ms}ms)")
                     except Exception as g3_err:
+                        print(f"   ❌ [Re-Synthesis] Gemini 3 Pro failed: {g3_err}")
+
+                # Fallback 2: Gemini 2.5 Pro (separate rate limits from 3.x family)
+                if not resynth_text and gemini_key:
+                    try:
+                        print(f"   🔄 [Re-Synthesis] Falling back to gemini-2.5-pro...")
+                        gemini_client = genai.Client(api_key=gemini_key)
+                        resynth_response = gemini_client.models.generate_content(
+                            model="gemini-2.5-pro",
+                            contents=resynth_prompt,
+                            config=types.GenerateContentConfig(
+                                temperature=0.0,
+                                max_output_tokens=2048
+                            )
+                        )
+                        resynth_text = resynth_response.text or ""
+                        resynth_model_used = "gemini-2.5-pro"
                         resynth_ms = int((time.time() - resynth_start) * 1000)
-                        print(f"   ❌ [Re-Synthesis] All re-synthesis models failed. Last error: {g3_err} ({resynth_ms}ms)")
+                        print(f"   ✅ [Re-Synthesis] Gemini 2.5 Pro re-synthesis complete ({resynth_ms}ms)")
+                    except Exception as g25_err:
+                        resynth_ms = int((time.time() - resynth_start) * 1000)
+                        print(f"   ❌ [Re-Synthesis] All re-synthesis models failed. Last error: {g25_err} ({resynth_ms}ms)")
 
                 if resynth_text:
                     resynth_payload = extract_json_from_text(resynth_text)

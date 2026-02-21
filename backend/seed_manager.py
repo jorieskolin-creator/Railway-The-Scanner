@@ -607,7 +607,26 @@ Output valid JSON only. Must include all four fields: summary, pitch, reality_sc
                                 response_text = gemini_resp.text or ""
                                 print(f"   [{company_name}] ✅ [Synthesis] Gemini 3 Pro Preview succeeded in {int((time.time() - g2_start) * 1000)}ms")
                             except Exception as gemini3_err:
-                                print(f"   [{company_name}] ❌ [Synthesis] All models failed. Last error: {gemini3_err}")
+                                print(f"   [{company_name}] ❌ [Synthesis] Gemini 3 Pro Preview failed: {gemini3_err}")
+
+                        # Fallback 3: Gemini 2.5 Pro (separate rate limits from 3.x family)
+                        if not response_text and gemini_key:
+                            try:
+                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Gemini 2.5 Pro...")
+                                g3_start = time.time()
+                                gemini_client = genai.Client(api_key=gemini_key)
+                                gemini_resp = gemini_client.models.generate_content(
+                                    model="gemini-2.5-pro",
+                                    contents=synthesis_prompt,
+                                    config=types.GenerateContentConfig(
+                                        temperature=0.0,
+                                        max_output_tokens=2048
+                                    )
+                                )
+                                response_text = gemini_resp.text or ""
+                                print(f"   [{company_name}] ✅ [Synthesis] Gemini 2.5 Pro succeeded in {int((time.time() - g3_start) * 1000)}ms")
+                            except Exception as gemini25_err:
+                                print(f"   [{company_name}] ❌ [Synthesis] All models failed. Last error: {gemini25_err}")
                     if response_text:
                         payload = extract_json_from_text(response_text)
                         if payload:
