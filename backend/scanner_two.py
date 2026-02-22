@@ -1062,7 +1062,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     evidence (real tech stacks, team structures, actual service delivery) not marketing fluff.
     Otherwise, look at evidence from these specific 'JURIES' defined below.
 
-    {"SEARCH BUDGET: You have 10 web searches. The FIRST 3 MUST be used for verification (see RESCAN INSTRUCTIONS above). The remaining 7 are for jury searches below. Combine sub-queries with OR to cover multiple juries per search." if history_block else "SEARCH BUDGET: You have 5 web searches. Combine sub-queries with OR to cover all 5 juries efficiently (e.g. one search per jury)."}
+    {"SEARCH BUDGET: You have 10 web searches. The FIRST 3 MUST be used for verification (see RESCAN INSTRUCTIONS above). The remaining 7 are for jury searches below. Combine sub-queries with OR to cover multiple juries per search." if history_block else "SEARCH BUDGET: You have 10 web searches. Use 2 searches per jury for thorough coverage, combining sub-queries with OR operators."}
 
     CRITICAL: You must execute searches for ALL 5 JURIES. Do not skip any.
     NOTE: Target companies are primarily Finnish. Use BOTH English and Finnish search terms.
@@ -1323,12 +1323,14 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             start = time.time()
             claude_client = anthropic.Anthropic(api_key=anthropic_key)
 
-            # Rescan gets more searches: 3-4 for verifying old evidence + 6-7 for new juries.
-            # First scan only needs 5 (one per jury).
+            # Always 10 searches: first scans need thorough coverage (2 per jury),
+            # rescans need 3-4 for verification + 6-7 for new juries.
             is_rescan = bool(previous_context and previous_context.get("previous_reality") is not None)
-            search_budget = 10 if is_rescan else 5
+            search_budget = 10
             if is_rescan:
-                print(f"   📊 [Forensic Scan] RESCAN: search budget raised to {search_budget} (verification + juries)")
+                print(f"   📊 [Forensic Scan] RESCAN: search budget = {search_budget} (verification + juries)")
+            else:
+                print(f"   📊 [Forensic Scan] FIRST SCAN: search budget = {search_budget} (thorough jury coverage)")
 
             # --- PASS 1: Web Search (format-relaxed) ---
             # Replace strict JSON requirement with flexible format instruction.
@@ -1340,12 +1342,17 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 active_prompt
             )
 
-            # Enforce 180s per-call timeout via thread pool (Sonnet + web search typically 30-90s, up to 150s with rescans)
+            # Enforce 180s per-call timeout via thread pool (Sonnet + web search + thinking typically 60-150s)
+            # Extended Thinking: Sonnet reasons through evidence before scoring,
+            # helping it weigh conflicting signals more carefully.
             def _call_sonnet_web():
                 return claude_client.messages.create(
                     model="claude-sonnet-4-6",
-                    max_tokens=12000,
-                    temperature=0,
+                    max_tokens=16000,
+                    thinking={
+                        "type": "enabled",
+                        "budget_tokens": 8000
+                    },
                     tools=[{
                         "type": "web_search_20250305",
                         "name": "web_search",

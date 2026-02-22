@@ -29,8 +29,8 @@ from analyze_scores import run_analysis
 from knowledge_base import get_evolving_framework
 from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, clean_summary, purge_false_evidence
 
-# VERIFICATION LOG: v5.3.0 - Gemini 3.1 Pro Upgrade (MEDIUM thinking)
-print("Starting Adaptability Scanner Backend (v5.3.0 - Gemini 3.1 Pro Upgrade)...", flush=True)
+# VERIFICATION LOG: v5.4.0 - Extended Thinking + Search Budget Upgrade
+print("Starting Adaptability Scanner Backend (v5.4.0 - Extended Thinking + Search Budget Upgrade)...", flush=True)
 
 def clean_env_var(value):
     if not value: return ""
@@ -1334,8 +1334,9 @@ Respond with valid JSON only. Four fields required:
 
                 # --- Synthesis with fallback chain: Opus 4.6 → Gemini 3.1 Pro → Gemini 3 Pro → Gemini 2.5 Pro ---
                 # Opus is the judge — it does ONE thing: synthesize. Fallbacks degrade gracefully.
-                # Each model call is wrapped in a 60s timeout to prevent unbounded waits.
-                SYNTH_TIMEOUT = 60  # seconds per synthesis model call
+                # Opus uses Extended Thinking to reason through conflicting intent vs. reality
+                # evidence before generating the synthesis — exactly what a "judge" model should do.
+                SYNTH_TIMEOUT = 120  # seconds per synthesis model call (extended thinking needs more time)
                 response_text = ""
                 synth_start = time.time()
                 synth_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
@@ -1344,18 +1345,29 @@ Respond with valid JSON only. Four fields required:
                 def _synth_opus():
                     return claude_client.messages.create(
                         model="claude-opus-4-6",
-                        max_tokens=1024,
+                        max_tokens=16000,
+                        thinking={
+                            "type": "enabled",
+                            "budget_tokens": 10000
+                        },
                         messages=[{"role": "user", "content": synthesis_prompt}]
                     )
 
                 try:
-                    print(f"   🔄 [Synthesis] Attempting claude-opus-4-6 (timeout: {SYNTH_TIMEOUT}s)...")
+                    print(f"   🔄 [Synthesis] Attempting claude-opus-4-6 with Extended Thinking (timeout: {SYNTH_TIMEOUT}s)...")
                     synth_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
                     synth_future = synth_pool.submit(_synth_opus)
                     try:
                         response = synth_future.result(timeout=SYNTH_TIMEOUT)
-                        response_text = response.content[0].text if response.content else ""
-                        print(f"   ✅ [Synthesis] claude-opus-4-6 succeeded in {int((time.time() - synth_start) * 1000)}ms")
+                        # Extended thinking response: [ThinkingBlock, TextBlock]
+                        # Extract the text block (skip thinking blocks)
+                        response_text = ""
+                        if response.content:
+                            for block in response.content:
+                                if getattr(block, 'type', None) == 'text':
+                                    response_text = block.text
+                                    break
+                        print(f"   ✅ [Synthesis] claude-opus-4-6 + Extended Thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
                     except concurrent.futures.TimeoutError:
                         synth_pool.shutdown(wait=False)
                         print(f"   ⏰ [Synthesis] claude-opus-4-6 timed out after {SYNTH_TIMEOUT}s")

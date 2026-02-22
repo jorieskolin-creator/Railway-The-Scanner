@@ -194,7 +194,7 @@
         "Evidence persistence prevents lucky re-scans from hiding real problems",
         "Recency weighting ensures stale evidence doesn't dominate"
       ],
-      "model_used": "Gemini 3.1 Pro with Google Search grounding (live web search, fact-check + inline correction)"
+      "model_used": "Sonnet 4.6 with Extended Thinking + Brave Web Search (primary, 10 searches), Gemini 3.1 Pro with Google Search grounding (fallback, fact-check + inline correction)"
     },
 
     "phase_2b_financial_health": {
@@ -263,15 +263,17 @@
         }
       },
       "fallback_chain": [
-        "Claude Opus 4.6 (primary)",
+        "Claude Opus 4.6 with Extended Thinking (primary, 10K thinking budget)",
         "Gemini 3.1 Pro (fallback 1)",
-        "Claude Sonnet 4.5 (fallback 2)"
+        "Gemini 3 Pro (fallback 2)",
+        "Gemini 2.5 Pro (fallback 3)"
       ],
       "accuracy_safeguards": [
+        "Extended Thinking: Opus reasons through conflicting evidence before scoring",
         "Blind verification: Synthesis scores without seeing Scanner scores",
         "Blending logic prevents any single model from dominating",
         "Post-verification: if Reality >= Intent, washing flag removed",
-        "3-model fallback chain ensures synthesis completes under API pressure"
+        "4-model fallback chain ensures synthesis completes under API pressure"
       ]
     },
 

@@ -569,17 +569,28 @@ Respond with valid JSON only. Four fields required:
 {{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "intent_score": <int 0-100>}}"""
 
                     # --- Synthesis with fallback chain: Opus 4.6 → Gemini 3.1 Pro → Gemini 3 Pro → Sonnet 4.6 ---
+                    # Opus uses Extended Thinking to reason through evidence before synthesis.
                     response_text = ""
                     try:
-                        print(f"   [{company_name}] 🔄 [Synthesis] Attempting claude-opus-4-6...")
+                        print(f"   [{company_name}] 🔄 [Synthesis] Attempting claude-opus-4-6 with Extended Thinking...")
                         synth_start = time.time()
                         resp = claude_client.messages.create(
                             model="claude-opus-4-6",
-                            max_tokens=1024,
+                            max_tokens=16000,
+                            thinking={
+                                "type": "enabled",
+                                "budget_tokens": 10000
+                            },
                             messages=[{"role": "user", "content": synthesis_prompt}]
                         )
-                        response_text = resp.content[0].text if resp.content else ""
-                        print(f"   [{company_name}] ✅ [Synthesis] claude-opus-4-6 succeeded in {int((time.time() - synth_start) * 1000)}ms")
+                        # Extended thinking response: extract text block (skip thinking blocks)
+                        response_text = ""
+                        if resp.content:
+                            for block in resp.content:
+                                if getattr(block, 'type', None) == 'text':
+                                    response_text = block.text
+                                    break
+                        print(f"   [{company_name}] ✅ [Synthesis] claude-opus-4-6 + Extended Thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
                     except Exception as opus_err:
                         print(f"   [{company_name}] ❌ [Synthesis] Opus 4.6 failed: {opus_err}")
 
