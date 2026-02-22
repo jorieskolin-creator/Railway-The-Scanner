@@ -1108,7 +1108,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
        - External Reviews: `"{search_name}" review OR "arvostelu" service quality OR "palvelun laatu"`
        - Analyst Reports: `"{search_name}" Gartner OR Forrester OR ISG OR "Magic Quadrant"`
 
-    ALSO: IDENTIFY 4 KEY MODERNIZATION STAKEHOLDERS:
+    MANDATORY — IDENTIFY 4 KEY MODERNIZATION STAKEHOLDERS (REQUIRED in JSON output):
     Search for real names of current executives in these roles:
     1. Technology (CTO, CIO, VP Engineering)
     2. People/Culture (CPO, HR Director)
@@ -1151,6 +1151,13 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
     RETURN STRICT JSON:
     {{
+        "key_people": [
+            {{
+                "name": "Full Name",
+                "role": "Exact Title",
+                "relevance": "Why relevant?"
+            }}
+        ],
         "findings": [
             {{
                 "category": "Operating Model",
@@ -1161,13 +1168,6 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 "title": "Source Title",
                 "url": "URL",
                 "is_recent": boolean (True if < 12 months)
-            }}
-        ],
-        "key_people": [
-            {{
-                "name": "Full Name",
-                "role": "Exact Title",
-                "relevance": "Why relevant?"
             }}
         ],
         "reality_score_adjustment": (integer -50 to +50),

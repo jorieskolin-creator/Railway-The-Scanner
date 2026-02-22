@@ -1121,6 +1121,12 @@ def run_scan(
         washing_flag = reality_results.get("washing_flag", False)
         washing_type = reality_results.get("washing_type", None)
         key_people = reality_results.get("key_people", [])
+        # Preserve previous key_people if new scan returned empty
+        if not key_people and existing_data:
+            prev_kp = existing_data.get("key_people", [])
+            if prev_kp:
+                key_people = prev_kp
+                print(f"   [Key People] Preserved {len(prev_kp)} stakeholder(s) from previous scan (new scan returned none)")
 
         # --- LOGIC CONSISTENCY CHECK ---
         # CRITICAL FIX: "Washing" is impossible if Reality >= Intent.
