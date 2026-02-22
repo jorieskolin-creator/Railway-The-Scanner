@@ -917,8 +917,16 @@ def run_scan(
 
     try:
         scan_start = time.time()
-        print(f"🚀 --- LIVE SCAN INITIATED FOR: {companyName} ---")
-        
+        # Global scan time budget (seconds). All phases must fit within this window.
+        # Railway proxy timeout is typically 300-600s; 540s (9 min) keeps us safely under.
+        # Budget allocation:
+        #   Reality check: budget - 150s (reserves time for synthesis + post-processing)
+        #   Financial:     120s (parallel with reality, non-blocking)
+        #   Self-analysis: only if remaining > 120s
+        #   Synthesis:     60s per model call (with fallback chain)
+        SCAN_TOTAL_BUDGET = 540
+        print(f"🚀 --- LIVE SCAN INITIATED FOR: {companyName} (budget: {SCAN_TOTAL_BUDGET}s) ---")
+
         # Model pipeline: Sonnet 4.6 + Web Search (forensic) | Gemini 2.5 Pro (financial) | Opus 4.6 (synthesis)
         # Forensic fallback: Gemini 3.1 Pro. Synthesis fallback: Gemini 3.1 Pro → Gemini 3 Pro
         search_model = "gemini-3.1-pro-preview"  # Used as forensic fallback if Sonnet fails
@@ -998,7 +1006,11 @@ def run_scan(
             print(f"   [History] Could not load previous data (non-critical): {e}")
 
         # --- STEP 2: SCANNER 2 (Reality) + FINANCIAL HEALTH (Parallel) ---
-        print(f"   🔄 [Scanner 2 + Financial] Starting parallel execution for {companyName}...")
+        # Allocate time: reserve 150s for synthesis + self-analysis + post-processing
+        elapsed_so_far = time.time() - scan_start
+        reality_budget = max(180, int(SCAN_TOTAL_BUDGET - elapsed_so_far - 150))
+        reality_outer_timeout = reality_budget + 10  # small buffer over internal budget
+        print(f"   🔄 [Scanner 2 + Financial] Starting parallel execution for {companyName} (reality budget: {reality_budget}s)...")
         s2_start = time.time()
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
@@ -1006,14 +1018,15 @@ def run_scan(
                 x_ray_search, companyName, target_url,
                 model_id=search_model, intent_score=intent_results["score"],
                 previous_context=previous_context, max_research_loops=2,
-                subsidiaries=company_subsidiaries
+                subsidiaries=company_subsidiaries,
+                time_budget=reality_budget
             )
             financial_future = executor.submit(
                 financial_health_search, companyName, target_url
             )
 
             try:
-                reality_results = reality_future.result(timeout=350)
+                reality_results = reality_future.result(timeout=reality_outer_timeout)
             except (concurrent.futures.TimeoutError, Exception) as e:
                 print(f"   ❌ [Scanner 2] Reality search failed for {companyName}: {e}")
                 # PARTIAL UPDATE: reuse existing reality data if available
@@ -1084,19 +1097,24 @@ def run_scan(
                     reality_results["drift_delta"] = raw_delta
 
                     # --- SELF-ANALYSIS: Why did the scanner produce different results? ---
-                    print(f"   🔄 [Self-Analysis] Triggered: score delta {raw_delta} within {days_since}d.")
-                    sa_start = time.time()
-                    self_analysis = run_self_analysis(
-                        company_name=companyName,
-                        previous_scan_data=previous_context,
-                        current_scan_data=reality_results,
-                        days_since_last=days_since
-                    )
-                    if self_analysis:
-                        reality_results["self_analysis"] = self_analysis
-                        print(f"   ✅ [Self-Analysis] Complete in {int((time.time() - sa_start) * 1000)}ms → Cause: {self_analysis.get('primary_cause', '?')}")
+                    # Only run if we have enough time remaining (need ~120s for synthesis)
+                    sa_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
+                    if sa_remaining > 120:
+                        print(f"   🔄 [Self-Analysis] Triggered: score delta {raw_delta} within {days_since}d. ({int(sa_remaining)}s remaining)")
+                        sa_start = time.time()
+                        self_analysis = run_self_analysis(
+                            company_name=companyName,
+                            previous_scan_data=previous_context,
+                            current_scan_data=reality_results,
+                            days_since_last=days_since
+                        )
+                        if self_analysis:
+                            reality_results["self_analysis"] = self_analysis
+                            print(f"   ✅ [Self-Analysis] Complete in {int((time.time() - sa_start) * 1000)}ms → Cause: {self_analysis.get('primary_cause', '?')}")
+                        else:
+                            print(f"   ⚠️ [Self-Analysis] No result ({int((time.time() - sa_start) * 1000)}ms)")
                     else:
-                        print(f"   ⚠️ [Self-Analysis] No result ({int((time.time() - sa_start) * 1000)}ms)")
+                        print(f"   ⏰ [Self-Analysis] Skipped — only {int(sa_remaining)}s remaining (need 120s for synthesis)")
 
         gap = intent_results["score"] - reality_results["score"]
         confidence = reality_results.get("confidence_score", 50)
@@ -1316,78 +1334,126 @@ Respond with valid JSON only. Four fields required:
 
                 # --- Synthesis with fallback chain: Opus 4.6 → Gemini 3.1 Pro → Gemini 3 Pro → Gemini 2.5 Pro ---
                 # Opus is the judge — it does ONE thing: synthesize. Fallbacks degrade gracefully.
+                # Each model call is wrapped in a 60s timeout to prevent unbounded waits.
+                SYNTH_TIMEOUT = 60  # seconds per synthesis model call
                 response_text = ""
                 synth_start = time.time()
+                synth_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
+                print(f"   [Synthesis] Time remaining in scan budget: {int(synth_remaining)}s")
 
-                try:
-                    print(f"   🔄 [Synthesis] Attempting claude-opus-4-6...")
-                    response = claude_client.messages.create(
+                def _synth_opus():
+                    return claude_client.messages.create(
                         model="claude-opus-4-6",
                         max_tokens=1024,
                         messages=[{"role": "user", "content": synthesis_prompt}]
                     )
-                    response_text = response.content[0].text if response.content else ""
-                    print(f"   ✅ [Synthesis] claude-opus-4-6 succeeded in {int((time.time() - synth_start) * 1000)}ms")
+
+                try:
+                    print(f"   🔄 [Synthesis] Attempting claude-opus-4-6 (timeout: {SYNTH_TIMEOUT}s)...")
+                    synth_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                    synth_future = synth_pool.submit(_synth_opus)
+                    try:
+                        response = synth_future.result(timeout=SYNTH_TIMEOUT)
+                        response_text = response.content[0].text if response.content else ""
+                        print(f"   ✅ [Synthesis] claude-opus-4-6 succeeded in {int((time.time() - synth_start) * 1000)}ms")
+                    except concurrent.futures.TimeoutError:
+                        synth_pool.shutdown(wait=False)
+                        print(f"   ⏰ [Synthesis] claude-opus-4-6 timed out after {SYNTH_TIMEOUT}s")
+                        raise Exception(f"Opus timeout after {SYNTH_TIMEOUT}s")
+                    synth_pool.shutdown(wait=False)
                 except Exception as opus_err:
                     print(f"   ❌ [Synthesis] Opus 4.6 failed: {opus_err}")
 
                     # Fallback 1: Gemini 3.1 Pro Preview (strongest Google model, MEDIUM thinking)
                     gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-                    if gemini_key:
+                    if gemini_key and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 30:
                         try:
-                            print(f"   🔄 [Synthesis] Falling back to Gemini 3.1 Pro Preview...")
+                            print(f"   🔄 [Synthesis] Falling back to Gemini 3.1 Pro Preview (timeout: {SYNTH_TIMEOUT}s)...")
                             g_start = time.time()
                             gemini_client = genai.Client(api_key=gemini_key)
-                            gemini_resp = gemini_client.models.generate_content(
-                                model="gemini-3.1-pro-preview",
-                                contents=synthesis_prompt,
-                                config=types.GenerateContentConfig(
-                                    temperature=0.5,
-                                    thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
-                                    max_output_tokens=2048
+
+                            def _synth_gemini31():
+                                return gemini_client.models.generate_content(
+                                    model="gemini-3.1-pro-preview",
+                                    contents=synthesis_prompt,
+                                    config=types.GenerateContentConfig(
+                                        temperature=0.5,
+                                        thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
+                                        max_output_tokens=2048
+                                    )
                                 )
-                            )
-                            response_text = gemini_resp.text or ""
-                            print(f"   ✅ [Synthesis] Gemini 3.1 Pro Preview succeeded in {int((time.time() - g_start) * 1000)}ms")
+
+                            g_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                            g_future = g_pool.submit(_synth_gemini31)
+                            try:
+                                gemini_resp = g_future.result(timeout=SYNTH_TIMEOUT)
+                                response_text = gemini_resp.text or ""
+                                print(f"   ✅ [Synthesis] Gemini 3.1 Pro Preview succeeded in {int((time.time() - g_start) * 1000)}ms")
+                            except concurrent.futures.TimeoutError:
+                                g_pool.shutdown(wait=False)
+                                print(f"   ⏰ [Synthesis] Gemini 3.1 Pro Preview timed out after {SYNTH_TIMEOUT}s")
+                            g_pool.shutdown(wait=False)
                         except Exception as gemini31_err:
                             print(f"   ❌ [Synthesis] Gemini 3.1 Pro Preview failed: {gemini31_err}")
 
                     # Fallback 2: Gemini 3 Pro Preview
-                    if not response_text and gemini_key:
+                    if not response_text and gemini_key and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 30:
                         try:
-                            print(f"   🔄 [Synthesis] Falling back to Gemini 3 Pro Preview...")
+                            print(f"   🔄 [Synthesis] Falling back to Gemini 3 Pro Preview (timeout: {SYNTH_TIMEOUT}s)...")
                             g2_start = time.time()
                             gemini_client = genai.Client(api_key=gemini_key)
-                            gemini_resp = gemini_client.models.generate_content(
-                                model="gemini-3-pro-preview",
-                                contents=synthesis_prompt,
-                                config=types.GenerateContentConfig(
-                                    temperature=1.0,  # Gemini 3 requires temp=1.0
-                                    thinking_config=types.ThinkingConfig(thinking_level="LOW"),
-                                    max_output_tokens=2048
+
+                            def _synth_gemini3():
+                                return gemini_client.models.generate_content(
+                                    model="gemini-3-pro-preview",
+                                    contents=synthesis_prompt,
+                                    config=types.GenerateContentConfig(
+                                        temperature=1.0,  # Gemini 3 requires temp=1.0
+                                        thinking_config=types.ThinkingConfig(thinking_level="LOW"),
+                                        max_output_tokens=2048
+                                    )
                                 )
-                            )
-                            response_text = gemini_resp.text or ""
-                            print(f"   ✅ [Synthesis] Gemini 3 Pro Preview succeeded in {int((time.time() - g2_start) * 1000)}ms")
+
+                            g2_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                            g2_future = g2_pool.submit(_synth_gemini3)
+                            try:
+                                gemini_resp = g2_future.result(timeout=SYNTH_TIMEOUT)
+                                response_text = gemini_resp.text or ""
+                                print(f"   ✅ [Synthesis] Gemini 3 Pro Preview succeeded in {int((time.time() - g2_start) * 1000)}ms")
+                            except concurrent.futures.TimeoutError:
+                                g2_pool.shutdown(wait=False)
+                                print(f"   ⏰ [Synthesis] Gemini 3 Pro Preview timed out after {SYNTH_TIMEOUT}s")
+                            g2_pool.shutdown(wait=False)
                         except Exception as gemini3_err:
                             print(f"   ❌ [Synthesis] Gemini 3 Pro Preview failed: {gemini3_err}")
 
                     # Fallback 3: Gemini 2.5 Pro (separate rate limits from 3.x family)
-                    if not response_text and gemini_key:
+                    if not response_text and gemini_key and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 30:
                         try:
-                            print(f"   🔄 [Synthesis] Falling back to Gemini 2.5 Pro...")
+                            print(f"   🔄 [Synthesis] Falling back to Gemini 2.5 Pro (timeout: {SYNTH_TIMEOUT}s)...")
                             g3_start = time.time()
                             gemini_client = genai.Client(api_key=gemini_key)
-                            gemini_resp = gemini_client.models.generate_content(
-                                model="gemini-2.5-pro",
-                                contents=synthesis_prompt,
-                                config=types.GenerateContentConfig(
-                                    temperature=0.0,
-                                    max_output_tokens=2048
+
+                            def _synth_gemini25():
+                                return gemini_client.models.generate_content(
+                                    model="gemini-2.5-pro",
+                                    contents=synthesis_prompt,
+                                    config=types.GenerateContentConfig(
+                                        temperature=0.0,
+                                        max_output_tokens=2048
+                                    )
                                 )
-                            )
-                            response_text = gemini_resp.text or ""
-                            print(f"   ✅ [Synthesis] Gemini 2.5 Pro succeeded in {int((time.time() - g3_start) * 1000)}ms")
+
+                            g3_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                            g3_future = g3_pool.submit(_synth_gemini25)
+                            try:
+                                gemini_resp = g3_future.result(timeout=SYNTH_TIMEOUT)
+                                response_text = gemini_resp.text or ""
+                                print(f"   ✅ [Synthesis] Gemini 2.5 Pro succeeded in {int((time.time() - g3_start) * 1000)}ms")
+                            except concurrent.futures.TimeoutError:
+                                g3_pool.shutdown(wait=False)
+                                print(f"   ⏰ [Synthesis] Gemini 2.5 Pro timed out after {SYNTH_TIMEOUT}s")
+                            g3_pool.shutdown(wait=False)
                         except Exception as gemini25_err:
                             print(f"   ❌ [Synthesis] All models failed. Last error: {gemini25_err}")
 

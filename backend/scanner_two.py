@@ -963,7 +963,7 @@ Return STRICT JSON:
         return None
 
 
-def x_ray_search(company_name: str, company_url: str = None, model_id: str = None, intent_score: int = 0, previous_context: dict = None, max_research_loops: int = 2, subsidiaries: list = None):
+def x_ray_search(company_name: str, company_url: str = None, model_id: str = None, intent_score: int = 0, previous_context: dict = None, max_research_loops: int = 2, subsidiaries: list = None, time_budget: int = 350):
     """
     SCANNER 2: THE REALITY CHECK (External Evidence)
 
@@ -974,9 +974,17 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     Optional: max_research_loops (0-3) controls confidence-driven re-search.
               Default 2 for single scans, use 1 for batch scans.
               Set to 0 to disable re-search entirely.
+    Optional: time_budget (seconds) — total time this function may run.
+              Inner guards derive from this value instead of hardcoded constants.
     """
 
     _fn_start = time.time()  # Track total function elapsed time for guards
+    # Derive inner guard thresholds from time_budget (instead of hardcoded values)
+    _guard_forensic = time_budget - 20       # skip model calls (leave buffer for URL validation + response)
+    _guard_research = time_budget - 50       # skip re-search loops
+    _guard_anthropic = time_budget - 50      # skip Sonnet + Web Search
+    _guard_delta_verify = time_budget - 130  # skip delta verification (leave room for URL validation)
+    print(f"   [Scanner 2] Time budget: {time_budget}s (guards: forensic={_guard_forensic}s, research={_guard_research}s, delta={_guard_delta_verify}s)")
 
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
     # Default to the chosen model, or fallback to the reliable 3-pro
@@ -1177,10 +1185,10 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     def execute_with_model(target_model_name, custom_prompt=None, call_timeout=150):
         """Execute a search with the given model. Uses main prompt by default, or a custom one for re-search."""
         # Elapsed time guard — skip if function has been running too long
-        # 330s leaves ~20s buffer within main.py's 350s outer timeout for URL validation + response
+        # Derived from time_budget to leave buffer for URL validation + response
         elapsed_total = time.time() - _fn_start
-        if elapsed_total > 330:
-            print(f"   ⏰ [Forensic Scan] Skipping {target_model_name} — elapsed {int(elapsed_total)}s exceeds 330s guard")
+        if elapsed_total > _guard_forensic:
+            print(f"   ⏰ [Forensic Scan] Skipping {target_model_name} — elapsed {int(elapsed_total)}s exceeds {_guard_forensic}s guard")
             return None
 
         active_prompt = custom_prompt if custom_prompt else prompt
@@ -1296,10 +1304,10 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
         Fast path: If Pass 1 happens to return valid JSON, Pass 2 is skipped.
         """
-        # Elapsed time guard — leave ~50s buffer for URL validation + response
+        # Elapsed time guard — leave buffer for URL validation + response
         elapsed_total = time.time() - _fn_start
-        if elapsed_total > 300:
-            print(f"   ⏰ [Forensic Scan] Skipping Sonnet + Web Search — elapsed {int(elapsed_total)}s exceeds 300s guard")
+        if elapsed_total > _guard_anthropic:
+            print(f"   ⏰ [Forensic Scan] Skipping Sonnet + Web Search — elapsed {int(elapsed_total)}s exceeds {_guard_anthropic}s guard")
             return None
 
         anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -1509,8 +1517,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             for loop in range(1, max_research_loops + 1):
                 # Elapsed time guard — return what we have rather than risk timeout
                 elapsed_total = time.time() - _fn_start
-                if elapsed_total > 300:
-                    print(f"   ⏰ [Re-Search] Skipping loop {loop} — elapsed {int(elapsed_total)}s exceeds 300s guard. Returning current results.")
+                if elapsed_total > _guard_research:
+                    print(f"   ⏰ [Re-Search] Skipping loop {loop} — elapsed {int(elapsed_total)}s exceeds {_guard_research}s guard. Returning current results.")
                     break
 
                 weak_juries = _identify_weak_juries(all_findings)
@@ -1696,11 +1704,10 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
             if abs(delta) >= 25:
                 # Elapsed time guard — skip verification if running out of time.
-                # Delta re-scan + URL validation can fit in remaining ~130s.
-                # Guard at 220s to stay within main.py's 350s timeout.
+                # Delta re-scan + URL validation can fit in remaining time.
                 elapsed_total = time.time() - _fn_start
-                if elapsed_total > 220:
-                    print(f"   ⏰ [Delta Verification] Skipping — elapsed {int(elapsed_total)}s exceeds 220s guard. Keeping score {final_score}.")
+                if elapsed_total > _guard_delta_verify:
+                    print(f"   ⏰ [Delta Verification] Skipping — elapsed {int(elapsed_total)}s exceeds {_guard_delta_verify}s guard. Keeping score {final_score}.")
                 else:
                     print(f"   [Delta Verification] Large score change detected: {prev_reality} → {final_score} (delta {delta}). Running verification re-scan with Sonnet (same methodology)...")
                     # Use the SAME model (Sonnet) for verification.

@@ -298,7 +298,8 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
                     x_ray_search, company_name, company["url"],
                     model_id="gemini-3.1-pro-preview", intent_score=intent_results["score"],
                     previous_context=previous_context, max_research_loops=2,
-                    subsidiaries=company.get("subsidiaries")
+                    subsidiaries=company.get("subsidiaries"),
+                    time_budget=340
                 )
                 financial_future = sub_executor.submit(
                     financial_health_search, company_name, company["url"]
