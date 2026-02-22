@@ -1269,16 +1269,14 @@ const App = () => {
                             )}
                           </div>
                           <div className="flex items-center gap-1 shrink-0">
-                            {hasUnverifiedClaims && (
-                              <button
-                                onClick={() => handleCleanCompany(item.companyName)}
-                                disabled={cleaningCompany === item.companyName}
-                                className="text-orange-400 hover:text-emerald-400 p-1.5 rounded hover:bg-emerald-500/10 transition-all disabled:opacity-50"
-                                title={`Reality Check + Clean ${item.companyName}`}
-                              >
-                                {cleaningCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <ShieldAlert size={14} />}
-                              </button>
-                            )}
+                            <button
+                              onClick={() => handleCleanCompany(item.companyName)}
+                              disabled={cleaningCompany === item.companyName}
+                              className={`${hasUnverifiedClaims ? 'text-orange-400' : 'text-slate-500'} hover:text-emerald-400 p-1.5 rounded hover:bg-emerald-500/10 transition-all disabled:opacity-50`}
+                              title={`Reality Check${hasUnverifiedClaims ? ' + Clean' : ''} ${item.companyName}`}
+                            >
+                              {cleaningCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <ShieldAlert size={14} />}
+                            </button>
                             <button
                               onClick={() => handleDeleteCompany(item.companyName)}
                               className="text-slate-500 hover:text-rose-400 p-1.5 rounded hover:bg-rose-500/10 transition-all"
