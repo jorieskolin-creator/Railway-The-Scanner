@@ -277,6 +277,66 @@
       ]
     },
 
+    "phase_3b_fact_check": {
+      "name": "Fact-Check & Evidence Integrity Gate",
+      "runs": "Immediately after Phase 3 Synthesis, before Archetype Classification",
+      "question": "Are the claims in the AI-generated summary actually true? Is the evidence contaminated?",
+      "core_insight": "The problem is EVIDENCE CONTAMINATION, not hallucination. Checking the summary against stored evidence is circular when the evidence itself may be wrong. An independent model with live web search must verify claims against the real world.",
+      "thinking_process": {
+        "step_1_heuristic_hallucination_detection": {
+          "description": "Rule-based pre-scan of the summary and pitch for obvious red flags",
+          "checks": [
+            "Summary references people not found in evidence",
+            "Summary makes claims with no supporting evidence links",
+            "Pitch contains generic template language instead of company-specific proposals",
+            "Confidence score is low but summary sounds certain"
+          ],
+          "output": "Hallucination risk score (0-100) + specific flags. Diagnostic only — does NOT block the pipeline."
+        },
+        "step_2_ai_fact_check": {
+          "description": "Gemini 3.1 Pro with Google Search grounding independently verifies every factual claim in the summary and pitch against live web data",
+          "model": "Gemini 3.1 Pro with Google Search grounding",
+          "process": [
+            "Receives the full summary text, pitch text, evidence links, and company name",
+            "Uses Google Search to independently verify each factual claim",
+            "Classifies each claim as verified (true) or false",
+            "If false claims found: produces a corrected summary and pitch in the same call (inline correction)"
+          ],
+          "single_pass_guarantee": "The fact-check runs exactly ONCE. No recursive loops. The fact-checker fixes what it finds in a single pass."
+        },
+        "step_3_if_clean": {
+          "description": "No false claims found — original synthesis stands as-is. Pipeline continues to Archetype Classification."
+        },
+        "step_4_if_false_claims_found": {
+          "description": "False claims detected — triggers evidence purging and summary correction",
+          "sub_steps": {
+            "a_evidence_purging": "Remove contaminated evidence sources that supported the false claims from stored data (links, checklist items)",
+            "b_apply_corrected_summary": "Use the corrected summary/pitch produced by the fact-checker (preferred path — inline correction)",
+            "c_fallback_re_synthesis": "If the fact-checker did not produce a corrected summary, trigger a separate full re-synthesis from cleaned evidence using the Gemini model chain. The re-synthesis prompt explicitly lists the false claims to avoid.",
+            "d_clear_stale_flags": "Remove washing flags that may have been based on now-purged false claims"
+          }
+        }
+      },
+      "outputs": {
+        "verified": "Boolean — did the summary pass fact-check?",
+        "false_claims": "List of specific false claims detected (if any)",
+        "false_claims_detailed": "Per-claim details with evidence source mapping",
+        "corrected_summary": "Fact-checker-produced corrected summary (if false claims found)",
+        "corrected_pitch": "Fact-checker-produced corrected pitch (if false claims found)",
+        "fact_check_model": "Model that performed the fact-check",
+        "fact_check_time_ms": "Time taken for the fact-check call",
+        "evidence_purged": "Count and details of removed contaminated evidence sources"
+      },
+      "accuracy_safeguards": [
+        "Independent model (Gemini) with live web search — not checking summary against its own evidence (avoids circular validation)",
+        "Single-pass guarantee prevents infinite fact-check loops",
+        "Evidence purging removes the root cause (contaminated sources), not just the symptom (bad text)",
+        "Inline correction by the same model that found the errors ensures consistency",
+        "Fallback re-synthesis path ensures correction even if inline correction fails",
+        "Washing flags cleared after correction to prevent stale false-positive flags"
+      ]
+    },
+
     "phase_4_archetype_classification": {
       "name": "Company Archetype Determination",
       "axes": ["Reality Score (operational maturity)", "Financial Index (business health)"],
@@ -330,7 +390,7 @@
   },
 
   "verification_mechanisms": {
-    "summary": "Six layers of accuracy assurance operate across the entire pipeline",
+    "summary": "Seven layers of accuracy assurance operate across the entire pipeline",
     "layers": [
       {
         "name": "Jury Diversity",
@@ -343,6 +403,10 @@
       {
         "name": "Blind Cross-Verification",
         "description": "Synthesis model scores independently without seeing Scanner scores. Disagreements trigger blending or override."
+      },
+      {
+        "name": "AI Fact-Check (Post-Synthesis)",
+        "description": "Gemini 3.1 Pro with Google Search independently verifies every claim in the summary against live web data. False claims trigger evidence purging and corrected summary. Single-pass guarantee prevents recursive loops."
       },
       {
         "name": "Score Drift Guard",

@@ -472,6 +472,7 @@
     <li><a href="#phase2b">Phase 2b &mdash; Financial Health Index</a></li>
     <li><a href="#phase2c">Phase 2c &mdash; Self-Analysis Loop (Score Delta Explanation)</a></li>
     <li><a href="#phase3">Phase 3 &mdash; Synthesis &amp; Cross-Verification</a></li>
+    <li><a href="#phase3b">Phase 3b &mdash; Fact-Check &amp; Evidence Integrity Gate</a></li>
     <li><a href="#phase4">Phase 4 &mdash; Archetype Classification</a></li>
     <li><a href="#phase5">Phase 5 &mdash; Multi-Scan History &amp; Trend Detection</a></li>
     <li><a href="#phase6">Phase 6 &mdash; Statistical Analysis Layer</a></li>
@@ -498,6 +499,8 @@
     <div class="flow-step red">Phase 2c: Self-Analysis (if score changed &ge;15 pts) &mdash; "Why did scores shift?"</div>
     <div class="mini-arrow"></div>
     <div class="flow-step purple">Phase 3: Synthesis &mdash; Cross-verify scores + generate narrative &amp; pitch</div>
+    <div class="mini-arrow"></div>
+    <div class="flow-step green">Phase 3b: Fact-Check &mdash; Gemini verifies claims against live web data</div>
     <div class="mini-arrow"></div>
     <div class="flow-step purple">Phase 4: Archetype Classification (Thriving / Modernizing / Cash Cow / At Risk)</div>
     <div class="mini-arrow"></div>
@@ -912,6 +915,93 @@
 </div>
 
 <div class="flow-connector"><div class="flow-arrow"></div></div>
+<div class="flow-label">Synthesis output flows into Fact-Check</div>
+
+<!-- PHASE 3b -->
+<div class="section" id="phase3b">
+  <div class="section-title">Phase 3b: Fact-Check &amp; Evidence Integrity Gate <span class="badge" style="background: rgba(52,211,153,0.15); color: var(--accent-green);">Agentic AI</span></div>
+
+  <div class="phase phase-scanner2">
+    <div class="phase-header">
+      <div class="phase-number">3b</div>
+      <div class="phase-name">Independent Claim Verification Against Live Web Data</div>
+    </div>
+
+    <div class="phase-question">
+      "Are the claims in the AI-generated summary actually true? Is the evidence contaminated?"
+    </div>
+
+    <div class="insight-box" style="margin: 1rem 0;">
+      <h3>Core Insight: Evidence Contamination, Not Hallucination</h3>
+      <p>Checking the summary against stored evidence is <strong>circular</strong> when the evidence itself may be wrong. An independent model with live web search must verify claims against the real world.</p>
+    </div>
+
+    <div class="subsection">
+      <h4>Step 1: Heuristic Hallucination Detection (Diagnostic)</h4>
+      <p>A rule-based pre-scan flags obvious red flags in the summary and pitch:</p>
+      <ul>
+        <li>Summary references people not found in evidence</li>
+        <li>Summary makes claims with no supporting evidence links</li>
+        <li>Pitch contains generic template language instead of company-specific proposals</li>
+        <li>Confidence score is low but summary sounds certain</li>
+      </ul>
+      <p style="font-size: 0.85rem; color: var(--text-dim); margin-top: 0.5rem;">Outputs a hallucination risk score (0&ndash;100) + specific flags. <strong>Diagnostic only</strong> &mdash; does not block the pipeline.</p>
+    </div>
+
+    <div class="subsection">
+      <h4>Step 2: AI Fact-Check (Gemini 3.1 Pro + Google Search Grounding)</h4>
+      <p>An independent AI model with live web search verifies every factual claim in the summary and pitch:</p>
+      <ul>
+        <li>Receives the full summary, pitch, evidence links, and company name</li>
+        <li>Uses <strong>Google Search</strong> to independently verify each factual claim against live web data</li>
+        <li>Classifies each claim as <strong>verified</strong> (true) or <strong>false</strong></li>
+        <li>If false claims found: produces a <strong>corrected summary and pitch</strong> in the same call (inline correction)</li>
+      </ul>
+      <p style="font-size: 0.85rem; color: var(--accent-amber); margin-top: 0.5rem;"><strong>Single-pass guarantee:</strong> The fact-check runs exactly once. No recursive loops. The fact-checker fixes what it finds in a single pass.</p>
+    </div>
+
+    <div class="subsection">
+      <h4>If Clean (No False Claims)</h4>
+      <p>Original synthesis stands as-is. Pipeline continues to Archetype Classification.</p>
+    </div>
+
+    <div class="subsection">
+      <h4>If False Claims Found</h4>
+      <ul>
+        <li><strong>Evidence Purging</strong>: Contaminated evidence sources that supported the false claims are removed from stored data (links, checklist items)</li>
+        <li><strong>Apply Corrected Summary</strong> (preferred): Use the corrected summary/pitch produced by the fact-checker in the same call</li>
+        <li><strong>Fallback Re-Synthesis</strong>: If the fact-checker did not produce a corrected summary, trigger a separate full re-synthesis from cleaned evidence. The re-synthesis prompt explicitly lists the false claims to avoid.</li>
+        <li><strong>Clear Stale Flags</strong>: Remove washing flags that may have been based on now-purged false claims</li>
+      </ul>
+    </div>
+
+    <div class="subsection">
+      <h4>Key Outputs</h4>
+      <ul>
+        <li><strong>Verified</strong>: Boolean &mdash; did the summary pass fact-check?</li>
+        <li><strong>False Claims</strong>: List of specific false claims detected (if any)</li>
+        <li><strong>Corrected Summary/Pitch</strong>: Fact-checker-produced corrections (if false claims found)</li>
+        <li><strong>Evidence Purged</strong>: Count and details of removed contaminated evidence sources</li>
+        <li><strong>Fact-Check Model &amp; Time</strong>: Traceability metadata</li>
+      </ul>
+    </div>
+
+    <div class="verification-box">
+      <h4>Accuracy Safeguards</h4>
+      <ul>
+        <li>Independent model (Gemini) with live web search &mdash; avoids circular validation against stored evidence</li>
+        <li>Single-pass guarantee prevents infinite fact-check loops</li>
+        <li>Evidence purging removes the root cause (contaminated sources), not just the symptom (bad text)</li>
+        <li>Inline correction by the same model that found the errors ensures consistency</li>
+        <li>Fallback re-synthesis path ensures correction even if inline correction fails</li>
+        <li>Washing flags cleared after correction to prevent stale false-positive flags</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div class="flow-connector"><div class="flow-arrow"></div></div>
+<div class="flow-label">Verified summary flows into Archetype Classification</div>
 
 <!-- PHASE 4 -->
 <div class="section" id="phase4">
@@ -1050,7 +1140,7 @@
   <div class="section-title">Cross-Cutting Verification Mechanisms</div>
 
   <div class="insight-box">
-    <h3>Six Layers of Accuracy Assurance</h3>
+    <h3>Seven Layers of Accuracy Assurance</h3>
     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem;">
       <div>
         <p style="color: var(--accent-cyan); font-weight: 600; margin-bottom: 0.3rem;">1. Jury Diversity</p>
@@ -1065,15 +1155,19 @@
         <p style="font-size: 0.85rem;">Synthesis model scores Reality/Intent independently, without seeing Scanner scores. Disagreements trigger blending or override.</p>
       </div>
       <div>
-        <p style="color: var(--accent-purple); font-weight: 600; margin-bottom: 0.3rem;">4. Score Drift Guard</p>
+        <p style="color: var(--accent-green); font-weight: 600; margin-bottom: 0.3rem;">4. AI Fact-Check (Post-Synthesis)</p>
+        <p style="font-size: 0.85rem;">Gemini 3.1 Pro with Google Search independently verifies every claim against live web data. False claims trigger evidence purging and corrected summary. Single-pass guarantee.</p>
+      </div>
+      <div>
+        <p style="color: var(--accent-purple); font-weight: 600; margin-bottom: 0.3rem;">5. Score Drift Guard</p>
         <p style="font-size: 0.85rem;">Limits score changes to &plusmn;15 per 7-day window. Large changes trigger self-analysis to diagnose cause (search variance vs. genuine change).</p>
       </div>
       <div>
-        <p style="color: var(--accent-red); font-weight: 600; margin-bottom: 0.3rem;">5. Evidence Persistence</p>
+        <p style="color: var(--accent-red); font-weight: 600; margin-bottom: 0.3rem;">6. Evidence Persistence</p>
         <p style="font-size: 0.85rem;">"Innocent until proven fixed." Previous findings carry forward for 90 days. Not finding something again = search noise, not improvement.</p>
       </div>
-      <div>
-        <p style="color: var(--accent-blue); font-weight: 600; margin-bottom: 0.3rem;">6. Logic Consistency</p>
+      <div style="grid-column: 1 / -1;">
+        <p style="color: var(--accent-blue); font-weight: 600; margin-bottom: 0.3rem;">7. Logic Consistency</p>
         <p style="font-size: 0.85rem;">Post-verification checks: washing impossible if Reality &ge; Intent. Low ambition can't be washing. Archetype recalculated from final verified scores.</p>
       </div>
     </div>
