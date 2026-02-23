@@ -34,6 +34,46 @@ def get_clean_domain(url):
     except:
         return ""
 
+def _find_balanced_json_object(text, start=0):
+    """
+    Find the first balanced JSON object in text starting from position `start`.
+    Properly handles nested braces and string literals (including escaped quotes).
+    Returns the substring from opening { to its matching }, or None if not found.
+
+    Why this exists: regex `\{.*?\}` (non-greedy) stops at the FIRST closing brace,
+    truncating nested JSON like {"a": {"b": 1}, "c": 2} → {"a": {"b": 1}.
+    Greedy `\{.*\}` can overshoot if there are multiple JSON objects in the text.
+    Balanced-brace walking handles both cases correctly.
+    """
+    idx = text.find('{', start)
+    if idx == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    i = idx
+    while i < len(text):
+        ch = text[i]
+        if in_string:
+            if ch == '\\':
+                i += 2  # skip escaped character
+                continue
+            if ch == '"':
+                in_string = False
+        else:
+            if ch == '"':
+                in_string = True
+            elif ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0:
+                    return text[idx:i + 1]
+        i += 1
+
+    return None
+
+
 def extract_json_from_text(text):
     """
     Robustly extracts the first JSON object found in a string.
@@ -42,15 +82,16 @@ def extract_json_from_text(text):
     if not text:
         return None
 
-    # 1. Try finding a markdown block first
-    markdown_match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
-    candidate = markdown_match.group(1) if markdown_match else None
+    # 1. Try finding a markdown block first — extract inner content, then balanced-brace match
+    candidate = None
+    block_match = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
+    if block_match:
+        block_content = block_match.group(1)
+        candidate = _find_balanced_json_object(block_content)
 
-    # 2. Fallback: Find the first outer curly braces
+    # 2. Fallback: balanced-brace match on the full text
     if not candidate:
-        match = re.search(r'\{.*\}', text, re.DOTALL)
-        if match:
-            candidate = match.group(0)
+        candidate = _find_balanced_json_object(text)
 
     if not candidate:
         return None
@@ -1342,7 +1383,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 active_prompt
             )
 
-            # Enforce 180s per-call timeout via thread pool (Sonnet + web search + thinking typically 60-150s)
+            # Enforce 240s per-call timeout via thread pool (Sonnet + web search + thinking typically 60-150s)
             # Extended Thinking: Sonnet reasons through evidence before scoring,
             # helping it weigh conflicting signals more carefully.
             def _call_sonnet_web():
@@ -1364,11 +1405,11 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             call_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             future = call_pool.submit(_call_sonnet_web)
             try:
-                response = future.result(timeout=180)
+                response = future.result(timeout=240)
             except concurrent.futures.TimeoutError:
                 call_pool.shutdown(wait=False)
                 elapsed = int((time.time() - start) * 1000)
-                print(f"   ⏰ [Forensic Scan] claude-sonnet-4-6 + Web Search timed out after 180s ({elapsed}ms). Skipping to next model.")
+                print(f"   ⏰ [Forensic Scan] claude-sonnet-4-6 + Web Search timed out after 240s ({elapsed}ms). Skipping to next model.")
                 return None
             call_pool.shutdown(wait=False)
 
