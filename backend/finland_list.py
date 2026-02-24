@@ -132,6 +132,8 @@ TOP_100_COMPANIES = [
      "domain": "Industrial & Manufacturing", "revenue_avg_3yr": 1200, "employees": 4000, "ownership": "Subsidiary", "hq_country": "DE"},
     {"name": "Elo", "url": "https://www.elo.fi",
      "domain": "Insurance & Pensions", "revenue_avg_3yr": 4000, "employees": 500, "ownership": "Private", "hq_country": "FI"},
+    {"name": "Fennia", "url": "https://www.fennia.fi",
+     "domain": "Insurance & Pensions", "revenue_avg_3yr": 750, "employees": 650, "ownership": "Mutual", "hq_country": "FI"},
     {"name": "SRV Yhtiöt Oyj", "url": "https://www.srv.fi",
      "domain": "Construction & Real Estate", "revenue_avg_3yr": 700, "employees": 1000, "ownership": "Public", "hq_country": "FI"},
     {"name": "Skanska (Suomi)", "url": "https://www.skanska.fi",
