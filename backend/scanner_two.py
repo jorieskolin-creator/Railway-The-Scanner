@@ -1272,6 +1272,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     'temperature': _temperature,
                     'thinking_config': types.ThinkingConfig(thinking_level=_thinking_level),
                     'safety_settings': _safety,
+                    'max_output_tokens': 16000,
                 }
             else:
                 _model_config = {
