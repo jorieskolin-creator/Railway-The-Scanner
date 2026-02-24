@@ -1364,14 +1364,14 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             start = time.time()
             claude_client = anthropic.Anthropic(api_key=anthropic_key)
 
-            # Always 10 searches: first scans need thorough coverage (2 per jury),
-            # rescans need 3-4 for verification + 6-7 for new juries.
+            # Rescan: 8 searches (3 verification + 5 jury) — reduced from 10 to lower pause_turn risk.
+            # First scan: 10 searches (2 per jury) — full coverage needed without prior context.
             is_rescan = bool(previous_context and previous_context.get("previous_reality") is not None)
-            search_budget = 10
+            search_budget = 8 if is_rescan else 10
             if is_rescan:
-                print(f"   📊 [Forensic Scan] RESCAN: search budget = {search_budget} (verification + juries)")
+                print(f"   📊 [Forensic Scan] RESCAN: search budget = {search_budget} (3 verification + 5 jury)")
             else:
-                print(f"   📊 [Forensic Scan] FIRST SCAN: search budget = {search_budget} (thorough jury coverage)")
+                print(f"   📊 [Forensic Scan] FIRST SCAN: search budget = {search_budget} (2 per jury)")
 
             # --- PASS 1: Web Search (format-relaxed) ---
             # Replace strict JSON requirement with flexible format instruction.
@@ -1382,6 +1382,14 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 'REPORT YOUR FINDINGS (any clear structured format — JSON, markdown, or text):',
                 active_prompt
             )
+            # Prepend wrap-up guard: tell Sonnet to stop searching 2 searches before the hard
+            # API-level max_uses limit, preventing pause_turn from cutting off mid-analysis.
+            _wrap_budget = search_budget - 2
+            sonnet_prompt = (
+                f"MANDATORY STOP RULE: After your {_wrap_budget}th web search, STOP SEARCHING "
+                f"immediately and write your final output — even if some juries are incomplete. "
+                f"Incomplete coverage is acceptable. An incomplete response that cuts off is not.\n\n"
+            ) + sonnet_prompt
 
             # Enforce 240s per-call timeout via thread pool (Sonnet + web search + thinking typically 60-150s)
             # Extended Thinking: Sonnet reasons through evidence before scoring,
@@ -1392,7 +1400,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     max_tokens=16000,
                     thinking={
                         "type": "enabled",
-                        "budget_tokens": 8000
+                        "budget_tokens": 5000 if is_rescan else 8000
                     },
                     tools=[{
                         "type": "web_search_20250305",
@@ -1414,13 +1422,15 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             call_pool.shutdown(wait=False)
 
             pass1_elapsed = int((time.time() - start) * 1000)
+            print(f"   [Forensic Scan] Sonnet stop_reason: {response.stop_reason} | content_blocks: {len(response.content)} ({pass1_elapsed}ms)")
 
             # Note: pause_turn can occur when the model hasn't finished all web searches,
             # but continuing the conversation requires complex message threading with
-            # tool_result blocks in the correct roles. Since Sonnet with max_uses=5
-            # almost always completes in one shot, we just extract whatever is available.
+            # tool_result blocks in the correct roles. We extract whatever is available.
             if response.stop_reason == "pause_turn":
-                print(f"   ⚠️ [Forensic Scan] Sonnet returned pause_turn — extracting partial results.")
+                print(f"   ⚠️ [Forensic Scan] Sonnet pause_turn — search budget exhausted mid-analysis. Extracting partial results.")
+            elif response.stop_reason == "max_tokens":
+                print(f"   ⚠️ [Forensic Scan] Sonnet max_tokens — response truncated. Attempting extraction from partial output.")
 
             # Extract text AND web search citations from response content blocks
             text_parts = []
