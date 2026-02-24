@@ -1526,31 +1526,30 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             print(f"   ❌ [Forensic Scan] claude-sonnet-4-6 + Web Search failed in {elapsed}ms: {e}")
             return None
 
-    # --- SEQUENTIAL FALLBACK: Sonnet 4.6 → Gemini 3.1 Pro → Gemini 3 Pro → Gemini 2.5 Pro ---
-    # Sonnet 4.6 + Brave Web Search is the primary model (fast, grounded, 5-search budget).
-    # Gemini 3.1 Pro is the first backup if Sonnet fails or returns nothing.
-    # Gemini 3 Pro is the second backup (shares rate limits with 3.1 Pro).
-    # Gemini 2.5 Pro is the last resort (separate rate limits from 3.x family).
+    # --- SEQUENTIAL FALLBACK: Gemini 3.1 Pro → Gemini 3 Pro → Gemini 2.5 Pro → Sonnet 4.6 ---
+    # Gemini 3.1 Pro is primary: native Google Search, temp=0.5, thinking=MEDIUM, proven reliable.
+    # Gemini 3 Pro / 2.5 Pro are Gemini-side backups (rate limit separation).
+    # Sonnet 4.6 is last resort: cross-provider safety net if all Gemini models fail.
     data = None
-    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Sonnet 4.6 → Gemini 3.1 Pro → Gemini 3 Pro → Gemini 2.5 Pro")
+    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Gemini 3.1 Pro → Gemini 3 Pro → Gemini 2.5 Pro → Sonnet 4.6")
 
-    # --- PRIMARY: Sonnet 4.6 + Web Search ---
-    data = execute_with_anthropic(prompt)
+    # --- PRIMARY: Gemini 3.1 Pro (temp=0.5, thinking=MEDIUM, native Google Search) ---
+    data = execute_with_model("gemini-3.1-pro-preview", None, 150)
 
-    # --- BACKUP 1: Gemini 3.1 Pro (only if Sonnet failed) ---
-    if not data:
-        print(f"   ⚠️ [Forensic Scan] Sonnet 4.6 returned no data. Falling back to Gemini 3.1 Pro...")
-        data = execute_with_model("gemini-3.1-pro-preview", None, 150)
-
-    # --- BACKUP 2: Gemini 3 Pro (only if Gemini 3.1 Pro also failed) ---
+    # --- BACKUP 1: Gemini 3 Pro (only if Gemini 3.1 Pro failed) ---
     if not data:
         print(f"   ⚠️ [Forensic Scan] Gemini 3.1 Pro returned no data. Falling back to Gemini 3 Pro...")
         data = execute_with_model("gemini-3-pro-preview", call_timeout=120)
 
-    # --- BACKUP 3: Gemini 2.5 Pro (separate rate limits from 3.x family) ---
+    # --- BACKUP 2: Gemini 2.5 Pro (separate rate limits from 3.x family) ---
     if not data:
         print(f"   ⚠️ [Forensic Scan] Gemini 3 Pro returned no data. Falling back to Gemini 2.5 Pro...")
         data = execute_with_model("gemini-2.5-pro", call_timeout=120)
+
+    # --- LAST RESORT: Sonnet 4.6 (cross-provider safety net if all Gemini models fail) ---
+    if not data:
+        print(f"   ⚠️ [Forensic Scan] All Gemini models returned no data. Falling back to Sonnet 4.6...")
+        data = execute_with_anthropic(prompt)
 
     # --- CONFIDENCE-DRIVEN RE-SEARCH LOOP ---
     # Only triggers when initial results have low confidence AND weak coverage.
