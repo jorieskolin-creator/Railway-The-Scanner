@@ -16,6 +16,18 @@ import json
 import os
 import time
 
+# Regex for detecting scan history references in fact-check claims.
+# These come from internal DB records (scan_history), not external web sources,
+# so the fact-checker will always label them "Fabrication" with source_indices=[].
+_SCAN_HISTORY_RE = re.compile(
+    r'\d+\s*→\s*\d+'              # arrow-notation scores: 72→76→75
+    r'|across\s+\w+\s+scans?'     # "across four scans"
+    r'|across\s+\w+\s+assessments?'  # "across four assessments"
+    r'|score\s+trajectory'         # "score trajectory"
+    r'|previous\s+scans?|prior\s+scans?',  # "previous scans / prior scans"
+    re.IGNORECASE,
+)
+
 
 def _strip_code_fences(text):
     """Strip markdown code fences (```json ... ```) from LLM responses."""
@@ -444,6 +456,7 @@ B. [Contradiction]: The summary makes a claim that directly contradicts the STOR
 
 Do NOT ignore qualitative claims if they are based on fabricated underlying metrics.
 Do NOT flag Knowledge Base terminology or archetype labels (e.g. "Digital Taylorism", "Thriving", "At Risk") — these are analytical framework terms, not factual claims.
+Do NOT flag references to previous scan counts, historical score trajectories (e.g. arrow-notation scores like "72→76→75", phrases like "across X scans" or "across X assessments"), or any comparative claim about this scan versus prior assessments — these are sourced from internal scan database records, not externally verifiable data.
 
 PART 1 — FACT-CHECK:
 Identify all false claims as described above.
@@ -669,6 +682,14 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
             reasoning = fc.get("reasoning", "") if isinstance(fc, dict) else ""
             source_urls = fc.get("source_urls", []) if isinstance(fc, dict) else []
             source_indices = fc.get("source_indices", []) if isinstance(fc, dict) else []
+
+            # Skip internal scan history false positives — score trajectories and
+            # scan count references are based on internal DB records and will never
+            # appear in external web sources, so source_indices is always empty for them.
+            if not source_indices and _SCAN_HISTORY_RE.search(claim_text):
+                print(f"      [Fact-Check] Skipping internal scan history claim (not externally verifiable): {claim_text[:70]}...")
+                continue
+
             all_claims.append(claim_text)
             all_claims_detailed.append({
                 "type": "false_claim",
