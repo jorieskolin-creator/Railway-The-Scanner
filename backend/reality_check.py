@@ -446,7 +446,7 @@ Step 1: Extract every definitive claim from the summary (including financial met
 
 Step 2: Cross-reference each claim strictly against the STORED EVIDENCE SOURCES above.
 
-Step 3: Use Google Search to verify real-world accuracy if the claim cannot be proven/disproven by the stored sources alone.
+Step 3: Apply your training knowledge to verify real-world accuracy if the claim cannot be proven or disproven by the stored sources alone.
 
 FLAG A CLAIM AS FALSE IF IT MEETS EITHER OF THESE CRITERIA:
 
@@ -501,16 +501,18 @@ Each false_claims object must have:
     ]
 
     gemini_31_config = {
-        'tools': [{'google_search': {}}],
-        'temperature': 1.0,  # Gemini 3.x thinking models require temp=1.0 — lower values cause fragmented responses
-        'thinking_config': types.ThinkingConfig(thinking_level="LOW"),
+        'temperature': 0.5,
+        'thinking_config': types.ThinkingConfig(thinking_level="MEDIUM"),
+        'max_output_tokens': 4096,
+        'response_mime_type': 'application/json',
         'safety_settings': _safety,
     }
 
     # Config for Gemini 2.5 Pro fallback (no thinking, separate rate limits from 3.x)
     gemini_25_config = {
-        'tools': [{'google_search': {}}],
         'temperature': 0.0,
+        'max_output_tokens': 4096,
+        'response_mime_type': 'application/json',
         'safety_settings': _safety,
     }
 
