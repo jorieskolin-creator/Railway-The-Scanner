@@ -550,8 +550,12 @@ Each false_claims object must have:
                     p.text for p in parts
                     if p.text and not getattr(p, 'thought', False)
                 ).strip()
-            except Exception:
+                _finish = getattr(response.candidates[0], 'finish_reason', 'unknown')
+                _part_sizes = [(getattr(p, 'thought', False), len(p.text) if p.text else 0) for p in parts]
+                print(f"   🔍 [Fact-Check] {model_name}: finish={_finish}, text_len={len(text)}, parts={_part_sizes}")
+            except Exception as _diag_e:
                 text = response.text if response.text else ""
+                print(f"   🔍 [Fact-Check] {model_name}: parts access failed ({_diag_e}), response.text len={len(text)}")
 
             if not text:
                 print(f"   ⚠️ [Fact-Check] {model_name} returned empty response ({elapsed_ms}ms)")
@@ -619,7 +623,7 @@ Each false_claims object must have:
                     "time_ms": elapsed_ms,
                 }
             else:
-                print(f"   ⚠️ [Fact-Check] Could not parse {model_name} response: {text[:200]}")
+                print(f"   ⚠️ [Fact-Check] Could not parse {model_name} response: {text[:1000]}")
                 continue  # Try next model
 
         except Exception as e:
