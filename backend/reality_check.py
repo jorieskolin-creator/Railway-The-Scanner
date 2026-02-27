@@ -503,9 +503,8 @@ Each false_claims object must have:
     gemini_31_config = {
         'tools': [{'google_search': {}}],
         'temperature': 1.0,  # Gemini 3.x thinking models require temp=1.0 — lower values cause fragmented responses
-        'thinking_config': types.ThinkingConfig(thinking_level="MEDIUM"),
+        'thinking_config': types.ThinkingConfig(thinking_level="LOW"),
         'safety_settings': _safety,
-        'max_output_tokens': 8192,
     }
 
     # Config for Gemini 2.5 Pro fallback (no thinking, separate rate limits from 3.x)
