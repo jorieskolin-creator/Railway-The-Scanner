@@ -1284,6 +1284,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             print(f"   ⏰ [Forensic Scan] Skipping {target_model_name} — elapsed {int(elapsed_total)}s exceeds {_guard_forensic}s guard")
             return None
 
+        is_rescan = bool(previous_context and previous_context.get("previous_reality") is not None)
         active_prompt = custom_prompt if custom_prompt else prompt
         # Prepend search budget instruction for Gemini models (no native max_uses support)
         search_budget_prefix = (
@@ -1306,7 +1307,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         # search quality and evidence gathering — no formatting overhead.
         # Pass 2: _repair_json_with_sonnet(is_structuring=True) converts the free-form
         # output to JSON, identical to the designed Sonnet path (no confidence penalty).
-        # Removing JSON-formatting pressure saves ~30-40s, fitting safely in 160s.
+        # Removing JSON-formatting pressure saves ~30-40s, fitting safely in 180s.
         is_two_pass = "3.1" in target_model_name
         if is_two_pass:
             active_prompt = re.sub(
@@ -1337,9 +1338,11 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 # both thinking_level and thinking_budget simultaneously
                 # ("You can only set only one of thinking budget and thinking level").
                 # A numeric budget implicitly enables thinking at the right intensity
-                # and caps token consumption so the search call fits within the 160s timeout.
+                # and caps token consumption so the search call fits within the 180s wall.
                 _temperature = 0.5 if "3.1" in target_model_name else 1.0
-                _thinking_budget = 8000 if "3.1" in target_model_name else 4000
+                # Rescan: 4000 tokens — model already has prior findings, needs less planning time.
+                # Fresh scan: 8000 tokens — full exploration budget.
+                _thinking_budget = (4000 if is_rescan else 8000) if "3.1" in target_model_name else 4000
                 _model_config = {
                     'tools': [{'google_search': {}}],
                     'temperature': _temperature,
@@ -1356,25 +1359,45 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     'safety_settings': _safety,
                 }
 
-            def _call_gemini():
-                return client.models.generate_content(
-                    model=target_model_name,
-                    contents=active_prompt,
-                    config=_model_config,
-                )
+            # 3.1 Pro uses streaming so that partial output can be salvaged on timeout.
+            # Other Gemini models use blocking — they're faster and rarely time out.
+            partial_result = []  # accumulates streamed chunks; read on soft timeout
+            if is_two_pass:
+                def _call_gemini():
+                    for chunk in client.models.generate_content_stream(
+                        model=target_model_name,
+                        contents=active_prompt,
+                        config=_model_config,
+                    ):
+                        if chunk.text:
+                            partial_result.append(chunk.text)
+                    return "".join(partial_result)
+            else:
+                def _call_gemini():
+                    resp = client.models.generate_content(
+                        model=target_model_name,
+                        contents=active_prompt,
+                        config=_model_config,
+                    )
+                    return resp.text if resp.text else ""
 
             call_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             future = call_pool.submit(_call_gemini)
+            text_content = ""
             try:
-                response = future.result(timeout=call_timeout)
+                text_content = future.result(timeout=call_timeout) or ""
             except concurrent.futures.TimeoutError:
                 call_pool.shutdown(wait=False)
                 elapsed = int((time.time() - start) * 1000)
-                print(f"   ⏰ [Forensic Scan] {target_model_name} timed out after {call_timeout}s ({elapsed}ms). Skipping to next model.")
-                return None
+                salvaged = "".join(partial_result)
+                if is_two_pass and len(salvaged) > 200:
+                    text_content = salvaged
+                    print(f"   ⏰ [Forensic Scan] {target_model_name} soft-timed out after {call_timeout}s ({elapsed}ms). Salvaging {len(salvaged)} chars for Pass 2...")
+                else:
+                    print(f"   ⏰ [Forensic Scan] {target_model_name} timed out after {call_timeout}s ({elapsed}ms). Skipping to next model.")
+                    return None
             call_pool.shutdown(wait=False)
 
-            text_content = response.text if response.text else ""
             json_payload = extract_json_from_text(text_content)
 
             elapsed = int((time.time() - start) * 1000)
@@ -1628,13 +1651,13 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Gemini 3.1 Pro Preview → Sonnet 4.6 → Gemini 2.5 Pro")
 
     # --- PRIMARY: Gemini 3.1 Pro Preview — two-pass mode ---
-    # Pass 1 (160s): relaxed-format prompt, thinking_budget=8000, temp=0.5, Google Search.
+    # Pass 1 (180s wall, soft timeout): relaxed-format prompt, thinking_budget=8000 (4000 on rescan), temp=0.5, Google Search.
     #   temp=0.5: decisive query selection without creative drift; looping risk gone
     #   because JSON-formatting pressure is removed.
     #   Budget: thinking (~60-70s) + 6 searches (~30-50s) = ~100-120s peak.
     # Pass 2 (fast): 3.1 Pro → Sonnet 4.6 → 2.5 Pro structuring chain.
     #   temp=0.0, no tools, no thinking — pure JSON conversion.
-    data = execute_with_model("gemini-3.1-pro-preview", None, 160)
+    data = execute_with_model("gemini-3.1-pro-preview", None, 180)
 
     # --- BACKUP 1: Sonnet 4.6 (cross-provider; own search quota, unaffected by Gemini rate limits) ---
     if not data:
