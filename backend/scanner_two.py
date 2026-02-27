@@ -1248,7 +1248,23 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             "write your JSON response. Do NOT keep searching for marginal improvements.\n\n"
         )
         active_prompt = search_budget_prefix + active_prompt
-        print(f"   🔄 [Forensic Scan] Attempting {target_model_name} for {company_name}...")
+
+        # For Gemini 3.1 Pro: two-pass mode.
+        # Pass 1 (this call): relax JSON requirement so the model focuses entirely on
+        # search quality and evidence gathering — no formatting overhead.
+        # Pass 2: _repair_json_with_sonnet(is_structuring=True) converts the free-form
+        # output to JSON, identical to the designed Sonnet path (no confidence penalty).
+        # Removing JSON-formatting pressure saves ~30-40s, fitting safely in 160s.
+        is_two_pass = "3.1" in target_model_name
+        if is_two_pass:
+            active_prompt = re.sub(
+                r'RETURN STRICT JSON[^:]*:',
+                'REPORT YOUR FINDINGS (any clear structured format — JSON, markdown, or text):',
+                active_prompt
+            )
+
+        pass_label = "Pass 1 (Search)" if is_two_pass else "Search+Structure"
+        print(f"   🔄 [Forensic Scan] Attempting {target_model_name} [{pass_label}] for {company_name}...")
         start = time.time()
         try:
             client = genai.Client(api_key=api_key)
@@ -1269,7 +1285,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 # both thinking_level and thinking_budget simultaneously
                 # ("You can only set only one of thinking budget and thinking level").
                 # A numeric budget implicitly enables thinking at the right intensity
-                # and caps token consumption so the call fits within the 210s timeout.
+                # and caps token consumption so the search call fits within the 160s timeout.
                 _temperature = 1.0
                 _thinking_budget = 8000 if "3.1" in target_model_name else 4000
                 _model_config = {
@@ -1320,17 +1336,20 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     # Fall through to Sonnet repair gate
 
             if text_content and len(text_content) > 100:
-                # --- JSON REPAIR GATE ---
-                # Model returned grounded search data but not as valid JSON.
-                # Use Sonnet to extract/restructure it rather than discarding.
-                print(f"   ⚠️ [Forensic Scan] {target_model_name} returned unstructured text ({elapsed}ms, {len(text_content)} chars). Attempting JSON repair...")
-                repaired = _repair_json_with_sonnet(text_content, company_name)
+                # --- STRUCTURING GATE ---
+                # Two-pass mode (3.1 Pro): free-form output is the designed flow →
+                #   is_structuring=True (no confidence penalty).
+                # Other models: unexpected unstructured output → is_structuring=False
+                #   (caps confidence at 70 to signal reduced reliability).
+                gate_label = "Pass 2 (Structure)" if is_two_pass else "JSON Repair"
+                print(f"   🔄 [{gate_label}] {target_model_name} returned {len(text_content)} chars ({elapsed}ms). Structuring into JSON...")
+                repaired = _repair_json_with_sonnet(text_content, company_name, is_structuring=is_two_pass)
                 if repaired:
                     repair_elapsed = int((time.time() - start) * 1000)
-                    print(f"   ✅ [JSON Repair] Recovered structured data from {target_model_name} response ({repair_elapsed}ms total)")
+                    print(f"   ✅ [{gate_label}] Structured data from {target_model_name} ({repair_elapsed}ms total)")
                     return repaired
                 else:
-                    print(f"   ⚠️ [JSON Repair] Could not recover JSON from {target_model_name} response")
+                    print(f"   ⚠️ [{gate_label}] Could not structure output from {target_model_name}")
                     return None
             else:
                 print(f"   ⚠️ [Forensic Scan] {target_model_name} returned no parseable JSON ({elapsed}ms)")
@@ -1545,9 +1564,13 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     data = None
     print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Gemini 3.1 Pro Preview → Gemini 2.5 Pro → Sonnet 4.6")
 
-    # --- PRIMARY: Gemini 3.1 Pro Preview (temp=1.0, thinking=MEDIUM/8000, native Google Search) ---
-    # Timeout raised to 210s: MEDIUM thinking (~60-70s) + 6 searches (~30-50s) + output (~20s) = ~140s peak.
-    data = execute_with_model("gemini-3.1-pro-preview", None, 210)
+    # --- PRIMARY: Gemini 3.1 Pro Preview — two-pass mode ---
+    # Pass 1 (160s): relaxed-format prompt, thinking_budget=8000, Google Search.
+    #   No JSON-formatting pressure → model finishes search phase faster.
+    #   Budget: thinking (~60-70s) + 6 searches (~30-50s) = ~100-120s peak.
+    # Pass 2 (fast): _repair_json_with_sonnet(is_structuring=True) converts
+    #   free-form evidence text to JSON — same as the designed Sonnet path.
+    data = execute_with_model("gemini-3.1-pro-preview", None, 160)
 
     # --- BACKUP 1: Gemini 2.5 Pro (separate rate limits from 3.x family; ~50s typical) ---
     if not data:
