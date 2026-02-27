@@ -1269,8 +1269,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 # both thinking_level and thinking_budget simultaneously
                 # ("You can only set only one of thinking budget and thinking level").
                 # A numeric budget implicitly enables thinking at the right intensity
-                # and caps token consumption so the call fits within the 150s timeout.
-                _temperature = 0.5 if "3.1" in target_model_name else 1.0
+                # and caps token consumption so the call fits within the 210s timeout.
+                _temperature = 1.0
                 _thinking_budget = 8000 if "3.1" in target_model_name else 4000
                 _model_config = {
                     'tools': [{'google_search': {}}],
@@ -1279,7 +1279,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                         thinking_budget=_thinking_budget,
                     ),
                     'safety_settings': _safety,
-                    'max_output_tokens': 16000,
+                    'max_output_tokens': 8000,
                 }
             else:
                 _model_config = {
@@ -1545,8 +1545,9 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     data = None
     print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Gemini 3.1 Pro Preview → Gemini 2.5 Pro → Sonnet 4.6")
 
-    # --- PRIMARY: Gemini 3.1 Pro Preview (temp=0.5, thinking=MEDIUM, native Google Search) ---
-    data = execute_with_model("gemini-3.1-pro-preview", None, 150)
+    # --- PRIMARY: Gemini 3.1 Pro Preview (temp=1.0, thinking=MEDIUM/8000, native Google Search) ---
+    # Timeout raised to 210s: MEDIUM thinking (~60-70s) + 6 searches (~30-50s) + output (~20s) = ~140s peak.
+    data = execute_with_model("gemini-3.1-pro-preview", None, 210)
 
     # --- BACKUP 1: Gemini 2.5 Pro (separate rate limits from 3.x family; ~50s typical) ---
     if not data:
@@ -1602,8 +1603,6 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
                 # Re-search uses Gemini models (targeted follow-up with Google Search grounding)
                 research_data = execute_with_model("gemini-3.1-pro-preview", custom_prompt=research_prompt)
-                if not research_data:
-                    research_data = execute_with_model("gemini-3.1-pro-preview", custom_prompt=research_prompt)
                 if not research_data:
                     research_data = execute_with_model("gemini-2.5-pro", custom_prompt=research_prompt)
 
