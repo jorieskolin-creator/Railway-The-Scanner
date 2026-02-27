@@ -507,14 +507,6 @@ Each false_claims object must have:
         'safety_settings': _safety
     }
 
-    # Config for Gemini 3 Pro fallback (LOW thinking)
-    gemini_3_config = {
-        'tools': [{'google_search': {}}],
-        'temperature': 1.0,
-        'thinking_config': types.ThinkingConfig(thinking_level="LOW"),
-        'safety_settings': _safety,
-    }
-
     # Config for Gemini 2.5 Pro fallback (no thinking, separate rate limits from 3.x)
     gemini_25_config = {
         'tools': [{'google_search': {}}],
@@ -523,8 +515,8 @@ Each false_claims object must have:
     }
 
     models_to_try = [
-        ("gemini-3.1-pro-preview", 90, gemini_31_config),  # Primary: Gemini 3.1 Pro, thinking_level=MEDIUM
-        ("gemini-3-pro-preview", 60, gemini_3_config),      # Backup 1: Gemini 3 Pro, thinking_level=LOW (60s for fact-check + correction)
+        ("gemini-3.1-pro-preview", 90, gemini_31_config),   # Primary: Gemini 3.1 Pro, thinking_level=MEDIUM
+        ("gemini-3.1-pro-review", 60, gemini_31_config),    # Backup 1: Gemini 3.1 Pro Review (replaces 3 Pro), temp=0.5, thinking=MEDIUM
         ("gemini-2.5-pro", 60, gemini_25_config),           # Backup 2: Gemini 2.5 Pro (separate rate limits)
     ]
 
@@ -812,18 +804,18 @@ def _clean_with_gemini(prompt):
     except Exception as g31_err:
         print(f"   ❌ [Clean] Gemini 3.1 Pro Preview failed: {g31_err}")
 
-    # --- Fallback 1: Gemini 3 Pro Preview (LOW thinking) ---
-    print(f"   🔄 [Clean] Falling back to Gemini 3 Pro Preview...")
+    # --- Fallback 1: Gemini 3.1 Pro Review (MEDIUM thinking, replaces Gemini 3 Pro) ---
+    print(f"   🔄 [Clean] Falling back to Gemini 3.1 Pro Review...")
     try:
         start = time.time()
 
         def _call_3():
             return client.models.generate_content(
-                model="gemini-3-pro-preview",
+                model="gemini-3.1-pro-review",
                 contents=prompt,
                 config={
-                    'temperature': 1.0,  # Gemini 3 requires temp=1.0
-                    'thinking_config': types.ThinkingConfig(thinking_level="LOW"),
+                    'temperature': 0.5,
+                    'thinking_config': types.ThinkingConfig(thinking_level="MEDIUM"),
                     'max_output_tokens': 2048,
                     'response_mime_type': 'application/json',
                 }
@@ -835,17 +827,17 @@ def _clean_with_gemini(prompt):
             response = future.result(timeout=60)
         except concurrent.futures.TimeoutError:
             pool.shutdown(wait=False)
-            raise ValueError("Gemini 3 Pro Preview timed out after 60s")
+            raise ValueError("Gemini 3.1 Pro Review timed out after 60s")
         pool.shutdown(wait=False)
 
         elapsed_ms = int((time.time() - start) * 1000)
         response_text = response.text if response.text else ""
         if response_text:
-            return response_text, elapsed_ms, "gemini-3-pro-preview"
-        raise ValueError("Gemini 3 Pro Preview returned empty response")
+            return response_text, elapsed_ms, "gemini-3.1-pro-review"
+        raise ValueError("Gemini 3.1 Pro Review returned empty response")
 
     except Exception as g3_err:
-        print(f"   ❌ [Clean] Gemini 3 Pro Preview failed: {g3_err}")
+        print(f"   ❌ [Clean] Gemini 3.1 Pro Review failed: {g3_err}")
 
     # --- Fallback 2: Gemini 2.5 Pro (separate rate limits from 3.x family) ---
     print(f"   🔄 [Clean] Falling back to Gemini 2.5 Pro...")

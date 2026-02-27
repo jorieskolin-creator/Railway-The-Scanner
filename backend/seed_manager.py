@@ -615,25 +615,25 @@ Respond with valid JSON only. Four fields required:
                             except Exception as gemini31_err:
                                 print(f"   [{company_name}] ❌ [Synthesis] Gemini 3.1 Pro Preview failed: {gemini31_err}")
 
-                        # Fallback 2: Gemini 3 Pro Preview
+                        # Fallback 2: Gemini 3.1 Pro Review (replaces Gemini 3 Pro)
                         if not response_text and gemini_key:
                             try:
-                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Gemini 3 Pro Preview...")
+                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Gemini 3.1 Pro Review...")
                                 g2_start = time.time()
                                 gemini_client = genai.Client(api_key=gemini_key)
                                 gemini_resp = gemini_client.models.generate_content(
-                                    model="gemini-3-pro-preview",
+                                    model="gemini-3.1-pro-review",
                                     contents=synthesis_prompt,
                                     config=types.GenerateContentConfig(
-                                        temperature=1.0,  # Gemini 3 requires temp=1.0
-                                        thinking_config=types.ThinkingConfig(thinking_level="LOW"),
+                                        temperature=0.5,
+                                        thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
                                         max_output_tokens=2048
                                     )
                                 )
                                 response_text = gemini_resp.text or ""
-                                print(f"   [{company_name}] ✅ [Synthesis] Gemini 3 Pro Preview succeeded in {int((time.time() - g2_start) * 1000)}ms")
+                                print(f"   [{company_name}] ✅ [Synthesis] Gemini 3.1 Pro Review succeeded in {int((time.time() - g2_start) * 1000)}ms")
                             except Exception as gemini3_err:
-                                print(f"   [{company_name}] ❌ [Synthesis] Gemini 3 Pro Preview failed: {gemini3_err}")
+                                print(f"   [{company_name}] ❌ [Synthesis] Gemini 3.1 Pro Review failed: {gemini3_err}")
 
                         # Fallback 3: Gemini 2.5 Pro (separate rate limits from 3.x family)
                         if not response_text and gemini_key:
