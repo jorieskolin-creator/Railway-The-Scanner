@@ -502,8 +502,8 @@ Each false_claims object must have:
 
     gemini_31_config = {
         'tools': [{'google_search': {}}],
-        'temperature': 0.5,
-        'thinking_config': types.ThinkingConfig(thinking_level="MEDIUM"),
+        'temperature': 0,
+        'thinking_config': types.ThinkingConfig(thinking_level="LOW"),
         'safety_settings': _safety,
         'response_mime_type': 'application/json',
         'max_output_tokens': 4096,
