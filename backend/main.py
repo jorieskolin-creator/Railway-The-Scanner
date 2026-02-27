@@ -283,6 +283,7 @@ def _recheck_company_data(company_name: str, data: dict) -> dict:
     if not ai_result["verified"] and ai_result["false_claims"]:
         corrected_summary = ai_result.get("corrected_summary", "")
         corrected_pitch = ai_result.get("corrected_pitch", "")
+        _kp_before_rc = len(data.get("key_people") or [])
         if corrected_summary:
             # Fact-checker produced corrected summary — apply directly
             data["summary_text"] = corrected_summary
@@ -292,6 +293,18 @@ def _recheck_company_data(company_name: str, data: dict) -> dict:
             data["ai_verification"]["false_claims"] = []
             data["ai_verification"]["note"] = "Corrected by Gemini 3.1 Pro fact-checker inline"
             data["summary_cleaned"] = True
+
+            # Verify key_people survived the correction — it is a separate field and
+            # should never be touched by Stage 2, but an empty array means the
+            # Key Modernization Stakeholders UI section will not render.
+            _kp_after_rc = len(data.get("key_people") or [])
+            if _kp_after_rc != _kp_before_rc:
+                print(f"   ⚠️ [Admin Recheck] key_people count changed during correction: {_kp_before_rc} → {_kp_after_rc} stakeholder(s) — Key Modernization Stakeholders section may not render!")
+            elif _kp_after_rc == 0:
+                print(f"   ⚠️ [Admin Recheck] key_people is empty after correction — Key Modernization Stakeholders section will not render")
+            else:
+                print(f"   ✅ [Admin Recheck] key_people preserved: {_kp_after_rc} stakeholder(s) — Key Modernization Stakeholders section OK")
+
             storage.save_company_data(company_name, data, post_clean=True)
             storage.update_global_index_field(company_name, "ai_verified", True)
             clean_result = {"action": "cleaned", "claims_removed": len(ai_result["false_claims"]), "re_verified": True, "remaining_issues": []}
@@ -1705,6 +1718,8 @@ Respond with valid JSON only. Four fields required:
             resynth_ms = 0
             resynth_model_used = fact_check.get("fact_check_model", "")
 
+            _kp_before_fc = len(full_data.get("key_people") or [])
+
             if corrected_summary:
                 # --- Fact-checker produced corrected summary — use it directly ---
                 print(f"   ✅ [Fact-Check] Using corrected summary from Gemini 3.1 Pro fact-checker ({len(corrected_summary.split())} words)")
@@ -1730,6 +1745,16 @@ Respond with valid JSON only. Four fields required:
                 full_data["washing_flag"] = False
                 full_data["washing_type"] = None
                 print(f"   ✅ [Fact-Check] Cleared washing flags (false claims corrected by fact-checker)")
+
+                # Verify key_people survived the correction (it is a separate field, never
+                # modified by Stage 2, but an empty array means the UI section won't render).
+                _kp_after_fc = len(full_data.get("key_people") or [])
+                if _kp_after_fc != _kp_before_fc:
+                    print(f"   ⚠️ [Fact-Check] key_people count changed during correction: {_kp_before_fc} → {_kp_after_fc} stakeholder(s) — Key Modernization Stakeholders section may not render!")
+                elif _kp_after_fc == 0:
+                    print(f"   ⚠️ [Fact-Check] key_people is empty after correction — Key Modernization Stakeholders section will not render")
+                else:
+                    print(f"   ✅ [Fact-Check] key_people preserved: {_kp_after_fc} stakeholder(s) — Key Modernization Stakeholders section OK")
 
             else:
                 # --- Fallback: Fact-checker didn't produce corrected summary → separate re-synthesis ---
