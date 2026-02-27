@@ -505,8 +505,7 @@ Each false_claims object must have:
         'temperature': 0,
         'thinking_config': types.ThinkingConfig(thinking_level="LOW"),
         'safety_settings': _safety,
-        'response_mime_type': 'application/json',
-        'max_output_tokens': 4096,
+        'max_output_tokens': 8192,
     }
 
     # Config for Gemini 2.5 Pro fallback (no thinking, separate rate limits from 3.x)
