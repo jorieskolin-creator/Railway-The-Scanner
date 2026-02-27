@@ -547,17 +547,29 @@ Each false_claims object must have:
 
             elapsed_ms = int((time.time() - start) * 1000)
             try:
-                parts = response.candidates[0].content.parts
-                text = "".join(
-                    p.text for p in parts
-                    if p.text and not getattr(p, 'thought', False)
-                ).strip()
                 _finish = getattr(response.candidates[0], 'finish_reason', 'unknown')
-                _part_sizes = [(getattr(p, 'thought', False), len(p.text) if p.text else 0) for p in parts]
+                # Use response.text first — SDK aggregates the full post-search response
+                # correctly (mirrors Deep Scanning which uses response.text reliably).
+                # Parts iteration only gets the pre-search fragment when google_search
+                # splits the response across a tool-call boundary.
+                text = response.text if response.text else ""
+                # Fallback: manual parts aggregation if response.text is empty
+                if not text:
+                    parts = response.candidates[0].content.parts
+                    text = "".join(
+                        p.text for p in parts
+                        if p.text and not getattr(p, 'thought', False)
+                    ).strip()
+                _part_sizes = []
+                try:
+                    _part_sizes = [(getattr(p, 'thought', False), len(p.text) if p.text else 0)
+                                   for p in response.candidates[0].content.parts]
+                except Exception:
+                    pass
                 print(f"   🔍 [Fact-Check] {model_name}: finish={_finish}, text_len={len(text)}, parts={_part_sizes}")
             except Exception as _diag_e:
                 text = response.text if response.text else ""
-                print(f"   🔍 [Fact-Check] {model_name}: parts access failed ({_diag_e}), response.text len={len(text)}")
+                print(f"   🔍 [Fact-Check] {model_name}: response access failed ({_diag_e}), response.text len={len(text)}")
 
             if not text:
                 print(f"   ⚠️ [Fact-Check] {model_name} returned empty response ({elapsed_ms}ms)")
