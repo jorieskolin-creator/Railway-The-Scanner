@@ -586,7 +586,7 @@ Generate a completely fresh synthesis. Do NOT reference or re-introduce any of t
                 config=types.GenerateContentConfig(
                     temperature=0.5,
                     thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
-                    max_output_tokens=2048
+                    max_output_tokens=6000
                 )
             )
             resynth_text = resynth_response.text or ""
@@ -609,7 +609,7 @@ Generate a completely fresh synthesis. Do NOT reference or re-introduce any of t
                 config=types.GenerateContentConfig(
                     temperature=0.5,
                     thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
-                    max_output_tokens=2048
+                    max_output_tokens=6000
                 )
             )
             resynth_text = resynth_response.text or ""
@@ -631,7 +631,7 @@ Generate a completely fresh synthesis. Do NOT reference or re-introduce any of t
                 contents=synthesis_prompt,
                 config=types.GenerateContentConfig(
                     temperature=0.0,
-                    max_output_tokens=2048
+                    max_output_tokens=3000
                 )
             )
             resynth_text = resynth_response.text or ""
@@ -1410,7 +1410,7 @@ Respond with valid JSON only. Four fields required:
                                     config=types.GenerateContentConfig(
                                         temperature=0.5,
                                         thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
-                                        max_output_tokens=2048
+                                        max_output_tokens=6000
                                     )
                                 )
 
@@ -1441,7 +1441,7 @@ Respond with valid JSON only. Four fields required:
                                     config=types.GenerateContentConfig(
                                         temperature=0.5,
                                         thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
-                                        max_output_tokens=2048
+                                        max_output_tokens=6000
                                     )
                                 )
 
@@ -1471,7 +1471,7 @@ Respond with valid JSON only. Four fields required:
                                     contents=synthesis_prompt,
                                     config=types.GenerateContentConfig(
                                         temperature=0.0,
-                                        max_output_tokens=2048
+                                        max_output_tokens=3000
                                     )
                                 )
 
@@ -1799,7 +1799,7 @@ verified evidence provided."""
                             config=types.GenerateContentConfig(
                                 temperature=0.5,
                                 thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
-                                max_output_tokens=2048
+                                max_output_tokens=6000
                             )
                         )
                         resynth_text = resynth_response.text or ""
@@ -1820,7 +1820,7 @@ verified evidence provided."""
                             config=types.GenerateContentConfig(
                                 temperature=0.5,
                                 thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
-                                max_output_tokens=2048
+                                max_output_tokens=6000
                             )
                         )
                         resynth_text = resynth_response.text or ""
@@ -1840,7 +1840,7 @@ verified evidence provided."""
                             contents=resynth_prompt,
                             config=types.GenerateContentConfig(
                                 temperature=0.0,
-                                max_output_tokens=2048
+                                max_output_tokens=3000
                             )
                         )
                         resynth_text = resynth_response.text or ""
