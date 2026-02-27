@@ -1264,13 +1264,20 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
             ]
             if "gemini-3" in target_model_name:
-                # Gemini 3.1 Pro / 3.1 Pro Preview both get MEDIUM thinking + temp 0.5 (both contain "3.1")
+                # Gemini 3.1 Pro Preview gets MEDIUM thinking + temp 0.5.
+                # thinking_budget=8000 caps how many tokens the model can spend thinking;
+                # without an explicit budget, MEDIUM auto-allocates a large block that
+                # routinely consumes the full 150s timeout before any output is written.
                 _thinking_level = "MEDIUM" if "3.1" in target_model_name else "LOW"
                 _temperature = 0.5 if "3.1" in target_model_name else 1.0
+                _thinking_budget = 8000 if "3.1" in target_model_name else 4000
                 _model_config = {
                     'tools': [{'google_search': {}}],
                     'temperature': _temperature,
-                    'thinking_config': types.ThinkingConfig(thinking_level=_thinking_level),
+                    'thinking_config': types.ThinkingConfig(
+                        thinking_level=_thinking_level,
+                        thinking_budget=_thinking_budget,
+                    ),
                     'safety_settings': _safety,
                     'max_output_tokens': 16000,
                 }
@@ -1527,22 +1534,21 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             print(f"   ❌ [Forensic Scan] claude-sonnet-4-6 + Web Search failed in {elapsed}ms: {e}")
             return None
 
-    # --- SEQUENTIAL FALLBACK: Gemini 3.1 Pro → Gemini 3.1 Pro Preview → Gemini 2.5 Pro → Sonnet 4.6 ---
-    # Gemini 3.1 Pro is primary: native Google Search, temp=0.5, thinking=MEDIUM, proven reliable.
-    # Gemini 3.1 Pro Preview / 2.5 Pro are Gemini-side backups (rate limit separation).
+    # --- SEQUENTIAL FALLBACK: Gemini 3.1 Pro Preview → Gemini 2.5 Pro → Sonnet 4.6 ---
+    # Gemini 3.1 Pro Preview is primary: native Google Search, temp=0.5, thinking=MEDIUM.
+    # Gemini 2.5 Pro is Gemini-side backup with separate rate limits (consistently ~50s, reliable).
     # Sonnet 4.6 is last resort: cross-provider safety net if all Gemini models fail.
+    #
+    # NOTE: There is no separate "gemini-3.1-pro" (non-preview) endpoint — do NOT add a
+    # duplicate fallback with the same model string; it wastes the full timeout budget and
+    # never succeeds if the primary already timed out.
     data = None
-    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Gemini 3.1 Pro → Gemini 3.1 Pro Preview → Gemini 2.5 Pro → Sonnet 4.6")
+    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Gemini 3.1 Pro Preview → Gemini 2.5 Pro → Sonnet 4.6")
 
-    # --- PRIMARY: Gemini 3.1 Pro (temp=0.5, thinking=MEDIUM, native Google Search) ---
+    # --- PRIMARY: Gemini 3.1 Pro Preview (temp=0.5, thinking=MEDIUM, native Google Search) ---
     data = execute_with_model("gemini-3.1-pro-preview", None, 150)
 
-    # --- BACKUP 1: Gemini 3.1 Pro Preview (replaces Gemini 3 Pro, temp=0.5, thinking=MEDIUM) ---
-    if not data:
-        print(f"   ⚠️ [Forensic Scan] Gemini 3.1 Pro returned no data. Falling back to Gemini 3.1 Pro Preview...")
-        data = execute_with_model("gemini-3.1-pro-preview", call_timeout=120)
-
-    # --- BACKUP 2: Gemini 2.5 Pro (separate rate limits from 3.x family) ---
+    # --- BACKUP 1: Gemini 2.5 Pro (separate rate limits from 3.x family; ~50s typical) ---
     if not data:
         print(f"   ⚠️ [Forensic Scan] Gemini 3.1 Pro Preview returned no data. Falling back to Gemini 2.5 Pro...")
         data = execute_with_model("gemini-2.5-pro", call_timeout=120)
