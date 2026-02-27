@@ -333,6 +333,58 @@ Return ONLY valid JSON, no explanation."""
         return None
 
 
+def _structure_with_gemini(raw_text, company_name, model_name):
+    """Structure free-form forensic evidence text into JSON using Gemini (no search tools).
+
+    Used as Pass 2 of the two-pass forensic pipeline.
+    Mirrors the prompt schema of _repair_json_with_sonnet so either model can
+    fulfil the structuring role — temperature 0.0, no thinking, no tools.
+    """
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
+    if not api_key:
+        return None
+    try:
+        client = genai.Client(api_key=api_key)
+        structuring_prompt = f"""The following text is a forensic reality-check analysis for "{company_name}" produced by a web-search-grounded AI model. Your job is to structure this analysis into valid JSON, preserving ALL evidence, scores, and assessments exactly as stated.
+
+The expected JSON structure is:
+{{
+  "findings": [
+    {{"category": "Operating Model", "label": "Brief Label", "found": true, "sentiment": "positive", "snippet": "Evidence quote...", "title": "Source Title", "url": "https://...", "is_recent": true}}
+  ],
+  "key_people": [
+    {{"name": "Full Name", "role": "Exact Title", "relevance": "Why relevant"}}
+  ],
+  "reality_score_adjustment": <integer -50 to +50>,
+  "confidence_score": <integer 0-100>,
+  "washing_flag": <boolean>,
+  "washing_type": <string or null>
+}}
+
+Extract as much data as possible from the text below. Preserve all findings, URLs, and evidence. If a field cannot be determined, use sensible defaults (0 for scores, empty arrays for lists, false for booleans).
+
+TEXT TO PARSE:
+{raw_text[:12000]}
+
+Return ONLY valid JSON, no explanation."""
+        response = client.models.generate_content(
+            model=model_name,
+            contents=structuring_prompt,
+            config={
+                'temperature': 0.0,
+                'max_output_tokens': 8000,
+            }
+        )
+        text = response.text if response.text else ""
+        json_payload = extract_json_from_text(text)
+        if not json_payload:
+            return None
+        return json.loads(json_payload, strict=False)
+    except Exception as e:
+        print(f"   ❌ [Gemini Structure] {model_name} structuring failed: {e}")
+        return None
+
+
 def _build_previous_context_block(previous_context):
     """
     Builds an optional prompt section from previous scan data.
@@ -1286,7 +1338,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 # ("You can only set only one of thinking budget and thinking level").
                 # A numeric budget implicitly enables thinking at the right intensity
                 # and caps token consumption so the search call fits within the 160s timeout.
-                _temperature = 1.0
+                _temperature = 0.5 if "3.1" in target_model_name else 1.0
                 _thinking_budget = 8000 if "3.1" in target_model_name else 4000
                 _model_config = {
                     'tools': [{'google_search': {}}],
@@ -1337,13 +1389,24 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
             if text_content and len(text_content) > 100:
                 # --- STRUCTURING GATE ---
-                # Two-pass mode (3.1 Pro): free-form output is the designed flow →
-                #   is_structuring=True (no confidence penalty).
-                # Other models: unexpected unstructured output → is_structuring=False
+                # Two-pass mode (3.1 Pro): free-form output is the designed flow.
+                #   Structuring fallback chain: 3.1 Pro → Sonnet 4.6 → 2.5 Pro.
+                #   is_structuring=True for Sonnet (no confidence penalty).
+                # Other models: unexpected unstructured output → Sonnet repair only
                 #   (caps confidence at 70 to signal reduced reliability).
                 gate_label = "Pass 2 (Structure)" if is_two_pass else "JSON Repair"
                 print(f"   🔄 [{gate_label}] {target_model_name} returned {len(text_content)} chars ({elapsed}ms). Structuring into JSON...")
-                repaired = _repair_json_with_sonnet(text_content, company_name, is_structuring=is_two_pass)
+                repaired = None
+                if is_two_pass:
+                    repaired = _structure_with_gemini(text_content, company_name, "gemini-3.1-pro-preview")
+                    if not repaired:
+                        print(f"   ⚠️ [Pass 2] Gemini 3.1 Pro structuring failed. Trying Sonnet 4.6...")
+                        repaired = _repair_json_with_sonnet(text_content, company_name, is_structuring=True)
+                    if not repaired:
+                        print(f"   ⚠️ [Pass 2] Sonnet 4.6 structuring failed. Trying Gemini 2.5 Pro...")
+                        repaired = _structure_with_gemini(text_content, company_name, "gemini-2.5-pro")
+                else:
+                    repaired = _repair_json_with_sonnet(text_content, company_name, is_structuring=False)
                 if repaired:
                     repair_elapsed = int((time.time() - start) * 1000)
                     print(f"   ✅ [{gate_label}] Structured data from {target_model_name} ({repair_elapsed}ms total)")
@@ -1562,25 +1625,26 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     # duplicate fallback with the same model string; it wastes the full timeout budget and
     # never succeeds if the primary already timed out.
     data = None
-    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Gemini 3.1 Pro Preview → Gemini 2.5 Pro → Sonnet 4.6")
+    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Gemini 3.1 Pro Preview → Sonnet 4.6 → Gemini 2.5 Pro")
 
     # --- PRIMARY: Gemini 3.1 Pro Preview — two-pass mode ---
-    # Pass 1 (160s): relaxed-format prompt, thinking_budget=8000, Google Search.
-    #   No JSON-formatting pressure → model finishes search phase faster.
+    # Pass 1 (160s): relaxed-format prompt, thinking_budget=8000, temp=0.5, Google Search.
+    #   temp=0.5: decisive query selection without creative drift; looping risk gone
+    #   because JSON-formatting pressure is removed.
     #   Budget: thinking (~60-70s) + 6 searches (~30-50s) = ~100-120s peak.
-    # Pass 2 (fast): _repair_json_with_sonnet(is_structuring=True) converts
-    #   free-form evidence text to JSON — same as the designed Sonnet path.
+    # Pass 2 (fast): 3.1 Pro → Sonnet 4.6 → 2.5 Pro structuring chain.
+    #   temp=0.0, no tools, no thinking — pure JSON conversion.
     data = execute_with_model("gemini-3.1-pro-preview", None, 160)
 
-    # --- BACKUP 1: Gemini 2.5 Pro (separate rate limits from 3.x family; ~50s typical) ---
+    # --- BACKUP 1: Sonnet 4.6 (cross-provider; own search quota, unaffected by Gemini rate limits) ---
     if not data:
-        print(f"   ⚠️ [Forensic Scan] Gemini 3.1 Pro Preview returned no data. Falling back to Gemini 2.5 Pro...")
-        data = execute_with_model("gemini-2.5-pro", call_timeout=120)
-
-    # --- LAST RESORT: Sonnet 4.6 (cross-provider safety net if all Gemini models fail) ---
-    if not data:
-        print(f"   ⚠️ [Forensic Scan] All Gemini models returned no data. Falling back to Sonnet 4.6...")
+        print(f"   ⚠️ [Forensic Scan] Gemini 3.1 Pro Preview returned no data. Falling back to Sonnet 4.6...")
         data = execute_with_anthropic(prompt)
+
+    # --- BACKUP 2: Gemini 2.5 Pro (separate rate limits from 3.x family; ~50s typical) ---
+    if not data:
+        print(f"   ⚠️ [Forensic Scan] Sonnet 4.6 returned no data. Falling back to Gemini 2.5 Pro...")
+        data = execute_with_model("gemini-2.5-pro", call_timeout=120)
 
     # --- CONFIDENCE-DRIVEN RE-SEARCH LOOP ---
     # Only triggers when initial results have low confidence AND weak coverage.
