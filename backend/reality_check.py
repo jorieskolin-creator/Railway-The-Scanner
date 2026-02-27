@@ -545,7 +545,14 @@ Each false_claims object must have:
             pool.shutdown(wait=False)
 
             elapsed_ms = int((time.time() - start) * 1000)
-            text = response.text if response.text else ""
+            try:
+                parts = response.candidates[0].content.parts
+                text = "".join(
+                    p.text for p in parts
+                    if p.text and not getattr(p, 'thought', False)
+                ).strip()
+            except Exception:
+                text = response.text if response.text else ""
 
             if not text:
                 print(f"   ⚠️ [Fact-Check] {model_name} returned empty response ({elapsed_ms}ms)")
