@@ -1264,18 +1264,18 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
             ]
             if "gemini-3" in target_model_name:
-                # Gemini 3.1 Pro Preview gets MEDIUM thinking + temp 0.5.
-                # thinking_budget=8000 caps how many tokens the model can spend thinking;
-                # without an explicit budget, MEDIUM auto-allocates a large block that
-                # routinely consumes the full 150s timeout before any output is written.
-                _thinking_level = "MEDIUM" if "3.1" in target_model_name else "LOW"
+                # Gemini 3.1 Pro Preview gets a capped thinking budget.
+                # Use thinking_budget ONLY — the Gemini API rejects requests that set
+                # both thinking_level and thinking_budget simultaneously
+                # ("You can only set only one of thinking budget and thinking level").
+                # A numeric budget implicitly enables thinking at the right intensity
+                # and caps token consumption so the call fits within the 150s timeout.
                 _temperature = 0.5 if "3.1" in target_model_name else 1.0
                 _thinking_budget = 8000 if "3.1" in target_model_name else 4000
                 _model_config = {
                     'tools': [{'google_search': {}}],
                     'temperature': _temperature,
                     'thinking_config': types.ThinkingConfig(
-                        thinking_level=_thinking_level,
                         thinking_budget=_thinking_budget,
                     ),
                     'safety_settings': _safety,
