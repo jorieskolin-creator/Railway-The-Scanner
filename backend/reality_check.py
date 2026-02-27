@@ -386,15 +386,19 @@ def _get_anthropic_key(anthropic_key=None):
 
 def _gemini_fact_check(summary_text, company_name, evidence_links=None, pitch_text=None):
     """
-    Fact-check the synthesis using Gemini 3.1 Pro Preview (backup: 3 Pro / 2.5 Pro)
-    with Google Search grounding. Gemini searches the web independently and checks
-    if the summary claims are true.
+    Two-stage fact-check pipeline:
 
-    If false claims are found, the model also produces a corrected summary and pitch
-    in the same call — saving a separate re-synthesis API call.
+      Stage 1 — Gemini 2.5 Pro + Google Search (detection):
+        Finds false claims and attributes them to evidence sources.
+        Backup: Gemini 3.1 Pro if 2.5 Pro fails/times out.
 
-    Returns source_indices and source_urls for each false claim so only the specific
-    sources that a false claim traces back to get purged.
+      Stage 2 — Gemini 3.1 Pro, no search (correction):
+        Given the false claims from Stage 1, surgically rewrites the summary
+        and pitch to remove them. Uses thinking budget for precise editing.
+        Only runs when Stage 1 found at least one false claim.
+
+    Returns source_indices and source_urls for each false claim so only the
+    specific sources that a false claim traces back to get purged.
     """
     import concurrent.futures
 
@@ -409,10 +413,11 @@ def _gemini_fact_check(summary_text, company_name, evidence_links=None, pitch_te
         }
 
     # Build evidence reference list so Gemini can attribute false claims to sources
+    verified_links = []
     evidence_ref = ""
     if evidence_links:
-        verified_links = [l for l in evidence_links if l.get("verified", True)]
-        for i, link in enumerate(verified_links[:20], 1):
+        verified_links = [l for l in evidence_links if l.get("verified", True)][:20]
+        for i, link in enumerate(verified_links, 1):
             title = link.get("title", "Unknown")
             url = link.get("url", "")
             snippet = link.get("snippet", "")[:150]
@@ -432,7 +437,8 @@ AI-GENERATED PITCH TO VERIFY:
 {pitch_text}
 """
 
-    prompt = f"""You are an uncompromising Data Auditor. Your job is to evaluate the faithfulness and factual accuracy of an AI-generated company summary. You must ruthlessly identify hallucinations, fabrications, and contradictions. If you find false claims, you must also produce a corrected version.
+    # ── Stage 1 prompt: detection only (no correction asked) ─────────────────
+    stage1_prompt = f"""You are an uncompromising Data Auditor. Your job is to evaluate the faithfulness and factual accuracy of an AI-generated company summary. You must ruthlessly identify hallucinations, fabrications, and contradictions.
 
 COMPANY: {company_name}
 
@@ -458,27 +464,13 @@ Do NOT ignore qualitative claims if they are based on fabricated underlying metr
 Do NOT flag Knowledge Base terminology or archetype labels (e.g. "Digital Taylorism", "Thriving", "At Risk") — these are analytical framework terms, not factual claims.
 Do NOT flag references to previous scan counts, historical score trajectories (e.g. arrow-notation scores like "72→76→75", phrases like "across X scans" or "across X assessments"), or any comparative claim about this scan versus prior assessments — these are sourced from internal scan database records, not externally verifiable data.
 
-PART 1 — FACT-CHECK:
-Identify all false claims as described above.
-
-PART 2 — CORRECTED SUMMARY (only if false claims found):
-If you find ANY false claims, you MUST also produce a corrected summary (and corrected pitch if applicable).
-Rules for correction:
-- Surgically remove or fix ONLY the sentences containing false claims.
-- Preserve the original text word-for-word for all sentences that are NOT affected by false claims.
-- Do NOT add new information, analysis, or claims. You are correcting, not rewriting.
-- Do NOT change the archetype classification or Knowledge Base terminology.
-- After removing false claim sentences, fix only the immediately adjacent transitions so the text reads naturally.
-- The corrected summary must remain close to the original length (within 80% of original word count).
-- If the pitch references any false claims, fix those parts too.
-
 OUTPUT FORMAT — valid JSON only:
 
 If summary is accurate (no false claims):
 {{"false_claims": [], "summary_accurate": true}}
 
-If false claims found (MUST include corrected_summary):
-{{"false_claims": [{{"claim": "Exact quote of the false claim from the summary", "error_type": "Fabrication OR Contradiction", "reasoning": "Briefly explain why this is false based on the sources or search results.", "source_indices": [2, 5]}}], "summary_accurate": false, "corrected_summary": "The surgically corrected summary with false claims removed/fixed...", "corrected_pitch": "The corrected pitch if it referenced false claims, or the original pitch unchanged..."}}
+If false claims found:
+{{"false_claims": [{{"claim": "Exact quote of the false claim from the summary", "error_type": "Fabrication OR Contradiction", "reasoning": "Briefly explain why this is false based on the sources or search results.", "source_indices": [2, 5]}}], "summary_accurate": false}}
 
 Each false_claims object must have:
   - "claim": string — the exact quote or close paraphrase of the false claim from the summary
@@ -486,10 +478,9 @@ Each false_claims object must have:
   - "reasoning": string — brief explanation of why this is false
   - "source_indices": array of integer indices referring to STORED EVIDENCE SOURCES that were contradicted or misrepresented. Use an EMPTY array [] if the claim is completely fabricated with no traceable source."""
 
-    # --- Try Gemini 3.1 Pro → 3 Pro → 2.5 Pro (2.5 has separate rate limits) ---
+    # ── Gemini client + configs ───────────────────────────────────────────────
     from google import genai
     client = genai.Client(api_key=gemini_key)
-    verified_links = [l for l in (evidence_links or []) if l.get("verified", True)][:20]
 
     from google.genai import types
 
@@ -500,7 +491,14 @@ Each false_claims object must have:
         {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
     ]
 
-    gemini_31_config = {
+    # Stage 1: Google Search enabled — 2.5 Pro (primary), 3.1 Pro (backup)
+    gemini_25_search_config = {
+        'tools': [{'google_search': {}}],
+        'temperature': 0.0,
+        'max_output_tokens': 4096,
+        'safety_settings': _safety,
+    }
+    gemini_31_search_config = {
         'tools': [{'google_search': {}}],
         'temperature': 0.5,
         'thinking_config': types.ThinkingConfig(thinking_level="MEDIUM"),
@@ -508,159 +506,244 @@ Each false_claims object must have:
         'safety_settings': _safety,
     }
 
-    # Config for Gemini 2.5 Pro fallback (no thinking, separate rate limits from 3.x)
-    gemini_25_config = {
-        'tools': [{'google_search': {}}],
-        'temperature': 0.0,
+    # Stage 2: No search tool — pure reasoning/correction by 3.1 Pro
+    gemini_31_correction_config = {
+        'temperature': 0.5,
+        'thinking_config': types.ThinkingConfig(thinking_level="MEDIUM"),
         'max_output_tokens': 4096,
         'safety_settings': _safety,
     }
 
-    models_to_try = [
-        ("gemini-3.1-pro-preview", 90, gemini_31_config),   # Primary: Gemini 3.1 Pro, thinking_level=MEDIUM
-        ("gemini-3.1-pro-preview", 60, gemini_31_config),    # Backup 1: Gemini 3.1 Pro Preview (replaces 3 Pro), temp=0.5, thinking=MEDIUM
-        ("gemini-2.5-pro", 60, gemini_25_config),           # Backup 2: Gemini 2.5 Pro (separate rate limits)
+    stage1_models = [
+        ("gemini-2.5-pro", 90, gemini_25_search_config),          # Primary: 2.5 Pro + Google Search, temp=0.0
+        ("gemini-3.1-pro-preview", 90, gemini_31_search_config),  # Backup:  3.1 Pro + Google Search
     ]
 
-    for model_name, timeout_sec, model_config in models_to_try:
+    # ── Helper: single model call with timeout ────────────────────────────────
+    def _call_model(model_name, config, prompt_text, timeout_sec):
+        """Returns (response, elapsed_ms) or raises TimeoutError / Exception."""
+        start = time.time()
+
+        def _call():
+            return client.models.generate_content(
+                model=model_name,
+                contents=prompt_text,
+                config=config,
+            )
+
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = pool.submit(_call)
         try:
-            print(f"   🔄 [Fact-Check] Trying {model_name}...")
-            start = time.time()
-
-            def _call(m=model_name, cfg=model_config):
-                return client.models.generate_content(
-                    model=m,
-                    contents=prompt,
-                    config=cfg,
-                )
-
-            pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-            future = pool.submit(_call)
-            try:
-                response = future.result(timeout=timeout_sec)
-            except concurrent.futures.TimeoutError:
-                pool.shutdown(wait=False)
-                elapsed_ms = int((time.time() - start) * 1000)
-                print(f"   ⏰ [Fact-Check] {model_name} timed out after {timeout_sec}s ({elapsed_ms}ms)")
-                continue  # Try next model
+            response = future.result(timeout=timeout_sec)
+        except concurrent.futures.TimeoutError:
             pool.shutdown(wait=False)
-
             elapsed_ms = int((time.time() - start) * 1000)
-            try:
-                _finish = getattr(response.candidates[0], 'finish_reason', 'unknown')
-                # Use response.text first — SDK aggregates the full post-search response
-                # correctly (mirrors Deep Scanning which uses response.text reliably).
-                # Parts iteration only gets the pre-search fragment when google_search
-                # splits the response across a tool-call boundary.
-                text = response.text if response.text else ""
-                # Fallback: manual parts aggregation if response.text is empty
-                if not text:
-                    parts = response.candidates[0].content.parts
-                    text = "".join(
-                        p.text for p in parts
-                        if p.text and not getattr(p, 'thought', False)
-                    ).strip()
-                _part_sizes = []
-                try:
-                    _part_sizes = [(getattr(p, 'thought', False), len(p.text) if p.text else 0)
-                                   for p in response.candidates[0].content.parts]
-                except Exception:
-                    pass
-                print(f"   🔍 [Fact-Check] {model_name}: finish={_finish}, text_len={len(text)}, parts={_part_sizes}")
-            except Exception as _diag_e:
-                text = response.text if response.text else ""
-                print(f"   🔍 [Fact-Check] {model_name}: response access failed ({_diag_e}), response.text len={len(text)}")
+            raise TimeoutError(f"timed out after {timeout_sec}s ({elapsed_ms}ms)")
+        pool.shutdown(wait=False)
+        elapsed_ms = int((time.time() - start) * 1000)
+        return response, elapsed_ms
 
+    # ── Helper: extract text from response (response.text first, parts fallback)
+    def _extract_text(response, label):
+        try:
+            _finish = getattr(response.candidates[0], 'finish_reason', 'unknown')
+            text = response.text if response.text else ""
             if not text:
-                print(f"   ⚠️ [Fact-Check] {model_name} returned empty response ({elapsed_ms}ms)")
-                continue  # Try next model
+                parts = response.candidates[0].content.parts
+                text = "".join(
+                    p.text for p in parts
+                    if p.text and not getattr(p, 'thought', False)
+                ).strip()
+            _part_sizes = []
+            try:
+                _part_sizes = [(getattr(p, 'thought', False), len(p.text) if p.text else 0)
+                               for p in response.candidates[0].content.parts]
+            except Exception:
+                pass
+            print(f"   🔍 [Fact-Check] {label}: finish={_finish}, text_len={len(text)}, parts={_part_sizes}")
+            return text
+        except Exception as _diag_e:
+            text = response.text if response.text else ""
+            print(f"   🔍 [Fact-Check] {label}: response access failed ({_diag_e}), response.text len={len(text)}")
+            return text
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STAGE 1 — Gemini 2.5 Pro (primary) + Google Search: detection
+    # ═══════════════════════════════════════════════════════════════════════════
+    stage1_false_claims = None
+    stage1_model_name = None
+    stage1_time_ms = 0
+
+    for model_name, timeout_sec, model_config in stage1_models:
+        try:
+            print(f"   🔄 [Fact-Check S1] Trying {model_name}...")
+            try:
+                response, elapsed_ms = _call_model(model_name, model_config, stage1_prompt, timeout_sec)
+            except TimeoutError as te:
+                print(f"   ⏰ [Fact-Check S1] {model_name} {te}")
+                continue
+
+            text = _extract_text(response, model_name)
+            if not text:
+                print(f"   ⚠️ [Fact-Check S1] {model_name} returned empty response ({elapsed_ms}ms)")
+                continue
 
             result = _robust_parse_json(text)
-            if result and "false_claims" in result:
-                # Respect the summary_accurate flag — if the LLM says true,
-                # treat the list as empty even if it contains explanatory entries
-                if result.get("summary_accurate") is True and result.get("false_claims"):
-                    print(f"   ✅ [Fact-Check] {model_name} explicitly said summary_accurate=true ({elapsed_ms}ms)")
-                    return {"false_claims": [], "corrected_summary": "", "corrected_pitch": "", "model": model_name, "time_ms": elapsed_ms}
+            if not result or "false_claims" not in result:
+                print(f"   ⚠️ [Fact-Check S1] Could not parse {model_name} response: {text[:1000]}")
+                continue
 
-                raw_claims = result.get("false_claims", [])
-                # Filter out bogus entries where the LLM put "no issue" text
-                _not_real = ["no fabrication", "no false", "appears accurate", "all accurate",
-                             "no issues", "could not find", "unable to verify", "summary is accurate",
-                             "no contradiction", "no conflict", "all align", "nothing to flag"]
-                false_claims = []
-                for fc in raw_claims[:10]:
-                    if isinstance(fc, str):
-                        if any(p in fc.lower() for p in _not_real):
-                            print(f"   ⏭️ [Fact-Check] Skipping non-issue entry: {fc[:80]}")
-                            continue
-                        false_claims.append({"claim": fc, "error_type": "Unknown", "reasoning": "", "source_indices": [], "source_urls": []})
-                    elif isinstance(fc, dict):
-                        claim_text = fc.get("claim", str(fc))
-                        if any(p in claim_text.lower() for p in _not_real):
-                            print(f"   ⏭️ [Fact-Check] Skipping non-issue entry: {claim_text[:80]}")
-                            continue
-                        error_type = fc.get("error_type", "Unknown")
-                        reasoning = fc.get("reasoning", "")
-                        indices = fc.get("source_indices", [])
-                        source_urls = []
-                        for idx in indices:
-                            if isinstance(idx, int) and 1 <= idx <= len(verified_links):
-                                url = verified_links[idx - 1].get("url", "")
-                                if url:
-                                    source_urls.append(url)
-                        false_claims.append({
-                            "claim": claim_text,
-                            "error_type": error_type,
-                            "reasoning": reasoning,
-                            "source_indices": indices,
-                            "source_urls": source_urls,
-                        })
+            # Respect summary_accurate override
+            if result.get("summary_accurate") is True and result.get("false_claims"):
+                print(f"   ✅ [Fact-Check S1] {model_name} explicitly said summary_accurate=true ({elapsed_ms}ms)")
+                return {"false_claims": [], "corrected_summary": "", "corrected_pitch": "", "model": model_name, "time_ms": elapsed_ms}
 
-                # Extract corrected summary/pitch if false claims were found
-                corrected_summary = ""
-                corrected_pitch = ""
-                if false_claims:
-                    corrected_summary = result.get("corrected_summary", "")
-                    corrected_pitch = result.get("corrected_pitch", "")
-                    if corrected_summary:
-                        print(f"   ✏️ [Fact-Check] {model_name} also produced corrected summary ({len(corrected_summary.split())} words)")
-                    else:
-                        print(f"   ⚠️ [Fact-Check] {model_name} found false claims but did NOT produce corrected summary")
+            raw_claims = result.get("false_claims", [])
+            _not_real = ["no fabrication", "no false", "appears accurate", "all accurate",
+                         "no issues", "could not find", "unable to verify", "summary is accurate",
+                         "no contradiction", "no conflict", "all align", "nothing to flag"]
+            false_claims = []
+            for fc in raw_claims[:10]:
+                if isinstance(fc, str):
+                    if any(p in fc.lower() for p in _not_real):
+                        print(f"   ⏭️ [Fact-Check S1] Skipping non-issue entry: {fc[:80]}")
+                        continue
+                    false_claims.append({"claim": fc, "error_type": "Unknown", "reasoning": "", "source_indices": [], "source_urls": []})
+                elif isinstance(fc, dict):
+                    claim_text = fc.get("claim", str(fc))
+                    if any(p in claim_text.lower() for p in _not_real):
+                        print(f"   ⏭️ [Fact-Check S1] Skipping non-issue entry: {claim_text[:80]}")
+                        continue
+                    error_type = fc.get("error_type", "Unknown")
+                    reasoning = fc.get("reasoning", "")
+                    indices = fc.get("source_indices", [])
+                    source_urls = []
+                    for idx in indices:
+                        if isinstance(idx, int) and 1 <= idx <= len(verified_links):
+                            url = verified_links[idx - 1].get("url", "")
+                            if url:
+                                source_urls.append(url)
+                    false_claims.append({
+                        "claim": claim_text,
+                        "error_type": error_type,
+                        "reasoning": reasoning,
+                        "source_indices": indices,
+                        "source_urls": source_urls,
+                    })
 
-                print(f"   {'⚠️' if false_claims else '✅'} [Fact-Check] {model_name}: {len(false_claims)} false claim(s) ({elapsed_ms}ms)")
-                return {
-                    "false_claims": false_claims,
-                    "corrected_summary": corrected_summary,
-                    "corrected_pitch": corrected_pitch,
-                    "model": model_name,
-                    "time_ms": elapsed_ms,
-                }
-            else:
-                print(f"   ⚠️ [Fact-Check] Could not parse {model_name} response: {text[:1000]}")
-                continue  # Try next model
+            print(f"   {'⚠️' if false_claims else '✅'} [Fact-Check S1] {model_name}: {len(false_claims)} false claim(s) ({elapsed_ms}ms)")
+            stage1_false_claims = false_claims
+            stage1_model_name = model_name
+            stage1_time_ms = elapsed_ms
+            break
 
         except Exception as e:
-            print(f"   ❌ [Fact-Check] {model_name} failed: {e}")
-            continue  # Try next model
+            print(f"   ❌ [Fact-Check S1] {model_name} failed: {e}")
+            continue
 
-    # All models failed
-    print(f"   ❌ [Fact-Check] All Gemini models failed — skipping fact-check")
-    return {"false_claims": [], "corrected_summary": "", "corrected_pitch": "", "model": "all_models_failed", "time_ms": 0}
+    if stage1_false_claims is None:
+        print(f"   ❌ [Fact-Check] All Stage 1 models failed — skipping fact-check")
+        return {"false_claims": [], "corrected_summary": "", "corrected_pitch": "", "model": "all_models_failed", "time_ms": 0}
+
+    # No false claims → done, Stage 2 not needed
+    if not stage1_false_claims:
+        return {"false_claims": [], "corrected_summary": "", "corrected_pitch": "", "model": stage1_model_name, "time_ms": stage1_time_ms}
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # STAGE 2 — Gemini 3.1 Pro, no search: surgical correction
+    # Runs only because Stage 1 found false claims.
+    # ═══════════════════════════════════════════════════════════════════════════
+    claims_text = "\n".join(
+        f"- [{fc['error_type']}] {fc['claim']}  (reason: {fc['reasoning']})"
+        for fc in stage1_false_claims
+    )
+
+    pitch_correction_note = ""
+    if pitch_text:
+        pitch_correction_note = f"""
+ORIGINAL PITCH TO ALSO CORRECT (fix only if it references a false claim):
+{pitch_text}
+"""
+
+    stage2_prompt = f"""You are a precise editorial editor. The following AI-generated company summary has been fact-checked and specific false claims have been identified. Your sole job is to surgically remove or fix those false claims while preserving everything else exactly as written.
+
+COMPANY: {company_name}
+
+ORIGINAL SUMMARY:
+{summary_text}
+{pitch_correction_note}
+IDENTIFIED FALSE CLAIMS TO REMOVE/FIX:
+{claims_text}
+
+CORRECTION RULES:
+- Surgically remove or fix ONLY the sentences containing the identified false claims.
+- Preserve the original text word-for-word for ALL sentences not affected by false claims.
+- Do NOT add new information, analysis, or claims of your own.
+- Do NOT change the archetype classification or Knowledge Base terminology.
+- After removing a false claim sentence, fix only the immediately adjacent transitions so the text reads naturally.
+- The corrected summary must remain close to the original length (within 80% of original word count).
+- If the pitch references any of the false claims, fix those parts too; otherwise return the pitch unchanged.
+
+OUTPUT FORMAT — valid JSON only:
+{{"corrected_summary": "The surgically corrected summary...", "corrected_pitch": "The corrected pitch, or the original pitch if it had no false claims..."}}"""
+
+    corrected_summary = ""
+    corrected_pitch = ""
+    elapsed2 = 0
+    try:
+        print(f"   🔄 [Fact-Check S2] Gemini 3.1 Pro correcting {len(stage1_false_claims)} false claim(s)...")
+        try:
+            response2, elapsed2 = _call_model("gemini-3.1-pro-preview", gemini_31_correction_config, stage2_prompt, 60)
+        except TimeoutError as te:
+            print(f"   ⏰ [Fact-Check S2] gemini-3.1-pro-preview {te} — returning claims without correction")
+            return {
+                "false_claims": stage1_false_claims,
+                "corrected_summary": "",
+                "corrected_pitch": "",
+                "model": f"{stage1_model_name}+3.1pro(s2-timeout)",
+                "time_ms": stage1_time_ms,
+            }
+
+        text2 = _extract_text(response2, "gemini-3.1-pro-preview (S2 correction)")
+        if text2:
+            result2 = _robust_parse_json(text2)
+            if result2:
+                corrected_summary = result2.get("corrected_summary", "")
+                corrected_pitch = result2.get("corrected_pitch", "")
+                if corrected_summary:
+                    print(f"   ✏️ [Fact-Check S2] Correction produced ({len(corrected_summary.split())} words, {elapsed2}ms)")
+                else:
+                    print(f"   ⚠️ [Fact-Check S2] Parsed but no corrected_summary in response")
+            else:
+                print(f"   ⚠️ [Fact-Check S2] Could not parse Stage 2 response: {text2[:500]}")
+        else:
+            print(f"   ⚠️ [Fact-Check S2] Empty response from Stage 2")
+
+    except Exception as e:
+        print(f"   ❌ [Fact-Check S2] gemini-3.1-pro-preview failed: {e} — returning claims without correction")
+
+    return {
+        "false_claims": stage1_false_claims,
+        "corrected_summary": corrected_summary,
+        "corrected_pitch": corrected_pitch,
+        "model": f"{stage1_model_name}+3.1pro",
+        "time_ms": stage1_time_ms + elapsed2,
+    }
 
 
 def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text=None):
     """
-    AI-powered fact-check — single phase using Gemini 3.1 Pro (backup: 3 Pro / 2.5 Pro)
-    with Google Search grounding.
+    AI-powered fact-check — two-stage pipeline:
+      Stage 1: Gemini 2.5 Pro + Google Search detects false claims.
+      Stage 2: Gemini 3.1 Pro (no search) surgically corrects them.
 
-    Gemini independently verifies the synthesis claims against live web data.
-    This catches both evidence-sourced errors (contaminated evidence) and
-    fabricated claims that have no basis anywhere.
+    Gemini 2.5 Pro independently verifies the synthesis claims against live
+    web data. This catches both evidence-sourced errors (contaminated evidence)
+    and fabricated claims that have no basis anywhere.
 
     If no false claims found → pipeline DONE, original synthesis stands.
-    If false claims found → Gemini 3.1 Pro also produces a corrected summary
-    in the same call (fact-check + fix in one step). Evidence purging still
+    If false claims found → Gemini 3.1 Pro produces a corrected summary
+    in a dedicated correction call. Evidence purging still
     happens in the caller (main.py).
 
     Returns:
