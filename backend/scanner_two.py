@@ -1264,7 +1264,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
             ]
             if "gemini-3" in target_model_name:
-                # Gemini 3.1 Pro / 3.1 Pro Review both get MEDIUM thinking + temp 0.5 (both contain "3.1")
+                # Gemini 3.1 Pro / 3.1 Pro Preview both get MEDIUM thinking + temp 0.5 (both contain "3.1")
                 _thinking_level = "MEDIUM" if "3.1" in target_model_name else "LOW"
                 _temperature = 0.5 if "3.1" in target_model_name else 1.0
                 _model_config = {
@@ -1527,24 +1527,24 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             print(f"   ❌ [Forensic Scan] claude-sonnet-4-6 + Web Search failed in {elapsed}ms: {e}")
             return None
 
-    # --- SEQUENTIAL FALLBACK: Gemini 3.1 Pro → Gemini 3.1 Pro Review → Gemini 2.5 Pro → Sonnet 4.6 ---
+    # --- SEQUENTIAL FALLBACK: Gemini 3.1 Pro → Gemini 3.1 Pro Preview → Gemini 2.5 Pro → Sonnet 4.6 ---
     # Gemini 3.1 Pro is primary: native Google Search, temp=0.5, thinking=MEDIUM, proven reliable.
-    # Gemini 3.1 Pro Review / 2.5 Pro are Gemini-side backups (rate limit separation).
+    # Gemini 3.1 Pro Preview / 2.5 Pro are Gemini-side backups (rate limit separation).
     # Sonnet 4.6 is last resort: cross-provider safety net if all Gemini models fail.
     data = None
-    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Gemini 3.1 Pro → Gemini 3.1 Pro Review → Gemini 2.5 Pro → Sonnet 4.6")
+    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Gemini 3.1 Pro → Gemini 3.1 Pro Preview → Gemini 2.5 Pro → Sonnet 4.6")
 
     # --- PRIMARY: Gemini 3.1 Pro (temp=0.5, thinking=MEDIUM, native Google Search) ---
     data = execute_with_model("gemini-3.1-pro-preview", None, 150)
 
-    # --- BACKUP 1: Gemini 3.1 Pro Review (replaces Gemini 3 Pro, temp=0.5, thinking=MEDIUM) ---
+    # --- BACKUP 1: Gemini 3.1 Pro Preview (replaces Gemini 3 Pro, temp=0.5, thinking=MEDIUM) ---
     if not data:
-        print(f"   ⚠️ [Forensic Scan] Gemini 3.1 Pro returned no data. Falling back to Gemini 3.1 Pro Review...")
-        data = execute_with_model("gemini-3.1-pro-review", call_timeout=120)
+        print(f"   ⚠️ [Forensic Scan] Gemini 3.1 Pro returned no data. Falling back to Gemini 3.1 Pro Preview...")
+        data = execute_with_model("gemini-3.1-pro-preview", call_timeout=120)
 
     # --- BACKUP 2: Gemini 2.5 Pro (separate rate limits from 3.x family) ---
     if not data:
-        print(f"   ⚠️ [Forensic Scan] Gemini 3.1 Pro Review returned no data. Falling back to Gemini 2.5 Pro...")
+        print(f"   ⚠️ [Forensic Scan] Gemini 3.1 Pro Preview returned no data. Falling back to Gemini 2.5 Pro...")
         data = execute_with_model("gemini-2.5-pro", call_timeout=120)
 
     # --- LAST RESORT: Sonnet 4.6 (cross-provider safety net if all Gemini models fail) ---
@@ -1597,7 +1597,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 # Re-search uses Gemini models (targeted follow-up with Google Search grounding)
                 research_data = execute_with_model("gemini-3.1-pro-preview", custom_prompt=research_prompt)
                 if not research_data:
-                    research_data = execute_with_model("gemini-3.1-pro-review", custom_prompt=research_prompt)
+                    research_data = execute_with_model("gemini-3.1-pro-preview", custom_prompt=research_prompt)
                 if not research_data:
                     research_data = execute_with_model("gemini-2.5-pro", custom_prompt=research_prompt)
 

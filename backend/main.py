@@ -583,15 +583,15 @@ Generate a completely fresh synthesis. Do NOT reference or re-introduce any of t
         except Exception as g31_err:
             print(f"   ❌ [Clean Re-Synthesis] Gemini 3.1 Pro failed: {g31_err}")
 
-    # Fallback 1: Gemini 3.1 Pro Review (replaces Gemini 3 Pro)
+    # Fallback 1: Gemini 3.1 Pro Preview (replaces Gemini 3 Pro)
     if not resynth_text and gemini_key:
         try:
             from google import genai
             from google.genai import types
-            print(f"   🔄 [Clean Re-Synthesis] Falling back to gemini-3.1-pro-review...")
+            print(f"   🔄 [Clean Re-Synthesis] Falling back to gemini-3.1-pro-preview...")
             gemini_client = genai.Client(api_key=gemini_key)
             resynth_response = gemini_client.models.generate_content(
-                model="gemini-3.1-pro-review",
+                model="gemini-3.1-pro-preview",
                 contents=synthesis_prompt,
                 config=types.GenerateContentConfig(
                     temperature=0.5,
@@ -600,11 +600,11 @@ Generate a completely fresh synthesis. Do NOT reference or re-introduce any of t
                 )
             )
             resynth_text = resynth_response.text or ""
-            resynth_model_used = "gemini-3.1-pro-review"
+            resynth_model_used = "gemini-3.1-pro-preview"
             resynth_ms = int((time.time() - resynth_start) * 1000)
-            print(f"   ✅ [Clean Re-Synthesis] Gemini 3.1 Pro Review complete ({resynth_ms}ms)")
+            print(f"   ✅ [Clean Re-Synthesis] Gemini 3.1 Pro Preview complete ({resynth_ms}ms)")
         except Exception as g3_err:
-            print(f"   ❌ [Clean Re-Synthesis] Gemini 3.1 Pro Review failed: {g3_err}")
+            print(f"   ❌ [Clean Re-Synthesis] Gemini 3.1 Pro Preview failed: {g3_err}")
 
     # Fallback 2: Gemini 2.5 Pro (separate rate limits from 3.x family)
     if not resynth_text and gemini_key:
@@ -1417,13 +1417,13 @@ Respond with valid JSON only. Four fields required:
                     # Fallback 2: Gemini 3 Pro Preview
                     if not response_text and gemini_key and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 30:
                         try:
-                            print(f"   🔄 [Synthesis] Falling back to Gemini 3.1 Pro Review (timeout: {SYNTH_TIMEOUT}s)...")
+                            print(f"   🔄 [Synthesis] Falling back to Gemini 3.1 Pro Preview (timeout: {SYNTH_TIMEOUT}s)...")
                             g2_start = time.time()
                             gemini_client = genai.Client(api_key=gemini_key)
 
                             def _synth_gemini31review():
                                 return gemini_client.models.generate_content(
-                                    model="gemini-3.1-pro-review",
+                                    model="gemini-3.1-pro-preview",
                                     contents=synthesis_prompt,
                                     config=types.GenerateContentConfig(
                                         temperature=0.5,
@@ -1437,13 +1437,13 @@ Respond with valid JSON only. Four fields required:
                             try:
                                 gemini_resp = g2_future.result(timeout=SYNTH_TIMEOUT)
                                 response_text = gemini_resp.text or ""
-                                print(f"   ✅ [Synthesis] Gemini 3.1 Pro Review succeeded in {int((time.time() - g2_start) * 1000)}ms")
+                                print(f"   ✅ [Synthesis] Gemini 3.1 Pro Preview succeeded in {int((time.time() - g2_start) * 1000)}ms")
                             except concurrent.futures.TimeoutError:
                                 g2_pool.shutdown(wait=False)
-                                print(f"   ⏰ [Synthesis] Gemini 3.1 Pro Review timed out after {SYNTH_TIMEOUT}s")
+                                print(f"   ⏰ [Synthesis] Gemini 3.1 Pro Preview timed out after {SYNTH_TIMEOUT}s")
                             g2_pool.shutdown(wait=False)
                         except Exception as gemini3_err:
-                            print(f"   ❌ [Synthesis] Gemini 3.1 Pro Review failed: {gemini3_err}")
+                            print(f"   ❌ [Synthesis] Gemini 3.1 Pro Preview failed: {gemini3_err}")
 
                     # Fallback 3: Gemini 2.5 Pro (separate rate limits from 3.x family)
                     if not response_text and gemini_key and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 30:
@@ -1784,13 +1784,13 @@ verified evidence provided."""
                     except Exception as g31_err:
                         print(f"   ❌ [Re-Synthesis] Gemini 3.1 Pro failed: {g31_err}")
 
-                # Fallback 1: Gemini 3.1 Pro Review (replaces Gemini 3 Pro)
+                # Fallback 1: Gemini 3.1 Pro Preview (replaces Gemini 3 Pro)
                 if not resynth_text and gemini_key:
                     try:
-                        print(f"   🔄 [Re-Synthesis] Falling back to gemini-3.1-pro-review...")
+                        print(f"   🔄 [Re-Synthesis] Falling back to gemini-3.1-pro-preview...")
                         gemini_client = genai.Client(api_key=gemini_key)
                         resynth_response = gemini_client.models.generate_content(
-                            model="gemini-3.1-pro-review",
+                            model="gemini-3.1-pro-preview",
                             contents=resynth_prompt,
                             config=types.GenerateContentConfig(
                                 temperature=0.5,
@@ -1799,11 +1799,11 @@ verified evidence provided."""
                             )
                         )
                         resynth_text = resynth_response.text or ""
-                        resynth_model_used = "gemini-3.1-pro-review"
+                        resynth_model_used = "gemini-3.1-pro-preview"
                         resynth_ms = int((time.time() - resynth_start) * 1000)
-                        print(f"   ✅ [Re-Synthesis] Gemini 3.1 Pro Review re-synthesis complete ({resynth_ms}ms)")
+                        print(f"   ✅ [Re-Synthesis] Gemini 3.1 Pro Preview re-synthesis complete ({resynth_ms}ms)")
                     except Exception as g3_err:
-                        print(f"   ❌ [Re-Synthesis] Gemini 3.1 Pro Review failed: {g3_err}")
+                        print(f"   ❌ [Re-Synthesis] Gemini 3.1 Pro Preview failed: {g3_err}")
 
                 # Fallback 2: Gemini 2.5 Pro (separate rate limits from 3.x family)
                 if not resynth_text and gemini_key:

@@ -516,7 +516,7 @@ Each false_claims object must have:
 
     models_to_try = [
         ("gemini-3.1-pro-preview", 90, gemini_31_config),   # Primary: Gemini 3.1 Pro, thinking_level=MEDIUM
-        ("gemini-3.1-pro-review", 60, gemini_31_config),    # Backup 1: Gemini 3.1 Pro Review (replaces 3 Pro), temp=0.5, thinking=MEDIUM
+        ("gemini-3.1-pro-preview", 60, gemini_31_config),    # Backup 1: Gemini 3.1 Pro Preview (replaces 3 Pro), temp=0.5, thinking=MEDIUM
         ("gemini-2.5-pro", 60, gemini_25_config),           # Backup 2: Gemini 2.5 Pro (separate rate limits)
     ]
 
@@ -804,14 +804,14 @@ def _clean_with_gemini(prompt):
     except Exception as g31_err:
         print(f"   ❌ [Clean] Gemini 3.1 Pro Preview failed: {g31_err}")
 
-    # --- Fallback 1: Gemini 3.1 Pro Review (MEDIUM thinking, replaces Gemini 3 Pro) ---
-    print(f"   🔄 [Clean] Falling back to Gemini 3.1 Pro Review...")
+    # --- Fallback 1: Gemini 3.1 Pro Preview (MEDIUM thinking, replaces Gemini 3 Pro) ---
+    print(f"   🔄 [Clean] Falling back to Gemini 3.1 Pro Preview...")
     try:
         start = time.time()
 
         def _call_3():
             return client.models.generate_content(
-                model="gemini-3.1-pro-review",
+                model="gemini-3.1-pro-preview",
                 contents=prompt,
                 config={
                     'temperature': 0.5,
@@ -827,17 +827,17 @@ def _clean_with_gemini(prompt):
             response = future.result(timeout=60)
         except concurrent.futures.TimeoutError:
             pool.shutdown(wait=False)
-            raise ValueError("Gemini 3.1 Pro Review timed out after 60s")
+            raise ValueError("Gemini 3.1 Pro Preview timed out after 60s")
         pool.shutdown(wait=False)
 
         elapsed_ms = int((time.time() - start) * 1000)
         response_text = response.text if response.text else ""
         if response_text:
-            return response_text, elapsed_ms, "gemini-3.1-pro-review"
-        raise ValueError("Gemini 3.1 Pro Review returned empty response")
+            return response_text, elapsed_ms, "gemini-3.1-pro-preview"
+        raise ValueError("Gemini 3.1 Pro Preview returned empty response")
 
     except Exception as g3_err:
-        print(f"   ❌ [Clean] Gemini 3.1 Pro Review failed: {g3_err}")
+        print(f"   ❌ [Clean] Gemini 3.1 Pro Preview failed: {g3_err}")
 
     # --- Fallback 2: Gemini 2.5 Pro (separate rate limits from 3.x family) ---
     print(f"   🔄 [Clean] Falling back to Gemini 2.5 Pro...")
