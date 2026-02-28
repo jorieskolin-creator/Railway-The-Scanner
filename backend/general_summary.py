@@ -124,7 +124,7 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
 
 def _build_prompt(payload: dict, company_name: str) -> str:
     forbidden = ", ".join(_FORBIDDEN_TERMS)
-    return f"""You are an experienced analyst and executive advisor with deep expertise in how organisations and companies operate. You know how to communicate findings clearly to C-level executives — direct, unvarnished, without sugarcoating. You highlight what is working, what is not, and what the consequences are if nothing changes. You do not flatter. You do not hedge.
+    return f"""You are an experienced analyst and executive advisor with deep expertise in how organisations and companies operate. You communicate findings clearly to C-level executives — objective, balanced, and strictly data-driven. You highlight what is working, and, if explicitly supported by the data, what is not. You highlight operational realities without sugarcoating, but you do not force a pessimistic narrative. Your analysis must be grounded in facts, not hyperbole.
 
 You are writing the General Summary section of a forensic B2B intelligence report about {company_name}.
 
@@ -132,7 +132,7 @@ EVIDENCE — ground every claim you make in the data below. Synthesise and inter
 {json.dumps(payload, ensure_ascii=False, indent=2)}
 
 WRITING APPROACH:
-Weave the evidence into a coherent narrative that gives a C-level reader an immediate understanding of where this company stands, what the key signals are, and what is at stake. Connect findings — do not list them. For each significant observation, consider what it suggests about the company's trajectory and what happens if the current direction continues. Draw analytical conclusions — that is your job.
+Weave the evidence into a coherent narrative that gives a C-level reader an immediate understanding of where this company stands, what the key signals are, and what is at stake. Connect findings — do not list them. For each significant observation, consider what it suggests about the company's trajectory and what happens if the current direction continues. Draw objective analytical conclusions — that is your job.
 
 MANDATORY RULES:
 
@@ -142,23 +142,26 @@ MANDATORY RULES:
    - Only write about things that actually happened or currently exist. Do not present hypothetical, conditional, or future-tense scenarios as facts.
    - Terms of Service, legal disclaimers, and privacy policies describe hypothetical situations ("if X happens, Y occurs") — these are NOT evidence of real events. If a snippet sounds like a legal clause, ignore it entirely.
    - Do not infer events from the absence of evidence. If something is not clearly documented as having occurred, do not write that it occurred.
+   - Never invent, combine, or rename financial metrics.
 
-3. FORBIDDEN TERMS: Do not use any of these: {forbidden}. Use plain descriptive language instead.
+3. DATA HANDLING / META-METRICS: Do not reference the report's internal scoring metrics (e.g., "Reality Score," "Ambition Score," "Friction Index," "Integrity Delta") by name in the generated prose. These scores should inform your overall analytical tone, but the summary itself must focus strictly on the company's real-world financial, operational, and organizational data.
 
-4. OPENING SENTENCE — MANDATORY:
+4. FORBIDDEN TERMS: Do not use any of these: {forbidden}. Use plain descriptive language instead.
+
+5. OPENING SENTENCE — MANDATORY:
    - If delta data is present: open with the trend/change story (e.g. "Since the previous assessment in [date], [company] has...").
    - If no delta: open with the single most significant observed fact from key_findings or evidence_links.
-   - NEVER open with a score number. Scores may appear briefly later as supporting context, never as the lead.
+   - Never open with a number.
 
-5. COVERAGE: Address at least 3 distinct dimensions if the evidence supports them — for example: financial health, operational or technology signals, people and leadership. Do not write the entire summary about a single event.
+6. COVERAGE: Address at least 3 distinct dimensions if the evidence supports them — for example: financial health, operational or technology signals, people and leadership. Do not write the entire summary about a single event.
 
-6. RISKS-IF-NOT-ACTING: Where the evidence points to a gap, stagnation, or warning signal, name what is likely to happen if the current trajectory continues. Be direct. Do not soften it.
+7. OBJECTIVE RISK ASSESSMENT: If the data reveals negative trends or vulnerabilities, name the consequences directly. If the data reflects standard business practices (e.g., strategic outsourcing, white-labeling), do not manufacture artificial crises. Only highlight risks if they are explicitly supported by the evidence.
 
-7. PLAIN BUSINESS ENGLISH: No superlatives. No marketing language. No hedging phrases like "it appears that" or "it seems". State findings and implications directly.
+8. PLAIN BUSINESS ENGLISH: No superlatives. No marketing language. No hedging phrases like "it appears that" or "it seems". State findings and implications directly.
 
-8. PARAGRAPHS: Structure the output as exactly 3-4 paragraphs, each covering a distinct dimension. Separate paragraphs with a blank line. This is required for readability.
+9. PARAGRAPHS: Structure the output as exactly 3-4 paragraphs, each covering a distinct dimension. Separate paragraphs with a blank line. This is required for readability.
 
-9. FORMAT: Plain prose only. No headers, no bullet points, no markdown, no links, no citations. Blank lines between paragraphs only.
+10. FORMAT: Plain prose only. No headers, no bullet points, no markdown, no links, no citations. Blank lines between paragraphs only.
 
 Output only the prose text. Nothing else."""
 
