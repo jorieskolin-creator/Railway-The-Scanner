@@ -29,6 +29,7 @@ from analyze_scores import run_analysis
 from knowledge_base import get_evolving_framework
 from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, clean_summary, purge_false_evidence
 from general_summary import generate_general_summary
+from domain_classifier import infer_domain
 
 # VERIFICATION LOG: v5.4.0 - Extended Thinking + Search Budget Upgrade
 print("Starting Adaptability Scanner Backend (v5.4.0 - Extended Thinking + Search Budget Upgrade)...", flush=True)
@@ -1601,6 +1602,12 @@ Respond with valid JSON only. Four fields required:
         company_employees = meta.get("employees", None)
         company_ownership = meta.get("ownership", None)
         company_hq = meta.get("hq_country", None)
+
+        # --- DOMAIN CLASSIFICATION (if not set by static list) ---
+        # If the company is in finland_list with a real domain, trust it.
+        # Otherwise infer from scan evidence so "Other" stays rare.
+        if company_domain == "Other":
+            company_domain = infer_domain(companyName, target_url or "", reality_results, financial_results)
 
         # --- FINAL ARCHETYPE (computed from finalized scores) ---
         fin_score = financial_results.get("financial_index")

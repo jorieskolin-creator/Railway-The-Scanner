@@ -731,6 +731,11 @@ Respond with valid JSON only. Four fields required:
             company_ownership = meta.get("ownership", None)
             company_hq = meta.get("hq_country", None)
 
+            # --- DOMAIN CLASSIFICATION (if not set by static list) ---
+            if company_domain == "Other":
+                from domain_classifier import infer_domain
+                company_domain = infer_domain(company_name, company.get("url", ""), reality_results, financial_results)
+
             # --- FINAL ARCHETYPE (computed from finalized scores) ---
             fin_score = financial_results.get("financial_index")
             fin_for_archetype = fin_score if fin_score is not None else intent_results["score"]
