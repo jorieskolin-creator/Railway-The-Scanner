@@ -108,13 +108,16 @@ RULES (all are mandatory):
 
 1. WORD COUNT: The output MUST be between {_WORD_MIN} and {_WORD_MAX} words. Count every word before submitting. This is non-negotiable.
 
-2. CITATIONS: Every factual claim about the company must end with [Title](url), using ONLY urls from evidence_links or key_findings in the input. If you cannot cite a url for a claim, do not make that claim. Scores (reality_score, intent_score, financial_index) do not need citations — they are computed metrics.
+2. CITATIONS: Every factual claim about the company must end with [Title](url), using ONLY urls from evidence_links or key_findings in the input. If you cannot cite a url for a claim, do not make that claim. Scores (reality_score, intent_score, financial_index, confidence_score) do not need citations — they are computed internal metrics, not web claims.
 
 3. FORBIDDEN TERMS: Do not use any of these: {forbidden}. Use plain descriptive language instead.
 
 4. FACTS ONLY: Report what was observed. Do not interpret what findings mean strategically.
 
-5. DELTA FIRST: If delta data is present in the input, make the trend/change story the opening paragraph. If no delta, open with the company overview.
+5. OPENING SENTENCE — MANDATORY:
+   - If delta data is present: open with the trend/change story (e.g. "Since the previous assessment in [date], [company] has...").
+   - If no delta: open with the single most significant observed fact from key_findings or evidence_links (e.g. "[Company] operates a ...").
+   - NEVER open with a score number. Sentences like "X has a reality score of 45" or "The intent score is 37" must NOT appear anywhere near the opening. Scores may be mentioned briefly later, embedded in context, not as standalone statements.
 
 6. PLAIN BUSINESS ENGLISH: No superlatives. No marketing language. No hedging phrases like "it appears that" or "it seems". State facts directly.
 
@@ -157,7 +160,7 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
                 contents=prompt,
                 config=genai_types.GenerateContentConfig(
                     temperature=0.3,
-                    max_output_tokens=900,
+                    max_output_tokens=1200,
                 ),
             )
             text = (response.text or "").strip()
@@ -178,7 +181,7 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
                     contents=retry_prompt,
                     config=genai_types.GenerateContentConfig(
                         temperature=0.2,
-                        max_output_tokens=900,
+                        max_output_tokens=1200,
                     ),
                 )
                 retry_text = (retry_response.text or "").strip()

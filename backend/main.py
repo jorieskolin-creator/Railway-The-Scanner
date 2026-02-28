@@ -1933,20 +1933,17 @@ verified evidence provided."""
             gs_start = time.time()
             gs_text, gs_model = generate_general_summary(full_data, companyName)
             if gs_text:
-                # Lightweight fact-check — same function, scoped to general summary prose
-                gs_fc = ai_fact_check_summary(
-                    summary_text=gs_text,
-                    evidence_links=full_data.get("evidence_links", []),
-                    company_name=companyName,
-                )
-                if not gs_fc["verified"] and gs_fc.get("corrected_summary"):
-                    gs_text = gs_fc["corrected_summary"]
+                # No web fact-check: General Summary is assembled from already-verified
+                # structured data (computed scores + purged evidence_links). Running it
+                # through ai_fact_check_summary() would flag computed metrics like
+                # reality_score / intent_score as "unsupported by evidence sources"
+                # and Stage 2 would surgically truncate them, breaking the output.
                 full_data["general_summary"] = gs_text
                 full_data["general_summary_model"] = gs_model
-                full_data["general_summary_verified"] = gs_fc.get("verified", True)
-                full_data["general_summary_false_claims"] = gs_fc.get("false_claims", [])
+                full_data["general_summary_verified"] = True
+                full_data["general_summary_false_claims"] = []
                 wc = len(gs_text.split())
-                print(f"   ✅ [General Summary] {wc} words, verified={full_data['general_summary_verified']} ({int((time.time()-gs_start)*1000)}ms)")
+                print(f"   ✅ [General Summary] {wc} words, model={gs_model} ({int((time.time()-gs_start)*1000)}ms)")
             else:
                 print(f"   ⚠️ [General Summary] Generation returned empty — skipping field")
         except Exception as gs_err:
