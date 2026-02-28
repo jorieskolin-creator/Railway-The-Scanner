@@ -2,9 +2,9 @@
 general_summary.py — Plain-language General Summary generator.
 
 Assembles a 275-325 word narrative from already-computed structured scan data
-(scores, verified evidence links, jury findings, financial sub-scores, delta).
+(verified evidence links, jury findings, financial findings, delta).
 
-No Knowledge Base terminology. No interpretation beyond the data.
+Written from the perspective of an experienced analyst and executive advisor.
 Every factual claim must be backed by an inline citation from the evidence pool.
 """
 
@@ -88,49 +88,60 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
         if p.get("name")
     ]
 
-    return {
+    # Only include scores the model genuinely needs for context.
+    # intent_score, confidence_score, and financial_sub_scores are intentionally
+    # excluded: when present as JSON fields the model treats them as "facts to
+    # report" and dumps them as a score list instead of writing a narrative.
+    # financial_index is kept (single number) as context for financial findings.
+    # reality_score is kept only when delta is present so the trend sentence
+    # has a concrete number to anchor to.
+    result: dict = {
         "company_name": company_name,
-        "reality_score": full_data.get("reality_score", 0),
-        "intent_score": full_data.get("intent_score", 0),
-        "financial_index": full_data.get("financial_index"),
-        "financial_sub_scores": full_data.get("financial_sub_scores") or {},
-        "confidence_score": full_data.get("confidence_score", 0),
         "delta": delta,
+        "financial_index": full_data.get("financial_index"),
         "key_findings": key_findings,
         "evidence_links": verified_links,
         "financial_findings": fin_findings,
         "key_people": people,
     }
+    if delta:
+        result["reality_score"] = full_data.get("reality_score", 0)
+    return result
 
 
 def _build_prompt(payload: dict, company_name: str, word_correction: str = "") -> str:
     forbidden = ", ".join(_FORBIDDEN_TERMS)
     correction_note = f"\n\nIMPORTANT CORRECTION FROM PREVIOUS ATTEMPT: {word_correction}" if word_correction else ""
-    return f"""You are writing the General Summary section of a B2B intelligence report about {company_name}.
+    return f"""You are an experienced analyst and executive advisor with deep expertise in how organisations and companies operate. You know how to communicate findings clearly to C-level executives — direct, unvarnished, without sugarcoating. You highlight what is working, what is not, and what the consequences are if nothing changes. You do not flatter. You do not hedge.
 
-INPUT DATA — use ONLY these facts. Do not infer, assume, or add anything beyond what is provided:
+You are writing the General Summary section of a forensic B2B intelligence report about {company_name}.
+
+EVIDENCE — ground every claim you make in the data below. Synthesise and interpret — do not enumerate:
 {json.dumps(payload, ensure_ascii=False, indent=2)}
 {correction_note}
-RULES (all are mandatory):
+WRITING APPROACH:
+Weave the evidence into a coherent narrative that gives a C-level reader an immediate understanding of where this company stands, what the key signals are, and what is at stake. Connect findings — do not list them. For each significant observation, consider: what does this suggest about the company's trajectory, and what happens if the current direction continues? You are allowed to draw analytical conclusions as long as every factual claim cites a source URL.
+
+MANDATORY RULES:
 
 1. WORD COUNT: The output MUST be between {_WORD_MIN} and {_WORD_MAX} words. Count every word before submitting. This is non-negotiable.
 
-2. CITATIONS: Every factual claim about the company must be followed by an inline citation in the form [label](url). Use ONLY urls from evidence_links or key_findings in the input. Write a short 2–4 word label of your own — do NOT copy the article title. Good examples: [press release](url), [annual report](url), [company news](url), [strategy page](url). If you cannot cite a url for a claim, do not make that claim. Scores (reality_score, intent_score, financial_index, confidence_score) do not need citations — they are computed internal metrics, not web claims.
+2. CITATIONS: Every factual claim about the company must be followed by an inline citation in the form [label](url). Use ONLY urls from evidence_links or key_findings in the input. Write a short 2–4 word label of your own — do NOT copy the article title. Good examples: [press release](url), [annual report](url), [company news](url), [strategy page](url). If you cannot cite a url for a claim, do not make that claim. Scores (financial_index, reality_score) do not need citations — they are computed internal metrics.
 
 3. FORBIDDEN TERMS: Do not use any of these: {forbidden}. Use plain descriptive language instead.
 
-4. FACTS ONLY: Report what was observed. Do not interpret what findings mean strategically.
-
-5. OPENING SENTENCE — MANDATORY:
+4. OPENING SENTENCE — MANDATORY:
    - If delta data is present: open with the trend/change story (e.g. "Since the previous assessment in [date], [company] has...").
-   - If no delta: open with the single most significant observed fact from key_findings or evidence_links (e.g. "[Company] operates a ...").
-   - NEVER open with a score number. Sentences like "X has a reality score of 45" or "The intent score is 37" must NOT appear anywhere near the opening. Scores may be mentioned briefly later, embedded in context, not as standalone statements.
+   - If no delta: open with the single most significant observed fact from key_findings or evidence_links.
+   - NEVER open with a score number. Scores may appear briefly later as supporting context, never as the lead.
 
-6. COVERAGE: Distribute the summary across at least 3 distinct dimensions if the input supports it. Typical dimensions: people & leadership, financial performance, operational or technology evidence, strategy or products. Do not write the entire summary about a single event or finding.
+5. COVERAGE: If the evidence supports it, address at least 3 distinct dimensions — for example: financial health, operational or technology signals, people and leadership. Do not write the entire summary about a single event.
 
-7. PLAIN BUSINESS ENGLISH: No superlatives. No marketing language. No hedging phrases like "it appears that" or "it seems". State facts directly.
+6. RISKS-IF-NOT-ACTING: Where the evidence points to a gap, a stagnation, or a warning signal, name what is likely to happen if the current trajectory continues. Be direct. Do not soften it.
 
-8. FORMAT: Plain prose only. No headers, no bullet points, no markdown formatting except the inline [label](url) citation links.
+7. PLAIN BUSINESS ENGLISH: No superlatives. No marketing language. No hedging phrases like "it appears that" or "it seems". State findings and implications directly.
+
+8. FORMAT: Plain prose only. No headers, no bullet points, no markdown except the inline [label](url) citation links.
 
 Output only the prose text. Nothing else."""
 
@@ -167,12 +178,12 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
             "gemini-2.5-pro",
             genai_types.GenerateContentConfig(
                 temperature=0.5,
-                max_output_tokens=1200,
+                max_output_tokens=2000,
                 thinking_config=genai_types.ThinkingConfig(thinking_budget=8192),
             ),
             genai_types.GenerateContentConfig(
                 temperature=0.5,
-                max_output_tokens=1200,
+                max_output_tokens=2000,
                 thinking_config=genai_types.ThinkingConfig(thinking_budget=8192),
             ),
         ),
