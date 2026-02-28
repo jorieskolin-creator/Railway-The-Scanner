@@ -587,7 +587,7 @@ Generate a completely fresh synthesis. Do NOT reference or re-introduce any of t
                 config=types.GenerateContentConfig(
                     temperature=0.5,
                     thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
-                    max_output_tokens=6000
+                    max_output_tokens=12000
                 )
             )
             resynth_text = resynth_response.text or ""
@@ -610,7 +610,7 @@ Generate a completely fresh synthesis. Do NOT reference or re-introduce any of t
                 config=types.GenerateContentConfig(
                     temperature=0.5,
                     thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
-                    max_output_tokens=6000
+                    max_output_tokens=12000
                 )
             )
             resynth_text = resynth_response.text or ""
@@ -1411,7 +1411,7 @@ Respond with valid JSON only. Four fields required:
                                     config=types.GenerateContentConfig(
                                         temperature=0.5,
                                         thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
-                                        max_output_tokens=6000
+                                        max_output_tokens=12000
                                     )
                                 )
 
@@ -1442,7 +1442,7 @@ Respond with valid JSON only. Four fields required:
                                     config=types.GenerateContentConfig(
                                         temperature=0.5,
                                         thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
-                                        max_output_tokens=6000
+                                        max_output_tokens=12000
                                     )
                                 )
 
@@ -1800,7 +1800,7 @@ verified evidence provided."""
                             config=types.GenerateContentConfig(
                                 temperature=0.5,
                                 thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
-                                max_output_tokens=6000
+                                max_output_tokens=12000
                             )
                         )
                         resynth_text = resynth_response.text or ""
@@ -1821,7 +1821,7 @@ verified evidence provided."""
                             config=types.GenerateContentConfig(
                                 temperature=0.5,
                                 thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
-                                max_output_tokens=6000
+                                max_output_tokens=12000
                             )
                         )
                         resynth_text = resynth_response.text or ""
