@@ -553,6 +553,7 @@ A direct cold-outreach message to a C-level executive at {company_name}:
   - The proposals must feel specific to THIS company's situation, not generic consulting templates.
   - Do NOT use "Forensic Modernization Audit" or any generic service names.
   - Tone: Professional, provocative, insight-led. The recipient should feel understood, not sold to.
+  - Structure as exactly 3 short paragraphs separated by \n\n (opening hook / two proposals / closing CTA).
 
 ### GUARDRAILS
 - NEVER fabricate evidence, people, events, partnerships, or metrics not present in the scan data.
@@ -562,7 +563,7 @@ A direct cold-outreach message to a C-level executive at {company_name}:
 ### OUTPUT
 Respond with valid JSON only. Four fields required:
 {{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
-Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs total).
+Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs total). The pitch value must also contain \n\n between its 3 paragraphs.
 
 ### CRITICAL CONTEXT — FACT-CHECK CORRECTIONS
 The previous synthesis contained false claims detected by an independent fact-checker (Gemini 3.1 Pro with Google Search).
@@ -1349,6 +1350,7 @@ A direct cold-outreach message to a C-level executive at {companyName}:
   - The proposals must feel specific to THIS company's situation, not generic consulting templates.
   - Do NOT use "Forensic Modernization Audit" or any generic service names.
   - Tone: Professional, provocative, insight-led. The recipient should feel understood, not sold to.
+  - Structure as exactly 3 short paragraphs separated by \n\n (opening hook / two proposals / closing CTA).
 
 ### GUARDRAILS
 - NEVER fabricate evidence, people, events, partnerships, or metrics not present in the scan data.
@@ -1359,6 +1361,7 @@ A direct cold-outreach message to a C-level executive at {companyName}:
 ### OUTPUT
 Respond with valid JSON only. Four fields required:
 {{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
+Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs total). The pitch value must also contain \n\n between its 3 paragraphs.
 Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs total)."""
 
                 # --- Synthesis with fallback chain: Opus 4.6 → Gemini 3.1 Pro → Gemini 3 Pro → Gemini 2.5 Pro ---

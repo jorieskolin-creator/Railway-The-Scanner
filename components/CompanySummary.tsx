@@ -729,8 +729,12 @@ const CompanySummary = ({ data }) => {
                     Strategic Outreach Pitch
                 </h3>
                 <div className="relative group">
-                    <div className="bg-black/40 p-5 rounded-xl border border-white/10 font-mono text-xs text-slate-300 leading-relaxed whitespace-pre-wrap">
-                        "{data.pitch_text}"
+                    <div className="bg-black/40 p-5 rounded-xl border border-white/10 font-mono text-xs text-slate-300 leading-relaxed">
+                        {data.pitch_text.split(/\n\n+/).map((para, pi, arr) => (
+                            <p key={pi} className={pi > 0 ? "mt-3" : ""}>
+                                {pi === 0 ? "\u201c" : ""}{para}{pi === arr.length - 1 ? "\u201d" : ""}
+                            </p>
+                        ))}
                     </div>
                     <button
                         onClick={handleCopyPitch}
