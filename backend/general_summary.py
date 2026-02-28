@@ -161,7 +161,6 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
                 config=genai_types.GenerateContentConfig(
                     temperature=0.3,
                     max_output_tokens=1200,
-                    thinking_config=genai_types.ThinkingConfig(thinking_level="NONE"),
                 ),
             )
             text = (response.text or "").strip()
@@ -183,7 +182,6 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
                     config=genai_types.GenerateContentConfig(
                         temperature=0.2,
                         max_output_tokens=1200,
-                        thinking_config=genai_types.ThinkingConfig(thinking_level="NONE"),
                     ),
                 )
                 retry_text = (retry_response.text or "").strip()
