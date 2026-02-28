@@ -73,7 +73,7 @@ Rules:
             config=genai_types.GenerateContentConfig(
                 temperature=0.5,
                 max_output_tokens=20,
-                thinking_config=genai_types.ThinkingConfig(thinking_level="LOW"),
+                thinking_config=genai_types.ThinkingConfig(thinking_budget=1024),
             ),
         )
         result = (response.text or "").strip().strip('"').strip("'")

@@ -54,18 +54,25 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
         if parts:
             delta = {"previous_scan_date": prev_date, "changes": parts}
 
-    # Verified evidence links only (max 14)
+    # Verified evidence links only (max 14).
+    # Titles truncated to 55 chars to keep the payload compact and to prevent
+    # the model from copying verbose article titles verbatim into citation labels.
     verified_links = [
-        {"title": l.get("title", "Source"), "url": l.get("url", ""), "snippet": (l.get("snippet") or "")[:180]}
+        {
+            "title": (l.get("title", "Source") or "Source")[:55],
+            "url": l.get("url", ""),
+            "snippet": (l.get("snippet") or "")[:180],
+        }
         for l in full_data.get("evidence_links", [])
         if l.get("verified", True) and l.get("url")
     ][:14]
 
-    # Key jury findings that have a URL (max 8)
+    # Key jury findings that have a URL (max 8).
+    # Same 55-char title cap for consistency.
     key_findings = [
         {
             "description": item.get("description") or item.get("category", ""),
-            "title": item.get("title") or item.get("category", ""),
+            "title": ((item.get("title") or item.get("category", "")) or "")[:55],
             "url": item.get("url", ""),
         }
         for item in full_data.get("reality_checklist", [])
@@ -108,7 +115,7 @@ RULES (all are mandatory):
 
 1. WORD COUNT: The output MUST be between {_WORD_MIN} and {_WORD_MAX} words. Count every word before submitting. This is non-negotiable.
 
-2. CITATIONS: Every factual claim about the company must end with [Title](url), using ONLY urls from evidence_links or key_findings in the input. If you cannot cite a url for a claim, do not make that claim. Scores (reality_score, intent_score, financial_index, confidence_score) do not need citations — they are computed internal metrics, not web claims.
+2. CITATIONS: Every factual claim about the company must be followed by an inline citation in the form [label](url). Use ONLY urls from evidence_links or key_findings in the input. Write a short 2–4 word label of your own — do NOT copy the article title. Good examples: [press release](url), [annual report](url), [company news](url), [strategy page](url). If you cannot cite a url for a claim, do not make that claim. Scores (reality_score, intent_score, financial_index, confidence_score) do not need citations — they are computed internal metrics, not web claims.
 
 3. FORBIDDEN TERMS: Do not use any of these: {forbidden}. Use plain descriptive language instead.
 
@@ -119,9 +126,11 @@ RULES (all are mandatory):
    - If no delta: open with the single most significant observed fact from key_findings or evidence_links (e.g. "[Company] operates a ...").
    - NEVER open with a score number. Sentences like "X has a reality score of 45" or "The intent score is 37" must NOT appear anywhere near the opening. Scores may be mentioned briefly later, embedded in context, not as standalone statements.
 
-6. PLAIN BUSINESS ENGLISH: No superlatives. No marketing language. No hedging phrases like "it appears that" or "it seems". State facts directly.
+6. COVERAGE: Distribute the summary across at least 3 distinct dimensions if the input supports it. Typical dimensions: people & leadership, financial performance, operational or technology evidence, strategy or products. Do not write the entire summary about a single event or finding.
 
-7. FORMAT: Plain prose only. No headers, no bullet points, no markdown formatting except the inline [Title](url) citation links.
+7. PLAIN BUSINESS ENGLISH: No superlatives. No marketing language. No hedging phrases like "it appears that" or "it seems". State facts directly.
+
+8. FORMAT: Plain prose only. No headers, no bullet points, no markdown formatting except the inline [label](url) citation links.
 
 Output only the prose text. Nothing else."""
 
@@ -145,10 +154,10 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
     payload = _build_input_payload(full_data, company_name)
 
     # Per-model configs.
-    # gemini-2.5-pro: mandatory thinking model — thinking_level controls depth.
+    # gemini-2.5-pro: mandatory thinking model — thinking_budget (128-32768).
     #   thinking tokens are separate from max_output_tokens for this model, so
     #   1200 output tokens (~900 words) is ample for the 275-325 word target.
-    #   Uses the same pattern as main.py / reality_check.py for this model.
+    #   8192 thinking budget is appropriate for multi-rule prose generation.
     # gemini-3.1-pro-preview: thinking tokens are drawn from the same
     #   max_output_tokens pool, so the budget must comfortably exceed
     #   thinking_budget + target_output (2048 thinking + ~500 visible = 2548).
@@ -159,12 +168,12 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
             genai_types.GenerateContentConfig(
                 temperature=0.5,
                 max_output_tokens=1200,
-                thinking_config=genai_types.ThinkingConfig(thinking_level="MEDIUM"),
+                thinking_config=genai_types.ThinkingConfig(thinking_budget=8192),
             ),
             genai_types.GenerateContentConfig(
                 temperature=0.5,
                 max_output_tokens=1200,
-                thinking_config=genai_types.ThinkingConfig(thinking_level="MEDIUM"),
+                thinking_config=genai_types.ThinkingConfig(thinking_budget=8192),
             ),
         ),
         (
