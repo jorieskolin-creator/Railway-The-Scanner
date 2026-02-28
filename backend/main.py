@@ -28,6 +28,7 @@ from finland_list import TOP_100_COMPANIES, get_company_metadata
 from analyze_scores import run_analysis
 from knowledge_base import get_evolving_framework
 from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, clean_summary, purge_false_evidence
+from general_summary import generate_general_summary
 
 # VERIFICATION LOG: v5.4.0 - Extended Thinking + Search Budget Upgrade
 print("Starting Adaptability Scanner Backend (v5.4.0 - Extended Thinking + Search Budget Upgrade)...", flush=True)
@@ -1921,6 +1922,35 @@ verified evidence provided."""
                         "evidence_purged": purge_result,
                         "reason": "Gemini re-synthesis failed",
                     }
+
+        # --- STEP 3.5: GENERAL SUMMARY ---
+        # Plain-language narrative (275-325 words) assembled from already-computed
+        # structured data (scores, verified links, jury findings, delta).
+        # No KB terminology. Every claim must carry an inline citation.
+        # Runs after fact-check so evidence_links are already purged/verified.
+        # Failure is non-fatal — old records without this field are handled gracefully.
+        try:
+            gs_start = time.time()
+            gs_text, gs_model = generate_general_summary(full_data, companyName)
+            if gs_text:
+                # Lightweight fact-check — same function, scoped to general summary prose
+                gs_fc = ai_fact_check_summary(
+                    summary_text=gs_text,
+                    evidence_links=full_data.get("evidence_links", []),
+                    company_name=companyName,
+                )
+                if not gs_fc["verified"] and gs_fc.get("corrected_summary"):
+                    gs_text = gs_fc["corrected_summary"]
+                full_data["general_summary"] = gs_text
+                full_data["general_summary_model"] = gs_model
+                full_data["general_summary_verified"] = gs_fc.get("verified", True)
+                full_data["general_summary_false_claims"] = gs_fc.get("false_claims", [])
+                wc = len(gs_text.split())
+                print(f"   ✅ [General Summary] {wc} words, verified={full_data['general_summary_verified']} ({int((time.time()-gs_start)*1000)}ms)")
+            else:
+                print(f"   ⚠️ [General Summary] Generation returned empty — skipping field")
+        except Exception as gs_err:
+            print(f"   ⚠️ [General Summary] Failed: {gs_err} — skipping, scan continues")
 
         # --- STEP 4: SAVE ---
         if saveToDatabase:
