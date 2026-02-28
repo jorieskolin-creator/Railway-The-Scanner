@@ -145,34 +145,38 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
     payload = _build_input_payload(full_data, company_name)
 
     # Per-model configs.
-    # gemini-2.5-pro:      thinking disabled (budget=0) so all tokens go to visible
-    #                      output; temperature=0.3 for controlled prose.
-    # gemini-3.1-pro-preview: temperature MUST be 1.0 (low temp causes output loops
-    #                      on 3.x models); small thinking budget for grounding.
+    # gemini-2.5-pro: mandatory thinking model — thinking_level controls depth.
+    #   thinking tokens are separate from max_output_tokens for this model, so
+    #   1200 output tokens (~900 words) is ample for the 275-325 word target.
+    #   Uses the same pattern as main.py / reality_check.py for this model.
+    # gemini-3.1-pro-preview: thinking tokens are drawn from the same
+    #   max_output_tokens pool, so the budget must comfortably exceed
+    #   thinking_budget + target_output (2048 thinking + ~500 visible = 2548).
+    #   4096 gives a safe margin. temperature MUST be 1.0 on 3.x models.
     models = [
         (
             "gemini-2.5-pro",
             genai_types.GenerateContentConfig(
-                temperature=0.3,
+                temperature=0.5,
                 max_output_tokens=1200,
-                thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+                thinking_config=genai_types.ThinkingConfig(thinking_level="MEDIUM"),
             ),
             genai_types.GenerateContentConfig(
-                temperature=0.2,
+                temperature=0.5,
                 max_output_tokens=1200,
-                thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+                thinking_config=genai_types.ThinkingConfig(thinking_level="MEDIUM"),
             ),
         ),
         (
             "gemini-3.1-pro-preview",
             genai_types.GenerateContentConfig(
                 temperature=1.0,
-                max_output_tokens=1200,
+                max_output_tokens=4096,
                 thinking_config=genai_types.ThinkingConfig(thinking_budget=2048),
             ),
             genai_types.GenerateContentConfig(
                 temperature=1.0,
-                max_output_tokens=1200,
+                max_output_tokens=4096,
                 thinking_config=genai_types.ThinkingConfig(thinking_budget=1024),
             ),
         ),

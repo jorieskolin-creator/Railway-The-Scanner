@@ -71,9 +71,9 @@ Rules:
             model="gemini-2.5-pro",
             contents=prompt,
             config=genai_types.GenerateContentConfig(
-                temperature=0.0,
+                temperature=0.5,
                 max_output_tokens=20,
-                thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+                thinking_config=genai_types.ThinkingConfig(thinking_level="LOW"),
             ),
         )
         result = (response.text or "").strip().strip('"').strip("'")
