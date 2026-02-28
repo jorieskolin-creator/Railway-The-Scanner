@@ -5,6 +5,7 @@ import time
 import re
 import requests as http_requests
 import concurrent.futures
+from datetime import date
 from urllib.parse import urlparse
 from google import genai
 from google.genai import types
@@ -2181,6 +2182,11 @@ def financial_health_search(company_name: str, company_url: str = None, model_id
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
     primary_model = model_id or "gemini-2.5-pro"
 
+    # Dynamic year window — always search for the two most recent calendar years
+    # so results stay current without manual updates each January.
+    _cur_year = date.today().year
+    _prev_year = _cur_year - 1
+
     search_name = clean_company_name_for_search(company_name)
     domain_hint = get_clean_domain(company_url) if company_url else f"{search_name.lower().replace(' ', '')}.fi"
 
@@ -2200,17 +2206,23 @@ def financial_health_search(company_name: str, company_url: str = None, model_id
 
 TARGET: Finnish companies. Use BOTH English and Finnish search terms.
 
+DATA FRESHNESS — CRITICAL RULE:
+Always use the MOST RECENT financial data available. Today is {date.today().isoformat()}.
+Priority order: {_cur_year} full-year results > {_prev_year} full-year results > interim reports.
+If {_cur_year} annual results have been published, use them. Do NOT use older data when newer is available.
+State explicitly which year's results you are basing each score on.
+
 SEARCH STRATEGY — Execute these searches:
 
 1. REVENUE TREND (liikevaihto):
-   - `"{search_name}" liikevaihto tulos 2024 2025`
-   - `"{search_name}" annual report revenue profit 2024 2025`
+   - `"{search_name}" liikevaihto tulos {_prev_year} {_cur_year}`
+   - `"{search_name}" annual report revenue profit {_prev_year} {_cur_year}`
    - `site:kauppalehti.fi "{search_name}" liikevaihto` OR `site:talouselama.fi "{search_name}"`
-   - `"{search_name}" tilinpäätös vuosikertomus`
+   - `"{search_name}" tilinpäätös vuosikertomus {_cur_year}`
    EVALUATE: Is revenue growing, stable, or declining over the last 2-3 years?
 
 2. PROFITABILITY (kannattavuus):
-   - `"{search_name}" operating profit EBITDA margin 2024`
+   - `"{search_name}" operating profit EBITDA margin {_prev_year} {_cur_year}`
    - `"{search_name}" liikevoitto käyttökate tulos`
    - `site:finder.fi "{search_name}"` OR `site:asiakastieto.fi "{search_name}"`
    EVALUATE: Is the company profitable? Strong margins, moderate, weak, or negative?
@@ -2222,7 +2234,7 @@ SEARCH STRATEGY — Execute these searches:
    EVALUATE: Revenue per employee ratio. Compare to industry peers if possible.
 
 4. INVESTMENT SIGNAL (investoinnit):
-   - `"{search_name}" R&D investment technology capex 2024 2025`
+   - `"{search_name}" R&D investment technology capex {_prev_year} {_cur_year}`
    - `"{search_name}" T&K investoinnit teknologia`
    - `"{search_name}" hiring engineers developers rekrytointi kehittäjä`
    - `"{search_name}" acquisition yrityskauppa technology`
