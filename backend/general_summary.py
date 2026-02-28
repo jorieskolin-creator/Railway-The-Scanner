@@ -54,8 +54,24 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
         if parts:
             delta = {"previous_scan_date": prev_date, "changes": parts}
 
-    # Evidence snippets — titles and snippets only, NO URLs.
+    # Legal/ToS URL patterns — these pages contain conditional/hypothetical
+    # language that models consistently misread as factual past events.
+    # Exclude them entirely from the evidence payload.
+    _LEGAL_PATH_SEGMENTS = (
+        "terms", "legal", "disclaimer", "privacy", "cookie", "tos", "eula",
+        "tietosuoja", "kayttoehdot", "ehdot", "yksityisyys", "rekisteriseloste",
+        "gdpr", "oikeudellinen", "vastuuvapaus",
+    )
+
+    def _is_legal_page(url: str) -> bool:
+        url_lower = url.lower()
+        return any(seg in url_lower for seg in _LEGAL_PATH_SEGMENTS)
+
+    # Evidence snippets — titles and snippets only, NO URLs, NO legal pages.
     # Providing URLs caused the model to hallucinate wrong links in the output.
+    # Legal/ToS pages are excluded because they contain conditional language
+    # ("if the service is down, access is blocked") that models misread as
+    # factual historical events.
     # All verified links are already shown in the AI Diagnosis section of the UI.
     verified_links = [
         {
@@ -63,17 +79,17 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
             "snippet": (l.get("snippet") or "")[:180],
         }
         for l in full_data.get("evidence_links", [])
-        if l.get("verified", True) and l.get("url")
+        if l.get("verified", True) and l.get("url") and not _is_legal_page(l.get("url", ""))
     ][:14]
 
-    # Key jury findings — descriptions only, no URLs.
+    # Key jury findings — descriptions only, no URLs, no legal pages.
     key_findings = [
         {
             "description": item.get("description") or item.get("category", ""),
             "title": ((item.get("title") or item.get("category", "")) or "")[:55],
         }
         for item in full_data.get("reality_checklist", [])
-        if item.get("found") and item.get("url")
+        if item.get("found") and item.get("url") and not _is_legal_page(item.get("url", ""))
     ][:8]
 
     # Financial findings (plain strings, max 3)
@@ -122,7 +138,10 @@ MANDATORY RULES:
 
 1. WORD COUNT: The output MUST be between {_WORD_MIN} and {_WORD_MAX} words. Count carefully. This is non-negotiable.
 
-2. CITATIONS: Anchor key specific facts — numbers, named events, named people, product names, financial figures — with an inline [label](url) citation using ONLY urls from evidence_links or key_findings. Write a short 2–4 word label of your own (e.g. [annual report](url), [press release](url)). Synthesis sentences that connect or interpret cited evidence do NOT need individual citations. Include between 3 and 8 citations total. Do not cite scores (financial_index, reality_score) — they are computed metrics, not web sources.
+2. FACTUAL DISCIPLINE — CRITICAL:
+   - Only write about things that actually happened or currently exist. Do not present hypothetical, conditional, or future-tense scenarios as facts.
+   - Terms of Service, legal disclaimers, and privacy policies describe hypothetical situations ("if X happens, Y occurs") — these are NOT evidence of real events. If a snippet sounds like a legal clause, ignore it entirely.
+   - Do not infer events from the absence of evidence. If something is not clearly documented as having occurred, do not write that it occurred.
 
 3. FORBIDDEN TERMS: Do not use any of these: {forbidden}. Use plain descriptive language instead.
 
@@ -139,7 +158,7 @@ MANDATORY RULES:
 
 8. PARAGRAPHS: Structure the output as exactly 3-4 paragraphs, each covering a distinct dimension. Separate paragraphs with a blank line. This is required for readability.
 
-9. FORMAT: Plain prose only. No headers, no bullet points, no markdown, NO inline links or citations of any kind. Blank lines between paragraphs only.
+9. FORMAT: Plain prose only. No headers, no bullet points, no markdown, no links, no citations. Blank lines between paragraphs only.
 
 Output only the prose text. Nothing else."""
 
