@@ -9,6 +9,7 @@ in the AI Diagnosis section of the UI.
 
 import json
 import os
+import re
 import time
 
 from google import genai
@@ -147,6 +148,12 @@ def _word_count(text: str) -> int:
     return len(text.split())
 
 
+def _strip_links(text: str) -> str:
+    """Remove any [label](url) markdown links the model sneaks in despite instructions.
+    Keeps the label text so readability is preserved; only the URL syntax is dropped."""
+    return re.sub(r'\[([^\]]+)\]\(https?://[^)]+\)', r'\1', text)
+
+
 def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, str]:
     """
     Generate a 225-275 word General Summary from structured scan data.
@@ -197,7 +204,7 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
                 contents=prompt,
                 config=config,
             )
-            text = (response.text or "").strip()
+            text = _strip_links((response.text or "").strip())
             wc = _word_count(text)
             elapsed = int((time.time() - t0) * 1000)
             print(f"   [General Summary] {MODEL} attempt {attempt}: {wc} words ({elapsed}ms)")
