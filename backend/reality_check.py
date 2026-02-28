@@ -286,7 +286,7 @@ def validate_summary(summary_text, company_name, key_people=None, evidence_links
     # --- CHECK 7: Excessive length (AI rambling / hallucination drift) ---
     word_count = len(summary_text.split())
     if word_count > 350:
-        flags.append(f"Summary unusually long ({word_count} words, expected 180-220)")
+        flags.append(f"Summary unusually long ({word_count} words, expected 325-375)")
         score += 10
 
     # --- CHECK 8: Repetitive patterns (hallucination loops) ---
@@ -894,7 +894,7 @@ def _clean_with_gemini(prompt):
                 config={
                     'temperature': 0.5,
                     'thinking_config': types.ThinkingConfig(thinking_level="MEDIUM"),
-                    'max_output_tokens': 2048,
+                    'max_output_tokens': 6000,
                     'response_mime_type': 'application/json',
                 }
             )
@@ -929,7 +929,7 @@ def _clean_with_gemini(prompt):
                 config={
                     'temperature': 0.5,
                     'thinking_config': types.ThinkingConfig(thinking_level="MEDIUM"),
-                    'max_output_tokens': 2048,
+                    'max_output_tokens': 6000,
                     'response_mime_type': 'application/json',
                 }
             )

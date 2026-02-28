@@ -1,7 +1,7 @@
 """
 general_summary.py — Plain-language General Summary generator.
 
-Assembles a 275-325 word narrative from already-computed structured scan data
+Assembles a 225-275 word narrative from already-computed structured scan data
 (verified evidence links, jury findings, financial findings, delta).
 
 Written from the perspective of an experienced analyst and executive advisor.
@@ -25,8 +25,8 @@ _FORBIDDEN_TERMS = [
     "Knowledge Base", "KB dimension", "archetype",
 ]
 
-_WORD_MIN = 275
-_WORD_MAX = 325
+_WORD_MIN = 225
+_WORD_MAX = 275
 
 
 def _build_input_payload(full_data: dict, company_name: str) -> dict:
@@ -141,7 +141,9 @@ MANDATORY RULES:
 
 7. PLAIN BUSINESS ENGLISH: No superlatives. No marketing language. No hedging phrases like "it appears that" or "it seems". State findings and implications directly.
 
-8. FORMAT: Plain prose only. No headers, no bullet points, no markdown except the inline [label](url) citation links.
+8. PARAGRAPHS: Structure the output as exactly 3-4 paragraphs, each covering a distinct dimension (e.g. overall trajectory / financial signals / operational or technology evidence / people and leadership). Separate paragraphs with a blank line. This is required for readability.
+
+9. FORMAT: Plain prose only. No headers, no bullet points, no markdown except the inline [label](url) citation links and the paragraph blank lines.
 
 Output only the prose text. Nothing else."""
 
@@ -152,7 +154,7 @@ def _word_count(text: str) -> int:
 
 def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, str]:
     """
-    Generate a 275-325 word General Summary from structured scan data.
+    Generate a 225-275 word General Summary from structured scan data.
 
     Returns (summary_text, model_used).
     Returns ("", "") on failure — caller should catch exceptions separately.
@@ -167,7 +169,7 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
     # Per-model configs.
     # gemini-2.5-pro: mandatory thinking model — thinking_budget (128-32768).
     #   thinking tokens are separate from max_output_tokens for this model, so
-    #   1200 output tokens (~900 words) is ample for the 275-325 word target.
+    #   2000 output tokens (~1500 words) is ample for the 225-275 word target.
     #   8192 thinking budget is appropriate for multi-rule prose generation.
     # gemini-3.1-pro-preview: thinking tokens are drawn from the same
     #   max_output_tokens pool, so the budget must comfortably exceed

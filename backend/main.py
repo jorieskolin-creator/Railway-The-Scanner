@@ -531,8 +531,11 @@ Use YOUR reality_score + Financial Health Index ({fin_for_arch}):
   - reality_score < 50 AND Financial Health Index < 50 → "At Risk"
 This is a mechanical derivation — do not override based on narrative interpretation.
 
-STEP 3 — SUMMARY (180-220 words):
+STEP 3 — SUMMARY (325-375 words):
 Write a diagnostic narrative that reads like an expert assessment, not a template:
+  - Structure: exactly 3-4 paragraphs, each covering a distinct KB dimension (e.g. overall position
+    & operating model / strategy & culture / service portfolio & AI readiness / financial context).
+    Separate paragraphs with \n\n in the JSON string — this is required for rendering.
   - First sentence: State the archetype and what defines this company's position.
   - Body: Map 3-4 key findings to specific KB dimensions. For each finding, connect the evidence
     to the KB pattern it reveals.
@@ -559,6 +562,7 @@ A direct cold-outreach message to a C-level executive at {company_name}:
 ### OUTPUT
 Respond with valid JSON only. Four fields required:
 {{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
+Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs total).
 
 ### CRITICAL CONTEXT — FACT-CHECK CORRECTIONS
 The previous synthesis contained false claims detected by an independent fact-checker (Gemini 3.1 Pro with Google Search).
@@ -1318,8 +1322,11 @@ Use YOUR reality_score + Financial Health Index ({fin_for_archetype}):
   - reality_score < 50 AND Financial Health Index < 50 → "At Risk"
 This is a mechanical derivation — do not override based on narrative interpretation.
 
-STEP 3 — SUMMARY (180-220 words):
+STEP 3 — SUMMARY (325-375 words):
 Write a diagnostic narrative that reads like an expert assessment, not a template:
+  - Structure: exactly 3-4 paragraphs, each covering a distinct KB dimension (e.g. overall position
+    & operating model / strategy & culture / service portfolio & AI readiness / financial context).
+    Separate paragraphs with \n\n in the JSON string — this is required for rendering.
   - First sentence: State the archetype and what defines this company's position.
   - Body: Map 3-4 key findings to specific KB dimensions. For each finding, connect the evidence
     to the KB pattern it reveals (e.g., "Job postings emphasize hierarchical reporting lines,
@@ -1351,7 +1358,8 @@ A direct cold-outreach message to a C-level executive at {companyName}:
 
 ### OUTPUT
 Respond with valid JSON only. Four fields required:
-{{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}"""
+{{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
+Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs total)."""
 
                 # --- Synthesis with fallback chain: Opus 4.6 → Gemini 3.1 Pro → Gemini 3 Pro → Gemini 2.5 Pro ---
                 # Opus is the judge — it does ONE thing: synthesize. Fallbacks degrade gracefully.
@@ -1931,7 +1939,7 @@ verified evidence provided."""
                     }
 
         # --- STEP 3.5: GENERAL SUMMARY ---
-        # Plain-language narrative (275-325 words) assembled from already-computed
+        # Plain-language narrative (225-275 words) assembled from already-computed
         # structured data (scores, verified links, jury findings, delta).
         # No KB terminology. Every claim must carry an inline citation.
         # Runs after fact-check so evidence_links are already purged/verified.
