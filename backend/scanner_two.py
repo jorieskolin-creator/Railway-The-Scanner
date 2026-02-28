@@ -661,7 +661,7 @@ def _build_research_prompt(search_name, domain_hint, weak_juries, loop_number, i
         2: f"""2. STRATEGIC JURY (RETRY - broader search, Finnish news included):
        - `"{search_name}" strategy digital transformation OR "digitaalinen muutos"`
        - `"{search_name}" SaaS OR cloud migration OR "pilvipalvelu" OR "pilvisiirtymä"`
-       - `"{search_name}" annual report 2024 2025 OR "vuosikertomus"`
+       - `"{search_name}" annual report {date.today().year} {date.today().year - 1} OR "vuosikertomus"`
        - `"{search_name}" kauppalehti OR talouselämä OR "strategia"`""",
         3: f"""3. CULTURAL JURY (RETRY - broader search, Finnish terms):
        - `"{search_name}" employer review OR workplace culture OR "työkulttuuri" OR "työnantaja"`
@@ -691,7 +691,7 @@ def _build_research_prompt(search_name, domain_hint, weak_juries, loop_number, i
        - `"{search_name}" employee satisfaction Finland OR "henkilöstötyytyväisyys"`""",
         4: f"""4. AI & DATA JURY (DEEP RETRY - industry context):
        - `"{search_name}" digital maturity OR automation OR "automaatio" OR "digitaalinen kypsyys"`
-       - `"{search_name}" technology investment Finland 2024 2025 OR "teknologiainvestointi"`""",
+       - `"{search_name}" technology investment Finland {date.today().year} {date.today().year - 1} OR "teknologiainvestointi"`""",
         5: f"""5. SERVICE PORTFOLIO JURY (DEEP RETRY - industry context):
        - `"{search_name}" Gartner OR Forrester OR ISG analyst report`
        - `"{search_name}" service delivery quality Finland OR "palvelun laatu"`"""
