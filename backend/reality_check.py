@@ -492,17 +492,25 @@ Each false_claims object must have:
     ]
 
     # Stage 1: Google Search enabled — 2.5 Pro (primary), 3.1 Pro (backup)
+    # max_output_tokens raised from 4096 → 8000:
+    #   gemini-2.5-pro defaults to thinking mode; thinking tokens share the
+    #   same pool as output tokens. At 4096, ~2000 tokens consumed by thinking
+    #   left only ~2096 for the JSON — tight when claims have long reasoning.
+    #   thinking_budget=1024 caps internal reasoning, reserving ~7000 for output.
+    #   gemini-3.1-pro-preview: thinking_level="MEDIUM" can use 2000-3500 tokens,
+    #   so 4096 was marginal for complex responses; 8000 gives comfortable headroom.
     gemini_25_search_config = {
         'tools': [{'google_search': {}}],
         'temperature': 0.0,
-        'max_output_tokens': 4096,
+        'max_output_tokens': 8000,
+        'thinking_config': types.ThinkingConfig(thinking_budget=1024),
         'safety_settings': _safety,
     }
     gemini_31_search_config = {
         'tools': [{'google_search': {}}],
         'temperature': 0.5,
         'thinking_config': types.ThinkingConfig(thinking_level="MEDIUM"),
-        'max_output_tokens': 4096,
+        'max_output_tokens': 8000,
         'safety_settings': _safety,
     }
 
@@ -648,7 +656,7 @@ Each false_claims object must have:
 
     if stage1_false_claims is None:
         print(f"   ❌ [Fact-Check] All Stage 1 models failed — skipping fact-check")
-        return {"false_claims": [], "corrected_summary": "", "corrected_pitch": "", "model": "all_models_failed", "time_ms": 0}
+        return {"false_claims": [], "corrected_summary": "", "corrected_pitch": "", "model": "all_models_failed", "time_ms": 0, "fact_check_skipped": True}
 
     # No false claims → done, Stage 2 not needed
     if not stage1_false_claims:
@@ -814,9 +822,13 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
 
     corrected_summary = result.get("corrected_summary", "")
     corrected_pitch = result.get("corrected_pitch", "")
+    fact_check_skipped = result.get("fact_check_skipped", False)
 
     return {
-        "verified": len(all_claims) == 0,
+        # verified=False when skipped: an unverified summary must not be treated
+        # as clean. It stays unmodified but is flagged so callers can handle it.
+        "verified": not fact_check_skipped and len(all_claims) == 0,
+        "fact_check_skipped": fact_check_skipped,
         "false_claims": all_claims[:10],
         "false_claims_detailed": all_claims_detailed[:10],
         "corrected_summary": corrected_summary,

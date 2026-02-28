@@ -1705,13 +1705,17 @@ Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs tot
         )
         full_data["ai_verification"] = {
             "verified": fact_check["verified"],
+            "fact_check_skipped": fact_check.get("fact_check_skipped", False),
             "false_claims": fact_check["false_claims"],
             "false_claims_detailed": fact_check.get("false_claims_detailed", []),
             "model": fact_check["fact_check_model"],
             "time_ms": fact_check["fact_check_time_ms"],
         }
 
-        if fact_check["verified"]:
+        if fact_check.get("fact_check_skipped"):
+            # --- SKIPPED: All fact-check models failed. Summary is unverified. ---
+            print(f"   ⚠️ [Fact-Check] All models failed — summary stored as UNVERIFIED ({fact_check['fact_check_time_ms']}ms)")
+        elif fact_check["verified"]:
             # --- CLEAN: No false claims found. Original synthesis stands. Done. ---
             print(f"   ✅ [Fact-Check] Summary verified — no false claims ({fact_check['fact_check_time_ms']}ms)")
         else:
