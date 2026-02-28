@@ -68,11 +68,12 @@ Rules:
 
         client = genai.Client(api_key=gemini_key)
         response = client.models.generate_content(
-            model="gemini-2.5-flash-preview-04-17",
+            model="gemini-2.5-pro",
             contents=prompt,
             config=genai_types.GenerateContentConfig(
                 temperature=0.0,
                 max_output_tokens=20,
+                thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
             ),
         )
         result = (response.text or "").strip().strip('"').strip("'")

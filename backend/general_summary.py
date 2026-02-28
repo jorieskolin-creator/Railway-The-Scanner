@@ -144,12 +144,41 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
 
     payload = _build_input_payload(full_data, company_name)
 
+    # Per-model configs.
+    # gemini-2.5-pro:      thinking disabled (budget=0) so all tokens go to visible
+    #                      output; temperature=0.3 for controlled prose.
+    # gemini-3.1-pro-preview: temperature MUST be 1.0 (low temp causes output loops
+    #                      on 3.x models); small thinking budget for grounding.
     models = [
-        ("gemini-2.5-pro", 60),
-        ("gemini-3.1-pro-preview", 60),
+        (
+            "gemini-2.5-pro",
+            genai_types.GenerateContentConfig(
+                temperature=0.3,
+                max_output_tokens=1200,
+                thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+            ),
+            genai_types.GenerateContentConfig(
+                temperature=0.2,
+                max_output_tokens=1200,
+                thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
+            ),
+        ),
+        (
+            "gemini-3.1-pro-preview",
+            genai_types.GenerateContentConfig(
+                temperature=1.0,
+                max_output_tokens=1200,
+                thinking_config=genai_types.ThinkingConfig(thinking_budget=2048),
+            ),
+            genai_types.GenerateContentConfig(
+                temperature=1.0,
+                max_output_tokens=1200,
+                thinking_config=genai_types.ThinkingConfig(thinking_budget=1024),
+            ),
+        ),
     ]
 
-    for model_id, timeout in models:
+    for model_id, first_config, retry_config in models:
         try:
             client = genai.Client(api_key=gemini_key)
             t0 = time.time()
@@ -158,10 +187,7 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
             response = client.models.generate_content(
                 model=model_id,
                 contents=prompt,
-                config=genai_types.GenerateContentConfig(
-                    temperature=0.3,
-                    max_output_tokens=1200,
-                ),
+                config=first_config,
             )
             text = (response.text or "").strip()
             wc = _word_count(text)
@@ -179,10 +205,7 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
                 retry_response = client.models.generate_content(
                     model=model_id,
                     contents=retry_prompt,
-                    config=genai_types.GenerateContentConfig(
-                        temperature=0.2,
-                        max_output_tokens=1200,
-                    ),
+                    config=retry_config,
                 )
                 retry_text = (retry_response.text or "").strip()
                 retry_wc = _word_count(retry_text)
