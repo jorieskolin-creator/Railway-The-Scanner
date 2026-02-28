@@ -485,54 +485,27 @@ const CompanySummary = ({ data }) => {
             </div>
         )}
 
-        {/* GENERAL SUMMARY — plain-language findings with inline evidence links */}
-        {data.general_summary && (() => {
-            // Split on paragraph breaks first, then render [label](url) links within each paragraph
-            const renderWithLinks = (text: string) => {
-                const paragraphs = text.split(/\n\n+/);
-                return paragraphs.map((para, pi) => {
-                    const parts = para.split(/(\[[^\]]+\]\(https?:\/\/[^)]+\))/g);
-                    const content = parts.map((part, i) => {
-                        const match = part.match(/^\[([^\]]+)\]\((https?:\/\/[^)]+)\)$/);
-                        if (match) {
-                            return (
-                                <a
-                                    key={i}
-                                    href={match[2]}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-sky-400 hover:text-sky-300 underline underline-offset-2 decoration-sky-600 hover:decoration-sky-400 transition-colors"
-                                >
-                                    {match[1]}
-                                </a>
-                            );
-                        }
-                        return <span key={i}>{part}</span>;
-                    });
-                    return (
+        {/* GENERAL SUMMARY — plain prose, no inline links (links shown in AI Diagnosis) */}
+        {data.general_summary && (
+            <div className="bg-gradient-to-r from-slate-800/60 to-slate-700/40 p-8 rounded-2xl border-l-4 border-slate-500 backdrop-blur-sm">
+                <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+                    <Search className="text-slate-400" size={22} />
+                    General Summary
+                    {data.general_summary_verified === false && (
+                        <span className="ml-2 text-xs font-normal text-amber-400 bg-amber-400/10 px-2 py-0.5 rounded-full border border-amber-400/20">
+                            unverified claims removed
+                        </span>
+                    )}
+                </h3>
+                <div>
+                    {data.general_summary.split(/\n\n+/).map((para, pi) => (
                         <p key={pi} className={`text-slate-200 leading-relaxed text-base font-light${pi > 0 ? " mt-4" : ""}`}>
-                            {content}
+                            {para}
                         </p>
-                    );
-                });
-            };
-            return (
-                <div className="bg-gradient-to-r from-slate-800/60 to-slate-700/40 p-8 rounded-2xl border-l-4 border-slate-500 backdrop-blur-sm">
-                    <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
-                        <Search className="text-slate-400" size={22} />
-                        General Summary
-                        {data.general_summary_verified === false && (
-                            <span className="ml-2 text-xs font-normal text-amber-400 bg-amber-400/10 px-2 py-0.5 rounded-full border border-amber-400/20">
-                                unverified claims removed
-                            </span>
-                        )}
-                    </h3>
-                    <div>
-                        {renderWithLinks(data.general_summary)}
-                    </div>
+                    ))}
                 </div>
-            );
-        })()}
+            </div>
+        )}
 
         <div className="bg-gradient-to-r from-indigo-900/30 to-purple-900/30 p-8 rounded-2xl border-l-4 border-indigo-500 backdrop-blur-sm">
             <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">

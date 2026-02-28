@@ -2,11 +2,9 @@
 general_summary.py — Plain-language General Summary generator.
 
 Assembles a 225-275 word narrative from already-computed structured scan data
-(verified evidence links, jury findings, financial findings, delta).
-
-Written from the perspective of an experienced analyst and executive advisor.
-Key facts are anchored with citations; synthesis prose connecting evidence
-does not require individual citations.
+(jury findings, financial findings, delta). No inline links are included —
+the General Summary is plain prose only; all evidence links are already shown
+in the AI Diagnosis section of the UI.
 """
 
 import json
@@ -55,26 +53,23 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
         if parts:
             delta = {"previous_scan_date": prev_date, "changes": parts}
 
-    # Verified evidence links only (max 14).
-    # Titles truncated to 55 chars to keep the payload compact and to prevent
-    # the model from copying verbose article titles verbatim into citation labels.
+    # Evidence snippets — titles and snippets only, NO URLs.
+    # Providing URLs caused the model to hallucinate wrong links in the output.
+    # All verified links are already shown in the AI Diagnosis section of the UI.
     verified_links = [
         {
             "title": (l.get("title", "Source") or "Source")[:55],
-            "url": l.get("url", ""),
             "snippet": (l.get("snippet") or "")[:180],
         }
         for l in full_data.get("evidence_links", [])
         if l.get("verified", True) and l.get("url")
     ][:14]
 
-    # Key jury findings that have a URL (max 8).
-    # Same 55-char title cap for consistency.
+    # Key jury findings — descriptions only, no URLs.
     key_findings = [
         {
             "description": item.get("description") or item.get("category", ""),
             "title": ((item.get("title") or item.get("category", "")) or "")[:55],
-            "url": item.get("url", ""),
         }
         for item in full_data.get("reality_checklist", [])
         if item.get("found") and item.get("url")
@@ -143,7 +138,7 @@ MANDATORY RULES:
 
 8. PARAGRAPHS: Structure the output as exactly 3-4 paragraphs, each covering a distinct dimension. Separate paragraphs with a blank line. This is required for readability.
 
-9. FORMAT: Plain prose only. No headers, no bullet points, no markdown except the inline [label](url) citation links and the blank lines between paragraphs.
+9. FORMAT: Plain prose only. No headers, no bullet points, no markdown, NO inline links or citations of any kind. Blank lines between paragraphs only.
 
 Output only the prose text. Nothing else."""
 
