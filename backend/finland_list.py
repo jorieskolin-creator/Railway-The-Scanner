@@ -220,6 +220,10 @@ TOP_100_COMPANIES = [
      "domain": "Industrial & Manufacturing", "revenue_avg_3yr": 600, "employees": 1000, "ownership": "Private", "hq_country": "FI"},
 
     # --- Special Additions ---
+    {"name": "Säästöpankki", "url": "https://www.saastopankki.fi",
+     "domain": "Financial Services", "revenue_avg_3yr": 800, "employees": 3000, "ownership": "Cooperative", "hq_country": "FI"},
+    {"name": "Mandatum", "url": "https://mandatum.com",
+     "domain": "Financial Services", "revenue_avg_3yr": 1200, "employees": 700, "ownership": "Public", "hq_country": "FI"},
     {"name": "Vivicta", "url": "https://www.vivicta.fi",
      "domain": "IT Services & Consulting", "revenue_avg_3yr": 50, "employees": 100, "ownership": "Private", "hq_country": "FI"},
     {"name": "Vincit Oyj", "url": "https://www.vincit.com",

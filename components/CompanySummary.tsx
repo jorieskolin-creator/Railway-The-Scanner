@@ -487,25 +487,33 @@ const CompanySummary = ({ data }) => {
 
         {/* GENERAL SUMMARY — plain-language findings with inline evidence links */}
         {data.general_summary && (() => {
-            // Render [Title](url) markdown links as real anchor tags
+            // Split on paragraph breaks first, then render [label](url) links within each paragraph
             const renderWithLinks = (text: string) => {
-                const parts = text.split(/(\[[^\]]+\]\(https?:\/\/[^)]+\))/g);
-                return parts.map((part, i) => {
-                    const match = part.match(/^\[([^\]]+)\]\((https?:\/\/[^)]+)\)$/);
-                    if (match) {
-                        return (
-                            <a
-                                key={i}
-                                href={match[2]}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-sky-400 hover:text-sky-300 underline underline-offset-2 decoration-sky-600 hover:decoration-sky-400 transition-colors"
-                            >
-                                {match[1]}
-                            </a>
-                        );
-                    }
-                    return <span key={i}>{part}</span>;
+                const paragraphs = text.split(/\n\n+/);
+                return paragraphs.map((para, pi) => {
+                    const parts = para.split(/(\[[^\]]+\]\(https?:\/\/[^)]+\))/g);
+                    const content = parts.map((part, i) => {
+                        const match = part.match(/^\[([^\]]+)\]\((https?:\/\/[^)]+)\)$/);
+                        if (match) {
+                            return (
+                                <a
+                                    key={i}
+                                    href={match[2]}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-sky-400 hover:text-sky-300 underline underline-offset-2 decoration-sky-600 hover:decoration-sky-400 transition-colors"
+                                >
+                                    {match[1]}
+                                </a>
+                            );
+                        }
+                        return <span key={i}>{part}</span>;
+                    });
+                    return (
+                        <p key={pi} className={`text-slate-200 leading-relaxed text-base font-light${pi > 0 ? " mt-4" : ""}`}>
+                            {content}
+                        </p>
+                    );
                 });
             };
             return (
@@ -519,9 +527,9 @@ const CompanySummary = ({ data }) => {
                             </span>
                         )}
                     </h3>
-                    <p className="text-slate-200 leading-relaxed text-base font-light">
+                    <div>
                         {renderWithLinks(data.general_summary)}
-                    </p>
+                    </div>
                 </div>
             );
         })()}
