@@ -5,7 +5,8 @@ Assembles a 225-275 word narrative from already-computed structured scan data
 (verified evidence links, jury findings, financial findings, delta).
 
 Written from the perspective of an experienced analyst and executive advisor.
-Every factual claim must be backed by an inline citation from the evidence pool.
+Key facts are anchored with citations; synthesis prose connecting evidence
+does not require individual citations.
 """
 
 import json
@@ -109,24 +110,23 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
     return result
 
 
-def _build_prompt(payload: dict, company_name: str, word_correction: str = "") -> str:
+def _build_prompt(payload: dict, company_name: str) -> str:
     forbidden = ", ".join(_FORBIDDEN_TERMS)
-    correction_note = f"\n\nIMPORTANT CORRECTION FROM PREVIOUS ATTEMPT: {word_correction}" if word_correction else ""
     return f"""You are an experienced analyst and executive advisor with deep expertise in how organisations and companies operate. You know how to communicate findings clearly to C-level executives — direct, unvarnished, without sugarcoating. You highlight what is working, what is not, and what the consequences are if nothing changes. You do not flatter. You do not hedge.
 
 You are writing the General Summary section of a forensic B2B intelligence report about {company_name}.
 
 EVIDENCE — ground every claim you make in the data below. Synthesise and interpret — do not enumerate:
 {json.dumps(payload, ensure_ascii=False, indent=2)}
-{correction_note}
+
 WRITING APPROACH:
-Weave the evidence into a coherent narrative that gives a C-level reader an immediate understanding of where this company stands, what the key signals are, and what is at stake. Connect findings — do not list them. For each significant observation, consider: what does this suggest about the company's trajectory, and what happens if the current direction continues? You are allowed to draw analytical conclusions as long as every factual claim cites a source URL.
+Weave the evidence into a coherent narrative that gives a C-level reader an immediate understanding of where this company stands, what the key signals are, and what is at stake. Connect findings — do not list them. For each significant observation, consider what it suggests about the company's trajectory and what happens if the current direction continues. Draw analytical conclusions — that is your job.
 
 MANDATORY RULES:
 
-1. WORD COUNT: The output MUST be between {_WORD_MIN} and {_WORD_MAX} words. Count every word before submitting. This is non-negotiable.
+1. WORD COUNT: The output MUST be between {_WORD_MIN} and {_WORD_MAX} words. Count carefully. This is non-negotiable.
 
-2. CITATIONS: Every factual claim about the company must be followed by an inline citation in the form [label](url). Use ONLY urls from evidence_links or key_findings in the input. Write a short 2–4 word label of your own — do NOT copy the article title. Good examples: [press release](url), [annual report](url), [company news](url), [strategy page](url). If you cannot cite a url for a claim, do not make that claim. Scores (financial_index, reality_score) do not need citations — they are computed internal metrics.
+2. CITATIONS: Anchor key specific facts — numbers, named events, named people, product names, financial figures — with an inline [label](url) citation using ONLY urls from evidence_links or key_findings. Write a short 2–4 word label of your own (e.g. [annual report](url), [press release](url)). Synthesis sentences that connect or interpret cited evidence do NOT need individual citations. Include between 3 and 8 citations total. Do not cite scores (financial_index, reality_score) — they are computed metrics, not web sources.
 
 3. FORBIDDEN TERMS: Do not use any of these: {forbidden}. Use plain descriptive language instead.
 
@@ -135,15 +135,15 @@ MANDATORY RULES:
    - If no delta: open with the single most significant observed fact from key_findings or evidence_links.
    - NEVER open with a score number. Scores may appear briefly later as supporting context, never as the lead.
 
-5. COVERAGE: If the evidence supports it, address at least 3 distinct dimensions — for example: financial health, operational or technology signals, people and leadership. Do not write the entire summary about a single event.
+5. COVERAGE: Address at least 3 distinct dimensions if the evidence supports them — for example: financial health, operational or technology signals, people and leadership. Do not write the entire summary about a single event.
 
-6. RISKS-IF-NOT-ACTING: Where the evidence points to a gap, a stagnation, or a warning signal, name what is likely to happen if the current trajectory continues. Be direct. Do not soften it.
+6. RISKS-IF-NOT-ACTING: Where the evidence points to a gap, stagnation, or warning signal, name what is likely to happen if the current trajectory continues. Be direct. Do not soften it.
 
 7. PLAIN BUSINESS ENGLISH: No superlatives. No marketing language. No hedging phrases like "it appears that" or "it seems". State findings and implications directly.
 
-8. PARAGRAPHS: Structure the output as exactly 3-4 paragraphs, each covering a distinct dimension (e.g. overall trajectory / financial signals / operational or technology evidence / people and leadership). Separate paragraphs with a blank line. This is required for readability.
+8. PARAGRAPHS: Structure the output as exactly 3-4 paragraphs, each covering a distinct dimension. Separate paragraphs with a blank line. This is required for readability.
 
-9. FORMAT: Plain prose only. No headers, no bullet points, no markdown except the inline [label](url) citation links and the paragraph blank lines.
+9. FORMAT: Plain prose only. No headers, no bullet points, no markdown except the inline [label](url) citation links and the blank lines between paragraphs.
 
 Output only the prose text. Nothing else."""
 
@@ -165,87 +165,64 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
         return "", ""
 
     payload = _build_input_payload(full_data, company_name)
+    prompt = _build_prompt(payload, company_name)
 
-    # Per-model configs.
-    # gemini-2.5-pro: mandatory thinking model — thinking_budget (128-32768).
-    #   thinking tokens are separate from max_output_tokens for this model, so
-    #   2000 output tokens (~1500 words) is ample for the 225-275 word target.
-    #   8192 thinking budget is appropriate for multi-rule prose generation.
-    # gemini-3.1-pro-preview: thinking tokens are drawn from the same
-    #   max_output_tokens pool, so the budget must comfortably exceed
-    #   thinking_budget + target_output (2048 thinking + ~500 visible = 2548).
-    #   4096 gives a safe margin. temperature MUST be 1.0 on 3.x models.
-    models = [
-        (
-            "gemini-2.5-pro",
-            genai_types.GenerateContentConfig(
-                temperature=0.5,
-                max_output_tokens=2000,
-                thinking_config=genai_types.ThinkingConfig(thinking_budget=8192),
-            ),
-            genai_types.GenerateContentConfig(
-                temperature=0.5,
-                max_output_tokens=2000,
-                thinking_config=genai_types.ThinkingConfig(thinking_budget=8192),
-            ),
-        ),
-        (
-            "gemini-3.1-pro-preview",
-            genai_types.GenerateContentConfig(
-                temperature=1.0,
-                max_output_tokens=4096,
-                thinking_config=genai_types.ThinkingConfig(thinking_budget=2048),
-            ),
-            genai_types.GenerateContentConfig(
-                temperature=1.0,
-                max_output_tokens=4096,
-                thinking_config=genai_types.ThinkingConfig(thinking_budget=1024),
-            ),
-        ),
-    ]
+    # gemini-3.1-pro-preview is the sole model for General Summary.
+    # gemini-2.5-pro was removed: with thinking_budget=8192 it consistently
+    # exhausts its thinking budget on the long evidence payload and returns
+    # response.text = None (0 visible words) every time.
+    #
+    # gemini-3.1-pro-preview: thinking tokens and output tokens share the same
+    # max_output_tokens pool. Budget: 6000 total, 2048 thinking → ~3952 visible
+    # (~3000 words). The 225-275 word target needs ~400 visible tokens — ample.
+    # temperature=1.0 is required on 3.x models (low temp causes output loops).
+    #
+    # Retry uses thinking_budget=512 to leave the maximum visible token room,
+    # since on a retry the model has already failed once and over-thinking is
+    # more likely to repeat the same mistake than fix it.
+    FIRST_CONFIG = genai_types.GenerateContentConfig(
+        temperature=1.0,
+        max_output_tokens=6000,
+        thinking_config=genai_types.ThinkingConfig(thinking_budget=2048),
+    )
+    RETRY_CONFIG = genai_types.GenerateContentConfig(
+        temperature=1.0,
+        max_output_tokens=6000,
+        thinking_config=genai_types.ThinkingConfig(thinking_budget=512),
+    )
+    MODEL = "gemini-3.1-pro-preview"
 
-    for model_id, first_config, retry_config in models:
+    client = genai.Client(api_key=gemini_key)
+
+    for attempt, config in enumerate([FIRST_CONFIG, RETRY_CONFIG], start=1):
         try:
-            client = genai.Client(api_key=gemini_key)
             t0 = time.time()
-
-            prompt = _build_prompt(payload, company_name)
             response = client.models.generate_content(
-                model=model_id,
+                model=MODEL,
                 contents=prompt,
-                config=first_config,
+                config=config,
             )
             text = (response.text or "").strip()
             wc = _word_count(text)
             elapsed = int((time.time() - t0) * 1000)
-            print(f"   [General Summary] {model_id}: {wc} words ({elapsed}ms)")
+            print(f"   [General Summary] {MODEL} attempt {attempt}: {wc} words ({elapsed}ms)")
 
-            # If outside range, one retry with explicit correction note
-            if not (_WORD_MIN <= wc <= _WORD_MAX):
-                if wc < _WORD_MIN:
-                    correction = f"Your previous output was {wc} words — too short. You must reach at least {_WORD_MIN} words. Expand with additional cited evidence from the input."
-                else:
-                    correction = f"Your previous output was {wc} words — too long. You must cut down to at most {_WORD_MAX} words. Remove the least important sentences."
+            if _WORD_MIN <= wc <= _WORD_MAX:
+                return text, MODEL
 
-                retry_prompt = _build_prompt(payload, company_name, word_correction=correction)
-                retry_response = client.models.generate_content(
-                    model=model_id,
-                    contents=retry_prompt,
-                    config=retry_config,
-                )
-                retry_text = (retry_response.text or "").strip()
-                retry_wc = _word_count(retry_text)
-                print(f"   [General Summary] {model_id} retry: {retry_wc} words")
-                # Use retry result if it's at least closer to range (or inside it)
-                if abs(retry_wc - 300) < abs(wc - 300):
-                    text = retry_text
-                    wc = retry_wc
+            if attempt == 1:
+                print(f"   [General Summary] {wc} words outside [{_WORD_MIN}-{_WORD_MAX}] — retrying")
+                continue
 
+            # Second attempt: use whatever we got if it's non-empty
             if text:
-                return text, model_id
+                print(f"   [General Summary] Using attempt 2 result ({wc} words) — outside range but non-empty")
+                return text, MODEL
 
         except Exception as e:
-            print(f"   ❌ [General Summary] {model_id} failed: {e}")
+            print(f"   ❌ [General Summary] {MODEL} attempt {attempt} failed: {e}")
+            if attempt == 2:
+                break
             continue
 
     return "", ""
