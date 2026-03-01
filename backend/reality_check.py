@@ -530,7 +530,8 @@ Each false_claims object must have:
 
     stage1_models = [
         ("gemini-2.5-pro", 90, gemini_25_search_config),          # Primary: 2.5 Pro + Google Search, temp=0.0
-        ("gemini-3.1-pro-preview", 90, gemini_31_search_config),  # Backup:  3.1 Pro + Google Search
+        ("gemini-3.1-pro-preview", 90, gemini_31_search_config),  # Backup 1: 3.1 Pro + Google Search
+        ("gemini-3-pro-preview", 90, gemini_31_search_config),    # Backup 2: 3 Pro (lower demand; ~1 week left)
     ]
 
     # ── Helper: single model call with timeout ────────────────────────────────
@@ -936,15 +937,15 @@ def _clean_with_gemini(prompt):
     except Exception as g31_err:
         print(f"   ❌ [Clean] Gemini 3.1 Pro Preview failed: {g31_err}")
 
-    # --- Fallback 1: Gemini 3.1 Pro Preview (MEDIUM thinking, replaces Gemini 3 Pro) ---
-    print(f"   🔄 [Clean] Falling back to Gemini 3.1 Pro Preview...")
+    # --- Fallback 1: Gemini 3 Pro Preview (lower demand than 3.1 during overload; ~1 week left) ---
+    print(f"   🔄 [Clean] Falling back to Gemini 3 Pro Preview...")
     try:
         start = time.time()
 
         def _call_3():
             return call_with_503_backoff(
                 lambda: client.models.generate_content(
-                    model="gemini-3.1-pro-preview",
+                    model="gemini-3-pro-preview",
                     contents=prompt,
                     config={
                         'temperature': 0.5,
@@ -953,7 +954,7 @@ def _clean_with_gemini(prompt):
                         'response_mime_type': 'application/json',
                     }
                 ),
-                label="Clean fallback gemini-3.1-pro-preview",
+                label="Clean gemini-3-pro-preview",
             )
 
         pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -962,17 +963,17 @@ def _clean_with_gemini(prompt):
             response = future.result(timeout=60)
         except concurrent.futures.TimeoutError:
             pool.shutdown(wait=False)
-            raise ValueError("Gemini 3.1 Pro Preview timed out after 60s")
+            raise ValueError("Gemini 3 Pro Preview timed out after 60s")
         pool.shutdown(wait=False)
 
         elapsed_ms = int((time.time() - start) * 1000)
         response_text = response.text if response.text else ""
         if response_text:
-            return response_text, elapsed_ms, "gemini-3.1-pro-preview"
-        raise ValueError("Gemini 3.1 Pro Preview returned empty response")
+            return response_text, elapsed_ms, "gemini-3-pro-preview"
+        raise ValueError("Gemini 3 Pro Preview returned empty response")
 
     except Exception as g3_err:
-        print(f"   ❌ [Clean] Gemini 3.1 Pro Preview failed: {g3_err}")
+        print(f"   ❌ [Clean] Gemini 3 Pro Preview failed: {g3_err}")
 
     # --- Fallback 2: Gemini 2.5 Pro (separate rate limits from 3.x family) ---
     print(f"   🔄 [Clean] Falling back to Gemini 2.5 Pro...")

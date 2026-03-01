@@ -200,6 +200,7 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
     # starvation issue. At 1024 thinking tokens, ~7000 tokens remain for output,
     # which is far more than the ~400 tokens needed for 225-275 words.
     PRIMARY_MODEL = "gemini-3.1-pro-preview"
+    MIDDLE_MODEL  = "gemini-3-pro-preview"   # available ~1 more week; lower demand than 3.1
     BACKUP_MODEL  = "gemini-2.5-pro"
 
     FIRST_CONFIG = genai_types.GenerateContentConfig(
@@ -209,6 +210,11 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
     )
     RETRY_CONFIG = genai_types.GenerateContentConfig(
         temperature=1.0,
+        max_output_tokens=6000,
+        thinking_config=genai_types.ThinkingConfig(thinking_budget=512),
+    )
+    MIDDLE_CONFIG = genai_types.GenerateContentConfig(
+        temperature=0.7,
         max_output_tokens=6000,
         thinking_config=genai_types.ThinkingConfig(thinking_budget=512),
     )
@@ -255,8 +261,29 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
             if attempt == 1:
                 continue
 
-    # Attempt 3: backup model (gemini-2.5-pro)
-    print(f"   [General Summary] Primary model failed — trying backup {BACKUP_MODEL}")
+    # Attempt 3: middle model (gemini-3-pro-preview) — lower demand than 3.1 during overload
+    print(f"   [General Summary] Primary model failed — trying middle {MIDDLE_MODEL}")
+    try:
+        t0 = time.time()
+        response = call_with_503_backoff(
+            lambda: client.models.generate_content(
+                model=MIDDLE_MODEL,
+                contents=prompt,
+                config=MIDDLE_CONFIG,
+            ),
+            label=f"General Summary {MIDDLE_MODEL}",
+        )
+        text = _strip_links((response.text or "").strip())
+        wc = _word_count(text)
+        elapsed = int((time.time() - t0) * 1000)
+        print(f"   [General Summary] {MIDDLE_MODEL}: {wc} words ({elapsed}ms)")
+        if text:
+            return text, MIDDLE_MODEL
+    except Exception as e:
+        print(f"   ❌ [General Summary] {MIDDLE_MODEL} failed: {e}")
+
+    # Attempt 4: backup model (gemini-2.5-pro)
+    print(f"   [General Summary] Middle model failed — trying backup {BACKUP_MODEL}")
     try:
         t0 = time.time()
         response = call_with_503_backoff(
