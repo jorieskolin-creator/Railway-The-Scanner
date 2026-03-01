@@ -1650,7 +1650,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     # duplicate fallback with the same model string; it wastes the full timeout budget and
     # never succeeds if the primary already timed out.
     data = None
-    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Gemini 3.1 Pro Preview → Sonnet 4.6 → Gemini 2.5 Pro")
+    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Gemini 3.1 Pro Preview → Gemini 3 Pro Preview → Sonnet 4.6 → Gemini 2.5 Pro")
 
     # --- PRIMARY: Gemini 3.1 Pro Preview — two-pass mode ---
     # Pass 1 (180s wall, soft timeout): relaxed-format prompt, thinking_budget=8000 (4000 on rescan), temp=0.5, Google Search.
@@ -1661,12 +1661,17 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     #   temp=0.0, no tools, no thinking — pure JSON conversion.
     data = execute_with_model("gemini-3.1-pro-preview", None, 180)
 
-    # --- BACKUP 1: Sonnet 4.6 (cross-provider; own search quota, unaffected by Gemini rate limits) ---
+    # --- BACKUP 1: Gemini 3 Pro Preview (lower demand than 3.1 during overload; ~1 week left) ---
     if not data:
-        print(f"   ⚠️ [Forensic Scan] Gemini 3.1 Pro Preview returned no data. Falling back to Sonnet 4.6...")
+        print(f"   ⚠️ [Forensic Scan] Gemini 3.1 Pro Preview returned no data. Falling back to Gemini 3 Pro Preview...")
+        data = execute_with_model("gemini-3-pro-preview", None, 120)
+
+    # --- BACKUP 2: Sonnet 4.6 (cross-provider; own search quota, unaffected by Gemini rate limits) ---
+    if not data:
+        print(f"   ⚠️ [Forensic Scan] Gemini 3 Pro Preview returned no data. Falling back to Sonnet 4.6...")
         data = execute_with_anthropic(prompt)
 
-    # --- BACKUP 2: Gemini 2.5 Pro (separate rate limits from 3.x family; ~50s typical) ---
+    # --- BACKUP 3: Gemini 2.5 Pro (separate rate limits from 3.x family; ~50s typical) ---
     if not data:
         print(f"   ⚠️ [Forensic Scan] Sonnet 4.6 returned no data. Falling back to Gemini 2.5 Pro...")
         data = execute_with_model("gemini-2.5-pro", call_timeout=120)

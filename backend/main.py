@@ -1447,16 +1447,16 @@ Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs tot
                         except Exception as gemini31_err:
                             print(f"   ❌ [Synthesis] Gemini 3.1 Pro Preview failed: {gemini31_err}")
 
-                    # Fallback 2: Gemini 3 Pro Preview
+                    # Fallback 2: Gemini 3 Pro Preview (lower demand than 3.1 during overload; ~1 week left)
                     if not response_text and gemini_key and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 30:
                         try:
-                            print(f"   🔄 [Synthesis] Falling back to Gemini 3.1 Pro Preview (timeout: {SYNTH_TIMEOUT}s)...")
+                            print(f"   🔄 [Synthesis] Falling back to Gemini 3 Pro Preview (timeout: {SYNTH_TIMEOUT}s)...")
                             g2_start = time.time()
                             gemini_client = genai.Client(api_key=gemini_key)
 
                             def _synth_gemini31review():
                                 return gemini_client.models.generate_content(
-                                    model="gemini-3.1-pro-preview",
+                                    model="gemini-3-pro-preview",
                                     contents=synthesis_prompt,
                                     config=types.GenerateContentConfig(
                                         temperature=0.5,
@@ -1470,13 +1470,13 @@ Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs tot
                             try:
                                 gemini_resp = g2_future.result(timeout=SYNTH_TIMEOUT)
                                 response_text = gemini_resp.text or ""
-                                print(f"   ✅ [Synthesis] Gemini 3.1 Pro Preview succeeded in {int((time.time() - g2_start) * 1000)}ms")
+                                print(f"   ✅ [Synthesis] Gemini 3 Pro Preview succeeded in {int((time.time() - g2_start) * 1000)}ms")
                             except concurrent.futures.TimeoutError:
                                 g2_pool.shutdown(wait=False)
-                                print(f"   ⏰ [Synthesis] Gemini 3.1 Pro Preview timed out after {SYNTH_TIMEOUT}s")
+                                print(f"   ⏰ [Synthesis] Gemini 3 Pro Preview timed out after {SYNTH_TIMEOUT}s")
                             g2_pool.shutdown(wait=False)
                         except Exception as gemini3_err:
-                            print(f"   ❌ [Synthesis] Gemini 3.1 Pro Preview failed: {gemini3_err}")
+                            print(f"   ❌ [Synthesis] Gemini 3 Pro Preview failed: {gemini3_err}")
 
                     # Fallback 3: Gemini 2.5 Pro (separate rate limits from 3.x family)
                     if not response_text and gemini_key and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 30:
