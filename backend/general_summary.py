@@ -191,19 +191,16 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
     payload = _build_input_payload(full_data, company_name)
     prompt = _build_prompt(payload, company_name)
 
-    # gemini-3.1-pro-preview is the sole model for General Summary.
-    # gemini-2.5-pro was removed: with thinking_budget=8192 it consistently
-    # exhausts its thinking budget on the long evidence payload and returns
-    # response.text = None (0 visible words) every time.
-    #
-    # gemini-3.1-pro-preview: thinking tokens and output tokens share the same
-    # max_output_tokens pool. Budget: 6000 total, 2048 thinking → ~3952 visible
-    # (~3000 words). The 225-275 word target needs ~400 visible tokens — ample.
-    # temperature=1.0 is required on 3.x models (low temp causes output loops).
-    #
-    # Retry uses thinking_budget=512 to leave the maximum visible token room,
-    # since on a retry the model has already failed once and over-thinking is
-    # more likely to repeat the same mistake than fix it.
+    # Primary model: gemini-3.1-pro-preview (2 attempts)
+    # gemini-2.5-pro was originally removed because thinking_budget=8192 caused
+    # it to exhaust thinking and return response.text=None (0 visible words).
+    # It is now reinstated as a backup-only model with thinking_budget=1024 +
+    # max_output_tokens=8000 — the same fix that resolved the fact-check token
+    # starvation issue. At 1024 thinking tokens, ~7000 tokens remain for output,
+    # which is far more than the ~400 tokens needed for 225-275 words.
+    PRIMARY_MODEL = "gemini-3.1-pro-preview"
+    BACKUP_MODEL  = "gemini-2.5-pro"
+
     FIRST_CONFIG = genai_types.GenerateContentConfig(
         temperature=1.0,
         max_output_tokens=6000,
@@ -214,39 +211,62 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
         max_output_tokens=6000,
         thinking_config=genai_types.ThinkingConfig(thinking_budget=512),
     )
-    MODEL = "gemini-3.1-pro-preview"
+    BACKUP_CONFIG = genai_types.GenerateContentConfig(
+        temperature=0.5,
+        max_output_tokens=8000,
+        thinking_config=genai_types.ThinkingConfig(thinking_budget=1024),
+    )
 
     client = genai.Client(api_key=gemini_key)
 
+    # Attempts 1 & 2: primary model
     for attempt, config in enumerate([FIRST_CONFIG, RETRY_CONFIG], start=1):
         try:
             t0 = time.time()
             response = client.models.generate_content(
-                model=MODEL,
+                model=PRIMARY_MODEL,
                 contents=prompt,
                 config=config,
             )
             text = _strip_links((response.text or "").strip())
             wc = _word_count(text)
             elapsed = int((time.time() - t0) * 1000)
-            print(f"   [General Summary] {MODEL} attempt {attempt}: {wc} words ({elapsed}ms)")
+            print(f"   [General Summary] {PRIMARY_MODEL} attempt {attempt}: {wc} words ({elapsed}ms)")
 
             if _WORD_MIN <= wc <= _WORD_MAX:
-                return text, MODEL
+                return text, PRIMARY_MODEL
 
             if attempt == 1:
                 print(f"   [General Summary] {wc} words outside [{_WORD_MIN}-{_WORD_MAX}] — retrying")
                 continue
 
-            # Second attempt: use whatever we got if it's non-empty
+            # Attempt 2 result: use if non-empty (best-effort over silence),
+            # but still fall through to backup if completely empty.
             if text:
                 print(f"   [General Summary] Using attempt 2 result ({wc} words) — outside range but non-empty")
-                return text, MODEL
+                return text, PRIMARY_MODEL
 
         except Exception as e:
-            print(f"   ❌ [General Summary] {MODEL} attempt {attempt} failed: {e}")
-            if attempt == 2:
-                break
-            continue
+            print(f"   ❌ [General Summary] {PRIMARY_MODEL} attempt {attempt} failed: {e}")
+            if attempt == 1:
+                continue
+
+    # Attempt 3: backup model (gemini-2.5-pro)
+    print(f"   [General Summary] Primary model failed — trying backup {BACKUP_MODEL}")
+    try:
+        t0 = time.time()
+        response = client.models.generate_content(
+            model=BACKUP_MODEL,
+            contents=prompt,
+            config=BACKUP_CONFIG,
+        )
+        text = _strip_links((response.text or "").strip())
+        wc = _word_count(text)
+        elapsed = int((time.time() - t0) * 1000)
+        print(f"   [General Summary] {BACKUP_MODEL} backup: {wc} words ({elapsed}ms)")
+        if text:
+            return text, BACKUP_MODEL
+    except Exception as e:
+        print(f"   ❌ [General Summary] {BACKUP_MODEL} backup failed: {e}")
 
     return "", ""
