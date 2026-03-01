@@ -626,7 +626,6 @@ Generate a completely fresh synthesis. Do NOT reference or re-introduce any of t
                 ),
                 label="Clean Re-Synthesis fallback gemini-3.1-pro-preview",
             )
-            )
             resynth_text = resynth_response.text or ""
             resynth_model_used = "gemini-3.1-pro-preview"
             resynth_ms = int((time.time() - resynth_start) * 1000)
