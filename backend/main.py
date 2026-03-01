@@ -6,6 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional, List
 import os
+import re
 import uuid
 import json
 import requests
@@ -34,6 +35,16 @@ from gemini_backoff import call_with_503_backoff
 
 # VERIFICATION LOG: v5.4.0 - Extended Thinking + Search Budget Upgrade
 print("Starting Adaptability Scanner Backend (v5.4.0 - Extended Thinking + Search Budget Upgrade)...", flush=True)
+
+def _strip_tac_codes(text: str) -> str:
+    """Remove legacy TAC-xxx / DIM-xxx internal codes from summary text.
+    These codes were generated before the 'NEVER use TAC-xxx' prompt rule was
+    added. Stripping ensures old stored data is cleaned up on every write and
+    read so they never appear in the UI or re-poison future synthesis prompts.
+    """
+    if not text:
+        return text
+    return re.sub(r'\b(?:TAC|DIM)-\d{3,4}\b\s*', '', text)
 
 def clean_env_var(value):
     if not value: return ""
@@ -208,6 +219,9 @@ async def get_company_details(company_name: str, response: Response):
     data = storage.get_company_data(company_name)
     if not data:
         raise HTTPException(status_code=404, detail="Company report not found in Vercel Blob.")
+    # Clean legacy TAC-xxx / DIM-xxx codes that may exist in pre-rule stored summaries
+    if data.get("summary_text"):
+        data["summary_text"] = _strip_tac_codes(data["summary_text"])
     return data
 
 @app.get("/admin/company-list")
@@ -289,7 +303,7 @@ def _recheck_company_data(company_name: str, data: dict) -> dict:
         _kp_before_rc = len(data.get("key_people") or [])
         if corrected_summary:
             # Fact-checker produced corrected summary — apply directly
-            data["summary_text"] = corrected_summary
+            data["summary_text"] = _strip_tac_codes(corrected_summary)
             if corrected_pitch:
                 data["pitch_text"] = corrected_pitch
             data["ai_verification"]["verified"] = True
@@ -665,7 +679,7 @@ Generate a completely fresh synthesis. Do NOT reference or re-introduce any of t
             new_pitch = resynth_json.get("pitch", "")
 
             if new_summary:
-                data["summary_text"] = new_summary
+                data["summary_text"] = _strip_tac_codes(new_summary)
             if new_pitch:
                 data["pitch_text"] = new_pitch
 
@@ -1259,7 +1273,9 @@ Include the trend trajectory in the summary. Note persistent patterns or turning
 
                     parts = []
                     if prev_summary:
-                        parts.append(f"Previous Summary:\n{prev_summary}")
+                        # Strip any TAC-xxx / DIM-xxx codes that may exist in old stored summaries
+                        parts.append(f"Previous Summary:\n{_strip_tac_codes(prev_summary)}")
+                        parts.append("NOTE: The previous summary above may have used deprecated internal codes (TAC-xxx, DIM-xxx). Do NOT reproduce any such codes in the new summary — always write the full concept name.")
                     if prev_findings:
                         findings_lines = []
                         for f in prev_findings[:10]:
@@ -1656,7 +1672,7 @@ Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs tot
             "reality_checklist": reality_results["checklist"],
             "evidence_links": reality_results["links"],
             "key_people": key_people,
-            "summary_text": summary,
+            "summary_text": _strip_tac_codes(summary),
             "pitch_text": pitch,
             "lastUpdated": new_timestamp,
             "history": history,
@@ -1753,7 +1769,7 @@ Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs tot
             if corrected_summary:
                 # --- Fact-checker produced corrected summary — use it directly ---
                 print(f"   ✅ [Fact-Check] Using corrected summary from Gemini 3.1 Pro fact-checker ({len(corrected_summary.split())} words)")
-                full_data["summary_text"] = corrected_summary
+                full_data["summary_text"] = _strip_tac_codes(corrected_summary)
                 if corrected_pitch:
                     full_data["pitch_text"] = corrected_pitch
                     print(f"   ✅ [Fact-Check] Also applied corrected pitch ({len(corrected_pitch.split())} words)")
@@ -1895,7 +1911,7 @@ verified evidence provided."""
                         new_pitch = resynth_json.get("pitch", "")
 
                         if new_summary:
-                            full_data["summary_text"] = new_summary
+                            full_data["summary_text"] = _strip_tac_codes(new_summary)
                         if new_pitch:
                             full_data["pitch_text"] = new_pitch
 
