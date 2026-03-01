@@ -514,6 +514,15 @@ Each false_claims object must have:
         'max_output_tokens': 8000,
         'safety_settings': _safety,
     }
+    # gemini-3-pro-preview: thinking_level not supported — use thinking_budget instead.
+    # thinking_budget=4000 ≈ MEDIUM; leaves ~4000 tokens for JSON output within max_output_tokens=8000.
+    gemini_3_search_config = {
+        'tools': [{'google_search': {}}],
+        'temperature': 0.5,
+        'thinking_config': types.ThinkingConfig(thinking_budget=4000),
+        'max_output_tokens': 8000,
+        'safety_settings': _safety,
+    }
 
     # Stage 2: No search tool — pure text editing by 3.1 Pro.
     # Thinking is intentionally disabled here: Stage 2 is a precise surgical
@@ -531,7 +540,7 @@ Each false_claims object must have:
     stage1_models = [
         ("gemini-2.5-pro", 90, gemini_25_search_config),          # Primary: 2.5 Pro + Google Search, temp=0.0
         ("gemini-3.1-pro-preview", 90, gemini_31_search_config),  # Backup 1: 3.1 Pro + Google Search
-        ("gemini-3-pro-preview", 90, gemini_31_search_config),    # Backup 2: 3 Pro (lower demand; ~1 week left)
+        ("gemini-3-pro-preview", 90, gemini_3_search_config),     # Backup 2: 3 Pro (lower demand; ~1 week left)
     ]
 
     # ── Helper: single model call with timeout ────────────────────────────────
@@ -949,7 +958,7 @@ def _clean_with_gemini(prompt):
                     contents=prompt,
                     config={
                         'temperature': 0.5,
-                        'thinking_config': types.ThinkingConfig(thinking_level="MEDIUM"),
+                        'thinking_config': types.ThinkingConfig(thinking_budget=1024),
                         'max_output_tokens': 6000,
                         'response_mime_type': 'application/json',
                     }

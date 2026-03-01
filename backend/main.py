@@ -620,7 +620,7 @@ Generate a completely fresh synthesis. Do NOT reference or re-introduce any of t
                     contents=synthesis_prompt,
                     config=types.GenerateContentConfig(
                         temperature=0.5,
-                        thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
+                        thinking_config=types.ThinkingConfig(thinking_budget=4000),
                         max_output_tokens=12000
                     )
                 ),
@@ -1460,7 +1460,7 @@ Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs tot
                                     contents=synthesis_prompt,
                                     config=types.GenerateContentConfig(
                                         temperature=0.5,
-                                        thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
+                                        thinking_config=types.ThinkingConfig(thinking_budget=8000),
                                         max_output_tokens=12000
                                     )
                                 )
@@ -1853,7 +1853,7 @@ verified evidence provided."""
                                 contents=resynth_prompt,
                                 config=types.GenerateContentConfig(
                                     temperature=0.5,
-                                    thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
+                                    thinking_config=types.ThinkingConfig(thinking_budget=4000),
                                     max_output_tokens=12000
                                 )
                             ),
