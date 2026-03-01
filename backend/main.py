@@ -38,13 +38,22 @@ print("Starting Adaptability Scanner Backend (v5.4.0 - Extended Thinking + Searc
 
 def _strip_tac_codes(text: str) -> str:
     """Remove legacy TAC-xxx / DIM-xxx internal codes from summary text.
-    These codes were generated before the 'NEVER use TAC-xxx' prompt rule was
-    added. Stripping ensures old stored data is cleaned up on every write and
-    read so they never appear in the UI or re-poison future synthesis prompts.
+    Handles three forms that may appear in stored data:
+      1. "(TAC-007)"  — parenthesized code from original model output
+      2. "TAC-007"   — bare code without parentheses
+      3. "()"        — orphaned empty parens left by a previous strip pass
     """
     if not text:
         return text
-    return re.sub(r'\b(?:TAC|DIM)-\d{3,4}\b\s*', '', text)
+    # Pass 1: remove parenthesized codes "(TAC-007)" / "(DIM-003)"
+    text = re.sub(r'\s*\(\s*(?:TAC|DIM)-\d{3,4}\s*\)', '', text)
+    # Pass 2: remove bare codes not wrapped in parentheses
+    text = re.sub(r'\b(?:TAC|DIM)-\d{3,4}\b', '', text)
+    # Pass 3: remove orphaned empty parens left by earlier strip passes
+    text = re.sub(r'\s*\(\s*\)', '', text)
+    # Collapse any double-spaces introduced by removal
+    text = re.sub(r'  +', ' ', text)
+    return text.strip()
 
 def clean_env_var(value):
     if not value: return ""
