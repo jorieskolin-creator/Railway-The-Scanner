@@ -991,7 +991,6 @@ def _clean_with_gemini(prompt):
             ),
             label="Clean gemini-2.5-pro",
         )
-        )
 
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
     future = pool.submit(_call_25)
