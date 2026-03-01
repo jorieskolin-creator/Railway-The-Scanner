@@ -237,6 +237,7 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
                     config=config,
                 ),
                 label=f"General Summary {PRIMARY_MODEL}",
+                timeout=90,
             )
             text = _strip_links((response.text or "").strip())
             wc = _word_count(text)
@@ -272,6 +273,7 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
                 config=MIDDLE_CONFIG,
             ),
             label=f"General Summary {MIDDLE_MODEL}",
+            timeout=90,
         )
         text = _strip_links((response.text or "").strip())
         wc = _word_count(text)
@@ -293,6 +295,7 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
                 config=BACKUP_CONFIG,
             ),
             label=f"General Summary {BACKUP_MODEL}",
+            timeout=90,
         )
         text = _strip_links((response.text or "").strip())
         wc = _word_count(text)
