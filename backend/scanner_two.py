@@ -6,6 +6,7 @@ import re
 import requests as http_requests
 import concurrent.futures
 from datetime import date
+from gemini_backoff import call_with_503_backoff
 from urllib.parse import urlparse
 from google import genai
 from google.genai import types
@@ -2100,19 +2101,22 @@ def _execute_financial_search(api_key, model_name, prompt, company_name):
         print(f"   [Financial Health] Attempting {model_name} for {company_name}...")
         start = time.time()
         client = genai.Client(api_key=api_key)
-        response = client.models.generate_content(
-            model=model_name,
-            contents=prompt,
-            config={
-                'tools': [{'google_search': {}}],
-                'temperature': 0.0,
-                'safety_settings': [
-                    {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
-                    {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
-                    {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
-                    {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
-                ]
-            }
+        response = call_with_503_backoff(
+            lambda: client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config={
+                    'tools': [{'google_search': {}}],
+                    'temperature': 0.0,
+                    'safety_settings': [
+                        {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
+                        {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
+                        {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
+                        {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
+                    ]
+                }
+            ),
+            label=f"Financial Health {model_name}",
         )
         text_content = response.text if response.text else ""
         json_payload = extract_json_from_text(text_content)

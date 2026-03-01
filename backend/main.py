@@ -30,6 +30,7 @@ from knowledge_base import get_evolving_framework
 from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, clean_summary, purge_false_evidence
 from general_summary import generate_general_summary
 from domain_classifier import infer_domain
+from gemini_backoff import call_with_503_backoff
 
 # VERIFICATION LOG: v5.4.0 - Extended Thinking + Search Budget Upgrade
 print("Starting Adaptability Scanner Backend (v5.4.0 - Extended Thinking + Search Budget Upgrade)...", flush=True)
@@ -587,14 +588,17 @@ Generate a completely fresh synthesis. Do NOT reference or re-introduce any of t
             from google.genai import types
             print(f"   🔄 [Clean Re-Synthesis] Attempting gemini-3.1-pro-preview...")
             gemini_client = genai.Client(api_key=gemini_key)
-            resynth_response = gemini_client.models.generate_content(
-                model="gemini-3.1-pro-preview",
-                contents=synthesis_prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.5,
-                    thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
-                    max_output_tokens=12000
-                )
+            resynth_response = call_with_503_backoff(
+                lambda: gemini_client.models.generate_content(
+                    model="gemini-3.1-pro-preview",
+                    contents=synthesis_prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.5,
+                        thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
+                        max_output_tokens=12000
+                    )
+                ),
+                label="Clean Re-Synthesis gemini-3.1-pro-preview",
             )
             resynth_text = resynth_response.text or ""
             resynth_model_used = "gemini-3.1-pro-preview"
@@ -610,14 +614,18 @@ Generate a completely fresh synthesis. Do NOT reference or re-introduce any of t
             from google.genai import types
             print(f"   🔄 [Clean Re-Synthesis] Falling back to gemini-3.1-pro-preview...")
             gemini_client = genai.Client(api_key=gemini_key)
-            resynth_response = gemini_client.models.generate_content(
-                model="gemini-3.1-pro-preview",
-                contents=synthesis_prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.5,
-                    thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
-                    max_output_tokens=12000
-                )
+            resynth_response = call_with_503_backoff(
+                lambda: gemini_client.models.generate_content(
+                    model="gemini-3.1-pro-preview",
+                    contents=synthesis_prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.5,
+                        thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
+                        max_output_tokens=12000
+                    )
+                ),
+                label="Clean Re-Synthesis fallback gemini-3.1-pro-preview",
+            )
             )
             resynth_text = resynth_response.text or ""
             resynth_model_used = "gemini-3.1-pro-preview"
@@ -1816,14 +1824,17 @@ verified evidence provided."""
                     try:
                         print(f"   🔄 [Re-Synthesis] Attempting gemini-3.1-pro-preview...")
                         gemini_client = genai.Client(api_key=gemini_key)
-                        resynth_response = gemini_client.models.generate_content(
-                            model="gemini-3.1-pro-preview",
-                            contents=resynth_prompt,
-                            config=types.GenerateContentConfig(
-                                temperature=0.5,
-                                thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
-                                max_output_tokens=12000
-                            )
+                        resynth_response = call_with_503_backoff(
+                            lambda: gemini_client.models.generate_content(
+                                model="gemini-3.1-pro-preview",
+                                contents=resynth_prompt,
+                                config=types.GenerateContentConfig(
+                                    temperature=0.5,
+                                    thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
+                                    max_output_tokens=12000
+                                )
+                            ),
+                            label="Re-Synthesis gemini-3.1-pro-preview",
                         )
                         resynth_text = resynth_response.text or ""
                         resynth_model_used = "gemini-3.1-pro-preview"
@@ -1837,14 +1848,17 @@ verified evidence provided."""
                     try:
                         print(f"   🔄 [Re-Synthesis] Falling back to gemini-3.1-pro-preview...")
                         gemini_client = genai.Client(api_key=gemini_key)
-                        resynth_response = gemini_client.models.generate_content(
-                            model="gemini-3.1-pro-preview",
-                            contents=resynth_prompt,
-                            config=types.GenerateContentConfig(
-                                temperature=0.5,
-                                thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
-                                max_output_tokens=12000
-                            )
+                        resynth_response = call_with_503_backoff(
+                            lambda: gemini_client.models.generate_content(
+                                model="gemini-3.1-pro-preview",
+                                contents=resynth_prompt,
+                                config=types.GenerateContentConfig(
+                                    temperature=0.5,
+                                    thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
+                                    max_output_tokens=12000
+                                )
+                            ),
+                            label="Re-Synthesis fallback gemini-3.1-pro-preview",
                         )
                         resynth_text = resynth_response.text or ""
                         resynth_model_used = "gemini-3.1-pro-preview"

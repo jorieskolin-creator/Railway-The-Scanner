@@ -14,6 +14,7 @@ import time
 
 from google import genai
 from google.genai import types as genai_types
+from gemini_backoff import call_with_503_backoff
 
 
 _FORBIDDEN_TERMS = [
@@ -223,10 +224,13 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
     for attempt, config in enumerate([FIRST_CONFIG, RETRY_CONFIG], start=1):
         try:
             t0 = time.time()
-            response = client.models.generate_content(
-                model=PRIMARY_MODEL,
-                contents=prompt,
-                config=config,
+            response = call_with_503_backoff(
+                lambda: client.models.generate_content(
+                    model=PRIMARY_MODEL,
+                    contents=prompt,
+                    config=config,
+                ),
+                label=f"General Summary {PRIMARY_MODEL}",
             )
             text = _strip_links((response.text or "").strip())
             wc = _word_count(text)
@@ -255,10 +259,13 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
     print(f"   [General Summary] Primary model failed — trying backup {BACKUP_MODEL}")
     try:
         t0 = time.time()
-        response = client.models.generate_content(
-            model=BACKUP_MODEL,
-            contents=prompt,
-            config=BACKUP_CONFIG,
+        response = call_with_503_backoff(
+            lambda: client.models.generate_content(
+                model=BACKUP_MODEL,
+                contents=prompt,
+                config=BACKUP_CONFIG,
+            ),
+            label=f"General Summary {BACKUP_MODEL}",
         )
         text = _strip_links((response.text or "").strip())
         wc = _word_count(text)

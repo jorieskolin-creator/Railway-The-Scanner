@@ -10,6 +10,7 @@ import concurrent.futures
 from bs4 import BeautifulSoup
 from datetime import datetime
 from finland_list import TOP_100_COMPANIES, get_company_metadata
+from gemini_backoff import call_with_503_backoff
 from scanner_one import analyze_intent
 from scanner_two import x_ray_search, extract_json_from_text, run_self_analysis, financial_health_search
 from knowledge_base import get_evolving_framework
@@ -601,14 +602,17 @@ Respond with valid JSON only. Four fields required:
                                 print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Gemini 3.1 Pro Preview...")
                                 g_start = time.time()
                                 gemini_client = genai.Client(api_key=gemini_key)
-                                gemini_resp = gemini_client.models.generate_content(
-                                    model="gemini-3.1-pro-preview",
-                                    contents=synthesis_prompt,
-                                    config=types.GenerateContentConfig(
-                                        temperature=0.5,
-                                        thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
-                                        max_output_tokens=2048
-                                    )
+                                gemini_resp = call_with_503_backoff(
+                                    lambda: gemini_client.models.generate_content(
+                                        model="gemini-3.1-pro-preview",
+                                        contents=synthesis_prompt,
+                                        config=types.GenerateContentConfig(
+                                            temperature=0.5,
+                                            thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
+                                            max_output_tokens=2048
+                                        )
+                                    ),
+                                    label=f"Seed Synthesis gemini-3.1-pro-preview [{company_name}]",
                                 )
                                 response_text = gemini_resp.text or ""
                                 print(f"   [{company_name}] ✅ [Synthesis] Gemini 3.1 Pro Preview succeeded in {int((time.time() - g_start) * 1000)}ms")
@@ -621,14 +625,17 @@ Respond with valid JSON only. Four fields required:
                                 print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Gemini 3.1 Pro Preview...")
                                 g2_start = time.time()
                                 gemini_client = genai.Client(api_key=gemini_key)
-                                gemini_resp = gemini_client.models.generate_content(
-                                    model="gemini-3.1-pro-preview",
-                                    contents=synthesis_prompt,
-                                    config=types.GenerateContentConfig(
-                                        temperature=0.5,
-                                        thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
-                                        max_output_tokens=2048
-                                    )
+                                gemini_resp = call_with_503_backoff(
+                                    lambda: gemini_client.models.generate_content(
+                                        model="gemini-3.1-pro-preview",
+                                        contents=synthesis_prompt,
+                                        config=types.GenerateContentConfig(
+                                            temperature=0.5,
+                                            thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
+                                            max_output_tokens=2048
+                                        )
+                                    ),
+                                    label=f"Seed Synthesis fallback gemini-3.1-pro-preview [{company_name}]",
                                 )
                                 response_text = gemini_resp.text or ""
                                 print(f"   [{company_name}] ✅ [Synthesis] Gemini 3.1 Pro Preview succeeded in {int((time.time() - g2_start) * 1000)}ms")

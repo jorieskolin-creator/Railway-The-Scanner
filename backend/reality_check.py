@@ -15,6 +15,7 @@ import re
 import json
 import os
 import time
+from gemini_backoff import call_with_503_backoff
 
 # Regex for detecting scan history references in fact-check claims.
 # These come from internal DB records (scan_history), not external web sources,
@@ -538,10 +539,13 @@ Each false_claims object must have:
         start = time.time()
 
         def _call():
-            return client.models.generate_content(
-                model=model_name,
-                contents=prompt_text,
-                config=config,
+            return call_with_503_backoff(
+                lambda: client.models.generate_content(
+                    model=model_name,
+                    contents=prompt_text,
+                    config=config,
+                ),
+                label=f"Fact-Check {model_name}",
             )
 
         pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -900,15 +904,18 @@ def _clean_with_gemini(prompt):
         start = time.time()
 
         def _call():
-            return client.models.generate_content(
-                model="gemini-3.1-pro-preview",
-                contents=prompt,
-                config={
-                    'temperature': 0.5,
-                    'thinking_config': types.ThinkingConfig(thinking_level="MEDIUM"),
-                    'max_output_tokens': 6000,
-                    'response_mime_type': 'application/json',
-                }
+            return call_with_503_backoff(
+                lambda: client.models.generate_content(
+                    model="gemini-3.1-pro-preview",
+                    contents=prompt,
+                    config={
+                        'temperature': 0.5,
+                        'thinking_config': types.ThinkingConfig(thinking_level="MEDIUM"),
+                        'max_output_tokens': 6000,
+                        'response_mime_type': 'application/json',
+                    }
+                ),
+                label="Clean gemini-3.1-pro-preview",
             )
 
         pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -935,15 +942,18 @@ def _clean_with_gemini(prompt):
         start = time.time()
 
         def _call_3():
-            return client.models.generate_content(
-                model="gemini-3.1-pro-preview",
-                contents=prompt,
-                config={
-                    'temperature': 0.5,
-                    'thinking_config': types.ThinkingConfig(thinking_level="MEDIUM"),
-                    'max_output_tokens': 6000,
-                    'response_mime_type': 'application/json',
-                }
+            return call_with_503_backoff(
+                lambda: client.models.generate_content(
+                    model="gemini-3.1-pro-preview",
+                    contents=prompt,
+                    config={
+                        'temperature': 0.5,
+                        'thinking_config': types.ThinkingConfig(thinking_level="MEDIUM"),
+                        'max_output_tokens': 6000,
+                        'response_mime_type': 'application/json',
+                    }
+                ),
+                label="Clean fallback gemini-3.1-pro-preview",
             )
 
         pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -969,14 +979,18 @@ def _clean_with_gemini(prompt):
     start = time.time()
 
     def _call_25():
-        return client.models.generate_content(
-            model="gemini-2.5-pro",
-            contents=prompt,
-            config={
-                'temperature': 0.0,
-                'max_output_tokens': 2048,
-                'response_mime_type': 'application/json',
-            }
+        return call_with_503_backoff(
+            lambda: client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=prompt,
+                config={
+                    'temperature': 0.0,
+                    'max_output_tokens': 2048,
+                    'response_mime_type': 'application/json',
+                }
+            ),
+            label="Clean gemini-2.5-pro",
+        )
         )
 
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
