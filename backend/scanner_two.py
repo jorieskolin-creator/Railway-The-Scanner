@@ -1432,6 +1432,9 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                         repaired = _structure_with_gemini(text_content, company_name, "gemini-2.5-pro")
                 else:
                     repaired = _repair_json_with_sonnet(text_content, company_name, is_structuring=False)
+                    if not repaired:
+                        print(f"   ⚠️ [JSON Repair] Sonnet unavailable. Trying Gemini 2.5 Pro...")
+                        repaired = _structure_with_gemini(text_content, company_name, "gemini-2.5-pro")
                 if repaired:
                     repair_elapsed = int((time.time() - start) * 1000)
                     print(f"   ✅ [{gate_label}] Structured data from {target_model_name} ({repair_elapsed}ms total)")
@@ -1641,16 +1644,19 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             print(f"   ❌ [Forensic Scan] claude-sonnet-4-6 + Web Search failed in {elapsed}ms: {e}")
             return None
 
-    # --- SEQUENTIAL FALLBACK: Gemini 3.1 Pro Preview → Gemini 2.5 Pro → Sonnet 4.6 ---
+    # --- SEQUENTIAL FALLBACK: Gemini 3.1 Pro Preview → Gemini 3 Pro Preview → Gemini 2.5 Pro ---
     # Gemini 3.1 Pro Preview is primary: native Google Search, temp=0.5, thinking=MEDIUM.
-    # Gemini 2.5 Pro is Gemini-side backup with separate rate limits (consistently ~50s, reliable).
-    # Sonnet 4.6 is last resort: cross-provider safety net if all Gemini models fail.
+    # Gemini 3 Pro Preview is BACKUP 1: lower demand than 3.1 during overload periods.
+    # Gemini 2.5 Pro is BACKUP 2: separate rate limits from 3.x family (~50s, reliable).
+    # Sonnet is intentionally excluded: cross-provider API failures (credit exhaustion,
+    # quota errors) silently killed this slot and blocked JSON repair in the same event.
+    # All three Gemini models share the same structuring fallback chain in Pass 2.
     #
     # NOTE: There is no separate "gemini-3.1-pro" (non-preview) endpoint — do NOT add a
     # duplicate fallback with the same model string; it wastes the full timeout budget and
     # never succeeds if the primary already timed out.
     data = None
-    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Gemini 3.1 Pro Preview → Gemini 3 Pro Preview → Sonnet 4.6 → Gemini 2.5 Pro")
+    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Gemini 3.1 Pro Preview → Gemini 3 Pro Preview → Gemini 2.5 Pro")
 
     # --- PRIMARY: Gemini 3.1 Pro Preview — two-pass mode ---
     # Pass 1 (180s wall, soft timeout): relaxed-format prompt, thinking_budget=8000 (4000 on rescan), temp=0.5, Google Search.
@@ -1666,14 +1672,9 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         print(f"   ⚠️ [Forensic Scan] Gemini 3.1 Pro Preview returned no data. Falling back to Gemini 3 Pro Preview...")
         data = execute_with_model("gemini-3-pro-preview", None, 120)
 
-    # --- BACKUP 2: Sonnet 4.6 (cross-provider; own search quota, unaffected by Gemini rate limits) ---
+    # --- BACKUP 2: Gemini 2.5 Pro (separate rate limits from 3.x family; ~50s typical) ---
     if not data:
-        print(f"   ⚠️ [Forensic Scan] Gemini 3 Pro Preview returned no data. Falling back to Sonnet 4.6...")
-        data = execute_with_anthropic(prompt)
-
-    # --- BACKUP 3: Gemini 2.5 Pro (separate rate limits from 3.x family; ~50s typical) ---
-    if not data:
-        print(f"   ⚠️ [Forensic Scan] Sonnet 4.6 returned no data. Falling back to Gemini 2.5 Pro...")
+        print(f"   ⚠️ [Forensic Scan] Gemini 3 Pro Preview returned no data. Falling back to Gemini 2.5 Pro...")
         data = execute_with_model("gemini-2.5-pro", call_timeout=120)
 
     # --- CONFIDENCE-DRIVEN RE-SEARCH LOOP ---
