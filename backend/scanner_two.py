@@ -1356,9 +1356,16 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     'max_output_tokens': 8000,
                 }
             else:
+                # gemini-2.5-pro: cap default thinking to prevent token starvation.
+                # Without explicit thinking_config, 2.5-pro defaults to uncapped thinking
+                # mode — thinking tokens share the output pool and can exhaust it on complex
+                # prompts, leaving too few tokens for the actual JSON. thinking_budget=1024
+                # matches the proven config in reality_check.py for the same model.
                 _model_config = {
                     'tools': [{'google_search': {}}],
                     'temperature': 0.0,
+                    'thinking_config': types.ThinkingConfig(thinking_budget=1024),
+                    'max_output_tokens': 8000,
                     'safety_settings': _safety,
                 }
 
@@ -1382,7 +1389,14 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                         contents=active_prompt,
                         config=_model_config,
                     )
-                    return resp.text if resp.text else ""
+                    if not resp.text:
+                        # Raise rather than returning "" so the exception handler logs
+                        # the real cause (e.g. finish_reason=SAFETY/MAX_TOKENS/OTHER)
+                        # instead of the generic "no parseable JSON" message.
+                        finish = (resp.candidates[0].finish_reason
+                                  if resp.candidates else "NO_CANDIDATES")
+                        raise ValueError(f"empty response (finish_reason={finish})")
+                    return resp.text
 
             call_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             future = call_pool.submit(_call_gemini)
