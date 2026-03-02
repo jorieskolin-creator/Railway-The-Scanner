@@ -617,7 +617,7 @@ Generate a completely fresh synthesis. Do NOT reference or re-introduce any of t
                     contents=synthesis_prompt,
                     config=types.GenerateContentConfig(
                         temperature=0.5,
-                        thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
+                        thinking_config=types.ThinkingConfig(thinking_budget=3000),  # MEDIUM = 2000-3500 tokens; explicit cap
                         max_output_tokens=12000
                     )
                 ),
@@ -1440,7 +1440,7 @@ Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs tot
                 except Exception as opus_err:
                     print(f"   ❌ [Synthesis] Opus 4.6 failed: {opus_err}")
 
-                    # Fallback 1: Gemini 3.1 Pro Preview (strongest Google model, MEDIUM thinking)
+                    # Fallback 1: Gemini 3.1 Pro Preview (thinking_budget=3000 ≈ MEDIUM; 2000-3500 range)
                     gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
                     if gemini_key and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 30:
                         try:
@@ -1454,7 +1454,7 @@ Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs tot
                                     contents=synthesis_prompt,
                                     config=types.GenerateContentConfig(
                                         temperature=0.5,
-                                        thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
+                                        thinking_config=types.ThinkingConfig(thinking_budget=3000),  # MEDIUM = 2000-3500 tokens; explicit cap
                                         max_output_tokens=12000
                                     )
                                 )
@@ -1854,7 +1854,7 @@ verified evidence provided."""
                                 contents=resynth_prompt,
                                 config=types.GenerateContentConfig(
                                     temperature=0.5,
-                                    thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
+                                    thinking_config=types.ThinkingConfig(thinking_budget=3000),  # MEDIUM = 2000-3500 tokens; explicit cap
                                     max_output_tokens=12000
                                 )
                             ),

@@ -1342,9 +1342,10 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 # A numeric budget implicitly enables thinking at the right intensity
                 # and caps token consumption so the search call fits within the 180s wall.
                 _temperature = 0.5 if "3.1" in target_model_name else 1.0
-                # Rescan: 4000 tokens — model already has prior findings, needs less planning time.
-                # Fresh scan: 8000 tokens — full exploration budget.
-                _thinking_budget = (4000 if is_rescan else 8000) if "3.1" in target_model_name else 4000
+                # Rescan: 2000 tokens — model already has prior findings, needs less planning time.
+                # Fresh scan: 3000 tokens — capped at MEDIUM equivalent (2000-3500 range); saves
+                #   ~35-45s vs the previous 8000 budget without degrading result quality.
+                _thinking_budget = (2000 if is_rescan else 3000) if "3.1" in target_model_name else 4000
                 _model_config = {
                     'tools': [{'google_search': {}}],
                     'temperature': _temperature,
@@ -1644,37 +1645,34 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             print(f"   ❌ [Forensic Scan] claude-sonnet-4-6 + Web Search failed in {elapsed}ms: {e}")
             return None
 
-    # --- SEQUENTIAL FALLBACK: Gemini 3.1 Pro Preview → Gemini 3 Pro Preview → Gemini 2.5 Pro ---
-    # Gemini 3.1 Pro Preview is primary: native Google Search, temp=0.5, thinking=MEDIUM.
-    # Gemini 3 Pro Preview is BACKUP 1: lower demand than 3.1 during overload periods.
-    # Gemini 2.5 Pro is BACKUP 2: separate rate limits from 3.x family (~50s, reliable).
+    # --- SEQUENTIAL FALLBACK: Gemini 3.1 Pro Preview → Gemini 2.5 Pro ---
+    # Gemini 3.1 Pro Preview is primary: native Google Search, temp=0.5, thinking_budget=3000.
+    # Gemini 2.5 Pro is BACKUP 1: separate rate limits from 3.x family (~40-50s, reliable).
+    # Gemini 3 Pro Preview removed from forensic chain: under 3.x server load it also times
+    #   out at 120s, wasting the full slot before 2.5-pro is reached. 2.5-pro has separate
+    #   quota and consistently returns in ~40s regardless of 3.x congestion.
     # Sonnet is intentionally excluded: cross-provider API failures (credit exhaustion,
     # quota errors) silently killed this slot and blocked JSON repair in the same event.
-    # All three Gemini models share the same structuring fallback chain in Pass 2.
+    # Both Gemini models share the same structuring fallback chain in Pass 2.
     #
     # NOTE: There is no separate "gemini-3.1-pro" (non-preview) endpoint — do NOT add a
     # duplicate fallback with the same model string; it wastes the full timeout budget and
     # never succeeds if the primary already timed out.
     data = None
-    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Gemini 3.1 Pro Preview → Gemini 3 Pro Preview → Gemini 2.5 Pro")
+    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Gemini 3.1 Pro Preview → Gemini 2.5 Pro")
 
     # --- PRIMARY: Gemini 3.1 Pro Preview — two-pass mode ---
-    # Pass 1 (180s wall, soft timeout): relaxed-format prompt, thinking_budget=8000 (4000 on rescan), temp=0.5, Google Search.
+    # Pass 1 (180s wall, soft timeout): relaxed-format prompt, thinking_budget=3000 (2000 on rescan), temp=0.5, Google Search.
     #   temp=0.5: decisive query selection without creative drift; looping risk gone
     #   because JSON-formatting pressure is removed.
-    #   Budget: thinking (~60-70s) + 6 searches (~30-50s) = ~100-120s peak.
+    #   Budget: thinking (~25-35s) + 6 searches (~30-50s) = ~55-85s peak.
     # Pass 2 (fast): 3.1 Pro → Sonnet 4.6 → 2.5 Pro structuring chain.
     #   temp=0.0, no tools, no thinking — pure JSON conversion.
     data = execute_with_model("gemini-3.1-pro-preview", None, 180)
 
-    # --- BACKUP 1: Gemini 3 Pro Preview (lower demand than 3.1 during overload; ~1 week left) ---
+    # --- BACKUP 1: Gemini 2.5 Pro (separate rate limits from 3.x family; ~40-50s typical) ---
     if not data:
-        print(f"   ⚠️ [Forensic Scan] Gemini 3.1 Pro Preview returned no data. Falling back to Gemini 3 Pro Preview...")
-        data = execute_with_model("gemini-3-pro-preview", None, 120)
-
-    # --- BACKUP 2: Gemini 2.5 Pro (separate rate limits from 3.x family; ~50s typical) ---
-    if not data:
-        print(f"   ⚠️ [Forensic Scan] Gemini 3 Pro Preview returned no data. Falling back to Gemini 2.5 Pro...")
+        print(f"   ⚠️ [Forensic Scan] Gemini 3.1 Pro Preview returned no data. Falling back to Gemini 2.5 Pro...")
         data = execute_with_model("gemini-2.5-pro", call_timeout=120)
 
     # --- CONFIDENCE-DRIVEN RE-SEARCH LOOP ---

@@ -608,7 +608,7 @@ Respond with valid JSON only. Four fields required:
                                         contents=synthesis_prompt,
                                         config=types.GenerateContentConfig(
                                             temperature=0.5,
-                                            thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
+                                            thinking_config=types.ThinkingConfig(thinking_budget=3000),  # MEDIUM = 2000-3500 tokens; explicit cap
                                             max_output_tokens=2048
                                         )
                                     ),

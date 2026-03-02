@@ -498,8 +498,8 @@ Each false_claims object must have:
     #   same pool as output tokens. At 4096, ~2000 tokens consumed by thinking
     #   left only ~2096 for the JSON — tight when claims have long reasoning.
     #   thinking_budget=1024 caps internal reasoning, reserving ~7000 for output.
-    #   gemini-3.1-pro-preview: thinking_level="MEDIUM" can use 2000-3500 tokens,
-    #   so 4096 was marginal for complex responses; 8000 gives comfortable headroom.
+    #   gemini-3.1-pro-preview: now uses thinking_budget=3000 (mid-MEDIUM range: 2000-3500);
+    #   8000 max_output_tokens still gives comfortable headroom for the JSON response.
     gemini_25_search_config = {
         'tools': [{'google_search': {}}],
         'temperature': 0.0,
@@ -510,7 +510,7 @@ Each false_claims object must have:
     gemini_31_search_config = {
         'tools': [{'google_search': {}}],
         'temperature': 0.5,
-        'thinking_config': types.ThinkingConfig(thinking_level="MEDIUM"),
+        'thinking_config': types.ThinkingConfig(thinking_budget=3000),  # MEDIUM = 2000-3500 tokens; explicit cap
         'max_output_tokens': 8000,
         'safety_settings': _safety,
     }
@@ -920,7 +920,7 @@ def _clean_with_gemini(prompt):
                     contents=prompt,
                     config={
                         'temperature': 0.5,
-                        'thinking_config': types.ThinkingConfig(thinking_level="MEDIUM"),
+                        'thinking_config': types.ThinkingConfig(thinking_budget=3000),  # MEDIUM = 2000-3500 tokens; explicit cap
                         'max_output_tokens': 6000,
                         'response_mime_type': 'application/json',
                     }
