@@ -622,6 +622,8 @@ Generate a completely fresh synthesis. Do NOT reference or re-introduce any of t
                     )
                 ),
                 label="Clean Re-Synthesis gemini-3.1-pro-preview",
+                model="gemini-3.1-pro-preview",
+                timeout=120,
             )
             resynth_text = resynth_response.text or ""
             resynth_model_used = "gemini-3.1-pro-preview"
@@ -640,13 +642,18 @@ Generate a completely fresh synthesis. Do NOT reference or re-introduce any of t
             from google.genai import types
             print(f"   🔄 [Clean Re-Synthesis] Falling back to gemini-2.5-pro...")
             gemini_client = genai.Client(api_key=gemini_key)
-            resynth_response = gemini_client.models.generate_content(
+            resynth_response = call_with_503_backoff(
+                lambda: gemini_client.models.generate_content(
+                    model="gemini-2.5-pro",
+                    contents=synthesis_prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.0,
+                        max_output_tokens=3000
+                    )
+                ),
+                label="Clean Re-Synthesis gemini-2.5-pro",
                 model="gemini-2.5-pro",
-                contents=synthesis_prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.0,
-                    max_output_tokens=3000
-                )
+                timeout=90,
             )
             resynth_text = resynth_response.text or ""
             resynth_model_used = "gemini-2.5-pro"
@@ -1808,6 +1815,8 @@ verified evidence provided."""
                                 )
                             ),
                             label="Re-Synthesis gemini-3.1-pro-preview",
+                            model="gemini-3.1-pro-preview",
+                            timeout=120,
                         )
                         resynth_text = resynth_response.text or ""
                         resynth_model_used = "gemini-3.1-pro-preview"
@@ -1824,13 +1833,18 @@ verified evidence provided."""
                     try:
                         print(f"   🔄 [Re-Synthesis] Falling back to gemini-2.5-pro...")
                         gemini_client = genai.Client(api_key=gemini_key)
-                        resynth_response = gemini_client.models.generate_content(
+                        resynth_response = call_with_503_backoff(
+                            lambda: gemini_client.models.generate_content(
+                                model="gemini-2.5-pro",
+                                contents=resynth_prompt,
+                                config=types.GenerateContentConfig(
+                                    temperature=0.0,
+                                    max_output_tokens=3000
+                                )
+                            ),
+                            label="Re-Synthesis gemini-2.5-pro",
                             model="gemini-2.5-pro",
-                            contents=resynth_prompt,
-                            config=types.GenerateContentConfig(
-                                temperature=0.0,
-                                max_output_tokens=3000
-                            )
+                            timeout=90,
                         )
                         resynth_text = resynth_response.text or ""
                         resynth_model_used = "gemini-2.5-pro"

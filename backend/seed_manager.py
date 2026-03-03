@@ -628,13 +628,18 @@ Respond with valid JSON only. Four fields required:
                                 print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Gemini 2.5 Pro...")
                                 g3_start = time.time()
                                 gemini_client = genai.Client(api_key=gemini_key)
-                                gemini_resp = gemini_client.models.generate_content(
+                                gemini_resp = call_with_503_backoff(
+                                    lambda: gemini_client.models.generate_content(
+                                        model="gemini-2.5-pro",
+                                        contents=synthesis_prompt,
+                                        config=types.GenerateContentConfig(
+                                            temperature=0.0,
+                                            max_output_tokens=2048
+                                        )
+                                    ),
+                                    label=f"Seed Synthesis gemini-2.5-pro [{company_name}]",
                                     model="gemini-2.5-pro",
-                                    contents=synthesis_prompt,
-                                    config=types.GenerateContentConfig(
-                                        temperature=0.0,
-                                        max_output_tokens=2048
-                                    )
+                                    timeout=90,
                                 )
                                 response_text = gemini_resp.text or ""
                                 print(f"   [{company_name}] ✅ [Synthesis] Gemini 2.5 Pro succeeded in {int((time.time() - g3_start) * 1000)}ms")
