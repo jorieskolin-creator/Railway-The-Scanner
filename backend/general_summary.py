@@ -199,8 +199,9 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
     # max_output_tokens=8000 — the same fix that resolved the fact-check token
     # starvation issue. At 1024 thinking tokens, ~7000 tokens remain for output,
     # which is far more than the ~400 tokens needed for 225-275 words.
+    # gemini-3-pro-preview removed: shares 3.x rate limits with 3.1-pro (useless
+    # as fallback during overload) and is being deprecated by Google.
     PRIMARY_MODEL = "gemini-3.1-pro-preview"
-    MIDDLE_MODEL  = "gemini-3-pro-preview"   # available ~1 more week; lower demand than 3.1
     BACKUP_MODEL  = "gemini-2.5-pro"
 
     FIRST_CONFIG = genai_types.GenerateContentConfig(
@@ -210,11 +211,6 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
     )
     RETRY_CONFIG = genai_types.GenerateContentConfig(
         temperature=1.0,
-        max_output_tokens=6000,
-        thinking_config=genai_types.ThinkingConfig(thinking_budget=512),
-    )
-    MIDDLE_CONFIG = genai_types.GenerateContentConfig(
-        temperature=0.7,
         max_output_tokens=6000,
         thinking_config=genai_types.ThinkingConfig(thinking_budget=512),
     )
@@ -237,6 +233,7 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
                     config=config,
                 ),
                 label=f"General Summary {PRIMARY_MODEL}",
+                model=PRIMARY_MODEL,
                 timeout=90,
             )
             text = _strip_links((response.text or "").strip())
@@ -262,30 +259,8 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
             if attempt == 1:
                 continue
 
-    # Attempt 3: middle model (gemini-3-pro-preview) — lower demand than 3.1 during overload
-    print(f"   [General Summary] Primary model failed — trying middle {MIDDLE_MODEL}")
-    try:
-        t0 = time.time()
-        response = call_with_503_backoff(
-            lambda: client.models.generate_content(
-                model=MIDDLE_MODEL,
-                contents=prompt,
-                config=MIDDLE_CONFIG,
-            ),
-            label=f"General Summary {MIDDLE_MODEL}",
-            timeout=90,
-        )
-        text = _strip_links((response.text or "").strip())
-        wc = _word_count(text)
-        elapsed = int((time.time() - t0) * 1000)
-        print(f"   [General Summary] {MIDDLE_MODEL}: {wc} words ({elapsed}ms)")
-        if text:
-            return text, MIDDLE_MODEL
-    except Exception as e:
-        print(f"   ❌ [General Summary] {MIDDLE_MODEL} failed: {e}")
-
-    # Attempt 4: backup model (gemini-2.5-pro)
-    print(f"   [General Summary] Middle model failed — trying backup {BACKUP_MODEL}")
+    # Attempt 3: backup model (gemini-2.5-pro) — separate rate limits from 3.x family
+    print(f"   [General Summary] Primary model failed — trying backup {BACKUP_MODEL}")
     try:
         t0 = time.time()
         response = call_with_503_backoff(
@@ -295,6 +270,7 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
                 config=BACKUP_CONFIG,
             ),
             label=f"General Summary {BACKUP_MODEL}",
+            model=BACKUP_MODEL,
             timeout=90,
         )
         text = _strip_links((response.text or "").strip())

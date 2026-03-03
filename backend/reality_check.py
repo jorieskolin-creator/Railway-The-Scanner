@@ -514,15 +514,8 @@ Each false_claims object must have:
         'max_output_tokens': 8000,
         'safety_settings': _safety,
     }
-    # gemini-3-pro-preview: thinking_level not supported — use thinking_budget instead.
-    # thinking_budget=4000 ≈ MEDIUM; leaves ~4000 tokens for JSON output within max_output_tokens=8000.
-    gemini_3_search_config = {
-        'tools': [{'google_search': {}}],
-        'temperature': 0.5,
-        'thinking_config': types.ThinkingConfig(thinking_budget=4000),
-        'max_output_tokens': 8000,
-        'safety_settings': _safety,
-    }
+    # gemini-3-pro-preview removed: shares 3.x rate limits with 3.1-pro (useless
+    # as fallback during overload) and is being deprecated by Google.
 
     # Stage 2: No search tool — pure text editing by 3.1 Pro.
     # Thinking is intentionally disabled here: Stage 2 is a precise surgical
@@ -539,8 +532,7 @@ Each false_claims object must have:
 
     stage1_models = [
         ("gemini-2.5-pro", 90, gemini_25_search_config),          # Primary: 2.5 Pro + Google Search, temp=0.0
-        ("gemini-3.1-pro-preview", 90, gemini_31_search_config),  # Backup 1: 3.1 Pro + Google Search
-        ("gemini-3-pro-preview", 90, gemini_3_search_config),     # Backup 2: 3 Pro (lower demand; ~1 week left)
+        ("gemini-3.1-pro-preview", 90, gemini_31_search_config),  # Backup: 3.1 Pro + Google Search
     ]
 
     # ── Helper: single model call with timeout ────────────────────────────────
@@ -946,45 +938,10 @@ def _clean_with_gemini(prompt):
     except Exception as g31_err:
         print(f"   ❌ [Clean] Gemini 3.1 Pro Preview failed: {g31_err}")
 
-    # --- Fallback 1: Gemini 3 Pro Preview (lower demand than 3.1 during overload; ~1 week left) ---
-    print(f"   🔄 [Clean] Falling back to Gemini 3 Pro Preview...")
-    try:
-        start = time.time()
+    # gemini-3-pro-preview fallback removed: shares 3.x rate limits with 3.1-pro
+    # and is being deprecated by Google.
 
-        def _call_3():
-            return call_with_503_backoff(
-                lambda: client.models.generate_content(
-                    model="gemini-3-pro-preview",
-                    contents=prompt,
-                    config={
-                        'temperature': 0.5,
-                        'thinking_config': types.ThinkingConfig(thinking_budget=1024),
-                        'max_output_tokens': 6000,
-                        'response_mime_type': 'application/json',
-                    }
-                ),
-                label="Clean gemini-3-pro-preview",
-            )
-
-        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = pool.submit(_call_3)
-        try:
-            response = future.result(timeout=60)
-        except concurrent.futures.TimeoutError:
-            pool.shutdown(wait=False)
-            raise ValueError("Gemini 3 Pro Preview timed out after 60s")
-        pool.shutdown(wait=False)
-
-        elapsed_ms = int((time.time() - start) * 1000)
-        response_text = response.text if response.text else ""
-        if response_text:
-            return response_text, elapsed_ms, "gemini-3-pro-preview"
-        raise ValueError("Gemini 3 Pro Preview returned empty response")
-
-    except Exception as g3_err:
-        print(f"   ❌ [Clean] Gemini 3 Pro Preview failed: {g3_err}")
-
-    # --- Fallback 2: Gemini 2.5 Pro (separate rate limits from 3.x family) ---
+    # --- Fallback: Gemini 2.5 Pro (separate rate limits from 3.x family) ---
     print(f"   🔄 [Clean] Falling back to Gemini 2.5 Pro...")
     start = time.time()
 

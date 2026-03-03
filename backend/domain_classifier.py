@@ -9,6 +9,7 @@ import os
 
 from google import genai
 from google.genai import types as genai_types
+from gemini_backoff import call_with_503_backoff
 
 
 KNOWN_DOMAINS = [
@@ -67,14 +68,19 @@ Rules:
 - Do not invent a domain not in the list."""
 
         client = genai.Client(api_key=gemini_key)
-        response = client.models.generate_content(
-            model="gemini-2.5-pro",
-            contents=prompt,
-            config=genai_types.GenerateContentConfig(
-                temperature=0.5,
-                max_output_tokens=20,
-                thinking_config=genai_types.ThinkingConfig(thinking_budget=1024),
+        response = call_with_503_backoff(
+            lambda: client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=prompt,
+                config=genai_types.GenerateContentConfig(
+                    temperature=0.5,
+                    max_output_tokens=20,
+                    thinking_config=genai_types.ThinkingConfig(thinking_budget=1024),
+                ),
             ),
+            label="Domain Classification gemini-2.5-pro",
+            model="gemini-2.5-pro",
+            timeout=30,
         )
         result = (response.text or "").strip().strip('"').strip("'")
         if result in KNOWN_DOMAINS:
