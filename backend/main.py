@@ -1,7 +1,7 @@
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Response, Request, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional, List
@@ -77,6 +77,34 @@ def verify_admin(request: Request):
         raise HTTPException(status_code=401, detail="Invalid credentials.")
 
 app = FastAPI()
+
+# --- MAINTENANCE MODE ---
+# Set MAINTENANCE_MODE=true in Railway env vars to block all user access.
+# Remove (or set to empty/false) to restore normal operation.
+# No code deployment needed — just toggle the env var and Railway restarts.
+_MAINTENANCE_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Maintenance</title>
+  <style>
+    body {
+      margin: 0; display: flex; align-items: center; justify-content: center;
+      min-height: 100vh; background: #1e1b4b; color: #f8fafc;
+      font-family: 'Inter', -apple-system, sans-serif;
+    }
+    h1 { font-size: 2.5rem; font-weight: 700; letter-spacing: 0.15em; opacity: 0.85; }
+  </style>
+</head>
+<body><h1>MAINTENANCE</h1></body>
+</html>"""
+
+@app.middleware("http")
+async def maintenance_middleware(request: Request, call_next):
+    if os.environ.get("MAINTENANCE_MODE", "").lower() in ("true", "1", "yes"):
+        return HTMLResponse(_MAINTENANCE_HTML, status_code=503)
+    return await call_next(request)
 
 # --- CORS: Restrict to known origins ---
 _allowed_origins = os.environ.get(
