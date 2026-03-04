@@ -43,6 +43,53 @@ def _strip_code_fences(text):
     return stripped
 
 
+def _balance_brackets(text):
+    """
+    Close unclosed [ brackets that appear before } in JSON text.
+    Walks the string respecting JSON string literals so we don't
+    modify content inside quoted values.
+    """
+    result = list(text)
+    stack = []  # track ( [ { nesting
+    in_string = False
+    escape = False
+    i = 0
+    insertions = []  # (position, char_to_insert)
+    for i, ch in enumerate(result):
+        if escape:
+            escape = False
+            continue
+        if ch == '\\' and in_string:
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch in ('{', '['):
+            stack.append(ch)
+        elif ch == ']':
+            # Pop matching [
+            if stack and stack[-1] == '[':
+                stack.pop()
+        elif ch == '}':
+            # Close any unclosed [ before this }
+            while stack and stack[-1] == '[':
+                insertions.append((i, ']'))
+                stack.pop()
+            if stack and stack[-1] == '{':
+                stack.pop()
+    # Apply insertions in reverse order so positions stay valid
+    for pos, char in reversed(insertions):
+        result.insert(pos, char)
+    # Close anything still open at the end
+    while stack:
+        bracket = stack.pop()
+        result.append(']' if bracket == '[' else '}')
+    return ''.join(result)
+
+
 def _robust_parse_json(text):
     """
     Robustly parse JSON from LLM response text.
@@ -92,6 +139,11 @@ def _robust_parse_json(text):
 
     # 5. Auto-repair common LLM JSON errors
     repaired = candidate
+    # Fix missing value after colon: "key":} or "key":]  →  "key":null} or "key":null]
+    repaired = re.sub(r':\s*([}\]])', r': null\1', repaired)
+    # Fix unclosed brackets/arrays inside the candidate
+    # Walk the string (outside of JSON strings) and close any unclosed [ before }
+    repaired = _balance_brackets(repaired)
     # Remove trailing commas before } or ]
     repaired = re.sub(r',\s*([}\]])', r'\1', repaired)
     # Fix missing commas between }{ or }" or ]" patterns
@@ -125,7 +177,11 @@ def _robust_parse_json(text):
             elif "Expecting ':' delimiter" in msg:
                 repaired = repaired[:pos] + ':' + repaired[pos:]
             elif "Expecting value" in msg and pos > 0 and repaired[pos - 1] == ',':
+                # Trailing comma before closer — remove the comma
                 repaired = repaired[:pos - 1] + repaired[pos:]
+            elif "Expecting value" in msg and pos < len(repaired) and repaired[pos] in ('}', ']'):
+                # Missing value before } or ] — insert null
+                repaired = repaired[:pos] + 'null' + repaired[pos:]
             else:
                 break
 
