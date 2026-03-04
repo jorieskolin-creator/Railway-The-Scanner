@@ -86,7 +86,8 @@ def _robust_parse_json(text):
     # 4. Fast path: try parsing as-is
     try:
         return json.loads(candidate, strict=False)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
+        print(f"   🐛 [JSON debug] Fast-path failed: {e} | candidate[{max(0,e.pos-30)}:{e.pos+30}] = ...{candidate[max(0,e.pos-30):e.pos+30]}...")
         pass
 
     # 5. Auto-repair common LLM JSON errors
@@ -106,7 +107,8 @@ def _robust_parse_json(text):
 
     try:
         return json.loads(repaired, strict=False)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
+        print(f"   🐛 [JSON debug] Auto-repair failed: {e} | repaired[{max(0,e.pos-30)}:{e.pos+30}] = ...{repaired[max(0,e.pos-30):e.pos+30]}...")
         pass
 
     # 6. Iterative position-based repair (handles deeply nested errors)
@@ -130,7 +132,8 @@ def _robust_parse_json(text):
     # 7. Final attempt
     try:
         return json.loads(repaired, strict=False)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as e:
+        print(f"   🐛 [JSON debug] All repairs failed: {e} | pos={e.pos} | full candidate ({len(repaired)} chars): {repr(repaired[:500])}")
         return None
 
 # --- HEURISTIC PATTERNS ---
