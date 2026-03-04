@@ -579,13 +579,16 @@ Each false_claims object must have:
     # Stage 2: No search tool — pure text editing by 3.1 Pro.
     # Thinking is intentionally disabled here: Stage 2 is a precise surgical
     # text editor ("remove this sentence"), not a reasoning task.  With
-    # thinking_level="MEDIUM" the model spends 2000-3500 of its 4096
-    # max_output_tokens on internal thought-parts, leaving too few tokens for
-    # the actual JSON — causing the corrected_pitch to be silently truncated
-    # mid-sentence.  Disabling thinking gives the full budget to real output.
+    # thinking enabled the model spends 2000-3500 of its output tokens on
+    # internal thought-parts, leaving too few tokens for the actual JSON —
+    # causing the corrected_summary to be truncated mid-sentence.
+    # thinking_budget=0 explicitly disables thinking (omitting the key lets
+    # the model default to thinking-on), and 8192 max_output_tokens matches
+    # the headroom given to S1 configs.
     gemini_31_correction_config = {
         'temperature': 0.2,
-        'max_output_tokens': 4096,
+        'max_output_tokens': 8192,
+        'thinking_config': types.ThinkingConfig(thinking_budget=0),
         'safety_settings': _safety,
     }
 
