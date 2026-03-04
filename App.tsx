@@ -11,7 +11,7 @@ const Icons = new Proxy(LucideRaw, {
     }
 });
 
-const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock, HardDrive, Radio, Cpu, BarChart3, TrendingUp, TrendingDown, Minus, Trash2, Eye, ShieldAlert } = Icons;
+const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock, HardDrive, Radio, Cpu, BarChart3, TrendingUp, TrendingDown, Minus, Trash2, Eye, ShieldAlert, Calculator } = Icons;
 
 const TruthMatrix = (window as any).TruthMatrix;
 const ScannerInput = (window as any).ScannerInput;
@@ -64,6 +64,8 @@ const App = () => {
   const [recheckLoading, setRecheckLoading] = useState(false);
   const [cleaningCompany, setCleaningCompany] = useState(null);
   const [recheckResults, setRecheckResults] = useState(null);
+  const [recalcLoading, setRecalcLoading] = useState(false);
+  const [recalcResults, setRecalcResults] = useState(null);
 
   const prevDataLengthRef = useRef(0);
 
@@ -367,6 +369,31 @@ const App = () => {
       }
     } catch (e) { console.error(e); alert("Recheck failed."); }
     finally { setRecheckLoading(false); }
+  };
+
+  const handleRecalculateFinancial = async () => {
+    const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to recalculate financial scores:");
+    if (!password) return;
+    setRecalcLoading(true);
+    setRecalcResults(null);
+    try {
+      const res = await fetch('/admin/recalculate-financial', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${password}` }
+      });
+      if (res.status === 401) { alert("ACCESS DENIED: Incorrect Password."); setRecalcLoading(false); return; }
+      if (res.ok) {
+        const json = await res.json();
+        setRecalcResults(json);
+        // Refresh review list and dashboard
+        const reviewRes = await fetch('/admin/review-data', { headers: { 'Authorization': `Bearer ${password}` } });
+        if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
+        fetchSummaryData(true);
+      } else {
+        alert("Recalculation failed: " + (await res.text()));
+      }
+    } catch (e) { console.error(e); alert("Recalculation failed."); }
+    finally { setRecalcLoading(false); }
   };
 
   const handleSort = (key) => {
@@ -1137,6 +1164,14 @@ const App = () => {
               </h3>
               <div className="flex items-center gap-3">
                 <button
+                  onClick={handleRecalculateFinancial}
+                  disabled={recalcLoading}
+                  className="flex items-center gap-1.5 px-3 py-1 bg-cyan-900/40 hover:bg-cyan-800/60 border border-cyan-600/50 text-cyan-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
+                >
+                  {recalcLoading ? <Loader2 size={12} className="animate-spin" /> : <Calculator size={12} />}
+                  RECALC SCORES
+                </button>
+                <button
                   onClick={handleRecheckAll}
                   disabled={recheckLoading}
                   className="flex items-center gap-1.5 px-3 py-1 bg-amber-900/40 hover:bg-amber-800/60 border border-amber-600/50 text-amber-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
@@ -1214,6 +1249,38 @@ const App = () => {
                           )}
                         </div>
                       ))}
+                    </div>
+                  )}
+
+                  {/* RECALC RESULTS BANNER */}
+                  {recalcResults && (
+                    <div className="rounded-xl p-4 border bg-cyan-500/5 border-cyan-500/20">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <Calculator size={16} className="text-cyan-400" />
+                          <span className="font-bold text-white text-sm">
+                            Financial Recalculation: {recalcResults.updated} updated, {recalcResults.skipped} skipped out of {recalcResults.total}
+                          </span>
+                        </div>
+                        <button onClick={() => setRecalcResults(null)} className="text-slate-500 hover:text-white"><X size={14} /></button>
+                      </div>
+                      {recalcResults.changes && recalcResults.changes.length > 0 ? (
+                        <div className="space-y-1 max-h-60 overflow-y-auto">
+                          {recalcResults.changes.map((c, idx) => (
+                            <div key={idx} className="flex items-center gap-3 bg-black/30 rounded-lg px-3 py-2 border border-cyan-500/10">
+                              <span className="text-white text-xs font-medium min-w-[140px] truncate">{c.company}</span>
+                              <span className="text-slate-500 text-[10px] font-mono">{c.old}</span>
+                              <span className="text-slate-600 text-[10px]">&rarr;</span>
+                              <span className="text-cyan-300 text-[10px] font-mono font-bold">{c.new}</span>
+                              <span className={`text-[10px] font-mono font-bold ${c.delta > 0 ? 'text-emerald-400' : c.delta < 0 ? 'text-rose-400' : 'text-slate-500'}`}>
+                                {c.delta > 0 ? '+' : ''}{c.delta}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-cyan-300/60 text-xs font-mono">No scores changed.</p>
+                      )}
                     </div>
                   )}
 
