@@ -22,7 +22,7 @@ from google.genai import types
 import anthropic
 
 from scanner_one import analyze_intent
-from scanner_two import x_ray_search, extract_json_from_text, run_self_analysis, financial_health_search, compute_financial_index
+from scanner_two import x_ray_search, extract_json_from_text, run_self_analysis, financial_health_search, compute_financial_index, migrate_financial_sub_scores
 from storage import BlobStorage
 from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES, get_company_metadata
@@ -446,7 +446,7 @@ async def recalculate_financial_index(request: Request):
             skipped += 1
             continue
 
-        sub_scores = data.get("financial_sub_scores")
+        sub_scores = migrate_financial_sub_scores(data.get("financial_sub_scores"))
         if not sub_scores or not isinstance(sub_scores, dict):
             skipped += 1
             continue
@@ -456,6 +456,7 @@ async def recalculate_financial_index(request: Request):
             skipped += 1
             continue
 
+        data["financial_sub_scores"] = sub_scores
         new_index = compute_financial_index(sub_scores)
         old_index_in_file = data.get("financial_index")
         old_index_on_landing = index_entry.get("financial_index")
@@ -1205,7 +1206,7 @@ def run_scan(
                     print(f"   🔄 [Financial Health] Reusing previous financial data (index: {existing_data['financial_index']})")
                     financial_results = {
                         "financial_index": existing_data["financial_index"],
-                        "sub_scores": existing_data.get("financial_sub_scores", {}),
+                        "sub_scores": migrate_financial_sub_scores(existing_data.get("financial_sub_scores", {})),
                         "financial_findings": existing_data.get("financial_findings", []),
                         "financial_confidence": existing_data.get("financial_confidence", 0),
                         "is_simulated": False,

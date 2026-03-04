@@ -12,7 +12,7 @@ from datetime import datetime
 from finland_list import TOP_100_COMPANIES, get_company_metadata
 from gemini_backoff import call_with_503_backoff
 from scanner_one import analyze_intent
-from scanner_two import x_ray_search, extract_json_from_text, run_self_analysis, financial_health_search
+from scanner_two import x_ray_search, extract_json_from_text, run_self_analysis, financial_health_search, migrate_financial_sub_scores
 from knowledge_base import get_evolving_framework
 from storage import BlobStorage
 from reality_check import validate_summary, validate_pitch
@@ -333,7 +333,7 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
                         print(f"   [{company_name}] 🔄 Reusing previous financial data (index: {existing_company_data['financial_index']})")
                         financial_results = {
                             "financial_index": existing_company_data["financial_index"],
-                            "sub_scores": existing_company_data.get("financial_sub_scores", {}),
+                            "sub_scores": migrate_financial_sub_scores(existing_company_data.get("financial_sub_scores", {})),
                             "financial_findings": existing_company_data.get("financial_findings", []),
                             "financial_confidence": existing_company_data.get("financial_confidence", 0),
                             "is_simulated": False,

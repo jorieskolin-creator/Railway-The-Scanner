@@ -2162,6 +2162,15 @@ def _execute_financial_search(api_key, model_name, prompt, company_name):
         return None
 
 
+def migrate_financial_sub_scores(sub_scores: dict) -> dict:
+    """Rename legacy 'efficiency' key to 'financial_stability' in stored sub_scores."""
+    if not sub_scores or not isinstance(sub_scores, dict):
+        return sub_scores
+    if "efficiency" in sub_scores and "financial_stability" not in sub_scores:
+        sub_scores["financial_stability"] = sub_scores.pop("efficiency")
+    return sub_scores
+
+
 def compute_financial_index(sub_scores: dict) -> int:
     """
     Weighted Financial Health Index — Option B: asymmetric profitability.
