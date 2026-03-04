@@ -2175,12 +2175,14 @@ def compute_financial_index(sub_scores: dict) -> int:
 
     Stage 2: Core health gate
       When both fundamentals (R+P) are weak, a multiplier (floor 0.25) crushes the score.
-      Gate reaches 1.0 (no penalty) when R+P >= 60% of max (30 out of 50).
+      Gate reaches 1.0 (no penalty) when R+P >= 70% of max (35 out of 50).
+      Raised from 60% to 70% to spread the mid-range distribution and prevent
+      clustering above 50 for merely-OK companies.
     """
-    R = sub_scores.get("revenue_trend", 12)
-    P = sub_scores.get("profitability", 12)
-    E = sub_scores.get("efficiency", 12)
-    I = sub_scores.get("investment_signal", 12)
+    R = sub_scores.get("revenue_trend", 10)
+    P = sub_scores.get("profitability", 10)
+    E = sub_scores.get("efficiency", 10)
+    I = sub_scores.get("investment_signal", 10)
 
     # Stage 1: Weighted linear base (0-100)
     base = (0.30 * R + 0.40 * P + 0.15 * E + 0.15 * I) * 4
@@ -2188,7 +2190,7 @@ def compute_financial_index(sub_scores: dict) -> int:
     # Stage 2: Core health gate — penalizes when both fundamentals are weak
     core_pct = (R + P) / 50.0
     GATE_FLOOR = 0.25
-    GATE_THRESHOLD = 0.60
+    GATE_THRESHOLD = 0.70
     gate = min(1.0, GATE_FLOOR + (1.0 - GATE_FLOOR) * core_pct / GATE_THRESHOLD)
 
     score = round(base * gate)
@@ -2263,13 +2265,15 @@ SEARCH STRATEGY — Execute these searches:
    EVALUATE: Is the company investing in growth? R&D spend, tech hiring, acquisitions.
 
 SCORING LOGIC:
-Each dimension scores 0-25:
-- Revenue Trend: 0-8 (declining >10%), 9-15 (stable ±5%), 16-20 (growing 5-15%), 21-25 (growing >15%)
-- Profitability: 0-8 (negative/losses), 9-15 (weak <5% margin), 16-20 (moderate 5-15%), 21-25 (strong >15%)
-- Efficiency: 0-8 (very low for sector), 9-15 (below average), 16-20 (average), 21-25 (top quartile)
-- Investment Signal: 0-8 (no visible investment), 9-15 (maintenance level), 16-20 (moderate growth), 21-25 (aggressive investment/M&A)
+Each dimension scores 0-25. Use the FULL range — most companies should land in the 8-17 zone, not cluster at 15-20.
+- Revenue Trend: 0-7 (declining >10%), 8-13 (stable ±5%), 14-19 (growing 5-15%), 20-25 (growing >15%)
+- Profitability: 0-7 (negative/losses), 8-13 (weak/breakeven <5% margin), 14-19 (moderate 5-15%), 20-25 (strong >15%)
+- Efficiency: 0-7 (very low for sector), 8-13 (below average), 14-19 (average), 20-25 (top quartile)
+- Investment Signal: 0-7 (no visible investment), 8-13 (maintenance level), 14-19 (moderate growth), 20-25 (aggressive investment/M&A)
 
-If no financial data is found for a dimension, score it 12 (neutral).
+CALIBRATION ANCHOR: A typical stable Finnish IT company with modest profitability should score around 10-13 per dimension, NOT 15-20. Reserve 14+ for companies with clearly above-average performance with evidence to back it up.
+
+If no financial data is found for a dimension, score it 10 (neutral — reflects uncertainty, not health).
 
 RETURN STRICT JSON:
 {{{{
@@ -2330,9 +2334,9 @@ CONFIDENCE GUIDE:
     for dim in dimensions:
         dim_data = data.get(dim, {})
         if isinstance(dim_data, dict):
-            score = max(0, min(25, int(dim_data.get("score", 12))))
+            score = max(0, min(25, int(dim_data.get("score", 10))))
         else:
-            score = 12
+            score = 10
             dim_data = {}
         sub_scores[dim] = score
         findings.append({

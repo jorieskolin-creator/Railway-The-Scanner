@@ -22,7 +22,7 @@ from google.genai import types
 import anthropic
 
 from scanner_one import analyze_intent
-from scanner_two import x_ray_search, extract_json_from_text, run_self_analysis, financial_health_search
+from scanner_two import x_ray_search, extract_json_from_text, run_self_analysis, financial_health_search, compute_financial_index
 from storage import BlobStorage
 from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES, get_company_metadata
@@ -415,6 +415,68 @@ async def recheck_company(company_name: str, request: Request):
         raise HTTPException(status_code=404, detail=f"Company '{company_name}' not found in database.")
 
     return _recheck_company_data(company_name, data)
+
+@app.post("/admin/recalculate-financial")
+async def recalculate_financial_index(request: Request):
+    """
+    Recalculate financial_index from stored sub_scores for ALL companies.
+    Applies the current compute_financial_index formula (gate threshold, weights)
+    without re-running any AI search. Fast, free, no API calls.
+    """
+    verify_admin(request)
+    companies = storage.get_all_companies_summary()
+    updated = 0
+    skipped = 0
+    changes = []
+
+    for company in companies:
+        name = company.get("companyName", "")
+        if not name:
+            continue
+        data = storage.get_company_data(name)
+        if not data:
+            continue
+
+        sub_scores = data.get("financial_sub_scores")
+        old_index = data.get("financial_index")
+
+        if not sub_scores or not isinstance(sub_scores, dict):
+            skipped += 1
+            continue
+
+        # Check if we have real sub_scores (at least one non-None value)
+        has_real = any(v is not None for v in sub_scores.values())
+        if not has_real:
+            skipped += 1
+            continue
+
+        new_index = compute_financial_index(sub_scores)
+
+        if new_index != old_index:
+            data["financial_index"] = new_index
+            storage.save_company_data(name, data)
+            changes.append({
+                "company": name,
+                "old": old_index,
+                "new": new_index,
+                "delta": new_index - (old_index or 0),
+                "sub_scores": sub_scores
+            })
+            updated += 1
+        else:
+            skipped += 1
+
+    # Sort by largest change for easy review
+    changes.sort(key=lambda c: abs(c["delta"]), reverse=True)
+
+    return {
+        "status": "done",
+        "updated": updated,
+        "skipped": skipped,
+        "total": len(companies),
+        "changes": changes
+    }
+
 
 @app.post("/admin/recheck-all")
 async def recheck_all_companies(request: Request):
