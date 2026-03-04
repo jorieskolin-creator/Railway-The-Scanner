@@ -407,6 +407,8 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
             # 4. SYNTHESIS (Claude Opus 4.6)
             summary_text = "Automated Analysis Complete."
             pitch_text = "Pitch unavailable."
+            why_proposals = []
+            what_proposals = []
 
             if claude_client:
                 try:
@@ -559,6 +561,28 @@ A direct cold-outreach message to a C-level executive at {company_name}:
   - Do NOT use "Forensic Modernization Audit" or any generic service names.
   - Tone: Professional, provocative, insight-led. The recipient should feel understood, not sold to.
 
+STEP 4 — IMPACT PROPOSALS (derived from Steps 1-3):
+Generate exactly 2 WHY statements and 2 WHAT statements.
+
+WHY (Desired Impact) — the strategic reason to act:
+  - Each WHY must connect a specific weakness found in Step 1 to a business-level consequence the C-suite cares about.
+  - Frame as: "What happens if this stays unfixed?" → strategic risk or missed opportunity.
+  - Tone: Executive-level, outcome-oriented. Not technical jargon.
+  - Length: 1-2 sentences each.
+
+WHAT (Desired Effect) — the measurable business outcome:
+  - Each WHAT must propose a concrete, observable change that would prove progress on the corresponding WHY.
+  - Frame as: "What would be different in 12 months if we succeed?"
+  - Must be specific enough to verify, but not a made-up KPI number.
+  - Tone: Tangible, verifiable, grounded in this company's context.
+  - Length: 1-2 sentences each.
+
+Rules:
+  - WHY1 pairs with WHAT1 (same theme). WHY2 pairs with WHAT2 (different theme).
+  - Draw ONLY from the weakest 2 KB dimensions scored in Step 1.
+  - Never generic — each must reference something specific from the evidence or diagnosis.
+  - These are proposals, not promises — frame as "potential impact" and "potential effect".
+
 ### GUARDRAILS
 - NEVER fabricate evidence, people, events, partnerships, or metrics not present in the scan data.
 - NEVER invent temporal claims ("recently announced", "just launched", "this quarter").
@@ -566,8 +590,8 @@ A direct cold-outreach message to a C-level executive at {company_name}:
 - Every factual claim in the summary must be traceable to a specific piece of evidence above.
 
 ### OUTPUT
-Respond with valid JSON only. Four fields required:
-{{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "intent_score": <int 0-100>}}"""
+Respond with valid JSON only. Six fields required:
+{{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "intent_score": <int 0-100>, "why_proposals": ["...", "..."], "what_proposals": ["...", "..."]}}"""
 
                     # --- Synthesis with fallback chain: Opus 4.6 → Gemini 3.1 Pro → Gemini 3 Pro → Sonnet 4.6 ---
                     # Opus uses Extended Thinking to reason through evidence before synthesis.
@@ -609,7 +633,7 @@ Respond with valid JSON only. Four fields required:
                                         config=types.GenerateContentConfig(
                                             temperature=0.5,
                                             thinking_config=types.ThinkingConfig(thinking_budget=3000),  # MEDIUM = 2000-3500 tokens; explicit cap
-                                            max_output_tokens=2048
+                                            max_output_tokens=4000
                                         )
                                     ),
                                     label=f"Seed Synthesis gemini-3.1-pro-preview [{company_name}]",
@@ -634,7 +658,7 @@ Respond with valid JSON only. Four fields required:
                                         contents=synthesis_prompt,
                                         config=types.GenerateContentConfig(
                                             temperature=0.0,
-                                            max_output_tokens=2048
+                                            max_output_tokens=4000
                                         )
                                     ),
                                     label=f"Seed Synthesis gemini-2.5-pro [{company_name}]",
@@ -651,6 +675,8 @@ Respond with valid JSON only. Four fields required:
                              json_data = json.loads(payload)
                              summary_text = json_data.get("summary", summary_text)
                              pitch_text = json_data.get("pitch", pitch_text) or pitch_text
+                             why_proposals = json_data.get("why_proposals", why_proposals) or why_proposals
+                             what_proposals = json_data.get("what_proposals", what_proposals) or what_proposals
 
                              # --- OPUS SCORE VERIFICATION ---
                              opus_reality = json_data.get("reality_score")
@@ -759,6 +785,8 @@ Respond with valid JSON only. Four fields required:
                 "key_people": key_people,
                 "summary_text": summary_text,
                 "pitch_text": pitch_text,
+                "why_proposals": why_proposals,
+                "what_proposals": what_proposals,
                 "lastUpdated": timestamp,
                 "history": batch_history,
                 "is_simulated": False,

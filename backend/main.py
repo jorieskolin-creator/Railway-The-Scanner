@@ -696,15 +696,38 @@ A direct cold-outreach message to a C-level executive at {company_name}:
   - Tone: Professional, provocative, insight-led. The recipient should feel understood, not sold to.
   - Structure as exactly 3 short paragraphs separated by \n\n (opening hook / two proposals / closing CTA).
 
+STEP 5 — IMPACT PROPOSALS (derived from Steps 1-4):
+Generate exactly 2 WHY statements and 2 WHAT statements.
+
+WHY (Desired Impact) — the strategic reason to act:
+  - Each WHY must connect a specific weakness found in Step 1 to a business-level consequence the C-suite cares about.
+  - Frame as: "What happens if this stays unfixed?" → strategic risk or missed opportunity.
+  - Tone: Executive-level, outcome-oriented. Not technical jargon.
+  - Length: 1-2 sentences each.
+
+WHAT (Desired Effect) — the measurable business outcome:
+  - Each WHAT must propose a concrete, observable change that would prove progress on the corresponding WHY.
+  - Frame as: "What would be different in 12 months if we succeed?"
+  - Must be specific enough to verify, but not a made-up KPI number.
+  - Tone: Tangible, verifiable, grounded in this company's context.
+  - Length: 1-2 sentences each.
+
+Rules:
+  - WHY1 pairs with WHAT1 (same theme). WHY2 pairs with WHAT2 (different theme).
+  - Draw ONLY from the weakest 2 KB dimensions scored in Step 1.
+  - Never generic — each must reference something specific from the evidence or diagnosis.
+  - These are proposals, not promises — frame as "potential impact" and "potential effect".
+
 ### GUARDRAILS
 - NEVER fabricate evidence, people, events, partnerships, or metrics not present in the scan data.
 - NEVER invent temporal claims ("recently announced", "just launched", "this quarter").
 - Every factual claim in the summary must be traceable to a specific piece of evidence above.
 
 ### OUTPUT
-Respond with valid JSON only. Four fields required:
-{{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
+Respond with valid JSON only. Six fields required:
+{{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."]}}
 Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs total). The pitch value must also contain \n\n between its 3 paragraphs.
+Note: why_proposals and what_proposals are arrays of exactly 2 strings each. WHY1 pairs with WHAT1, WHY2 pairs with WHAT2.
 
 ### CRITICAL CONTEXT — FACT-CHECK CORRECTIONS
 The previous synthesis contained false claims detected by an independent fact-checker (Gemini 3.1 Pro with Google Search).
@@ -765,7 +788,7 @@ Generate a completely fresh synthesis. Do NOT reference or re-introduce any of t
                     contents=synthesis_prompt,
                     config=types.GenerateContentConfig(
                         temperature=0.0,
-                        max_output_tokens=3000
+                        max_output_tokens=4000
                     )
                 ),
                 label="Clean Re-Synthesis gemini-2.5-pro",
@@ -792,6 +815,12 @@ Generate a completely fresh synthesis. Do NOT reference or re-introduce any of t
                 data["summary_text"] = _strip_tac_codes(new_summary)
             if new_pitch:
                 data["pitch_text"] = new_pitch
+            new_why = resynth_json.get("why_proposals", [])
+            new_what = resynth_json.get("what_proposals", [])
+            if new_why and isinstance(new_why, list):
+                data["why_proposals"] = new_why
+            if new_what and isinstance(new_what, list):
+                data["what_proposals"] = new_what
 
             # Update reality score if Gemini re-evaluated it
             resynth_reality = resynth_json.get("reality_score")
@@ -1298,6 +1327,8 @@ def run_scan(
         # --- STEP 3: SYNTHESIS ---
         summary = "AI Summary Unavailable"
         pitch = "Pitch Unavailable"
+        why_proposals = []
+        what_proposals = []
 
         anthropic_key = clean_env_var(os.environ.get("ANTHROPIC_API_KEY"))
         has_synth_key = anthropic_key
@@ -1485,6 +1516,31 @@ A direct cold-outreach message to a C-level executive at {companyName}:
   - Tone: Professional, provocative, insight-led. The recipient should feel understood, not sold to.
   - Structure as exactly 3 short paragraphs separated by \n\n (opening hook / two proposals / closing CTA).
 
+STEP 5 — IMPACT PROPOSALS (derived from Steps 1-4):
+Generate exactly 2 WHY statements and 2 WHAT statements.
+
+WHY (Desired Impact) — the strategic reason to act:
+  - Each WHY must connect a specific weakness found in Step 1 to a business-level consequence the C-suite cares about.
+  - Frame as: "What happens if this stays unfixed?" → strategic risk or missed opportunity.
+  - Tone: Executive-level, outcome-oriented. Not technical jargon.
+  - Length: 1-2 sentences each.
+  - Example: "Reduce time-to-market for digital services from months to weeks by dissolving project-based handoffs that currently bottleneck every release."
+
+WHAT (Desired Effect) — the measurable business outcome:
+  - Each WHAT must propose a concrete, observable change that would prove progress on the corresponding WHY.
+  - Frame as: "What would be different in 12 months if we succeed?"
+  - Must be specific enough to verify, but not a made-up KPI number.
+  - Tone: Tangible, verifiable, grounded in this company's context.
+  - Length: 1-2 sentences each.
+  - Example: "Cross-functional teams own services end-to-end, eliminating the current approval chain that delays every deployment."
+
+Rules:
+  - WHY1 and WHAT1 must pair — same KB dimension or theme.
+  - WHY2 and WHAT2 must pair — a different KB dimension or theme.
+  - Draw ONLY from the weakest 2 KB dimensions scored in Step 1.
+  - Never generic — each must reference something specific from the evidence or diagnosis.
+  - These are proposals, not promises — frame as "potential impact" and "potential effect".
+
 ### GUARDRAILS
 - NEVER fabricate evidence, people, events, partnerships, or metrics not present in the scan data.
 - NEVER invent temporal claims ("recently announced", "just launched", "this quarter").
@@ -1492,10 +1548,10 @@ A direct cold-outreach message to a C-level executive at {companyName}:
 - Every factual claim in the summary must be traceable to a specific piece of evidence above.
 
 ### OUTPUT
-Respond with valid JSON only. Four fields required:
-{{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
+Respond with valid JSON only. Six fields required:
+{{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."]}}
 Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs total). The pitch value must also contain \n\n between its 3 paragraphs.
-Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs total)."""
+Note: why_proposals and what_proposals are arrays of exactly 2 strings each. WHY1 pairs with WHAT1, WHY2 pairs with WHAT2."""
 
                 # --- Synthesis with fallback chain: Opus 4.6 → Gemini 3.1 Pro → Gemini 3 Pro → Gemini 2.5 Pro ---
                 # Opus is the judge — it does ONE thing: synthesize. Fallbacks degrade gracefully.
@@ -1589,7 +1645,7 @@ Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs tot
                                     contents=synthesis_prompt,
                                     config=types.GenerateContentConfig(
                                         temperature=0.0,
-                                        max_output_tokens=3000
+                                        max_output_tokens=4000
                                     )
                                 )
 
@@ -1612,6 +1668,8 @@ Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs tot
                          json_data = json.loads(payload)
                          summary = json_data.get("summary", summary)
                          pitch = json_data.get("pitch", pitch) or pitch
+                         why_proposals = json_data.get("why_proposals", why_proposals) or why_proposals
+                         what_proposals = json_data.get("what_proposals", what_proposals) or what_proposals
 
                          # --- OPUS SCORE VERIFICATION ---
                          # Opus is the Final Judge for Reality Score. It has the most
@@ -1756,6 +1814,8 @@ Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs tot
             "key_people": key_people,
             "summary_text": _strip_tac_codes(summary),
             "pitch_text": pitch,
+            "why_proposals": why_proposals,
+            "what_proposals": what_proposals,
             "lastUpdated": new_timestamp,
             "history": history,
             "is_simulated": reality_results.get("is_simulated", False),
@@ -1956,7 +2016,7 @@ verified evidence provided."""
                                 contents=resynth_prompt,
                                 config=types.GenerateContentConfig(
                                     temperature=0.0,
-                                    max_output_tokens=3000
+                                    max_output_tokens=4000
                                 )
                             ),
                             label="Re-Synthesis gemini-2.5-pro",
@@ -1982,6 +2042,12 @@ verified evidence provided."""
                             full_data["summary_text"] = _strip_tac_codes(new_summary)
                         if new_pitch:
                             full_data["pitch_text"] = new_pitch
+                        new_why = resynth_json.get("why_proposals", [])
+                        new_what = resynth_json.get("what_proposals", [])
+                        if new_why and isinstance(new_why, list):
+                            full_data["why_proposals"] = new_why
+                        if new_what and isinstance(new_what, list):
+                            full_data["what_proposals"] = new_what
 
                         # Update reality score if Gemini re-evaluated it
                         resynth_reality = resynth_json.get("reality_score")

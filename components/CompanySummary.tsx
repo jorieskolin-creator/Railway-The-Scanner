@@ -60,6 +60,7 @@ const CompanySummary = ({ data }) => {
   const summaryRef = useRef(null);
   const [copied, setCopied] = useState(false);
   const [pitchCopied, setPitchCopied] = useState(false);
+  const [whyWhatCopied, setWhyWhatCopied] = useState(false);
 
   // ARCHETYPE LOGIC (Reality vs Financial — unified with dashboard)
   // Prefer the stored archetype from the backend (single source of truth).
@@ -180,6 +181,16 @@ const CompanySummary = ({ data }) => {
             setTimeout(() => setPitchCopied(false), 2000);
         });
     }
+  };
+
+  const handleCopyWhyWhat = () => {
+    const why = data.why_proposals || [];
+    const what = data.what_proposals || [];
+    const text = `WHY (Desired Impact):\n1. ${why[0] || ''}\n2. ${why[1] || ''}\n\nWHAT (Desired Effect):\n1. ${what[0] || ''}\n2. ${what[1] || ''}`;
+    navigator.clipboard.writeText(text).then(() => {
+        setWhyWhatCopied(true);
+        setTimeout(() => setWhyWhatCopied(false), 2000);
+    });
   };
 
   const handleDownloadHTML = () => {
@@ -721,6 +732,56 @@ const CompanySummary = ({ data }) => {
                 <p className="text-[10px] text-slate-500 mt-3 flex items-center gap-1.5 opacity-70">
                      <Info size={12} />
                      Generated based on detected constraints: {data.reality_checklist ? data.reality_checklist.filter(i => i.sentiment === 'negative').slice(0, 3).map(i => i.query).join(", ") : "General constraints"}
+                </p>
+            </div>
+        )}
+
+        {/* WHY & WHAT PROPOSALS */}
+        {data.why_proposals && data.why_proposals.length > 0 && data.what_proposals && data.what_proposals.length > 0 && (
+            <div className="bg-gradient-to-r from-amber-900/20 to-orange-900/20 p-6 rounded-2xl border border-amber-500/30 backdrop-blur-md shadow-lg shadow-amber-900/10">
+                <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                    <Zap className="text-amber-400" size={20} />
+                    Proposed WHY & WHAT
+                </h3>
+                <div className="relative group">
+                    <div className="space-y-4">
+                        <div>
+                            <p className="text-[11px] font-bold text-amber-400 uppercase tracking-wider mb-2">WHY — Desired Impact</p>
+                            <div className="space-y-2">
+                                {data.why_proposals.map((why, i) => (
+                                    <div key={i} className="bg-black/30 p-3 rounded-lg border border-amber-500/15">
+                                        <p className="text-xs text-slate-300 leading-relaxed">
+                                            <span className="text-amber-400 font-bold mr-2">{i + 1}.</span>{why}
+                                        </p>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                        <div>
+                            <p className="text-[11px] font-bold text-orange-400 uppercase tracking-wider mb-2">WHAT — Desired Effect</p>
+                            <div className="space-y-2">
+                                {data.what_proposals.map((what, i) => (
+                                    <div key={i} className="bg-black/30 p-3 rounded-lg border border-orange-500/15">
+                                        <p className="text-xs text-slate-300 leading-relaxed">
+                                            <span className="text-orange-400 font-bold mr-2">{i + 1}.</span>{what}
+                                        </p>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                    <button
+                        onClick={handleCopyWhyWhat}
+                        className={`absolute top-0 right-0 p-2 rounded transition-all shadow-md flex items-center gap-2 ${whyWhatCopied ? 'bg-emerald-600 text-white' : 'bg-white/10 hover:bg-amber-600 hover:text-white text-slate-400'}`}
+                        title="Copy WHY & WHAT to Clipboard"
+                    >
+                        {whyWhatCopied ? <Check size={14} /> : <Copy size={14} />}
+                        {whyWhatCopied && <span className="text-[10px] font-bold">COPIED</span>}
+                    </button>
+                </div>
+                <p className="text-[10px] text-slate-500 mt-3 flex items-center gap-1.5 opacity-70">
+                    <Info size={12} />
+                    Proposals derived from the weakest Knowledge Base dimensions — intended as conversation starters, not promises.
                 </p>
             </div>
         )}

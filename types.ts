@@ -54,6 +54,8 @@ interface AnalysisResult {
   key_people?: KeyPerson[];
   summary_text: string;
   pitch_text?: string; // NEW: Strategic Pitch
+  why_proposals?: string[]; // Desired Impact (WHY) — 2 proposals
+  what_proposals?: string[]; // Desired Effect (WHAT) — 2 proposals
   lastUpdated: string;
   intent_breakdown: ScannerCategoryScore[];
   metrics?: ScannerMetrics;
