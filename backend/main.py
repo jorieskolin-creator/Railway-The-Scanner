@@ -455,7 +455,6 @@ async def recalculate_financial_index(request: Request):
         if new_index != old_index:
             data["financial_index"] = new_index
             storage.save_company_data(name, data)
-            storage.update_global_index_field(name, "financial_index", new_index)
             changes.append({
                 "company": name,
                 "old": old_index,
@@ -466,6 +465,26 @@ async def recalculate_financial_index(request: Request):
             updated += 1
         else:
             skipped += 1
+
+    # Batch-update the global index in a single read-modify-write cycle
+    if changes:
+        change_map = {c["company"]: c["new"] for c in changes}
+        with storage._index_lock:
+            blobs = storage._list("index/summary_list", limit=10)
+            current_index = []
+            if blobs:
+                blobs.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
+                latest_url = blobs[0].get("url")
+                data = storage._get(latest_url)
+                if data and isinstance(data, list):
+                    current_index = data
+            for item in current_index:
+                cname = item.get("companyName")
+                if cname in change_map:
+                    item["financial_index"] = change_map[cname]
+            new_url = storage._put("index/summary_list.json", current_index)
+            if new_url:
+                storage._prune_old_versions("index/summary_list", keep=3)
 
     # Sort by largest change for easy review
     changes.sort(key=lambda c: abs(c["delta"]), reverse=True)
