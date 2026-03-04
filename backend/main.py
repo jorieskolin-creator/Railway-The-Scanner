@@ -420,90 +420,86 @@ async def recheck_company(company_name: str, request: Request):
 async def recalculate_financial_index(request: Request):
     """
     Recalculate financial_index from stored sub_scores for ALL companies.
-    Applies the current compute_financial_index formula (gate threshold, weights)
-    without re-running any AI search. Fast, free, no API calls.
+    Compares computed value against the GLOBAL INDEX (landing page) value,
+    not the company file, to catch any out-of-sync state.
     """
     verify_admin(request)
-    companies = storage.get_all_companies_summary()
+
+    # 1. Load global index — this is what the landing page actually reads
+    index_data = storage.retrieve_latest_data("index/summary_list")
+    if not index_data or not isinstance(index_data, list):
+        print(f"   [Recalc] ERROR: Could not load global index. Got: {type(index_data)}")
+        return {"status": "error", "detail": "Could not load global index"}
+
+    index_lookup = {item.get("companyName"): item for item in index_data}
+    print(f"   [Recalc] Loaded global index with {len(index_data)} entries")
+
     updated = 0
     skipped = 0
     changes = []
 
-    for company in companies:
-        name = company.get("companyName", "")
+    for name, index_entry in index_lookup.items():
         if not name:
             continue
         data = storage.get_company_data(name)
         if not data:
+            skipped += 1
             continue
 
         sub_scores = data.get("financial_sub_scores")
-        old_index = data.get("financial_index")
-
         if not sub_scores or not isinstance(sub_scores, dict):
             skipped += 1
             continue
 
-        # Check if we have real sub_scores (at least one non-None value)
         has_real = any(v is not None for v in sub_scores.values())
         if not has_real:
             skipped += 1
             continue
 
         new_index = compute_financial_index(sub_scores)
+        old_index_in_file = data.get("financial_index")
+        old_index_on_landing = index_entry.get("financial_index")
 
-        if new_index != old_index:
+        # Update company file if it differs
+        if new_index != old_index_in_file:
             data["financial_index"] = new_index
             storage.save_company_data(name, data)
+
+        # Compare against LANDING PAGE value — this is what matters
+        if new_index != old_index_on_landing:
+            index_entry["financial_index"] = new_index
             changes.append({
                 "company": name,
-                "old": old_index,
+                "old": old_index_on_landing,
                 "new": new_index,
-                "delta": new_index - (old_index or 0),
+                "delta": new_index - (old_index_on_landing or 0),
                 "sub_scores": sub_scores
             })
             updated += 1
+            print(f"   [Recalc] {name}: landing={old_index_on_landing} file={old_index_in_file} -> {new_index}")
         else:
             skipped += 1
 
-    # Update global index using the same proven method as the scan flow.
-    # Read current index once, patch all financial_index values, write back.
+    # 2. Write updated global index back in one shot
     if changes:
-        change_map = {c["company"]: c["new"] for c in changes}
-        print(f"   [Recalc] Updating global index for {len(change_map)} companies...")
-        index_data = storage.retrieve_latest_data("index/summary_list")
-        if index_data and isinstance(index_data, list):
-            print(f"   [Recalc] Loaded global index with {len(index_data)} entries")
-            matched = 0
-            for item in index_data:
-                cname = item.get("companyName")
-                if cname in change_map:
-                    old_val = item.get("financial_index")
-                    item["financial_index"] = change_map[cname]
-                    print(f"   [Recalc] {cname}: {old_val} -> {change_map[cname]}")
-                    matched += 1
-            print(f"   [Recalc] Matched {matched}/{len(change_map)} companies in global index")
-            if matched > 0:
-                with storage._index_lock:
-                    new_url = storage._put("index/summary_list.json", index_data)
-                    print(f"   [Recalc] Wrote updated index: {new_url}")
-                    if new_url:
-                        storage._prune_old_versions("index/summary_list", keep=3)
-                    else:
-                        print(f"   [Recalc] ERROR: _put returned None - write failed!")
+        print(f"   [Recalc] Writing global index with {updated} updates...")
+        with storage._index_lock:
+            new_url = storage._put("index/summary_list.json", index_data)
+            print(f"   [Recalc] Wrote updated index: {new_url}")
+            if new_url:
+                storage._prune_old_versions("index/summary_list", keep=3)
             else:
-                print(f"   [Recalc] WARNING: No companies matched in global index! Names in index: {[item.get('companyName') for item in index_data[:5]]}...")
-        else:
-            print(f"   [Recalc] ERROR: Could not load global index. Got: {type(index_data)}")
+                print(f"   [Recalc] ERROR: _put returned None - write failed!")
+    else:
+        print(f"   [Recalc] No changes needed — all landing page scores already match.")
 
-    # Sort by largest change for easy review
     changes.sort(key=lambda c: abs(c["delta"]), reverse=True)
 
     return {
         "status": "done",
         "updated": updated,
         "skipped": skipped,
-        "total": len(companies),
+        "total": len(index_lookup),
         "changes": changes
     }
 
