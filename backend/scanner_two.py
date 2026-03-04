@@ -2175,13 +2175,13 @@ def compute_financial_index(sub_scores: dict) -> int:
     """
     Weighted Financial Health Index — fundamentals-first weighting.
 
-    Profitability is the dominant signal (50%). Financial Stability (25%)
-    is the clear #2 — equity ratio, debt levels, balance sheet health.
-    Together they account for 75% so core fundamentals drive the index.
+    Profitability is the dominant signal (60%). Financial Stability (15%)
+    has low variance across companies but still anchors balance sheet
+    health. Revenue Trend (15%) captures growth trajectory.
 
     Stage 1: Weighted linear base
-      - Profitability:         50%  (dominant health signal)
-      - Financial Stability:   25%  (balance sheet health — #2)
+      - Profitability:         60%  (dominant health signal)
+      - Financial Stability:   15%  (balance sheet health)
       - Revenue Trend:         15%  (growth trajectory)
       - Investment Signal:     10%  (forward-looking tiebreaker)
 
@@ -2200,7 +2200,7 @@ def compute_financial_index(sub_scores: dict) -> int:
     I = sub_scores.get("investment_signal", 10)
 
     # Stage 1: Weighted linear base (0-100)
-    base = (0.15 * R + 0.50 * P + 0.25 * E + 0.10 * I) * 4
+    base = (0.15 * R + 0.60 * P + 0.15 * E + 0.10 * I) * 4
 
     # Stage 2: Softer core health gate — penalizes when all three fundamentals are weak
     core_pct = (R + P + E) / 75.0
