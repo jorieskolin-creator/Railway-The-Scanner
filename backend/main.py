@@ -505,6 +505,224 @@ async def recalculate_financial_index(request: Request):
     }
 
 
+def _refresh_proposals_for_company(company_name: str, data: dict) -> dict:
+    """
+    Re-generate WHY & WHAT proposals from existing scan data.
+    Uses a lightweight, focused prompt — no full rescan needed.
+    Returns dict with status, old/new proposals.
+    """
+    import time as _time
+
+    # Gather existing analysis context from stored data
+    knowledge_context = get_evolving_framework()
+    intent_breakdown = json.dumps(data.get("intent_breakdown", {}))
+    reality_checklist = data.get("reality_checklist", [])
+    summary_text = data.get("summary_text", "")
+    pitch_text = data.get("pitch_text", "")
+    archetype = data.get("archetype", "Unknown")
+    reality_score = data.get("reality_score", 0)
+    evidence_links = data.get("evidence_links", [])
+    evidence_list = ', '.join([f"{l.get('title', 'Unknown')}: {l.get('snippet', '')}" for l in evidence_links[:20]])
+
+    # Build the weakest dimensions from reality checklist
+    negative_findings = [item for item in reality_checklist if item.get("sentiment") == "negative"]
+    negative_summary = "\n".join([f"- {item.get('query', '')}: {item.get('snippet', 'No detail')}" for item in negative_findings[:6]])
+
+    prompt = f"""You are a strategic consulting advisor analyzing {company_name}.
+
+### KNOWLEDGE BASE (KB)
+{knowledge_context}
+
+### EXISTING ANALYSIS CONTEXT
+Company: {company_name}
+Archetype: {archetype}
+Reality Score: {reality_score}/100
+
+Intent Breakdown (Scanner 1):
+{intent_breakdown}
+
+Key Negative Findings (Scanner 2):
+{negative_summary}
+
+Evidence Sources:
+{evidence_list}
+
+Existing Summary:
+{summary_text}
+
+Existing Pitch:
+{pitch_text}
+
+### YOUR TASK
+Generate exactly 2 WHY statements and 2 WHAT statements based on the analysis above.
+
+WHY (Desired Impact) — the strategic reason to act:
+  - Each WHY must connect a specific weakness from the analysis to a business-level consequence the C-suite cares about.
+  - Frame as: "What happens if this stays unfixed?" → strategic risk or missed opportunity.
+  - Tone: Executive-level, outcome-oriented. Not technical jargon.
+  - Length: 1-2 sentences each.
+
+WHAT (Desired Effect) — the measurable business outcome:
+  - Each WHAT must propose a concrete, observable change that would prove progress on the corresponding WHY.
+  - Frame as: "What would be different in 12 months if we succeed?"
+  - Must be specific enough to verify, but not a made-up KPI number.
+  - Tone: Tangible, verifiable, grounded in this company's context.
+  - Length: 1-2 sentences each.
+
+Rules:
+  - WHY1 pairs with WHAT1 (same theme). WHY2 pairs with WHAT2 (different theme).
+  - Draw ONLY from the weakest KB dimensions visible in the analysis.
+  - Never generic — each must reference something specific from the evidence or diagnosis.
+  - These are proposals, not promises — frame as "potential impact" and "potential effect".
+
+### GUARDRAILS
+- NEVER fabricate evidence, people, events, partnerships, or metrics not present in the analysis above.
+- NEVER invent temporal claims ("recently announced", "just launched", "this quarter").
+
+### OUTPUT
+Respond with valid JSON only:
+{{"why_proposals": ["...", "..."], "what_proposals": ["...", "..."]}}"""
+
+    old_why = data.get("why_proposals", [])
+    old_what = data.get("what_proposals", [])
+
+    # --- Model chain: Gemini 3.1 Pro → Gemini 2.5 Pro ---
+    # Lightweight task — no need for Opus; Gemini handles focused generation well.
+    response_text = ""
+    model_used = ""
+    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
+    start = _time.time()
+
+    if gemini_key:
+        try:
+            from google import genai
+            from google.genai import types
+            print(f"   🔄 [Refresh Proposals] {company_name}: Attempting gemini-3.1-pro-preview...")
+            gemini_client = genai.Client(api_key=gemini_key)
+            resp = call_with_503_backoff(
+                lambda: gemini_client.models.generate_content(
+                    model="gemini-3.1-pro-preview",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.5,
+                        thinking_config=types.ThinkingConfig(thinking_budget=2000),
+                        max_output_tokens=2000
+                    )
+                ),
+                label=f"Refresh Proposals {company_name} gemini-3.1-pro-preview",
+                model="gemini-3.1-pro-preview",
+                timeout=60,
+            )
+            response_text = resp.text or ""
+            model_used = "gemini-3.1-pro-preview"
+            ms = int((_time.time() - start) * 1000)
+            print(f"   ✅ [Refresh Proposals] {company_name}: Gemini 3.1 Pro complete ({ms}ms)")
+        except Exception as g31_err:
+            print(f"   ❌ [Refresh Proposals] {company_name}: Gemini 3.1 Pro failed: {g31_err}")
+
+    if not response_text and gemini_key:
+        try:
+            from google import genai
+            from google.genai import types
+            print(f"   🔄 [Refresh Proposals] {company_name}: Falling back to gemini-2.5-pro...")
+            gemini_client = genai.Client(api_key=gemini_key)
+            resp = call_with_503_backoff(
+                lambda: gemini_client.models.generate_content(
+                    model="gemini-2.5-pro",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.0,
+                        max_output_tokens=2000
+                    )
+                ),
+                label=f"Refresh Proposals {company_name} gemini-2.5-pro",
+                model="gemini-2.5-pro",
+                timeout=60,
+            )
+            response_text = resp.text or ""
+            model_used = "gemini-2.5-pro"
+            ms = int((_time.time() - start) * 1000)
+            print(f"   ✅ [Refresh Proposals] {company_name}: Gemini 2.5 Pro complete ({ms}ms)")
+        except Exception as g25_err:
+            ms = int((_time.time() - start) * 1000)
+            print(f"   ❌ [Refresh Proposals] {company_name}: All models failed ({ms}ms). Last error: {g25_err}")
+
+    if not response_text:
+        return {"company": company_name, "status": "failed", "reason": "All models failed or no API key."}
+
+    payload = extract_json_from_text(response_text)
+    if not payload:
+        return {"company": company_name, "status": "failed", "reason": "Could not parse JSON from model response."}
+
+    result_json = json.loads(payload)
+    new_why = result_json.get("why_proposals", [])
+    new_what = result_json.get("what_proposals", [])
+
+    if not new_why or not new_what or not isinstance(new_why, list) or not isinstance(new_what, list):
+        return {"company": company_name, "status": "failed", "reason": "Model returned invalid proposal structure."}
+
+    # Save updated proposals
+    data["why_proposals"] = new_why
+    data["what_proposals"] = new_what
+    storage.save_company_data(company_name, data)
+
+    ms = int((_time.time() - start) * 1000)
+    print(f"   ✅ [Refresh Proposals] {company_name}: Saved new WHY/WHAT proposals ({model_used}, {ms}ms)")
+
+    return {
+        "company": company_name,
+        "status": "refreshed",
+        "model_used": model_used,
+        "old_why": old_why,
+        "old_what": old_what,
+        "new_why": new_why,
+        "new_what": new_what,
+    }
+
+
+@app.post("/admin/refresh-proposals/{company_name}")
+async def refresh_proposals_single(company_name: str, request: Request):
+    """Re-generate WHY & WHAT proposals for a single company from existing data."""
+    verify_admin(request)
+    data = storage.get_company_data(company_name)
+    if not data:
+        raise HTTPException(status_code=404, detail=f"Company '{company_name}' not found in database.")
+    return _refresh_proposals_for_company(company_name, data)
+
+
+@app.post("/admin/refresh-proposals-all")
+async def refresh_proposals_all(request: Request):
+    """Re-generate WHY & WHAT proposals for ALL companies from existing data."""
+    verify_admin(request)
+    companies = storage.get_all_companies_summary()
+    results = []
+    refreshed = 0
+    failed = 0
+
+    for company in companies:
+        name = company.get("companyName", "")
+        if not name:
+            continue
+        data = storage.get_company_data(name)
+        if not data:
+            continue
+
+        result = _refresh_proposals_for_company(name, data)
+        results.append(result)
+        if result["status"] == "refreshed":
+            refreshed += 1
+        else:
+            failed += 1
+
+    return {
+        "status": "done",
+        "total": len(results),
+        "refreshed": refreshed,
+        "failed": failed,
+        "results": results,
+    }
+
+
 @app.post("/admin/recheck-all")
 async def recheck_all_companies(request: Request):
     """Run reality check on ALL stored companies. Flags issues and auto-cleans them."""

@@ -11,7 +11,7 @@ const Icons = new Proxy(LucideRaw, {
     }
 });
 
-const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock, HardDrive, Radio, Cpu, BarChart3, TrendingUp, TrendingDown, Minus, Trash2, Eye, ShieldAlert, Calculator } = Icons;
+const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock, HardDrive, Radio, Cpu, BarChart3, TrendingUp, TrendingDown, Minus, Trash2, Eye, ShieldAlert, Calculator, Zap } = Icons;
 
 const TruthMatrix = (window as any).TruthMatrix;
 const ScannerInput = (window as any).ScannerInput;
@@ -66,6 +66,9 @@ const App = () => {
   const [recheckResults, setRecheckResults] = useState(null);
   const [recalcLoading, setRecalcLoading] = useState(false);
   const [recalcResults, setRecalcResults] = useState(null);
+  const [refreshProposalsLoading, setRefreshProposalsLoading] = useState(false);
+  const [refreshProposalsResults, setRefreshProposalsResults] = useState(null);
+  const [refreshingProposalsCompany, setRefreshingProposalsCompany] = useState(null);
 
   const prevDataLengthRef = useRef(0);
 
@@ -394,6 +397,57 @@ const App = () => {
       }
     } catch (e) { console.error(e); alert("Recalculation failed."); }
     finally { setRecalcLoading(false); }
+  };
+
+  const handleRefreshProposalsAll = async () => {
+    const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to refresh WHY/WHAT proposals for ALL companies:");
+    if (!password) return;
+    setRefreshProposalsLoading(true);
+    setRefreshProposalsResults(null);
+    try {
+      const res = await fetch('/admin/refresh-proposals-all', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${password}` }
+      });
+      if (res.status === 401) { alert("ACCESS DENIED: Incorrect Password."); setRefreshProposalsLoading(false); return; }
+      if (res.ok) {
+        const json = await res.json();
+        setRefreshProposalsResults(json);
+        const reviewRes = await fetch('/admin/review-data', { headers: { 'Authorization': `Bearer ${password}` } });
+        if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
+        fetchSummaryData(true);
+      } else {
+        alert("Refresh proposals failed: " + (await res.text()));
+      }
+    } catch (e) { console.error(e); alert("Refresh proposals failed."); }
+    finally { setRefreshProposalsLoading(false); }
+  };
+
+  const handleRefreshProposalsSingle = async (companyName) => {
+    const password = prompt(`AUTHENTICATION REQUIRED\n\nEnter Admin Password to refresh WHY/WHAT proposals for "${companyName}":`);
+    if (!password) return;
+    setRefreshingProposalsCompany(companyName);
+    try {
+      const res = await fetch(`/admin/refresh-proposals/${encodeURIComponent(companyName)}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${password}` }
+      });
+      if (res.status === 401) { alert("ACCESS DENIED: Incorrect Password."); return; }
+      if (res.ok) {
+        const json = await res.json();
+        if (json.status === 'refreshed') {
+          alert(`WHY/WHAT Proposals refreshed for "${companyName}" (${json.model_used}).\n\nWHY 1: ${json.new_why[0]}\nWHY 2: ${json.new_why[1]}\n\nWHAT 1: ${json.new_what[0]}\nWHAT 2: ${json.new_what[1]}`);
+        } else {
+          alert(`Refresh failed for "${companyName}": ${json.reason || 'Unknown error'}`);
+        }
+        const reviewRes = await fetch('/admin/review-data', { headers: { 'Authorization': `Bearer ${password}` } });
+        if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
+        fetchSummaryData(true);
+      } else {
+        alert("Refresh proposals failed: " + (await res.text()));
+      }
+    } catch (e) { console.error(e); alert("Refresh proposals failed."); }
+    finally { setRefreshingProposalsCompany(null); }
   };
 
   const handleSort = (key) => {
@@ -1172,6 +1226,14 @@ const App = () => {
                   RECALC SCORES
                 </button>
                 <button
+                  onClick={handleRefreshProposalsAll}
+                  disabled={refreshProposalsLoading}
+                  className="flex items-center gap-1.5 px-3 py-1 bg-orange-900/40 hover:bg-orange-800/60 border border-orange-600/50 text-orange-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
+                >
+                  {refreshProposalsLoading ? <Loader2 size={12} className="animate-spin" /> : <Zap size={12} />}
+                  REFRESH WHY/WHAT
+                </button>
+                <button
                   onClick={handleRecheckAll}
                   disabled={recheckLoading}
                   className="flex items-center gap-1.5 px-3 py-1 bg-amber-900/40 hover:bg-amber-800/60 border border-amber-600/50 text-amber-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
@@ -1284,6 +1346,35 @@ const App = () => {
                     </div>
                   )}
 
+                  {/* REFRESH PROPOSALS RESULTS BANNER */}
+                  {refreshProposalsResults && (
+                    <div className="rounded-xl p-4 border bg-orange-500/5 border-orange-500/20">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <Zap size={16} className="text-orange-400" />
+                          <span className="font-bold text-white text-sm">
+                            WHY/WHAT Refresh: {refreshProposalsResults.refreshed} refreshed, {refreshProposalsResults.failed} failed out of {refreshProposalsResults.total}
+                          </span>
+                        </div>
+                        <button onClick={() => setRefreshProposalsResults(null)} className="text-slate-500 hover:text-white"><X size={14} /></button>
+                      </div>
+                      {refreshProposalsResults.results && refreshProposalsResults.results.length > 0 ? (
+                        <div className="space-y-1 max-h-60 overflow-y-auto">
+                          {refreshProposalsResults.results.map((r, idx) => (
+                            <div key={idx} className="flex items-center gap-3 bg-black/30 rounded-lg px-3 py-2 border border-orange-500/10">
+                              <span className="text-white text-xs font-medium min-w-[140px] truncate">{r.company}</span>
+                              <span className={`text-[10px] font-mono font-bold ${r.status === 'refreshed' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                {r.status === 'refreshed' ? `✅ ${r.model_used}` : `❌ ${r.reason || 'Failed'}`}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-orange-300/60 text-xs font-mono">No proposals refreshed.</p>
+                      )}
+                    </div>
+                  )}
+
                   {/* STORED COMPANIES LIST */}
                   <div className="text-[10px] text-slate-500 font-mono uppercase tracking-wider">
                     {dataReviewItems.length} companies in database
@@ -1336,6 +1427,14 @@ const App = () => {
                             )}
                           </div>
                           <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              onClick={() => handleRefreshProposalsSingle(item.companyName)}
+                              disabled={refreshingProposalsCompany === item.companyName}
+                              className="text-slate-500 hover:text-orange-400 p-1.5 rounded hover:bg-orange-500/10 transition-all disabled:opacity-50"
+                              title={`Refresh WHY/WHAT proposals for ${item.companyName}`}
+                            >
+                              {refreshingProposalsCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
+                            </button>
                             <button
                               onClick={() => handleCleanCompany(item.companyName)}
                               disabled={cleaningCompany === item.companyName}
