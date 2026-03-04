@@ -2173,21 +2173,21 @@ def migrate_financial_sub_scores(sub_scores: dict) -> dict:
 
 def compute_financial_index(sub_scores: dict) -> int:
     """
-    Weighted Financial Health Index — Option B: asymmetric profitability.
+    Weighted Financial Health Index — fundamentals-first weighting.
 
-    Profitability is the dominant signal (50%). Revenue trend (25%) captures
-    growth trajectory. Financial Stability (10%) captures balance sheet
-    health — equity ratio, debt levels — data that Finder.fi publishes
-    for most Finnish companies.
+    Profitability is the dominant signal (50%). Financial Stability (25%)
+    is the clear #2 — equity ratio, debt levels, balance sheet health.
+    Together they account for 75% so core fundamentals drive the index.
 
     Stage 1: Weighted linear base
-      - Revenue Trend:         25%
       - Profitability:         50%  (dominant health signal)
-      - Financial Stability:   10%  (balance sheet health)
-      - Investment Signal:     15%
+      - Financial Stability:   25%  (balance sheet health — #2)
+      - Revenue Trend:         15%  (growth trajectory)
+      - Investment Signal:     10%  (forward-looking tiebreaker)
 
     Stage 2: Softer core health gate
-      Gate floor 0.35, threshold 0.60 — spreads the mid-range better.
+      Gate now includes Stability alongside Revenue+Profitability.
+      Gate floor 0.35, threshold 0.60.
 
     Stage 3: Profitability penalty amplifier
       Unprofitable companies get an extra penalty on top of the gate:
@@ -2200,10 +2200,10 @@ def compute_financial_index(sub_scores: dict) -> int:
     I = sub_scores.get("investment_signal", 10)
 
     # Stage 1: Weighted linear base (0-100)
-    base = (0.25 * R + 0.50 * P + 0.10 * E + 0.15 * I) * 4
+    base = (0.15 * R + 0.50 * P + 0.25 * E + 0.10 * I) * 4
 
-    # Stage 2: Softer core health gate — penalizes when both fundamentals are weak
-    core_pct = (R + P) / 50.0
+    # Stage 2: Softer core health gate — penalizes when all three fundamentals are weak
+    core_pct = (R + P + E) / 75.0
     GATE_FLOOR = 0.35
     GATE_THRESHOLD = 0.60
     gate = min(1.0, GATE_FLOOR + (1.0 - GATE_FLOOR) * core_pct / GATE_THRESHOLD)
