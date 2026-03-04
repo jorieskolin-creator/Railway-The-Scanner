@@ -577,18 +577,16 @@ Each false_claims object must have:
     # as fallback during overload) and is being deprecated by Google.
 
     # Stage 2: No search tool — pure text editing by 3.1 Pro.
-    # Thinking is intentionally disabled here: Stage 2 is a precise surgical
-    # text editor ("remove this sentence"), not a reasoning task.  With
-    # thinking enabled the model spends 2000-3500 of its output tokens on
-    # internal thought-parts, leaving too few tokens for the actual JSON —
-    # causing the corrected_summary to be truncated mid-sentence.
-    # thinking_budget=0 explicitly disables thinking (omitting the key lets
-    # the model default to thinking-on), and 8192 max_output_tokens matches
-    # the headroom given to S1 configs.
+    # gemini-3.1-pro-preview REQUIRES thinking (budget=0 → 400 INVALID_ARGUMENT).
+    # With no thinking_config the model defaults to MEDIUM (~2000-3500 tokens),
+    # which at the old max_output_tokens=4096 left too few tokens for the JSON
+    # — truncating the corrected_summary mid-sentence.
+    # Fix: cap thinking at 1024 (minimal) and raise max_output_tokens to 10000
+    # so ~9000 tokens remain for the corrected JSON output.
     gemini_31_correction_config = {
         'temperature': 0.2,
-        'max_output_tokens': 8192,
-        'thinking_config': types.ThinkingConfig(thinking_budget=0),
+        'max_output_tokens': 10000,
+        'thinking_config': types.ThinkingConfig(thinking_budget=1024),
         'safety_settings': _safety,
     }
 
