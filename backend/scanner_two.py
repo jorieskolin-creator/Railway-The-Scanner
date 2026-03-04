@@ -2164,20 +2164,28 @@ def _execute_financial_search(api_key, model_name, prompt, company_name):
 
 def compute_financial_index(sub_scores: dict) -> int:
     """
-    Weighted Financial Health Index with core health gate.
-    Revenue/Profitability dominate (70% combined); Efficiency/Investment are supporting (30%).
+    Weighted Financial Health Index — Option B: asymmetric profitability.
+
+    Profitability is the dominant signal (45%). Revenue trend is reduced (20%)
+    because flat revenue doesn't mean unhealthy — mature profitable companies
+    shouldn't be penalized for not growing.
 
     Stage 1: Weighted linear base
-      - Revenue Trend:    30%
-      - Profitability:    40%  (strongest health signal)
-      - Efficiency:       15%
+      - Revenue Trend:     20%
+      - Profitability:     45%  (dominant health signal)
+      - Efficiency:        20%  (real operational signal)
       - Investment Signal: 15%
 
-    Stage 2: Core health gate
-      When both fundamentals (R+P) are weak, a multiplier (floor 0.25) crushes the score.
-      Gate reaches 1.0 (no penalty) when R+P >= 70% of max (35 out of 50).
-      Raised from 60% to 70% to spread the mid-range distribution and prevent
-      clustering above 50 for merely-OK companies.
+    Stage 2: Softer core health gate
+      Gate floor 0.35, threshold 0.60 — spreads the mid-range better.
+      Neutral companies land ~35-45 instead of clustering at 27-42.
+
+    Stage 3: Profitability penalty amplifier
+      Unprofitable companies get an extra penalty on top of the gate:
+      - P < 8 (losses):        ×0.85
+      - P < 4 (severe losses): ×0.70
+      This separates "unprofitable" from "slightly profitable" without
+      the gate having to do all the work.
     """
     R = sub_scores.get("revenue_trend", 10)
     P = sub_scores.get("profitability", 10)
@@ -2185,15 +2193,23 @@ def compute_financial_index(sub_scores: dict) -> int:
     I = sub_scores.get("investment_signal", 10)
 
     # Stage 1: Weighted linear base (0-100)
-    base = (0.30 * R + 0.40 * P + 0.15 * E + 0.15 * I) * 4
+    base = (0.20 * R + 0.45 * P + 0.20 * E + 0.15 * I) * 4
 
-    # Stage 2: Core health gate — penalizes when both fundamentals are weak
+    # Stage 2: Softer core health gate — penalizes when both fundamentals are weak
     core_pct = (R + P) / 50.0
-    GATE_FLOOR = 0.25
-    GATE_THRESHOLD = 0.70
+    GATE_FLOOR = 0.35
+    GATE_THRESHOLD = 0.60
     gate = min(1.0, GATE_FLOOR + (1.0 - GATE_FLOOR) * core_pct / GATE_THRESHOLD)
 
-    score = round(base * gate)
+    # Stage 3: Profitability penalty amplifier — extra hit for actual losses
+    if P < 4:
+        profit_mult = 0.70
+    elif P < 8:
+        profit_mult = 0.85
+    else:
+        profit_mult = 1.0
+
+    score = round(base * gate * profit_mult)
     return max(0, min(100, score))
 
 
