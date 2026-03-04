@@ -466,25 +466,35 @@ async def recalculate_financial_index(request: Request):
         else:
             skipped += 1
 
-    # Batch-update the global index in a single read-modify-write cycle
+    # Update global index using the same proven method as the scan flow.
+    # Read current index once, patch all financial_index values, write back.
     if changes:
         change_map = {c["company"]: c["new"] for c in changes}
-        with storage._index_lock:
-            blobs = storage._list("index/summary_list", limit=10)
-            current_index = []
-            if blobs:
-                blobs.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
-                latest_url = blobs[0].get("url")
-                data = storage._get(latest_url)
-                if data and isinstance(data, list):
-                    current_index = data
-            for item in current_index:
+        print(f"   [Recalc] Updating global index for {len(change_map)} companies...")
+        index_data = storage.retrieve_latest_data("index/summary_list")
+        if index_data and isinstance(index_data, list):
+            print(f"   [Recalc] Loaded global index with {len(index_data)} entries")
+            matched = 0
+            for item in index_data:
                 cname = item.get("companyName")
                 if cname in change_map:
+                    old_val = item.get("financial_index")
                     item["financial_index"] = change_map[cname]
-            new_url = storage._put("index/summary_list.json", current_index)
-            if new_url:
-                storage._prune_old_versions("index/summary_list", keep=3)
+                    print(f"   [Recalc] {cname}: {old_val} -> {change_map[cname]}")
+                    matched += 1
+            print(f"   [Recalc] Matched {matched}/{len(change_map)} companies in global index")
+            if matched > 0:
+                with storage._index_lock:
+                    new_url = storage._put("index/summary_list.json", index_data)
+                    print(f"   [Recalc] Wrote updated index: {new_url}")
+                    if new_url:
+                        storage._prune_old_versions("index/summary_list", keep=3)
+                    else:
+                        print(f"   [Recalc] ERROR: _put returned None - write failed!")
+            else:
+                print(f"   [Recalc] WARNING: No companies matched in global index! Names in index: {[item.get('companyName') for item in index_data[:5]]}...")
+        else:
+            print(f"   [Recalc] ERROR: Could not load global index. Got: {type(index_data)}")
 
     # Sort by largest change for easy review
     changes.sort(key=lambda c: abs(c["delta"]), reverse=True)
