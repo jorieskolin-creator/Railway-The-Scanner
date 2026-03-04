@@ -1214,7 +1214,7 @@ def run_scan(
                 else:
                     financial_results = {
                         "financial_index": None,
-                        "sub_scores": {"revenue_trend": None, "profitability": None, "efficiency": None, "investment_signal": None},
+                        "sub_scores": {"revenue_trend": None, "profitability": None, "financial_stability": None, "investment_signal": None},
                         "financial_findings": [],
                         "financial_confidence": 0,
                         "is_simulated": True

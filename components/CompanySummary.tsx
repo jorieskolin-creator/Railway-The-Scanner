@@ -428,7 +428,7 @@ const CompanySummary = ({ data }) => {
                         {[
                             { key: 'revenue_trend', label: 'Revenue Trend', icon: '📈' },
                             { key: 'profitability', label: 'Profitability', icon: '💰' },
-                            { key: 'efficiency', label: 'Efficiency', icon: '⚡' },
+                            { key: 'financial_stability', label: 'Financial Stability', icon: '🏦' },
                             { key: 'investment_signal', label: 'Investment Signal', icon: '🔬' }
                         ].map(dim => {
                             const score = data.financial_sub_scores?.[dim.key] ?? 0;

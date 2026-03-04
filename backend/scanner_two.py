@@ -2167,14 +2167,15 @@ def compute_financial_index(sub_scores: dict) -> int:
     Weighted Financial Health Index — Option B: asymmetric profitability.
 
     Profitability is the dominant signal (50%). Revenue trend (25%) captures
-    growth trajectory. Efficiency is a supporting signal (10%) since
-    revenue-per-employee is often vague and Gemini defaults to safe middles.
+    growth trajectory. Financial Stability (10%) captures balance sheet
+    health — equity ratio, debt levels — data that Finder.fi publishes
+    for most Finnish companies.
 
     Stage 1: Weighted linear base
-      - Revenue Trend:     25%
-      - Profitability:     50%  (dominant health signal)
-      - Efficiency:        10%  (supporting signal)
-      - Investment Signal: 15%
+      - Revenue Trend:         25%
+      - Profitability:         50%  (dominant health signal)
+      - Financial Stability:   10%  (balance sheet health)
+      - Investment Signal:     15%
 
     Stage 2: Softer core health gate
       Gate floor 0.35, threshold 0.60 — spreads the mid-range better.
@@ -2186,7 +2187,7 @@ def compute_financial_index(sub_scores: dict) -> int:
     """
     R = sub_scores.get("revenue_trend", 10)
     P = sub_scores.get("profitability", 10)
-    E = sub_scores.get("efficiency", 10)
+    E = sub_scores.get("financial_stability", 10)
     I = sub_scores.get("investment_signal", 10)
 
     # Stage 1: Weighted linear base (0-100)
@@ -2229,7 +2230,7 @@ def financial_health_search(company_name: str, company_url: str = None, model_id
 
     DEFAULT_RESULT = {
         "financial_index": None,
-        "sub_scores": {"revenue_trend": None, "profitability": None, "efficiency": None, "investment_signal": None},
+        "sub_scores": {"revenue_trend": None, "profitability": None, "financial_stability": None, "investment_signal": None},
         "financial_findings": [],
         "financial_confidence": 0,
         "is_simulated": True
@@ -2264,11 +2265,12 @@ SEARCH STRATEGY — Execute these searches:
    - `site:finder.fi "{search_name}"` OR `site:asiakastieto.fi "{search_name}"`
    EVALUATE: Is the company profitable? Strong margins, moderate, weak, or negative?
 
-3. EFFICIENCY (tehokkuus):
-   - `"{search_name}" henkilöstö liikevaihto per employee`
-   - `"{search_name}" revenue employees headcount`
-   - `"{search_name}" tuottavuus henkilöstömäärä`
-   EVALUATE: Revenue per employee ratio. Compare to industry peers if possible.
+3. FINANCIAL STABILITY (taloudellinen vakaus):
+   - `site:finder.fi "{search_name}"` OR `site:asiakastieto.fi "{search_name}"`
+   - `"{search_name}" omavaraisuusaste velkaantuneisuus tase`
+   - `"{search_name}" equity ratio debt balance sheet {_prev_year} {_cur_year}`
+   - `"{search_name}" luottoluokitus credit rating`
+   EVALUATE: Balance sheet health — equity ratio, debt levels, liquidity. Finnish sources (Finder.fi, Asiakastieto) often publish equity ratio and credit ratings directly.
 
 4. INVESTMENT SIGNAL (investoinnit):
    - `"{search_name}" R&D investment technology capex {_prev_year} {_cur_year}`
@@ -2281,7 +2283,7 @@ SCORING LOGIC:
 Each dimension scores 0-25. Use the FULL range — most companies should land in the 8-17 zone, not cluster at 15-20.
 - Revenue Trend: 0-7 (declining >10%), 8-13 (stable ±5%), 14-19 (growing 5-15%), 20-25 (growing >15%)
 - Profitability: 0-7 (negative/losses), 8-13 (weak/breakeven <5% margin), 14-19 (moderate 5-15%), 20-25 (strong >15%)
-- Efficiency: 0-7 (very low for sector), 8-13 (below average), 14-19 (average), 20-25 (top quartile)
+- Financial Stability: 0-7 (high debt, weak equity ratio <20%, credit risk), 8-13 (moderate leverage, equity ratio 20-35%), 14-19 (solid balance sheet, equity ratio 35-50%), 20-25 (fortress balance sheet, equity ratio >50%, minimal debt)
 - Investment Signal: 0-7 (no visible investment), 8-13 (maintenance level), 14-19 (moderate growth), 20-25 (aggressive investment/M&A)
 
 CALIBRATION ANCHOR: A typical stable Finnish IT company with modest profitability should score around 10-13 per dimension, NOT 15-20. Reserve 14+ for companies with clearly above-average performance with evidence to back it up.
@@ -2304,9 +2306,9 @@ RETURN STRICT JSON:
         "source_url": "URL",
         "source_title": "Title"
     }}}},
-    "efficiency": {{{{
+    "financial_stability": {{{{
         "score": (integer 0-25),
-        "assessment": "Brief assessment with revenue/employee if available",
+        "assessment": "Brief assessment with equity ratio/debt level if available",
         "evidence_snippet": "Key data point",
         "source_url": "URL",
         "source_title": "Title"
@@ -2340,7 +2342,7 @@ CONFIDENCE GUIDE:
         return DEFAULT_RESULT
 
     # Assemble result
-    dimensions = ["revenue_trend", "profitability", "efficiency", "investment_signal"]
+    dimensions = ["revenue_trend", "profitability", "financial_stability", "investment_signal"]
     sub_scores = {}
     findings = []
 
@@ -2364,7 +2366,7 @@ CONFIDENCE GUIDE:
     composite = compute_financial_index(sub_scores)
     confidence = max(0, min(100, int(data.get("financial_confidence", 40))))
 
-    print(f"   ✅ [Financial Health] {company_name}: Index={composite}/100 (Rev={sub_scores['revenue_trend']}, Prof={sub_scores['profitability']}, Eff={sub_scores['efficiency']}, Inv={sub_scores['investment_signal']}), Confidence={confidence}")
+    print(f"   ✅ [Financial Health] {company_name}: Index={composite}/100 (Rev={sub_scores['revenue_trend']}, Prof={sub_scores['profitability']}, Stab={sub_scores['financial_stability']}, Inv={sub_scores['investment_signal']}), Confidence={confidence}")
 
     return {
         "financial_index": composite,
