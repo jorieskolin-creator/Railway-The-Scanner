@@ -455,6 +455,7 @@ async def recalculate_financial_index(request: Request):
         if new_index != old_index:
             data["financial_index"] = new_index
             storage.save_company_data(name, data)
+            storage.update_global_index_field(name, "financial_index", new_index)
             changes.append({
                 "company": name,
                 "old": old_index,
