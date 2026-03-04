@@ -2166,14 +2166,14 @@ def compute_financial_index(sub_scores: dict) -> int:
     """
     Weighted Financial Health Index — Option B: asymmetric profitability.
 
-    Profitability is the dominant signal (50%). Revenue trend is low (15%)
-    because flat revenue doesn't mean unhealthy — mature profitable companies
-    shouldn't be penalized for not growing.
+    Profitability is the dominant signal (50%). Revenue trend (25%) captures
+    growth trajectory. Efficiency is a supporting signal (10%) since
+    revenue-per-employee is often vague and Gemini defaults to safe middles.
 
     Stage 1: Weighted linear base
-      - Revenue Trend:     15%
+      - Revenue Trend:     25%
       - Profitability:     50%  (dominant health signal)
-      - Efficiency:        20%  (real operational signal)
+      - Efficiency:        10%  (supporting signal)
       - Investment Signal: 15%
 
     Stage 2: Softer core health gate
@@ -2190,7 +2190,7 @@ def compute_financial_index(sub_scores: dict) -> int:
     I = sub_scores.get("investment_signal", 10)
 
     # Stage 1: Weighted linear base (0-100)
-    base = (0.15 * R + 0.50 * P + 0.20 * E + 0.15 * I) * 4
+    base = (0.25 * R + 0.50 * P + 0.10 * E + 0.15 * I) * 4
 
     # Stage 2: Softer core health gate — penalizes when both fundamentals are weak
     core_pct = (R + P) / 50.0
