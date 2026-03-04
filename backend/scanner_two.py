@@ -2166,26 +2166,23 @@ def compute_financial_index(sub_scores: dict) -> int:
     """
     Weighted Financial Health Index — Option B: asymmetric profitability.
 
-    Profitability is the dominant signal (45%). Revenue trend is reduced (20%)
+    Profitability is the dominant signal (50%). Revenue trend is low (15%)
     because flat revenue doesn't mean unhealthy — mature profitable companies
     shouldn't be penalized for not growing.
 
     Stage 1: Weighted linear base
-      - Revenue Trend:     20%
-      - Profitability:     45%  (dominant health signal)
+      - Revenue Trend:     15%
+      - Profitability:     50%  (dominant health signal)
       - Efficiency:        20%  (real operational signal)
       - Investment Signal: 15%
 
     Stage 2: Softer core health gate
       Gate floor 0.35, threshold 0.60 — spreads the mid-range better.
-      Neutral companies land ~35-45 instead of clustering at 27-42.
 
     Stage 3: Profitability penalty amplifier
       Unprofitable companies get an extra penalty on top of the gate:
       - P < 8 (losses):        ×0.85
       - P < 4 (severe losses): ×0.70
-      This separates "unprofitable" from "slightly profitable" without
-      the gate having to do all the work.
     """
     R = sub_scores.get("revenue_trend", 10)
     P = sub_scores.get("profitability", 10)
@@ -2193,7 +2190,7 @@ def compute_financial_index(sub_scores: dict) -> int:
     I = sub_scores.get("investment_signal", 10)
 
     # Stage 1: Weighted linear base (0-100)
-    base = (0.20 * R + 0.45 * P + 0.20 * E + 0.15 * I) * 4
+    base = (0.15 * R + 0.50 * P + 0.20 * E + 0.15 * I) * 4
 
     # Stage 2: Softer core health gate — penalizes when both fundamentals are weak
     core_pct = (R + P) / 50.0
