@@ -682,25 +682,66 @@ const CompanySummary = ({ data }) => {
                     <Users className="text-indigo-400" size={20} />
                     Key Modernization Stakeholders
                 </h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {data.key_people.map((person, idx) => (
-                        <div key={idx} className="flex items-center justify-between p-3 rounded-lg border border-white/5 bg-black/20 hover:border-indigo-500/30 transition-colors group">
-                            <div className="flex flex-col min-w-0 mr-2">
-                                <span className="font-bold text-sm text-slate-200 truncate">{person.name}</span>
-                                <span className="text-xs text-indigo-300 truncate">{person.role}</span>
-                                {person.relevance && <span className="text-[10px] text-slate-500 mt-1 line-clamp-1">{person.relevance}</span>}
+                <div className="grid grid-cols-1 gap-3">
+                    {data.key_people.map((person, idx) => {
+                        const insights = person.linkedin_insights;
+                        const hasInsights = insights && insights.found;
+                        return (
+                            <div key={idx} className="rounded-lg border border-white/5 bg-black/20 hover:border-indigo-500/30 transition-colors">
+                                <div className="flex items-center justify-between p-3">
+                                    <div className="flex flex-col min-w-0 mr-2">
+                                        <span className="font-bold text-sm text-slate-200 truncate">{person.name}</span>
+                                        <span className="text-xs text-indigo-300 truncate">{person.role}</span>
+                                        {person.relevance && <span className="text-[10px] text-slate-500 mt-1 line-clamp-1">{person.relevance}</span>}
+                                    </div>
+                                    <a
+                                        href={`https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(person.name + " " + data.companyName)}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="shrink-0 p-2 rounded-full bg-white/5 hover:bg-[#0077b5] hover:text-white text-slate-500 transition-all"
+                                        title="Find on LinkedIn"
+                                    >
+                                        <ExternalLink size={16} />
+                                    </a>
+                                </div>
+                                {insights && (
+                                    <div className={`px-3 pb-3 border-t ${hasInsights ? 'border-indigo-500/15' : 'border-white/5'}`}>
+                                        {hasInsights ? (
+                                            <div className="pt-2 space-y-1.5">
+                                                {insights.headline && (
+                                                    <p className="text-[11px] text-indigo-300 font-medium">{insights.headline}</p>
+                                                )}
+                                                <p className="text-[11px] text-slate-400 leading-relaxed">{insights.summary}</p>
+                                                {insights.topics && insights.topics.length > 0 && (
+                                                    <div className="flex flex-wrap gap-1 mt-1">
+                                                        {insights.topics.slice(0, 5).map((topic, ti) => (
+                                                            <span key={ti} className="text-[9px] px-1.5 py-0.5 rounded-full bg-indigo-500/15 text-indigo-300 border border-indigo-500/20">{topic}</span>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                                {insights.career_moves && insights.career_moves.length > 0 && (
+                                                    <div className="mt-1">
+                                                        <span className="text-[9px] text-slate-600 uppercase tracking-wider">Previous:</span>
+                                                        <span className="text-[10px] text-slate-500 ml-1">{insights.career_moves.slice(0, 2).join(" → ")}</span>
+                                                    </div>
+                                                )}
+                                                {insights.notable_posts && insights.notable_posts.length > 0 && (
+                                                    <div className="mt-1">
+                                                        <span className="text-[9px] text-slate-600 uppercase tracking-wider">Shared publicly:</span>
+                                                        {insights.notable_posts.slice(0, 2).map((post, pi) => (
+                                                            <p key={pi} className="text-[10px] text-slate-500 ml-2 mt-0.5">— {post}</p>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        ) : (
+                                            <p className="text-[10px] text-slate-600 pt-2 italic">{insights.summary || "No public LinkedIn insights found."}</p>
+                                        )}
+                                    </div>
+                                )}
                             </div>
-                            <a
-                                href={`https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(person.name + " " + data.companyName)}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="shrink-0 p-2 rounded-full bg-white/5 hover:bg-[#0077b5] hover:text-white text-slate-500 transition-all"
-                                title="Find on LinkedIn"
-                            >
-                                <ExternalLink size={16} />
-                            </a>
-                        </div>
-                    ))}
+                        );
+                    })}
                 </div>
             </div>
         )}

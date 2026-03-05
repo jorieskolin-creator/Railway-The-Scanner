@@ -69,6 +69,9 @@ const App = () => {
   const [refreshProposalsLoading, setRefreshProposalsLoading] = useState(false);
   const [refreshProposalsResults, setRefreshProposalsResults] = useState(null);
   const [refreshingProposalsCompany, setRefreshingProposalsCompany] = useState(null);
+  const [enrichStakeholdersLoading, setEnrichStakeholdersLoading] = useState(false);
+  const [enrichStakeholdersResults, setEnrichStakeholdersResults] = useState(null);
+  const [enrichingStakeholderCompany, setEnrichingStakeholderCompany] = useState(null);
 
   const prevDataLengthRef = useRef(0);
 
@@ -448,6 +451,58 @@ const App = () => {
       }
     } catch (e) { console.error(e); alert("Refresh proposals failed."); }
     finally { setRefreshingProposalsCompany(null); }
+  };
+
+  const handleEnrichStakeholdersAll = async () => {
+    const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to enrich LinkedIn insights for ALL companies' stakeholders:");
+    if (!password) return;
+    setEnrichStakeholdersLoading(true);
+    setEnrichStakeholdersResults(null);
+    try {
+      const res = await fetch('/admin/enrich-stakeholders-all', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${password}` }
+      });
+      if (res.status === 401) { alert("ACCESS DENIED: Incorrect Password."); setEnrichStakeholdersLoading(false); return; }
+      if (res.ok) {
+        const json = await res.json();
+        setEnrichStakeholdersResults(json);
+        const reviewRes = await fetch('/admin/review-data', { headers: { 'Authorization': `Bearer ${password}` } });
+        if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
+        fetchSummaryData(true);
+      } else {
+        alert("Enrich stakeholders failed: " + (await res.text()));
+      }
+    } catch (e) { console.error(e); alert("Enrich stakeholders failed."); }
+    finally { setEnrichStakeholdersLoading(false); }
+  };
+
+  const handleEnrichStakeholdersSingle = async (companyName) => {
+    const password = prompt(`AUTHENTICATION REQUIRED\n\nEnter Admin Password to enrich LinkedIn insights for "${companyName}" stakeholders:`);
+    if (!password) return;
+    setEnrichingStakeholderCompany(companyName);
+    try {
+      const res = await fetch(`/admin/enrich-stakeholders/${encodeURIComponent(companyName)}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${password}` }
+      });
+      if (res.status === 401) { alert("ACCESS DENIED: Incorrect Password."); return; }
+      if (res.ok) {
+        const json = await res.json();
+        if (json.status === 'enriched') {
+          const details = json.people.map(p => `${p.found ? '✅' : '⚪'} ${p.name} (${p.role}): ${p.summary}`).join('\n\n');
+          alert(`Stakeholder Intel for "${companyName}"\n${json.found_insights}/${json.total_people} with public insights (${json.duration_ms}ms)\n\n${details}`);
+        } else {
+          alert(`Enrichment skipped for "${companyName}": ${json.reason || 'Unknown'}`);
+        }
+        const reviewRes = await fetch('/admin/review-data', { headers: { 'Authorization': `Bearer ${password}` } });
+        if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
+        fetchSummaryData(true);
+      } else {
+        alert("Enrich stakeholders failed: " + (await res.text()));
+      }
+    } catch (e) { console.error(e); alert("Enrich stakeholders failed."); }
+    finally { setEnrichingStakeholderCompany(null); }
   };
 
   const handleSort = (key) => {
@@ -1234,6 +1289,14 @@ const App = () => {
                   REFRESH WHY/WHAT
                 </button>
                 <button
+                  onClick={handleEnrichStakeholdersAll}
+                  disabled={enrichStakeholdersLoading}
+                  className="flex items-center gap-1.5 px-3 py-1 bg-indigo-900/40 hover:bg-indigo-800/60 border border-indigo-600/50 text-indigo-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
+                >
+                  {enrichStakeholdersLoading ? <Loader2 size={12} className="animate-spin" /> : <Search size={12} />}
+                  STAKEHOLDER INTEL
+                </button>
+                <button
                   onClick={handleRecheckAll}
                   disabled={recheckLoading}
                   className="flex items-center gap-1.5 px-3 py-1 bg-amber-900/40 hover:bg-amber-800/60 border border-amber-600/50 text-amber-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
@@ -1375,6 +1438,35 @@ const App = () => {
                     </div>
                   )}
 
+                  {/* ENRICH STAKEHOLDERS RESULTS BANNER */}
+                  {enrichStakeholdersResults && (
+                    <div className="rounded-xl p-4 border bg-indigo-500/5 border-indigo-500/20">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <Search size={16} className="text-indigo-400" />
+                          <span className="font-bold text-white text-sm">
+                            Stakeholder Intel: {enrichStakeholdersResults.enriched} enriched, {enrichStakeholdersResults.skipped} skipped out of {enrichStakeholdersResults.total}
+                          </span>
+                        </div>
+                        <button onClick={() => setEnrichStakeholdersResults(null)} className="text-slate-500 hover:text-white"><X size={14} /></button>
+                      </div>
+                      {enrichStakeholdersResults.results && enrichStakeholdersResults.results.length > 0 ? (
+                        <div className="space-y-1 max-h-60 overflow-y-auto">
+                          {enrichStakeholdersResults.results.map((r, idx) => (
+                            <div key={idx} className="flex items-center gap-3 bg-black/30 rounded-lg px-3 py-2 border border-indigo-500/10">
+                              <span className="text-white text-xs font-medium min-w-[140px] truncate">{r.company}</span>
+                              <span className={`text-[10px] font-mono font-bold ${r.status === 'enriched' ? 'text-emerald-400' : r.status === 'skipped' ? 'text-slate-500' : 'text-rose-400'}`}>
+                                {r.status === 'enriched' ? `✅ ${r.found}/${r.total} with insights` : r.status === 'skipped' ? '⚪ No stakeholders' : `❌ ${r.reason || 'Failed'}`}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-indigo-300/60 text-xs font-mono">No stakeholders enriched.</p>
+                      )}
+                    </div>
+                  )}
+
                   {/* STORED COMPANIES LIST */}
                   <div className="text-[10px] text-slate-500 font-mono uppercase tracking-wider">
                     {dataReviewItems.length} companies in database
@@ -1427,6 +1519,14 @@ const App = () => {
                             )}
                           </div>
                           <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              onClick={() => handleEnrichStakeholdersSingle(item.companyName)}
+                              disabled={enrichingStakeholderCompany === item.companyName}
+                              className="text-slate-500 hover:text-indigo-400 p-1.5 rounded hover:bg-indigo-500/10 transition-all disabled:opacity-50"
+                              title={`Enrich stakeholder LinkedIn insights for ${item.companyName}`}
+                            >
+                              {enrichingStakeholderCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
+                            </button>
                             <button
                               onClick={() => handleRefreshProposalsSingle(item.companyName)}
                               disabled={refreshingProposalsCompany === item.companyName}

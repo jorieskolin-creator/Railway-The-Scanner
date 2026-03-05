@@ -388,6 +388,14 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
             washing_type = reality_results.get("washing_type", None)
             key_people = reality_results.get("key_people", [])
 
+            # --- STAKEHOLDER LINKEDIN ENRICHMENT ---
+            if key_people:
+                try:
+                    from stakeholder_intel import enrich_key_people
+                    key_people = enrich_key_people(company_name, key_people)
+                except Exception as enrich_err:
+                    print(f"   [{company_name}] ⚠️ [Stakeholder Intel] Enrichment failed (non-fatal): {enrich_err}")
+
             # --- LOGIC CONSISTENCY CHECK ---
             if reality_results["score"] >= intent_results["score"]:
                 washing_flag = False

@@ -723,6 +723,89 @@ async def refresh_proposals_all(request: Request):
     }
 
 
+@app.post("/admin/enrich-stakeholders/{company_name}")
+async def enrich_stakeholders_single(company_name: str, request: Request):
+    """Re-run LinkedIn enrichment for a single company's key_people from existing data."""
+    verify_admin(request)
+    data = storage.get_company_data(company_name)
+    if not data:
+        raise HTTPException(status_code=404, detail=f"Company '{company_name}' not found in database.")
+
+    key_people = data.get("key_people", [])
+    if not key_people:
+        return {"company": company_name, "status": "skipped", "reason": "No key_people stored for this company."}
+
+    from stakeholder_intel import enrich_key_people
+    start = time.time()
+    enriched = enrich_key_people(company_name, key_people)
+    ms = int((time.time() - start) * 1000)
+
+    data["key_people"] = enriched
+    storage.save_company_data(company_name, data)
+
+    found_count = sum(1 for p in enriched if p.get("linkedin_insights", {}).get("found"))
+    return {
+        "company": company_name,
+        "status": "enriched",
+        "total_people": len(enriched),
+        "found_insights": found_count,
+        "duration_ms": ms,
+        "people": [
+            {
+                "name": p.get("name"),
+                "role": p.get("role"),
+                "found": p.get("linkedin_insights", {}).get("found", False),
+                "summary": p.get("linkedin_insights", {}).get("summary", ""),
+            }
+            for p in enriched
+        ],
+    }
+
+
+@app.post("/admin/enrich-stakeholders-all")
+async def enrich_stakeholders_all(request: Request):
+    """Re-run LinkedIn enrichment for ALL companies' key_people."""
+    verify_admin(request)
+    companies = storage.get_all_companies_summary()
+    results = []
+    enriched_count = 0
+    skipped_count = 0
+
+    for company in companies:
+        name = company.get("companyName", "")
+        if not name:
+            continue
+        data = storage.get_company_data(name)
+        if not data:
+            continue
+
+        key_people = data.get("key_people", [])
+        if not key_people:
+            results.append({"company": name, "status": "skipped", "reason": "No key_people"})
+            skipped_count += 1
+            continue
+
+        try:
+            from stakeholder_intel import enrich_key_people
+            enriched = enrich_key_people(name, key_people)
+            data["key_people"] = enriched
+            storage.save_company_data(name, data)
+
+            found = sum(1 for p in enriched if p.get("linkedin_insights", {}).get("found"))
+            results.append({"company": name, "status": "enriched", "total": len(enriched), "found": found})
+            enriched_count += 1
+        except Exception as e:
+            results.append({"company": name, "status": "failed", "reason": str(e)})
+
+    return {
+        "status": "done",
+        "total": len(results),
+        "enriched": enriched_count,
+        "skipped": skipped_count,
+        "results": results,
+    }
+
+
 @app.post("/admin/recheck-all")
 async def recheck_all_companies(request: Request):
     """Run reality check on ALL stored companies. Flags issues and auto-cleans them."""
@@ -1525,6 +1608,14 @@ def run_scan(
             if prev_kp:
                 key_people = prev_kp
                 print(f"   [Key People] Preserved {len(prev_kp)} stakeholder(s) from previous scan (new scan returned none)")
+
+        # --- STAKEHOLDER LINKEDIN ENRICHMENT ---
+        if key_people:
+            try:
+                from stakeholder_intel import enrich_key_people
+                key_people = enrich_key_people(company_name, key_people)
+            except Exception as enrich_err:
+                print(f"   ⚠️ [Stakeholder Intel] Enrichment failed (non-fatal): {enrich_err}")
 
         # --- LOGIC CONSISTENCY CHECK ---
         # CRITICAL FIX: "Washing" is impossible if Reality >= Intent.

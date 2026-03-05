@@ -13,10 +13,21 @@ interface EvidenceLink {
   source: string;
 }
 
+interface LinkedInInsights {
+  found: boolean;
+  headline?: string | null;
+  summary: string;
+  career_moves?: string[];
+  topics?: string[];
+  notable_posts?: string[];
+  model_used?: string | null;
+}
+
 interface KeyPerson {
   name: string;
   role: string;
   relevance: string;
+  linkedin_insights?: LinkedInInsights;
 }
 
 interface ScannerCategoryScore {
