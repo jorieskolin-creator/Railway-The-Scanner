@@ -41,7 +41,7 @@ def load_data_from_storage():
 def load_data_from_api():
     """Fetch from the live API (fallback for local dev without blob token)."""
     import requests, os
-    base = os.environ.get("VITE_API_URL", "https://the-scanner.up.railway.app")
+    base = os.environ.get("VITE_API_URL", "https://diagnostic-engine.up.railway.app")
     resp = requests.get(f"{base}/dashboard-data", timeout=30)
     resp.raise_for_status()
     return resp.json()

@@ -109,7 +109,7 @@ async def maintenance_middleware(request: Request, call_next):
 # --- CORS: Restrict to known origins ---
 _allowed_origins = os.environ.get(
     "ALLOWED_ORIGINS",
-    "https://the-scanner.up.railway.app"
+    "https://diagnostic-engine.up.railway.app"
 ).split(",")
 app.add_middleware(
     CORSMiddleware,
