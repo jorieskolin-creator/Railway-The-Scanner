@@ -1613,7 +1613,7 @@ def run_scan(
         if key_people:
             try:
                 from stakeholder_intel import enrich_key_people
-                key_people = enrich_key_people(company_name, key_people)
+                key_people = enrich_key_people(companyName, key_people)
             except Exception as enrich_err:
                 print(f"   ⚠️ [Stakeholder Intel] Enrichment failed (non-fatal): {enrich_err}")
 
