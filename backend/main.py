@@ -367,7 +367,26 @@ def _recheck_company_data(company_name: str, data: dict) -> dict:
             # Fallback: separate clean
             clean_result = _clean_company_data(company_name, data)
 
-    # Step 5: Determine recommendation
+    # Step 5: Regenerate General Summary (runs after any cleaning so evidence is purged/verified)
+    try:
+        gs_start = time.time()
+        gs_text, gs_model = generate_general_summary(data, company_name)
+        if gs_text:
+            data["general_summary"] = gs_text
+            data["general_summary_model"] = gs_model
+            data["general_summary_verified"] = True
+            data["general_summary_false_claims"] = []
+            wc = len(gs_text.split())
+            print(f"   ✅ [General Summary] {wc} words, model={gs_model} ({int((time.time()-gs_start)*1000)}ms)")
+        else:
+            print(f"   ⚠️ [General Summary] Generation returned empty — skipping field")
+    except Exception as gs_err:
+        print(f"   ⚠️ [General Summary] Failed: {gs_err} — skipping, recheck continues")
+
+    # Save updated data with General Summary
+    storage.save_company_data(company_name, data)
+
+    # Step 6: Determine recommendation
     if summary_result["risk"] == "high":
         recommendation = "Refresh database — high hallucination risk, full rescan needed"
     elif clean_result and clean_result.get("action") == "cleaned" and clean_result.get("re_verified"):
@@ -1188,6 +1207,22 @@ Generate a completely fresh synthesis. Do NOT reference or re-introduce any of t
                 data["washing_flag"] = False
                 data["washing_type"] = None
                 print(f"   ✅ [Clean] Cleared washing flags (false claims removed, fresh synthesis)")
+
+            # Regenerate General Summary from cleaned data
+            try:
+                gs_start = time.time()
+                gs_text, gs_model = generate_general_summary(data, company_name)
+                if gs_text:
+                    data["general_summary"] = gs_text
+                    data["general_summary_model"] = gs_model
+                    data["general_summary_verified"] = True
+                    data["general_summary_false_claims"] = []
+                    wc = len(gs_text.split())
+                    print(f"   ✅ [General Summary] {wc} words, model={gs_model} ({int((time.time()-gs_start)*1000)}ms)")
+                else:
+                    print(f"   ⚠️ [General Summary] Generation returned empty — skipping field")
+            except Exception as gs_err:
+                print(f"   ⚠️ [General Summary] Failed: {gs_err} — skipping, clean continues")
 
             saved_url = storage.save_company_data(company_name, data, post_clean=True)
             storage.update_global_index_fields(company_name, {

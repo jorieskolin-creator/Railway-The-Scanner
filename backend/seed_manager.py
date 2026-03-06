@@ -1,5 +1,6 @@
 
 import os
+import re
 import requests
 import uuid
 import time
@@ -15,10 +16,21 @@ from scanner_one import analyze_intent
 from scanner_two import x_ray_search, extract_json_from_text, run_self_analysis, financial_health_search, migrate_financial_sub_scores
 from knowledge_base import get_evolving_framework
 from storage import BlobStorage
-from reality_check import validate_summary, validate_pitch
+from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, purge_false_evidence
+from general_summary import generate_general_summary
 from google import genai
 from google.genai import types
 import anthropic
+
+
+def _strip_tac_codes(text: str) -> str:
+    """Remove legacy TAC-xxx / DIM-xxx internal codes from summary text."""
+    if not text:
+        return text
+    text = re.sub(r'\s*\(\s*(?:TAC|DIM)-\d{3,4}\s*\)', '', text)
+    text = re.sub(r'\b(?:TAC|DIM)-\d{3,4}\b', '', text)
+    text = re.sub(r'\s*\(\s*\)', '', text)
+    return text.strip()
 
 # --- CONFIGURATION ---
 def clean_env_var(value):
@@ -807,8 +819,7 @@ Respond with valid JSON only. Six fields required:
                 "financial_confidence": financial_results.get("financial_confidence", 0)
             }
 
-            # --- REALITY CHECK: Hallucination Detection ---
-            from reality_check import validate_summary, validate_pitch
+            # --- REALITY CHECK: Hallucination Detection (diagnostic only) ---
             summary_check = validate_summary(
                 summary_text=summary_text,
                 company_name=company_name,
@@ -824,12 +835,343 @@ Respond with valid JSON only. Six fields required:
 
             if summary_check["risk"] == "high":
                 print(f"   [{company_name}] ⚠️ [Reality Check] HIGH risk (score {summary_check['score']}/100)! Flags: {summary_check['flags']}")
-                full_data["summary_text"] = f"[FLAGGED] Summary blocked by Reality Check (score: {summary_check['score']}/100). Flags: {'; '.join(summary_check['flags'])}. Rescan required."
-                full_data["pitch_text"] = "Pitch unavailable — summary flagged. Rescan required."
+                print(f"   [{company_name}] ℹ️ [Reality Check] Heuristic is diagnostic only — proceeding to AI fact-check for independent verification.")
             elif summary_check["risk"] == "medium":
                 print(f"   [{company_name}] ⚠️ [Reality Check] MEDIUM risk (score {summary_check['score']}/100). Flags: {summary_check['flags']}")
             else:
                 print(f"   [{company_name}] ✅ [Reality Check] Summary OK (score {summary_check['score']}/100)")
+
+            # --- AI FACT-CHECK: Same single-pass pipeline as Deep Scanning ---
+            # Gemini 3.1 Pro + Google Search verifies claims against live web data.
+            # Single-pass: fact-check once → if false claims → apply correction → DONE.
+            print(f"   [{company_name}] 🔄 [Fact-Check] Gemini 3.1 Pro fact-check against live web data...")
+            fact_check = ai_fact_check_summary(
+                summary_text=full_data["summary_text"],
+                evidence_links=reality_results.get("links", []),
+                company_name=company_name,
+                pitch_text=full_data.get("pitch_text", ""),
+            )
+            full_data["ai_verification"] = {
+                "verified": fact_check["verified"],
+                "fact_check_skipped": fact_check.get("fact_check_skipped", False),
+                "false_claims": fact_check["false_claims"],
+                "false_claims_detailed": fact_check.get("false_claims_detailed", []),
+                "model": fact_check["fact_check_model"],
+                "time_ms": fact_check["fact_check_time_ms"],
+            }
+
+            if fact_check.get("fact_check_skipped"):
+                print(f"   [{company_name}] ⚠️ [Fact-Check] All models failed — summary stored as UNVERIFIED ({fact_check['fact_check_time_ms']}ms)")
+            elif fact_check["verified"]:
+                print(f"   [{company_name}] ✅ [Fact-Check] Summary verified — no false claims ({fact_check['fact_check_time_ms']}ms)")
+            else:
+                # --- FALSE CLAIMS FOUND: Apply corrected summary or re-synthesize ---
+                print(f"   [{company_name}] ⚠️ [Fact-Check] {len(fact_check['false_claims'])} false claim(s) found ({fact_check['fact_check_time_ms']}ms):")
+                for claim in fact_check["false_claims"]:
+                    print(f"      - {claim}")
+
+                # Step 1: Purge contaminated evidence sources
+                print(f"   [{company_name}] 🗑️ [Purge] Removing contaminated evidence from stored data...")
+                detailed_claims = fact_check.get("false_claims_detailed", [])
+                purge_result = purge_false_evidence(
+                    full_data, fact_check["false_claims"], detailed_claims=detailed_claims,
+                )
+
+                # Step 2: Apply corrected summary or fall back to separate re-synthesis
+                corrected_summary = fact_check.get("corrected_summary", "")
+                corrected_pitch = fact_check.get("corrected_pitch", "")
+                resynth_model_used = fact_check.get("fact_check_model", "")
+                _kp_before_fc = len(full_data.get("key_people") or [])
+
+                if corrected_summary:
+                    # --- Inline correction from fact-checker ---
+                    print(f"   [{company_name}] ✅ [Fact-Check] Using corrected summary from fact-checker ({len(corrected_summary.split())} words)")
+                    full_data["summary_text"] = _strip_tac_codes(corrected_summary)
+                    if corrected_pitch:
+                        full_data["pitch_text"] = corrected_pitch
+                        print(f"   [{company_name}] ✅ [Fact-Check] Also applied corrected pitch ({len(corrected_pitch.split())} words)")
+
+                    full_data["re_synthesis"] = {
+                        "was_resynthesized": True,
+                        "false_claims_found": fact_check["false_claims"],
+                        "evidence_purged": purge_result,
+                        "resynth_model": resynth_model_used,
+                        "resynth_time_ms": fact_check.get("fact_check_time_ms", 0),
+                        "method": "fact_check_inline_correction",
+                    }
+                    full_data["ai_verification"]["verified"] = True
+                    full_data["ai_verification"]["false_claims"] = []
+                    full_data["ai_verification"]["note"] = "Corrected by Gemini 3.1 Pro fact-checker in single pass (fact-check + fix)"
+                    full_data["washing_flag"] = False
+                    full_data["washing_type"] = None
+                    washing_flag = False
+                    washing_type = None
+                    print(f"   [{company_name}] ✅ [Fact-Check] Cleared washing flags (false claims corrected)")
+
+                    # Verify key_people survived the correction
+                    _kp_after_fc = len(full_data.get("key_people") or [])
+                    if _kp_after_fc != _kp_before_fc:
+                        print(f"   [{company_name}] ⚠️ [Fact-Check] key_people count changed: {_kp_before_fc} → {_kp_after_fc} stakeholder(s)")
+                    elif _kp_after_fc == 0:
+                        print(f"   [{company_name}] ⚠️ [Fact-Check] key_people is empty after correction")
+                    else:
+                        print(f"   [{company_name}] ✅ [Fact-Check] key_people preserved: {_kp_after_fc} stakeholder(s)")
+
+                else:
+                    # --- Separate re-synthesis fallback ---
+                    print(f"   [{company_name}] ⚠️ [Fact-Check] No inline correction — falling back to separate re-synthesis")
+                    print(f"   [{company_name}] 🔄 [Re-Synthesis] Gemini full re-synthesis from cleaned evidence...")
+                    resynth_start = time.time()
+
+                    # Build re-synthesis prompt from full_data (same approach as _clean_company_data)
+                    knowledge_ctx = get_evolving_framework()
+                    clean_evidence_links = full_data.get("evidence_links", [])
+                    clean_verified = [l for l in clean_evidence_links if l.get('verified', True)]
+                    clean_evidence_list = ', '.join([f"{l.get('title', 'Unknown')}: {l.get('snippet', '')}" for l in clean_verified[:20]])
+                    removed_claims_note = "\n".join(f"- {c}" for c in fact_check["false_claims"])
+
+                    fc_confidence = full_data.get("confidence_score", 50)
+                    fc_fin_score = full_data.get("financial_index")
+                    fc_fin_for_arch = fc_fin_score if fc_fin_score is not None else full_data.get("intent_score", 0)
+
+                    fc_washing_context = ""
+                    if full_data.get("washing_flag"):
+                        fc_washing_context = f"CRITICAL: The forensic scanner DETECTED {full_data.get('washing_type') or 'WASHING'}. High ambition narrative but low operational evidence."
+
+                    fc_financial_context = ""
+                    if fc_fin_score is not None:
+                        fc_findings = full_data.get("financial_findings", [])
+                        fc_findings_text = '; '.join(
+                            f.get('assessment', '') if isinstance(f, dict) else str(f)
+                            for f in fc_findings[:5]
+                        ) if fc_findings else 'No specific findings'
+                        fc_financial_context = f"FINANCIAL HEALTH CONTEXT (do NOT cite numeric scores — the index is displayed separately): {fc_findings_text}. You may reference financial health qualitatively but never mention specific index numbers."
+
+                    resynth_prompt = f"""You are a senior organizational analyst conducting a forensic modernization assessment.
+Your task: synthesize scanner evidence into a precise, evidence-grounded diagnosis using the Knowledge Base framework below.
+
+METHODOLOGY: Read ALL evidence first. Score ONLY what evidence supports. Write ONLY what scores justify.
+If evidence is thin, say so — a short honest analysis beats a long fabricated one.
+
+### PRIMARY FRAMEWORK (KNOWLEDGE BASE — MANDATORY)
+{knowledge_ctx}
+
+You MUST use the terminology, archetypes, and criteria defined in the Knowledge Base above.
+Every claim in the summary MUST trace back to specific evidence AND map to a Knowledge Base dimension.
+Do NOT invent categories — use ONLY Knowledge Base vocabulary.
+NEVER use internal codes (TAC-xxx, DIM-xxx, etc.) — always write the full concept name.
+
+### SCAN DATA
+Target: {company_name}
+Financial Health Index: {fc_fin_for_arch} ({"actual financial index" if fc_fin_score is not None else "fallback: using intent score"})
+Summary Confidence: {fc_confidence}/100
+
+Evidence Found: {clean_evidence_list}
+Intent Data: {json.dumps(full_data.get("intent_breakdown", {{}}))}
+{fc_washing_context}
+{fc_financial_context}
+
+### ANALYSIS PROTOCOL
+
+STEP 1 — SCORE EVALUATION (evaluate before writing anything):
+Score each Knowledge Base dimension (0-20) for reality_score, based on VERIFIED EVIDENCE ONLY:
+  - Operating Model: Evidence of modern practices? Or legacy/waterfall/silos?
+  - Strategy: Clear digital/modernization strategy with visible execution? Or vague/absent?
+  - Culture: Learning culture, psychological safety, talent signals? Or hierarchy/control/fear?
+  - Service Portfolio: Product-led, API-first, composable architecture? Or monolithic/legacy?
+  - AI Readiness: Concrete AI/ML adoption with measurable outcomes? Or just buzzwords/pilot purgatory?
+
+Scoring rules:
+  - No evidence for a dimension = score 10 (neutral). Never score generously without evidence.
+  - Evidence of aspiration without execution evidence = score 8-12, not higher.
+  - Sum the 5 dimensions → 'reality_score' (0-100).
+
+For 'intent_score' (0-100): Score based on the Intent Data provided above.
+
+STEP 2 — SUMMARY (180-220 words):
+Write a diagnostic narrative that reads like an expert assessment, not a template:
+  - First sentence: State the archetype and what defines this company's position.
+  - Body: Map 3-4 key findings to specific KB dimensions.
+  - Use KB terminology naturally — but only where evidence supports it.
+  - Do NOT cite numeric scores in the text — scores display separately in the UI.
+  - Do NOT fabricate findings.
+  - Use ONLY the four archetype labels: Thriving, Modernizing, Cash Cow, At Risk.
+
+STEP 3 — PITCH (90-110 words):
+A direct cold-outreach message to a C-level executive at {company_name}:
+  - Open with a specific insight from the analysis.
+  - Derive exactly 2 CONCRETE PROPOSALS targeting the company's weakest KB dimensions.
+  - Tone: Professional, provocative, insight-led.
+
+STEP 4 — IMPACT PROPOSALS (derived from Steps 1-3):
+Generate exactly 2 WHY statements and 2 WHAT statements.
+
+### GUARDRAILS
+- NEVER fabricate evidence, people, events, partnerships, or metrics not present in the scan data.
+- NEVER invent temporal claims ("recently announced", "just launched", "this quarter").
+- Every factual claim in the summary must be traceable to a specific piece of evidence above.
+
+### OUTPUT
+Respond with valid JSON only. Six fields required:
+{{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "intent_score": <int 0-100>, "why_proposals": ["...", "..."], "what_proposals": ["...", "..."]}}
+
+### CRITICAL CONTEXT — FACT-CHECK CORRECTIONS
+The previous synthesis contained false claims detected by an independent fact-checker (Gemini 3.1 Pro with Google Search).
+The following claims were FALSE and must NOT appear in your output:
+{removed_claims_note}
+
+The contaminated evidence sources have been removed. You are now working with CLEANED evidence only.
+Generate a completely fresh synthesis from this cleaned evidence set. Do NOT reference or
+re-introduce any of the false claims listed above."""
+
+                    resynth_text = ""
+                    resynth_model_used = ""
+                    resynth_ms = 0
+                    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
+
+                    # Primary: Gemini 3.1 Pro Preview
+                    if gemini_key:
+                        try:
+                            print(f"   [{company_name}] 🔄 [Re-Synthesis] Attempting gemini-3.1-pro-preview...")
+                            gemini_resynth_client = genai.Client(api_key=gemini_key)
+                            resynth_response = call_with_503_backoff(
+                                lambda: gemini_resynth_client.models.generate_content(
+                                    model="gemini-3.1-pro-preview",
+                                    contents=resynth_prompt,
+                                    config=types.GenerateContentConfig(
+                                        temperature=0.5,
+                                        thinking_config=types.ThinkingConfig(thinking_budget=3000),
+                                        max_output_tokens=12000
+                                    )
+                                ),
+                                label=f"Re-Synthesis gemini-3.1-pro-preview [{company_name}]",
+                                model="gemini-3.1-pro-preview",
+                                timeout=120,
+                            )
+                            resynth_text = resynth_response.text or ""
+                            resynth_model_used = "gemini-3.1-pro-preview"
+                            resynth_ms = int((time.time() - resynth_start) * 1000)
+                            print(f"   [{company_name}] ✅ [Re-Synthesis] Gemini 3.1 Pro complete ({resynth_ms}ms)")
+                        except Exception as g31_err:
+                            print(f"   [{company_name}] ❌ [Re-Synthesis] Gemini 3.1 Pro failed: {g31_err}")
+
+                    # Fallback: Gemini 2.5 Pro (separate rate limits from 3.x family)
+                    if not resynth_text and gemini_key:
+                        try:
+                            print(f"   [{company_name}] 🔄 [Re-Synthesis] Falling back to gemini-2.5-pro...")
+                            gemini_resynth_client = genai.Client(api_key=gemini_key)
+                            resynth_response = call_with_503_backoff(
+                                lambda: gemini_resynth_client.models.generate_content(
+                                    model="gemini-2.5-pro",
+                                    contents=resynth_prompt,
+                                    config=types.GenerateContentConfig(
+                                        temperature=0.0,
+                                        max_output_tokens=4000
+                                    )
+                                ),
+                                label=f"Re-Synthesis gemini-2.5-pro [{company_name}]",
+                                model="gemini-2.5-pro",
+                                timeout=90,
+                            )
+                            resynth_text = resynth_response.text or ""
+                            resynth_model_used = "gemini-2.5-pro"
+                            resynth_ms = int((time.time() - resynth_start) * 1000)
+                            print(f"   [{company_name}] ✅ [Re-Synthesis] Gemini 2.5 Pro complete ({resynth_ms}ms)")
+                        except Exception as g25_err:
+                            resynth_ms = int((time.time() - resynth_start) * 1000)
+                            print(f"   [{company_name}] ❌ [Re-Synthesis] All models failed. Last error: {g25_err} ({resynth_ms}ms)")
+
+                    if resynth_text:
+                        resynth_payload = extract_json_from_text(resynth_text)
+                        if resynth_payload:
+                            resynth_json = json.loads(resynth_payload)
+                            new_summary = resynth_json.get("summary", "")
+                            new_pitch = resynth_json.get("pitch", "")
+
+                            if new_summary:
+                                full_data["summary_text"] = _strip_tac_codes(new_summary)
+                            if new_pitch:
+                                full_data["pitch_text"] = new_pitch
+                            new_why = resynth_json.get("why_proposals", [])
+                            new_what = resynth_json.get("what_proposals", [])
+                            if new_why and isinstance(new_why, list):
+                                full_data["why_proposals"] = new_why
+                            if new_what and isinstance(new_what, list):
+                                full_data["what_proposals"] = new_what
+
+                            # Update reality score if Gemini re-evaluated it
+                            resynth_reality = resynth_json.get("reality_score")
+                            if resynth_reality is not None and isinstance(resynth_reality, (int, float)):
+                                resynth_reality = max(0, min(100, int(resynth_reality)))
+                                reality_results["score"] = resynth_reality
+                                full_data["reality_score"] = resynth_reality
+                                gap = intent_results["score"] - resynth_reality
+                                full_data["reality_gap"] = gap
+                                if resynth_reality >= 50:
+                                    archetype = "Thriving" if fin_for_archetype >= 50 else "Modernizing"
+                                else:
+                                    archetype = "Cash Cow" if fin_for_archetype >= 50 else "At Risk"
+                                full_data["archetype"] = archetype
+                                if resynth_reality >= intent_results["score"]:
+                                    full_data["washing_flag"] = False
+                                    full_data["washing_type"] = None
+
+                            # Verify archetype from re-synthesis
+                            resynth_archetype = resynth_json.get("archetype")
+                            final_reality = full_data["reality_score"]
+                            expected_archetype = ("Thriving" if fin_for_archetype >= 50 else "Modernizing") if final_reality >= 50 else ("Cash Cow" if fin_for_archetype >= 50 else "At Risk")
+                            if resynth_archetype and resynth_archetype != expected_archetype:
+                                print(f"   [{company_name}] ⚖️ [Re-Synthesis] Archetype '{resynth_archetype}' → corrected to '{expected_archetype}'")
+                                valid_archetypes = ["Thriving", "Modernizing", "Cash Cow", "At Risk"]
+                                for wrong_label in valid_archetypes:
+                                    if wrong_label == expected_archetype:
+                                        continue
+                                    full_data["summary_text"] = full_data["summary_text"].replace(wrong_label, expected_archetype)
+
+                            print(f"   [{company_name}] ✅ [Re-Synthesis] Full re-synthesis applied from cleaned evidence")
+
+                        full_data["re_synthesis"] = {
+                            "was_resynthesized": True,
+                            "false_claims_found": fact_check["false_claims"],
+                            "evidence_purged": purge_result,
+                            "resynth_model": resynth_model_used or "gemini-3.1-pro-preview",
+                            "resynth_time_ms": resynth_ms,
+                            "method": "separate_re_synthesis_fallback",
+                        }
+                        full_data["ai_verification"]["verified"] = True
+                        full_data["ai_verification"]["false_claims"] = []
+                        full_data["ai_verification"]["note"] = "Re-synthesized from cleaned evidence after fact-check (single-pass fallback)"
+                        full_data["washing_flag"] = False
+                        full_data["washing_type"] = None
+                        print(f"   [{company_name}] ✅ [Re-Synthesis] Cleared washing flags (false claims removed)")
+                    else:
+                        print(f"   [{company_name}] ⚠️ [Re-Synthesis] Could not re-synthesize — saving with false claims flagged")
+                        full_data["re_synthesis"] = {
+                            "was_resynthesized": False,
+                            "false_claims_found": fact_check["false_claims"],
+                            "evidence_purged": purge_result,
+                            "reason": "Gemini re-synthesis failed",
+                        }
+
+            # --- GENERAL SUMMARY ---
+            # Plain-language narrative (225-275 words) assembled from already-computed
+            # structured data (scores, verified links, jury findings, delta).
+            # Runs after fact-check so evidence_links are already purged/verified.
+            # Failure is non-fatal — old records without this field are handled gracefully.
+            try:
+                gs_start = time.time()
+                gs_text, gs_model = generate_general_summary(full_data, company_name)
+                if gs_text:
+                    full_data["general_summary"] = gs_text
+                    full_data["general_summary_model"] = gs_model
+                    full_data["general_summary_verified"] = True
+                    full_data["general_summary_false_claims"] = []
+                    wc = len(gs_text.split())
+                    print(f"   [{company_name}] ✅ [General Summary] {wc} words, model={gs_model} ({int((time.time()-gs_start)*1000)}ms)")
+                else:
+                    print(f"   [{company_name}] ⚠️ [General Summary] Generation returned empty — skipping field")
+            except Exception as gs_err:
+                print(f"   [{company_name}] ⚠️ [General Summary] Failed: {gs_err} — skipping, scan continues")
 
             # 6. SAVE INDIVIDUAL COMPANY (thread-safe — unique path per company)
             # Use timestamp conflict resolution: skip save if a manual scan happened after batch started
