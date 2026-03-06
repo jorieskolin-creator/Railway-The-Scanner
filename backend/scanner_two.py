@@ -1359,12 +1359,15 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 # gemini-2.5-pro: cap default thinking to prevent token starvation.
                 # Without explicit thinking_config, 2.5-pro defaults to uncapped thinking
                 # mode — thinking tokens share the output pool and can exhaust it on complex
-                # prompts, leaving too few tokens for the actual JSON. thinking_budget=1024
-                # matches the proven config in reality_check.py for the same model.
+                # prompts, leaving too few tokens for the actual JSON.
+                # Budget: 2048 tokens balances quality (enough reasoning for a full forensic
+                # scan) vs speed (~40-50s). Previous 1024 was too tight when 2.5-pro is the
+                # primary scanner (fallback from 3.1), producing shallow findings.
+                # reality_check.py can stay at 1024 — its task is simpler (score adjustment).
                 _model_config = {
                     'tools': [{'google_search': {}}],
                     'temperature': 0.0,
-                    'thinking_config': types.ThinkingConfig(thinking_budget=1024),
+                    'thinking_config': types.ThinkingConfig(thinking_budget=2048),
                     'max_output_tokens': 8000,
                     'safety_settings': _safety,
                 }
@@ -1427,8 +1430,12 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     print(f"   ⚠️ [Forensic Scan] {target_model_name} JSON parse failed: {je}")
                     # Fall through to Sonnet repair gate
 
-            if text_content and len(text_content) > 100:
-                # --- STRUCTURING GATE ---
+            # --- STRUCTURING GATE ---
+            # Two-pass mode threshold is lower (20 chars) because Pass 1 output
+            # is free-form by design — even short search summaries can be structured.
+            # Single-pass threshold stays at 100 chars (unexpected unstructured output).
+            structuring_threshold = 20 if is_two_pass else 100
+            if text_content and len(text_content) > structuring_threshold:
                 # Two-pass mode (3.1 Pro): free-form output is the designed flow.
                 #   Structuring fallback chain: 3.1 Pro → Sonnet 4.6 → 2.5 Pro.
                 #   is_structuring=True for Sonnet (no confidence penalty).
@@ -1458,7 +1465,10 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     print(f"   ⚠️ [{gate_label}] Could not structure output from {target_model_name}")
                     return None
             else:
-                print(f"   ⚠️ [Forensic Scan] {target_model_name} returned no parseable JSON ({elapsed}ms)")
+                text_len = len(text_content) if text_content else 0
+                preview = repr(text_content[:120]) if text_content else "(empty)"
+                print(f"   ⚠️ [Forensic Scan] {target_model_name} returned no parseable JSON ({elapsed}ms, {text_len} chars raw)")
+                print(f"   📋 [Forensic Scan] Response preview: {preview}")
                 return None
         except Exception as e:
             elapsed = int((time.time() - start) * 1000)
