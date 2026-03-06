@@ -77,7 +77,7 @@ def _build_person_prompt(person_name: str, person_role: str, company_name: str) 
 
 TARGET PERSON:
   Name: {person_name}
-  Role: {person_role}
+  Role (from our records — may be outdated): {person_role}
   Company: {company_name}
 
 Search for ALL of these (try each one):
@@ -95,8 +95,21 @@ You MUST verify that BOTH the person's name AND their connection to "{company_na
 - Common names (e.g. "Tero Virtanen", "Manish Kumar") are especially risky — require STRICT company match
 - When in doubt, set "found" to false. A false negative is always better than a wrong-person attribution.
 
+### ROLE / POSITION VERIFICATION — CRITICAL
+The role we have on file ("{person_role}") may be OUTDATED. You MUST check for their CURRENT role:
+
+- On LinkedIn: the CURRENT position is the one shown at the top of the Experience section, with no end date.
+  Older positions have an end date or are listed further down — those are PAST roles.
+- If their current LinkedIn title differs from "{person_role}", report the CURRENT title in "verified_role".
+- If the person has LEFT {company_name} entirely (their current position is at a different company),
+  set "still_at_company" to false and report where they moved.
+- Only report what LinkedIn or other sources explicitly show as the CURRENT position.
+- Do NOT assume the role we provided is correct — always verify.
+
 ### WHAT TO REPORT (only if identity is verified)
-- LinkedIn profile headline, summary, career history
+- Their CURRENT role/title at {company_name} (not historical)
+- LinkedIn profile headline, summary
+- Career history (previous roles are reported in "career_moves", CURRENT role in "verified_role")
 - Press releases, news articles, or interviews mentioning them at {company_name}
 - Conference talks, blog posts, or public speaking where they represent {company_name}
 - Topics they publicly discuss in connection with their role at {company_name}
@@ -112,15 +125,17 @@ You MUST verify that BOTH the person's name AND their connection to "{company_na
 Respond with ONLY a JSON object (no other text, no markdown, no explanation):
 {{
   "found": true,
-  "headline": "Their professional headline or title if found, or null",
+  "headline": "Their current professional headline or title if found, or null",
+  "verified_role": "Their CURRENT role/title at {company_name} as shown on LinkedIn, or null if not found",
+  "still_at_company": true,
   "summary": "A 1-3 sentence synthesis of what you found about this person at {company_name}.",
-  "career_moves": ["Previous Role at Previous Company"],
+  "career_moves": ["Previous Role at Previous Company (dates if available)"],
   "topics": ["topic1", "topic2"],
   "notable_posts": ["Brief description of a real post, article, talk, or interview if found"]
 }}
 
 If NOTHING was found or identity could not be verified, respond with ONLY:
-{{"found": false, "headline": null, "summary": "No public professional insights found for this person.", "career_moves": [], "topics": [], "notable_posts": []}}"""
+{{"found": false, "headline": null, "verified_role": null, "still_at_company": null, "summary": "No public professional insights found for this person.", "career_moves": [], "topics": [], "notable_posts": []}}"""
 
 
 def enrich_single_person(person: dict, company_name: str, gemini_key: str) -> dict:
@@ -220,6 +235,8 @@ def enrich_single_person(person: dict, company_name: str, gemini_key: str) -> di
         insights = {
             "found": parsed.get("found", False),
             "headline": parsed.get("headline"),
+            "verified_role": parsed.get("verified_role"),
+            "still_at_company": parsed.get("still_at_company"),
             "summary": parsed.get("summary", "No public professional insights found for this person."),
             "career_moves": parsed.get("career_moves", []),
             "topics": parsed.get("topics", []),
@@ -231,6 +248,18 @@ def enrich_single_person(person: dict, company_name: str, gemini_key: str) -> di
         if insights["found"] and not insights["summary"]:
             insights["found"] = False
             insights["summary"] = "No public professional insights found for this person."
+
+        # Update the person's role if a verified current role was found
+        verified = insights.get("verified_role")
+        if verified and insights["found"] and insights.get("still_at_company") is not False:
+            original_role = person.get("role", "")
+            if verified.lower() != original_role.lower():
+                print(f"      🔄 [Stakeholder Intel] {name}: Role updated: \"{original_role}\" → \"{verified}\"")
+                person["role"] = verified
+
+        # Flag if person has left the company
+        if insights.get("still_at_company") is False:
+            print(f"      ⚠️ [Stakeholder Intel] {name}: No longer at {company_name}")
 
         person["linkedin_insights"] = insights
         print(f"      {'✅' if insights['found'] else '⚪'} [Stakeholder Intel] {name}: {'Found insights' if insights['found'] else 'No public insights found'} ({model_used})")
