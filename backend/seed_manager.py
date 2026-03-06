@@ -844,13 +844,30 @@ Respond with valid JSON only. Six fields required:
             # --- AI FACT-CHECK: Same single-pass pipeline as Deep Scanning ---
             # Gemini 3.1 Pro + Google Search verifies claims against live web data.
             # Single-pass: fact-check once → if false claims → apply correction → DONE.
+            # Wrapped in try/except: fact-check failure must NOT crash the pipeline —
+            # if it fails, the original synthesis is saved as UNVERIFIED and pipeline
+            # continues to General Summary + save.
             print(f"   [{company_name}] 🔄 [Fact-Check] Gemini 3.1 Pro fact-check against live web data...")
-            fact_check = ai_fact_check_summary(
-                summary_text=full_data["summary_text"],
-                evidence_links=reality_results.get("links", []),
-                company_name=company_name,
-                pitch_text=full_data.get("pitch_text", ""),
-            )
+            try:
+                fact_check = ai_fact_check_summary(
+                    summary_text=full_data["summary_text"],
+                    evidence_links=reality_results.get("links", []),
+                    company_name=company_name,
+                    pitch_text=full_data.get("pitch_text", ""),
+                )
+            except Exception as fc_err:
+                print(f"   [{company_name}] ❌ [Fact-Check] Exception — summary stored as UNVERIFIED: {fc_err}")
+                fact_check = {
+                    "verified": False,
+                    "fact_check_skipped": True,
+                    "false_claims": [],
+                    "false_claims_detailed": [],
+                    "corrected_summary": "",
+                    "corrected_pitch": "",
+                    "fact_check_model": "error",
+                    "fact_check_time_ms": 0,
+                }
+
             full_data["ai_verification"] = {
                 "verified": fact_check["verified"],
                 "fact_check_skipped": fact_check.get("fact_check_skipped", False),
