@@ -73,39 +73,53 @@ def _extract_json(text: str) -> dict | None:
 
 def _build_person_prompt(person_name: str, person_role: str, company_name: str) -> str:
     """Build a focused search prompt for one stakeholder."""
-    return f"""Search Google for publicly available professional information about this person.
+    return f"""Search Google for publicly available professional information about this specific person.
 
-PERSON: {person_name}
-ROLE: {person_role}
-COMPANY: {company_name}
+TARGET PERSON:
+  Name: {person_name}
+  Role: {person_role}
+  Company: {company_name}
 
 Search for ALL of these (try each one):
-1. "{person_name}" LinkedIn — their profile, headline, summary, career history
-2. "{person_name}" "{company_name}" — press releases, news articles, interviews
-3. "{person_name}" "{person_role}" — conference talks, blog posts, public speaking
+1. "{person_name}" "{company_name}" LinkedIn
+2. "{person_name}" "{company_name}" — press releases, news, interviews
+3. "{person_name}" "{person_role}" "{company_name}"
 
-Report what you ACTUALLY FIND. Include information from ANY public source (LinkedIn, company website, news, conference programs, blog posts, press releases).
+### IDENTITY VERIFICATION — THIS IS THE MOST IMPORTANT RULE
+You MUST verify that BOTH the person's name AND their connection to "{company_name}" match before reporting ANY finding.
 
-### CRITICAL RULES
+- A LinkedIn profile for "{person_name}" that does NOT mention "{company_name}" → REJECT (could be a different person with the same name)
+- A news article mentioning "{person_name}" at a DIFFERENT company → REJECT (wrong person)
+- A conference speaker named "{person_name}" with no link to "{company_name}" → REJECT
+- ONLY include findings where the source explicitly connects "{person_name}" to "{company_name}"
+- Common names (e.g. "Tero Virtanen", "Manish Kumar") are especially risky — require STRICT company match
+- When in doubt, set "found" to false. A false negative is always better than a wrong-person attribution.
+
+### WHAT TO REPORT (only if identity is verified)
+- LinkedIn profile headline, summary, career history
+- Press releases, news articles, or interviews mentioning them at {company_name}
+- Conference talks, blog posts, or public speaking where they represent {company_name}
+- Topics they publicly discuss in connection with their role at {company_name}
+
+### OTHER RULES
 - ONLY report information you actually find in search results.
-- If you find NOTHING, set "found" to false — do NOT invent anything.
+- If you find NOTHING that passes identity verification, set "found" to false.
 - NEVER fabricate quotes, posts, career history, or descriptions.
 - NEVER guess what someone "might" have shared or "likely" posted.
-- If results are ambiguous (could be a different person), say so explicitly.
-- Partial information is fine — report only what you actually found.
+- Partial information is fine — report only what you actually found AND verified.
 
 ### OUTPUT FORMAT
 Respond with ONLY a JSON object (no other text, no markdown, no explanation):
 {{
   "found": true,
   "headline": "Their professional headline or title if found, or null",
-  "summary": "A 1-3 sentence synthesis of what you found about this person's public professional presence.",
+  "summary": "A 1-3 sentence synthesis of what you found about this person at {company_name}.",
   "career_moves": ["Previous Role at Previous Company"],
   "topics": ["topic1", "topic2"],
   "notable_posts": ["Brief description of a real post, article, talk, or interview if found"]
 }}
 
-If NOTHING was found about this person, respond with ONLY:
+If NOTHING was found or identity could not be verified, respond with ONLY:
 {{"found": false, "headline": null, "summary": "No public professional insights found for this person.", "career_moves": [], "topics": [], "notable_posts": []}}"""
 
 
