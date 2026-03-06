@@ -2307,6 +2307,13 @@ Each dimension scores 0-25. Use the FULL range — most companies should land in
 
 CALIBRATION ANCHOR: A typical stable Finnish IT company with modest profitability should score around 10-13 per dimension, NOT 15-20. Reserve 14+ for companies with clearly above-average performance with evidence to back it up.
 
+FINANCIAL FIGURE ACCURACY — CRITICAL:
+When reading financial reports, distinguish between BASE FIGURES and YEAR-OVER-YEAR CHANGES:
+- "Operating profit decreased by €153.7M" → the €153.7M is the CHANGE, NOT the previous profit
+- "Revenue was €3.5B, down from €4.15B" → the actual figures are €3.5B (current) and €4.15B (previous)
+- Always report the ACTUAL metric values in evidence_snippet, not the delta/change amount misidentified as a base figure
+- If an interim report states both the current figure and the YoY change, use the ACTUAL FIGURE for scoring
+
 If no financial data is found for a dimension, score it 10 (neutral — reflects uncertainty, not health).
 
 RETURN STRICT JSON:
