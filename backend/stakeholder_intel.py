@@ -13,47 +13,100 @@ CRITICAL GUARDRAILS:
 
 import json
 import os
+import re
 import time
 
 from gemini_backoff import call_with_503_backoff
 
 
+def _extract_json(text: str) -> dict | None:
+    """
+    Robustly extract a JSON object from Gemini's response.
+
+    Handles:
+      - Pure JSON response
+      - JSON inside ```json ... ``` code fences
+      - JSON inside ``` ... ``` code fences (no language tag)
+      - JSON embedded in prose (before/after text)
+      - Thinking tokens mixed with output
+    """
+    if not text:
+        return None
+
+    text = text.strip()
+
+    # 1. Try direct parse first (fastest path)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # 2. Extract from markdown code fences: ```json\n{...}\n``` or ```\n{...}\n```
+    fence_match = re.search(r'```(?:json)?\s*\n?\s*(\{.*?\})\s*\n?\s*```', text, re.DOTALL)
+    if fence_match:
+        try:
+            return json.loads(fence_match.group(1))
+        except json.JSONDecodeError:
+            pass
+
+    # 3. Find the first { and last } — extract the JSON object from surrounding prose
+    first_brace = text.find('{')
+    last_brace = text.rfind('}')
+    if first_brace != -1 and last_brace > first_brace:
+        candidate = text[first_brace:last_brace + 1]
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+
+        # 4. Try progressively smaller substrings (nested braces)
+        # Find all { positions and try each with the last }
+        for i in range(len(candidate)):
+            if candidate[i] == '{':
+                try:
+                    return json.loads(candidate[i:])
+                except json.JSONDecodeError:
+                    continue
+
+    return None
+
+
 def _build_person_prompt(person_name: str, person_role: str, company_name: str) -> str:
     """Build a focused search prompt for one stakeholder."""
-    return f"""You are a research assistant. Your ONLY task is to find publicly available LinkedIn information about this person.
+    return f"""Search Google for publicly available professional information about this person.
 
 PERSON: {person_name}
 ROLE: {person_role}
 COMPANY: {company_name}
 
-Search for this person on LinkedIn using Google. Look for:
-1. Their LinkedIn profile headline and summary (if Google has indexed it)
-2. Any LinkedIn posts or articles they have published
-3. Their career history / previous roles visible in search snippets
-4. Topics they publicly discuss or advocate for (digital transformation, technology, leadership, etc.)
+Search for ALL of these (try each one):
+1. "{person_name}" LinkedIn — their profile, headline, summary, career history
+2. "{person_name}" "{company_name}" — press releases, news articles, interviews
+3. "{person_name}" "{person_role}" — conference talks, blog posts, public speaking
 
-### CRITICAL RULES — READ CAREFULLY
+Report what you ACTUALLY FIND. Include information from ANY public source (LinkedIn, company website, news, conference programs, blog posts, press releases).
+
+### CRITICAL RULES
 - ONLY report information you actually find in search results.
-- If you find NOTHING about this person on LinkedIn, respond with the exact JSON below — do NOT make anything up.
-- NEVER fabricate LinkedIn posts, quotes, career history, or profile descriptions.
+- If you find NOTHING, set "found" to false — do NOT invent anything.
+- NEVER fabricate quotes, posts, career history, or descriptions.
 - NEVER guess what someone "might" have shared or "likely" posted.
-- NEVER invent connections, endorsements, skills, or follower counts.
-- If search results are ambiguous (could be a different person with the same name), say so explicitly and do NOT attribute those results to this person.
+- If results are ambiguous (could be a different person), say so explicitly.
 - Partial information is fine — report only what you actually found.
 
 ### OUTPUT FORMAT
-Respond with valid JSON only:
+Respond with ONLY a JSON object (no other text, no markdown, no explanation):
 {{
-  "found": true/false,
-  "headline": "Their LinkedIn headline if found, or null",
-  "summary": "A 1-3 sentence synthesis of what you found about this person's public LinkedIn presence. What do they focus on? What have they shared? If nothing found, say exactly: 'No public LinkedIn insights found for this person.'",
-  "career_moves": ["Previous Role at Previous Company", ...] or [] if not found,
-  "topics": ["topic1", "topic2", ...] or [] if not found,
-  "notable_posts": ["Brief description of a real post/article if found"] or [] if not found
+  "found": true,
+  "headline": "Their professional headline or title if found, or null",
+  "summary": "A 1-3 sentence synthesis of what you found about this person's public professional presence.",
+  "career_moves": ["Previous Role at Previous Company"],
+  "topics": ["topic1", "topic2"],
+  "notable_posts": ["Brief description of a real post, article, talk, or interview if found"]
 }}
 
-If nothing was found, respond with:
-{{"found": false, "headline": null, "summary": "No public LinkedIn insights found for this person.", "career_moves": [], "topics": [], "notable_posts": []}}"""
+If NOTHING was found about this person, respond with ONLY:
+{{"found": false, "headline": null, "summary": "No public professional insights found for this person.", "career_moves": [], "topics": [], "notable_posts": []}}"""
 
 
 def enrich_single_person(person: dict, company_name: str, gemini_key: str) -> dict:
@@ -85,56 +138,57 @@ def enrich_single_person(person: dict, company_name: str, gemini_key: str) -> di
     response_text = ""
     model_used = ""
 
-    # Primary: Gemini 3.1 Pro with Google Search grounding
+    # Primary: Gemini 2.5 Pro with Google Search grounding
+    # (2.5 Pro is more reliable for structured JSON output than 3.1 Pro preview)
     try:
-        print(f"      🔍 [Stakeholder Intel] Searching for {name} ({role}) via gemini-3.1-pro-preview...")
+        print(f"      🔍 [Stakeholder Intel] Searching for {name} ({role}) via gemini-2.5-pro...")
         client = genai.Client(api_key=gemini_key)
         resp = call_with_503_backoff(
             lambda: client.models.generate_content(
-                model="gemini-3.1-pro-preview",
+                model="gemini-2.5-pro",
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     tools=[{'google_search': {}}],
-                    temperature=0.2,
+                    temperature=0.0,
                     thinking_config=types.ThinkingConfig(thinking_budget=1024),
-                    max_output_tokens=2000,
+                    max_output_tokens=4000,
                     safety_settings=_safety,
                 )
             ),
-            label=f"Stakeholder Intel {name} gemini-3.1-pro-preview",
-            model="gemini-3.1-pro-preview",
-            timeout=45,
+            label=f"Stakeholder Intel {name} gemini-2.5-pro",
+            model="gemini-2.5-pro",
+            timeout=60,
         )
         response_text = resp.text or ""
-        model_used = "gemini-3.1-pro-preview"
-    except Exception as g31_err:
-        print(f"      ❌ [Stakeholder Intel] Gemini 3.1 Pro failed for {name}: {g31_err}")
+        model_used = "gemini-2.5-pro"
+    except Exception as g25_err:
+        print(f"      ❌ [Stakeholder Intel] Gemini 2.5 Pro failed for {name}: {g25_err}")
 
-    # Fallback: Gemini 2.5 Pro with Google Search
+    # Fallback: Gemini 3.1 Pro with Google Search
     if not response_text:
         try:
-            print(f"      🔄 [Stakeholder Intel] Falling back to gemini-2.5-pro for {name}...")
+            print(f"      🔄 [Stakeholder Intel] Falling back to gemini-3.1-pro-preview for {name}...")
             client = genai.Client(api_key=gemini_key)
             resp = call_with_503_backoff(
                 lambda: client.models.generate_content(
-                    model="gemini-2.5-pro",
+                    model="gemini-3.1-pro-preview",
                     contents=prompt,
                     config=types.GenerateContentConfig(
                         tools=[{'google_search': {}}],
-                        temperature=0.0,
+                        temperature=0.2,
                         thinking_config=types.ThinkingConfig(thinking_budget=1024),
-                        max_output_tokens=2000,
+                        max_output_tokens=4000,
                         safety_settings=_safety,
                     )
                 ),
-                label=f"Stakeholder Intel {name} gemini-2.5-pro",
-                model="gemini-2.5-pro",
-                timeout=45,
+                label=f"Stakeholder Intel {name} gemini-3.1-pro-preview",
+                model="gemini-3.1-pro-preview",
+                timeout=60,
             )
             response_text = resp.text or ""
-            model_used = "gemini-2.5-pro"
-        except Exception as g25_err:
-            print(f"      ❌ [Stakeholder Intel] All models failed for {name}: {g25_err}")
+            model_used = "gemini-3.1-pro-preview"
+        except Exception as g31_err:
+            print(f"      ❌ [Stakeholder Intel] All models failed for {name}: {g31_err}")
 
     # Parse response
     if not response_text:
@@ -145,21 +199,14 @@ def enrich_single_person(person: dict, company_name: str, gemini_key: str) -> di
         }
         return person
 
-    # Try to extract JSON
-    try:
-        # Handle markdown code blocks
-        text = response_text.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-            if text.endswith("```"):
-                text = text[:-3]
-            text = text.strip()
+    # Robust JSON extraction
+    parsed = _extract_json(response_text)
 
-        parsed = json.loads(text)
+    if parsed and isinstance(parsed, dict):
         insights = {
             "found": parsed.get("found", False),
             "headline": parsed.get("headline"),
-            "summary": parsed.get("summary", "No public LinkedIn insights found for this person."),
+            "summary": parsed.get("summary", "No public professional insights found for this person."),
             "career_moves": parsed.get("career_moves", []),
             "topics": parsed.get("topics", []),
             "notable_posts": parsed.get("notable_posts", []),
@@ -169,18 +216,40 @@ def enrich_single_person(person: dict, company_name: str, gemini_key: str) -> di
         # Safety net: if found=true but summary is empty/generic, don't claim found
         if insights["found"] and not insights["summary"]:
             insights["found"] = False
-            insights["summary"] = "No public LinkedIn insights found for this person."
+            insights["summary"] = "No public professional insights found for this person."
 
         person["linkedin_insights"] = insights
         print(f"      {'✅' if insights['found'] else '⚪'} [Stakeholder Intel] {name}: {'Found insights' if insights['found'] else 'No public insights found'} ({model_used})")
 
-    except (json.JSONDecodeError, KeyError) as e:
-        print(f"      ⚠️ [Stakeholder Intel] Could not parse response for {name}: {e}")
-        person["linkedin_insights"] = {
-            "found": False,
-            "summary": "Search completed but response could not be parsed.",
-            "model_used": model_used,
-        }
+    else:
+        # Last resort: the response is plain text (no JSON at all).
+        # If it contains substantive content about the person, use it as-is.
+        trimmed = response_text.strip()
+        has_substance = len(trimmed) > 80 and name.split()[0].lower() in trimmed.lower()
+
+        if has_substance:
+            # Model returned prose instead of JSON — use it as a summary
+            # Truncate to ~500 chars for display
+            summary_text = trimmed[:500].rstrip()
+            if len(trimmed) > 500:
+                summary_text += "…"
+            person["linkedin_insights"] = {
+                "found": True,
+                "headline": None,
+                "summary": summary_text,
+                "career_moves": [],
+                "topics": [],
+                "notable_posts": [],
+                "model_used": model_used,
+            }
+            print(f"      ✅ [Stakeholder Intel] {name}: Found insights (plain text fallback, {model_used})")
+        else:
+            print(f"      ⚠️ [Stakeholder Intel] Could not parse response for {name} ({len(response_text)} chars, model: {model_used})")
+            person["linkedin_insights"] = {
+                "found": False,
+                "summary": "Search completed but response could not be parsed.",
+                "model_used": model_used,
+            }
 
     return person
 
