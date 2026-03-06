@@ -537,11 +537,11 @@ If summary is accurate (no false claims):
 {{"false_claims": [], "summary_accurate": true}}
 
 If false claims found:
-{{"false_claims": [{{"claim": "Exact quote of the false claim from the summary", "error_type": "Fabrication OR Contradiction", "reasoning": "Briefly explain why this is false based on the sources or search results.", "source_indices": [2, 5]}}], "summary_accurate": false}}
+{{"false_claims": [{{"claim": "Exact quote of the false claim from the summary", "error_type": "Fabrication OR Contradiction OR Misattribution", "reasoning": "Briefly explain why this is false based on the sources or search results.", "source_indices": [2, 5]}}], "summary_accurate": false}}
 
 Each false_claims object must have:
   - "claim": string — the exact quote or close paraphrase of the false claim from the summary
-  - "error_type": string — either "Fabrication" or "Contradiction"
+  - "error_type": string — "Fabrication", "Contradiction", or "Misattribution" (for criterion C: number used in wrong context)
   - "reasoning": string — brief explanation of why this is false
   - "source_indices": array of integer indices referring to STORED EVIDENCE SOURCES that were contradicted or misrepresented. Use an EMPTY array [] if the claim is completely fabricated with no traceable source."""
 
