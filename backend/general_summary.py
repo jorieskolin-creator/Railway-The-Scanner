@@ -144,6 +144,7 @@ MANDATORY RULES:
    - Terms of Service, legal disclaimers, and privacy policies describe hypothetical situations ("if X happens, Y occurs") — these are NOT evidence of real events. If a snippet sounds like a legal clause, ignore it entirely.
    - Do not infer events from the absence of evidence. If something is not clearly documented as having occurred, do not write that it occurred.
    - Never invent, combine, or rename financial metrics.
+   - CRITICAL: When citing year-over-year financial changes, distinguish between the BASE figure (previous period's actual value) and the CHANGE/DELTA (the difference). Example: if a source says "profit decreased by €153.7M" that means €153.7M is the CHANGE, NOT the previous profit. Always verify: does the number represent the actual metric or the year-over-year movement?
 
 3. DATA HANDLING / META-METRICS: Do not reference the report's internal scoring metrics (e.g., "Reality Score," "Ambition Score," "Friction Index," "Integrity Delta") by name in the generated prose. These scores should inform your overall analytical tone, but the summary itself must focus strictly on the company's real-world financial, operational, and organizational data.
 

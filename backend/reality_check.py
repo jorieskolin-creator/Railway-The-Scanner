@@ -514,11 +514,18 @@ Step 2: Cross-reference each claim strictly against the STORED EVIDENCE SOURCES 
 
 Step 3: Use Google Search to verify real-world accuracy if the claim cannot be proven or disproven by the stored sources alone.
 
-FLAG A CLAIM AS FALSE IF IT MEETS EITHER OF THESE CRITERIA:
+FLAG A CLAIM AS FALSE IF IT MEETS ANY OF THESE CRITERIA:
 
 A. [Fabrication/Unsupported]: The summary states a specific metric, event, or operational fact (e.g., "no digital investments," "10 million euros") that is NOT explicitly supported by the STORED EVIDENCE SOURCES. In an AI summary, adding new unsourced facts is a hallucination.
 
 B. [Contradiction]: The summary makes a claim that directly contradicts the STORED EVIDENCE SOURCES or verifiable facts found via your Google Search.
+
+C. [Misattribution/Arithmetic]: A number from a source is used in the wrong context. This is the MOST COMMON financial error — pay extra attention:
+   - A year-over-year CHANGE (delta) cited as if it were the base figure. Example: a source says "profit decreased by €153.7M" but the summary says "from the €153.7M operating profit" — the €153.7M is the decrease, not the profit itself.
+   - Revenue confused with profit, or operating profit confused with net profit.
+   - A figure from one time period attributed to a different period.
+   - A percentage change confused with an absolute figure, or vice versa.
+   When you see a financial figure in the summary, verify not just that the number EXISTS in the source, but that it is attributed to the CORRECT METRIC and used in the CORRECT CONTEXT.
 
 Do NOT ignore qualitative claims if they are based on fabricated underlying metrics.
 Do NOT flag Knowledge Base terminology or archetype labels (e.g. "Digital Taylorism", "Thriving", "At Risk") — these are analytical framework terms, not factual claims.
