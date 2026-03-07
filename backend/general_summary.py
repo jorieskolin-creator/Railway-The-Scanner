@@ -194,16 +194,9 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
     prompt = _build_prompt(payload, company_name)
 
     # Primary model: gemini-3.1-pro-preview (2 attempts)
-    # gemini-2.5-pro was originally removed because thinking_budget=8192 caused
-    # it to exhaust thinking and return response.text=None (0 visible words).
-    # It is now reinstated as a backup-only model with thinking_budget=1024 +
-    # max_output_tokens=8000 — the same fix that resolved the fact-check token
-    # starvation issue. At 1024 thinking tokens, ~7000 tokens remain for output,
-    # which is far more than the ~400 tokens needed for 225-275 words.
     # gemini-3-pro-preview removed: shares 3.x rate limits with 3.1-pro (useless
     # as fallback during overload) and is being deprecated by Google.
     PRIMARY_MODEL = "gemini-3.1-pro-preview"
-    BACKUP_MODEL  = "gemini-2.5-pro"
 
     FIRST_CONFIG = genai_types.GenerateContentConfig(
         temperature=1.0,
@@ -214,11 +207,6 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
         temperature=1.0,
         max_output_tokens=6000,
         thinking_config=genai_types.ThinkingConfig(thinking_budget=512),
-    )
-    BACKUP_CONFIG = genai_types.GenerateContentConfig(
-        temperature=0.5,
-        max_output_tokens=8000,
-        thinking_config=genai_types.ThinkingConfig(thinking_budget=1024),
     )
 
     client = genai.Client(api_key=gemini_key)
@@ -260,27 +248,27 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
             if attempt == 1:
                 continue
 
-    # Attempt 3: backup model (gemini-2.5-pro) — separate rate limits from 3.x family
-    print(f"   [General Summary] Primary model failed — trying backup {BACKUP_MODEL}")
-    try:
-        t0 = time.time()
-        response = call_with_503_backoff(
-            lambda: client.models.generate_content(
-                model=BACKUP_MODEL,
-                contents=prompt,
-                config=BACKUP_CONFIG,
-            ),
-            label=f"General Summary {BACKUP_MODEL}",
-            model=BACKUP_MODEL,
-            timeout=90,
-        )
-        text = _strip_links((response.text or "").strip())
-        wc = _word_count(text)
-        elapsed = int((time.time() - t0) * 1000)
-        print(f"   [General Summary] {BACKUP_MODEL} backup: {wc} words ({elapsed}ms)")
-        if text:
-            return text, BACKUP_MODEL
-    except Exception as e:
-        print(f"   ❌ [General Summary] {BACKUP_MODEL} backup failed: {e}")
+    # Attempt 3: Mistral Large backup (independent provider — survives Google outages)
+    mistral_key = os.environ.get("MISTRAL_API_KEY")
+    if mistral_key:
+        try:
+            from mistralai import Mistral
+            print(f"   [General Summary] Primary model failed — trying backup mistral-large-latest")
+            t0 = time.time()
+            mistral_client = Mistral(api_key=mistral_key)
+            mistral_resp = mistral_client.chat.complete(
+                model="mistral-large-latest",
+                temperature=0.1,
+                max_tokens=4000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = _strip_links((mistral_resp.choices[0].message.content or "").strip())
+            wc = _word_count(text)
+            elapsed = int((time.time() - t0) * 1000)
+            print(f"   [General Summary] mistral-large-latest backup: {wc} words ({elapsed}ms)")
+            if text:
+                return text, "mistral-large-latest"
+        except Exception as e:
+            print(f"   ❌ [General Summary] mistral-large-latest backup failed: {e}")
 
     return "", ""

@@ -1095,33 +1095,28 @@ Generate a completely fresh synthesis. Do NOT reference or re-introduce any of t
     # gemini-3-pro-preview fallback removed: shares 3.x rate limits with 3.1-pro
     # and is being deprecated by Google.
 
-    # Fallback: Gemini 2.5 Pro (separate rate limits from 3.x family)
-    if not resynth_text and gemini_key:
+    # Fallback: Mistral Large (independent provider — survives Anthropic + Google outages)
+    mistral_key = os.environ.get("MISTRAL_API_KEY")
+    if not resynth_text and mistral_key:
         try:
-            from google import genai
-            from google.genai import types
-            print(f"   🔄 [Clean Re-Synthesis] Falling back to gemini-2.5-pro...")
-            gemini_client = genai.Client(api_key=gemini_key)
-            resynth_response = call_with_503_backoff(
-                lambda: gemini_client.models.generate_content(
-                    model="gemini-2.5-pro",
-                    contents=synthesis_prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=0.0,
-                        max_output_tokens=4000
-                    )
-                ),
-                label="Clean Re-Synthesis gemini-2.5-pro",
-                model="gemini-2.5-pro",
-                timeout=90,
+            from mistralai import Mistral
+            print(f"   🔄 [Clean Re-Synthesis] Falling back to Mistral Large...")
+            m_start = time.time()
+            mistral_client = Mistral(api_key=mistral_key)
+            mistral_resp = mistral_client.chat.complete(
+                model="mistral-large-latest",
+                temperature=0.1,
+                response_format={"type": "json_object"},
+                max_tokens=4000,
+                messages=[{"role": "user", "content": synthesis_prompt}],
             )
-            resynth_text = resynth_response.text or ""
-            resynth_model_used = "gemini-2.5-pro"
+            resynth_text = mistral_resp.choices[0].message.content or ""
+            resynth_model_used = "mistral-large-latest"
+            resynth_ms = int((time.time() - m_start) * 1000)
+            print(f"   ✅ [Clean Re-Synthesis] Mistral Large complete ({resynth_ms}ms)")
+        except Exception as mistral_err:
             resynth_ms = int((time.time() - resynth_start) * 1000)
-            print(f"   ✅ [Clean Re-Synthesis] Gemini 2.5 Pro complete ({resynth_ms}ms)")
-        except Exception as g25_err:
-            resynth_ms = int((time.time() - resynth_start) * 1000)
-            print(f"   ❌ [Clean Re-Synthesis] All re-synthesis models failed. Last error: {g25_err} ({resynth_ms}ms)")
+            print(f"   ❌ [Clean Re-Synthesis] All re-synthesis models failed. Last error: {mistral_err} ({resynth_ms}ms)")
 
     # Step 4: Parse re-synthesis result and apply
     if resynth_text:
@@ -1976,35 +1971,36 @@ Note: why_proposals and what_proposals are arrays of exactly 2 strings each. WHY
                     # gemini-3-pro-preview fallback removed: shares 3.x rate limits with 3.1-pro
                     # and is being deprecated by Google.
 
-                    # Fallback 2: Gemini 2.5 Pro (separate rate limits from 3.x family)
-                    if not response_text and gemini_key and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 30:
+                    # Fallback 2: Mistral Large (independent provider — survives Anthropic + Google outages)
+                    mistral_key = os.environ.get("MISTRAL_API_KEY")
+                    if not response_text and mistral_key and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 30:
                         try:
-                            print(f"   🔄 [Synthesis] Falling back to Gemini 2.5 Pro (timeout: {SYNTH_TIMEOUT}s)...")
-                            g3_start = time.time()
-                            gemini_client = genai.Client(api_key=gemini_key)
+                            from mistralai import Mistral
+                            print(f"   🔄 [Synthesis] Falling back to Mistral Large (timeout: {SYNTH_TIMEOUT}s)...")
+                            m_start = time.time()
+                            mistral_client = Mistral(api_key=mistral_key)
 
-                            def _synth_gemini25():
-                                return gemini_client.models.generate_content(
-                                    model="gemini-2.5-pro",
-                                    contents=synthesis_prompt,
-                                    config=types.GenerateContentConfig(
-                                        temperature=0.0,
-                                        max_output_tokens=4000
-                                    )
+                            def _synth_mistral():
+                                return mistral_client.chat.complete(
+                                    model="mistral-large-latest",
+                                    temperature=0.1,
+                                    response_format={"type": "json_object"},
+                                    max_tokens=4000,
+                                    messages=[{"role": "user", "content": synthesis_prompt}],
                                 )
 
-                            g3_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                            g3_future = g3_pool.submit(_synth_gemini25)
+                            m_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                            m_future = m_pool.submit(_synth_mistral)
                             try:
-                                gemini_resp = g3_future.result(timeout=SYNTH_TIMEOUT)
-                                response_text = gemini_resp.text or ""
-                                print(f"   ✅ [Synthesis] Gemini 2.5 Pro succeeded in {int((time.time() - g3_start) * 1000)}ms")
+                                mistral_resp = m_future.result(timeout=SYNTH_TIMEOUT)
+                                response_text = mistral_resp.choices[0].message.content or ""
+                                print(f"   ✅ [Synthesis] Mistral Large succeeded in {int((time.time() - m_start) * 1000)}ms")
                             except concurrent.futures.TimeoutError:
-                                g3_pool.shutdown(wait=False)
-                                print(f"   ⏰ [Synthesis] Gemini 2.5 Pro timed out after {SYNTH_TIMEOUT}s")
-                            g3_pool.shutdown(wait=False)
-                        except Exception as gemini25_err:
-                            print(f"   ❌ [Synthesis] All models failed. Last error: {gemini25_err}")
+                                m_pool.shutdown(wait=False)
+                                print(f"   ⏰ [Synthesis] Mistral Large timed out after {SYNTH_TIMEOUT}s")
+                            m_pool.shutdown(wait=False)
+                        except Exception as mistral_err:
+                            print(f"   ❌ [Synthesis] All models failed. Last error: {mistral_err}")
 
                 if response_text:
                     payload = extract_json_from_text(response_text)
@@ -2349,31 +2345,28 @@ verified evidence provided."""
                 # gemini-3-pro-preview fallback removed: shares 3.x rate limits with 3.1-pro
                 # and is being deprecated by Google.
 
-                # Fallback: Gemini 2.5 Pro (separate rate limits from 3.x family)
-                if not resynth_text and gemini_key:
+                # Fallback: Mistral Large (independent provider — survives Anthropic + Google outages)
+                mistral_key = os.environ.get("MISTRAL_API_KEY")
+                if not resynth_text and mistral_key:
                     try:
-                        print(f"   🔄 [Re-Synthesis] Falling back to gemini-2.5-pro...")
-                        gemini_client = genai.Client(api_key=gemini_key)
-                        resynth_response = call_with_503_backoff(
-                            lambda: gemini_client.models.generate_content(
-                                model="gemini-2.5-pro",
-                                contents=resynth_prompt,
-                                config=types.GenerateContentConfig(
-                                    temperature=0.0,
-                                    max_output_tokens=4000
-                                )
-                            ),
-                            label="Re-Synthesis gemini-2.5-pro",
-                            model="gemini-2.5-pro",
-                            timeout=90,
+                        from mistralai import Mistral
+                        print(f"   🔄 [Re-Synthesis] Falling back to Mistral Large...")
+                        m_start = time.time()
+                        mistral_client = Mistral(api_key=mistral_key)
+                        mistral_resp = mistral_client.chat.complete(
+                            model="mistral-large-latest",
+                            temperature=0.1,
+                            response_format={"type": "json_object"},
+                            max_tokens=4000,
+                            messages=[{"role": "user", "content": resynth_prompt}],
                         )
-                        resynth_text = resynth_response.text or ""
-                        resynth_model_used = "gemini-2.5-pro"
+                        resynth_text = mistral_resp.choices[0].message.content or ""
+                        resynth_model_used = "mistral-large-latest"
+                        resynth_ms = int((time.time() - m_start) * 1000)
+                        print(f"   ✅ [Re-Synthesis] Mistral Large re-synthesis complete ({resynth_ms}ms)")
+                    except Exception as mistral_err:
                         resynth_ms = int((time.time() - resynth_start) * 1000)
-                        print(f"   ✅ [Re-Synthesis] Gemini 2.5 Pro re-synthesis complete ({resynth_ms}ms)")
-                    except Exception as g25_err:
-                        resynth_ms = int((time.time() - resynth_start) * 1000)
-                        print(f"   ❌ [Re-Synthesis] All re-synthesis models failed. Last error: {g25_err} ({resynth_ms}ms)")
+                        print(f"   ❌ [Re-Synthesis] All re-synthesis models failed. Last error: {mistral_err} ({resynth_ms}ms)")
 
                 if resynth_text:
                     resynth_payload = extract_json_from_text(resynth_text)
