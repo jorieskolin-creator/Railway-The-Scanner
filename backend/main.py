@@ -1055,7 +1055,9 @@ The following claims were FALSE and must NOT appear in your output:
 {chr(10).join(f"- {c}" for c in false_claims)}
 
 The contaminated evidence sources have been removed. You are now working with CLEANED evidence only.
-Generate a completely fresh synthesis. Do NOT reference or re-introduce any of the false claims listed above."""
+Generate a completely fresh synthesis. Do NOT reference or re-introduce any of the false claims listed above.
+
+CRITICAL: Do not just rephrase the false claims. You must act as if the concepts mentioned in the false claims above do not exist for this company at all. If the cleaned evidence does not explicitly state a fact, remain silent on that topic."""
 
     # Step 3: Full Gemini re-synthesis — same model chain as Deep Scanning re-synthesis
     resynth_start = time.time()
@@ -2310,7 +2312,9 @@ Evidence Found: {clean_evidence_list}
 
 Generate a completely fresh synthesis from this cleaned evidence set. Do NOT reference or
 re-introduce any of the false claims listed above. Build your narrative only from the
-verified evidence provided."""
+verified evidence provided.
+
+CRITICAL: Do not just rephrase the false claims. You must act as if the concepts mentioned in the {removed_claims_note} do not exist for this company at all. If the cleaned evidence does not explicitly state a fact, remain silent on that topic."""
 
                 resynth_text = ""
                 resynth_model_used = ""
