@@ -537,13 +537,15 @@ If summary is accurate (no false claims):
 {{"false_claims": [], "summary_accurate": true}}
 
 If false claims found:
-{{"false_claims": [{{"claim": "Exact quote of the false claim from the summary", "error_type": "Fabrication OR Contradiction OR Misattribution", "reasoning": "Briefly explain why this is false based on the sources or search results.", "correction": "The verified fact that should replace this claim, or empty string if the claim should simply be deleted.", "source_indices": [2, 5]}}], "summary_accurate": false}}
+{{"false_claims": [{{"claim": "Exact quote of the false claim from the summary", "error_type": "Fabrication OR Contradiction OR Misattribution", "reasoning": "Briefly explain why this is false based on the sources or search results.", "correction": "The verified fact that should replace this claim, or empty string if the claim should simply be deleted.", "wrong_value": "61.8%", "correct_value": "60.8%", "source_indices": [2, 5]}}], "summary_accurate": false}}
 
 Each false_claims object must have:
   - "claim": string — the exact quote or close paraphrase of the false claim from the summary
   - "error_type": string — "Fabrication", "Contradiction", or "Misattribution" (for criterion C: number used in wrong context)
   - "reasoning": string — brief explanation of why this is false
   - "correction": string — the VERIFIED correct fact from your Google Search or stored evidence. For numeric errors, state the exact correct number/qualifier (e.g. "CDP score is A-, not A", "equity ratio is 60.8%, not 61.1%", "overall automated picking is ~90%, not 97%"). For temporal errors, state the correct timeline. For fabrications with no true equivalent, use empty string "".
+  - "wrong_value": string — the EXACT incorrect value as it appears in the summary text (e.g. "61.8%", "A", "97%", "-3.2%"). Must be copy-pasted from the summary so it can be used for literal text replacement. Use empty string "" for non-numeric errors or fabrications.
+  - "correct_value": string — the EXACT verified correct value to substitute (e.g. "60.8%", "A-", "~90%", "-3.7%"). Must be the precise replacement string. Use empty string "" for non-numeric errors or fabrications.
   - "source_indices": array of integer indices referring to STORED EVIDENCE SOURCES that were contradicted or misrepresented. Use an EMPTY array [] if the claim is completely fabricated with no traceable source."""
 
     # ── Gemini client + configs ───────────────────────────────────────────────
@@ -711,11 +713,15 @@ Each false_claims object must have:
                             if url:
                                 source_urls.append(url)
                     correction = fc.get("correction", "")
+                    wrong_value = fc.get("wrong_value", "")
+                    correct_value = fc.get("correct_value", "")
                     false_claims.append({
                         "claim": claim_text,
                         "error_type": error_type,
                         "reasoning": reasoning,
                         "correction": correction,
+                        "wrong_value": wrong_value,
+                        "correct_value": correct_value,
                         "source_indices": indices,
                         "source_urls": source_urls,
                     })
@@ -887,6 +893,8 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
                 continue
 
             correction = fc.get("correction", "") if isinstance(fc, dict) else ""
+            wrong_value = fc.get("wrong_value", "") if isinstance(fc, dict) else ""
+            correct_value = fc.get("correct_value", "") if isinstance(fc, dict) else ""
 
             all_claims.append(claim_text)
             all_claims_detailed.append({
@@ -895,6 +903,8 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
                 "error_type": error_type,
                 "reasoning": reasoning,
                 "correction": correction,
+                "wrong_value": wrong_value,
+                "correct_value": correct_value,
                 "source_urls": source_urls,
                 "source_indices": source_indices,
             })

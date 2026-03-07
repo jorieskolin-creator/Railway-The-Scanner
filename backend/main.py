@@ -55,6 +55,29 @@ def _strip_tac_codes(text: str) -> str:
     text = re.sub(r'  +', ' ', text)
     return text.strip()
 
+def _apply_deterministic_corrections(text: str, detailed_claims: list) -> str:
+    """Apply literal string replacements for wrong_value → correct_value pairs.
+
+    LLMs are unreliable at precise numeric substitution (e.g. replacing "61.8%"
+    with "60.8%"). This function does a deterministic pass after the LLM
+    correction to guarantee exact values are applied.
+
+    Only replaces when both wrong_value and correct_value are non-empty strings
+    and the wrong_value actually appears in the text.
+    """
+    if not text or not detailed_claims:
+        return text
+    replacements_made = []
+    for dc in detailed_claims:
+        wrong = dc.get("wrong_value", "")
+        correct = dc.get("correct_value", "")
+        if wrong and correct and wrong != correct and wrong in text:
+            text = text.replace(wrong, correct)
+            replacements_made.append(f"{wrong} → {correct}")
+    if replacements_made:
+        print(f"   🔧 [Deterministic Fix] Applied {len(replacements_made)} numeric replacement(s): {', '.join(replacements_made)}")
+    return text
+
 def clean_env_var(value):
     if not value: return ""
     if "=" in value:
@@ -337,11 +360,14 @@ def _recheck_company_data(company_name: str, data: dict) -> dict:
     if not ai_result["verified"] and ai_result["false_claims"]:
         corrected_summary = ai_result.get("corrected_summary", "")
         corrected_pitch = ai_result.get("corrected_pitch", "")
+        rc_detailed_claims = ai_result.get("false_claims_detailed", [])
         _kp_before_rc = len(data.get("key_people") or [])
         if corrected_summary:
             # Fact-checker produced corrected summary — apply directly
+            corrected_summary = _apply_deterministic_corrections(corrected_summary, rc_detailed_claims)
             data["summary_text"] = _strip_tac_codes(corrected_summary)
             if corrected_pitch:
+                corrected_pitch = _apply_deterministic_corrections(corrected_pitch, rc_detailed_claims)
                 data["pitch_text"] = corrected_pitch
             data["ai_verification"]["verified"] = True
             data["ai_verification"]["false_claims"] = []
@@ -1144,8 +1170,10 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
             new_pitch = resynth_json.get("pitch", "")
 
             if new_summary:
+                new_summary = _apply_deterministic_corrections(new_summary, detailed_claims)
                 data["summary_text"] = _strip_tac_codes(new_summary)
             if new_pitch:
+                new_pitch = _apply_deterministic_corrections(new_pitch, detailed_claims)
                 data["pitch_text"] = new_pitch
             new_why = resynth_json.get("why_proposals", [])
             new_what = resynth_json.get("what_proposals", [])
@@ -2268,8 +2296,10 @@ Note: why_proposals and what_proposals are arrays of exactly 2 strings each. WHY
             if corrected_summary:
                 # --- Fact-checker produced corrected summary — use it directly ---
                 print(f"   ✅ [Fact-Check] Using corrected summary from Gemini 3.1 Pro fact-checker ({len(corrected_summary.split())} words)")
+                corrected_summary = _apply_deterministic_corrections(corrected_summary, detailed_claims)
                 full_data["summary_text"] = _strip_tac_codes(corrected_summary)
                 if corrected_pitch:
+                    corrected_pitch = _apply_deterministic_corrections(corrected_pitch, detailed_claims)
                     full_data["pitch_text"] = corrected_pitch
                     print(f"   ✅ [Fact-Check] Also applied corrected pitch ({len(corrected_pitch.split())} words)")
 
@@ -2416,8 +2446,10 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                         new_pitch = resynth_json.get("pitch", "")
 
                         if new_summary:
+                            new_summary = _apply_deterministic_corrections(new_summary, detailed_claims)
                             full_data["summary_text"] = _strip_tac_codes(new_summary)
                         if new_pitch:
+                            new_pitch = _apply_deterministic_corrections(new_pitch, detailed_claims)
                             full_data["pitch_text"] = new_pitch
                         new_why = resynth_json.get("why_proposals", [])
                         new_what = resynth_json.get("what_proposals", [])
