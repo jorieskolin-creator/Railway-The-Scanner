@@ -480,7 +480,7 @@ def _gemini_fact_check(summary_text, company_name, evidence_links=None, pitch_te
         for i, link in enumerate(verified_links, 1):
             title = link.get("title", "Unknown")
             url = link.get("url", "")
-            snippet = link.get("snippet", "")[:150]
+            snippet = link.get("snippet", "")[:500]
             evidence_ref += f"[{i}] {title} | URL: {url} | Snippet: {snippet}\n"
 
     evidence_section = ""
@@ -537,12 +537,13 @@ If summary is accurate (no false claims):
 {{"false_claims": [], "summary_accurate": true}}
 
 If false claims found:
-{{"false_claims": [{{"claim": "Exact quote of the false claim from the summary", "error_type": "Fabrication OR Contradiction OR Misattribution", "reasoning": "Briefly explain why this is false based on the sources or search results.", "source_indices": [2, 5]}}], "summary_accurate": false}}
+{{"false_claims": [{{"claim": "Exact quote of the false claim from the summary", "error_type": "Fabrication OR Contradiction OR Misattribution", "reasoning": "Briefly explain why this is false based on the sources or search results.", "correction": "The verified fact that should replace this claim, or empty string if the claim should simply be deleted.", "source_indices": [2, 5]}}], "summary_accurate": false}}
 
 Each false_claims object must have:
   - "claim": string — the exact quote or close paraphrase of the false claim from the summary
   - "error_type": string — "Fabrication", "Contradiction", or "Misattribution" (for criterion C: number used in wrong context)
   - "reasoning": string — brief explanation of why this is false
+  - "correction": string — the VERIFIED correct fact from your Google Search or stored evidence. For numeric errors, state the exact correct number/qualifier (e.g. "CDP score is A-, not A", "equity ratio is 60.8%, not 61.1%", "overall automated picking is ~90%, not 97%"). For temporal errors, state the correct timeline. For fabrications with no true equivalent, use empty string "".
   - "source_indices": array of integer indices referring to STORED EVIDENCE SOURCES that were contradicted or misrepresented. Use an EMPTY array [] if the claim is completely fabricated with no traceable source."""
 
     # ── Gemini client + configs ───────────────────────────────────────────────
@@ -709,10 +710,12 @@ Each false_claims object must have:
                             url = verified_links[idx - 1].get("url", "")
                             if url:
                                 source_urls.append(url)
+                    correction = fc.get("correction", "")
                     false_claims.append({
                         "claim": claim_text,
                         "error_type": error_type,
                         "reasoning": reasoning,
+                        "correction": correction,
                         "source_indices": indices,
                         "source_urls": source_urls,
                     })
@@ -739,10 +742,14 @@ Each false_claims object must have:
     # STAGE 2 — Gemini 3.1 Pro, no search: surgical correction
     # Runs only because Stage 1 found false claims.
     # ═══════════════════════════════════════════════════════════════════════════
-    claims_text = "\n".join(
-        f"- [{fc['error_type']}] {fc['claim']}  (reason: {fc['reasoning']})"
-        for fc in stage1_false_claims
-    )
+    claims_lines = []
+    for fc in stage1_false_claims:
+        line = f"- [{fc['error_type']}] {fc['claim']}  (reason: {fc['reasoning']})"
+        correction = fc.get('correction', '')
+        if correction:
+            line += f"\n  → VERIFIED CORRECTION: {correction}"
+        claims_lines.append(line)
+    claims_text = "\n".join(claims_lines)
 
     pitch_correction_note = ""
     if pitch_text:
@@ -751,24 +758,27 @@ ORIGINAL PITCH TO ALSO CORRECT (fix only if it references a false claim):
 {pitch_text}
 """
 
-    stage2_prompt = f"""You are a precise editorial editor. The following AI-generated company summary has been fact-checked and specific false claims have been identified. Your sole job is to surgically remove or fix those false claims while preserving everything else exactly as written.
+    stage2_prompt = f"""You are a precise editorial editor. The following AI-generated company summary has been fact-checked and specific false claims have been identified. Your sole job is to surgically correct those false claims while preserving everything else exactly as written.
 
 COMPANY: {company_name}
 
 ORIGINAL SUMMARY:
 {summary_text}
 {pitch_correction_note}
-IDENTIFIED FALSE CLAIMS TO REMOVE/FIX:
+IDENTIFIED FALSE CLAIMS WITH VERIFIED CORRECTIONS:
 {claims_text}
 
 CORRECTION RULES:
-- Surgically remove or fix ONLY the sentences containing the identified false claims.
+- For each false claim, apply the VERIFIED CORRECTION provided. Use the exact corrected value — do not round, approximate, hedge, or keep the original value.
+- For numeric/qualifier errors (e.g. "A" vs "A-", "97%" vs "~90%", "61.1%" vs "60.8%"), you MUST replace the incorrect number/qualifier with the exact verified value. Do NOT soften it with hedging words like "reportedly", "approximately", or "may have".
+- For temporal errors (e.g. "delivered in August 2024" when it was only announced), replace with the verified timeline from the correction.
+- For fabrications with no verified correction (empty correction field), DELETE the entire sentence containing the fabrication.
 - Preserve the original text word-for-word for ALL sentences not affected by false claims.
 - Do NOT add new information, analysis, or claims of your own.
 - Do NOT change the archetype classification or Knowledge Base terminology.
-- After removing a false claim sentence, fix only the immediately adjacent transitions so the text reads naturally.
+- After removing or correcting a sentence, fix only the immediately adjacent transitions so the text reads naturally.
 - The corrected summary must remain close to the original length (within 80% of original word count).
-- If the pitch references any of the false claims, fix those parts too; otherwise return the pitch unchanged.
+- If the pitch references any of the false claims, apply the same corrections there too; otherwise return the pitch unchanged.
 
 OUTPUT FORMAT — valid JSON only:
 {{"corrected_summary": "The surgically corrected summary...", "corrected_pitch": "The corrected pitch, or the original pitch if it had no false claims..."}}"""
@@ -876,12 +886,15 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
                 print(f"      [Fact-Check] Skipping internal scan history claim (not externally verifiable): {claim_text[:70]}...")
                 continue
 
+            correction = fc.get("correction", "") if isinstance(fc, dict) else ""
+
             all_claims.append(claim_text)
             all_claims_detailed.append({
                 "type": "false_claim",
                 "claim": claim_text,
                 "error_type": error_type,
                 "reasoning": reasoning,
+                "correction": correction,
                 "source_urls": source_urls,
                 "source_indices": source_indices,
             })

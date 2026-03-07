@@ -942,6 +942,19 @@ def _clean_company_data(company_name: str, data: dict) -> dict:
     if uploaded_doc_names:
         doc_context = f"NOTE: Analysis includes confidential internal documents: {', '.join(uploaded_doc_names)}. Treat this as high-fidelity intent data."
 
+    # Build false claims text with verified corrections for the re-synthesis prompt
+    _detail_map = {}
+    for dc in detailed_claims:
+        _detail_map[dc.get("claim", "")] = dc.get("correction", "")
+    _claims_lines = []
+    for c in false_claims:
+        line = f"- {c}"
+        corr = _detail_map.get(c, "")
+        if corr:
+            line += f"\n  \u2192 VERIFIED CORRECTION: {corr}"
+        _claims_lines.append(line)
+    _false_claims_text = chr(10).join(_claims_lines)
+
     # Same synthesis prompt as Deep Scanning (main.py scan pipeline)
     synthesis_prompt = f"""You are a senior organizational analyst conducting a forensic modernization assessment.
 Your task: synthesize scanner evidence into a precise, evidence-grounded diagnosis using the Knowledge Base framework below.
@@ -1052,12 +1065,14 @@ Note: why_proposals and what_proposals are arrays of exactly 2 strings each. WHY
 ### CRITICAL CONTEXT — FACT-CHECK CORRECTIONS
 The previous synthesis contained false claims detected by an independent fact-checker (Gemini 3.1 Pro with Google Search).
 The following claims were FALSE and must NOT appear in your output:
-{chr(10).join(f"- {c}" for c in false_claims)}
+{_false_claims_text}
 
+Where a VERIFIED CORRECTION is provided above, use that exact corrected fact instead of the false claim.
+For numeric/qualifier errors, use the exact verified value — do not round, approximate, or hedge.
 The contaminated evidence sources have been removed. You are now working with CLEANED evidence only.
 Generate a completely fresh synthesis. Do NOT reference or re-introduce any of the false claims listed above.
 
-CRITICAL: Do not just rephrase the false claims. You must act as if the concepts mentioned in the false claims above do not exist for this company at all. If the cleaned evidence does not explicitly state a fact, remain silent on that topic."""
+CRITICAL: Do not just rephrase the false claims. You must act as if the concepts mentioned in the false claims above do not exist for this company at all — unless a VERIFIED CORRECTION is provided, in which case use that exact correction. If the cleaned evidence does not explicitly state a fact, remain silent on that topic."""
 
     # Step 3: Full Gemini re-synthesis — same model chain as Deep Scanning re-synthesis
     resynth_start = time.time()
@@ -2297,15 +2312,36 @@ Note: why_proposals and what_proposals are arrays of exactly 2 strings each. WHY
                 clean_verified = [l for l in clean_evidence_links if l.get('verified', True)]
                 clean_evidence_list = ', '.join([f"{l.get('title', 'Unknown')}: {l.get('snippet', '')}" for l in clean_verified[:20]])
 
-                # Note which claims were removed so the model knows what to avoid
-                removed_claims_note = "\n".join(f"- {c}" for c in fact_check["false_claims"])
+                # Note which claims were removed (with verified corrections when available)
+                removed_claims_lines = []
+                detailed_map = {}
+                for dc in detailed_claims:
+                    detailed_map[dc.get("claim", "")] = dc.get("correction", "")
+                for c in fact_check["false_claims"]:
+                    line = f"- {c}"
+                    corr = detailed_map.get(c, "")
+                    if corr:
+                        line += f"\n  → VERIFIED CORRECTION: {corr}"
+                    removed_claims_lines.append(line)
+                removed_claims_note = "\n".join(removed_claims_lines)
 
-                resynth_prompt = f"""{synthesis_prompt}
+                # Strip the old (contaminated) "Evidence Found:" line from the original
+                # synthesis_prompt so the LLM only sees the cleaned evidence list below.
+                import re as _re
+                clean_synthesis_prompt = _re.sub(
+                    r'Evidence Found: .+', 'Evidence Found: [see CLEANED evidence below]',
+                    synthesis_prompt, count=1
+                )
+
+                resynth_prompt = f"""{clean_synthesis_prompt}
 
 CRITICAL CONTEXT — FACT-CHECK CORRECTIONS:
 The previous synthesis contained false claims that were detected by an independent fact-checker
 (Gemini 3.1 Pro with Google Search). The following claims were FALSE and must NOT appear in your output:
 {removed_claims_note}
+
+Where a VERIFIED CORRECTION is provided above, use that exact corrected fact instead of the false claim.
+For numeric/qualifier errors, use the exact verified value — do not round, approximate, or hedge.
 
 The contaminated evidence sources have been removed. You are now working with CLEANED evidence only:
 Evidence Found: {clean_evidence_list}
@@ -2314,7 +2350,7 @@ Generate a completely fresh synthesis from this cleaned evidence set. Do NOT ref
 re-introduce any of the false claims listed above. Build your narrative only from the
 verified evidence provided.
 
-CRITICAL: Do not just rephrase the false claims. You must act as if the concepts mentioned in the {removed_claims_note} do not exist for this company at all. If the cleaned evidence does not explicitly state a fact, remain silent on that topic."""
+CRITICAL: Do not just rephrase the false claims. You must act as if the concepts mentioned in the false claims above do not exist for this company at all — unless a VERIFIED CORRECTION is provided, in which case use that exact correction. If the cleaned evidence does not explicitly state a fact, remain silent on that topic."""
 
                 resynth_text = ""
                 resynth_model_used = ""
