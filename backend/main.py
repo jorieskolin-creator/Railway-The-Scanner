@@ -1045,6 +1045,7 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
   - Do NOT cite numeric scores in the text — scores display separately in the UI.
   - Do NOT fabricate findings. If evidence is sparse, acknowledge gaps rather than inventing patterns.
   - TEMPORAL PRECISION: When evidence contains the same metric for different periods (e.g. Q1 vs full-year, 2024 vs 2025), always use the most recent FULL-YEAR / ANNUAL figure — not interim or quarterly snapshots. If only a quarterly figure is available, label it explicitly (e.g. "as of Q1 2025"). Never present a quarterly number as if it were the annual result.
+  - ORGANIZATIONAL CLAIMS PROHIBITION: NEVER claim or imply leadership gaps, unfilled executive roles, succession planning issues, management vacancies, or organizational restructuring unless the evidence EXPLICITLY states this. The absence of a person in scanner results does NOT mean the role is vacant — it means the scanner didn't find them. Do NOT invent risk factors about people, roles, or organizational structure to add analytical depth. If the evidence doesn't mention an organizational problem, the problem does not exist for this analysis.
   - Use ONLY the four archetype labels: Thriving, Modernizing, Cash Cow, At Risk.
 
 STEP 4 — PITCH (90-110 words):
@@ -1888,6 +1889,7 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
   - Do NOT cite numeric scores in the text — scores display separately in the UI.
   - Do NOT fabricate findings. If evidence is sparse, acknowledge gaps rather than inventing patterns.
   - TEMPORAL PRECISION: When evidence contains the same metric for different periods (e.g. Q1 vs full-year, 2024 vs 2025), always use the most recent FULL-YEAR / ANNUAL figure — not interim or quarterly snapshots. If only a quarterly figure is available, label it explicitly (e.g. "as of Q1 2025"). Never present a quarterly number as if it were the annual result.
+  - ORGANIZATIONAL CLAIMS PROHIBITION: NEVER claim or imply leadership gaps, unfilled executive roles, succession planning issues, management vacancies, or organizational restructuring unless the evidence EXPLICITLY states this. The absence of a person in scanner results does NOT mean the role is vacant — it means the scanner didn't find them. Do NOT invent risk factors about people, roles, or organizational structure to add analytical depth. If the evidence doesn't mention an organizational problem, the problem does not exist for this analysis.
   - Use ONLY the four archetype labels: Thriving, Modernizing, Cash Cow, At Risk.
 
 STEP 4 — PITCH (90-110 words):

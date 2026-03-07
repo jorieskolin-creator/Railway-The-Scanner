@@ -527,6 +527,8 @@ C. [Misattribution/Arithmetic]: A number from a source is used in the wrong cont
    - A percentage change confused with an absolute figure, or vice versa.
    When you see a financial figure in the summary, verify not just that the number EXISTS in the source, but that it is attributed to the CORRECT METRIC and used in the CORRECT CONTEXT.
 
+D. [Organizational Fabrication]: The summary claims or implies leadership gaps, unfilled executive roles, succession planning issues, management vacancies, or organizational dysfunction that is NOT supported by any stored evidence or verifiable web source. This is a common AI pattern: the model invents plausible-sounding organizational risk factors to add analytical depth. Use Google Search to verify — if there is no public reporting of a leadership vacancy, restructuring crisis, or succession gap, flag it as fabrication. The absence of a person in scanner results does NOT mean the role is vacant.
+
 Do NOT ignore qualitative claims if they are based on fabricated underlying metrics.
 Do NOT flag Knowledge Base terminology or archetype labels (e.g. "Digital Taylorism", "Thriving", "At Risk") — these are analytical framework terms, not factual claims.
 Do NOT flag references to previous scan counts, historical score trajectories (e.g. arrow-notation scores like "72→76→75", phrases like "across X scans" or "across X assessments"), or any comparative claim about this scan versus prior assessments — these are sourced from internal scan database records, not externally verifiable data.
@@ -537,11 +539,11 @@ If summary is accurate (no false claims):
 {{"false_claims": [], "summary_accurate": true}}
 
 If false claims found:
-{{"false_claims": [{{"claim": "Exact quote of the false claim from the summary", "error_type": "Fabrication OR Contradiction OR Misattribution", "reasoning": "Briefly explain why this is false based on the sources or search results.", "correction": "The verified fact that should replace this claim, or empty string if the claim should simply be deleted.", "wrong_value": "61.8%", "correct_value": "60.8%", "source_indices": [2, 5]}}], "summary_accurate": false}}
+{{"false_claims": [{{"claim": "Exact quote of the false claim from the summary", "error_type": "Fabrication OR Contradiction OR Misattribution OR Organizational Fabrication", "reasoning": "Briefly explain why this is false based on the sources or search results.", "correction": "The verified fact that should replace this claim, or empty string if the claim should simply be deleted.", "wrong_value": "61.8%", "correct_value": "60.8%", "source_indices": [2, 5]}}], "summary_accurate": false}}
 
 Each false_claims object must have:
   - "claim": string — the exact quote or close paraphrase of the false claim from the summary
-  - "error_type": string — "Fabrication", "Contradiction", or "Misattribution" (for criterion C: number used in wrong context)
+  - "error_type": string — "Fabrication", "Contradiction", "Misattribution" (for criterion C: number used in wrong context), or "Organizational Fabrication" (for criterion D: invented leadership/structural claims)
   - "reasoning": string — brief explanation of why this is false
   - "correction": string — the VERIFIED correct fact from your Google Search or stored evidence. For numeric errors, state the exact correct number/qualifier (e.g. "CDP score is A-, not A", "equity ratio is 60.8%, not 61.1%", "overall automated picking is ~90%, not 97%"). For temporal errors, state the correct timeline. For fabrications with no true equivalent, use empty string "".
   - "wrong_value": string — the EXACT incorrect value as it appears in the summary text (e.g. "61.8%", "A", "97%", "-3.2%"). Must be copy-pasted from the summary so it can be used for literal text replacement. Use empty string "" for non-numeric errors or fabrications.
