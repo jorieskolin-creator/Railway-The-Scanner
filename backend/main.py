@@ -983,10 +983,17 @@ def _clean_company_data(company_name: str, data: dict) -> dict:
 
     # Same synthesis prompt as Deep Scanning (main.py scan pipeline)
     synthesis_prompt = f"""You are a senior organizational analyst conducting a forensic modernization assessment.
+You are conservative and evidence-bound. You would rather say "insufficient evidence" than risk a wrong claim. Your credibility depends on never overstating.
 Your task: synthesize scanner evidence into a precise, evidence-grounded diagnosis using the Knowledge Base framework below.
 
 METHODOLOGY: Read ALL evidence first. Score ONLY what evidence supports. Write ONLY what scores justify.
 If evidence is thin, say so — a short honest analysis beats a long fabricated one.
+
+### ABSOLUTE RULES (repeated throughout for emphasis)
+1. NEVER fabricate findings — if evidence is thin, SAY SO.
+2. NEVER invent organizational or people problems (leadership gaps, succession issues, morale claims, unfilled roles).
+3. Every claim must trace to specific evidence in the SCAN DATA below. No evidence = no claim.
+4. Do NOT extrapolate small signals into sweeping assessments (e.g., a Jira mention in a job ad does NOT reveal corporate strategy).
 
 ### PRIMARY FRAMEWORK (KNOWLEDGE BASE — MANDATORY)
 {knowledge_context}
@@ -1013,7 +1020,7 @@ STEP 1 — REALITY SCORE (evaluate before writing anything):
 Score each Knowledge Base dimension (0-20) based on VERIFIED EVIDENCE ONLY:
   - Operating Model: Evidence of modern practices (DevOps, platform teams, stream-aligned)? Or legacy/waterfall/silos?
   - Strategy: Clear digital/modernization strategy with visible execution? Or vague/absent?
-  - Culture: Learning culture, psychological safety, talent signals? Or hierarchy/control/fear?
+  - Culture: Learning culture, psychological safety? Evidence of open communication or blameless post-mortems? Or hierarchy/control/fear?
   - Service Portfolio: Product-led, API-first, composable architecture? Or monolithic/legacy?
   - AI Readiness: Concrete AI/ML adoption with measurable outcomes? Or just buzzwords/pilot purgatory?
 
@@ -1031,7 +1038,7 @@ Use YOUR reality_score + Financial Health Index ({fin_for_arch}):
   - reality_score < 50 AND Financial Health Index < 50 → "At Risk"
 This is a mechanical derivation — do not override based on narrative interpretation.
 
-STEP 3 — SUMMARY (325-375 words):
+STEP 3 — SUMMARY (up to 375 words):
 Write a diagnostic narrative that reads like an expert assessment, not a template:
   - Structure: exactly 3-4 paragraphs, each covering a distinct KB dimension (e.g. overall position
     & operating model / strategy & culture / service portfolio & AI readiness / financial context).
@@ -1051,14 +1058,15 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
 STEP 4 — PITCH (90-110 words):
 A direct cold-outreach message to a C-level executive at {company_name}:
   - Open with a specific insight from the analysis that would make them stop and read.
-  - Derive exactly 2 CONCRETE PROPOSALS targeting the company's weakest KB dimensions.
+  - Derive 1-2 CONCRETE PROPOSALS targeting the company's weakest KB dimensions.
   - The proposals must feel specific to THIS company's situation, not generic consulting templates.
   - Do NOT use "Forensic Modernization Audit" or any generic service names.
-  - Tone: Professional, provocative, insight-led. The recipient should feel understood, not sold to.
-  - Structure as exactly 3 short paragraphs separated by \n\n (opening hook / two proposals / closing CTA).
+  - Tone: Professional, direct, evidence-led. Every claim in the pitch must be verifiable from the scan data. The recipient should feel understood, not sold to.
+  - Structure as exactly 3 short paragraphs separated by \n\n (opening hook / proposals / closing CTA).
 
 STEP 5 — IMPACT PROPOSALS (derived from Steps 1-4):
-Generate exactly 2 WHY statements and 2 WHAT statements.
+Generate 1-2 WHY statements and 1-2 WHAT statements (matching count).
+If evidence strongly supports 2 distinct weaknesses, produce 2 pairs. If evidence is limited, produce 1 pair. One strong evidence-based proposal beats two fabricated ones.
 
 WHY (Desired Impact) — the strategic reason to act:
   - Each WHY must connect a specific weakness found in Step 1 to a business-level consequence the C-suite cares about.
@@ -1074,21 +1082,23 @@ WHAT (Desired Effect) — the measurable business outcome:
   - Length: 1-2 sentences each.
 
 Rules:
-  - WHY1 pairs with WHAT1 (same theme). WHY2 pairs with WHAT2 (different theme).
-  - Draw ONLY from the weakest 2 KB dimensions scored in Step 1.
+  - WHY1 pairs with WHAT1 (same theme). If 2 pairs: WHY2 pairs with WHAT2 (different theme).
+  - Draw ONLY from the weakest KB dimensions scored in Step 1 that have ACTUAL EVIDENCE.
   - Never generic — each must reference something specific from the evidence or diagnosis.
   - These are proposals, not promises — frame as "potential impact" and "potential effect".
 
 ### GUARDRAILS
 - NEVER fabricate evidence, people, events, partnerships, or metrics not present in the scan data.
 - NEVER invent temporal claims ("recently announced", "just launched", "this quarter").
+- NEVER extrapolate small signals into sweeping assessments (e.g., a tool mentioned in a job ad does NOT reveal corporate strategy).
+- If a KB dimension has no supporting evidence, score it neutrally and acknowledge the gap — do not speculate.
 - Every factual claim in the summary must be traceable to a specific piece of evidence above.
 
 ### OUTPUT
 Respond with valid JSON only. Six fields required:
 {{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."]}}
 Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs total). The pitch value must also contain \n\n between its 3 paragraphs.
-Note: why_proposals and what_proposals are arrays of exactly 2 strings each. WHY1 pairs with WHAT1, WHY2 pairs with WHAT2.
+Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2.
 
 ### CRITICAL CONTEXT — FACT-CHECK CORRECTIONS
 The previous synthesis contained false claims detected by an independent fact-checker (Gemini 3.1 Pro with Google Search).
@@ -1823,10 +1833,17 @@ Use this to maintain consistency. If issues from previous scan are still present
 If new evidence shows improvement, highlight the positive trajectory."""
 
                 synthesis_prompt = f"""You are a senior organizational analyst conducting a forensic modernization assessment.
+You are conservative and evidence-bound. You would rather say "insufficient evidence" than risk a wrong claim. Your credibility depends on never overstating.
 Your task: synthesize scanner evidence into a precise, evidence-grounded diagnosis using the Knowledge Base framework below.
 
 METHODOLOGY: Read ALL evidence first. Score ONLY what evidence supports. Write ONLY what scores justify.
 If evidence is thin, say so — a short honest analysis beats a long fabricated one.
+
+### ABSOLUTE RULES (repeated throughout for emphasis)
+1. NEVER fabricate findings — if evidence is thin, SAY SO.
+2. NEVER invent organizational or people problems (leadership gaps, succession issues, morale claims, unfilled roles).
+3. Every claim must trace to specific evidence in the SCAN DATA below. No evidence = no claim.
+4. Do NOT extrapolate small signals into sweeping assessments (e.g., a Jira mention in a job ad does NOT reveal corporate strategy).
 
 ### PRIMARY FRAMEWORK (KNOWLEDGE BASE — MANDATORY)
 {knowledge_context}
@@ -1855,7 +1872,7 @@ STEP 1 — REALITY SCORE (evaluate before writing anything):
 Score each Knowledge Base dimension (0-20) based on VERIFIED EVIDENCE ONLY:
   - Operating Model: Evidence of modern practices (DevOps, platform teams, stream-aligned)? Or legacy/waterfall/silos?
   - Strategy: Clear digital/modernization strategy with visible execution? Or vague/absent?
-  - Culture: Learning culture, psychological safety, talent signals? Or hierarchy/control/fear?
+  - Culture: Learning culture, psychological safety? Evidence of open communication or blameless post-mortems? Or hierarchy/control/fear?
   - Service Portfolio: Product-led, API-first, composable architecture? Or monolithic/legacy?
   - AI Readiness: Concrete AI/ML adoption with measurable outcomes? Or just buzzwords/pilot purgatory?
 
@@ -1873,7 +1890,7 @@ Use YOUR reality_score + Financial Health Index ({fin_for_archetype}):
   - reality_score < 50 AND Financial Health Index < 50 → "At Risk"
 This is a mechanical derivation — do not override based on narrative interpretation.
 
-STEP 3 — SUMMARY (325-375 words):
+STEP 3 — SUMMARY (up to 375 words):
 Write a diagnostic narrative that reads like an expert assessment, not a template:
   - Structure: exactly 3-4 paragraphs, each covering a distinct KB dimension (e.g. overall position
     & operating model / strategy & culture / service portfolio & AI readiness / financial context).
@@ -1895,17 +1912,18 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
 STEP 4 — PITCH (90-110 words):
 A direct cold-outreach message to a C-level executive at {companyName}:
   - Open with a specific insight from the analysis that would make them stop and read.
-  - Derive exactly 2 CONCRETE PROPOSALS targeting the company's weakest KB dimensions.
+  - Derive 1-2 CONCRETE PROPOSALS targeting the company's weakest KB dimensions.
     Each proposal must name the dimension and suggest a specific transformation direction
     (e.g., "Shift from Digital Taylorism toward Flow Efficiency by restructuring around
     stream-aligned teams with end-to-end ownership").
   - The proposals must feel specific to THIS company's situation, not generic consulting templates.
   - Do NOT use "Forensic Modernization Audit" or any generic service names.
-  - Tone: Professional, provocative, insight-led. The recipient should feel understood, not sold to.
-  - Structure as exactly 3 short paragraphs separated by \n\n (opening hook / two proposals / closing CTA).
+  - Tone: Professional, direct, evidence-led. Every claim in the pitch must be verifiable from the scan data. The recipient should feel understood, not sold to.
+  - Structure as exactly 3 short paragraphs separated by \n\n (opening hook / proposals / closing CTA).
 
 STEP 5 — IMPACT PROPOSALS (derived from Steps 1-4):
-Generate exactly 2 WHY statements and 2 WHAT statements.
+Generate 1-2 WHY statements and 1-2 WHAT statements (matching count).
+If evidence strongly supports 2 distinct weaknesses, produce 2 pairs. If evidence is limited, produce 1 pair. One strong evidence-based proposal beats two fabricated ones.
 
 WHY (Desired Impact) — the strategic reason to act:
   - Each WHY must connect a specific weakness found in Step 1 to a business-level consequence the C-suite cares about.
@@ -1923,15 +1941,15 @@ WHAT (Desired Effect) — the measurable business outcome:
   - Example: "Cross-functional teams own services end-to-end, eliminating the current approval chain that delays every deployment."
 
 Rules:
-  - WHY1 and WHAT1 must pair — same KB dimension or theme.
-  - WHY2 and WHAT2 must pair — a different KB dimension or theme.
-  - Draw ONLY from the weakest 2 KB dimensions scored in Step 1.
+  - WHY1 pairs with WHAT1 (same theme). If 2 pairs: WHY2 pairs with WHAT2 (different theme).
+  - Draw ONLY from the weakest KB dimensions scored in Step 1 that have ACTUAL EVIDENCE.
   - Never generic — each must reference something specific from the evidence or diagnosis.
   - These are proposals, not promises — frame as "potential impact" and "potential effect".
 
 ### GUARDRAILS
 - NEVER fabricate evidence, people, events, partnerships, or metrics not present in the scan data.
 - NEVER invent temporal claims ("recently announced", "just launched", "this quarter").
+- NEVER extrapolate small signals into sweeping assessments (e.g., a tool mentioned in a job ad does NOT reveal corporate strategy).
 - If a KB dimension has no supporting evidence, score it neutrally and acknowledge the gap — do not speculate.
 - Every factual claim in the summary must be traceable to a specific piece of evidence above.
 
@@ -1939,7 +1957,7 @@ Rules:
 Respond with valid JSON only. Six fields required:
 {{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."]}}
 Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs total). The pitch value must also contain \n\n between its 3 paragraphs.
-Note: why_proposals and what_proposals are arrays of exactly 2 strings each. WHY1 pairs with WHAT1, WHY2 pairs with WHAT2."""
+Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2."""
 
                 # --- Synthesis with fallback chain: Opus 4.6 → Gemini 3.1 Pro → Gemini 3 Pro → Gemini 2.5 Pro ---
                 # Opus is the judge — it does ONE thing: synthesize. Fallbacks degrade gracefully.
@@ -2029,13 +2047,24 @@ Note: why_proposals and what_proposals are arrays of exactly 2 strings each. WHY
                             m_start = time.time()
                             mistral_client = Mistral(api_key=mistral_key)
 
+                            _mistral_system = (
+                                "CRITICAL: You are a CONSERVATIVE analyst. When in doubt, say 'insufficient evidence.' "
+                                "Do NOT extrapolate. Do NOT infer organizational problems. Do NOT sound deeper than "
+                                "your evidence supports. A boring, accurate summary beats an impressive, fabricated one. "
+                                "NEVER invent leadership gaps, morale issues, succession problems, or strategic conclusions "
+                                "from minor details like tool names in job ads."
+                            )
+
                             def _synth_mistral():
                                 return mistral_client.chat.complete(
                                     model="mistral-large-latest",
                                     temperature=0.1,
                                     response_format={"type": "json_object"},
                                     max_tokens=4000,
-                                    messages=[{"role": "user", "content": synthesis_prompt}],
+                                    messages=[
+                                        {"role": "system", "content": _mistral_system},
+                                        {"role": "user", "content": synthesis_prompt},
+                                    ],
                                 )
 
                             m_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
