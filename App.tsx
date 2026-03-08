@@ -53,6 +53,7 @@ const App = () => {
   const [analyticsData, setAnalyticsData] = useState(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [analyticsMatrixType, setAnalyticsMatrixType] = useState('spearman'); // 'spearman' | 'pearson'
+  const [analyticsTab, setAnalyticsTab] = useState('reality_financial'); // 'reality_financial' | 'intent_reality' | 'intent_financial'
 
   // SERVER-SIDE BATCH STATE
   const [batchStatus, setBatchStatus] = useState({ is_running: false, current: 0, total: 0, current_name: '' });
@@ -914,78 +915,106 @@ const App = () => {
                     </div>
                   )}
 
-                  {/* CORE CORRELATION: Reality vs Financial */}
+                  {/* CORRELATION ANALYSIS — TABBED */}
                   <div className="bg-violet-500/5 border border-violet-500/20 rounded-xl p-5">
-                    <h4 className="text-sm font-bold text-violet-300 uppercase tracking-wide mb-3 flex items-center gap-2">
-                      <TrendingUp size={14} /> Reality Score vs Financial Index
-                    </h4>
-                    {view.reality_vs_financial?.spearman_rho != null ? (
-                      <div className="space-y-3">
-                        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-                          <div className="bg-black/30 rounded-lg p-3 text-center">
-                            <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Paired n</div>
-                            <div className="text-xl font-bold text-white">{view.reality_vs_financial.n}</div>
-                          </div>
-                          <div className="bg-black/30 rounded-lg p-3 text-center border border-violet-500/20">
-                            <div className="text-[9px] text-violet-400 uppercase tracking-wider font-mono">Spearman rho</div>
-                            <div className={`text-xl font-bold ${view.reality_vs_financial.spearman_rho > 0.3 ? 'text-emerald-400' : view.reality_vs_financial.spearman_rho < -0.3 ? 'text-rose-400' : 'text-amber-400'}`}>
-                              {view.reality_vs_financial.spearman_rho > 0 ? '+' : ''}{view.reality_vs_financial.spearman_rho}
-                            </div>
-                            <div className="text-[8px] text-violet-400/60 font-mono mt-0.5">PRIMARY</div>
-                          </div>
-                          <div className="bg-black/30 rounded-lg p-3 text-center">
-                            <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Kendall tau</div>
-                            <div className={`text-xl font-bold ${(view.reality_vs_financial.kendall_tau ?? 0) > 0.3 ? 'text-emerald-400' : (view.reality_vs_financial.kendall_tau ?? 0) < -0.3 ? 'text-rose-400' : 'text-amber-400'}`}>
-                              {view.reality_vs_financial.kendall_tau != null ? ((view.reality_vs_financial.kendall_tau > 0 ? '+' : '') + view.reality_vs_financial.kendall_tau) : 'n/a'}
-                            </div>
-                          </div>
-                          <div className="bg-black/30 rounded-lg p-3 text-center">
-                            <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Pearson r</div>
-                            <div className="text-xl font-bold text-slate-400">
-                              {view.reality_vs_financial.pearson_r > 0 ? '+' : ''}{view.reality_vs_financial.pearson_r}
-                            </div>
-                            <div className="text-[8px] text-slate-600 font-mono mt-0.5">assumes normality</div>
-                          </div>
-                          <div className="bg-black/30 rounded-lg p-3 text-center">
-                            <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Interpretation</div>
-                            <div className="text-sm font-bold text-violet-300 uppercase">{view.reality_vs_financial.interpretation}</div>
-                          </div>
-                        </div>
-                        {view.reality_vs_financial.spearman_p != null && (
-                          <div className="text-[10px] text-slate-500 font-mono text-center">
-                            Spearman p-value = {view.reality_vs_financial.spearman_p} {view.reality_vs_financial.spearman_p < 0.05 ? '(statistically significant)' : '(not significant)'}
-                            {view.reality_vs_financial.kendall_p != null && (<span> | Kendall p-value = {view.reality_vs_financial.kendall_p}</span>)}
-                          </div>
-                        )}
-                        {view.reality_vs_financial.divergence_note && (
-                          <div className="text-[10px] text-amber-400/80 font-mono text-center bg-amber-500/5 rounded-lg p-2 border border-amber-500/10">
-                            {view.reality_vs_financial.divergence_note}
-                          </div>
-                        )}
-                        {/* Regression residuals */}
-                        {view.reality_vs_financial.residuals?.length > 0 && (
-                          <div className="mt-3">
-                            <div className="text-[10px] text-slate-500 uppercase tracking-wider font-mono mb-2">Largest Residuals from Regression</div>
-                            <div className="space-y-1">
-                              {view.reality_vs_financial.residuals.map((o, i) => (
-                                <div key={i} className="flex items-center justify-between text-xs font-mono bg-black/20 rounded px-3 py-1.5">
-                                  <span className="text-slate-300 truncate max-w-[200px]">{o.name}</span>
-                                  <div className="flex gap-4 text-[10px]">
-                                    <span className="text-cyan-400">R:{o.reality}</span>
-                                    <span className="text-emerald-400">F:{o.financial}</span>
-                                    <span className={o.residual > 0 ? 'text-emerald-400' : 'text-rose-400'}>
-                                      {o.residual > 0 ? '+' : ''}{o.residual}
-                                    </span>
+                    {/* Tab navigation */}
+                    <div className="flex items-center gap-1 mb-4 bg-black/30 rounded-lg border border-white/10 p-1 overflow-x-auto">
+                      {[
+                        { key: 'reality_financial', label: 'Reality vs Financial' },
+                        { key: 'intent_reality', label: 'Ambition vs Reality' },
+                        { key: 'intent_financial', label: 'Ambition vs Financial' },
+                      ].map(({ key, label }) => (
+                        <button key={key} onClick={() => setAnalyticsTab(key)} className={`px-3 py-1.5 text-[10px] font-mono font-bold rounded-md transition-all whitespace-nowrap ${analyticsTab === key ? 'bg-violet-500/20 text-violet-300 border border-violet-500/40' : 'text-slate-500 hover:text-slate-300'}`}>
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Tab content — renders the active correlation */}
+                    {(() => {
+                      const corrKey = analyticsTab === 'reality_financial' ? 'reality_vs_financial' : analyticsTab === 'intent_reality' ? 'intent_vs_reality' : 'intent_vs_financial';
+                      const corrData = view[corrKey];
+                      const titles = {
+                        reality_financial: { title: 'Reality Score vs Financial Index', xLabel: 'R', yLabel: 'F', xColor: 'text-cyan-400', yColor: 'text-emerald-400' },
+                        intent_reality: { title: 'Ambition (Intent) vs Reality Score', xLabel: 'I', yLabel: 'R', xColor: 'text-indigo-400', yColor: 'text-cyan-400' },
+                        intent_financial: { title: 'Ambition (Intent) vs Financial Index', xLabel: 'I', yLabel: 'F', xColor: 'text-indigo-400', yColor: 'text-emerald-400' },
+                      };
+                      const t = titles[analyticsTab];
+                      return (
+                        <>
+                          <h4 className="text-sm font-bold text-violet-300 uppercase tracking-wide mb-3 flex items-center gap-2">
+                            <TrendingUp size={14} /> {t.title}
+                          </h4>
+                          {corrData?.spearman_rho != null ? (
+                            <div className="space-y-3">
+                              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                                <div className="bg-black/30 rounded-lg p-3 text-center">
+                                  <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Paired n</div>
+                                  <div className="text-xl font-bold text-white">{corrData.n}</div>
+                                </div>
+                                <div className="bg-black/30 rounded-lg p-3 text-center border border-violet-500/20">
+                                  <div className="text-[9px] text-violet-400 uppercase tracking-wider font-mono">Spearman rho</div>
+                                  <div className={`text-xl font-bold ${corrData.spearman_rho > 0.3 ? 'text-emerald-400' : corrData.spearman_rho < -0.3 ? 'text-rose-400' : 'text-amber-400'}`}>
+                                    {corrData.spearman_rho > 0 ? '+' : ''}{corrData.spearman_rho}
+                                  </div>
+                                  <div className="text-[8px] text-violet-400/60 font-mono mt-0.5">PRIMARY</div>
+                                </div>
+                                <div className="bg-black/30 rounded-lg p-3 text-center">
+                                  <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Kendall tau</div>
+                                  <div className={`text-xl font-bold ${(corrData.kendall_tau ?? 0) > 0.3 ? 'text-emerald-400' : (corrData.kendall_tau ?? 0) < -0.3 ? 'text-rose-400' : 'text-amber-400'}`}>
+                                    {corrData.kendall_tau != null ? ((corrData.kendall_tau > 0 ? '+' : '') + corrData.kendall_tau) : 'n/a'}
                                   </div>
                                 </div>
-                              ))}
+                                <div className="bg-black/30 rounded-lg p-3 text-center">
+                                  <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Pearson r</div>
+                                  <div className="text-xl font-bold text-slate-400">
+                                    {corrData.pearson_r > 0 ? '+' : ''}{corrData.pearson_r}
+                                  </div>
+                                  <div className="text-[8px] text-slate-600 font-mono mt-0.5">assumes normality</div>
+                                </div>
+                                <div className="bg-black/30 rounded-lg p-3 text-center">
+                                  <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Interpretation</div>
+                                  <div className="text-sm font-bold text-violet-300 uppercase">{corrData.interpretation}</div>
+                                </div>
+                              </div>
+                              {corrData.spearman_p != null && (
+                                <div className="text-[10px] text-slate-500 font-mono text-center">
+                                  Spearman p-value = {corrData.spearman_p} {corrData.spearman_p < 0.05 ? '(statistically significant)' : '(not significant)'}
+                                  {corrData.kendall_p != null && (<span> | Kendall p-value = {corrData.kendall_p}</span>)}
+                                </div>
+                              )}
+                              {corrData.divergence_note && (
+                                <div className="text-[10px] text-amber-400/80 font-mono text-center bg-amber-500/5 rounded-lg p-2 border border-amber-500/10">
+                                  {corrData.divergence_note}
+                                </div>
+                              )}
+                              {/* Regression residuals */}
+                              {corrData.residuals?.length > 0 && (
+                                <div className="mt-3">
+                                  <div className="text-[10px] text-slate-500 uppercase tracking-wider font-mono mb-2">Largest Residuals from Regression</div>
+                                  <div className="space-y-1">
+                                    {corrData.residuals.map((o: any, i: number) => (
+                                      <div key={i} className="flex items-center justify-between text-xs font-mono bg-black/20 rounded px-3 py-1.5">
+                                        <span className="text-slate-300 truncate max-w-[200px]">{o.name}</span>
+                                        <div className="flex gap-4 text-[10px]">
+                                          <span className={t.xColor}>{t.xLabel}:{o.x_val ?? o.reality}</span>
+                                          <span className={t.yColor}>{t.yLabel}:{o.y_val ?? o.financial}</span>
+                                          <span className={o.residual > 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                                            {o.residual > 0 ? '+' : ''}{o.residual}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
                             </div>
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="text-slate-500 text-sm">Not enough paired data (need 3+ companies with both scores)</div>
-                    )}
+                          ) : (
+                            <div className="text-slate-500 text-sm">Not enough paired data (need 3+ companies with both scores)</div>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
 
                   {/* CORRELATION MATRIX */}

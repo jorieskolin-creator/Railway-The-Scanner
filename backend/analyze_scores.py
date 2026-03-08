@@ -278,6 +278,8 @@ def _analyze_dataset(companies, label="full"):
                     residual = c["financial"] - predicted
                     residuals.append({
                         "name": c["name"],
+                        "x_val": c["reality"],
+                        "y_val": c["financial"],
                         "reality": c["reality"],
                         "financial": c["financial"],
                         "residual": round(residual, 1),
@@ -286,6 +288,103 @@ def _analyze_dataset(companies, label="full"):
             core_corr["residuals"] = residuals[:5]
 
     result["reality_vs_financial"] = core_corr
+
+    # --- B2. Correlation: Intent vs Reality ---
+    paired_ir = [(c["intent"], c["reality"]) for c in companies]
+    ir_corr = {"n": len(paired_ir)}
+    if len(paired_ir) >= 3:
+        ix, iy = zip(*paired_ir)
+        r_s, p_s = spearman(list(ix), list(iy))
+        tau, p_tau = kendall_tau(list(ix), list(iy))
+        r_p, p_p = pearson(list(ix), list(iy))
+        ir_corr["spearman_rho"] = round(r_s, 3) if r_s is not None else None
+        ir_corr["spearman_p"] = round(p_s, 4) if p_s is not None else None
+        ir_corr["kendall_tau"] = tau
+        ir_corr["kendall_p"] = p_tau
+        ir_corr["pearson_r"] = round(r_p, 3) if r_p is not None else None
+        ir_corr["pearson_p"] = round(p_p, 4) if p_p is not None else None
+        primary = abs(r_s) if r_s else 0
+        if primary < 0.1: interp = "negligible"
+        elif primary < 0.3: interp = "weak"
+        elif primary < 0.5: interp = "moderate"
+        elif primary < 0.7: interp = "strong"
+        else: interp = "very strong"
+        direction = "positive" if r_s and r_s > 0 else "negative"
+        ir_corr["interpretation"] = f"{interp} {direction}"
+        if r_p is not None and r_s is not None:
+            delta = abs(r_p - r_s)
+            if delta > 0.15:
+                ir_corr["divergence_note"] = (
+                    f"Pearson ({r_p:+.3f}) and Spearman ({r_s:+.3f}) differ by {delta:.3f}. "
+                    f"This is expected with skewed distributions — Spearman is more reliable here."
+                )
+        # Residuals: Intent → Reality regression
+        if len(paired_ir) >= 5 and r_p is not None:
+            sx_val = statistics.stdev(list(ix))
+            slope = r_p * (statistics.stdev(list(iy)) / (sx_val + 1e-12)) if sx_val else 0
+            intercept = statistics.mean(list(iy)) - slope * statistics.mean(list(ix))
+            residuals = []
+            for c in companies:
+                predicted = slope * c["intent"] + intercept
+                residual = c["reality"] - predicted
+                residuals.append({
+                    "name": c["name"],
+                    "x_val": c["intent"],
+                    "y_val": c["reality"],
+                    "residual": round(residual, 1),
+                })
+            residuals.sort(key=lambda r: abs(r["residual"]), reverse=True)
+            ir_corr["residuals"] = residuals[:5]
+    result["intent_vs_reality"] = ir_corr
+
+    # --- B3. Correlation: Intent vs Financial ---
+    paired_if = [(c["intent"], c["financial"]) for c in companies if c["financial"] is not None]
+    if_corr = {"n": len(paired_if)}
+    if len(paired_if) >= 3:
+        ix, iy = zip(*paired_if)
+        r_s, p_s = spearman(list(ix), list(iy))
+        tau, p_tau = kendall_tau(list(ix), list(iy))
+        r_p, p_p = pearson(list(ix), list(iy))
+        if_corr["spearman_rho"] = round(r_s, 3) if r_s is not None else None
+        if_corr["spearman_p"] = round(p_s, 4) if p_s is not None else None
+        if_corr["kendall_tau"] = tau
+        if_corr["kendall_p"] = p_tau
+        if_corr["pearson_r"] = round(r_p, 3) if r_p is not None else None
+        if_corr["pearson_p"] = round(p_p, 4) if p_p is not None else None
+        primary = abs(r_s) if r_s else 0
+        if primary < 0.1: interp = "negligible"
+        elif primary < 0.3: interp = "weak"
+        elif primary < 0.5: interp = "moderate"
+        elif primary < 0.7: interp = "strong"
+        else: interp = "very strong"
+        direction = "positive" if r_s and r_s > 0 else "negative"
+        if_corr["interpretation"] = f"{interp} {direction}"
+        if r_p is not None and r_s is not None:
+            delta = abs(r_p - r_s)
+            if delta > 0.15:
+                if_corr["divergence_note"] = (
+                    f"Pearson ({r_p:+.3f}) and Spearman ({r_s:+.3f}) differ by {delta:.3f}. "
+                    f"This is expected with skewed distributions — Spearman is more reliable here."
+                )
+        # Residuals: Intent → Financial regression
+        if len(paired_if) >= 5 and r_p is not None:
+            sx_val = statistics.stdev(list(ix))
+            slope = r_p * (statistics.stdev(list(iy)) / (sx_val + 1e-12)) if sx_val else 0
+            intercept = statistics.mean(list(iy)) - slope * statistics.mean(list(ix))
+            residuals = []
+            for c in companies:
+                if c["financial"] is not None:
+                    predicted = slope * c["intent"] + intercept
+                    residual = c["financial"] - predicted
+                    residuals.append({
+                        "name": c["name"],
+                        "x_val": c["intent"],
+                        "y_val": c["financial"],
+                        "residual": round(residual, 1),
+                    })
+            residuals.sort(key=lambda r: abs(r["residual"]), reverse=True)
+            if_corr["residuals"] = residuals[:5]
+    result["intent_vs_financial"] = if_corr
 
     # --- C. Full Correlation Matrix (Spearman + Pearson) ---
     score_keys = ["intent", "reality", "financial", "confidence"]
