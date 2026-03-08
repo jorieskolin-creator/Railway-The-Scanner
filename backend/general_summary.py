@@ -248,7 +248,30 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
             if attempt == 1:
                 continue
 
-    # Attempt 3: Mistral Large backup (independent provider — survives Google outages)
+    # Attempt 3: DeepSeek V3.2 backup (independent provider — survives Google outages)
+    deepseek_key = os.environ.get("DEEPSEEK_API_KEY")
+    if deepseek_key:
+        try:
+            from openai import OpenAI as DeepSeekClient
+            print(f"   [General Summary] Primary model failed — trying backup deepseek-chat (V3.2)")
+            t0 = time.time()
+            ds_client = DeepSeekClient(api_key=deepseek_key, base_url="https://api.deepseek.com")
+            ds_resp = ds_client.chat.completions.create(
+                model="deepseek-chat",
+                temperature=0.3,
+                max_tokens=4000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = _strip_links((ds_resp.choices[0].message.content or "").strip())
+            wc = _word_count(text)
+            elapsed = int((time.time() - t0) * 1000)
+            print(f"   [General Summary] deepseek-chat backup: {wc} words ({elapsed}ms)")
+            if text:
+                return text, "deepseek-chat"
+        except Exception as e:
+            print(f"   ❌ [General Summary] deepseek-chat backup failed: {e}")
+
+    # Attempt 4: Mistral Large backup (independent provider — survives Google outages)
     mistral_key = os.environ.get("MISTRAL_API_KEY")
     if mistral_key:
         try:
