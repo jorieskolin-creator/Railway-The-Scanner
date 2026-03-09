@@ -584,8 +584,15 @@ def enrich_key_people(company_name: str, key_people: list, gemini_key: str = Non
     start = time.time()
 
     # Split into people with names (searchable) and without (skip)
-    people_with_names = [p for p in key_people if p.get("name")]
-    people_without_names = [p for p in key_people if not p.get("name")]
+    _placeholder_names = {"unknown", "unnamed", "n/a", "tbd", "none", "not found",
+                          "not available", "ei tiedossa", "tuntematon"}
+
+    def _has_real_name(p):
+        name = (p.get("name") or "").strip()
+        return name and name.lower() not in _placeholder_names
+
+    people_with_names = [p for p in key_people if _has_real_name(p)]
+    people_without_names = [p for p in key_people if not _has_real_name(p)]
 
     for person in people_without_names:
         person["linkedin_insights"] = {

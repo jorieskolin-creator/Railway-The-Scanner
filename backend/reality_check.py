@@ -672,18 +672,58 @@ Each false_claims object must have:
                  "no contradiction", "no conflict", "all align", "nothing to flag"]
 
     # ── GLM-5 attempt (first option) ──────────────────────────────────────────
+    # GLM-5 with thinking=True + web_search + large evidence section times out
+    # at 90s (thinking burns the entire budget before web search starts).
+    # Fix: disable thinking (web search provides grounding), trim evidence to
+    # 10 sources with 200-char snippets, and allow 120s wall-clock.
     zai_key = os.environ.get("ZAI_API_KEY", "")
     if zai_key:
         try:
+            # Build a trimmed prompt for GLM-5 — fewer evidence sources, shorter snippets
+            glm5_evidence_ref = ""
+            if evidence_links:
+                glm5_sources = [l for l in evidence_links if l.get("verified", True)][:10]
+                for i, link in enumerate(glm5_sources, 1):
+                    title = link.get("title", "Unknown")
+                    url = link.get("url", "")
+                    snippet = link.get("snippet", "")[:200]
+                    glm5_evidence_ref += f"[{i}] {title} | {url} | {snippet}\n"
+            glm5_evidence_section = f"\nSTORED EVIDENCE SOURCES:\n{glm5_evidence_ref}" if glm5_evidence_ref else ""
+            glm5_pitch_section = f"\nAI-GENERATED PITCH TO VERIFY:\n{pitch_text}" if pitch_text else ""
+
+            glm5_stage1_prompt = f"""You are an uncompromising Data Auditor. Evaluate the faithfulness and factual accuracy of this AI-generated company summary. Identify hallucinations, fabrications, and contradictions.
+
+COMPANY: {company_name}
+
+AI-GENERATED SUMMARY TO VERIFY:
+{summary_text}
+{glm5_pitch_section}{glm5_evidence_section}
+INSTRUCTIONS:
+1. Extract every definitive claim from the summary (financial metrics, operational facts, strategic assessments).
+2. Cross-reference each claim against the STORED EVIDENCE SOURCES above.
+3. Use web search to verify claims that cannot be proven/disproven by stored sources alone.
+
+FLAG AS FALSE IF:
+A. [Fabrication] — specific metric/event NOT in stored evidence (unsourced = hallucination)
+B. [Contradiction] — claim contradicts stored evidence or verifiable web facts
+C. [Misattribution] — number used in wrong context (delta vs base, revenue vs profit, wrong period)
+D. [Organizational Fabrication] — invented leadership gaps or vacancies not reported publicly
+
+Do NOT flag Knowledge Base terms (e.g. "Digital Taylorism", "Thriving") or scan history references (e.g. "72→76→75", "across X scans").
+
+OUTPUT — valid JSON only:
+If accurate: {{"false_claims": [], "summary_accurate": true}}
+If false claims found: {{"false_claims": [{{"claim": "exact quote", "error_type": "Fabrication|Contradiction|Misattribution|Organizational Fabrication", "reasoning": "why false", "correction": "verified replacement or empty string", "wrong_value": "incorrect value or empty", "correct_value": "correct value or empty", "source_indices": [1, 2]}}], "summary_accurate": false}}"""
+
             print(f"   🔄 [Fact-Check S1] Trying GLM-5 + Web Search...")
             glm5_start = time.time()
             glm5_text = glm5_web_search(
-                prompt=stage1_prompt,
+                prompt=glm5_stage1_prompt,
                 label=f"Fact-Check {company_name} GLM-5",
                 temperature=0.6,
                 max_tokens=8000,
-                timeout=90,
-                thinking=True,
+                timeout=120,
+                thinking=False,
                 do_sample=False,
             )
             glm5_elapsed = int((time.time() - glm5_start) * 1000)
