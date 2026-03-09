@@ -1689,39 +1689,12 @@ def run_scan(
         washing_flag = reality_results.get("washing_flag", False)
         washing_type = reality_results.get("washing_type", None)
         key_people = reality_results.get("key_people", [])
-
-        # ── Preserve / merge previous key_people when new scan has gaps ──
-        # Scanner 2 sometimes returns placeholder names ("Unknown") when the
-        # structuring model can't extract a real name from the free-text output.
-        # If a previous scan had real names, prefer those over placeholders.
-        _placeholder_names = {"unknown", "unnamed", "n/a", "tbd", "none",
-                              "not found", "not available", "ei tiedossa", "tuntematon"}
-
-        def _is_real_name(name_str):
-            return bool(name_str) and name_str.strip().lower() not in _placeholder_names
-
-        new_real_count = sum(1 for p in key_people if _is_real_name(p.get("name", "")))
-
-        if existing_data:
+        # Preserve previous key_people if new scan returned empty
+        if not key_people and existing_data:
             prev_kp = existing_data.get("key_people", [])
-            prev_real_count = sum(1 for p in prev_kp if _is_real_name(p.get("name", "")))
-
-            if not key_people and prev_kp:
-                # New scan returned nothing — keep previous entirely
+            if prev_kp:
                 key_people = prev_kp
                 print(f"   [Key People] Preserved {len(prev_kp)} stakeholder(s) from previous scan (new scan returned none)")
-            elif prev_real_count > new_real_count and prev_kp:
-                # Previous scan had more real names — merge: keep previous names,
-                # add any new roles not already covered
-                prev_roles = {p.get("role", "").lower().strip() for p in prev_kp if _is_real_name(p.get("name", ""))}
-                merged = list(prev_kp)
-                added = 0
-                for p in key_people:
-                    if _is_real_name(p.get("name", "")) and p.get("role", "").lower().strip() not in prev_roles:
-                        merged.append(p)
-                        added += 1
-                key_people = merged
-                print(f"   [Key People] Merged: kept {prev_real_count} named stakeholder(s) from previous scan, added {added} new")
 
         # --- STAKEHOLDER LINKEDIN ENRICHMENT ---
         if key_people:

@@ -290,8 +290,6 @@ The expected JSON structure is:
 }}
 
 Extract as much data as possible from the text below. Preserve all findings, URLs, and evidence. If a field cannot be determined, use sensible defaults (0 for scores, empty arrays for lists, false for booleans).
-
-CRITICAL for key_people: Extract REAL person names mentioned in the text. Do NOT use "Unknown", "N/A", or placeholder values for the name field. If the text mentions a role but no person name, OMIT that entry entirely — an empty array is better than placeholder names.
 {citations_section}
 
 TEXT TO PARSE:
@@ -367,8 +365,6 @@ The expected JSON structure is:
 }}
 
 Extract as much data as possible from the text below. Preserve all findings, URLs, and evidence. If a field cannot be determined, use sensible defaults (0 for scores, empty arrays for lists, false for booleans).
-
-CRITICAL for key_people: Extract REAL person names mentioned in the text. Do NOT use "Unknown", "N/A", or placeholder values for the name field. If the text mentions a role but no person name, OMIT that entry entirely — an empty array is better than placeholder names.
 
 TEXT TO PARSE:
 {raw_text[:12000]}
@@ -1744,6 +1740,79 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 print(f"   ❌ [Forensic Scan] GLM-5 failed in {elapsed}ms: {glm_err}")
     else:
         print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Gemini 3.1 Pro Preview → Gemini 2.5 Pro")
+
+    # --- GLM-5 stakeholder gap: targeted Gemini supplementation ────────────
+    # GLM-5 often finds good evidence/scores but misses stakeholder names.
+    # Rather than re-running the full forensic scan, do a quick targeted
+    # Gemini call ONLY for key_people when GLM-5 left that field empty.
+    _placeholder_kp_names = {"unknown", "unnamed", "n/a", "tbd", "none",
+                             "not found", "not available", "ei tiedossa", "tuntematon"}
+    if data and zai_key:
+        kp = data.get("key_people", [])
+        real_names = [p for p in kp if p.get("name", "").strip().lower() not in _placeholder_kp_names and p.get("name", "").strip()]
+        if len(real_names) < 2:
+            elapsed_so_far = time.time() - _fn_start
+            if elapsed_so_far < _guard_forensic - 30:  # need at least 30s headroom
+                print(f"   🔄 [Key People] GLM-5 found {len(real_names)} named stakeholder(s). Running targeted Gemini search...")
+                kp_prompt = (
+                    f"Find the current key executives/leaders of {search_name} ({domain_hint}). "
+                    f"Search for real names in these roles:\n"
+                    f"1. CEO / Managing Director / Toimitusjohtaja\n"
+                    f"2. Technology (CTO, CIO, VP Engineering)\n"
+                    f"3. People/Culture (CPO, HR Director)\n"
+                    f"4. Transformation/Strategy (CDO, Head of Strategy)\n\n"
+                    f"RETURN STRICT JSON ONLY:\n"
+                    f'[{{"name": "Full Name", "role": "Exact Title", "relevance": "Why relevant"}}]'
+                )
+                try:
+                    kp_client = genai.Client(api_key=api_key)
+                    _kp_safety = [
+                        {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
+                        {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
+                        {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
+                        {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
+                    ]
+                    kp_config = types.GenerateContentConfig(
+                        tools=[types.Tool(google_search=types.GoogleSearch())],
+                        safety_settings=_kp_safety,
+                        temperature=0.5,
+                        max_output_tokens=2000,
+                    )
+                    kp_start = time.time()
+                    kp_response = kp_client.models.generate_content(
+                        model="gemini-2.5-pro",
+                        contents=kp_prompt,
+                        config=kp_config,
+                    )
+                    kp_text = kp_response.text if hasattr(kp_response, 'text') else ""
+                    kp_elapsed = int((time.time() - kp_start) * 1000)
+                    if kp_text:
+                        kp_json = extract_json_from_text(kp_text)
+                        if kp_json:
+                            kp_list = json.loads(kp_json, strict=False)
+                            if isinstance(kp_list, list) and kp_list:
+                                # Filter out any placeholders Gemini might return
+                                kp_list = [p for p in kp_list if isinstance(p, dict)
+                                           and p.get("name", "").strip().lower() not in _placeholder_kp_names
+                                           and p.get("name", "").strip()]
+                                if kp_list:
+                                    data["key_people"] = kp_list
+                                    print(f"   ✅ [Key People] Gemini found {len(kp_list)} stakeholder(s) ({kp_elapsed}ms)")
+                                else:
+                                    print(f"   ⚠️ [Key People] Gemini returned no real names ({kp_elapsed}ms)")
+                            elif isinstance(kp_list, dict) and "key_people" in kp_list:
+                                # Gemini returned {key_people: [...]} instead of bare array
+                                kp_arr = kp_list["key_people"]
+                                kp_arr = [p for p in kp_arr if isinstance(p, dict)
+                                          and p.get("name", "").strip().lower() not in _placeholder_kp_names
+                                          and p.get("name", "").strip()]
+                                if kp_arr:
+                                    data["key_people"] = kp_arr
+                                    print(f"   ✅ [Key People] Gemini found {len(kp_arr)} stakeholder(s) ({kp_elapsed}ms)")
+                        else:
+                            print(f"   ⚠️ [Key People] Could not parse Gemini response ({kp_elapsed}ms)")
+                except Exception as kp_err:
+                    print(f"   ⚠️ [Key People] Targeted Gemini search failed (non-fatal): {kp_err}")
 
     # --- BACKUP 1: Gemini 3.1 Pro Preview — two-pass mode ---
     if not data:
