@@ -12,7 +12,6 @@ from google import genai
 from google.genai import types
 import anthropic
 from knowledge_base import get_evolving_framework
-from glm5_client import glm5_web_search
 
 # --- HELPER: IMPROVE SEARCH RECALL ---
 def clean_company_name_for_search(name):
@@ -1670,157 +1669,18 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             print(f"   ❌ [Forensic Scan] claude-sonnet-4-6 + Web Search failed in {elapsed}ms: {e}")
             return None
 
-    # --- SEQUENTIAL FALLBACK: GLM-5 → Gemini 3.1 Pro Preview → Gemini 2.5 Pro ---
-    # GLM-5 is PRIMARY: Z.ai web search, OpenAI-compatible, ~5-8x cheaper than Gemini.
-    # Gemini 3.1 Pro Preview is BACKUP 1: native Google Search, temp=0.5, thinking_budget=3000.
-    # Gemini 2.5 Pro is BACKUP 2: separate rate limits from 3.x family (~40-50s, reliable).
+    # --- SEQUENTIAL: Gemini 3.1 Pro Preview → Gemini 2.5 Pro ---
+    # Gemini 3.1 Pro Preview is PRIMARY: native Google Search, temp=0.5, thinking_budget=3000.
+    # Gemini 2.5 Pro is BACKUP: separate rate limits from 3.x family (~40-50s, reliable).
     data = None
 
-    # --- PRIMARY: GLM-5 with web search (Z.ai) ---
-    zai_key = os.environ.get("ZAI_API_KEY", "")
-    if zai_key:
-        elapsed_total = time.time() - _fn_start
-        if elapsed_total < _guard_forensic:
-            print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: GLM-5 → Gemini 3.1 Pro Preview → Gemini 2.5 Pro")
-            print(f"   🔄 [Forensic Scan] Attempting GLM-5 + Web Search for {company_name}...")
-            start = time.time()
-            try:
-                # Use the same prompt with relaxed JSON requirement for GLM-5
-                glm5_prompt = re.sub(
-                    r'RETURN STRICT JSON[^:]*:',
-                    'REPORT YOUR FINDINGS (any clear structured format — JSON, markdown, or text):',
-                    prompt
-                )
-                glm5_prompt = (
-                    "IMPORTANT CONSTRAINTS FOR THIS SEARCH:\n"
-                    "1. SEARCH LIMIT: Complete your analysis in MAX 6 web searches. After 6 searches, "
-                    "STOP searching and synthesize what you have. Do NOT repeat similar queries.\n"
-                    "2. URL QUALITY: ONLY include URLs that appear in actual search results. "
-                    "Do NOT construct URLs from memory or guess URL patterns.\n"
-                    "3. EFFICIENCY: Combine related queries with OR operators into single searches.\n"
-                    "4. STOP CONDITION: If after 4 searches you have found 3+ verified findings, "
-                    "write your final response.\n\n"
-                ) + glm5_prompt
+    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Gemini 3.1 Pro Preview → Gemini 2.5 Pro")
 
-                response_text = glm5_web_search(
-                    prompt=glm5_prompt,
-                    label=f"Forensic Scan {company_name} GLM-5",
-                    temperature=0.6,
-                    max_tokens=8000,
-                    timeout=180,
-                    thinking=True,
-                )
-                elapsed = int((time.time() - start) * 1000)
-
-                if response_text and len(response_text) > 100:
-                    # Try to extract JSON from GLM-5 response
-                    json_payload = extract_json_from_text(response_text)
-                    if json_payload:
-                        try:
-                            data = json.loads(json_payload, strict=False)
-                            print(f"   ✅ [Forensic Scan] GLM-5 succeeded in {elapsed}ms")
-                        except json.JSONDecodeError as je:
-                            print(f"   ⚠️ [Forensic Scan] GLM-5 JSON parse failed: {je}")
-
-                    # If no valid JSON, try structuring with Sonnet/Gemini (Pass 2)
-                    if not data and len(response_text) > 200:
-                        print(f"   🔄 [Pass 2] GLM-5 returned {len(response_text)} chars ({elapsed}ms). Structuring into JSON...")
-                        repaired = _repair_json_with_sonnet(response_text, company_name, is_structuring=True)
-                        if not repaired:
-                            print(f"   ⚠️ [Pass 2] Sonnet structuring failed. Trying Gemini 2.5 Pro...")
-                            repaired = _structure_with_gemini(response_text, company_name, "gemini-2.5-pro")
-                        if repaired:
-                            data = repaired
-                            repair_elapsed = int((time.time() - start) * 1000)
-                            print(f"   ✅ [Pass 2] Structured GLM-5 data ({repair_elapsed}ms total)")
-                else:
-                    print(f"   ⚠️ [Forensic Scan] GLM-5 returned insufficient data ({len(response_text) if response_text else 0} chars, {elapsed}ms)")
-            except Exception as glm_err:
-                elapsed = int((time.time() - start) * 1000)
-                print(f"   ❌ [Forensic Scan] GLM-5 failed in {elapsed}ms: {glm_err}")
-    else:
-        print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Gemini 3.1 Pro Preview → Gemini 2.5 Pro")
-
-    # --- GLM-5 stakeholder gap: targeted Gemini supplementation ────────────
-    # GLM-5 often finds good evidence/scores but misses stakeholder names.
-    # Rather than re-running the full forensic scan, do a quick targeted
-    # Gemini call ONLY for key_people when GLM-5 left that field empty.
-    _placeholder_kp_names = {"unknown", "unnamed", "n/a", "tbd", "none",
-                             "not found", "not available", "ei tiedossa", "tuntematon"}
-    if data and zai_key:
-        kp = data.get("key_people", [])
-        real_names = [p for p in kp if p.get("name", "").strip().lower() not in _placeholder_kp_names and p.get("name", "").strip()]
-        if len(real_names) < 2:
-            elapsed_so_far = time.time() - _fn_start
-            if elapsed_so_far < _guard_forensic - 30:  # need at least 30s headroom
-                print(f"   🔄 [Key People] GLM-5 found {len(real_names)} named stakeholder(s). Running targeted Gemini search...")
-                kp_prompt = (
-                    f"Find the current key executives/leaders of {search_name} ({domain_hint}). "
-                    f"Search for real names in these roles:\n"
-                    f"1. CEO / Managing Director / Toimitusjohtaja\n"
-                    f"2. Technology (CTO, CIO, VP Engineering)\n"
-                    f"3. People/Culture (CPO, HR Director)\n"
-                    f"4. Transformation/Strategy (CDO, Head of Strategy)\n\n"
-                    f"RETURN STRICT JSON ONLY:\n"
-                    f'[{{"name": "Full Name", "role": "Exact Title", "relevance": "Why relevant"}}]'
-                )
-                try:
-                    kp_client = genai.Client(api_key=api_key)
-                    _kp_safety = [
-                        {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
-                        {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
-                        {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
-                        {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
-                    ]
-                    kp_config = types.GenerateContentConfig(
-                        tools=[types.Tool(google_search=types.GoogleSearch())],
-                        safety_settings=_kp_safety,
-                        temperature=0.5,
-                        max_output_tokens=2000,
-                    )
-                    kp_start = time.time()
-                    kp_response = kp_client.models.generate_content(
-                        model="gemini-2.5-pro",
-                        contents=kp_prompt,
-                        config=kp_config,
-                    )
-                    kp_text = kp_response.text if hasattr(kp_response, 'text') else ""
-                    kp_elapsed = int((time.time() - kp_start) * 1000)
-                    if kp_text:
-                        kp_json = extract_json_from_text(kp_text)
-                        if kp_json:
-                            kp_list = json.loads(kp_json, strict=False)
-                            if isinstance(kp_list, list) and kp_list:
-                                # Filter out any placeholders Gemini might return
-                                kp_list = [p for p in kp_list if isinstance(p, dict)
-                                           and p.get("name", "").strip().lower() not in _placeholder_kp_names
-                                           and p.get("name", "").strip()]
-                                if kp_list:
-                                    data["key_people"] = kp_list
-                                    print(f"   ✅ [Key People] Gemini found {len(kp_list)} stakeholder(s) ({kp_elapsed}ms)")
-                                else:
-                                    print(f"   ⚠️ [Key People] Gemini returned no real names ({kp_elapsed}ms)")
-                            elif isinstance(kp_list, dict) and "key_people" in kp_list:
-                                # Gemini returned {key_people: [...]} instead of bare array
-                                kp_arr = kp_list["key_people"]
-                                kp_arr = [p for p in kp_arr if isinstance(p, dict)
-                                          and p.get("name", "").strip().lower() not in _placeholder_kp_names
-                                          and p.get("name", "").strip()]
-                                if kp_arr:
-                                    data["key_people"] = kp_arr
-                                    print(f"   ✅ [Key People] Gemini found {len(kp_arr)} stakeholder(s) ({kp_elapsed}ms)")
-                        else:
-                            print(f"   ⚠️ [Key People] Could not parse Gemini response ({kp_elapsed}ms)")
-                except Exception as kp_err:
-                    print(f"   ⚠️ [Key People] Targeted Gemini search failed (non-fatal): {kp_err}")
-
-    # --- BACKUP 1: Gemini 3.1 Pro Preview — two-pass mode ---
+    # --- PRIMARY: Gemini 3.1 Pro Preview — two-pass mode ---
     if not data:
-        if zai_key:
-            print(f"   ⚠️ [Forensic Scan] GLM-5 returned no usable data. Falling back to Gemini 3.1 Pro Preview...")
         data = execute_with_model("gemini-3.1-pro-preview", None, 180)
 
-    # --- BACKUP 2: Gemini 2.5 Pro (separate rate limits from 3.x family; ~40-50s typical) ---
+    # --- BACKUP: Gemini 2.5 Pro (separate rate limits from 3.x family; ~40-50s typical) ---
     if not data:
         print(f"   ⚠️ [Forensic Scan] Gemini 3.1 Pro Preview returned no data. Falling back to Gemini 2.5 Pro...")
         data = execute_with_model("gemini-2.5-pro", call_timeout=120)

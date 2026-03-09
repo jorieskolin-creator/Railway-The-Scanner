@@ -17,7 +17,6 @@ import re
 import time
 
 from gemini_backoff import call_with_503_backoff
-from glm5_client import glm5_web_search
 
 
 def _extract_json(text: str) -> dict | None:
@@ -240,27 +239,7 @@ def enrich_single_person(person: dict, company_name: str, gemini_key: str) -> di
     response_text = ""
     model_used = ""
 
-    # Primary: GLM-5 with web search (Z.ai)
-    zai_key = os.environ.get("ZAI_API_KEY", "")
-    if zai_key:
-        try:
-            print(f"      🔍 [Stakeholder Intel] Searching for {name} ({role}) via GLM-5...")
-            response_text = glm5_web_search(
-                prompt=prompt,
-                label=f"Stakeholder Intel {name} GLM-5",
-                temperature=0.6,
-                max_tokens=4000,
-                timeout=60,
-                thinking=True,
-            )
-            if response_text:
-                model_used = "glm-5"
-            else:
-                print(f"      ⚠️ [Stakeholder Intel] GLM-5 returned empty response for {name}")
-        except Exception as glm_err:
-            print(f"      ❌ [Stakeholder Intel] GLM-5 failed for {name}: {glm_err}")
-
-    # Fallback 1: Gemini 2.5 Pro with Google Search grounding
+    # Primary: Gemini 2.5 Pro with Google Search grounding
     if not response_text:
         _safety = [
             {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
@@ -269,7 +248,7 @@ def enrich_single_person(person: dict, company_name: str, gemini_key: str) -> di
             {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
         ]
         try:
-            print(f"      🔄 [Stakeholder Intel] Falling back to gemini-2.5-pro for {name}...")
+            print(f"      🔍 [Stakeholder Intel] Searching for {name} ({role}) via gemini-2.5-pro...")
             client = genai.Client(api_key=gemini_key)
             resp = call_with_503_backoff(
                 lambda: client.models.generate_content(
@@ -412,27 +391,7 @@ def _enrich_batch(people_with_names: list[dict], company_name: str, gemini_key: 
     response_text = ""
     model_used = ""
 
-    # Primary: GLM-5 with web search (Z.ai)
-    zai_key = os.environ.get("ZAI_API_KEY", "")
-    if zai_key:
-        try:
-            print(f"      🔍 [Stakeholder Intel] Batched search for {len(people_with_names)} people ({names_str}) via GLM-5...")
-            response_text = glm5_web_search(
-                prompt=prompt,
-                label=f"Stakeholder Intel batch GLM-5",
-                temperature=0.6,
-                max_tokens=8000,
-                timeout=90,
-                thinking=True,
-            )
-            if response_text:
-                model_used = "glm-5"
-            else:
-                print(f"      ⚠️ [Stakeholder Intel] GLM-5 batch returned empty response")
-        except Exception as glm_err:
-            print(f"      ❌ [Stakeholder Intel] Batch GLM-5 failed: {glm_err}")
-
-    # Fallback 1: Gemini 2.5 Pro with Google Search grounding
+    # Primary: Gemini 2.5 Pro with Google Search grounding
     if not response_text:
         _safety = [
             {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
@@ -441,7 +400,7 @@ def _enrich_batch(people_with_names: list[dict], company_name: str, gemini_key: 
             {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
         ]
         try:
-            print(f"      🔄 [Stakeholder Intel] Batched fallback to gemini-2.5-pro for {len(people_with_names)} people ({names_str})...")
+            print(f"      🔍 [Stakeholder Intel] Batched search for {len(people_with_names)} people ({names_str}) via gemini-2.5-pro...")
             client = genai.Client(api_key=gemini_key)
             resp = call_with_503_backoff(
                 lambda: client.models.generate_content(

@@ -3,7 +3,7 @@ Reality Check — Hallucination Detection for AI-Generated Summaries
 
 Two layers:
 1. Heuristic pattern matching (zero API cost) — catches obvious fakes
-2. AI-powered fact-check (GLM-5 primary / Gemini 2.5 Pro / 3.1 Pro backup + web search grounding)
+2. AI-powered fact-check (Gemini 3.1 Pro / 2.5 Pro + web search grounding)
    — verifies synthesis claims against live web data
    — if false claims found, also produces corrected summary in the same call
 
@@ -16,7 +16,6 @@ import json
 import os
 import time
 from gemini_backoff import call_with_503_backoff
-from glm5_client import glm5_web_search
 
 # Regex for detecting scan history references in fact-check claims.
 # These come from internal DB records (scan_history), not external web sources,
@@ -660,132 +659,18 @@ Each false_claims object must have:
             return text
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # STAGE 1 — Detection: GLM-5 (primary) → Gemini 2.5 Pro → 3.1 Pro fallback
+    # STAGE 1 — Detection: Gemini 3.1 Pro → 2.5 Pro fallback
     # ═══════════════════════════════════════════════════════════════════════════
     stage1_false_claims = None
     stage1_model_name = None
     stage1_time_ms = 0
 
-    # Non-issue phrases to skip (used by both GLM-5 and Gemini parsing)
+    # Non-issue phrases to skip (used by Gemini parsing)
     _not_real = ["no fabrication", "no false", "appears accurate", "all accurate",
                  "no issues", "could not find", "unable to verify", "summary is accurate",
                  "no contradiction", "no conflict", "all align", "nothing to flag"]
 
-    # ── GLM-5 attempt (first option) ──────────────────────────────────────────
-    # GLM-5 with thinking=True + web_search + large evidence section times out
-    # at 90s (thinking burns the entire budget before web search starts).
-    # Fix: disable thinking (web search provides grounding), trim evidence to
-    # 10 sources with 200-char snippets, and allow 120s wall-clock.
-    zai_key = os.environ.get("ZAI_API_KEY", "")
-    if zai_key:
-        try:
-            # Build a trimmed prompt for GLM-5 — fewer evidence sources, shorter snippets
-            glm5_evidence_ref = ""
-            if evidence_links:
-                glm5_sources = [l for l in evidence_links if l.get("verified", True)][:10]
-                for i, link in enumerate(glm5_sources, 1):
-                    title = link.get("title", "Unknown")
-                    url = link.get("url", "")
-                    snippet = link.get("snippet", "")[:200]
-                    glm5_evidence_ref += f"[{i}] {title} | {url} | {snippet}\n"
-            glm5_evidence_section = f"\nSTORED EVIDENCE SOURCES:\n{glm5_evidence_ref}" if glm5_evidence_ref else ""
-            glm5_pitch_section = f"\nAI-GENERATED PITCH TO VERIFY:\n{pitch_text}" if pitch_text else ""
-
-            glm5_stage1_prompt = f"""You are an uncompromising Data Auditor. Evaluate the faithfulness and factual accuracy of this AI-generated company summary. Identify hallucinations, fabrications, and contradictions.
-
-COMPANY: {company_name}
-
-AI-GENERATED SUMMARY TO VERIFY:
-{summary_text}
-{glm5_pitch_section}{glm5_evidence_section}
-INSTRUCTIONS:
-1. Extract every definitive claim from the summary (financial metrics, operational facts, strategic assessments).
-2. Cross-reference each claim against the STORED EVIDENCE SOURCES above.
-3. Use web search to verify claims that cannot be proven/disproven by stored sources alone.
-
-FLAG AS FALSE IF:
-A. [Fabrication] — specific metric/event NOT in stored evidence (unsourced = hallucination)
-B. [Contradiction] — claim contradicts stored evidence or verifiable web facts
-C. [Misattribution] — number used in wrong context (delta vs base, revenue vs profit, wrong period)
-D. [Organizational Fabrication] — invented leadership gaps or vacancies not reported publicly
-
-Do NOT flag Knowledge Base terms (e.g. "Digital Taylorism", "Thriving") or scan history references (e.g. "72→76→75", "across X scans").
-
-OUTPUT — valid JSON only:
-If accurate: {{"false_claims": [], "summary_accurate": true}}
-If false claims found: {{"false_claims": [{{"claim": "exact quote", "error_type": "Fabrication|Contradiction|Misattribution|Organizational Fabrication", "reasoning": "why false", "correction": "verified replacement or empty string", "wrong_value": "incorrect value or empty", "correct_value": "correct value or empty", "source_indices": [1, 2]}}], "summary_accurate": false}}"""
-
-            print(f"   🔄 [Fact-Check S1] Trying GLM-5 + Web Search...")
-            glm5_start = time.time()
-            glm5_text = glm5_web_search(
-                prompt=glm5_stage1_prompt,
-                label=f"Fact-Check {company_name} GLM-5",
-                temperature=0.6,
-                max_tokens=8000,
-                timeout=120,
-                thinking=False,
-                do_sample=False,
-            )
-            glm5_elapsed = int((time.time() - glm5_start) * 1000)
-
-            if glm5_text:
-                glm5_result = _robust_parse_json(glm5_text)
-                if glm5_result and "false_claims" in glm5_result:
-                    # Respect summary_accurate override
-                    if glm5_result.get("summary_accurate") is True and glm5_result.get("false_claims"):
-                        print(f"   ✅ [Fact-Check S1] GLM-5 explicitly said summary_accurate=true ({glm5_elapsed}ms)")
-                        return {"false_claims": [], "corrected_summary": "", "corrected_pitch": "", "model": "glm-5", "time_ms": glm5_elapsed}
-
-                    raw_claims = glm5_result.get("false_claims", [])
-                    false_claims = []
-                    for fc in raw_claims[:10]:
-                        if isinstance(fc, str):
-                            if any(p in fc.lower() for p in _not_real):
-                                print(f"   ⏭️ [Fact-Check S1] Skipping non-issue entry: {fc[:80]}")
-                                continue
-                            false_claims.append({"claim": fc, "error_type": "Unknown", "reasoning": "", "source_indices": [], "source_urls": []})
-                        elif isinstance(fc, dict):
-                            claim_text = fc.get("claim", str(fc))
-                            if any(p in claim_text.lower() for p in _not_real):
-                                print(f"   ⏭️ [Fact-Check S1] Skipping non-issue entry: {claim_text[:80]}")
-                                continue
-                            error_type = fc.get("error_type", "Unknown")
-                            reasoning = fc.get("reasoning", "")
-                            indices = fc.get("source_indices", [])
-                            source_urls = []
-                            for idx in indices:
-                                if isinstance(idx, int) and 1 <= idx <= len(verified_links):
-                                    url = verified_links[idx - 1].get("url", "")
-                                    if url:
-                                        source_urls.append(url)
-                            correction = fc.get("correction", "")
-                            wrong_value = fc.get("wrong_value", "")
-                            correct_value = fc.get("correct_value", "")
-                            false_claims.append({
-                                "claim": claim_text,
-                                "error_type": error_type,
-                                "reasoning": reasoning,
-                                "correction": correction,
-                                "wrong_value": wrong_value,
-                                "correct_value": correct_value,
-                                "source_indices": indices,
-                                "source_urls": source_urls,
-                            })
-
-                    print(f"   {'⚠️' if false_claims else '✅'} [Fact-Check S1] GLM-5: {len(false_claims)} false claim(s) ({glm5_elapsed}ms)")
-                    stage1_false_claims = false_claims
-                    stage1_model_name = "glm-5"
-                    stage1_time_ms = glm5_elapsed
-                else:
-                    print(f"   ⚠️ [Fact-Check S1] Could not parse GLM-5 response: {glm5_text[:500]}")
-            else:
-                print(f"   ⚠️ [Fact-Check S1] GLM-5 returned empty response ({glm5_elapsed}ms)")
-        except Exception as e:
-            print(f"   ❌ [Fact-Check S1] GLM-5 failed: {e}")
-    else:
-        print(f"   ⏭️ [Fact-Check S1] ZAI_API_KEY not set, skipping GLM-5")
-
-    # ── Gemini fallback (if GLM-5 didn't succeed) ─────────────────────────────
+    # ── Gemini Stage 1 — detect false claims ────────────────────────────────
     if stage1_false_claims is None:
         for model_name, timeout_sec, model_config in stage1_models:
             try:
@@ -866,7 +751,7 @@ If false claims found: {{"false_claims": [{{"claim": "exact quote", "error_type"
         return {"false_claims": [], "corrected_summary": "", "corrected_pitch": "", "model": stage1_model_name, "time_ms": stage1_time_ms}
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # STAGE 2 — Surgical correction: GLM-5 (primary) → Gemini 3.1 Pro fallback
+    # STAGE 2 — Surgical correction: Gemini 3.1 Pro
     # Runs only because Stage 1 found false claims.
     # ═══════════════════════════════════════════════════════════════════════════
     claims_lines = []
@@ -915,42 +800,7 @@ OUTPUT FORMAT — valid JSON only:
     elapsed2 = 0
     s2_model_name = None
 
-    # ── GLM-5 attempt for Stage 2 (no web search needed, pure text editing) ──
-    if zai_key:
-        try:
-            from glm5_client import glm5_chat
-            print(f"   🔄 [Fact-Check S2] Trying GLM-5 correcting {len(stage1_false_claims)} false claim(s)...")
-            glm5_s2_start = time.time()
-            glm5_s2_text = glm5_chat(
-                prompt=stage2_prompt,
-                label=f"Fact-Check S2 {company_name} GLM-5",
-                system_prompt="You are a precise editorial editor. Output valid JSON only.",
-                temperature=0.6,
-                max_tokens=10000,
-                timeout=60,
-                thinking=True,
-                do_sample=False,
-            )
-            elapsed2 = int((time.time() - glm5_s2_start) * 1000)
-
-            if glm5_s2_text:
-                result2 = _robust_parse_json(glm5_s2_text)
-                if result2:
-                    corrected_summary = result2.get("corrected_summary", "")
-                    corrected_pitch = result2.get("corrected_pitch", "")
-                    if corrected_summary:
-                        print(f"   ✏️ [Fact-Check S2] GLM-5 correction produced ({len(corrected_summary.split())} words, {elapsed2}ms)")
-                        s2_model_name = "glm-5"
-                    else:
-                        print(f"   ⚠️ [Fact-Check S2] GLM-5 parsed but no corrected_summary")
-                else:
-                    print(f"   ⚠️ [Fact-Check S2] Could not parse GLM-5 response: {glm5_s2_text[:500]}")
-            else:
-                print(f"   ⚠️ [Fact-Check S2] GLM-5 returned empty response ({elapsed2}ms)")
-        except Exception as e:
-            print(f"   ❌ [Fact-Check S2] GLM-5 failed: {e}")
-
-    # ── Gemini 3.1 Pro fallback for Stage 2 ──────────────────────────────────
+    # ── Gemini 3.1 Pro for Stage 2 correction ──────────────────────────────
     if not s2_model_name:
         try:
             print(f"   🔄 [Fact-Check S2] Gemini 3.1 Pro correcting {len(stage1_false_claims)} false claim(s)...")
@@ -997,8 +847,8 @@ OUTPUT FORMAT — valid JSON only:
 def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text=None):
     """
     AI-powered fact-check — two-stage pipeline:
-      Stage 1: GLM-5 (primary) → Gemini 2.5 Pro → 3.1 Pro fallback — detects false claims via web search.
-      Stage 2: GLM-5 (primary) → Gemini 3.1 Pro fallback — surgically corrects false claims.
+      Stage 1: Gemini 3.1 Pro → 2.5 Pro fallback — detects false claims via web search.
+      Stage 2: Gemini 3.1 Pro — surgically corrects false claims.
 
     The fact-checker independently verifies the synthesis claims against live
     web data. This catches both evidence-sourced errors (contaminated evidence)
