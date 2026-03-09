@@ -290,6 +290,8 @@ The expected JSON structure is:
 }}
 
 Extract as much data as possible from the text below. Preserve all findings, URLs, and evidence. If a field cannot be determined, use sensible defaults (0 for scores, empty arrays for lists, false for booleans).
+
+CRITICAL for key_people: Extract REAL person names mentioned in the text. Do NOT use "Unknown", "N/A", or placeholder values for the name field. If the text mentions a role but no person name, OMIT that entry entirely — an empty array is better than placeholder names.
 {citations_section}
 
 TEXT TO PARSE:
@@ -365,6 +367,8 @@ The expected JSON structure is:
 }}
 
 Extract as much data as possible from the text below. Preserve all findings, URLs, and evidence. If a field cannot be determined, use sensible defaults (0 for scores, empty arrays for lists, false for booleans).
+
+CRITICAL for key_people: Extract REAL person names mentioned in the text. Do NOT use "Unknown", "N/A", or placeholder values for the name field. If the text mentions a role but no person name, OMIT that entry entirely — an empty array is better than placeholder names.
 
 TEXT TO PARSE:
 {raw_text[:12000]}
