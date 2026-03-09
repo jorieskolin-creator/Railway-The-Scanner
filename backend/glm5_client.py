@@ -11,6 +11,8 @@ GLM-5 supports:
     Default: enabled. Can be disabled with {"type": "disabled"}.
   - Temperature: 0.6 recommended for general use, 1.0 for benchmarks.
     Note: thinking mode may override low temperatures (like Gemini 3.x).
+  - do_sample: false for greedy/deterministic output (factual tasks),
+    true (default) for creative/diverse output. Passed via extra_body.
 
 This module provides drop-in replacements for Gemini calls in:
   - Stakeholder Intel (person enrichment)
@@ -45,6 +47,7 @@ def glm5_web_search(
     max_tokens: int = 4000,
     timeout: int = 90,
     thinking: bool = True,
+    do_sample: bool = False,
 ) -> str:
     """
     Call GLM-5 with web search enabled and return the text response.
@@ -52,6 +55,7 @@ def glm5_web_search(
     Uses the zhipuai web_search tool type for grounded search results.
     Thinking mode is enabled by default (GLM-5's reasoning helps with
     evidence evaluation and identity verification).
+    do_sample=False by default for greedy/deterministic factual output.
     Runs in a thread pool to enforce wall-clock timeout.
 
     Parameters
@@ -62,14 +66,15 @@ def glm5_web_search(
     max_tokens  : Max output tokens (excludes reasoning tokens)
     timeout     : Wall-clock timeout in seconds
     thinking    : Enable GLM-5's reasoning mode (default True)
+    do_sample   : False=greedy deterministic (default), True=random sampling
 
     Returns the response text, or empty string on failure.
     """
     client = _get_client()
 
     def _call():
-        # Build extra_body for thinking mode (not part of OpenAI standard params)
-        extra = {}
+        # Build extra_body for Z.ai-specific params (not part of OpenAI standard)
+        extra = {"do_sample": do_sample}
         if thinking:
             extra["thinking"] = {"type": "enabled"}
         else:
@@ -117,17 +122,19 @@ def glm5_chat(
     max_tokens: int = 8000,
     timeout: int = 120,
     thinking: bool = False,
+    do_sample: bool = False,
 ) -> str:
     """
     Call GLM-5 WITHOUT web search (pure text generation).
     Used for JSON structuring / repair tasks.
 
     Thinking is disabled by default for structuring tasks (speed over reasoning).
+    do_sample=False by default for deterministic JSON output.
     """
     client = _get_client()
 
     def _call():
-        extra = {}
+        extra = {"do_sample": do_sample}
         if thinking:
             extra["thinking"] = {"type": "enabled"}
         else:
