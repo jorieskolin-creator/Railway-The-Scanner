@@ -17,6 +17,7 @@ import re
 import time
 
 from gemini_backoff import call_with_503_backoff
+from glm5_client import glm5_web_search
 
 
 def _extract_json(text: str) -> dict | None:
@@ -236,43 +237,61 @@ def enrich_single_person(person: dict, company_name: str, gemini_key: str) -> di
 
     prompt = _build_person_prompt(name, role, company_name)
 
-    _safety = [
-        {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
-        {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
-        {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
-        {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
-    ]
-
     response_text = ""
     model_used = ""
 
-    # Primary: Gemini 2.5 Pro with Google Search grounding
-    # (2.5 Pro is more reliable for structured JSON output than 3.1 Pro preview)
-    try:
-        print(f"      🔍 [Stakeholder Intel] Searching for {name} ({role}) via gemini-2.5-pro...")
-        client = genai.Client(api_key=gemini_key)
-        resp = call_with_503_backoff(
-            lambda: client.models.generate_content(
-                model="gemini-2.5-pro",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    tools=[{'google_search': {}}],
-                    temperature=0.0,
-                    thinking_config=types.ThinkingConfig(thinking_budget=1024),
-                    max_output_tokens=4000,
-                    safety_settings=_safety,
-                )
-            ),
-            label=f"Stakeholder Intel {name} gemini-2.5-pro",
-            model="gemini-2.5-pro",
-            timeout=60,
-        )
-        response_text = resp.text or ""
-        model_used = "gemini-2.5-pro"
-    except Exception as g25_err:
-        print(f"      ❌ [Stakeholder Intel] Gemini 2.5 Pro failed for {name}: {g25_err}")
+    # Primary: GLM-5 with web search (Z.ai)
+    zai_key = os.environ.get("ZAI_API_KEY", "")
+    if zai_key:
+        try:
+            print(f"      🔍 [Stakeholder Intel] Searching for {name} ({role}) via GLM-5...")
+            response_text = glm5_web_search(
+                prompt=prompt,
+                label=f"Stakeholder Intel {name} GLM-5",
+                temperature=0.0,
+                max_tokens=4000,
+                timeout=60,
+            )
+            if response_text:
+                model_used = "glm-5"
+            else:
+                print(f"      ⚠️ [Stakeholder Intel] GLM-5 returned empty response for {name}")
+        except Exception as glm_err:
+            print(f"      ❌ [Stakeholder Intel] GLM-5 failed for {name}: {glm_err}")
 
-    # Fallback: Gemini 3.1 Pro with Google Search
+    # Fallback 1: Gemini 2.5 Pro with Google Search grounding
+    if not response_text:
+        _safety = [
+            {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
+            {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
+            {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
+            {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
+        ]
+        try:
+            print(f"      🔄 [Stakeholder Intel] Falling back to gemini-2.5-pro for {name}...")
+            client = genai.Client(api_key=gemini_key)
+            resp = call_with_503_backoff(
+                lambda: client.models.generate_content(
+                    model="gemini-2.5-pro",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        tools=[{'google_search': {}}],
+                        temperature=0.0,
+                        thinking_config=types.ThinkingConfig(thinking_budget=1024),
+                        max_output_tokens=4000,
+                        safety_settings=_safety,
+                    )
+                ),
+                label=f"Stakeholder Intel {name} gemini-2.5-pro",
+                model="gemini-2.5-pro",
+                timeout=60,
+            )
+            response_text = resp.text or ""
+            model_used = "gemini-2.5-pro"
+        except Exception as g25_err:
+            print(f"      ❌ [Stakeholder Intel] Gemini 2.5 Pro failed for {name}: {g25_err}")
+
+    # Fallback 2: Gemini 3.1 Pro with Google Search
     if not response_text:
         try:
             print(f"      🔄 [Stakeholder Intel] Falling back to gemini-3.1-pro-preview for {name}...")
@@ -389,42 +408,61 @@ def _enrich_batch(people_with_names: list[dict], company_name: str, gemini_key: 
     prompt = _build_batch_prompt(people_with_names, company_name)
     names_str = ", ".join(p.get("name", "?") for p in people_with_names)
 
-    _safety = [
-        {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
-        {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
-        {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
-        {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
-    ]
-
     response_text = ""
     model_used = ""
 
-    # Primary: Gemini 2.5 Pro with Google Search grounding
-    try:
-        print(f"      🔍 [Stakeholder Intel] Batched search for {len(people_with_names)} people ({names_str}) via gemini-2.5-pro...")
-        client = genai.Client(api_key=gemini_key)
-        resp = call_with_503_backoff(
-            lambda: client.models.generate_content(
-                model="gemini-2.5-pro",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    tools=[{'google_search': {}}],
-                    temperature=0.0,
-                    thinking_config=types.ThinkingConfig(thinking_budget=1024),
-                    max_output_tokens=8000,
-                    safety_settings=_safety,
-                )
-            ),
-            label=f"Stakeholder Intel batch gemini-2.5-pro",
-            model="gemini-2.5-pro",
-            timeout=90,
-        )
-        response_text = resp.text or ""
-        model_used = "gemini-2.5-pro"
-    except Exception as g25_err:
-        print(f"      ❌ [Stakeholder Intel] Batch Gemini 2.5 Pro failed: {g25_err}")
+    # Primary: GLM-5 with web search (Z.ai)
+    zai_key = os.environ.get("ZAI_API_KEY", "")
+    if zai_key:
+        try:
+            print(f"      🔍 [Stakeholder Intel] Batched search for {len(people_with_names)} people ({names_str}) via GLM-5...")
+            response_text = glm5_web_search(
+                prompt=prompt,
+                label=f"Stakeholder Intel batch GLM-5",
+                temperature=0.0,
+                max_tokens=8000,
+                timeout=90,
+            )
+            if response_text:
+                model_used = "glm-5"
+            else:
+                print(f"      ⚠️ [Stakeholder Intel] GLM-5 batch returned empty response")
+        except Exception as glm_err:
+            print(f"      ❌ [Stakeholder Intel] Batch GLM-5 failed: {glm_err}")
 
-    # Fallback: Gemini 3.1 Pro
+    # Fallback 1: Gemini 2.5 Pro with Google Search grounding
+    if not response_text:
+        _safety = [
+            {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
+            {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
+            {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
+            {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
+        ]
+        try:
+            print(f"      🔄 [Stakeholder Intel] Batched fallback to gemini-2.5-pro for {len(people_with_names)} people ({names_str})...")
+            client = genai.Client(api_key=gemini_key)
+            resp = call_with_503_backoff(
+                lambda: client.models.generate_content(
+                    model="gemini-2.5-pro",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        tools=[{'google_search': {}}],
+                        temperature=0.0,
+                        thinking_config=types.ThinkingConfig(thinking_budget=1024),
+                        max_output_tokens=8000,
+                        safety_settings=_safety,
+                    )
+                ),
+                label=f"Stakeholder Intel batch gemini-2.5-pro",
+                model="gemini-2.5-pro",
+                timeout=90,
+            )
+            response_text = resp.text or ""
+            model_used = "gemini-2.5-pro"
+        except Exception as g25_err:
+            print(f"      ❌ [Stakeholder Intel] Batch Gemini 2.5 Pro failed: {g25_err}")
+
+    # Fallback 2: Gemini 3.1 Pro
     if not response_text:
         try:
             print(f"      🔄 [Stakeholder Intel] Batch falling back to gemini-3.1-pro-preview...")

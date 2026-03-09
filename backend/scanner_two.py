@@ -12,6 +12,7 @@ from google import genai
 from google.genai import types
 import anthropic
 from knowledge_base import get_evolving_framework
+from glm5_client import glm5_web_search
 
 # --- HELPER: IMPROVE SEARCH RECALL ---
 def clean_company_name_for_search(name):
@@ -1669,32 +1670,83 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             print(f"   ❌ [Forensic Scan] claude-sonnet-4-6 + Web Search failed in {elapsed}ms: {e}")
             return None
 
-    # --- SEQUENTIAL FALLBACK: Gemini 3.1 Pro Preview → Gemini 2.5 Pro ---
-    # Gemini 3.1 Pro Preview is primary: native Google Search, temp=0.5, thinking_budget=3000.
-    # Gemini 2.5 Pro is BACKUP 1: separate rate limits from 3.x family (~40-50s, reliable).
-    # Gemini 3 Pro Preview removed from forensic chain: under 3.x server load it also times
-    #   out at 120s, wasting the full slot before 2.5-pro is reached. 2.5-pro has separate
-    #   quota and consistently returns in ~40s regardless of 3.x congestion.
-    # Sonnet is intentionally excluded: cross-provider API failures (credit exhaustion,
-    # quota errors) silently killed this slot and blocked JSON repair in the same event.
-    # Both Gemini models share the same structuring fallback chain in Pass 2.
-    #
-    # NOTE: There is no separate "gemini-3.1-pro" (non-preview) endpoint — do NOT add a
-    # duplicate fallback with the same model string; it wastes the full timeout budget and
-    # never succeeds if the primary already timed out.
+    # --- SEQUENTIAL FALLBACK: GLM-5 → Gemini 3.1 Pro Preview → Gemini 2.5 Pro ---
+    # GLM-5 is PRIMARY: Z.ai web search, OpenAI-compatible, ~5-8x cheaper than Gemini.
+    # Gemini 3.1 Pro Preview is BACKUP 1: native Google Search, temp=0.5, thinking_budget=3000.
+    # Gemini 2.5 Pro is BACKUP 2: separate rate limits from 3.x family (~40-50s, reliable).
     data = None
-    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Gemini 3.1 Pro Preview → Gemini 2.5 Pro")
 
-    # --- PRIMARY: Gemini 3.1 Pro Preview — two-pass mode ---
-    # Pass 1 (180s wall, soft timeout): relaxed-format prompt, thinking_budget=3000 (2000 on rescan), temp=0.5, Google Search.
-    #   temp=0.5: decisive query selection without creative drift; looping risk gone
-    #   because JSON-formatting pressure is removed.
-    #   Budget: thinking (~25-35s) + 6 searches (~30-50s) = ~55-85s peak.
-    # Pass 2 (fast): 3.1 Pro → Sonnet 4.6 → 2.5 Pro structuring chain.
-    #   temp=0.0, no tools, no thinking — pure JSON conversion.
-    data = execute_with_model("gemini-3.1-pro-preview", None, 180)
+    # --- PRIMARY: GLM-5 with web search (Z.ai) ---
+    zai_key = os.environ.get("ZAI_API_KEY", "")
+    if zai_key:
+        elapsed_total = time.time() - _fn_start
+        if elapsed_total < _guard_forensic:
+            print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: GLM-5 → Gemini 3.1 Pro Preview → Gemini 2.5 Pro")
+            print(f"   🔄 [Forensic Scan] Attempting GLM-5 + Web Search for {company_name}...")
+            start = time.time()
+            try:
+                # Use the same prompt with relaxed JSON requirement for GLM-5
+                glm5_prompt = re.sub(
+                    r'RETURN STRICT JSON[^:]*:',
+                    'REPORT YOUR FINDINGS (any clear structured format — JSON, markdown, or text):',
+                    prompt
+                )
+                glm5_prompt = (
+                    "IMPORTANT CONSTRAINTS FOR THIS SEARCH:\n"
+                    "1. SEARCH LIMIT: Complete your analysis in MAX 6 web searches. After 6 searches, "
+                    "STOP searching and synthesize what you have. Do NOT repeat similar queries.\n"
+                    "2. URL QUALITY: ONLY include URLs that appear in actual search results. "
+                    "Do NOT construct URLs from memory or guess URL patterns.\n"
+                    "3. EFFICIENCY: Combine related queries with OR operators into single searches.\n"
+                    "4. STOP CONDITION: If after 4 searches you have found 3+ verified findings, "
+                    "write your final response.\n\n"
+                ) + glm5_prompt
 
-    # --- BACKUP 1: Gemini 2.5 Pro (separate rate limits from 3.x family; ~40-50s typical) ---
+                response_text = glm5_web_search(
+                    prompt=glm5_prompt,
+                    label=f"Forensic Scan {company_name} GLM-5",
+                    temperature=0.1,
+                    max_tokens=8000,
+                    timeout=180,
+                )
+                elapsed = int((time.time() - start) * 1000)
+
+                if response_text and len(response_text) > 100:
+                    # Try to extract JSON from GLM-5 response
+                    json_payload = extract_json_from_text(response_text)
+                    if json_payload:
+                        try:
+                            data = json.loads(json_payload, strict=False)
+                            print(f"   ✅ [Forensic Scan] GLM-5 succeeded in {elapsed}ms")
+                        except json.JSONDecodeError as je:
+                            print(f"   ⚠️ [Forensic Scan] GLM-5 JSON parse failed: {je}")
+
+                    # If no valid JSON, try structuring with Sonnet/Gemini (Pass 2)
+                    if not data and len(response_text) > 200:
+                        print(f"   🔄 [Pass 2] GLM-5 returned {len(response_text)} chars ({elapsed}ms). Structuring into JSON...")
+                        repaired = _repair_json_with_sonnet(response_text, company_name, is_structuring=True)
+                        if not repaired:
+                            print(f"   ⚠️ [Pass 2] Sonnet structuring failed. Trying Gemini 2.5 Pro...")
+                            repaired = _structure_with_gemini(response_text, company_name, "gemini-2.5-pro")
+                        if repaired:
+                            data = repaired
+                            repair_elapsed = int((time.time() - start) * 1000)
+                            print(f"   ✅ [Pass 2] Structured GLM-5 data ({repair_elapsed}ms total)")
+                else:
+                    print(f"   ⚠️ [Forensic Scan] GLM-5 returned insufficient data ({len(response_text) if response_text else 0} chars, {elapsed}ms)")
+            except Exception as glm_err:
+                elapsed = int((time.time() - start) * 1000)
+                print(f"   ❌ [Forensic Scan] GLM-5 failed in {elapsed}ms: {glm_err}")
+    else:
+        print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Gemini 3.1 Pro Preview → Gemini 2.5 Pro")
+
+    # --- BACKUP 1: Gemini 3.1 Pro Preview — two-pass mode ---
+    if not data:
+        if zai_key:
+            print(f"   ⚠️ [Forensic Scan] GLM-5 returned no usable data. Falling back to Gemini 3.1 Pro Preview...")
+        data = execute_with_model("gemini-3.1-pro-preview", None, 180)
+
+    # --- BACKUP 2: Gemini 2.5 Pro (separate rate limits from 3.x family; ~40-50s typical) ---
     if not data:
         print(f"   ⚠️ [Forensic Scan] Gemini 3.1 Pro Preview returned no data. Falling back to Gemini 2.5 Pro...")
         data = execute_with_model("gemini-2.5-pro", call_timeout=120)
