@@ -1705,9 +1705,10 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 response_text = glm5_web_search(
                     prompt=glm5_prompt,
                     label=f"Forensic Scan {company_name} GLM-5",
-                    temperature=0.1,
+                    temperature=0.6,
                     max_tokens=8000,
                     timeout=180,
+                    thinking=True,
                 )
                 elapsed = int((time.time() - start) * 1000)
 

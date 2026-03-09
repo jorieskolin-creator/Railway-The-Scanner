@@ -248,9 +248,10 @@ def enrich_single_person(person: dict, company_name: str, gemini_key: str) -> di
             response_text = glm5_web_search(
                 prompt=prompt,
                 label=f"Stakeholder Intel {name} GLM-5",
-                temperature=0.0,
+                temperature=0.6,
                 max_tokens=4000,
                 timeout=60,
+                thinking=True,
             )
             if response_text:
                 model_used = "glm-5"
@@ -419,9 +420,10 @@ def _enrich_batch(people_with_names: list[dict], company_name: str, gemini_key: 
             response_text = glm5_web_search(
                 prompt=prompt,
                 label=f"Stakeholder Intel batch GLM-5",
-                temperature=0.0,
+                temperature=0.6,
                 max_tokens=8000,
                 timeout=90,
+                thinking=True,
             )
             if response_text:
                 model_used = "glm-5"

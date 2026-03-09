@@ -2,8 +2,15 @@
 glm5_client.py — GLM-5 API client for web-search-grounded AI calls.
 
 Uses the OpenAI-compatible endpoint at Z.ai (formerly ZhipuAI).
-GLM-5 supports web search via the zhipuai-style tools parameter:
-  tools=[{"type": "web_search", "web_search": {"search_result": True}}]
+
+GLM-5 supports:
+  - Web search: tools=[{"type": "web_search", "web_search": {"search_result": True}}]
+  - Thinking/reasoning: extra_body={"thinking": {"type": "enabled"}}
+    Reasoning output is in chunk.choices[0].delta.reasoning_content (streaming)
+    or response.choices[0].message.reasoning_content (blocking).
+    Default: enabled. Can be disabled with {"type": "disabled"}.
+  - Temperature: 0.6 recommended for general use, 1.0 for benchmarks.
+    Note: thinking mode may override low temperatures (like Gemini 3.x).
 
 This module provides drop-in replacements for Gemini calls in:
   - Stakeholder Intel (person enrichment)
@@ -34,21 +41,40 @@ def _get_client():
 def glm5_web_search(
     prompt: str,
     label: str = "GLM-5",
-    temperature: float = 0.0,
+    temperature: float = 0.6,
     max_tokens: int = 4000,
     timeout: int = 90,
+    thinking: bool = True,
 ) -> str:
     """
     Call GLM-5 with web search enabled and return the text response.
 
     Uses the zhipuai web_search tool type for grounded search results.
+    Thinking mode is enabled by default (GLM-5's reasoning helps with
+    evidence evaluation and identity verification).
     Runs in a thread pool to enforce wall-clock timeout.
+
+    Parameters
+    ----------
+    prompt      : The search/analysis prompt
+    label       : Log label for diagnostics
+    temperature : 0.6 (default, recommended by Z.ai for general use)
+    max_tokens  : Max output tokens (excludes reasoning tokens)
+    timeout     : Wall-clock timeout in seconds
+    thinking    : Enable GLM-5's reasoning mode (default True)
 
     Returns the response text, or empty string on failure.
     """
     client = _get_client()
 
     def _call():
+        # Build extra_body for thinking mode (not part of OpenAI standard params)
+        extra = {}
+        if thinking:
+            extra["thinking"] = {"type": "enabled"}
+        else:
+            extra["thinking"] = {"type": "disabled"}
+
         response = client.chat.completions.create(
             model="glm-5",
             messages=[
@@ -63,6 +89,7 @@ def glm5_web_search(
             }],
             temperature=temperature,
             max_tokens=max_tokens,
+            extra_body=extra,
         )
         return response.choices[0].message.content or ""
 
@@ -86,17 +113,26 @@ def glm5_chat(
     prompt: str,
     label: str = "GLM-5",
     system_prompt: str = "You are a professional analyst. Respond only with the requested format.",
-    temperature: float = 0.0,
+    temperature: float = 0.6,
     max_tokens: int = 8000,
     timeout: int = 120,
+    thinking: bool = False,
 ) -> str:
     """
     Call GLM-5 WITHOUT web search (pure text generation).
     Used for JSON structuring / repair tasks.
+
+    Thinking is disabled by default for structuring tasks (speed over reasoning).
     """
     client = _get_client()
 
     def _call():
+        extra = {}
+        if thinking:
+            extra["thinking"] = {"type": "enabled"}
+        else:
+            extra["thinking"] = {"type": "disabled"}
+
         response = client.chat.completions.create(
             model="glm-5",
             messages=[
@@ -105,6 +141,7 @@ def glm5_chat(
             ],
             temperature=temperature,
             max_tokens=max_tokens,
+            extra_body=extra,
         )
         return response.choices[0].message.content or ""
 
