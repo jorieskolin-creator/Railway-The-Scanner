@@ -71,6 +71,85 @@ def _extract_json(text: str) -> dict | None:
     return None
 
 
+def _build_batch_prompt(people: list[dict], company_name: str) -> str:
+    """Build a single prompt to search for ALL stakeholders in one API call."""
+    people_block = ""
+    for i, p in enumerate(people):
+        name = p.get("name", "Unknown")
+        role = p.get("role", "Unknown")
+        people_block += f"\n  Person {i+1}: {name} — Role (may be outdated): {role}"
+
+    return f"""Search Google for publicly available professional information about ALL of these people at {company_name}.
+{people_block}
+
+For EACH person, search for:
+1. "<person_name>" "{company_name}" LinkedIn
+2. "<person_name>" "{company_name}" — press releases, news, interviews
+3. "<person_name>" "<role>" "{company_name}"
+
+### IDENTITY VERIFICATION — THIS IS THE MOST IMPORTANT RULE
+You MUST verify that BOTH the person's name AND their connection to "{company_name}" match before reporting ANY finding.
+
+- A LinkedIn profile that does NOT mention "{company_name}" → REJECT (could be a different person)
+- A news article at a DIFFERENT company → REJECT (wrong person)
+- Common names are especially risky — require STRICT company match
+- When in doubt, set "found" to false. A false negative is always better than a wrong-person attribution.
+
+### ROLE / POSITION VERIFICATION — CRITICAL
+The roles we have on file may be OUTDATED. You MUST check for their CURRENT role:
+- On LinkedIn: the CURRENT position is shown at the top of Experience with no end date.
+- If their current title differs from our records, report the CURRENT title in "verified_role".
+- If the person has LEFT {company_name}, set "still_at_company" to false and report where they moved.
+- Do NOT assume the role we provided is correct — always verify.
+
+### WHAT TO REPORT (only if identity is verified)
+- Their CURRENT role/title at {company_name}
+- LinkedIn profile headline, summary
+- Career history (previous roles in "career_moves", CURRENT role in "verified_role")
+- Press releases, news articles, or interviews mentioning them at {company_name}
+- Conference talks, blog posts, or public speaking
+- Topics they publicly discuss
+
+### OTHER RULES
+- ONLY report information you actually find in search results.
+- If you find NOTHING for a person, set "found" to false for that person.
+- NEVER fabricate quotes, posts, career history, or descriptions.
+- Partial information is fine — report only what you actually found AND verified.
+
+### OUTPUT FORMAT
+Respond with ONLY a JSON object (no other text, no markdown, no explanation).
+The JSON must have a "results" array with one entry per person, IN THE SAME ORDER as listed above:
+
+{{
+  "results": [
+    {{
+      "person_index": 1,
+      "name": "<name>",
+      "found": true,
+      "headline": "Their current professional headline or null",
+      "verified_role": "Their CURRENT role at {company_name} or null",
+      "still_at_company": true,
+      "summary": "1-3 sentence synthesis of findings.",
+      "career_moves": ["Previous Role at Previous Company (dates if available)"],
+      "topics": ["topic1", "topic2"],
+      "notable_posts": ["Brief description of a real post/article/talk"]
+    }},
+    {{
+      "person_index": 2,
+      "name": "<name>",
+      "found": false,
+      "headline": null,
+      "verified_role": null,
+      "still_at_company": null,
+      "summary": "No public professional insights found for this person.",
+      "career_moves": [],
+      "topics": [],
+      "notable_posts": []
+    }}
+  ]
+}}"""
+
+
 def _build_person_prompt(person_name: str, person_role: str, company_name: str) -> str:
     """Build a focused search prompt for one stakeholder."""
     return f"""Search Google for publicly available professional information about this specific person.
@@ -297,9 +376,147 @@ def enrich_single_person(person: dict, company_name: str, gemini_key: str) -> di
     return person
 
 
+def _enrich_batch(people_with_names: list[dict], company_name: str, gemini_key: str) -> bool:
+    """
+    Enrich multiple people in a SINGLE Gemini API call (batched).
+
+    Returns True if batch succeeded and all people were enriched,
+    False if batch failed (caller should fall back to per-person calls).
+    """
+    from google import genai
+    from google.genai import types
+
+    prompt = _build_batch_prompt(people_with_names, company_name)
+    names_str = ", ".join(p.get("name", "?") for p in people_with_names)
+
+    _safety = [
+        {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
+        {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
+        {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
+        {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
+    ]
+
+    response_text = ""
+    model_used = ""
+
+    # Primary: Gemini 2.5 Pro with Google Search grounding
+    try:
+        print(f"      🔍 [Stakeholder Intel] Batched search for {len(people_with_names)} people ({names_str}) via gemini-2.5-pro...")
+        client = genai.Client(api_key=gemini_key)
+        resp = call_with_503_backoff(
+            lambda: client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    tools=[{'google_search': {}}],
+                    temperature=0.0,
+                    thinking_config=types.ThinkingConfig(thinking_budget=1024),
+                    max_output_tokens=8000,
+                    safety_settings=_safety,
+                )
+            ),
+            label=f"Stakeholder Intel batch gemini-2.5-pro",
+            model="gemini-2.5-pro",
+            timeout=90,
+        )
+        response_text = resp.text or ""
+        model_used = "gemini-2.5-pro"
+    except Exception as g25_err:
+        print(f"      ❌ [Stakeholder Intel] Batch Gemini 2.5 Pro failed: {g25_err}")
+
+    # Fallback: Gemini 3.1 Pro
+    if not response_text:
+        try:
+            print(f"      🔄 [Stakeholder Intel] Batch falling back to gemini-3.1-pro-preview...")
+            client = genai.Client(api_key=gemini_key)
+            resp = call_with_503_backoff(
+                lambda: client.models.generate_content(
+                    model="gemini-3.1-pro-preview",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        tools=[{'google_search': {}}],
+                        temperature=0.2,
+                        thinking_config=types.ThinkingConfig(thinking_budget=1024),
+                        max_output_tokens=8000,
+                        safety_settings=_safety,
+                    )
+                ),
+                label=f"Stakeholder Intel batch gemini-3.1-pro-preview",
+                model="gemini-3.1-pro-preview",
+                timeout=90,
+            )
+            response_text = resp.text or ""
+            model_used = "gemini-3.1-pro-preview"
+        except Exception as g31_err:
+            print(f"      ❌ [Stakeholder Intel] Batch all models failed: {g31_err}")
+
+    if not response_text:
+        return False
+
+    # Parse the batch response
+    parsed = _extract_json(response_text)
+    if not parsed or not isinstance(parsed, dict):
+        print(f"      ⚠️ [Stakeholder Intel] Batch response not valid JSON ({len(response_text)} chars)")
+        return False
+
+    results = parsed.get("results")
+    if not results or not isinstance(results, list):
+        print(f"      ⚠️ [Stakeholder Intel] Batch response missing 'results' array")
+        return False
+
+    if len(results) < len(people_with_names):
+        print(f"      ⚠️ [Stakeholder Intel] Batch returned {len(results)} results for {len(people_with_names)} people — falling back")
+        return False
+
+    # Map results back to people (by index order)
+    for i, person in enumerate(people_with_names):
+        if i >= len(results):
+            break
+
+        r = results[i]
+        name = person.get("name", "")
+
+        insights = {
+            "found": r.get("found", False),
+            "headline": r.get("headline"),
+            "verified_role": r.get("verified_role"),
+            "still_at_company": r.get("still_at_company"),
+            "summary": r.get("summary", "No public professional insights found for this person."),
+            "career_moves": r.get("career_moves", []),
+            "topics": r.get("topics", []),
+            "notable_posts": r.get("notable_posts", []),
+            "model_used": f"{model_used} (batched)",
+        }
+
+        # Safety net: if found=true but summary is empty/generic, don't claim found
+        if insights["found"] and not insights["summary"]:
+            insights["found"] = False
+            insights["summary"] = "No public professional insights found for this person."
+
+        # Update role if a verified current role was found
+        verified = insights.get("verified_role")
+        if verified and insights["found"] and insights.get("still_at_company") is not False:
+            original_role = person.get("role", "")
+            if verified.lower() != original_role.lower():
+                print(f"      🔄 [Stakeholder Intel] {name}: Role updated: \"{original_role}\" → \"{verified}\"")
+                person["role"] = verified
+
+        # Flag if person has left the company
+        if insights.get("still_at_company") is False:
+            print(f"      ⚠️ [Stakeholder Intel] {name}: No longer at {company_name}")
+
+        person["linkedin_insights"] = insights
+        print(f"      {'✅' if insights['found'] else '⚪'} [Stakeholder Intel] {name}: {'Found insights' if insights['found'] else 'No public insights found'} ({model_used}, batched)")
+
+    return True
+
+
 def enrich_key_people(company_name: str, key_people: list, gemini_key: str = None) -> list:
     """
     Enrich all key_people with LinkedIn insights.
+
+    Uses a BATCHED approach: all people are searched in a single Gemini API call
+    instead of one call per person. Falls back to per-person calls if batch fails.
 
     Args:
         company_name: The company name for search context
@@ -325,13 +542,40 @@ def enrich_key_people(company_name: str, key_people: list, gemini_key: str = Non
         return key_people
 
     start = time.time()
-    print(f"   🔍 [Stakeholder Intel] Enriching {len(key_people)} stakeholder(s) for {company_name}...")
 
-    for person in key_people:
-        enrich_single_person(person, company_name, gemini_key)
+    # Split into people with names (searchable) and without (skip)
+    people_with_names = [p for p in key_people if p.get("name")]
+    people_without_names = [p for p in key_people if not p.get("name")]
+
+    for person in people_without_names:
+        person["linkedin_insights"] = {
+            "found": False,
+            "summary": "No name provided — cannot search.",
+        }
+
+    if not people_with_names:
+        return key_people
+
+    print(f"   🔍 [Stakeholder Intel] Enriching {len(people_with_names)} stakeholder(s) for {company_name}...")
+
+    # Try batched approach first (1 API call for all people)
+    if len(people_with_names) >= 2:
+        batch_ok = _enrich_batch(people_with_names, company_name, gemini_key)
+        if batch_ok:
+            ms = int((time.time() - start) * 1000)
+            found_count = sum(1 for p in key_people if p.get("linkedin_insights", {}).get("found"))
+            print(f"   ✅ [Stakeholder Intel] Complete for {company_name}: {found_count}/{len(people_with_names)} stakeholders with public insights ({ms}ms, batched — 1 API call)")
+            return key_people
+        else:
+            print(f"   🔄 [Stakeholder Intel] Batch failed — falling back to per-person search")
+
+    # Fallback: per-person calls (also used when only 1 person)
+    for person in people_with_names:
+        if not person.get("linkedin_insights"):
+            enrich_single_person(person, company_name, gemini_key)
 
     ms = int((time.time() - start) * 1000)
     found_count = sum(1 for p in key_people if p.get("linkedin_insights", {}).get("found"))
-    print(f"   ✅ [Stakeholder Intel] Complete for {company_name}: {found_count}/{len(key_people)} stakeholders with public insights ({ms}ms)")
+    print(f"   ✅ [Stakeholder Intel] Complete for {company_name}: {found_count}/{len(people_with_names)} stakeholders with public insights ({ms}ms)")
 
     return key_people
