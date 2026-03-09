@@ -1150,29 +1150,7 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
     # gemini-3-pro-preview fallback removed: shares 3.x rate limits with 3.1-pro
     # and is being deprecated by Google.
 
-    # Fallback 1: DeepSeek V3.2 (independent provider — survives Google outages)
-    deepseek_key = os.environ.get("DEEPSEEK_API_KEY")
-    if not resynth_text and deepseek_key:
-        try:
-            from openai import OpenAI as DeepSeekClient
-            print(f"   🔄 [Clean Re-Synthesis] Falling back to DeepSeek V3.2...")
-            ds_start = time.time()
-            ds_client = DeepSeekClient(api_key=deepseek_key, base_url="https://api.deepseek.com")
-            ds_resp = ds_client.chat.completions.create(
-                model="deepseek-chat",
-                temperature=0.3,
-                response_format={"type": "json_object"},
-                max_tokens=8000,
-                messages=[{"role": "user", "content": synthesis_prompt}],
-            )
-            resynth_text = ds_resp.choices[0].message.content or ""
-            resynth_model_used = "deepseek-chat"
-            resynth_ms = int((time.time() - ds_start) * 1000)
-            print(f"   ✅ [Clean Re-Synthesis] DeepSeek V3.2 complete ({resynth_ms}ms)")
-        except Exception as ds_err:
-            print(f"   ❌ [Clean Re-Synthesis] DeepSeek V3.2 failed: {ds_err}")
-
-    # Fallback 2: Mistral Large (independent provider — survives Anthropic + Google outages)
+    # Fallback 1: Mistral Large (independent provider — survives Anthropic + Google outages)
     mistral_key = os.environ.get("MISTRAL_API_KEY")
     if not resynth_text and mistral_key:
         try:
@@ -1981,7 +1959,7 @@ Respond with valid JSON only. Six fields required:
 Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs total). The pitch value must also contain \n\n between its 3 paragraphs.
 Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2."""
 
-                # --- Synthesis with fallback chain: Opus 4.6 → DeepSeek V3.2 → Gemini 3.1 Pro → Mistral Large ---
+                # --- Synthesis with fallback chain: Opus 4.6 → Gemini 3.1 Pro → Mistral Large ---
                 # Opus is the judge — it does ONE thing: synthesize. Fallbacks degrade gracefully.
                 # Opus uses Extended Thinking to reason through conflicting intent vs. reality
                 # evidence before generating the synthesis — exactly what a "judge" model should do.
@@ -2025,49 +2003,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                 except Exception as opus_err:
                     print(f"   ❌ [Synthesis] Opus 4.6 failed: {opus_err}")
 
-                    # Fallback 1: DeepSeek V3.2 (independent provider — survives Anthropic outages)
-                    deepseek_key = os.environ.get("DEEPSEEK_API_KEY")
-                    if not response_text and deepseek_key and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 30:
-                        try:
-                            from openai import OpenAI as DeepSeekClient
-                            print(f"   🔄 [Synthesis] Falling back to DeepSeek V3.2 (timeout: {SYNTH_TIMEOUT}s)...")
-                            ds_start = time.time()
-                            ds_client = DeepSeekClient(api_key=deepseek_key, base_url="https://api.deepseek.com")
-
-                            _deepseek_system = (
-                                "CRITICAL: You are a CONSERVATIVE analyst. When in doubt, say 'insufficient evidence.' "
-                                "Do NOT extrapolate. Do NOT infer organizational problems. Do NOT sound deeper than "
-                                "your evidence supports. A boring, accurate summary beats an impressive, fabricated one. "
-                                "NEVER invent leadership gaps, morale issues, succession problems, or strategic conclusions "
-                                "from minor details like tool names in job ads."
-                            )
-
-                            def _synth_deepseek():
-                                return ds_client.chat.completions.create(
-                                    model="deepseek-chat",
-                                    temperature=0.3,
-                                    response_format={"type": "json_object"},
-                                    max_tokens=8000,
-                                    messages=[
-                                        {"role": "system", "content": _deepseek_system},
-                                        {"role": "user", "content": synthesis_prompt},
-                                    ],
-                                )
-
-                            ds_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                            ds_future = ds_pool.submit(_synth_deepseek)
-                            try:
-                                ds_resp = ds_future.result(timeout=SYNTH_TIMEOUT)
-                                response_text = ds_resp.choices[0].message.content or ""
-                                print(f"   ✅ [Synthesis] DeepSeek V3.2 succeeded in {int((time.time() - ds_start) * 1000)}ms")
-                            except concurrent.futures.TimeoutError:
-                                ds_pool.shutdown(wait=False)
-                                print(f"   ⏰ [Synthesis] DeepSeek V3.2 timed out after {SYNTH_TIMEOUT}s")
-                            ds_pool.shutdown(wait=False)
-                        except Exception as ds_err:
-                            print(f"   ❌ [Synthesis] DeepSeek V3.2 failed: {ds_err}")
-
-                    # Fallback 2: Gemini 3.1 Pro Preview (thinking_budget=3000 ≈ MEDIUM; 2000-3500 range)
+                    # Fallback 1: Gemini 3.1 Pro Preview (thinking_budget=3000 ≈ MEDIUM; 2000-3500 range)
                     gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
                     if not response_text and gemini_key and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 30:
                         try:
@@ -2102,7 +2038,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                     # gemini-3-pro-preview fallback removed: shares 3.x rate limits with 3.1-pro
                     # and is being deprecated by Google.
 
-                    # Fallback 3: Mistral Large (independent provider — survives Anthropic + Google outages)
+                    # Fallback 2: Mistral Large (independent provider — survives Anthropic + Google outages)
                     mistral_key = os.environ.get("MISTRAL_API_KEY")
                     if not response_text and mistral_key and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 30:
                         try:
