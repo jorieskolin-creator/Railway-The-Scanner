@@ -177,7 +177,7 @@ For each of the {n_dims} priority KB dimensions above, use web search to identif
 
 Per force, provide:
 - "trend": Concrete name of the external force (specific, not vague)
-- "type": One of: "Strengthening" (gathering momentum) | "Weakening" (declining) | "Wild Card" (low probability, massive impact) | "Weak Signal" (early, insufficient data)
+- "type": One of: "Plausible/Maturing" (gathering momentum, validated trend) | "Weakening/Declining" (losing relevance or reversing) | "Preposterous/Black Swan" (low probability, massive impact) | "Probable/Emerging" (early signal, gaining traction but insufficient data)
 - "timeframe": "6-12mo" | "12-24mo" | "24-36mo"
 - "kb_dimension": Which priority dimension this impacts most
 - "fp_theme": Which Futures Platform theme this maps to
@@ -201,7 +201,7 @@ RETURN STRICT JSON ONLY:
   "dimension_forces": [
     {{
       "trend": "...",
-      "type": "Strengthening|Weakening|Wild Card|Weak Signal",
+      "type": "Plausible/Maturing|Weakening/Declining|Preposterous/Black Swan|Probable/Emerging",
       "timeframe": "6-12mo|12-24mo|24-36mo",
       "kb_dimension": "...",
       "fp_theme": "...",
