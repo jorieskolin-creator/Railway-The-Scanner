@@ -239,12 +239,11 @@ const CompanySummary = ({ data }) => {
                 var cls = 'text-slate-200 leading-relaxed text-sm font-light' + (pi > 0 ? ' mt-4' : '');
                 return '<p class="' + cls + '">' + escaped + '</p>';
             }).join('\n');
-            var drModelTag = exportData.detailed_report_model ? ' \u2014 ' + exportData.detailed_report_model : '';
             detailedReportHTML = '<div class="mt-8 space-y-8"><div class="bg-gradient-to-r from-violet-900/30 to-indigo-900/30 p-8 rounded-2xl border-l-4 border-violet-500 backdrop-blur-sm">'
                 + '<h3 class="text-xl font-bold text-white mb-2 flex items-center gap-2">'
                 + '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>'
                 + ' Detailed Forensic Report</h3>'
-                + '<p class="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">Deep diagnostic with evidence and stakeholder context' + drModelTag + '</p>'
+                + '<p class="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">Deep diagnostic with evidence and stakeholder context</p>'
                 + '<div>' + drParagraphs + '</div>'
                 + '</div></div>';
             console.log('[HTML Export v6] detailedReportHTML built:', detailedReportHTML.length, 'chars');
@@ -264,12 +263,11 @@ const CompanySummary = ({ data }) => {
                 var cls = 'text-slate-200 leading-relaxed text-sm font-light' + (pi > 0 ? ' mt-4' : '');
                 return '<p class="' + cls + '">' + escaped + '</p>';
             }).join('\n');
-            var fsModelTag = exportData.foresight_summary_model ? ' \u2014 ' + exportData.foresight_summary_model : '';
             foresightHTML = '<div class="mt-8 space-y-8"><div class="bg-gradient-to-r from-teal-900/30 to-cyan-900/30 p-8 rounded-2xl border-l-4 border-teal-500 backdrop-blur-sm">'
                 + '<h3 class="text-xl font-bold text-white mb-2 flex items-center gap-2">'
                 + '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2dd4bf" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>'
                 + ' Future Insight</h3>'
-                + '<p class="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">Forward-looking narrative based on strategic foresight analysis' + fsModelTag + '</p>'
+                + '<p class="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">Forward-looking narrative based on strategic foresight analysis</p>'
                 + '<div>' + fsParagraphs + '</div>'
                 + '</div></div>';
             console.log('[HTML Export v6] foresightHTML built:', foresightHTML.length, 'chars');
@@ -977,7 +975,6 @@ const CompanySummary = ({ data }) => {
                     </h3>
                     <p className="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">
                         Deep diagnostic with evidence and stakeholder context
-                        {data.detailed_report_model && ` — ${data.detailed_report_model}`}
                     </p>
                     <div>
                         {data.detailed_report.split(/\n\n+/).map((block, pi) => {
@@ -1009,7 +1006,6 @@ const CompanySummary = ({ data }) => {
                     </h3>
                     <p className="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">
                         Forward-looking narrative based on strategic foresight analysis
-                        {data.foresight_summary_model && ` — ${data.foresight_summary_model}`}
                     </p>
                     <div>
                         {data.foresight_summary.split(/\n\n+/).map((para, pi) => (
