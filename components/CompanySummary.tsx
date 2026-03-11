@@ -221,13 +221,26 @@ const CompanySummary = ({ data }) => {
     </style>
 </head>
 <body class="p-8 max-w-7xl mx-auto">
-    <div class="mb-6 flex justify-between items-center border-b border-slate-700 pb-4">
-        <div>
-            <h1 class="text-2xl font-bold text-white">${data.companyName}</h1>
-            <p class="text-slate-400 text-sm">Final Forensic Report</p>
+    <div class="mb-6 border-b border-slate-700 pb-6">
+        <div class="flex justify-between items-start">
+            <div>
+                <div class="flex items-center gap-3 flex-wrap">
+                    <h1 class="text-3xl font-bold text-white tracking-tight">${data.companyName}</h1>
+                    ${data.id ? `<span class="px-2 py-0.5 rounded text-[10px] font-mono bg-white/5 text-slate-400 border border-white/5">ID: ${data.id.substring(0,8)}</span>` : ''}
+                    ${data.has_docs ? '<span class="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">DEEP DIVE</span>' : ''}
+                    ${data.washing_flag && data.intent_score > data.reality_score ? `<span class="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">${data.washing_type ? data.washing_type.toUpperCase() : 'WASHING DETECTED'}</span>` : ''}
+                </div>
+                <p class="text-slate-400 text-sm mt-1">Final Forensic Report</p>
+            </div>
+            <div class="text-right text-xs text-slate-500 font-mono space-y-1">
+                <div>Report: ${new Date().toISOString().split('T')[0]}</div>
+                ${data.lastUpdated ? `<div>Scanned: ${new Date(data.lastUpdated).toLocaleDateString('en-FI', { day: 'numeric', month: 'long', year: 'numeric' })}</div>` : ''}
+            </div>
         </div>
-        <div class="text-right text-xs text-slate-500 font-mono">
-            Generated: ${new Date().toISOString()}
+        <div class="flex items-center gap-3 mt-3 flex-wrap">
+            ${data.domain ? `<span class="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-slate-800 text-slate-300 border border-white/10">${data.domain}</span>` : ''}
+            ${data.archetype ? `<span class="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-indigo-500/15 text-indigo-300 border border-indigo-500/20">${data.archetype}</span>` : ''}
+            ${data.financial_index != null ? `<span class="px-2.5 py-1 rounded-full text-[10px] font-bold font-mono bg-slate-800 text-slate-300 border border-white/10">FHI: ${data.financial_index}/100</span>` : ''}
         </div>
     </div>
 
