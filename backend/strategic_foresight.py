@@ -19,6 +19,60 @@ from gemini_backoff import call_with_503_backoff
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# FUTURES PLATFORM 30-THEME TAXONOMY
+# Complete list of the 30 FP Themes utilized in Future Insight creation.
+# Each theme represents a macro-level domain of change that shapes the external
+# environment companies must navigate. Used to tag dimension-level forces and
+# ensure comprehensive coverage across all foresight analyses.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+FP_THEMES_30 = [
+    # --- Technology & Digital ---
+    "Artificial Intelligence",          #  1 — AI, machine learning, autonomous systems
+    "Data & Digitalisation",            #  2 — Big data, digital transformation, platforms
+    "Communication & Media",            #  3 — Telecom, journalism, social media, content
+
+    # --- Economy & Business ---
+    "Business",                         #  4 — Business models, strategy, innovation mgmt
+    "Finance & Ownership",              #  5 — Banking, investment, fintech, ownership models
+    "Global Economy",                   #  6 — Trade, macroeconomics, supply chains, sanctions
+    "Digital & Sharing Economies",      #  7 — Platform economy, gig work, collaborative models
+    "Services",                         #  8 — Service design, customer experience, servitization
+
+    # --- Industry & Infrastructure ---
+    "Industry & Manufacturing",         #  9 — Smart factories, automation, industrial IoT
+    "Construction & Urbanisation",      # 10 — Smart cities, urban planning, building tech
+    "Energy",                           # 11 — Renewables, grids, energy storage, nuclear
+    "Freight & Logistics",              # 12 — Supply chains, last-mile, autonomous freight
+    "Private & Public Transport",       # 13 — Mobility-as-a-Service, EVs, public transit
+
+    # --- Environment & Resources ---
+    "Climate Change",                   # 14 — Mitigation, adaptation, carbon markets
+    "Sustainability & Recycling",       # 15 — Circular economy, waste, ESG reporting
+    "Nature",                           # 16 — Biodiversity, ecosystems, land use
+    "Food",                             # 17 — Agri-tech, food security, alternative proteins
+    "Water & Oceans",                   # 18 — Water scarcity, marine economy, blue tech
+
+    # --- Society & Governance ---
+    "Public Governance",                # 19 — Regulation, democracy, public-sector innovation
+    "Geopolitics",                      # 20 — International relations, conflicts, alliances
+    "Security & Safety",                # 21 — Cybersecurity, defence, resilience, privacy
+    "Values & Ethics",                  # 22 — Trust, transparency, corporate responsibility
+    "Society",                          # 23 — Inequality, social cohesion, civil society
+
+    # --- People & Well-being ---
+    "Health & Wellbeing",               # 24 — Healthcare, mental health, biotech, longevity
+    "Education & Knowledge",            # 25 — EdTech, lifelong learning, skills transformation
+    "Work & Income",                    # 26 — Future of work, labour markets, UBI
+    "Management & HR",                  # 27 — Leadership, org design, talent management
+    "Leisure & Lifestyles",             # 28 — Consumer culture, tourism, entertainment
+
+    # --- Science & Demographics ---
+    "Sciences & Research",              # 29 — R&D, quantum computing, space, biotech research
+    "Population & Demographics",        # 30 — Aging, migration, urbanisation trends
+]
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # DOMAIN → FORESIGHT THEME MAPPING
 # Maps the scanner's 14 KNOWN_DOMAINS to Futures Platform's 30-theme taxonomy
 # and identifies which KB dimensions are most impacted by external forces.
