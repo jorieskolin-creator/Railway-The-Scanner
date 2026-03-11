@@ -84,9 +84,11 @@
             const tsx = await response.text();
             
             // Transform TSX/TS to JS using Babel
+            // Strip query string from filename so Babel detects .ts/.tsx extensions correctly
+            const cleanFilename = url.split('?')[0];
             const js = Babel.transform(tsx, {
               presets: ['react', 'typescript'],
-              filename: url,
+              filename: cleanFilename,
             }).code;
 
             // Execute in IIFE using string concatenation
