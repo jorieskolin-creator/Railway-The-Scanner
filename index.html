@@ -62,16 +62,17 @@
         RechartsKeys: Object.keys(window.Recharts).length
       });
 
-      // 2. Define App Scripts in dependency order
+      // 2. Define App Scripts in dependency order (cache-busted to prevent stale browser cache)
+      var cacheBust = '?v=' + Date.now();
       const scripts = [
-        "/types.ts",
-        "/constants.ts",
-        "/components/ScannerInput.tsx",
-        "/components/TruthMatrix.tsx",
-        "/components/CompanySummary.tsx",
-        "/components/CompanyModal.tsx",
-        "/App.tsx",
-        "/index.tsx"
+        "/types.ts" + cacheBust,
+        "/constants.ts" + cacheBust,
+        "/components/ScannerInput.tsx" + cacheBust,
+        "/components/TruthMatrix.tsx" + cacheBust,
+        "/components/CompanySummary.tsx" + cacheBust,
+        "/components/CompanyModal.tsx" + cacheBust,
+        "/App.tsx" + cacheBust,
+        "/index.tsx" + cacheBust
       ];
 
       // 3. Helper to load scripts sequentially and compile with Babel
