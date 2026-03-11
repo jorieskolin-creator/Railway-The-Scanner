@@ -1721,6 +1721,13 @@ def run_scan(
              washing_flag = False
              washing_type = None
 
+        # --- EARLY DOMAIN RESOLUTION (needed for foresight before full metadata step) ---
+        meta_early = get_company_metadata(companyName) or {}
+        company_domain = meta_early.get("domain", "Other")
+        if company_domain == "Other":
+            from domain_classifier import infer_domain
+            company_domain = infer_domain(companyName, target_url or "", reality_results, financial_results)
+
         # --- STEP 2.7: STRATEGIC FORESIGHT ---
         foresight_data = None
         try:
