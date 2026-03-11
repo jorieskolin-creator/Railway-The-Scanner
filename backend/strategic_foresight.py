@@ -410,7 +410,7 @@ def generate_foresight_summary(
     domain: str,
 ) -> tuple[str, str]:
     """
-    Generate a 150-200 word "Future Insight" narrative from foresight data.
+    Generate a 250-300 word "Future Insight" narrative from foresight data.
 
     Returns (summary_text, model_used).
     Returns ("", "") on failure.
@@ -456,11 +456,15 @@ Key scenarios:
 - Acceleration: {scenarios.get('acceleration', 'N/A')}
 
 RULES:
-- 150-200 words, 2-3 paragraphs separated by \\n\\n
-- First paragraph: The 1-2 most impactful external forces and their timeframe.
+- 250-300 words, 3-4 paragraphs separated by \\n\\n
+- First paragraph: The 2-3 most impactful external forces and their timeframe.
   Name the forces concretely — no vague "market changes are coming."
+  Wrap each key force name in **double asterisks** when first mentioned (e.g., "**EU SFDR 2.0 implementation**").
 - Second paragraph: What this specifically means for THIS company given
   their current weaknesses. Connect the dots between external forces and internal gaps.
+  Explain the cross-impact chain — how one force triggers cascading effects across multiple areas.
+- Third paragraph: What the company must do to prepare — concrete strategic imperatives
+  tied to the identified forces. Be specific about timelines and capabilities needed.
 {climate_instruction}
 - Tone: Strategic, forward-looking, grounded in evidence. Like a foresight
   analyst briefing a board of directors. Not marketing fluff.
@@ -468,7 +472,10 @@ RULES:
 - Do NOT use any of these terms: {forbidden}. Use plain business language.
 - Every claim must trace to a force identified in the foresight analysis.
 - If confidence is low on a force, use hedging language ("emerging signals suggest...")
-- FORMAT: Plain prose only. No headers, no bullet points, no markdown, no links.
+- KEY FORCE HIGHLIGHTING: When naming a key external force for the first time,
+  wrap it in **double asterisks** (e.g., "**generative AI disruption**").
+  Do this for the 2-4 most important forces only. Do not overuse.
+- FORMAT: Prose only with **bold** markers for key forces. No headers, no bullet points, no other markdown, no links.
 
 Output only the prose text. Nothing else."""
 

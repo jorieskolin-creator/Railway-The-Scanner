@@ -1,7 +1,8 @@
 
 const { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Tooltip: RechartsTooltip, LineChart, Line, XAxis, YAxis, CartesianGrid, ReferenceLine } = (window as any).Recharts;
 const { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash, RefreshCw, XCircle, Search, Zap, Scale, Activity, Download, Copy, FileJson, FileCode, Check, Eye, AlertOctagon, Info, Users, Sparkles, TrendingUp } = (window as any).Lucide;
-const { useRef, useState } = (window as any).React;
+const React = (window as any).React;
+const { useRef, useState } = React;
 
 const HighlightText = ({ text }) => {
   if (!text) return null;
@@ -225,8 +226,14 @@ const CompanySummary = ({ data }) => {
         // Pre-build detailed report section
         var detailedReportHTML = '';
         if (exportData.detailed_report && typeof exportData.detailed_report === 'string') {
-            var drParagraphs = exportData.detailed_report.split(/\n\n+/).map(function(para, pi) {
-                var escaped = para.replace(/&/g, '&amp;');
+            var drParagraphs = exportData.detailed_report.split(/\n\n+/).map(function(block, pi) {
+                var headingMatch = block.match(/^##\s+(.+)/);
+                if (headingMatch) {
+                    var headingText = headingMatch[1].replace(/&/g, '&amp;').replace(/\x3c/g, '&lt;').replace(/>/g, '&gt;');
+                    var hcls = 'text-base font-semibold text-violet-300 uppercase tracking-wide' + (pi > 0 ? ' mt-6 mb-2' : ' mb-2');
+                    return '<h4 class="' + hcls + '">' + headingText + '</h4>';
+                }
+                var escaped = block.replace(/&/g, '&amp;');
                 escaped = escaped.replace(/\x3c/g, '&lt;');
                 escaped = escaped.replace(/>/g, '&gt;');
                 var cls = 'text-slate-200 leading-relaxed text-sm font-light' + (pi > 0 ? ' mt-4' : '');
@@ -252,6 +259,8 @@ const CompanySummary = ({ data }) => {
                 var escaped = para.replace(/&/g, '&amp;');
                 escaped = escaped.replace(/\x3c/g, '&lt;');
                 escaped = escaped.replace(/>/g, '&gt;');
+                // Convert **bold** markers to styled spans for key forces
+                escaped = escaped.replace(/\*\*([^*]+)\*\*/g, '<span class="font-semibold text-teal-300">$1</span>');
                 var cls = 'text-slate-200 leading-relaxed text-sm font-light' + (pi > 0 ? ' mt-4' : '');
                 return '<p class="' + cls + '">' + escaped + '</p>';
             }).join('\n');
@@ -971,11 +980,21 @@ const CompanySummary = ({ data }) => {
                         {data.detailed_report_model && ` — ${data.detailed_report_model}`}
                     </p>
                     <div>
-                        {data.detailed_report.split(/\n\n+/).map((para, pi) => (
-                            <p key={pi} className={`text-slate-200 leading-relaxed text-sm font-light${pi > 0 ? " mt-4" : ""}`}>
-                                {para}
-                            </p>
-                        ))}
+                        {data.detailed_report.split(/\n\n+/).map((block, pi) => {
+                            const headingMatch = block.match(/^##\s+(.+)/);
+                            if (headingMatch) {
+                                return (
+                                    <h4 key={pi} className={`text-base font-semibold text-violet-300 uppercase tracking-wide${pi > 0 ? " mt-6 mb-2" : " mb-2"}`}>
+                                        {headingMatch[1]}
+                                    </h4>
+                                );
+                            }
+                            return (
+                                <p key={pi} className={`text-slate-200 leading-relaxed text-sm font-light${pi > 0 ? " mt-4" : ""}`}>
+                                    {block}
+                                </p>
+                            );
+                        })}
                     </div>
                 </div>
             </div>
@@ -995,7 +1014,11 @@ const CompanySummary = ({ data }) => {
                     <div>
                         {data.foresight_summary.split(/\n\n+/).map((para, pi) => (
                             <p key={pi} className={`text-slate-200 leading-relaxed text-sm font-light${pi > 0 ? " mt-4" : ""}`}>
-                                {para}
+                                {para.split(/\*\*([^*]+)\*\*/).map((segment, si) =>
+                                    si % 2 === 1
+                                        ? <span key={si} className="font-semibold text-teal-300">{segment}</span>
+                                        : <React.Fragment key={si}>{segment}</React.Fragment>
+                                )}
                             </p>
                         ))}
                     </div>

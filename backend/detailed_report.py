@@ -158,7 +158,7 @@ def _build_prompt(payload: dict, company_name: str) -> str:
     foresight_instruction = ""
     if payload.get("foresight"):
         foresight_instruction = """
-PARAGRAPH — STRATEGIC FORESIGHT (~100-150 words)
+SECTION — heading "Strategic Foresight" (~100-150 words)
 Based on the foresight data in the evidence below:
 - Name the 1-2 most impactful external forces and their timeframe
 - Explain how these forces specifically affect THIS company given their current weaknesses
@@ -173,31 +173,35 @@ This report will be read by strategy consultants and C-level advisors. It must b
 STRUCTURED INPUT DATA:
 {json.dumps(payload, ensure_ascii=False, indent=2)}
 
-REPORT STRUCTURE ({_WORD_MIN}-{_WORD_MAX} words, 5-7 paragraphs separated by \\n\\n):
+REPORT STRUCTURE ({_WORD_MIN}-{_WORD_MAX} words, 5-7 sections separated by \\n\\n):
 
-PARAGRAPH 1 — EXECUTIVE POSITION (~100-150 words)
+Each section MUST begin with a heading line in the format: ## Heading Text
+The heading line must be on its own line, followed by \\n\\n, then the paragraph body.
+Choose concise, descriptive heading text for each section (2-4 words).
+
+SECTION 1 — heading "Key Findings" (~100-150 words)
 State the company's market position, financial health trajectory, and the central tension the assessment reveals. Do NOT use archetype labels — describe the position in plain business language.
 If delta data is present: open with the trend story (what changed since the previous assessment and why).
 If no delta: open with the single most significant strategic observation.
 
-PARAGRAPHS 2-4 — DIMENSION DEEP DIVES (~150-200 words each)
+SECTIONS 2-4 — DIMENSION DEEP DIVES (~150-200 words each)
+Choose a heading that names the dimension in plain business language (e.g., "## Technology & Infrastructure", "## Sustainability Strategy", "## Workforce & Operations").
 For the 3 dimensions where evidence is richest (strongest or weakest):
-- Name the dimension in plain business language (e.g., "technology adoption" instead of jargon)
 - Cite 2-3 specific evidence findings by referencing their source titles naturally in the text (e.g., "According to their engineering blog..." or "A review of recent job postings reveals...")
 - Explain what the evidence reveals about the company's maturity in this area
 - Connect to business implications — what this means for competitiveness or risk
 - If a weakness: describe what improvement would look like in concrete terms
 Only cover dimensions with genuine evidence. If evidence is thin for a dimension, skip it — depth over breadth.
 
-PARAGRAPH 5 — STAKEHOLDER & LEADERSHIP CONTEXT (~100-150 words)
+SECTION 5 — heading "Leadership & Stakeholders" (~100-150 words)
 If key_people data is available in the evidence:
 - Name the identified modernization stakeholders and their roles
 - What their backgrounds or career moves suggest about the company's strategic direction
 - Any notable observations (e.g., recent leadership changes, domain expertise patterns)
-If no stakeholder data is available: skip this paragraph entirely. Do not fabricate.
+If no stakeholder data is available: skip this section entirely. Do not fabricate.
 {foresight_instruction}
 
-FINAL PARAGRAPH — RISK ASSESSMENT & OUTLOOK (~100-150 words)
+FINAL SECTION — heading "Verdict" (~100-150 words)
 - If washing data indicates a gap between stated ambitions and operational reality, name it explicitly
 - If rescan delta is available, note persistent patterns or meaningful trajectory changes
 - State the single most critical action this company should consider
@@ -211,7 +215,7 @@ MANDATORY RULES:
 5. SOURCE REFERENCES: When citing evidence, use source titles naturally in text. Do NOT include URLs — those display separately.
 6. FORBIDDEN ACTIONS: Do not fabricate findings, invent people problems, assume leadership gaps, or extrapolate small signals into sweeping assessments.
 7. PARAGRAPHS: Separate with \\n\\n. Required for rendering.
-8. FORMAT: Plain prose only. No headers, no bullet points, no markdown, no links.
+8. FORMAT: Prose with section headings only. Each section starts with "## Heading" on its own line followed by \\n\\n then the paragraph body. No bullet points, no other markdown, no links.
 9. TEMPORAL PRECISION: Use the most recent annual figures, not quarterly snapshots presented as annual results.
 10. ORGANIZATIONAL CLAIMS: NEVER claim leadership gaps, unfilled roles, or organizational problems unless the evidence explicitly states them.
 
