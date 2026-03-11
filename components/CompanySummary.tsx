@@ -197,7 +197,15 @@ const CompanySummary = ({ data }) => {
     if (!summaryRef.current) return;
 
     // Capture innerHTML synchronously BEFORE any async operations
-    var visuals = summaryRef.current.innerHTML;
+    // Strip report-only-section divs from the snapshot to avoid duplication —
+    // they are rebuilt fresh from backend data and appended separately below.
+    var container = document.createElement('div');
+    container.innerHTML = summaryRef.current.innerHTML;
+    var reportOnlySections = container.querySelectorAll('.report-only-section');
+    for (var i = 0; i < reportOnlySections.length; i++) {
+        reportOnlySections[i].parentNode.removeChild(reportOnlySections[i]);
+    }
+    var visuals = container.innerHTML;
 
     console.log('[HTML Export v6] Starting. data.detailed_report:',
         !!data.detailed_report, data.detailed_report ? data.detailed_report.length + ' chars' : 'MISSING',
