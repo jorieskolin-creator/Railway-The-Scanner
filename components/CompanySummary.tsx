@@ -201,7 +201,46 @@ const CompanySummary = ({ data }) => {
     // 2. Prepare raw data for Deep Dive Tool integration
     const rawData = JSON.stringify(data, null, 2);
 
-    // 3. Construct Standalone HTML
+    // 3. Pre-build report sections as strings (avoids nested template literal issues with Babel)
+    var detailedReportHTML = '';
+    if (data.detailed_report) {
+        var drParagraphs = data.detailed_report.split(/\n\n+/).map(function(para, pi) {
+            var escaped = para.replace(/&/g, '&amp;');
+            escaped = escaped.replace(/\x3c/g, '&lt;');
+            escaped = escaped.replace(/>/g, '&gt;');
+            var cls = 'text-slate-200 leading-relaxed text-sm font-light' + (pi > 0 ? ' mt-4' : '');
+            return '<p class="' + cls + '">' + escaped + '</p>';
+        }).join('\n');
+        var drModelTag = data.detailed_report_model ? ' — ' + data.detailed_report_model : '';
+        detailedReportHTML = '<div class="mt-8 space-y-8"><div class="bg-gradient-to-r from-violet-900/30 to-indigo-900/30 p-8 rounded-2xl border-l-4 border-violet-500 backdrop-blur-sm">'
+            + '<h3 class="text-xl font-bold text-white mb-2 flex items-center gap-2">'
+            + '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>'
+            + ' Detailed Forensic Report</h3>'
+            + '<p class="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">Deep diagnostic with evidence and stakeholder context' + drModelTag + '</p>'
+            + '<div>' + drParagraphs + '</div>'
+            + '</div></div>';
+    }
+
+    var foresightHTML = '';
+    if (data.foresight_summary) {
+        var fsParagraphs = data.foresight_summary.split(/\n\n+/).map(function(para, pi) {
+            var escaped = para.replace(/&/g, '&amp;');
+            escaped = escaped.replace(/\x3c/g, '&lt;');
+            escaped = escaped.replace(/>/g, '&gt;');
+            var cls = 'text-slate-200 leading-relaxed text-sm font-light' + (pi > 0 ? ' mt-4' : '');
+            return '<p class="' + cls + '">' + escaped + '</p>';
+        }).join('\n');
+        var fsModelTag = data.foresight_summary_model ? ' — ' + data.foresight_summary_model : '';
+        foresightHTML = '<div class="mt-8 space-y-8"><div class="bg-gradient-to-r from-teal-900/30 to-cyan-900/30 p-8 rounded-2xl border-l-4 border-teal-500 backdrop-blur-sm">'
+            + '<h3 class="text-xl font-bold text-white mb-2 flex items-center gap-2">'
+            + '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2dd4bf" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>'
+            + ' Future Insight</h3>'
+            + '<p class="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">Forward-looking narrative based on strategic foresight analysis' + fsModelTag + '</p>'
+            + '<div>' + fsParagraphs + '</div>'
+            + '</div></div>';
+    }
+
+    // 4. Construct Standalone HTML
     const htmlContent = `
 <!DOCTYPE html>
 <html lang="en">
@@ -249,39 +288,11 @@ const CompanySummary = ({ data }) => {
         ${visuals}
     </div>
 
-    <!-- DETAILED FORENSIC REPORT (rendered from data, not DOM) -->
-    ${data.detailed_report ? `
-    <div class="mt-8 space-y-8">
-        <div class="bg-gradient-to-r from-violet-900/30 to-indigo-900/30 p-8 rounded-2xl border-l-4 border-violet-500 backdrop-blur-sm">
-            <h3 class="text-xl font-bold text-white mb-2 flex items-center gap-2">
-                <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
-                Detailed Forensic Report
-            </h3>
-            <p class="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">
-                Deep diagnostic with evidence and stakeholder context${data.detailed_report_model ? ` — ${data.detailed_report_model}` : ''}
-            </p>
-            <div>
-                ${data.detailed_report.split(/\n\n+/).map((para, pi) => `<p class="text-slate-200 leading-relaxed text-sm font-light${pi > 0 ? ' mt-4' : ''}">${para.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>`).join('\n                ')}
-            </div>
-        </div>
-    </div>` : ''}
+    <!-- DETAILED FORENSIC REPORT -->
+    ${detailedReportHTML}
 
-    <!-- FUTURE INSIGHT (rendered from data, not DOM) -->
-    ${data.foresight_summary ? `
-    <div class="mt-8 space-y-8">
-        <div class="bg-gradient-to-r from-teal-900/30 to-cyan-900/30 p-8 rounded-2xl border-l-4 border-teal-500 backdrop-blur-sm">
-            <h3 class="text-xl font-bold text-white mb-2 flex items-center gap-2">
-                <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2dd4bf" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
-                Future Insight
-            </h3>
-            <p class="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">
-                Forward-looking narrative based on strategic foresight analysis${data.foresight_summary_model ? ` — ${data.foresight_summary_model}` : ''}
-            </p>
-            <div>
-                ${data.foresight_summary.split(/\n\n+/).map((para, pi) => `<p class="text-slate-200 leading-relaxed text-sm font-light${pi > 0 ? ' mt-4' : ''}">${para.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>`).join('\n                ')}
-            </div>
-        </div>
-    </div>` : ''}
+    <!-- FUTURE INSIGHT -->
+    ${foresightHTML}
 
     <!-- RAW DATA CAPSULE (Hidden, for Deep Dive Tool Parsing) -->
     <script id="forensic-data" type="application/json">
