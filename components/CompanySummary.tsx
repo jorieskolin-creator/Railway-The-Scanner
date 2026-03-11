@@ -216,13 +216,15 @@ const CompanySummary = ({ data }) => {
       ::-webkit-scrollbar { width: 8px; height: 8px; }
       ::-webkit-scrollbar-track { background: #1e1b4b; }
       ::-webkit-scrollbar-thumb { background: #4f46e5; border-radius: 4px; border: 2px solid #1e1b4b; }
+      /* Show report-only sections in downloaded HTML */
+      .report-only-section { display: block !important; }
     </style>
 </head>
 <body class="p-8 max-w-7xl mx-auto">
     <div class="mb-6 flex justify-between items-center border-b border-slate-700 pb-4">
         <div>
             <h1 class="text-2xl font-bold text-white">${data.companyName}</h1>
-            <p class="text-slate-400 text-sm">Forensic Snapshot</p>
+            <p class="text-slate-400 text-sm">Final Forensic Report</p>
         </div>
         <div class="text-right text-xs text-slate-500 font-mono">
             Generated: ${new Date().toISOString()}
@@ -824,6 +826,54 @@ const CompanySummary = ({ data }) => {
                     <Info size={12} />
                     Proposals derived from the weakest Knowledge Base dimensions — intended as conversation starters, not promises.
                 </p>
+            </div>
+        )}
+
+        {/* === REPORT-ONLY SECTIONS (hidden in modal, visible in downloaded HTML) === */}
+        {/* These sections are wrapped with report-only class which is display:none in the app
+            but the downloaded HTML overrides it to display:block */}
+
+        {data.detailed_report && (
+            <div className="report-only-section" style={{ display: 'none' }}>
+                <div className="bg-gradient-to-r from-violet-900/30 to-indigo-900/30 p-8 rounded-2xl border-l-4 border-violet-500 backdrop-blur-sm">
+                    <h3 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
+                        <ShieldCheck className="text-violet-400" size={22} />
+                        Detailed Forensic Report
+                    </h3>
+                    <p className="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">
+                        Deep diagnostic with evidence and stakeholder context
+                        {data.detailed_report_model && ` — ${data.detailed_report_model}`}
+                    </p>
+                    <div>
+                        {data.detailed_report.split(/\n\n+/).map((para, pi) => (
+                            <p key={pi} className={`text-slate-200 leading-relaxed text-sm font-light${pi > 0 ? " mt-4" : ""}`}>
+                                {para}
+                            </p>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {data.foresight_summary && (
+            <div className="report-only-section" style={{ display: 'none' }}>
+                <div className="bg-gradient-to-r from-teal-900/30 to-cyan-900/30 p-8 rounded-2xl border-l-4 border-teal-500 backdrop-blur-sm">
+                    <h3 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
+                        <TrendingUp className="text-teal-400" size={22} />
+                        Future Insight
+                    </h3>
+                    <p className="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">
+                        Forward-looking narrative based on strategic foresight analysis
+                        {data.foresight_summary_model && ` — ${data.foresight_summary_model}`}
+                    </p>
+                    <div>
+                        {data.foresight_summary.split(/\n\n+/).map((para, pi) => (
+                            <p key={pi} className={`text-slate-200 leading-relaxed text-sm font-light${pi > 0 ? " mt-4" : ""}`}>
+                                {para}
+                            </p>
+                        ))}
+                    </div>
+                </div>
             </div>
         )}
       </div>
