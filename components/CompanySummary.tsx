@@ -193,25 +193,42 @@ const CompanySummary = ({ data }) => {
     });
   };
 
-  const handleDownloadHTML = () => {
+  const handleDownloadHTML = async () => {
     if (!summaryRef.current) return;
 
+    // 0. Always re-fetch fresh data from API to guarantee detailed_report & foresight_summary are present
+    //    (the component's data prop may come from a stale detailsUrl blob that predates these fields)
+    var exportData = data;
+    console.log('[HTML Export] Component data.detailed_report:', !!data.detailed_report,
+        data.detailed_report ? data.detailed_report.length + ' chars' : 'MISSING');
+    try {
+        var freshRes = await fetch('/company/' + encodeURIComponent(data.companyName) + '?t=' + Date.now());
+        if (freshRes.ok) {
+            var fresh = await freshRes.json();
+            exportData = Object.assign({}, data, fresh);
+            console.log('[HTML Export] Fresh fetch exportData.detailed_report:', !!exportData.detailed_report,
+                exportData.detailed_report ? exportData.detailed_report.length + ' chars' : 'STILL MISSING');
+        }
+    } catch (fetchErr) {
+        console.warn('[HTML Export] Fresh fetch failed, using component data:', fetchErr);
+    }
+
     // 1. Get the visual DOM (Snapshot of current view)
-    const visuals = summaryRef.current.innerHTML;
-    // 2. Prepare raw data for Deep Dive Tool integration
-    const rawData = JSON.stringify(data, null, 2);
+    var visuals = summaryRef.current.innerHTML;
+    // 2. Prepare raw data — escape </script to prevent HTML parser issues in downloaded file
+    var rawData = JSON.stringify(exportData, null, 2).replace(/<\/script/gi, '<\\/script');
 
     // 3. Pre-build report sections as strings (avoids nested template literal issues with Babel)
     var detailedReportHTML = '';
-    if (data.detailed_report) {
-        var drParagraphs = data.detailed_report.split(/\n\n+/).map(function(para, pi) {
+    if (exportData.detailed_report && typeof exportData.detailed_report === 'string') {
+        var drParagraphs = exportData.detailed_report.split(/\n\n+/).map(function(para, pi) {
             var escaped = para.replace(/&/g, '&amp;');
             escaped = escaped.replace(/\x3c/g, '&lt;');
             escaped = escaped.replace(/>/g, '&gt;');
             var cls = 'text-slate-200 leading-relaxed text-sm font-light' + (pi > 0 ? ' mt-4' : '');
             return '<p class="' + cls + '">' + escaped + '</p>';
         }).join('\n');
-        var drModelTag = data.detailed_report_model ? ' — ' + data.detailed_report_model : '';
+        var drModelTag = exportData.detailed_report_model ? ' \u2014 ' + exportData.detailed_report_model : '';
         detailedReportHTML = '<div class="mt-8 space-y-8"><div class="bg-gradient-to-r from-violet-900/30 to-indigo-900/30 p-8 rounded-2xl border-l-4 border-violet-500 backdrop-blur-sm">'
             + '<h3 class="text-xl font-bold text-white mb-2 flex items-center gap-2">'
             + '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>'
@@ -219,18 +236,19 @@ const CompanySummary = ({ data }) => {
             + '<p class="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">Deep diagnostic with evidence and stakeholder context' + drModelTag + '</p>'
             + '<div>' + drParagraphs + '</div>'
             + '</div></div>';
+        console.log('[HTML Export] detailedReportHTML built:', detailedReportHTML.length, 'chars');
     }
 
     var foresightHTML = '';
-    if (data.foresight_summary) {
-        var fsParagraphs = data.foresight_summary.split(/\n\n+/).map(function(para, pi) {
+    if (exportData.foresight_summary && typeof exportData.foresight_summary === 'string') {
+        var fsParagraphs = exportData.foresight_summary.split(/\n\n+/).map(function(para, pi) {
             var escaped = para.replace(/&/g, '&amp;');
             escaped = escaped.replace(/\x3c/g, '&lt;');
             escaped = escaped.replace(/>/g, '&gt;');
             var cls = 'text-slate-200 leading-relaxed text-sm font-light' + (pi > 0 ? ' mt-4' : '');
             return '<p class="' + cls + '">' + escaped + '</p>';
         }).join('\n');
-        var fsModelTag = data.foresight_summary_model ? ' — ' + data.foresight_summary_model : '';
+        var fsModelTag = exportData.foresight_summary_model ? ' \u2014 ' + exportData.foresight_summary_model : '';
         foresightHTML = '<div class="mt-8 space-y-8"><div class="bg-gradient-to-r from-teal-900/30 to-cyan-900/30 p-8 rounded-2xl border-l-4 border-teal-500 backdrop-blur-sm">'
             + '<h3 class="text-xl font-bold text-white mb-2 flex items-center gap-2">'
             + '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2dd4bf" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>'
@@ -238,6 +256,7 @@ const CompanySummary = ({ data }) => {
             + '<p class="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">Forward-looking narrative based on strategic foresight analysis' + fsModelTag + '</p>'
             + '<div>' + fsParagraphs + '</div>'
             + '</div></div>';
+        console.log('[HTML Export] foresightHTML built:', foresightHTML.length, 'chars');
     }
 
     // 4. Construct Standalone HTML
@@ -247,8 +266,8 @@ const CompanySummary = ({ data }) => {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${data.companyName} - Forensic Report</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <title>${exportData.companyName} - Forensic Report</title>
+    <script src="https://cdn.tailwindcss.com"><\/script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
       body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
@@ -264,22 +283,22 @@ const CompanySummary = ({ data }) => {
         <div class="flex justify-between items-start">
             <div>
                 <div class="flex items-center gap-3 flex-wrap">
-                    <h1 class="text-3xl font-bold text-white tracking-tight">${data.companyName}</h1>
-                    ${data.id ? `<span class="px-2 py-0.5 rounded text-[10px] font-mono bg-white/5 text-slate-400 border border-white/5">ID: ${data.id.substring(0,8)}</span>` : ''}
-                    ${data.has_docs ? '<span class="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">DEEP DIVE</span>' : ''}
-                    ${data.washing_flag && data.intent_score > data.reality_score ? `<span class="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">${data.washing_type ? data.washing_type.toUpperCase() : 'WASHING DETECTED'}</span>` : ''}
+                    <h1 class="text-3xl font-bold text-white tracking-tight">${exportData.companyName}</h1>
+                    ${exportData.id ? `<span class="px-2 py-0.5 rounded text-[10px] font-mono bg-white/5 text-slate-400 border border-white/5">ID: ${exportData.id.substring(0,8)}</span>` : ''}
+                    ${exportData.has_docs ? '<span class="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">DEEP DIVE</span>' : ''}
+                    ${exportData.washing_flag && exportData.intent_score > exportData.reality_score ? `<span class="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">${exportData.washing_type ? exportData.washing_type.toUpperCase() : 'WASHING DETECTED'}</span>` : ''}
                 </div>
                 <p class="text-slate-400 text-sm mt-1">Final Forensic Report</p>
             </div>
             <div class="text-right text-xs text-slate-500 font-mono space-y-1">
                 <div>Report: ${new Date().toISOString().split('T')[0]}</div>
-                ${data.lastUpdated ? `<div>Scanned: ${new Date(data.lastUpdated).toLocaleDateString('en-FI', { day: 'numeric', month: 'long', year: 'numeric' })}</div>` : ''}
+                ${exportData.lastUpdated ? `<div>Scanned: ${new Date(exportData.lastUpdated).toLocaleDateString('en-FI', { day: 'numeric', month: 'long', year: 'numeric' })}</div>` : ''}
             </div>
         </div>
         <div class="flex items-center gap-3 mt-3 flex-wrap">
-            ${data.domain ? `<span class="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-slate-800 text-slate-300 border border-white/10">${data.domain}</span>` : ''}
-            ${data.archetype ? `<span class="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-indigo-500/15 text-indigo-300 border border-indigo-500/20">${data.archetype}</span>` : ''}
-            ${data.financial_index != null ? `<span class="px-2.5 py-1 rounded-full text-[10px] font-bold font-mono bg-slate-800 text-slate-300 border border-white/10">FHI: ${data.financial_index}/100</span>` : ''}
+            ${exportData.domain ? `<span class="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-slate-800 text-slate-300 border border-white/10">${exportData.domain}</span>` : ''}
+            ${exportData.archetype ? `<span class="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-indigo-500/15 text-indigo-300 border border-indigo-500/20">${exportData.archetype}</span>` : ''}
+            ${exportData.financial_index != null ? `<span class="px-2.5 py-1 rounded-full text-[10px] font-bold font-mono bg-slate-800 text-slate-300 border border-white/10">FHI: ${exportData.financial_index}/100</span>` : ''}
         </div>
     </div>
 
@@ -297,7 +316,7 @@ const CompanySummary = ({ data }) => {
     <!-- RAW DATA CAPSULE (Hidden, for Deep Dive Tool Parsing) -->
     <script id="forensic-data" type="application/json">
         ${rawData}
-    </script>
+    <\/script>
 
     <div class="mt-8 pt-8 border-t border-slate-700 text-center text-slate-500 text-xs font-mono opacity-50">
         AdaptabilityScanner | Forensic Suite | Data contained in #forensic-data tag
@@ -305,12 +324,12 @@ const CompanySummary = ({ data }) => {
 </body>
 </html>`;
 
-    // 4. Download
+    // 5. Download
     const blob = new Blob([htmlContent], { type: 'text/html' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `Forensic_Report_${data.companyName.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.html`;
+    a.download = `Forensic_Report_${exportData.companyName.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.html`;
     a.click();
     URL.revokeObjectURL(url);
   };
