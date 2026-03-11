@@ -1553,6 +1553,7 @@ def run_scan(
                     "previous_evidence": existing_data.get("evidence_links", [])[:8],
                     "previous_washing": existing_data.get("washing_type"),
                     "previous_summary": existing_data.get("summary_text", ""),
+                    "previous_detailed_report": existing_data.get("detailed_report", ""),
                 }
 
                 # Older scans from enriched history (up to 2 more, newest first)
@@ -1720,6 +1721,27 @@ def run_scan(
              washing_flag = False
              washing_type = None
 
+        # --- STEP 2.7: STRATEGIC FORESIGHT ---
+        foresight_data = None
+        try:
+            from strategic_foresight import generate_foresight
+            foresight_start = time.time()
+            foresight_data = generate_foresight(
+                company_name=companyName,
+                domain=company_domain,
+                archetype=archetype if 'archetype' in dir() else "Unknown",
+                reality_score=reality_results["score"],
+                financial_index=financial_results.get("financial_index"),
+                top_findings=reality_results.get("checklist", [])[:8],
+            )
+            foresight_ms = int((time.time() - foresight_start) * 1000)
+            if foresight_data:
+                print(f"   🔮 [Foresight] Complete: {len(foresight_data.get('dimension_forces', []))} forces ({foresight_ms}ms)")
+            else:
+                print(f"   ⚠️ [Foresight] Returned no data ({foresight_ms}ms)")
+        except Exception as foresight_err:
+            print(f"   ⚠️ [Foresight] Failed (non-fatal): {foresight_err}")
+
         # --- STEP 3: SYNTHESIS ---
         summary = "AI Summary Unavailable"
         pitch = "Pitch Unavailable"
@@ -1832,6 +1854,12 @@ Include the trend trajectory in the summary. Note persistent patterns or turning
 Use this to maintain consistency. If issues from previous scan are still present, note them as persistent.
 If new evidence shows improvement, highlight the positive trajectory."""
 
+                # Foresight context (only when foresight data was generated)
+                foresight_context = ""
+                if foresight_data:
+                    from strategic_foresight import format_foresight_for_synthesis
+                    foresight_context = format_foresight_for_synthesis(foresight_data, companyName, company_domain)
+
                 synthesis_prompt = f"""You are a senior organizational analyst conducting a forensic modernization assessment.
 You are conservative and evidence-bound. You would rather say "insufficient evidence" than risk a wrong claim. Your credibility depends on never overstating.
 Your task: synthesize scanner evidence into a precise, evidence-grounded diagnosis using the Knowledge Base framework below.
@@ -1864,6 +1892,7 @@ Intent Data: {intent_narrative}
 {washing_context}
 {financial_context}
 {trend_context}
+{foresight_context}
 {prev_synthesis_block}
 
 ### ANALYSIS PROTOCOL
@@ -2244,7 +2273,8 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
             "financial_index": financial_results.get("financial_index"),
             "financial_sub_scores": financial_results.get("sub_scores", {}),
             "financial_findings": financial_results.get("financial_findings", []),
-            "financial_confidence": financial_results.get("financial_confidence", 0)
+            "financial_confidence": financial_results.get("financial_confidence", 0),
+            "strategic_foresight": foresight_data,
         }
 
         # --- REALITY CHECK: Hallucination Detection ---
@@ -2550,31 +2580,76 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                         "reason": "Gemini re-synthesis failed",
                     }
 
-        # --- STEP 3.5: GENERAL SUMMARY ---
-        # Plain-language narrative (225-275 words) assembled from already-computed
-        # structured data (scores, verified links, jury findings, delta).
-        # No KB terminology. Every claim must carry an inline citation.
-        # Runs after fact-check so evidence_links are already purged/verified.
-        # Failure is non-fatal — old records without this field are handled gracefully.
+        # --- STEP 3.5 & 3.6: GENERAL SUMMARY + DETAILED REPORT (parallel) ---
+        # General Summary: Plain-language narrative (225-275 words) from already-verified data.
+        # Detailed Report: Deep diagnostic (800-1200 words) with evidence, stakeholder context, foresight.
+        # Both run after fact-check so evidence_links are already purged/verified.
+        # Failure is non-fatal for both — old records without these fields are handled gracefully.
+        gs_text, gs_model = "", ""
+        dr_text, dr_model = "", ""
         try:
-            gs_start = time.time()
-            gs_text, gs_model = generate_general_summary(full_data, companyName)
-            if gs_text:
-                # No web fact-check: General Summary is assembled from already-verified
-                # structured data (computed scores + purged evidence_links). Running it
-                # through ai_fact_check_summary() would flag computed metrics like
-                # reality_score / intent_score as "unsupported by evidence sources"
-                # and Stage 2 would surgically truncate them, breaking the output.
-                full_data["general_summary"] = gs_text
-                full_data["general_summary_model"] = gs_model
-                full_data["general_summary_verified"] = True
-                full_data["general_summary_false_claims"] = []
-                wc = len(gs_text.split())
-                print(f"   ✅ [General Summary] {wc} words, model={gs_model} ({int((time.time()-gs_start)*1000)}ms)")
-            else:
-                print(f"   ⚠️ [General Summary] Generation returned empty — skipping field")
-        except Exception as gs_err:
-            print(f"   ⚠️ [General Summary] Failed: {gs_err} — skipping, scan continues")
+            from detailed_report import generate_detailed_report
+            parallel_start = time.time()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                gs_future = pool.submit(generate_general_summary, full_data, companyName)
+                dr_future = pool.submit(generate_detailed_report, full_data, companyName, foresight_data)
+
+                try:
+                    gs_text, gs_model = gs_future.result(timeout=120)
+                except Exception as gs_err:
+                    print(f"   ⚠️ [General Summary] Failed: {gs_err} — skipping")
+
+                try:
+                    dr_text, dr_model = dr_future.result(timeout=120)
+                except Exception as dr_err:
+                    print(f"   ⚠️ [Detailed Report] Failed: {dr_err} — skipping")
+
+            parallel_ms = int((time.time() - parallel_start) * 1000)
+        except Exception as parallel_err:
+            print(f"   ⚠️ [Summary+Report] Parallel execution failed: {parallel_err}")
+            # Fallback: try general summary alone
+            try:
+                gs_text, gs_model = generate_general_summary(full_data, companyName)
+            except Exception:
+                pass
+
+        if gs_text:
+            # No web fact-check: General Summary is assembled from already-verified
+            # structured data (computed scores + purged evidence_links).
+            full_data["general_summary"] = gs_text
+            full_data["general_summary_model"] = gs_model
+            full_data["general_summary_verified"] = True
+            full_data["general_summary_false_claims"] = []
+            wc = len(gs_text.split())
+            print(f"   ✅ [General Summary] {wc} words, model={gs_model} ({parallel_ms}ms)")
+        else:
+            print(f"   ⚠️ [General Summary] Generation returned empty — skipping field")
+
+        if dr_text:
+            full_data["detailed_report"] = dr_text
+            full_data["detailed_report_model"] = dr_model
+            wc = len(dr_text.split())
+            print(f"   ✅ [Detailed Report] {wc} words, model={dr_model} ({parallel_ms}ms)")
+        else:
+            print(f"   ⚠️ [Detailed Report] Generation returned empty — skipping field")
+
+        # --- STEP 3.7: FUTURE INSIGHT SUMMARY ---
+        # 150-200 word forward-looking narrative based on foresight data.
+        # Only generated if foresight_data is available.
+        if foresight_data and foresight_data.get("dimension_forces"):
+            try:
+                from strategic_foresight import generate_foresight_summary
+                fs_start = time.time()
+                fs_text, fs_model = generate_foresight_summary(foresight_data, companyName, company_domain)
+                if fs_text:
+                    full_data["foresight_summary"] = fs_text
+                    full_data["foresight_summary_model"] = fs_model
+                    wc = len(fs_text.split())
+                    print(f"   ✅ [Future Insight] {wc} words, model={fs_model} ({int((time.time()-fs_start)*1000)}ms)")
+                else:
+                    print(f"   ⚠️ [Future Insight] Generation returned empty — skipping")
+            except Exception as fs_err:
+                print(f"   ⚠️ [Future Insight] Failed: {fs_err} — skipping, scan continues")
 
         # --- STEP 4: SAVE ---
         if saveToDatabase:
