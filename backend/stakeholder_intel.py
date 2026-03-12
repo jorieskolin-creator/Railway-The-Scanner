@@ -239,7 +239,7 @@ def enrich_single_person(person: dict, company_name: str, gemini_key: str) -> di
     response_text = ""
     model_used = ""
 
-    # Primary: Gemini 2.5 Pro with Google Search grounding
+    # Primary: Gemini 3.1 Pro with Google Search grounding (better name accuracy)
     if not response_text:
         _safety = [
             {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
@@ -248,7 +248,33 @@ def enrich_single_person(person: dict, company_name: str, gemini_key: str) -> di
             {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
         ]
         try:
-            print(f"      🔍 [Stakeholder Intel] Searching for {name} ({role}) via gemini-2.5-pro...")
+            print(f"      🔍 [Stakeholder Intel] Searching for {name} ({role}) via gemini-3.1-pro-preview...")
+            client = genai.Client(api_key=gemini_key)
+            resp = call_with_503_backoff(
+                lambda: client.models.generate_content(
+                    model="gemini-3.1-pro-preview",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        tools=[{'google_search': {}}],
+                        temperature=0.1,
+                        thinking_config=types.ThinkingConfig(thinking_budget=1024),
+                        max_output_tokens=4000,
+                        safety_settings=_safety,
+                    )
+                ),
+                label=f"Stakeholder Intel {name} gemini-3.1-pro-preview",
+                model="gemini-3.1-pro-preview",
+                timeout=60,
+            )
+            response_text = resp.text or ""
+            model_used = "gemini-3.1-pro-preview"
+        except Exception as g31_err:
+            print(f"      ❌ [Stakeholder Intel] Gemini 3.1 Pro failed for {name}: {g31_err}")
+
+    # Fallback: Gemini 2.5 Pro with Google Search
+    if not response_text:
+        try:
+            print(f"      🔄 [Stakeholder Intel] Falling back to gemini-2.5-pro for {name}...")
             client = genai.Client(api_key=gemini_key)
             resp = call_with_503_backoff(
                 lambda: client.models.generate_content(
@@ -269,33 +295,7 @@ def enrich_single_person(person: dict, company_name: str, gemini_key: str) -> di
             response_text = resp.text or ""
             model_used = "gemini-2.5-pro"
         except Exception as g25_err:
-            print(f"      ❌ [Stakeholder Intel] Gemini 2.5 Pro failed for {name}: {g25_err}")
-
-    # Fallback 2: Gemini 3.1 Pro with Google Search
-    if not response_text:
-        try:
-            print(f"      🔄 [Stakeholder Intel] Falling back to gemini-3.1-pro-preview for {name}...")
-            client = genai.Client(api_key=gemini_key)
-            resp = call_with_503_backoff(
-                lambda: client.models.generate_content(
-                    model="gemini-3.1-pro-preview",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        tools=[{'google_search': {}}],
-                        temperature=0.2,
-                        thinking_config=types.ThinkingConfig(thinking_budget=1024),
-                        max_output_tokens=4000,
-                        safety_settings=_safety,
-                    )
-                ),
-                label=f"Stakeholder Intel {name} gemini-3.1-pro-preview",
-                model="gemini-3.1-pro-preview",
-                timeout=60,
-            )
-            response_text = resp.text or ""
-            model_used = "gemini-3.1-pro-preview"
-        except Exception as g31_err:
-            print(f"      ❌ [Stakeholder Intel] All models failed for {name}: {g31_err}")
+            print(f"      ❌ [Stakeholder Intel] All models failed for {name}: {g25_err}")
 
     # Parse response
     if not response_text:
@@ -391,7 +391,7 @@ def _enrich_batch(people_with_names: list[dict], company_name: str, gemini_key: 
     response_text = ""
     model_used = ""
 
-    # Primary: Gemini 2.5 Pro with Google Search grounding
+    # Primary: Gemini 3.1 Pro with Google Search grounding (better name accuracy)
     if not response_text:
         _safety = [
             {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
@@ -400,7 +400,33 @@ def _enrich_batch(people_with_names: list[dict], company_name: str, gemini_key: 
             {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
         ]
         try:
-            print(f"      🔍 [Stakeholder Intel] Batched search for {len(people_with_names)} people ({names_str}) via gemini-2.5-pro...")
+            print(f"      🔍 [Stakeholder Intel] Batched search for {len(people_with_names)} people ({names_str}) via gemini-3.1-pro-preview...")
+            client = genai.Client(api_key=gemini_key)
+            resp = call_with_503_backoff(
+                lambda: client.models.generate_content(
+                    model="gemini-3.1-pro-preview",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        tools=[{'google_search': {}}],
+                        temperature=0.1,
+                        thinking_config=types.ThinkingConfig(thinking_budget=1024),
+                        max_output_tokens=8000,
+                        safety_settings=_safety,
+                    )
+                ),
+                label=f"Stakeholder Intel batch gemini-3.1-pro-preview",
+                model="gemini-3.1-pro-preview",
+                timeout=90,
+            )
+            response_text = resp.text or ""
+            model_used = "gemini-3.1-pro-preview"
+        except Exception as g31_err:
+            print(f"      ❌ [Stakeholder Intel] Batch Gemini 3.1 Pro failed: {g31_err}")
+
+    # Fallback: Gemini 2.5 Pro
+    if not response_text:
+        try:
+            print(f"      🔄 [Stakeholder Intel] Batch falling back to gemini-2.5-pro...")
             client = genai.Client(api_key=gemini_key)
             resp = call_with_503_backoff(
                 lambda: client.models.generate_content(
@@ -421,33 +447,7 @@ def _enrich_batch(people_with_names: list[dict], company_name: str, gemini_key: 
             response_text = resp.text or ""
             model_used = "gemini-2.5-pro"
         except Exception as g25_err:
-            print(f"      ❌ [Stakeholder Intel] Batch Gemini 2.5 Pro failed: {g25_err}")
-
-    # Fallback 2: Gemini 3.1 Pro
-    if not response_text:
-        try:
-            print(f"      🔄 [Stakeholder Intel] Batch falling back to gemini-3.1-pro-preview...")
-            client = genai.Client(api_key=gemini_key)
-            resp = call_with_503_backoff(
-                lambda: client.models.generate_content(
-                    model="gemini-3.1-pro-preview",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        tools=[{'google_search': {}}],
-                        temperature=0.2,
-                        thinking_config=types.ThinkingConfig(thinking_budget=1024),
-                        max_output_tokens=8000,
-                        safety_settings=_safety,
-                    )
-                ),
-                label=f"Stakeholder Intel batch gemini-3.1-pro-preview",
-                model="gemini-3.1-pro-preview",
-                timeout=90,
-            )
-            response_text = resp.text or ""
-            model_used = "gemini-3.1-pro-preview"
-        except Exception as g31_err:
-            print(f"      ❌ [Stakeholder Intel] Batch all models failed: {g31_err}")
+            print(f"      ❌ [Stakeholder Intel] Batch all models failed: {g25_err}")
 
     if not response_text:
         return False
