@@ -818,7 +818,7 @@ const CompanySummary = ({ data }) => {
                     Key Modernization Stakeholders
                 </h3>
                 <div className="grid grid-cols-1 gap-3">
-                    {data.key_people.map((person, idx) => {
+                    {data.key_people.filter(p => p.linkedin_insights?.still_at_company !== false).map((person, idx) => {
                         const insights = person.linkedin_insights;
                         const hasInsights = insights && insights.found;
                         return (

@@ -785,6 +785,13 @@ async def enrich_stakeholders_single(company_name: str, request: Request):
     enriched = enrich_key_people(company_name, key_people)
     ms = int((time.time() - start) * 1000)
 
+    # Filter out people who have left the company
+    departed = [p for p in enriched if p.get("linkedin_insights", {}).get("still_at_company") is False]
+    if departed:
+        departed_names = ", ".join(p.get("name", "?") for p in departed)
+        print(f"   🚫 [Stakeholder Filter] Removing {len(departed)} departed stakeholder(s): {departed_names}")
+        enriched = [p for p in enriched if p.get("linkedin_insights", {}).get("still_at_company") is not False]
+
     data["key_people"] = enriched
     storage.save_company_data(company_name, data)
 
@@ -833,6 +840,14 @@ async def enrich_stakeholders_all(request: Request):
         try:
             from stakeholder_intel import enrich_key_people
             enriched = enrich_key_people(name, key_people)
+
+            # Filter out people who have left the company
+            departed = [p for p in enriched if p.get("linkedin_insights", {}).get("still_at_company") is False]
+            if departed:
+                departed_names = ", ".join(p.get("name", "?") for p in departed)
+                print(f"   🚫 [Stakeholder Filter] Removing {len(departed)} departed stakeholder(s) from {name}: {departed_names}")
+                enriched = [p for p in enriched if p.get("linkedin_insights", {}).get("still_at_company") is not False]
+
             data["key_people"] = enriched
             storage.save_company_data(name, data)
 
@@ -1704,6 +1719,13 @@ def run_scan(
                 key_people = enrich_key_people(companyName, key_people)
             except Exception as enrich_err:
                 print(f"   ⚠️ [Stakeholder Intel] Enrichment failed (non-fatal): {enrich_err}")
+
+            # Filter out people who have left the company (verified by enrichment)
+            departed = [p for p in key_people if p.get("linkedin_insights", {}).get("still_at_company") is False]
+            if departed:
+                departed_names = ", ".join(p.get("name", "?") for p in departed)
+                print(f"   🚫 [Stakeholder Filter] Removing {len(departed)} departed stakeholder(s): {departed_names}")
+                key_people = [p for p in key_people if p.get("linkedin_insights", {}).get("still_at_company") is not False]
 
         # --- LOGIC CONSISTENCY CHECK ---
         # CRITICAL FIX: "Washing" is impossible if Reality >= Intent.

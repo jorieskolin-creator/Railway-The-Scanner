@@ -16,6 +16,8 @@ interface EvidenceLink {
 interface LinkedInInsights {
   found: boolean;
   headline?: string | null;
+  verified_role?: string | null;
+  still_at_company?: boolean | null;
   summary: string;
   career_moves?: string[];
   topics?: string[];
