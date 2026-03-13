@@ -288,7 +288,14 @@ The expected JSON structure is:
   "washing_type": <string or null>
 }}
 
-Extract as much data as possible from the text below. Preserve all findings, URLs, and evidence. If a field cannot be determined, use sensible defaults (0 for scores, empty arrays for lists, false for booleans).
+Extract as much data as possible from the text below. Preserve all findings, URLs, and evidence. If a field cannot be determined, use sensible defaults (0 for reality_score_adjustment, empty arrays for lists, false for booleans).
+
+IMPORTANT for confidence_score: Do NOT default to 0. Assess confidence based on the evidence density in the text:
+- Count findings with real URLs and specific quotes → more evidence = higher confidence
+- 0-40: Very few sources, evidence is generic or very old
+- 41-70: Some specific evidence found, but mixed recency or limited sources
+- 71-100: Multiple independent sources confirm findings, evidence is recent and specific
+If the text contains 3+ findings with URLs, confidence should be at least 50.
 {citations_section}
 
 TEXT TO PARSE:
@@ -363,7 +370,14 @@ The expected JSON structure is:
   "washing_type": <string or null>
 }}
 
-Extract as much data as possible from the text below. Preserve all findings, URLs, and evidence. If a field cannot be determined, use sensible defaults (0 for scores, empty arrays for lists, false for booleans).
+Extract as much data as possible from the text below. Preserve all findings, URLs, and evidence. If a field cannot be determined, use sensible defaults (0 for reality_score_adjustment, empty arrays for lists, false for booleans).
+
+IMPORTANT for confidence_score: Do NOT default to 0. Assess confidence based on the evidence density in the text:
+- Count findings with real URLs and specific quotes → more evidence = higher confidence
+- 0-40: Very few sources, evidence is generic or very old
+- 41-70: Some specific evidence found, but mixed recency or limited sources
+- 71-100: Multiple independent sources confirm findings, evidence is recent and specific
+If the text contains 3+ findings with URLs, confidence should be at least 50.
 
 TEXT TO PARSE:
 {raw_text[:12000]}
@@ -1684,6 +1698,20 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     if not data:
         print(f"   ⚠️ [Forensic Scan] Gemini 3.1 Pro Preview returned no data. Falling back to Gemini 2.5 Pro...")
         data = execute_with_model("gemini-2.5-pro", call_timeout=120)
+
+    # --- CONFIDENCE FLOOR (two-pass structuring safety net) ---
+    # When the structuring model (Pass 2) cannot determine confidence from
+    # free-form text, it may default to 0 even when real evidence exists.
+    # Apply a minimum confidence based on actual evidence count to prevent
+    # false "Manual Review Rec." labels on well-evidenced scans.
+    if data:
+        model_confidence = data.get("confidence_score", 0)
+        evidence_with_urls = len([f for f in data.get("findings", []) if f.get("found") and f.get("url")])
+        if model_confidence < 10 and evidence_with_urls >= 1:
+            # Evidence exists but confidence is near-zero → structuring model failed to assess
+            floor = min(50, evidence_with_urls * 15)  # 15 per evidence link, cap at 50
+            data["confidence_score"] = floor
+            print(f"   📊 [Confidence Floor] Model returned {model_confidence}/100 but {evidence_with_urls} evidence links found. Adjusted to {floor}/100.")
 
     # --- CONFIDENCE-DRIVEN RE-SEARCH LOOP ---
     # Only triggers when initial results have low confidence AND weak coverage.
