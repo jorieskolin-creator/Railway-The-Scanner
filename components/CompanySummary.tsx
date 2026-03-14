@@ -815,13 +815,18 @@ const CompanySummary = ({ data }) => {
                                                 {link._scan}
                                             </span>
                                         )}
-                                        {link.source_credibility && link._scan === 'foresight' && (
+                                        {link.source_credibility && (
                                             <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono shrink-0 ${
                                                 link.source_credibility === 'high' ? 'bg-emerald-500/20 text-emerald-400' :
                                                 link.source_credibility === 'medium' ? 'bg-amber-500/20 text-amber-400' :
                                                 'bg-rose-500/20 text-rose-400'
                                             }`}>
                                                 {link.source_credibility}
+                                            </span>
+                                        )}
+                                        {link.verified === true && !link.source_credibility && (
+                                            <span className="text-[9px] bg-slate-600/30 text-slate-400 px-1.5 py-0.5 rounded font-mono shrink-0">
+                                                url_ok
                                             </span>
                                         )}
                                         {link.verified === false && (

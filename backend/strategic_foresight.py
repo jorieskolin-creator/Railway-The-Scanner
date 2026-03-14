@@ -25,6 +25,7 @@ import concurrent.futures
 from google import genai
 from google.genai import types as genai_types
 from gemini_backoff import call_with_503_backoff
+from source_quality import HIGH_CREDIBILITY_DOMAINS, LOW_CREDIBILITY_DOMAINS, assess_source_credibility
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -602,21 +603,9 @@ Output only the prose text. Nothing else."""
 # Valid source types that the SIFT protocol considers credible
 _CREDIBLE_SOURCE_TYPES = {"academic", "think_tank", "industry_analyst", "government", "news"}
 
-# Domains known to be high-credibility sources
-_HIGH_CREDIBILITY_DOMAINS = {
-    "oecd.org", "mckinsey.com", "bcg.com", "hbr.org", "gartner.com",
-    "forrester.com", "idc.com", "weforum.org", "imf.org", "worldbank.org",
-    "ec.europa.eu", "deloitte.com", "pwc.com", "ey.com", "kpmg.com",
-    "reuters.com", "ft.com", "bloomberg.com", "economist.com",
-    "nature.com", "sciencedirect.com", "arxiv.org", "ssrn.com",
-    "ieee.org", "acm.org", "nist.gov", "europa.eu", "un.org",
-}
-
-# Domains that indicate low-credibility or marketing sources
-_LOW_CREDIBILITY_DOMAINS = {
-    "medium.com", "wordpress.com", "blogspot.com", "substack.com",
-    "pr.com", "prnewswire.com", "businesswire.com", "globenewswire.com",
-}
+# Domain credibility lists — imported from shared source_quality module
+_HIGH_CREDIBILITY_DOMAINS = HIGH_CREDIBILITY_DOMAINS
+_LOW_CREDIBILITY_DOMAINS = LOW_CREDIBILITY_DOMAINS
 
 
 def _verify_foresight_url(url, timeout=4):
@@ -1050,28 +1039,19 @@ def reality_check_foresight(foresight_data, company_name=""):
         elif not url_verified:
             flags.append("Source URL could not be verified (dead/unreachable)")
 
-        # --- Domain credibility assessment ---
-        credibility = "medium"  # default
-        if domain:
-            if domain in _HIGH_CREDIBILITY_DOMAINS or any(domain.endswith("." + hcd) for hcd in _HIGH_CREDIBILITY_DOMAINS):
-                credibility = "high"
-            elif domain in _LOW_CREDIBILITY_DOMAINS or any(domain.endswith("." + lcd) for lcd in _LOW_CREDIBILITY_DOMAINS):
-                credibility = "low"
-                flags.append(f"Low-credibility domain: {domain}")
-            elif source_type in ("academic", "government", "think_tank"):
-                credibility = "high"
-            elif source_type == "industry_analyst":
-                credibility = "medium"
-
-            # Company self-reporting check (SIFT principle: investigate the source)
-            company_name_lower = company_name.lower().replace(" ", "") if company_name else ""
-            if company_name_lower and company_name_lower in domain.replace(".", ""):
-                flags.append("Source appears to be company's own website — may be self-reported")
-                credibility = "low"
-        else:
-            credibility = "low"
-            if source_url:
-                flags.append("Could not extract domain from URL")
+        # --- Domain credibility assessment (shared module) ---
+        company_domain = ""
+        if company_name:
+            company_name_lower = company_name.lower().replace(" ", "")
+            if domain and company_name_lower in domain.replace(".", ""):
+                company_domain = domain
+        credibility = assess_source_credibility(source_url, source_type, company_domain)
+        if credibility == "low" and domain:
+            flags.append(f"Low-credibility domain: {domain}")
+        if company_domain:
+            flags.append("Source appears to be company's own website — may be self-reported")
+        if not domain and source_url:
+            flags.append("Could not extract domain from URL")
 
         # --- OSINT validation quality ---
         if not osint_validation:

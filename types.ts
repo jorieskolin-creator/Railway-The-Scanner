@@ -11,6 +11,8 @@ interface EvidenceLink {
   title: string;
   url: string;
   source: string;
+  verified?: boolean;
+  source_credibility?: string; // "high" | "medium" | "low"
 }
 
 interface ForesightLink {

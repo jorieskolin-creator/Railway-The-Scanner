@@ -12,6 +12,7 @@ from google import genai
 from google.genai import types
 import anthropic
 from knowledge_base import get_evolving_framework
+from source_quality import assess_evidence_quality, confidence_quality_penalty
 
 # --- HELPER: IMPROVE SEARCH RECALL ---
 def clean_company_name_for_search(name):
@@ -2080,6 +2081,17 @@ RETURN STRICT JSON:
                 old_conf = int(confidence)
                 confidence = max(10, confidence - penalty)
                 print(f"   ⚠️ [URL Validation] {int(dead_ratio*100)}% URLs still dead → confidence penalty -{penalty} ({old_conf} → {int(confidence)})")
+
+        # --- SOURCE QUALITY ASSESSMENT ---
+        # Evaluate credibility of each source domain (not just URL liveness).
+        # Adds 'source_credibility' field to each evidence link.
+        # Penalizes confidence when evidence comes from low-quality sources.
+        company_domain = get_clean_domain(company_url) if company_url else ""
+        high_q, med_q, low_q, quality_score = assess_evidence_quality(raw_findings, company_domain)
+        total_q = high_q + med_q + low_q
+        if total_q > 0:
+            print(f"   🔍 [Source Quality] {high_q} high, {med_q} medium, {low_q} low credibility sources (quality: {quality_score}/100)")
+        confidence = confidence_quality_penalty(confidence, raw_findings, company_domain)
 
         return {
             "score": int(final_score),
