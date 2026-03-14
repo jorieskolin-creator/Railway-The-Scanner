@@ -430,6 +430,80 @@ class BlobStorage:
         result.sort(key=lambda x: x.get("companyName", "").lower())
         return result
 
+    # --- FORESIGHT KNOWLEDGE BASE ---
+
+    def save_foresight_kb(self, theme_slug: str, signals_data: dict):
+        """
+        Saves validated foresight signals for a single FP theme.
+        Stored under foresight_kb/{theme_slug}.json with max 2 versions.
+        """
+        prefix = f"foresight_kb/{theme_slug}"
+        filename = f"{prefix}.json"
+        new_url = self._put(filename, signals_data)
+        if new_url:
+            self._prune_old_versions(prefix, keep=2)
+        return new_url
+
+    def get_foresight_kb(self, theme_slug: str):
+        """Retrieves the latest validated foresight signals for a single FP theme."""
+        prefix = f"foresight_kb/{theme_slug}"
+        blobs = self._list(prefix=prefix, limit=5)
+        if not blobs:
+            return None
+        blobs.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
+        return self._get(blobs[0].get("url"))
+
+    def get_all_foresight_kb(self):
+        """Retrieves all foresight KB themes. Returns dict {theme_slug: signals_data}."""
+        blobs = self._list(prefix="foresight_kb/", limit=100)
+        if not blobs:
+            return {}
+        # Group by theme (strip foresight_kb/ prefix and .json suffix)
+        themes = {}
+        for blob in blobs:
+            pathname = blob.get("pathname", "")
+            slug = pathname.replace("foresight_kb/", "").split(".")[0]
+            if slug not in themes:
+                themes[slug] = blob
+            elif blob.get("uploadedAt", "") > themes[slug].get("uploadedAt", ""):
+                themes[slug] = blob
+        result = {}
+        for slug, blob in themes.items():
+            data = self._get(blob.get("url"))
+            if data:
+                result[slug] = data
+        return result
+
+    def get_foresight_kb_status(self):
+        """Returns metadata about the foresight KB (theme count, last updated, signal counts)."""
+        blobs = self._list(prefix="foresight_kb/", limit=100)
+        if not blobs:
+            return {"theme_count": 0, "total_signals": 0, "last_updated": None, "themes": []}
+        # Group by theme, find latest per theme
+        themes = {}
+        for blob in blobs:
+            pathname = blob.get("pathname", "")
+            slug = pathname.replace("foresight_kb/", "").split(".")[0]
+            uploaded = blob.get("uploadedAt", "")
+            if slug not in themes or uploaded > themes[slug]["uploadedAt"]:
+                themes[slug] = {"slug": slug, "uploadedAt": uploaded, "url": blob.get("url")}
+        theme_list = sorted(themes.values(), key=lambda x: x["slug"])
+        last_updated = max(t["uploadedAt"] for t in theme_list) if theme_list else None
+        # Count signals per theme
+        total_signals = 0
+        theme_summaries = []
+        for t in theme_list:
+            data = self._get(t["url"])
+            n = len(data.get("signals", [])) if data else 0
+            total_signals += n
+            theme_summaries.append({"theme": t["slug"], "signals": n, "updated": t["uploadedAt"]})
+        return {
+            "theme_count": len(theme_list),
+            "total_signals": total_signals,
+            "last_updated": last_updated,
+            "themes": theme_summaries,
+        }
+
     def nuke_everything(self):
         """
         DANGEROUS: Deletes ALL files in the blob storage.

@@ -1,0 +1,411 @@
+"""
+foresight_harvester.py — Periodic harvester for the Foresight Knowledge Base.
+
+Scans authoritative sources (FP_THEME_SOURCES) for megatrend signals,
+validates them (URL verification + credibility assessment), and stores
+validated findings in blob storage. These pre-validated signals are then
+injected into per-company foresight generation, avoiding redundant searches.
+
+This is the "Simple RAG" layer: harvest → validate → store → retrieve.
+"""
+
+import json
+import os
+import re
+import time
+import concurrent.futures
+from datetime import datetime, timezone
+
+from google import genai
+from google.genai import types as genai_types
+from gemini_backoff import call_with_503_backoff
+from source_quality import HIGH_CREDIBILITY_DOMAINS, assess_source_credibility
+from strategic_foresight import (
+    FP_THEMES_30, FP_THEME_SOURCES, _verify_foresight_url, _extract_json_from_text,
+)
+from storage import BlobStorage
+
+
+def _theme_to_slug(theme: str) -> str:
+    """Convert a theme name to a storage-safe slug."""
+    slug = theme.lower()
+    slug = slug.replace(" & ", "_and_").replace("&", "and")
+    slug = re.sub(r'[^a-z0-9_]', '_', slug)
+    slug = re.sub(r'_{2,}', '_', slug)
+    return slug.strip('_')
+
+
+def _build_harvest_prompt(theme: str, search_queries: list[str]) -> str:
+    """Build a Gemini prompt to harvest megatrend signals for one FP theme."""
+
+    queries_text = "\n".join(f"- {q}" for q in search_queries[:8])
+
+    return f"""You are a Strategic Foresight Research Analyst specializing in megatrend signal detection.
+
+TASK: Identify the 3-5 most significant current signals/developments for the megatrend theme "{theme}".
+
+These signals must be:
+- HORIZONTAL: Industry-agnostic macro forces (not company-specific)
+- RECENT: From the last 12 months (2025-2026)
+- VERIFIED: From authoritative sources you can cite with real URLs
+- ACTIONABLE: Relevant to strategic planning for businesses affected by this theme
+
+MANDATORY SOURCE TARGETING — Search these first:
+{queries_text}
+
+ALLOWED SOURCE DOMAINS (primary sources MUST come from these):
+Tier 1 (analysts): gartner.com, forrester.com, mckinsey.com, bcg.com, deloitte.com, pwc.com, ey.com, kpmg.com, accenture.com, hbr.org, idc.com
+Tier 2 (quality news): reuters.com, ft.com, bloomberg.com, economist.com, wsj.com, bbc.com
+Tier 3 (academic/gov): oecd.org, imf.org, worldbank.org, ec.europa.eu, nature.com, sciencedirect.com, arxiv.org, ieee.org, un.org, who.int, fao.org, iea.org, irena.org, bis.org, ipcc.ch
+Tier 4 (foresight orgs): weforum.org, millennium-project.org, iftf.org, cifs.dk, rand.org, chathamhouse.org, clubofrome.org, oxfordmartin.ox.ac.uk, cser.ac.uk, sitra.fi
+
+DO NOT USE: blogs, press release wires, social media, content farms, regional tech news, marketing sites.
+
+SIFT PROTOCOL (mandatory):
+1. STOP: Verify the signal is real, not marketing spin.
+2. INVESTIGATE SOURCE: Is this independent research, not corporate PR?
+3. FIND BETTER COVERAGE: Each signal needs 2+ independent corroborating sources.
+4. TRACE CLAIMS: Link to ORIGINAL source, not derivative summaries.
+
+For each signal, provide:
+- "title": Concise name of the megatrend signal (specific, not vague)
+- "description": 2-3 sentences explaining the signal and its strategic implications
+- "signal_type": "Plausible/Maturing" | "Probable/Emerging" | "Weakening/Declining" | "Preposterous/Black Swan"
+- "timeframe": "6-12mo" | "12-24mo" | "24-36mo"
+- "source_url": Primary URL from your web search (MUST be real, from allowed domains)
+- "supporting_sources": Array of 1-2 additional corroborating URLs from different orgs. Each: {{"url": "https://...", "title": "Brief title"}}
+- "source_type": "academic" | "think_tank" | "industry_analyst" | "government" | "news"
+- "confidence": "high" (3+ sources) | "medium" (2 sources) | "low" (1 source)
+- "industries_affected": Array of 2-4 industry domains most impacted (e.g., ["Technology & Software", "Financial Services", "Healthcare"])
+- "kb_dimensions_affected": Array of 1-3 KB dimensions impacted: "Operating Model", "Strategy", "Culture", "Service Portfolio", "AI Readiness"
+
+CRITICAL: Every URL must be real and retrieved from web search. Do NOT fabricate URLs.
+
+RETURN STRICT JSON ONLY:
+{{
+  "theme": "{theme}",
+  "signals": [
+    {{
+      "title": "...",
+      "description": "...",
+      "signal_type": "...",
+      "timeframe": "...",
+      "source_url": "https://...",
+      "supporting_sources": [{{"url": "https://...", "title": "..."}}],
+      "source_type": "...",
+      "confidence": "...",
+      "industries_affected": ["...", "..."],
+      "kb_dimensions_affected": ["...", "..."]
+    }}
+  ]
+}}"""
+
+
+def _harvest_single_theme(theme: str, client, search_queries: list[str]) -> dict | None:
+    """Harvest megatrend signals for one FP theme using Gemini + Google Search."""
+
+    prompt = _build_harvest_prompt(theme, search_queries)
+
+    _safety = [
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    ]
+
+    models = [
+        ("gemini-3.1-pro-preview", genai_types.GenerateContentConfig(
+            tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
+            safety_settings=_safety,
+            temperature=0.4,
+            thinking_config=genai_types.ThinkingConfig(thinking_budget=2000),
+            max_output_tokens=6000,
+        ), 90),
+        ("gemini-2.5-pro", genai_types.GenerateContentConfig(
+            tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
+            safety_settings=_safety,
+            temperature=0.4,
+            thinking_config=genai_types.ThinkingConfig(thinking_budget=1024),
+            max_output_tokens=6000,
+        ), 60),
+    ]
+
+    for model_name, config, timeout_sec in models:
+        try:
+            print(f"   🌐 [Harvest] {theme} → {model_name}...")
+            t0 = time.time()
+            response = call_with_503_backoff(
+                lambda mn=model_name, cfg=config: client.models.generate_content(
+                    model=mn, contents=prompt, config=cfg,
+                ),
+                label=f"Harvest {theme} {model_name}",
+                model=model_name,
+                timeout=timeout_sec,
+            )
+            text = response.text if hasattr(response, "text") else ""
+            elapsed = int((time.time() - t0) * 1000)
+
+            if not text or len(text) < 80:
+                print(f"   ⚠️ [Harvest] {theme}: {model_name} insufficient data ({len(text) if text else 0} chars, {elapsed}ms)")
+                continue
+
+            json_str = _extract_json_from_text(text)
+            if not json_str:
+                print(f"   ⚠️ [Harvest] {theme}: could not extract JSON ({elapsed}ms)")
+                continue
+
+            data = json.loads(json_str, strict=False)
+
+            if not data.get("signals"):
+                print(f"   ⚠️ [Harvest] {theme}: no signals in response ({elapsed}ms)")
+                continue
+
+            data["model"] = model_name
+            data["time_ms"] = elapsed
+            data["theme"] = theme
+            n = len(data["signals"])
+            print(f"   ✅ [Harvest] {theme}: {n} signals ({elapsed}ms)")
+            return data
+
+        except json.JSONDecodeError as je:
+            elapsed = int((time.time() - t0) * 1000)
+            print(f"   ⚠️ [Harvest] {theme}: JSON parse failed ({elapsed}ms): {je}")
+            continue
+        except Exception as e:
+            elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
+            print(f"   ❌ [Harvest] {theme}: {model_name} failed ({elapsed}ms): {e}")
+            continue
+
+    print(f"   ❌ [Harvest] {theme}: all models failed — skipped")
+    return None
+
+
+def _validate_harvest_signals(data: dict) -> dict:
+    """
+    Validate harvested signals: verify URLs, assess credibility, remove bad ones.
+    Modifies and returns the data dict in place.
+    """
+    if not data or not data.get("signals"):
+        return data
+
+    all_urls = []
+    for sig in data["signals"]:
+        if sig.get("source_url"):
+            all_urls.append(("primary", sig, sig["source_url"]))
+        for ss in sig.get("supporting_sources", []):
+            if ss.get("url"):
+                all_urls.append(("supporting", ss, ss["url"]))
+
+    # Parallel URL verification
+    url_status = {}
+    if all_urls:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            futures = {
+                pool.submit(_verify_foresight_url, url, 5): url
+                for (_, _, url) in all_urls
+            }
+            for future in concurrent.futures.as_completed(futures):
+                url = futures[future]
+                try:
+                    url_status[url] = future.result()
+                except Exception:
+                    url_status[url] = False
+
+    verified_count = 0
+    dead_count = 0
+
+    for sig in data["signals"]:
+        # Check primary URL
+        primary_url = sig.get("source_url", "")
+        sig["url_verified"] = url_status.get(primary_url, False)
+        sig["source_credibility"] = assess_source_credibility(primary_url, sig.get("source_type", ""))
+
+        if sig["url_verified"]:
+            verified_count += 1
+        else:
+            dead_count += 1
+
+        # Check supporting sources
+        valid_supporting = []
+        for ss in sig.get("supporting_sources", []):
+            ss_url = ss.get("url", "")
+            ss["url_verified"] = url_status.get(ss_url, False)
+            ss["source_credibility"] = assess_source_credibility(ss_url)
+            if ss["url_verified"]:
+                valid_supporting.append(ss)
+        sig["supporting_sources"] = valid_supporting
+        sig["source_count"] = 1 + len(valid_supporting) if sig["url_verified"] else len(valid_supporting)
+
+        # Adjust confidence based on actual verification
+        if sig["source_count"] >= 3 and sig["source_credibility"] == "high":
+            sig["confidence"] = "high"
+        elif sig["source_count"] >= 2:
+            sig["confidence"] = "medium"
+        else:
+            sig["confidence"] = "low"
+
+        sig["validated"] = sig["url_verified"] and sig["source_count"] >= 2
+
+    # Remove signals with no verified primary URL
+    data["signals"] = [s for s in data["signals"] if s.get("url_verified")]
+
+    data["validation"] = {
+        "verified_urls": verified_count,
+        "dead_urls": dead_count,
+        "signals_after_validation": len(data["signals"]),
+    }
+
+    print(f"   🔍 [Validate] {data.get('theme', '?')}: {verified_count} verified, {dead_count} dead → {len(data['signals'])} signals kept")
+    return data
+
+
+def harvest_all_themes(
+    themes: list[str] | None = None,
+    max_concurrent: int = 2,
+    progress_callback=None,
+) -> dict:
+    """
+    Harvest megatrend signals for all (or selected) FP themes.
+
+    Args:
+        themes: List of theme names to harvest. None = all 30.
+        max_concurrent: Max parallel Gemini calls (keep low to avoid rate limits).
+        progress_callback: Optional fn(theme, index, total, status) for progress tracking.
+
+    Returns dict with harvest results and summary.
+    """
+    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
+    if not gemini_key:
+        return {"error": "No GEMINI_API_KEY configured", "harvested": 0}
+
+    client = genai.Client(api_key=gemini_key)
+    storage = BlobStorage()
+
+    target_themes = themes or FP_THEMES_30
+    total = len(target_themes)
+    results = {"harvested": 0, "failed": 0, "total_signals": 0, "themes": [], "started_at": datetime.now(timezone.utc).isoformat()}
+
+    print(f"\n{'='*70}")
+    print(f"🌐 FORESIGHT KB HARVEST — {total} themes")
+    print(f"{'='*70}\n")
+
+    for i, theme in enumerate(target_themes):
+        slug = _theme_to_slug(theme)
+        search_queries = FP_THEME_SOURCES.get(theme, [])
+
+        if progress_callback:
+            progress_callback(theme, i, total, "harvesting")
+
+        print(f"\n--- [{i+1}/{total}] {theme} ({len(search_queries)} queries) ---")
+
+        # Harvest
+        data = _harvest_single_theme(theme, client, search_queries)
+
+        if not data or not data.get("signals"):
+            results["failed"] += 1
+            results["themes"].append({"theme": theme, "slug": slug, "status": "failed", "signals": 0})
+            continue
+
+        # Validate
+        data = _validate_harvest_signals(data)
+
+        if not data.get("signals"):
+            results["failed"] += 1
+            results["themes"].append({"theme": theme, "slug": slug, "status": "no_valid_signals", "signals": 0})
+            continue
+
+        # Add metadata
+        data["harvested_at"] = datetime.now(timezone.utc).isoformat()
+        data["theme_slug"] = slug
+
+        # Store
+        url = storage.save_foresight_kb(slug, data)
+        n_signals = len(data["signals"])
+        results["harvested"] += 1
+        results["total_signals"] += n_signals
+        results["themes"].append({
+            "theme": theme,
+            "slug": slug,
+            "status": "ok",
+            "signals": n_signals,
+            "high_confidence": sum(1 for s in data["signals"] if s.get("confidence") == "high"),
+            "stored_url": url,
+        })
+
+        print(f"   💾 [Store] {theme}: {n_signals} signals saved to foresight_kb/{slug}")
+
+        # Rate limit courtesy: pause between themes to avoid Gemini quota hits
+        if i < total - 1:
+            time.sleep(2)
+
+    results["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+    print(f"\n{'='*70}")
+    print(f"🌐 HARVEST COMPLETE: {results['harvested']}/{total} themes, {results['total_signals']} signals")
+    print(f"{'='*70}\n")
+
+    return results
+
+
+def get_kb_signals_for_themes(theme_names: list[str]) -> list[dict]:
+    """
+    Retrieve pre-validated signals from the Foresight KB for a set of FP themes.
+    Used by generate_foresight() to inject known signals into the company-specific prompt.
+
+    Returns a flat list of signal dicts, sorted by confidence (high first).
+    """
+    storage = BlobStorage()
+    all_signals = []
+
+    for theme in theme_names:
+        slug = _theme_to_slug(theme)
+        data = storage.get_foresight_kb(slug)
+        if data and data.get("signals"):
+            # Only include validated, high/medium confidence signals
+            for sig in data["signals"]:
+                if sig.get("validated") or sig.get("confidence") in ("high", "medium"):
+                    sig["_from_kb"] = True  # Tag as KB-sourced
+                    sig["_kb_theme"] = theme
+                    all_signals.append(sig)
+
+    # Sort: high confidence first, then medium, then low
+    confidence_order = {"high": 0, "medium": 1, "low": 2}
+    all_signals.sort(key=lambda s: confidence_order.get(s.get("confidence", "low"), 3))
+
+    return all_signals
+
+
+def format_kb_signals_for_prompt(signals: list[dict], max_signals: int = 8) -> str:
+    """
+    Format KB signals into a context block that can be injected into the
+    company-specific foresight prompt. This gives Gemini pre-validated evidence
+    to synthesize against, rather than searching from scratch.
+    """
+    if not signals:
+        return ""
+
+    selected = signals[:max_signals]
+    lines = [
+        "PRE-VALIDATED MEGATREND SIGNALS (from Foresight Knowledge Base):",
+        "The following signals have been independently verified with 2+ authoritative sources.",
+        "Use these as GROUNDING CONTEXT — synthesize their impact on this specific company.",
+        "You may augment with additional search, but these signals are already validated.\n",
+    ]
+
+    for i, sig in enumerate(selected, 1):
+        theme = sig.get("_kb_theme", sig.get("fp_theme", ""))
+        lines.append(f"Signal {i}: {sig['title']}")
+        lines.append(f"  Theme: {theme}")
+        lines.append(f"  Type: {sig.get('signal_type', 'N/A')} | Timeframe: {sig.get('timeframe', 'N/A')}")
+        lines.append(f"  Description: {sig.get('description', '')}")
+        lines.append(f"  Primary source: {sig.get('source_url', 'N/A')} ({sig.get('source_credibility', 'N/A')} credibility)")
+        n_supporting = len(sig.get("supporting_sources", []))
+        lines.append(f"  Corroborating sources: {n_supporting}")
+        if sig.get("industries_affected"):
+            lines.append(f"  Industries affected: {', '.join(sig['industries_affected'])}")
+        if sig.get("kb_dimensions_affected"):
+            lines.append(f"  KB dimensions: {', '.join(sig['kb_dimensions_affected'])}")
+        lines.append(f"  Confidence: {sig.get('confidence', 'N/A')}")
+        lines.append("")
+
+    return "\n".join(lines)
