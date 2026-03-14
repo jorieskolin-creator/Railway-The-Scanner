@@ -22,6 +22,7 @@ import re
 import time
 import concurrent.futures
 
+import anthropic
 from google import genai
 from google.genai import types as genai_types
 from gemini_backoff import call_with_503_backoff
@@ -921,15 +922,11 @@ def generate_foresight_summary(
     """
     Generate a 250-300 word "Future Insight" narrative from foresight data.
 
+    Model chain: Sonnet 4.6 → Gemini 3.1 Pro → Gemini 2.5 Pro.
     Returns (summary_text, model_used).
     Returns ("", "") on failure.
     """
     if not foresight_data or not foresight_data.get("dimension_forces"):
-        return "", ""
-
-    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-    if not gemini_key:
-        print("   ⚠️ [Future Insight] No GEMINI_API_KEY — skipping")
         return "", ""
 
     # Format forces for the prompt
@@ -988,9 +985,50 @@ RULES:
 
 Output only the prose text. Nothing else."""
 
+    # --- Attempt 1: Claude Sonnet 4.6 (primary) ---
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if anthropic_key:
+        SONNET_MODEL = "claude-sonnet-4-6-20250514"
+        try:
+            print(f"   🔮 [Future Insight] Attempting {SONNET_MODEL}...")
+            t0 = time.time()
+            claude_client = anthropic.Anthropic(api_key=anthropic_key)
+            response = claude_client.messages.create(
+                model=SONNET_MODEL,
+                max_tokens=4000,
+                thinking={
+                    "type": "enabled",
+                    "budget_tokens": 3000,
+                },
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text_parts = []
+            for block in response.content:
+                if block.type == "text":
+                    text_parts.append(block.text)
+            text = "\n".join(text_parts).strip()
+            text = re.sub(r'\[([^\]]+)\]\(https?://[^)]+\)', r'\1', text)
+            wc = len(text.split())
+            elapsed = int((time.time() - t0) * 1000)
+            print(f"   🔮 [Future Insight] {SONNET_MODEL}: {wc} words ({elapsed}ms)")
+
+            if text and wc >= 100:
+                return text, SONNET_MODEL
+
+            print(f"   ⚠️ [Future Insight] Sonnet too short ({wc} words) — falling back to Gemini")
+        except Exception as e:
+            elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
+            print(f"   ❌ [Future Insight] {SONNET_MODEL} failed ({elapsed}ms): {e}")
+
+    # --- Attempt 2-3: Gemini fallbacks ---
+    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
+    if not gemini_key:
+        print("   ⚠️ [Future Insight] No GEMINI_API_KEY — skipping Gemini fallbacks")
+        return "", ""
+
     client = genai.Client(api_key=gemini_key)
 
-    models = [
+    gemini_models = [
         ("gemini-3.1-pro-preview", genai_types.GenerateContentConfig(
             temperature=0.8,
             max_output_tokens=4000,
@@ -1003,7 +1041,7 @@ Output only the prose text. Nothing else."""
         ), 60),
     ]
 
-    for model_name, config, timeout_sec in models:
+    for model_name, config, timeout_sec in gemini_models:
         try:
             t0 = time.time()
             response = call_with_503_backoff(
@@ -1015,7 +1053,6 @@ Output only the prose text. Nothing else."""
                 timeout=timeout_sec,
             )
             text = (response.text or "").strip()
-            # Strip any markdown links
             text = re.sub(r'\[([^\]]+)\]\(https?://[^)]+\)', r'\1', text)
             wc = len(text.split())
             elapsed = int((time.time() - t0) * 1000)
