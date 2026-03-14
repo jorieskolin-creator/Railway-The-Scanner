@@ -421,7 +421,7 @@ def harvest_all_themes(
         if data and data.get("signals"):
             # Step 3: Validate new harvest
             data = _validate_harvest_signals(data)
-            new_validated_signals = data.get("signals", [])
+            new_validated_signals = data.get("signals", []) if data else []
 
         # Step 4: Merge — combine cleaned existing + validated new
         merged_signals = _merge_signals(existing_signals, new_validated_signals)
@@ -439,7 +439,7 @@ def harvest_all_themes(
             "theme_slug": slug,
             "signals": merged_signals,
             "harvested_at": datetime.now(timezone.utc).isoformat(),
-            "model": data.get("model", existing_data.get("model", "unknown")) if data else existing_data.get("model", "unknown"),
+            "model": data.get("model", (existing_data or {}).get("model", "unknown")) if data else (existing_data or {}).get("model", "unknown"),
             "merge_stats": {
                 "existing_before_clean": len((existing_data or {}).get("signals", [])),
                 "existing_after_clean": len(existing_signals),
