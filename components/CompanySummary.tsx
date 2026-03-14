@@ -633,7 +633,7 @@ const CompanySummary = ({ data }) => {
 
         {/* GENERAL SUMMARY — plain prose, no inline links (links shown in AI Diagnosis) */}
         {data.general_summary && (
-            <div className="bg-gradient-to-r from-slate-800/60 to-slate-700/40 p-8 rounded-2xl border-l-4 border-slate-500 backdrop-blur-sm">
+            <div className="bg-slate-800/40 p-8 rounded-2xl border border-slate-600/30 backdrop-blur-sm">
                 <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
                     <Search className="text-slate-400" size={22} />
                     General Summary
@@ -653,12 +653,12 @@ const CompanySummary = ({ data }) => {
             </div>
         )}
 
-        <div className="bg-gradient-to-r from-indigo-900/30 to-purple-900/30 p-8 rounded-2xl border-l-4 border-indigo-500 backdrop-blur-sm">
+        <div className="bg-slate-800/40 p-8 rounded-2xl border border-slate-600/30 backdrop-blur-sm">
             <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
             <ShieldCheck className="text-indigo-400" />
             AI Diagnosis
             </h3>
-            <p className="text-slate-200 leading-relaxed whitespace-pre-line text-lg font-light">
+            <p className="text-slate-200 leading-relaxed whitespace-pre-line text-base font-light">
                 <HighlightText text={data.summary_text} />
             </p>
         </div>
@@ -883,7 +883,7 @@ const CompanySummary = ({ data }) => {
 
         {/* STRATEGIC PITCH SECTION */}
         {data.pitch_text && (
-            <div className="bg-gradient-to-r from-cyan-900/30 to-blue-900/30 p-6 rounded-2xl border border-cyan-500/30 backdrop-blur-md shadow-lg shadow-cyan-900/10">
+            <div className="bg-white/5 p-6 rounded-2xl border border-white/10 backdrop-blur-md">
                 <h3 className="text-lg font-bold text-white mb-3 flex items-center gap-2">
                     <Sparkles className="text-cyan-400" size={20} />
                     Strategic Outreach Pitch
@@ -914,7 +914,7 @@ const CompanySummary = ({ data }) => {
 
         {/* WHY & WHAT PROPOSALS */}
         {data.why_proposals && data.why_proposals.length > 0 && data.what_proposals && data.what_proposals.length > 0 && (
-            <div className="bg-gradient-to-r from-amber-900/20 to-orange-900/20 p-6 rounded-2xl border border-amber-500/30 backdrop-blur-md shadow-lg shadow-amber-900/10">
+            <div className="bg-white/5 p-6 rounded-2xl border border-white/10 backdrop-blur-md">
                 <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
                     <Zap className="text-amber-400" size={20} />
                     Proposed WHY & WHAT
@@ -1042,17 +1042,23 @@ const CompanySummary = ({ data }) => {
                     {/* 3. Cross-Impact Chain */}
                     {sf.cross_impact_chain && sf.cross_impact_chain.trim() && (
                         <div className="bg-white/5 p-5 rounded-2xl border border-white/10">
-                            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Cross-Impact Chain</h4>
-                            <div className="flex flex-wrap items-center gap-1.5">
+                            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Cross-Impact Chain</h4>
+                            <div className="flex flex-col gap-0">
                                 {sf.cross_impact_chain.split(/\s*(?:→|->)\s*/).filter(Boolean).map((node, i, arr) => (
-                                    <React.Fragment key={i}>
-                                        <span className="text-xs px-3 py-1.5 rounded-full bg-teal-500/15 text-teal-200 border border-teal-500/20 font-medium whitespace-nowrap">
+                                    <div key={i} className="flex items-start gap-3">
+                                        {/* Vertical connector line + dot */}
+                                        <div className="flex flex-col items-center shrink-0" style={{ width: '20px' }}>
+                                            <div className={`w-2.5 h-2.5 rounded-full border-2 ${i === 0 ? 'bg-teal-400 border-teal-400' : i === arr.length - 1 ? 'bg-cyan-400 border-cyan-400' : 'bg-transparent border-teal-500/60'}`} style={{ marginTop: '6px' }} />
+                                            {i < arr.length - 1 && (
+                                                <div className="w-px flex-grow bg-gradient-to-b from-teal-500/40 to-teal-500/10" style={{ minHeight: '20px' }} />
+                                            )}
+                                        </div>
+                                        {/* Node content */}
+                                        <div className={`text-xs leading-relaxed pb-3 ${i === 0 ? 'text-teal-200 font-semibold' : 'text-slate-300 font-medium'}`}>
+                                            {i > 0 && <span className="text-teal-500/50 text-[10px] font-normal mr-1.5">{i === 1 ? 'impacts' : i === arr.length - 1 ? 'ultimately affecting' : 'which cascades to'}</span>}
                                             {node.trim()}
-                                        </span>
-                                        {i < arr.length - 1 && (
-                                            <span className="text-teal-500 text-sm font-bold">→</span>
-                                        )}
-                                    </React.Fragment>
+                                        </div>
+                                    </div>
                                 ))}
                             </div>
                         </div>
