@@ -956,7 +956,7 @@ def _clean_company_data(company_name: str, data: dict) -> dict:
     knowledge_context = get_evolving_framework()
     intent_narrative = json.dumps(data.get("intent_breakdown", {}))
     clean_evidence_links = data.get("evidence_links", [])
-    clean_verified = [l for l in clean_evidence_links if l.get('verified', True)]
+    clean_verified = [l for l in clean_evidence_links if l.get('verified') is True]
     evidence_list = ', '.join([f"{l.get('title', 'Unknown')}: {l.get('snippet', '')}" for l in clean_verified[:20]])
 
     confidence = data.get("confidence_score", 50)
@@ -1750,6 +1750,14 @@ def run_scan(
             from domain_classifier import infer_domain
             company_domain = infer_domain(companyName, target_url or "", reality_results, financial_results)
 
+        # --- EARLY ARCHETYPE (needed for foresight before synthesis step) ---
+        fin_score_early = financial_results.get("financial_index")
+        fin_for_archetype_early = fin_score_early if fin_score_early is not None else intent_results["score"]
+        if reality_results["score"] >= 50:
+            archetype = "Thriving" if fin_for_archetype_early >= 50 else "Modernizing"
+        else:
+            archetype = "Cash Cow" if fin_for_archetype_early >= 50 else "At Risk"
+
         # --- STEP 2.7: STRATEGIC FORESIGHT ---
         foresight_data = None
         try:
@@ -1758,7 +1766,7 @@ def run_scan(
             foresight_data = generate_foresight(
                 company_name=companyName,
                 domain=company_domain,
-                archetype=archetype if 'archetype' in dir() else "Unknown",
+                archetype=archetype,
                 reality_score=reality_results["score"],
                 financial_index=financial_results.get("financial_index"),
                 top_findings=reality_results.get("checklist", [])[:8],
@@ -1783,7 +1791,7 @@ def run_scan(
             try:
                 claude_client = anthropic.Anthropic(api_key=anthropic_key) if anthropic_key else None
                 intent_narrative = json.dumps(intent_results["breakdown"])
-                verified_links = [l for l in reality_results['links'] if l.get('verified', True)]
+                verified_links = [l for l in reality_results['links'] if l.get('verified') is True]
                 evidence_list = ', '.join([f"{l.get('title', 'Unknown')}: {l.get('snippet', '')}" for l in verified_links[:20]])
                 knowledge_context = get_evolving_framework()
 
@@ -2431,7 +2439,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
 
                 # Rebuild evidence list from purged data
                 clean_evidence_links = full_data.get("evidence_links", [])
-                clean_verified = [l for l in clean_evidence_links if l.get('verified', True)]
+                clean_verified = [l for l in clean_evidence_links if l.get('verified') is True]
                 clean_evidence_list = ', '.join([f"{l.get('title', 'Unknown')}: {l.get('snippet', '')}" for l in clean_verified[:20]])
 
                 # Note which claims were removed (with verified corrections when available)

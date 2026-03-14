@@ -80,7 +80,7 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
             "snippet": (l.get("snippet") or "")[:180],
         }
         for l in full_data.get("evidence_links", [])
-        if l.get("verified", True) and l.get("url") and not _is_legal_page(l.get("url", ""))
+        if l.get("verified") is True and l.get("url") and not _is_legal_page(l.get("url", ""))
     ][:14]
 
     # Key jury findings — descriptions only, no URLs, no legal pages.

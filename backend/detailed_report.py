@@ -73,7 +73,7 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
             "snippet": (l.get("snippet") or "")[:300],
         }
         for l in full_data.get("evidence_links", [])
-        if l.get("verified", True) and l.get("url") and not _is_legal_page(l.get("url", ""))
+        if l.get("verified") is True and l.get("url") and not _is_legal_page(l.get("url", ""))
     ][:20]
 
     # Key findings — more detail (12 items)
