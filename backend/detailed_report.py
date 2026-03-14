@@ -3,7 +3,7 @@ detailed_report.py — Deep diagnostic report generator.
 
 Produces an 800-1200 word evidence-grounded report that expands on the
 executive summary with per-dimension deep dives, stakeholder context,
-and forward-looking insights. Designed to be the "full report"
+and (optionally) strategic foresight. Designed to be the "full report"
 that the company modal summary is the executive summary of.
 """
 
@@ -156,6 +156,15 @@ def _build_prompt(payload: dict, company_name: str) -> str:
 
     # Foresight paragraph instruction
     foresight_instruction = ""
+    if payload.get("foresight"):
+        foresight_instruction = """
+SECTION — heading "Strategic Foresight" (~100-150 words)
+Based on the foresight data in the evidence below:
+- Name the 1-2 most impactful external forces and their timeframe
+- Explain how these forces specifically affect THIS company given their current weaknesses
+- Reference the cross-impact chain if it connects 2+ dimensions
+- Mention the most relevant scenario (status quo or disruption)
+Use plain, forward-looking language."""
 
     return f"""You are a senior B2B intelligence analyst writing the detailed diagnostic section of a forensic company assessment report about {company_name}.
 

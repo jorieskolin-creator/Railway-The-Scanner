@@ -2311,6 +2311,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
             "financial_sub_scores": financial_results.get("sub_scores", {}),
             "financial_findings": financial_results.get("financial_findings", []),
             "financial_confidence": financial_results.get("financial_confidence", 0),
+            "strategic_foresight": foresight_data,
         }
 
         # --- REALITY CHECK: Hallucination Detection ---
