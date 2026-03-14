@@ -58,6 +58,28 @@ HIGH_CREDIBILITY_DOMAINS = {
     "bis.org",                  # Bank for International Settlements
     "fao.org",                  # Food and Agriculture Organization
     "isg-one.com",              # ISG — IT services analyst
+    # Intelligence, geopolitical & built-environment foresight
+    "dni.gov",                  # National Intelligence Council — Global Trends reports
+    "strategicforesight.com",   # Strategic Foresight Group — peace, water diplomacy, Global South
+    "arup.com",                 # Arup — future of cities, built environment, engineering foresight
+    "wbcsd.org",                # World Business Council for Sustainable Development — Vision 2050
+    "isi.fraunhofer.de",        # Fraunhofer ISI — European tech forecasting, innovation systems
+    "pewresearch.org",          # Pew Research Center — demographics, public opinion, social trends
+    "soif.org.uk",              # School of International Futures — policy foresight, governance
+    "dubaifuture.gov.ae",       # Dubai Future Foundation — applied gov foresight, emerging tech
+    "futures.hawaii.edu",       # Hawaii Research Center for Futures Studies — futures methodology
+    "tellus.org",               # Tellus Institute — Great Transition, systems modeling
+    # Climate, Earth systems & ecological foresight
+    "sitra.fi",                 # Sitra (Finnish Innovation Fund) — megatrends, circular economy
+    "ipcc.ch",                  # IPCC — definitive climate science consensus, SSP scenarios
+    "climate.nasa.gov",         # NASA Climate — satellite Earth data, physical climate modeling
+    "wmo.int",                  # World Meteorological Organization — extreme weather, climate state
+    "pik-potsdam.de",           # Potsdam Institute — climate tipping points, Earth system boundaries
+    "stockholmresilience.org",  # Stockholm Resilience Centre — Planetary Boundaries framework
+    "iiasa.ac.at",              # IIASA — complex systems analysis, integrated assessment models
+    "wri.org",                  # World Resources Institute — resource tracking, supply chain risk
+    "tyndall.ac.uk",            # Tyndall Centre — decarbonisation, climate justice, carbon budgets
+    "futureearth.org",          # Future Earth — sustainability science, 10 New Insights in Climate
 }
 
 # Tier 2: Low credibility — blogs, press release wires, content farms, marketing

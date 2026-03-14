@@ -89,10 +89,13 @@ FP_THEMES_30 = [
 # (theme-specific, cross-industry) vs the "vertical" per-industry target_sources.
 #
 # Source categories:
-# - Foresight orgs: Millennium Project, IFTF, CIFS, RAND
-# - Think tanks: Chatham House, Club of Rome, Oxford Martin
-# - Intergovernmental: OECD, WEF, EC, UN agencies
-# - Analysts: Gartner, McKinsey, BCG, Forrester
+# - Foresight orgs: Millennium Project, IFTF, CIFS, RAND, HRCFS, Tellus, DFF
+# - Think tanks: Chatham House, Club of Rome, Oxford Martin, SFG, SOIF
+# - Intergovernmental: OECD, WEF, EC, UN agencies, NIC, WMO
+# - Climate & Earth systems: IPCC, NASA Climate, PIK, SRC, IIASA, WRI, Tyndall, Future Earth
+# - Corporate & innovation: Gartner, McKinsey, BCG, Forrester, WBCSD, Arup, Fraunhofer ISI
+# - Public innovation: Sitra
+# - Data & demographics: Pew Research Center
 # - Academic: Nature, IEEE, ScienceDirect, arxiv
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -104,12 +107,16 @@ FP_THEME_SOURCES = {
         "site:cser.ac.uk artificial intelligence risk",
         "site:rand.org artificial intelligence",
         "site:gartner.com AI trends hype cycle",
+        "site:isi.fraunhofer.de artificial intelligence",       # Fraunhofer — European tech forecasting
+        "site:dubaifuture.gov.ae artificial intelligence",      # Dubai Future Foundation — applied AI
     ],
     "Data & Digitalisation": [
         "site:weforum.org digital transformation",
         "site:mckinsey.com digital transformation",
         "site:oecd.org digital economy",
         "site:ec.europa.eu digital strategy",
+        "site:sitra.fi data digital transformation",            # Sitra — fair data economy
+        "site:isi.fraunhofer.de digitalisation",                # Fraunhofer — European digital foresight
     ],
     "Communication & Media": [
         "site:reuters.com media industry future",
@@ -124,6 +131,8 @@ FP_THEME_SOURCES = {
         "site:hbr.org business strategy future",
         "site:bcg.com business transformation",
         "site:weforum.org business future",
+        "site:wbcsd.org business sustainability transformation", # WBCSD — Vision 2050, corporate transitions
+        "site:dubaifuture.gov.ae business innovation",          # Dubai Future Foundation — applied foresight
     ],
     "Finance & Ownership": [
         "site:bis.org fintech future",
@@ -137,6 +146,8 @@ FP_THEME_SOURCES = {
         "site:weforum.org global economy",
         "site:chathamhouse.org global economy",
         "site:millennium-project.org global challenges",
+        "site:dni.gov global trends",                           # NIC — Global Trends reports
+        "site:tellus.org global transition economy",            # Tellus — Great Transition scenarios
     ],
     "Digital & Sharing Economies": [
         "site:oecd.org platform economy",
@@ -157,6 +168,7 @@ FP_THEME_SOURCES = {
         "site:mckinsey.com smart manufacturing",
         "site:oecd.org industrial policy",
         "site:deloitte.com manufacturing trends",
+        "site:isi.fraunhofer.de manufacturing innovation",      # Fraunhofer — industrial innovation roadmaps
     ],
     "Construction & Urbanisation": [
         "site:weforum.org urban future",
@@ -164,6 +176,7 @@ FP_THEME_SOURCES = {
         "site:mckinsey.com construction",
         "site:ec.europa.eu urban policy",
         "site:oxfordmartin.ox.ac.uk urbanisation",
+        "site:arup.com cities future urbanisation",             # Arup — built environment, future cities
     ],
     "Energy": [
         "site:iea.org energy outlook",
@@ -171,6 +184,9 @@ FP_THEME_SOURCES = {
         "site:weforum.org energy transition",
         "site:bloombergnef.com energy",
         "site:clubofrome.org energy",
+        "site:isi.fraunhofer.de energy technology",             # Fraunhofer — energy tech forecasting
+        "site:tyndall.ac.uk energy decarbonisation",            # Tyndall — deep decarbonisation research
+        "site:wri.org energy transition",                       # WRI — resource-based energy foresight
     ],
     "Freight & Logistics": [
         "site:weforum.org supply chain logistics",
@@ -194,6 +210,14 @@ FP_THEME_SOURCES = {
         "site:oxfordmartin.ox.ac.uk climate",
         "site:iea.org climate",
         "site:millennium-project.org climate",
+        "site:climate.nasa.gov climate change",                 # NASA — satellite data, physical modeling
+        "site:wmo.int climate state",                           # WMO — extreme weather, climate benchmarks
+        "site:pik-potsdam.de climate tipping points",           # PIK — tipping elements, thresholds
+        "site:stockholmresilience.org climate planetary",       # SRC — Planetary Boundaries, resilience
+        "site:tellus.org climate transition",                   # Tellus — Great Transition, systemic paths
+        "site:futureearth.org climate science",                 # Future Earth — 10 New Insights in Climate
+        "site:sitra.fi climate megatrends",                     # Sitra — Finnish megatrend mapping
+        "site:tyndall.ac.uk climate carbon budget",             # Tyndall — carbon budgets, climate justice
     ],
     "Sustainability & Recycling": [
         "site:weforum.org circular economy",
@@ -201,6 +225,10 @@ FP_THEME_SOURCES = {
         "site:oecd.org sustainability",
         "site:clubofrome.org sustainability",
         "site:ellenmacarthurfoundation.org circular economy",
+        "site:wbcsd.org sustainability circular economy",       # WBCSD — Vision 2050, corporate pathways
+        "site:stockholmresilience.org sustainability",          # SRC — social-ecological systems
+        "site:sitra.fi circular economy",                       # Sitra — circular economy frameworks
+        "site:wri.org sustainability resources",                # WRI — resource tracking, supply chains
     ],
     "Nature": [
         "site:weforum.org biodiversity",
@@ -208,6 +236,9 @@ FP_THEME_SOURCES = {
         "site:clubofrome.org nature",
         "site:oxfordmartin.ox.ac.uk biodiversity",
         "site:fao.org ecosystems",
+        "site:stockholmresilience.org biodiversity planetary",  # SRC — Planetary Boundaries, biodiversity
+        "site:futureearth.org biodiversity ecosystems",         # Future Earth — sustainability science
+        "site:wri.org forests biodiversity",                    # WRI — forest & ecosystem tracking
     ],
     "Food": [
         "site:fao.org food security",
@@ -215,6 +246,7 @@ FP_THEME_SOURCES = {
         "site:oecd.org agriculture food",
         "site:oxfordmartin.ox.ac.uk food",
         "site:nature.com food systems",
+        "site:wri.org food systems agriculture",                # WRI — food supply chain, resource scarcity
     ],
     "Water & Oceans": [
         "site:un.org water scarcity",
@@ -222,6 +254,9 @@ FP_THEME_SOURCES = {
         "site:oecd.org water policy",
         "site:millennium-project.org water",
         "site:nature.com ocean",
+        "site:strategicforesight.com water diplomacy",          # SFG — transnational water conflicts
+        "site:wmo.int water climate",                           # WMO — water cycle, hydrological futures
+        "site:iiasa.ac.at water scarcity",                      # IIASA — water-climate-population modeling
     ],
 
     # --- Society & Governance ---
@@ -231,6 +266,9 @@ FP_THEME_SOURCES = {
         "site:weforum.org governance future",
         "site:chathamhouse.org governance",
         "site:rand.org governance",
+        "site:soif.org.uk governance foresight",                # SOIF — policy foresight, future generations
+        "site:dni.gov governance global trends",                # NIC — government-grade strategic foresight
+        "site:sitra.fi governance society",                     # Sitra — societal innovation, public policy
     ],
     "Geopolitics": [
         "site:chathamhouse.org geopolitics",
@@ -238,6 +276,8 @@ FP_THEME_SOURCES = {
         "site:weforum.org geopolitics",
         "site:cifs.dk geopolitics",
         "site:millennium-project.org geopolitics",
+        "site:dni.gov geopolitics global trends",               # NIC — US Intelligence Community foresight
+        "site:strategicforesight.com geopolitics peace",        # SFG — Global South, cost of conflict
     ],
     "Security & Safety": [
         "site:rand.org cybersecurity",
@@ -245,6 +285,8 @@ FP_THEME_SOURCES = {
         "site:chathamhouse.org security",
         "site:weforum.org cybersecurity",
         "site:gartner.com security trends",
+        "site:dni.gov security threats",                        # NIC — national security megatrends
+        "site:strategicforesight.com security conflict",        # SFG — peace & security foresight
     ],
     "Values & Ethics": [
         "site:weforum.org ethics trust",
@@ -252,6 +294,8 @@ FP_THEME_SOURCES = {
         "site:oecd.org AI ethics",
         "site:cifs.dk values ethics",
         "site:millennium-project.org ethics",
+        "site:futures.hawaii.edu futures values",               # HRCFS — futures epistemology, alternative futures
+        "site:pewresearch.org values society",                  # Pew — generational values, public opinion
     ],
     "Society": [
         "site:oecd.org inequality social",
@@ -259,6 +303,10 @@ FP_THEME_SOURCES = {
         "site:oxfordmartin.ox.ac.uk inequality",
         "site:chathamhouse.org social change",
         "site:clubofrome.org society",
+        "site:pewresearch.org society trends",                  # Pew — social trends, inequality data
+        "site:soif.org.uk society future generations",          # SOIF — intergenerational fairness
+        "site:tellus.org society transition",                   # Tellus — societal resilience pathways
+        "site:futures.hawaii.edu society futures",              # HRCFS — Four Futures archetypes
     ],
 
     # --- People & Well-being ---
@@ -282,6 +330,7 @@ FP_THEME_SOURCES = {
         "site:mckinsey.com future of work",
         "site:iftf.org future of work",
         "site:ilo.org future of work",
+        "site:pewresearch.org work income employment",          # Pew — labour market data, gig economy
     ],
     "Management & HR": [
         "site:mckinsey.com talent management",
@@ -304,6 +353,11 @@ FP_THEME_SOURCES = {
         "site:cser.ac.uk technology risk",
         "site:rand.org technology",
         "site:weforum.org technology science",
+        "site:isi.fraunhofer.de research innovation",           # Fraunhofer — European R&D roadmaps
+        "site:dubaifuture.gov.ae science technology",           # DFF — emerging tech prototyping
+        "site:futureearth.org research sustainability",         # Future Earth — cutting-edge climate science
+        "site:pik-potsdam.de research earth system",            # PIK — Earth system science
+        "site:iiasa.ac.at systems research",                    # IIASA — complex systems modeling
     ],
     "Population & Demographics": [
         "site:oecd.org demographics population",
@@ -311,6 +365,9 @@ FP_THEME_SOURCES = {
         "site:un.org population",
         "site:cifs.dk demographics megatrends",
         "site:oxfordmartin.ox.ac.uk demographics",
+        "site:pewresearch.org demographics population",         # Pew — global religion, migration, aging data
+        "site:iiasa.ac.at population demographics",             # IIASA — demographic-climate interaction models
+        "site:dni.gov demographics population trends",          # NIC — demographic power shift projections
     ],
 }
 
