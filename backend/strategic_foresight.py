@@ -93,77 +93,175 @@ DOMAIN_TO_FORESIGHT = {
         "fp_themes": ["Artificial Intelligence", "Data & Digitalisation", "Business"],
         "priority_dimensions": ["AI Readiness", "Operating Model", "Service Portfolio"],
         "osint_keywords": "agentic AI enterprise automation, SaaS market consolidation, open-source AI disruption",
+        "target_sources": [
+            "site:gartner.com software industry trends",
+            "site:mckinsey.com technology strategy",
+            "site:forrester.com software market forecast",
+            "site:hbr.org technology disruption",
+            "site:idc.com software industry",
+        ],
     },
     "IT Services & Consulting": {
         "fp_themes": ["Data & Digitalisation", "Business", "Management & HR"],
         "priority_dimensions": ["Operating Model", "Strategy", "AI Readiness"],
         "osint_keywords": "consulting industry AI disruption, IT outsourcing market shifts, talent war technology sector",
+        "target_sources": [
+            "site:gartner.com IT services outsourcing",
+            "site:mckinsey.com consulting industry transformation",
+            "site:forrester.com IT services market",
+            "site:isg-one.com IT outsourcing trends",
+            "site:hbr.org professional services",
+        ],
     },
     "Healthcare": {
         "fp_themes": ["Health & Wellbeing", "Artificial Intelligence", "Sciences & Research"],
         "priority_dimensions": ["AI Readiness", "Service Portfolio", "Culture"],
         "osint_keywords": "healthcare AI diagnostics regulation, digital health transformation, pharmaceutical supply chain risks",
+        "target_sources": [
+            "site:mckinsey.com healthcare transformation",
+            "site:deloitte.com healthcare trends",
+            "site:who.int digital health",
+            "site:nature.com AI healthcare",
+            "site:hbr.org healthcare innovation",
+        ],
     },
     "Retail & Consumer": {
         "fp_themes": ["Business", "Data & Digitalisation", "Leisure & Lifestyles"],
         "priority_dimensions": ["Service Portfolio", "AI Readiness", "Strategy"],
         "osint_keywords": "retail AI personalization, consumer behavior shifts, omnichannel transformation 2025 2026",
+        "target_sources": [
+            "site:mckinsey.com retail consumer trends",
+            "site:forrester.com retail market",
+            "site:deloitte.com consumer industry",
+            "site:hbr.org retail strategy",
+            "site:gartner.com retail technology",
+        ],
     },
     "Industrial & Manufacturing": {
         "fp_themes": ["Industry & Manufacturing", "Artificial Intelligence", "Sustainability & Recycling"],
         "priority_dimensions": ["Operating Model", "AI Readiness", "Service Portfolio"],
         "climate_exposure": "high",
         "osint_keywords": "industrial AI automation, smart manufacturing disruption, supply chain reshoring nearshoring",
+        "target_sources": [
+            "site:mckinsey.com manufacturing industry",
+            "site:weforum.org manufacturing future",
+            "site:deloitte.com manufacturing trends",
+            "site:idc.com manufacturing AI",
+            "site:bcg.com industrial transformation",
+        ],
     },
     "Energy & Utilities": {
         "fp_themes": ["Energy", "Climate Change", "Sustainability & Recycling"],
         "priority_dimensions": ["Strategy", "Service Portfolio", "Operating Model"],
         "climate_exposure": "critical",
         "osint_keywords": "energy transition decarbonization, renewable energy grid transformation, carbon taxation CBAM",
+        "target_sources": [
+            "site:iea.org energy transition outlook",
+            "site:irena.org renewable energy trends",
+            "site:mckinsey.com energy transition",
+            "site:weforum.org energy future",
+            "site:bloomberg.com energy market",
+        ],
     },
     "Financial Services": {
         "fp_themes": ["Finance & Ownership", "Artificial Intelligence", "Security & Safety"],
         "priority_dimensions": ["AI Readiness", "Strategy", "Operating Model"],
         "osint_keywords": "fintech disruption banking, AI risk management regulation, digital currency CBDC impact",
+        "target_sources": [
+            "site:mckinsey.com banking financial services",
+            "site:accenture.com financial services trends",
+            "site:deloitte.com financial services outlook",
+            "site:bis.org fintech regulation",
+            "site:ecb.europa.eu digital finance",
+        ],
     },
     "Insurance & Pensions": {
         "fp_themes": ["Finance & Ownership", "Data & Digitalisation", "Climate Change"],
         "priority_dimensions": ["AI Readiness", "Strategy", "Service Portfolio"],
         "climate_exposure": "high",
         "osint_keywords": "insurtech AI underwriting, climate risk insurance pricing, pension fund ESG regulation",
+        "target_sources": [
+            "site:mckinsey.com insurance industry",
+            "site:deloitte.com insurance trends",
+            "site:swissre.com insurance outlook",
+            "site:eiopa.europa.eu insurance regulation",
+            "site:genevaassociation.org insurance trends",
+        ],
     },
     "Forest & Paper": {
         "fp_themes": ["Nature", "Sustainability & Recycling", "Industry & Manufacturing"],
         "priority_dimensions": ["Service Portfolio", "Strategy", "Operating Model"],
         "climate_exposure": "critical",
         "osint_keywords": "bioeconomy circular economy forest, sustainable packaging disruption, EU deforestation regulation",
+        "target_sources": [
+            "site:fao.org forestry industry",
+            "site:weforum.org bioeconomy",
+            "site:ec.europa.eu forestry regulation",
+            "site:mckinsey.com paper packaging",
+            "site:cepi.org paper industry trends",
+        ],
     },
     "Telecommunications": {
         "fp_themes": ["Communication & Media", "Data & Digitalisation", "Artificial Intelligence"],
         "priority_dimensions": ["AI Readiness", "Service Portfolio", "Operating Model"],
         "osint_keywords": "telecom AI network optimization, 5G private networks enterprise, telecom industry consolidation",
+        "target_sources": [
+            "site:mckinsey.com telecommunications trends",
+            "site:gartner.com telecom industry",
+            "site:gsma.com 5G industry trends",
+            "site:ericsson.com mobility report",
+            "site:deloitte.com telecom outlook",
+        ],
     },
     "Construction & Real Estate": {
         "fp_themes": ["Construction & Urbanisation", "Sustainability & Recycling", "Energy"],
         "priority_dimensions": ["Operating Model", "Service Portfolio", "Strategy"],
         "climate_exposure": "high",
         "osint_keywords": "construction technology disruption, green building regulation, real estate market transformation",
+        "target_sources": [
+            "site:mckinsey.com construction industry",
+            "site:weforum.org construction future",
+            "site:deloitte.com real estate outlook",
+            "site:ec.europa.eu construction regulation",
+            "site:rics.org real estate trends",
+        ],
     },
     "Transport & Logistics": {
         "fp_themes": ["Freight & Logistics", "Private & Public Transport", "Artificial Intelligence"],
         "priority_dimensions": ["Operating Model", "AI Readiness", "Service Portfolio"],
         "climate_exposure": "high",
         "osint_keywords": "autonomous logistics AI, supply chain resilience disruption, transport decarbonization regulation",
+        "target_sources": [
+            "site:mckinsey.com logistics transport",
+            "site:weforum.org transport future",
+            "site:iea.org transport decarbonization",
+            "site:freightwaves.com logistics trends",
+            "site:deloitte.com transport outlook",
+        ],
     },
     "Media & Publishing": {
         "fp_themes": ["Communication & Media", "Artificial Intelligence", "Values & Ethics"],
         "priority_dimensions": ["AI Readiness", "Service Portfolio", "Strategy"],
         "osint_keywords": "generative AI media disruption, content industry transformation, digital advertising AI shift",
+        "target_sources": [
+            "site:reuters.com media industry trends",
+            "site:niemanlab.org journalism AI",
+            "site:mckinsey.com media transformation",
+            "site:deloitte.com media trends",
+            "site:weforum.org media future",
+        ],
     },
     "Other": {
         "fp_themes": ["Business", "Artificial Intelligence", "Global Economy"],
         "priority_dimensions": ["Strategy", "AI Readiness", "Operating Model"],
         "osint_keywords": "business model disruption AI, digital transformation enterprise, global economic uncertainty outlook",
+        "target_sources": [
+            "site:mckinsey.com business trends",
+            "site:weforum.org global economy outlook",
+            "site:hbr.org strategy disruption",
+            "site:oecd.org economic outlook",
+            "site:bcg.com digital transformation",
+        ],
     },
 }
 
@@ -184,6 +282,7 @@ def _build_foresight_prompt(
     osint_kw = domain_config.get("osint_keywords", "")
     climate_exposure = domain_config.get("climate_exposure")
     n_dims = len(domain_config["priority_dimensions"])
+    target_sources = domain_config.get("target_sources", [])
 
     # Format top findings
     findings_text = ""
@@ -236,8 +335,20 @@ RELEVANT FORESIGHT THEMES (from Futures Platform taxonomy): {fp_themes}
 PRIORITY KB DIMENSIONS TO EVALUATE: {priority_dims}
 DOMAIN-SPECIFIC OSINT KEYWORDS: {osint_kw}
 
+MANDATORY SOURCE TARGETING — SEARCH THESE FIRST:
+Use these targeted searches to find authoritative evidence. Start with these site-specific queries before any open web search:
+{chr(10).join(f"- {s}" for s in target_sources) if target_sources else "- site:mckinsey.com OR site:gartner.com OR site:weforum.org OR site:hbr.org {domain} trends"}
+
+ALLOWED SOURCE DOMAINS (use ONLY these for primary sources):
+Tier 1 (preferred): gartner.com, forrester.com, mckinsey.com, bcg.com, deloitte.com, pwc.com, ey.com, kpmg.com, accenture.com, hbr.org, weforum.org, idc.com
+Tier 2 (acceptable): reuters.com, ft.com, bloomberg.com, economist.com, wsj.com, bbc.com
+Tier 3 (academic/gov): oecd.org, imf.org, worldbank.org, ec.europa.eu, europa.eu, nature.com, sciencedirect.com, arxiv.org, ieee.org
+Tier 4 (sector-specific): iea.org, irena.org, bis.org, who.int, gsma.com, fao.org + established sector-specific analyst firms
+
+DO NOT USE sources from: blogs, content farms, regional tech news sites, outsourcing directories, marketing sites, press release wires, social media, or any site not recognized as an established research/analyst/news organization.
+
 TASK 1 — DIMENSION-LEVEL FORESIGHT:
-For each of the {n_dims} priority KB dimensions above, use web search to identify the single most impactful EXTERNAL force affecting companies in the {domain} sector. These must be macro-level industry/regulatory/technological forces — NOT company-specific findings.
+For each of the {n_dims} priority KB dimensions above, use the MANDATORY SOURCE TARGETING searches above to identify the single most impactful EXTERNAL force affecting companies in the {domain} sector. These must be macro-level industry/regulatory/technological forces — NOT company-specific findings.
 
 Per force, provide:
 - "trend": Concrete name of the external force (specific, not vague)
@@ -265,7 +376,9 @@ CRITICAL SOURCE QUALITY RULES:
 - Every source_url and supporting_sources URL MUST be a real URL you retrieved from web search.
 - Do NOT fabricate, guess, or construct URLs. If you cannot find a real source, omit the URL and set confidence to "low".
 - Each force MUST have at least 2 supporting_sources from different organizations. Forces with fewer than 2 corroborating sources must have confidence set to "low".
-- Prefer sources from: OECD, McKinsey, BCG, Gartner, Forrester, Reuters, FT, Bloomberg, government agencies, academic journals.
+- MANDATORY: All primary sources (source_url) MUST come from the ALLOWED SOURCE DOMAINS listed above. If you cannot find evidence from an allowed domain, set confidence to "low" and note this in osint_validation.
+- Supporting sources should also come from allowed domains. If a supporting source is from an unknown domain, it does NOT count toward the corroboration requirement.
+- REJECTED SOURCES: Do not cite blogs (medium.com, substack.com, wordpress.com), press releases (prnewswire.com, businesswire.com), social media, regional tech news sites, outsourcing directories, or marketing content. These are NOT evidence.
 
 RETURN STRICT JSON ONLY:
 {{
@@ -752,9 +865,10 @@ FORCES NEEDING VERIFIED SOURCES:
 RULES:
 - Use web search to find REAL articles, reports, or publications that discuss each trend.
 - Each source MUST be a real, currently accessible URL — not fabricated or guessed.
-- Prefer authoritative sources: OECD, McKinsey, BCG, Gartner, Forrester, Reuters, FT, Bloomberg, government agencies, EU institutions, academic journals.
+- ONLY use authoritative sources from these domains: gartner.com, forrester.com, mckinsey.com, bcg.com, deloitte.com, pwc.com, ey.com, kpmg.com, accenture.com, hbr.org, weforum.org, idc.com, reuters.com, ft.com, bloomberg.com, economist.com, oecd.org, imf.org, worldbank.org, ec.europa.eu, nature.com, sciencedirect.com, arxiv.org, ieee.org, and established sector-specific analyst firms.
+- Do NOT use blogs, press releases, regional tech news sites, content farms, outsourcing directories, or marketing sites.
 - For EACH force, provide the primary source URL plus 2 additional corroborating sources from different organizations.
-- If you genuinely cannot find a verifiable source for a trend, set "found": false for that entry.
+- If you genuinely cannot find a verifiable source from an authoritative domain, set "found": false for that entry.
 
 RETURN STRICT JSON ONLY:
 {{
