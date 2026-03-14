@@ -655,17 +655,20 @@ For each of the {n_dims} priority KB dimensions above, use the MANDATORY SOURCE 
 
 Per force, provide:
 - "trend": Concrete name of the external force (specific, not vague)
-- "type": One of: "Plausible/Maturing" (gathering momentum, validated trend) | "Weakening/Declining" (losing relevance or reversing) | "Preposterous/Black Swan" (low probability, massive impact) | "Probable/Emerging" (early signal, gaining traction but insufficient data)
+- "type": One of: "Plausible/Maturing" (gathering momentum, validated trend) | "Weakening/Declining" (losing relevance or reversing) | "Preposterous/Black Swan" (low probability, massive impact — see HORIZON SCANNING instruction below) | "Probable/Emerging" (early signal, gaining traction but insufficient data)
 - "timeframe": "6-12mo" | "12-24mo" | "24-36mo"
 - "kb_dimension": Which priority dimension this impacts most
 - "fp_theme": Which Futures Platform theme this maps to
 - "impact_on_company": 1-2 sentences on how this specifically affects {company_name} given their archetype ({archetype}) and current state
-- "proposal_angle": 1 sentence on how to use this in a consulting proposal to {company_name}
+- "proposal_angle": 1 sentence on how to use this in a consulting proposal to {company_name}. Frame as what must happen by when to either capture or defend against this force (e.g., "Must pilot X by Q2 2026 or risk Y").
 - "source_url": PRIMARY URL from your web search results (ORIGINAL source only — must be a real, reachable URL)
 - "supporting_sources": Array of 2-3 ADDITIONAL URLs that corroborate this force from DIFFERENT publications/organizations. Each entry: {{"url": "https://...", "source_type": "...", "title": "Brief title of the source"}}. CRITICAL: These must be REAL URLs you found via web search, not fabricated. If you cannot find 2+ corroborating sources, set confidence to "low".
 - "source_type": "academic" | "think_tank" | "industry_analyst" | "government" | "news"
 - "confidence": "high" (3+ verified sources) | "medium" (2 verified sources) | "low" (0-1 verified sources)
 - "osint_validation": 1 sentence on how you verified this signal (e.g., "Cross-referenced OECD report with McKinsey survey"). MUST reference specific source names.
+
+HORIZON SCANNING for "Preposterous/Black Swan" forces:
+At least one force MUST be a genuine weak signal — not a "known unknown" that everyone already discusses (e.g., "AI replaces jobs" is NOT a weak signal). Instead, scan the fringes: pre-commercial R&D breakthroughs, early-stage regulatory drafts not yet widely reported, niche social movements gaining quiet momentum, or emerging scientific findings that could upend assumptions in the {domain} sector within 24-36 months. Weak signals are barely visible today but could become mainstream disruptors. Look for what is NOT yet in the headlines.
 
 TASK 2 — CROSS-IMPACT CHAIN:
 Trace how the strongest identified force cascades through {company_name}'s weakest dimensions. Format as a chain: "Force X → impacts Dimension A → which cascades to Dimension B → ultimately affecting Dimension C." This must be specific to THIS company's situation, not generic.
