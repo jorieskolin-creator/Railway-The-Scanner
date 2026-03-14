@@ -2092,45 +2092,9 @@ RETURN STRICT JSON:
             "washing_type": washing_type
         }
     
-    # --- FALLBACK: SIMULATION ---
-    print(f"   [Scanner 2] All models failed. Engaging AI Simulation for {company_name} (Fallback)...")
-    try:
-        # Try Sonnet 4.6 first for simulation (Gemini may be rate-limited)
-        anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if "=" in anthropic_key:
-            try: anthropic_key = anthropic_key.split("=", 1)[1]
-            except: pass
-        anthropic_key = anthropic_key.strip().strip('"').strip("'")
-
-        if anthropic_key:
-            claude_client = anthropic.Anthropic(api_key=anthropic_key)
-            sim_prompt = f"Generate 3 REALISTIC forensic search findings for {company_name}. Return JSON with 'findings' (array of objects with label, found, sentiment, category, snippet, url, is_recent), 'reality_score_adjustment' (-40 to +40), 'confidence_score' (0-100), 'washing_flag' (boolean), and 'key_people' (array)."
-            response = claude_client.messages.create(
-                model="claude-sonnet-4-6",
-                max_tokens=2048,
-                messages=[{"role": "user", "content": sim_prompt}]
-            )
-            sim_text = response.content[0].text if response.content else ""
-            sim_data = json.loads(extract_json_from_text(sim_text), strict=False)
-        else:
-            # Last resort: try Gemini Flash
-            client = genai.Client(api_key=api_key)
-            sim_prompt = f"Generate 3 REALISTIC forensic search findings for {company_name}. Return JSON with 'findings', 'score' (0-100), 'confidence_score' (0-100), 'washing_flag' (boolean), and 'key_people' (array)."
-            response = client.models.generate_content(model="gemini-3-flash-preview", contents=sim_prompt)
-            sim_data = json.loads(extract_json_from_text(response.text), strict=False)
-
-        return {
-            "score": sim_data.get("score", 60),
-            "checklist": [],
-            "links": sim_data.get("findings", []),
-            "key_people": sim_data.get("key_people", []),
-            "is_simulated": True,
-            "confidence_score": min(sim_data.get("confidence_score", 40), 50),
-            "washing_flag": sim_data.get("washing_flag", False),
-            "washing_type": sim_data.get("washing_type", None)
-        }
-    except:
-        return { "score": 60, "checklist": [], "links": [], "key_people": [], "is_simulated": True, "confidence_score": 0, "washing_flag": False }
+    # --- FALLBACK: All models failed — return empty result, never fabricate evidence ---
+    print(f"   [Scanner 2] All models failed for {company_name}. Returning empty result (no simulated data).")
+    return { "score": 0, "checklist": [], "links": [], "key_people": [], "is_simulated": True, "confidence_score": 0, "washing_flag": False, "washing_type": None }
 
 
 # ==============================================================================
