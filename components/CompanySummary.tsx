@@ -334,13 +334,13 @@ const CompanySummary = ({ data }) => {
             + '        ' + visuals + '\n'
             + '    </div>\n\n';
 
-        // Detailed report section
-        htmlContent += '    <!-- DETAILED FORENSIC REPORT -->\n'
-            + '    ' + detailedReportHTML + '\n\n';
-
         // Foresight section
         htmlContent += '    <!-- FUTURE INSIGHT -->\n'
             + '    ' + foresightHTML + '\n\n';
+
+        // Detailed report section
+        htmlContent += '    <!-- DETAILED FORENSIC REPORT -->\n'
+            + '    ' + detailedReportHTML + '\n\n';
 
         // Raw data capsule
         htmlContent += '    <!-- RAW DATA CAPSULE (Hidden, for Deep Dive Tool Parsing) -->\n'
@@ -1141,6 +1141,31 @@ const CompanySummary = ({ data }) => {
         {/* These sections are wrapped with report-only class which is display:none in the app
             but the downloaded HTML overrides it to display:block */}
 
+        {data.foresight_summary && (
+            <div className="report-only-section" style={{ display: 'none' }}>
+                <div className="bg-gradient-to-r from-teal-900/30 to-cyan-900/30 p-8 rounded-2xl border-l-4 border-teal-500 backdrop-blur-sm">
+                    <h3 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
+                        <TrendingUp className="text-teal-400" size={22} />
+                        Future Insight
+                    </h3>
+                    <p className="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">
+                        Forward-looking narrative based on strategic foresight analysis
+                    </p>
+                    <div>
+                        {data.foresight_summary.split(/\n\n+/).map((para, pi) => (
+                            <p key={pi} className={`text-slate-200 leading-relaxed text-sm font-light${pi > 0 ? " mt-4" : ""}`}>
+                                {para.split(/\*\*([^*]+)\*\*/).map((segment, si) =>
+                                    si % 2 === 1
+                                        ? <span key={si} className="font-semibold text-teal-300">{segment}</span>
+                                        : <React.Fragment key={si}>{segment}</React.Fragment>
+                                )}
+                            </p>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        )}
+
         {data.detailed_report && (
             <div className="report-only-section" style={{ display: 'none' }}>
                 <div className="bg-gradient-to-r from-violet-900/30 to-indigo-900/30 p-8 rounded-2xl border-l-4 border-violet-500 backdrop-blur-sm">
@@ -1167,31 +1192,6 @@ const CompanySummary = ({ data }) => {
                                 </p>
                             );
                         })}
-                    </div>
-                </div>
-            </div>
-        )}
-
-        {data.foresight_summary && (
-            <div className="report-only-section" style={{ display: 'none' }}>
-                <div className="bg-gradient-to-r from-teal-900/30 to-cyan-900/30 p-8 rounded-2xl border-l-4 border-teal-500 backdrop-blur-sm">
-                    <h3 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
-                        <TrendingUp className="text-teal-400" size={22} />
-                        Future Insight
-                    </h3>
-                    <p className="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">
-                        Forward-looking narrative based on strategic foresight analysis
-                    </p>
-                    <div>
-                        {data.foresight_summary.split(/\n\n+/).map((para, pi) => (
-                            <p key={pi} className={`text-slate-200 leading-relaxed text-sm font-light${pi > 0 ? " mt-4" : ""}`}>
-                                {para.split(/\*\*([^*]+)\*\*/).map((segment, si) =>
-                                    si % 2 === 1
-                                        ? <span key={si} className="font-semibold text-teal-300">{segment}</span>
-                                        : <React.Fragment key={si}>{segment}</React.Fragment>
-                                )}
-                            </p>
-                        ))}
                     </div>
                 </div>
             </div>
