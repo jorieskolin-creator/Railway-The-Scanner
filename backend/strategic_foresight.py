@@ -83,6 +83,238 @@ FP_THEMES_30 = [
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# FP THEME → AUTHORITATIVE SOURCE MAPPING
+# Maps each of the 30 Futures Platform themes to the most relevant authoritative
+# sources for finding evidence about that theme. These are "horizontal" sources
+# (theme-specific, cross-industry) vs the "vertical" per-industry target_sources.
+#
+# Source categories:
+# - Foresight orgs: Millennium Project, IFTF, CIFS, RAND
+# - Think tanks: Chatham House, Club of Rome, Oxford Martin
+# - Intergovernmental: OECD, WEF, EC, UN agencies
+# - Analysts: Gartner, McKinsey, BCG, Forrester
+# - Academic: Nature, IEEE, ScienceDirect, arxiv
+# ═══════════════════════════════════════════════════════════════════════════════
+
+FP_THEME_SOURCES = {
+    # --- Technology & Digital ---
+    "Artificial Intelligence": [
+        "site:iftf.org artificial intelligence",
+        "site:oxfordmartin.ox.ac.uk AI",
+        "site:cser.ac.uk artificial intelligence risk",
+        "site:rand.org artificial intelligence",
+        "site:gartner.com AI trends hype cycle",
+    ],
+    "Data & Digitalisation": [
+        "site:weforum.org digital transformation",
+        "site:mckinsey.com digital transformation",
+        "site:oecd.org digital economy",
+        "site:ec.europa.eu digital strategy",
+    ],
+    "Communication & Media": [
+        "site:reuters.com media industry future",
+        "site:iftf.org media communication",
+        "site:weforum.org media transformation",
+        "site:oxfordmartin.ox.ac.uk media",
+    ],
+
+    # --- Economy & Business ---
+    "Business": [
+        "site:mckinsey.com business model innovation",
+        "site:hbr.org business strategy future",
+        "site:bcg.com business transformation",
+        "site:weforum.org business future",
+    ],
+    "Finance & Ownership": [
+        "site:bis.org fintech future",
+        "site:imf.org financial system",
+        "site:mckinsey.com financial services",
+        "site:weforum.org financial system",
+    ],
+    "Global Economy": [
+        "site:oecd.org economic outlook",
+        "site:imf.org world economic outlook",
+        "site:weforum.org global economy",
+        "site:chathamhouse.org global economy",
+        "site:millennium-project.org global challenges",
+    ],
+    "Digital & Sharing Economies": [
+        "site:oecd.org platform economy",
+        "site:weforum.org sharing economy",
+        "site:mckinsey.com platform economy",
+        "site:iftf.org future of work platforms",
+    ],
+    "Services": [
+        "site:mckinsey.com service industry",
+        "site:forrester.com customer experience",
+        "site:hbr.org service innovation",
+        "site:deloitte.com service transformation",
+    ],
+
+    # --- Industry & Infrastructure ---
+    "Industry & Manufacturing": [
+        "site:weforum.org manufacturing future",
+        "site:mckinsey.com smart manufacturing",
+        "site:oecd.org industrial policy",
+        "site:deloitte.com manufacturing trends",
+    ],
+    "Construction & Urbanisation": [
+        "site:weforum.org urban future",
+        "site:oecd.org urbanisation",
+        "site:mckinsey.com construction",
+        "site:ec.europa.eu urban policy",
+        "site:oxfordmartin.ox.ac.uk urbanisation",
+    ],
+    "Energy": [
+        "site:iea.org energy outlook",
+        "site:irena.org renewable energy",
+        "site:weforum.org energy transition",
+        "site:bloombergnef.com energy",
+        "site:clubofrome.org energy",
+    ],
+    "Freight & Logistics": [
+        "site:weforum.org supply chain logistics",
+        "site:mckinsey.com logistics",
+        "site:oecd.org trade logistics",
+        "site:deloitte.com supply chain",
+    ],
+    "Private & Public Transport": [
+        "site:iea.org transport",
+        "site:weforum.org mobility future",
+        "site:mckinsey.com mobility",
+        "site:oecd.org transport policy",
+        "site:iftf.org future of mobility",
+    ],
+
+    # --- Environment & Resources ---
+    "Climate Change": [
+        "site:ipcc.ch climate",
+        "site:weforum.org climate change",
+        "site:clubofrome.org climate",
+        "site:oxfordmartin.ox.ac.uk climate",
+        "site:iea.org climate",
+        "site:millennium-project.org climate",
+    ],
+    "Sustainability & Recycling": [
+        "site:weforum.org circular economy",
+        "site:ec.europa.eu circular economy",
+        "site:oecd.org sustainability",
+        "site:clubofrome.org sustainability",
+        "site:ellenmacarthurfoundation.org circular economy",
+    ],
+    "Nature": [
+        "site:weforum.org biodiversity",
+        "site:un.org biodiversity",
+        "site:clubofrome.org nature",
+        "site:oxfordmartin.ox.ac.uk biodiversity",
+        "site:fao.org ecosystems",
+    ],
+    "Food": [
+        "site:fao.org food security",
+        "site:weforum.org food future",
+        "site:oecd.org agriculture food",
+        "site:oxfordmartin.ox.ac.uk food",
+        "site:nature.com food systems",
+    ],
+    "Water & Oceans": [
+        "site:un.org water scarcity",
+        "site:weforum.org water",
+        "site:oecd.org water policy",
+        "site:millennium-project.org water",
+        "site:nature.com ocean",
+    ],
+
+    # --- Society & Governance ---
+    "Public Governance": [
+        "site:oecd.org governance innovation",
+        "site:ec.europa.eu governance",
+        "site:weforum.org governance future",
+        "site:chathamhouse.org governance",
+        "site:rand.org governance",
+    ],
+    "Geopolitics": [
+        "site:chathamhouse.org geopolitics",
+        "site:rand.org geopolitics",
+        "site:weforum.org geopolitics",
+        "site:cifs.dk geopolitics",
+        "site:millennium-project.org geopolitics",
+    ],
+    "Security & Safety": [
+        "site:rand.org cybersecurity",
+        "site:cser.ac.uk security risk",
+        "site:chathamhouse.org security",
+        "site:weforum.org cybersecurity",
+        "site:gartner.com security trends",
+    ],
+    "Values & Ethics": [
+        "site:weforum.org ethics trust",
+        "site:oxfordmartin.ox.ac.uk ethics",
+        "site:oecd.org AI ethics",
+        "site:cifs.dk values ethics",
+        "site:millennium-project.org ethics",
+    ],
+    "Society": [
+        "site:oecd.org inequality social",
+        "site:weforum.org inequality society",
+        "site:oxfordmartin.ox.ac.uk inequality",
+        "site:chathamhouse.org social change",
+        "site:clubofrome.org society",
+    ],
+
+    # --- People & Well-being ---
+    "Health & Wellbeing": [
+        "site:who.int health future",
+        "site:weforum.org health",
+        "site:mckinsey.com healthcare future",
+        "site:nature.com health",
+        "site:oxfordmartin.ox.ac.uk health",
+    ],
+    "Education & Knowledge": [
+        "site:oecd.org education future",
+        "site:weforum.org education",
+        "site:mckinsey.com education",
+        "site:iftf.org learning future",
+        "site:ec.europa.eu education skills",
+    ],
+    "Work & Income": [
+        "site:oecd.org future of work",
+        "site:weforum.org future of work",
+        "site:mckinsey.com future of work",
+        "site:iftf.org future of work",
+        "site:ilo.org future of work",
+    ],
+    "Management & HR": [
+        "site:mckinsey.com talent management",
+        "site:hbr.org future of management",
+        "site:weforum.org talent",
+        "site:deloitte.com human capital trends",
+        "site:gartner.com HR trends",
+    ],
+    "Leisure & Lifestyles": [
+        "site:mckinsey.com consumer trends",
+        "site:weforum.org consumer lifestyle",
+        "site:deloitte.com consumer trends",
+        "site:cifs.dk lifestyle trends",
+    ],
+
+    # --- Science & Demographics ---
+    "Sciences & Research": [
+        "site:nature.com science future",
+        "site:oxfordmartin.ox.ac.uk research",
+        "site:cser.ac.uk technology risk",
+        "site:rand.org technology",
+        "site:weforum.org technology science",
+    ],
+    "Population & Demographics": [
+        "site:oecd.org demographics population",
+        "site:weforum.org demographics",
+        "site:un.org population",
+        "site:cifs.dk demographics megatrends",
+        "site:oxfordmartin.ox.ac.uk demographics",
+    ],
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # DOMAIN → FORESIGHT THEME MAPPING
 # Maps the scanner's 14 KNOWN_DOMAINS to Futures Platform's 30-theme taxonomy
 # and identifies which KB dimensions are most impacted by external forces.
@@ -284,6 +516,15 @@ def _build_foresight_prompt(
     n_dims = len(domain_config["priority_dimensions"])
     target_sources = domain_config.get("target_sources", [])
 
+    # Collect theme-specific sources for the FP themes relevant to this domain
+    theme_sources = []
+    seen_theme_queries = set()
+    for theme in domain_config["fp_themes"]:
+        for query in FP_THEME_SOURCES.get(theme, []):
+            if query not in seen_theme_queries:
+                theme_sources.append(query)
+                seen_theme_queries.add(query)
+
     # Format top findings
     findings_text = ""
     for f in top_findings[:8]:
@@ -336,14 +577,19 @@ PRIORITY KB DIMENSIONS TO EVALUATE: {priority_dims}
 DOMAIN-SPECIFIC OSINT KEYWORDS: {osint_kw}
 
 MANDATORY SOURCE TARGETING — SEARCH THESE FIRST:
-Use these targeted searches to find authoritative evidence. Start with these site-specific queries before any open web search:
+Use these targeted searches to find authoritative evidence. Start with these site-specific queries before any open web search.
+
+Industry-specific searches for {domain}:
 {chr(10).join(f"- {s}" for s in target_sources) if target_sources else "- site:mckinsey.com OR site:gartner.com OR site:weforum.org OR site:hbr.org {domain} trends"}
 
+Theme-specific searches for {fp_themes}:
+{chr(10).join(f"- {s}" for s in theme_sources[:8]) if theme_sources else "- site:millennium-project.org OR site:iftf.org OR site:weforum.org megatrends"}
+
 ALLOWED SOURCE DOMAINS (use ONLY these for primary sources):
-Tier 1 (preferred): gartner.com, forrester.com, mckinsey.com, bcg.com, deloitte.com, pwc.com, ey.com, kpmg.com, accenture.com, hbr.org, weforum.org, idc.com
-Tier 2 (acceptable): reuters.com, ft.com, bloomberg.com, economist.com, wsj.com, bbc.com
-Tier 3 (academic/gov): oecd.org, imf.org, worldbank.org, ec.europa.eu, europa.eu, nature.com, sciencedirect.com, arxiv.org, ieee.org
-Tier 4 (sector-specific): iea.org, irena.org, bis.org, who.int, gsma.com, fao.org + established sector-specific analyst firms
+Tier 1 (preferred analysts): gartner.com, forrester.com, mckinsey.com, bcg.com, deloitte.com, pwc.com, ey.com, kpmg.com, accenture.com, hbr.org, idc.com, isg-one.com
+Tier 2 (quality news): reuters.com, ft.com, bloomberg.com, economist.com, wsj.com, bbc.com
+Tier 3 (academic/gov): oecd.org, imf.org, worldbank.org, ec.europa.eu, europa.eu, nature.com, sciencedirect.com, arxiv.org, ieee.org, un.org, who.int, fao.org, iea.org, irena.org, bis.org, ipcc.ch
+Tier 4 (foresight orgs): weforum.org, millennium-project.org, iftf.org, cifs.dk, rand.org, chathamhouse.org, clubofrome.org, oxfordmartin.ox.ac.uk, cser.ac.uk, wfsf.org, ilo.org
 
 DO NOT USE sources from: blogs, content farms, regional tech news sites, outsourcing directories, marketing sites, press release wires, social media, or any site not recognized as an established research/analyst/news organization.
 

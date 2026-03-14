@@ -39,6 +39,25 @@ HIGH_CREDIBILITY_DOMAINS = {
     # Finnish institutional
     "hankintailmoitukset.fi", "prh.fi", "vtt.fi", "aalto.fi",
     "theseus.fi",
+    # Strategic foresight organizations
+    "millennium-project.org",   # Global Futures Intelligence System, Delphi methodology
+    "iftf.org",                 # Institute for the Future — ex-RAND, 50+ year track record
+    "cifs.dk",                  # Copenhagen Institute for Futures Studies — European megatrends
+    "rand.org",                 # RAND Corporation — invented Delphi, foundational foresight
+    "chathamhouse.org",         # Royal Institute of Intl Affairs — geopolitics think tank
+    "clubofrome.org",           # Club of Rome — systems dynamics, planetary boundaries
+    "oxfordmartin.ox.ac.uk",    # Oxford Martin School — cross-disciplinary global challenges
+    "cser.ac.uk",               # Centre for Study of Existential Risk, Cambridge
+    # Foresight-adjacent academic & think tanks
+    "wfsf.org",                 # World Futures Studies Federation
+    "apf.org",                  # Association of Professional Futurists
+    "emerald.com",              # Foresight journal (peer-reviewed)
+    "iea.org",                  # International Energy Agency
+    "irena.org",                # International Renewable Energy Agency
+    "who.int",                  # World Health Organization
+    "bis.org",                  # Bank for International Settlements
+    "fao.org",                  # Food and Agriculture Organization
+    "isg-one.com",              # ISG — IT services analyst
 }
 
 # Tier 2: Low credibility — blogs, press release wires, content farms, marketing
