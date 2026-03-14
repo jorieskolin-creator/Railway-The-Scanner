@@ -6,7 +6,15 @@ validates them (URL verification + credibility assessment), and stores
 validated findings in blob storage. These pre-validated signals are then
 injected into per-company foresight generation, avoiding redundant searches.
 
-This is the "Simple RAG" layer: harvest → validate → store → retrieve.
+Refresh-and-clean strategy:
+  1. Load existing KB signals for the theme
+  2. Re-verify existing URLs — remove any that have gone dead since last harvest
+  3. Harvest new signals from Gemini
+  4. Deduplicate & merge — add new signals not already in the KB
+  5. Cap at MAX_SIGNALS_PER_THEME, ranked by confidence + recency
+  6. Store the merged result
+
+This ensures the KB grows over time and a failed harvest never wipes good data.
 """
 
 import json
@@ -25,6 +33,8 @@ from strategic_foresight import (
 )
 from storage import BlobStorage
 
+MAX_SIGNALS_PER_THEME = 10
+
 
 def _theme_to_slug(theme: str) -> str:
     """Convert a theme name to a storage-safe slug."""
@@ -33,6 +43,106 @@ def _theme_to_slug(theme: str) -> str:
     slug = re.sub(r'[^a-z0-9_]', '_', slug)
     slug = re.sub(r'_{2,}', '_', slug)
     return slug.strip('_')
+
+
+def _signal_key(sig: dict) -> str:
+    """
+    Generate a deduplication key for a signal.
+    Matches on source_url (exact) or title similarity (normalized).
+    """
+    url = (sig.get("source_url") or "").strip().rstrip("/").lower()
+    if url:
+        return url
+    # Fallback: normalized title
+    title = (sig.get("title") or "").strip().lower()
+    title = re.sub(r'[^a-z0-9 ]', '', title)
+    title = re.sub(r'\s+', ' ', title).strip()
+    return f"title:{title}"
+
+
+def _revalidate_existing_signals(existing_signals: list[dict], theme: str) -> list[dict]:
+    """
+    Re-verify URLs on existing KB signals. Remove any whose primary URL has gone dead.
+    Returns the cleaned list of still-valid signals.
+    """
+    if not existing_signals:
+        return []
+
+    # Collect all primary URLs for parallel verification
+    urls_to_check = []
+    for sig in existing_signals:
+        url = sig.get("source_url", "")
+        if url:
+            urls_to_check.append(url)
+
+    if not urls_to_check:
+        return []
+
+    url_status = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {
+            pool.submit(_verify_foresight_url, url, 8): url
+            for url in set(urls_to_check)
+        }
+        for future in concurrent.futures.as_completed(futures):
+            url = futures[future]
+            try:
+                url_status[url] = future.result()
+            except Exception:
+                url_status[url] = False
+
+    alive = []
+    dead = 0
+    for sig in existing_signals:
+        primary_url = sig.get("source_url", "")
+        if url_status.get(primary_url, False):
+            alive.append(sig)
+        else:
+            dead += 1
+
+    print(f"   🧹 [Clean] {theme}: {len(alive)} existing alive, {dead} expired → removed")
+    return alive
+
+
+def _merge_signals(existing: list[dict], new_signals: list[dict], max_total: int = MAX_SIGNALS_PER_THEME) -> list[dict]:
+    """
+    Merge new signals into existing KB signals:
+      - Deduplicate by source_url or normalized title
+      - New signals with the same key replace older ones (fresher data)
+      - Cap at max_total, ranked by confidence then recency
+    """
+    # Index existing by key
+    merged = {}
+    for sig in existing:
+        key = _signal_key(sig)
+        merged[key] = sig
+
+    # New signals overwrite duplicates (fresher), otherwise add
+    added = 0
+    updated = 0
+    for sig in new_signals:
+        key = _signal_key(sig)
+        if key in merged:
+            updated += 1
+        else:
+            added += 1
+        merged[key] = sig  # new always wins (fresher)
+
+    # Rank: high confidence first, then medium, then low; within same confidence, newest first
+    confidence_order = {"high": 0, "medium": 1, "low": 2}
+    result = sorted(
+        merged.values(),
+        key=lambda s: (
+            confidence_order.get(s.get("confidence", "low"), 3),
+            -(s.get("time_ms") or 0),  # proxy for recency
+        ),
+    )
+
+    capped = result[:max_total]
+    if added or updated:
+        print(f"   🔀 [Merge] {added} new, {updated} refreshed, {len(capped)} total (cap {max_total})")
+
+    return capped
 
 
 def _build_harvest_prompt(theme: str, search_queries: list[str]) -> str:
@@ -201,7 +311,7 @@ def _validate_harvest_signals(data: dict) -> dict:
     if all_urls:
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
             futures = {
-                pool.submit(_verify_foresight_url, url, 5): url
+                pool.submit(_verify_foresight_url, url, 8): url
                 for (_, _, url) in all_urls
             }
             for future in concurrent.futures.as_completed(futures):
@@ -298,29 +408,48 @@ def harvest_all_themes(
 
         print(f"\n--- [{i+1}/{total}] {theme} ({len(search_queries)} queries) ---")
 
-        # Harvest
+        # Step 1: Load & clean existing KB signals for this theme
+        existing_data = storage.get_foresight_kb(slug)
+        existing_signals = []
+        if existing_data and existing_data.get("signals"):
+            existing_signals = _revalidate_existing_signals(existing_data["signals"], theme)
+
+        # Step 2: Harvest new signals
         data = _harvest_single_theme(theme, client, search_queries)
 
-        if not data or not data.get("signals"):
+        new_validated_signals = []
+        if data and data.get("signals"):
+            # Step 3: Validate new harvest
+            data = _validate_harvest_signals(data)
+            new_validated_signals = data.get("signals", [])
+
+        # Step 4: Merge — combine cleaned existing + validated new
+        merged_signals = _merge_signals(existing_signals, new_validated_signals)
+
+        if not merged_signals:
             results["failed"] += 1
-            results["themes"].append({"theme": theme, "slug": slug, "status": "failed", "signals": 0})
+            status = "no_valid_signals" if (data and data.get("signals") is not None) else "failed"
+            results["themes"].append({"theme": theme, "slug": slug, "status": status, "signals": 0})
+            print(f"   ⚠️ [Result] {theme}: no signals after merge — skipped")
             continue
 
-        # Validate
-        data = _validate_harvest_signals(data)
+        # Step 5: Build merged data envelope and store
+        merged_data = {
+            "theme": theme,
+            "theme_slug": slug,
+            "signals": merged_signals,
+            "harvested_at": datetime.now(timezone.utc).isoformat(),
+            "model": data.get("model", existing_data.get("model", "unknown")) if data else existing_data.get("model", "unknown"),
+            "merge_stats": {
+                "existing_before_clean": len((existing_data or {}).get("signals", [])),
+                "existing_after_clean": len(existing_signals),
+                "new_harvested": len(new_validated_signals),
+                "merged_total": len(merged_signals),
+            },
+        }
 
-        if not data.get("signals"):
-            results["failed"] += 1
-            results["themes"].append({"theme": theme, "slug": slug, "status": "no_valid_signals", "signals": 0})
-            continue
-
-        # Add metadata
-        data["harvested_at"] = datetime.now(timezone.utc).isoformat()
-        data["theme_slug"] = slug
-
-        # Store
-        url = storage.save_foresight_kb(slug, data)
-        n_signals = len(data["signals"])
+        url = storage.save_foresight_kb(slug, merged_data)
+        n_signals = len(merged_signals)
         results["harvested"] += 1
         results["total_signals"] += n_signals
         results["themes"].append({
@@ -328,8 +457,10 @@ def harvest_all_themes(
             "slug": slug,
             "status": "ok",
             "signals": n_signals,
-            "high_confidence": sum(1 for s in data["signals"] if s.get("confidence") == "high"),
+            "high_confidence": sum(1 for s in merged_signals if s.get("confidence") == "high"),
             "stored_url": url,
+            "existing_kept": len(existing_signals),
+            "new_added": len(new_validated_signals),
         })
 
         print(f"   💾 [Store] {theme}: {n_signals} signals saved to foresight_kb/{slug}")

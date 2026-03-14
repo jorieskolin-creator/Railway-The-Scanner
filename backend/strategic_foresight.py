@@ -1082,32 +1082,70 @@ _HIGH_CREDIBILITY_DOMAINS = HIGH_CREDIBILITY_DOMAINS
 _LOW_CREDIBILITY_DOMAINS = LOW_CREDIBILITY_DOMAINS
 
 
-def _verify_foresight_url(url, timeout=4):
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/131.0.0.0 Safari/537.36"
+)
+
+# Domains that return 403 for automated requests but the URL is still real.
+# These are behind paywalls, Cloudflare, or aggressive bot protection.
+_PAYWALL_DOMAINS = {
+    "ft.com", "wsj.com", "economist.com", "bloomberg.com", "nytimes.com",
+    "gartner.com", "forrester.com", "idc.com", "hbr.org",
+    "mckinsey.com", "bcg.com", "bain.com", "deloitte.com",
+    "pwc.com", "ey.com", "kpmg.com", "accenture.com",
+    "sciencedirect.com", "nature.com", "ieee.org", "acm.org",
+    "pitchbook.com", "kauppalehti.fi", "talouselama.fi",
+    "cnbc.com", "di.se", "e24.no",
+}
+
+
+def _is_paywall_domain(url):
+    """Check if a URL belongs to a known paywalled/bot-blocking domain."""
+    try:
+        from urllib.parse import urlparse
+        domain = urlparse(url).netloc.lower().replace("www.", "")
+        return any(domain == d or domain.endswith("." + d) for d in _PAYWALL_DOMAINS)
+    except Exception:
+        return False
+
+
+def _verify_foresight_url(url, timeout=8):
     """
     Verify a single foresight URL exists via HTTP HEAD request.
     Returns True if the URL responds with a success/redirect status (2xx, 3xx).
-    Returns False for 4xx, 5xx, timeouts, or connection errors.
-    Mirrors scanner_two._verify_url for consistent verification behavior.
+    Also returns True for 403 on known paywalled domains (URL exists but is gated).
+    Returns False for 404, 5xx, timeouts, or connection errors.
     """
     if not url or not url.startswith("http"):
         return False
+    paywall = _is_paywall_domain(url)
     try:
         import requests as http_requests
         resp = http_requests.head(
             url, timeout=timeout, allow_redirects=True,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; AdaptabilityScanner/1.0)"},
+            headers={"User-Agent": _BROWSER_UA},
         )
-        return resp.status_code < 400
+        if resp.status_code < 400:
+            return True
+        if paywall and resp.status_code == 403:
+            return True
+        return False
     except Exception:
         # Timeout, connection error, SSL error — try GET as fallback
         try:
             import requests as http_requests
             resp = http_requests.get(
                 url, timeout=timeout, allow_redirects=True, stream=True,
-                headers={"User-Agent": "Mozilla/5.0 (compatible; AdaptabilityScanner/1.0)"},
+                headers={"User-Agent": _BROWSER_UA},
             )
             resp.close()
-            return resp.status_code < 400
+            if resp.status_code < 400:
+                return True
+            if paywall and resp.status_code == 403:
+                return True
+            return False
         except Exception:
             return False
 
