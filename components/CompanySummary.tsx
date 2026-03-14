@@ -267,7 +267,7 @@ const CompanySummary = ({ data }) => {
                 + '<h3 class="text-xl font-bold text-white mb-2 flex items-center gap-2">'
                 + '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2dd4bf" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>'
                 + ' Future Insight</h3>'
-                + '<p class="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">Forward-looking narrative based on strategic foresight analysis</p>'
+                + '<p class="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">Forward-looking narrative based on trend and market analysis</p>'
                 + '<div>' + fsParagraphs + '</div>'
                 + '</div></div>';
             console.log('[HTML Export v6] foresightHTML built:', foresightHTML.length, 'chars');
@@ -962,181 +962,6 @@ const CompanySummary = ({ data }) => {
             </div>
         )}
 
-        {/* === STRATEGIC FORESIGHT VISUALIZATIONS === */}
-        {data.strategic_foresight?.dimension_forces?.length > 0 && (() => {
-            const sf = data.strategic_foresight;
-            const forceTypeColor = {
-                'Probable/Emerging': { bg: 'bg-cyan-500/20', text: 'text-cyan-300', border: 'border-cyan-500/30' },
-                'Plausible/Maturing': { bg: 'bg-emerald-500/20', text: 'text-emerald-300', border: 'border-emerald-500/30' },
-                'Weakening/Declining': { bg: 'bg-amber-500/20', text: 'text-amber-300', border: 'border-amber-500/30' },
-                'Preposterous/Black Swan': { bg: 'bg-rose-500/20', text: 'text-rose-300', border: 'border-rose-500/30' },
-            };
-            const fallbackColor = { bg: 'bg-slate-500/20', text: 'text-slate-300', border: 'border-slate-500/30' };
-            const timeframeLabel = { '6-12mo': '6–12 mo', '12-24mo': '12–24 mo', '24-36mo': '24–36 mo' };
-            const confidenceDots = { high: 3, medium: 2, low: 1 };
-
-            return (
-                <div className="space-y-5 mt-6">
-
-                    {/* 1. Headline Banner */}
-                    {sf.foresight_headline && (
-                        <div className="bg-gradient-to-r from-teal-900/30 to-cyan-900/30 p-6 rounded-2xl border-l-4 border-teal-500 backdrop-blur-sm">
-                            <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                                <TrendingUp className="text-teal-400" size={20} />
-                                Strategic Foresight
-                            </h3>
-                            <p className="text-slate-200 text-sm mt-2 leading-relaxed font-light">{sf.foresight_headline}</p>
-                            {sf.fp_themes_used?.length > 0 && (
-                                <div className="flex flex-wrap gap-2 mt-3">
-                                    {sf.fp_themes_used.map((theme, i) => (
-                                        <span key={i} className="text-[10px] px-2.5 py-1 rounded-full bg-teal-500/15 text-teal-300 border border-teal-500/20 font-medium">
-                                            {theme}
-                                        </span>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                    )}
-
-                    {/* 2. Dimension Force Cards */}
-                    <div className="grid grid-cols-1 gap-4">
-                        {sf.dimension_forces.map((force, i) => {
-                            const colors = forceTypeColor[force.type] || fallbackColor;
-                            const dots = confidenceDots[force.confidence] || 1;
-                            return (
-                                <div key={i} className={`bg-white/5 p-5 rounded-2xl border ${colors.border} backdrop-blur-sm`}>
-                                    <div className="flex flex-wrap items-center gap-2 mb-3">
-                                        <span className={`text-[10px] px-2.5 py-1 rounded-full ${colors.bg} ${colors.text} font-semibold uppercase tracking-wider`}>
-                                            {force.type || 'Unknown'}
-                                        </span>
-                                        <span className="text-[10px] px-2.5 py-1 rounded-full bg-white/10 text-slate-300 font-medium">
-                                            {timeframeLabel[force.timeframe] || force.timeframe}
-                                        </span>
-                                        <span className="text-[10px] text-slate-500 ml-auto flex items-center gap-1" title={`Confidence: ${force.confidence || 'unknown'}`}>
-                                            {[...Array(3)].map((_, d) => (
-                                                <span key={d} className={`inline-block w-1.5 h-1.5 rounded-full ${d < dots ? 'bg-teal-400' : 'bg-slate-600'}`} />
-                                            ))}
-                                        </span>
-                                    </div>
-                                    <h4 className="text-sm font-bold text-white">{force.trend}</h4>
-                                    <p className="text-[11px] text-teal-400/70 font-medium mt-0.5 mb-2">{force.kb_dimension}{force.fp_theme ? ` · ${force.fp_theme}` : ''}</p>
-                                    <p className="text-xs text-slate-300 leading-relaxed">{force.impact_on_company}</p>
-                                    <div className="flex flex-wrap items-center gap-3 mt-3 pt-3 border-t border-white/5">
-                                        {force.source_url && (
-                                            <a href={force.source_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-teal-400 hover:text-teal-300 flex items-center gap-1 transition-colors">
-                                                <ExternalLink size={10} /> Source
-                                            </a>
-                                        )}
-                                        {force.source_type && (
-                                            <span className="text-[10px] px-2 py-0.5 rounded bg-white/5 text-slate-400">{force.source_type}</span>
-                                        )}
-                                        {force.osint_validation && (
-                                            <span className="text-[10px] text-slate-500 italic ml-auto">{force.osint_validation}</span>
-                                        )}
-                                    </div>
-                                </div>
-                            );
-                        })}
-                    </div>
-
-                    {/* 3. Cross-Impact Chain */}
-                    {sf.cross_impact_chain && sf.cross_impact_chain.trim() && (
-                        <div className="bg-white/5 p-5 rounded-2xl border border-white/10">
-                            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Cross-Impact Chain</h4>
-                            <div className="flex flex-col gap-0">
-                                {sf.cross_impact_chain.split(/\s*(?:→|->)\s*/).filter(Boolean).map((node, i, arr) => (
-                                    <div key={i} className="flex items-start gap-3">
-                                        {/* Vertical connector line + dot */}
-                                        <div className="flex flex-col items-center shrink-0" style={{ width: '20px' }}>
-                                            <div className={`w-2.5 h-2.5 rounded-full border-2 ${i === 0 ? 'bg-teal-400 border-teal-400' : i === arr.length - 1 ? 'bg-cyan-400 border-cyan-400' : 'bg-transparent border-teal-500/60'}`} style={{ marginTop: '6px' }} />
-                                            {i < arr.length - 1 && (
-                                                <div className="w-px flex-grow bg-gradient-to-b from-teal-500/40 to-teal-500/10" style={{ minHeight: '20px' }} />
-                                            )}
-                                        </div>
-                                        {/* Node content */}
-                                        <div className={`text-xs leading-relaxed pb-3 ${i === 0 ? 'text-teal-200 font-semibold' : 'text-slate-300 font-medium'}`}>
-                                            {i > 0 && <span className="text-teal-500/50 text-[10px] font-normal mr-1.5">{i === 1 ? 'impacts' : i === arr.length - 1 ? 'ultimately affecting' : 'which cascades to'}</span>}
-                                            {node.trim()}
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    {/* 4. Micro-Scenarios */}
-                    {sf.scenarios && (
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            {sf.scenarios.acceleration && (
-                                <div className="bg-emerald-500/5 p-4 rounded-2xl border border-emerald-500/20">
-                                    <div className="flex items-center gap-2 mb-2">
-                                        <Zap size={14} className="text-emerald-400" />
-                                        <h4 className="text-xs font-bold text-emerald-300 uppercase tracking-wider">If They Act Now</h4>
-                                    </div>
-                                    <p className="text-xs text-slate-300 leading-relaxed">{sf.scenarios.acceleration}</p>
-                                </div>
-                            )}
-                            {sf.scenarios.status_quo && (
-                                <div className="bg-amber-500/5 p-4 rounded-2xl border border-amber-500/20">
-                                    <div className="flex items-center gap-2 mb-2">
-                                        <RefreshCw size={14} className="text-amber-400" />
-                                        <h4 className="text-xs font-bold text-amber-300 uppercase tracking-wider">Continue Unchanged</h4>
-                                    </div>
-                                    <p className="text-xs text-slate-300 leading-relaxed">{sf.scenarios.status_quo}</p>
-                                </div>
-                            )}
-                            {sf.scenarios.disruption && (
-                                <div className="bg-rose-500/5 p-4 rounded-2xl border border-rose-500/20">
-                                    <div className="flex items-center gap-2 mb-2">
-                                        <AlertTriangle size={14} className="text-rose-400" />
-                                        <h4 className="text-xs font-bold text-rose-300 uppercase tracking-wider">Wild Card</h4>
-                                    </div>
-                                    <p className="text-xs text-slate-300 leading-relaxed">{sf.scenarios.disruption}</p>
-                                </div>
-                            )}
-                        </div>
-                    )}
-
-                    {/* 5. Climate Exposure Panel */}
-                    {sf.climate_exposure && (
-                        <div className={`p-5 rounded-2xl border-l-4 backdrop-blur-sm ${
-                            sf.climate_exposure.risk_level === 'critical' || sf.climate_exposure.risk_level === 'high'
-                                ? 'bg-rose-900/20 border-rose-500'
-                                : sf.climate_exposure.risk_level === 'medium'
-                                    ? 'bg-amber-900/20 border-amber-500'
-                                    : 'bg-emerald-900/20 border-emerald-500'
-                        }`}>
-                            <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 flex items-center gap-2">
-                                <Activity size={14} className={
-                                    sf.climate_exposure.risk_level === 'critical' || sf.climate_exposure.risk_level === 'high'
-                                        ? 'text-rose-400'
-                                        : sf.climate_exposure.risk_level === 'medium' ? 'text-amber-400' : 'text-emerald-400'
-                                } />
-                                Climate Exposure — <span className="capitalize">{sf.climate_exposure.risk_level}</span> Risk
-                            </h4>
-                            {sf.climate_exposure.headline && (
-                                <p className="text-sm text-slate-200 leading-relaxed mb-3">{sf.climate_exposure.headline}</p>
-                            )}
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                {sf.climate_exposure.physical_risk && (
-                                    <div className="bg-black/20 p-3 rounded-lg">
-                                        <p className="text-[10px] text-slate-500 uppercase tracking-wider font-bold mb-1">Physical Risk</p>
-                                        <p className="text-xs text-slate-300 leading-relaxed">{sf.climate_exposure.physical_risk}</p>
-                                    </div>
-                                )}
-                                {sf.climate_exposure.transition_risk && (
-                                    <div className="bg-black/20 p-3 rounded-lg">
-                                        <p className="text-[10px] text-slate-500 uppercase tracking-wider font-bold mb-1">Transition Risk</p>
-                                        <p className="text-xs text-slate-300 leading-relaxed">{sf.climate_exposure.transition_risk}</p>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    )}
-                </div>
-            );
-        })()}
-
         {/* === REPORT-ONLY SECTIONS (hidden in modal, visible in downloaded HTML) === */}
         {/* These sections are wrapped with report-only class which is display:none in the app
             but the downloaded HTML overrides it to display:block */}
@@ -1149,7 +974,7 @@ const CompanySummary = ({ data }) => {
                         Future Insight
                     </h3>
                     <p className="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">
-                        Forward-looking narrative based on strategic foresight analysis
+                        Forward-looking narrative based on trend and market analysis
                     </p>
                     <div>
                         {data.foresight_summary.split(/\n\n+/).map((para, pi) => (
