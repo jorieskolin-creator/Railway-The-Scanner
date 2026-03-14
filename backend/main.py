@@ -1806,6 +1806,24 @@ def run_scan(
         except Exception as foresight_err:
             print(f"   ⚠️ [Foresight] Failed (non-fatal): {foresight_err}")
 
+        # --- STEP 2.7.5: MERGE DB FORESIGHT LINKS ---
+        # Reuse validated/verified links from previous scans stored in the database.
+        # New sources are added; existing validated ones are preserved (de-duped by URL).
+        if existing_data and existing_data.get("foresight_links"):
+            existing_fl = existing_data["foresight_links"]
+            new_urls = {l.get("url") for l in foresight_links if l.get("url")}
+            merged_count = 0
+            for efl in existing_fl:
+                if (efl.get("url")
+                    and efl["url"] not in new_urls
+                    and efl.get("verified") is True
+                    and efl.get("validated") is True):
+                    foresight_links.append(efl)
+                    new_urls.add(efl["url"])
+                    merged_count += 1
+            if merged_count:
+                print(f"   📎 [Foresight Links] Merged {merged_count} validated links from previous scan")
+
         # --- STEP 3: SYNTHESIS ---
         summary = "AI Summary Unavailable"
         pitch = "Pitch Unavailable"

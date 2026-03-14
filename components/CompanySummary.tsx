@@ -1064,36 +1064,46 @@ const CompanySummary = ({ data }) => {
                                     <h4 className="text-sm font-bold text-white">{force.trend}</h4>
                                     <p className="text-[11px] text-teal-400/70 font-medium mt-0.5 mb-2">{force.kb_dimension}{force.fp_theme ? ` · ${force.fp_theme}` : ''}</p>
                                     <p className="text-xs text-slate-300 leading-relaxed">{force.impact_on_company}</p>
-                                    <div className="flex flex-wrap items-center gap-3 mt-3 pt-3 border-t border-white/5">
-                                        {force.source_url && (
-                                            <a href={force.source_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-teal-400 hover:text-teal-300 flex items-center gap-1 transition-colors">
-                                                <ExternalLink size={10} /> Source
-                                            </a>
-                                        )}
-                                        {force.source_type && (
-                                            <span className="text-[10px] px-2 py-0.5 rounded bg-white/5 text-slate-400">{force.source_type}</span>
-                                        )}
-                                        {force.url_verified !== undefined && (
-                                            <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${force.url_verified ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
-                                                {force.url_verified ? 'verified' : 'unverified'}
-                                            </span>
-                                        )}
-                                        {force.source_credibility && (
-                                            <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${
-                                                force.source_credibility === 'high' ? 'bg-emerald-500/15 text-emerald-500' :
-                                                force.source_credibility === 'medium' ? 'bg-amber-500/15 text-amber-500' :
-                                                'bg-rose-500/15 text-rose-500'
-                                            }`}>
-                                                {force.source_credibility}
-                                            </span>
-                                        )}
-                                        {force.source_count > 0 && (
-                                            <span className="text-[9px] px-1.5 py-0.5 rounded font-mono bg-white/5 text-slate-400">
-                                                {force.source_count} source{force.source_count !== 1 ? 's' : ''}
-                                            </span>
+                                    <div className="mt-3 pt-3 border-t border-white/5 space-y-2">
+                                        <div className="flex flex-wrap items-center gap-3">
+                                            {force.source_url && (
+                                                <a href={force.source_url} target="_blank" rel="noopener noreferrer" className="text-[10px] text-teal-400 hover:text-teal-300 flex items-center gap-1 transition-colors">
+                                                    <ExternalLink size={10} /> Source
+                                                </a>
+                                            )}
+                                            {force.source_type && (
+                                                <span className="text-[10px] px-2 py-0.5 rounded bg-white/5 text-slate-400">{force.source_type}</span>
+                                            )}
+                                            {force.url_verified !== undefined && (
+                                                <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${force.url_verified ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
+                                                    {force.url_verified ? 'verified' : 'unverified'}
+                                                </span>
+                                            )}
+                                            {force.source_credibility && (
+                                                <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${
+                                                    force.source_credibility === 'high' ? 'bg-emerald-500/15 text-emerald-500' :
+                                                    force.source_credibility === 'medium' ? 'bg-amber-500/15 text-amber-500' :
+                                                    'bg-rose-500/15 text-rose-500'
+                                                }`}>
+                                                    {force.source_credibility}
+                                                </span>
+                                            )}
+                                        </div>
+                                        {/* Verified supporting sources (1-3 links per card) */}
+                                        {force.verified_supporting_sources?.length > 0 && (
+                                            <div className="flex flex-wrap gap-2">
+                                                {force.verified_supporting_sources.slice(0, 3).map((ss, si) => (
+                                                    <a key={si} href={ss.url} target="_blank" rel="noopener noreferrer"
+                                                       className="text-[10px] text-slate-400 hover:text-teal-300 flex items-center gap-1 transition-colors"
+                                                       title={ss.title || ss.url}>
+                                                        <ExternalLink size={9} />
+                                                        <span className="truncate max-w-[180px]">{ss.title || (() => { try { return new URL(ss.url).hostname.replace('www.', ''); } catch { return 'Source'; } })()}</span>
+                                                    </a>
+                                                ))}
+                                            </div>
                                         )}
                                         {force.osint_validation && (
-                                            <span className="text-[10px] text-slate-500 italic ml-auto">{force.osint_validation}</span>
+                                            <p className="text-[10px] text-slate-500 italic leading-relaxed">{force.osint_validation}</p>
                                         )}
                                     </div>
                                 </div>
