@@ -1762,7 +1762,10 @@ def run_scan(
         foresight_data = None
         foresight_links = []
         try:
-            from strategic_foresight import generate_foresight, validate_foresight_urls, reality_check_foresight, extract_foresight_links
+            from strategic_foresight import (
+                generate_foresight, validate_foresight_urls, reality_check_foresight,
+                extract_foresight_links, retry_failed_sources, enforce_source_quality_gate,
+            )
             foresight_start = time.time()
             foresight_data = generate_foresight(
                 company_name=companyName,
@@ -1777,14 +1780,27 @@ def run_scan(
                 print(f"   🔮 [Foresight] Complete: {len(foresight_data.get('dimension_forces', []))} forces ({foresight_ms}ms)")
 
                 # --- STEP 2.7.1: FORESIGHT VALIDATION ---
-                # URL verification (parallel HEAD/GET probes)
+                # URL verification (parallel HEAD/GET probes) for primary + supporting sources
                 foresight_data, fs_verified, fs_dead = validate_foresight_urls(foresight_data)
+
+                # --- STEP 2.7.2: SOURCE RETRY LOOP ---
+                # If too many sources failed, re-search with targeted Gemini call
+                if fs_verified == 0 or (fs_dead > 0 and fs_verified < len(foresight_data.get("dimension_forces", []))):
+                    foresight_data, newly_verified = retry_failed_sources(foresight_data, domain=company_domain)
+                    fs_verified += newly_verified
+
+                # --- STEP 2.7.3: QUALITY GATE ---
+                # Enforce minimum evidence thresholds before accepting foresight
+                foresight_data, passes_gate = enforce_source_quality_gate(foresight_data)
 
                 # Reality-check pass (SIFT-based source quality assessment)
                 foresight_data = reality_check_foresight(foresight_data, company_name=companyName)
 
                 # Extract validated sources into foresight_links (mirrors evidence_links schema)
                 foresight_links = extract_foresight_links(foresight_data, company_name=companyName)
+
+                if not passes_gate:
+                    print(f"   ⚠️ [Foresight] Insufficient evidence — foresight flagged as low-trust")
             else:
                 print(f"   ⚠️ [Foresight] Returned no data ({foresight_ms}ms)")
         except Exception as foresight_err:
