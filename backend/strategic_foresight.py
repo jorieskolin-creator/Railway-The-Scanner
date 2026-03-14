@@ -563,6 +563,7 @@ def _build_foresight_prompt(
     financial_index: int | None,
     top_findings: list[dict],
     domain_config: dict,
+    kb_context: str = "",
 ) -> str:
     """Build the foresight analysis prompt with domain-specific context."""
 
@@ -642,6 +643,7 @@ Industry-specific searches for {domain}:
 Theme-specific searches for {fp_themes}:
 {chr(10).join(f"- {s}" for s in theme_sources[:8]) if theme_sources else "- site:millennium-project.org OR site:iftf.org OR site:weforum.org megatrends"}
 
+{kb_context}
 ALLOWED SOURCE DOMAINS (use ONLY these for primary sources):
 Tier 1 (preferred analysts): gartner.com, forrester.com, mckinsey.com, bcg.com, deloitte.com, pwc.com, ey.com, kpmg.com, accenture.com, hbr.org, idc.com, isg-one.com
 Tier 2 (quality news): reuters.com, ft.com, bloomberg.com, economist.com, wsj.com, bbc.com
@@ -757,9 +759,25 @@ def generate_foresight(
         return None
 
     domain_config = DOMAIN_TO_FORESIGHT.get(domain, DOMAIN_TO_FORESIGHT["Other"])
+
+    # --- FORESIGHT KB INJECTION ---
+    # Check if pre-validated megatrend signals exist for this domain's themes.
+    # If so, inject them as grounding context — Gemini synthesizes company-specific
+    # implications from pre-validated evidence instead of searching from scratch.
+    kb_context = ""
+    try:
+        from foresight_harvester import get_kb_signals_for_themes, format_kb_signals_for_prompt
+        kb_signals = get_kb_signals_for_themes(domain_config["fp_themes"])
+        if kb_signals:
+            kb_context = format_kb_signals_for_prompt(kb_signals, max_signals=6)
+            print(f"   📚 [Foresight KB] Injecting {len(kb_signals)} pre-validated signals for themes: {', '.join(domain_config['fp_themes'])}")
+    except Exception as kb_err:
+        print(f"   ⚠️ [Foresight KB] Could not load KB signals (non-fatal): {kb_err}")
+
     prompt = _build_foresight_prompt(
         company_name, domain, archetype, reality_score,
         financial_index, top_findings, domain_config,
+        kb_context=kb_context,
     )
 
     client = genai.Client(api_key=gemini_key)

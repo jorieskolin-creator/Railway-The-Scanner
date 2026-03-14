@@ -73,6 +73,8 @@ const App = () => {
   const [enrichStakeholdersLoading, setEnrichStakeholdersLoading] = useState(false);
   const [enrichStakeholdersResults, setEnrichStakeholdersResults] = useState(null);
   const [enrichingStakeholderCompany, setEnrichingStakeholderCompany] = useState(null);
+  const [foresightKbLoading, setForesightKbLoading] = useState(false);
+  const [foresightKbStatus, setForesightKbStatus] = useState(null);
 
   const prevDataLengthRef = useRef(0);
 
@@ -504,6 +506,47 @@ const App = () => {
       }
     } catch (e) { console.error(e); alert("Enrich stakeholders failed."); }
     finally { setEnrichingStakeholderCompany(null); }
+  };
+
+  const handleRefreshForesightKb = async () => {
+    const password = prompt("AUTHENTICATION REQUIRED\n\nRefresh Foresight Knowledge Base?\nThis harvests megatrend signals from 30 FP themes (~15-20 min).\n\nEnter Admin Password:");
+    if (!password) return;
+    setForesightKbLoading(true);
+    setForesightKbStatus(null);
+    try {
+      const res = await fetch('/admin/refresh-foresight-kb', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${password}` }
+      });
+      if (res.status === 401) { alert("ACCESS DENIED: Incorrect Password."); setForesightKbLoading(false); return; }
+      if (res.status === 409) { alert("Foresight KB harvest already in progress."); setForesightKbLoading(false); return; }
+      if (res.ok) {
+        alert("Foresight KB harvest started! Harvesting 30 themes in background.\nCheck status with the status indicator.");
+        // Poll for completion
+        const pollInterval = setInterval(async () => {
+          try {
+            const statusRes = await fetch('/admin/foresight-kb-status');
+            if (statusRes.ok) {
+              const status = await statusRes.json();
+              setForesightKbStatus(status);
+              if (!status.harvest.is_running && status.harvest.completed_at) {
+                clearInterval(pollInterval);
+                setForesightKbLoading(false);
+                const r = status.harvest.result;
+                if (r && !r.error) {
+                  alert(`Foresight KB Harvest Complete!\n\n${r.harvested}/${r.harvested + r.failed} themes harvested\n${r.total_signals} signals stored`);
+                } else if (r && r.error) {
+                  alert(`Foresight KB Harvest Failed: ${r.error}`);
+                }
+              }
+            }
+          } catch (e) { /* ignore poll errors */ }
+        }, 10000);
+      } else {
+        alert("Foresight KB refresh failed: " + (await res.text()));
+        setForesightKbLoading(false);
+      }
+    } catch (e) { console.error(e); alert("Foresight KB refresh failed."); setForesightKbLoading(false); }
   };
 
   const handleSort = (key) => {
@@ -1332,6 +1375,15 @@ const App = () => {
                 >
                   {recheckLoading ? <Loader2 size={12} className="animate-spin" /> : <Eye size={12} />}
                   REALITY CHECK ALL
+                </button>
+                <button
+                  onClick={handleRefreshForesightKb}
+                  disabled={foresightKbLoading}
+                  className="flex items-center gap-1.5 px-3 py-1 bg-cyan-900/40 hover:bg-cyan-800/60 border border-cyan-600/50 text-cyan-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
+                  title="Harvest megatrend signals from 30 FP themes into the Foresight Knowledge Base"
+                >
+                  {foresightKbLoading ? <Loader2 size={12} className="animate-spin" /> : <Database size={12} />}
+                  {foresightKbLoading && foresightKbStatus?.harvest ? `KB ${foresightKbStatus.harvest.current}/${foresightKbStatus.harvest.total}` : 'REFRESH FORESIGHT KB'}
                 </button>
                 <button onClick={() => setIsDataReviewOpen(false)} className="text-slate-400 hover:text-white">
                   <X size={18} />

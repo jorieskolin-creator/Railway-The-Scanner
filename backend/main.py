@@ -1482,6 +1482,87 @@ def get_batch_status():
         return dict(_batch_state)
 
 
+# --- FORESIGHT KNOWLEDGE BASE ENDPOINTS ---
+
+_foresight_kb_state = {
+    "is_running": False,
+    "started_at": None,
+    "completed_at": None,
+    "current_theme": None,
+    "current": 0,
+    "total": 0,
+    "result": None,
+}
+_foresight_kb_lock = threading.Lock()
+
+
+def _run_foresight_kb_harvest():
+    """Background worker for foresight KB refresh."""
+    try:
+        from foresight_harvester import harvest_all_themes
+
+        def progress_cb(theme, index, total, status):
+            with _foresight_kb_lock:
+                _foresight_kb_state["current_theme"] = theme
+                _foresight_kb_state["current"] = index + 1
+                _foresight_kb_state["total"] = total
+
+        result = harvest_all_themes(progress_callback=progress_cb)
+
+        with _foresight_kb_lock:
+            _foresight_kb_state["result"] = result
+            _foresight_kb_state["completed_at"] = datetime.utcnow().isoformat()
+            _foresight_kb_state["is_running"] = False
+            _foresight_kb_state["current_theme"] = None
+    except Exception as e:
+        print(f"   ❌ [Foresight KB] Harvest failed: {e}")
+        with _foresight_kb_lock:
+            _foresight_kb_state["is_running"] = False
+            _foresight_kb_state["result"] = {"error": str(e)}
+            _foresight_kb_state["completed_at"] = datetime.utcnow().isoformat()
+
+
+@app.post("/admin/refresh-foresight-kb")
+def refresh_foresight_kb(request: Request):
+    """
+    Starts a full Foresight Knowledge Base harvest in a background thread.
+    Scans all 30 FP themes for megatrend signals, validates, and stores.
+    Returns immediately — poll /admin/foresight-kb-status for progress.
+    """
+    verify_admin(request)
+
+    with _foresight_kb_lock:
+        if _foresight_kb_state["is_running"]:
+            raise HTTPException(status_code=409, detail="Foresight KB harvest already in progress.")
+        _foresight_kb_state["is_running"] = True
+        _foresight_kb_state["current"] = 0
+        _foresight_kb_state["total"] = 30
+        _foresight_kb_state["current_theme"] = "Starting..."
+        _foresight_kb_state["started_at"] = datetime.utcnow().isoformat()
+        _foresight_kb_state["completed_at"] = None
+        _foresight_kb_state["result"] = None
+
+    thread = threading.Thread(target=_run_foresight_kb_harvest, daemon=True)
+    thread.start()
+
+    return {"status": "started", "total_themes": 30}
+
+
+@app.get("/admin/foresight-kb-status")
+def foresight_kb_status():
+    """Returns current Foresight KB harvest progress and stored KB summary. No auth required (read-only)."""
+    with _foresight_kb_lock:
+        harvest_state = dict(_foresight_kb_state)
+
+    # Also include stored KB metadata
+    try:
+        kb_meta = storage.get_foresight_kb_status()
+    except Exception:
+        kb_meta = None
+
+    return {"harvest": harvest_state, "kb": kb_meta}
+
+
 # --- MAIN SCAN ENDPOINT (MULTIPART) ---
 @app.post("/scan")
 def run_scan(
