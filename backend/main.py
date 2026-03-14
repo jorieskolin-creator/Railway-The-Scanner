@@ -1760,8 +1760,9 @@ def run_scan(
 
         # --- STEP 2.7: STRATEGIC FORESIGHT ---
         foresight_data = None
+        foresight_links = []
         try:
-            from strategic_foresight import generate_foresight
+            from strategic_foresight import generate_foresight, validate_foresight_urls, reality_check_foresight, extract_foresight_links
             foresight_start = time.time()
             foresight_data = generate_foresight(
                 company_name=companyName,
@@ -1774,6 +1775,16 @@ def run_scan(
             foresight_ms = int((time.time() - foresight_start) * 1000)
             if foresight_data:
                 print(f"   🔮 [Foresight] Complete: {len(foresight_data.get('dimension_forces', []))} forces ({foresight_ms}ms)")
+
+                # --- STEP 2.7.1: FORESIGHT VALIDATION ---
+                # URL verification (parallel HEAD/GET probes)
+                foresight_data, fs_verified, fs_dead = validate_foresight_urls(foresight_data)
+
+                # Reality-check pass (SIFT-based source quality assessment)
+                foresight_data = reality_check_foresight(foresight_data, company_name=companyName)
+
+                # Extract validated sources into foresight_links (mirrors evidence_links schema)
+                foresight_links = extract_foresight_links(foresight_data, company_name=companyName)
             else:
                 print(f"   ⚠️ [Foresight] Returned no data ({foresight_ms}ms)")
         except Exception as foresight_err:
@@ -2250,6 +2261,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                 "summary_text": (existing_data.get("summary_text", "") or "")[:2500],
                 "findings": existing_data.get("reality_checklist", [])[:10],
                 "evidence": existing_data.get("evidence_links", [])[:8],
+                "foresight_evidence": existing_data.get("foresight_links", [])[:5],
             })
             if len(history) > 12: history = history[-12:]
 
@@ -2312,6 +2324,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
             "financial_findings": financial_results.get("financial_findings", []),
             "financial_confidence": financial_results.get("financial_confidence", 0),
             "strategic_foresight": foresight_data,
+            "foresight_links": foresight_links,
         }
 
         # --- REALITY CHECK: Hallucination Detection ---

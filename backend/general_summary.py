@@ -83,6 +83,17 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
         if l.get("verified") is True and l.get("url") and not _is_legal_page(l.get("url", ""))
     ][:14]
 
+    # Add validated foresight sources to the evidence pool (max 3, validated only)
+    foresight_sources = [
+        {
+            "title": (l.get("title", "Foresight") or "Foresight")[:55],
+            "snippet": (l.get("snippet") or "")[:180],
+        }
+        for l in full_data.get("foresight_links", [])
+        if l.get("verified") is True and l.get("validated") is True
+    ][:3]
+    verified_links = verified_links + foresight_sources
+
     # Key jury findings — descriptions only, no URLs, no legal pages.
     key_findings = [
         {

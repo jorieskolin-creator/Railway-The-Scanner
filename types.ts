@@ -13,6 +13,21 @@ interface EvidenceLink {
   source: string;
 }
 
+interface ForesightLink {
+  title: string;
+  url: string;
+  snippet: string;
+  source_type: string;
+  verified: boolean;
+  source_credibility: string;
+  validated: boolean;
+  kb_dimension: string;
+  fp_theme: string;
+  timeframe: string;
+  force_type: string;
+  origin: string; // always "foresight"
+}
+
 interface LinkedInInsights {
   found: boolean;
   headline?: string | null;
@@ -64,6 +79,7 @@ interface AnalysisResult {
   washing_flag?: boolean; // NEW: Washing Flag
   washing_type?: string | null; // NEW: AI Washing, Agile Washing, etc.
   evidence_links: EvidenceLink[];
+  foresight_links?: ForesightLink[]; // Validated foresight source links
   key_people?: KeyPerson[];
   summary_text: string;
   pitch_text?: string; // NEW: Strategic Pitch

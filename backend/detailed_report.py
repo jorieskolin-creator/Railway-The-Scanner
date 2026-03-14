@@ -67,6 +67,7 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
             delta = {"previous_scan_date": prev_date, "changes": parts}
 
     # Evidence — richer than general_summary (20 sources, 300-char snippets)
+    # Includes both forensic evidence_links and validated foresight_links
     verified_links = [
         {
             "title": (l.get("title", "Source") or "Source")[:80],
@@ -75,6 +76,18 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
         for l in full_data.get("evidence_links", [])
         if l.get("verified") is True and l.get("url") and not _is_legal_page(l.get("url", ""))
     ][:20]
+
+    # Add validated foresight sources (enriches the evidence pool with forward-looking sources)
+    foresight_links = [
+        {
+            "title": (l.get("title", "Foresight Source") or "Foresight Source")[:80],
+            "snippet": (l.get("snippet") or "")[:300],
+            "origin": "foresight",
+            "source_type": l.get("source_type", ""),
+        }
+        for l in full_data.get("foresight_links", [])
+        if l.get("verified") is True and l.get("validated") is True
+    ][:5]
 
     # Key findings — more detail (12 items)
     key_findings = [
@@ -120,7 +133,7 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
         "financial_index": full_data.get("financial_index"),
         "financial_sub_scores": fin_sub,
         "key_findings": key_findings,
-        "evidence_links": verified_links,
+        "evidence_links": verified_links + foresight_links,
         "financial_findings": fin_findings,
         "key_people": people,
         "washing": washing,

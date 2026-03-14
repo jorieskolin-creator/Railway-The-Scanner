@@ -744,9 +744,18 @@ const CompanySummary = ({ data }) => {
 
             <div className="flex-grow overflow-y-auto max-h-[450px] pr-2 space-y-3 custom-scrollbar">
                 {(() => {
-                    // Merge current + historical evidence, de-duped by URL
+                    // Merge current + historical + foresight evidence, de-duped by URL
                     const currentLinks = (data.evidence_links || []).map(l => ({ ...l, _scan: 'current' }));
                     const seenUrls = new Set(currentLinks.map(l => l.url).filter(Boolean));
+
+                    // Add validated foresight sources (origin: "foresight")
+                    const foresightLinks = (data.foresight_links || [])
+                        .filter(l => l.url && !seenUrls.has(l.url))
+                        .map(l => {
+                            seenUrls.add(l.url);
+                            return { ...l, _scan: 'foresight' };
+                        });
+
                     const historyLinks = [];
                     if (data.history && data.history.length > 0) {
                         for (const h of [...data.history].reverse()) {
@@ -757,9 +766,16 @@ const CompanySummary = ({ data }) => {
                                     historyLinks.push({ ...ev, _scan: scanDate });
                                 }
                             }
+                            // Include historical foresight sources
+                            for (const fev of (h.foresight_evidence || [])) {
+                                if (fev.url && !seenUrls.has(fev.url)) {
+                                    seenUrls.add(fev.url);
+                                    historyLinks.push({ ...fev, _scan: scanDate + ' foresight' });
+                                }
+                            }
                         }
                     }
-                    const allLinks = [...currentLinks, ...historyLinks];
+                    const allLinks = [...currentLinks, ...foresightLinks, ...historyLinks];
                     const extractDomain = (url) => { try { return new URL(url).hostname.replace('www.', ''); } catch { return url; } };
 
                     if (allLinks.length === 0) {
@@ -789,9 +805,23 @@ const CompanySummary = ({ data }) => {
                                     )}
                                     <div className="flex items-center gap-2 mt-1">
                                         <span className="text-[10px] text-slate-500 font-mono truncate">{link.source || extractDomain(link.url)}</span>
-                                        {link._scan !== 'current' && (
+                                        {link._scan === 'foresight' && (
+                                            <span className="text-[9px] bg-teal-500/20 text-teal-400 px-1.5 py-0.5 rounded font-mono shrink-0">
+                                                foresight
+                                            </span>
+                                        )}
+                                        {link._scan !== 'current' && link._scan !== 'foresight' && (
                                             <span className="text-[9px] bg-slate-700/60 text-slate-400 px-1.5 py-0.5 rounded font-mono shrink-0">
                                                 {link._scan}
+                                            </span>
+                                        )}
+                                        {link.source_credibility && link._scan === 'foresight' && (
+                                            <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono shrink-0 ${
+                                                link.source_credibility === 'high' ? 'bg-emerald-500/20 text-emerald-400' :
+                                                link.source_credibility === 'medium' ? 'bg-amber-500/20 text-amber-400' :
+                                                'bg-rose-500/20 text-rose-400'
+                                            }`}>
+                                                {link.source_credibility}
                                             </span>
                                         )}
                                         {link.verified === false && (
@@ -978,6 +1008,27 @@ const CompanySummary = ({ data }) => {
             return (
                 <div className="space-y-5 mt-6">
 
+                    {/* Validation Summary Badge */}
+                    {sf.validation_summary && (
+                        <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl bg-white/5 border border-white/10">
+                            <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${
+                                sf.validation_summary.quality === 'high' ? 'bg-emerald-500/20 text-emerald-400' :
+                                sf.validation_summary.quality === 'medium' ? 'bg-amber-500/20 text-amber-400' :
+                                'bg-rose-500/20 text-rose-400'
+                            }`}>
+                                {sf.validation_summary.quality} quality
+                            </span>
+                            <span className="text-[10px] text-slate-400">
+                                {sf.validation_summary.validated_forces}/{sf.validation_summary.total_forces} sources validated
+                            </span>
+                            {sf.validation_summary.flagged_forces > 0 && (
+                                <span className="text-[10px] text-amber-500/70">
+                                    · {sf.validation_summary.flagged_forces} flagged
+                                </span>
+                            )}
+                        </div>
+                    )}
+
                     {/* 2. Dimension Force Cards */}
                     <div className="grid grid-cols-1 gap-4">
                         {sf.dimension_forces.map((force, i) => {
@@ -1009,6 +1060,20 @@ const CompanySummary = ({ data }) => {
                                         )}
                                         {force.source_type && (
                                             <span className="text-[10px] px-2 py-0.5 rounded bg-white/5 text-slate-400">{force.source_type}</span>
+                                        )}
+                                        {force.url_verified !== undefined && (
+                                            <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${force.url_verified ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
+                                                {force.url_verified ? 'verified' : 'unverified'}
+                                            </span>
+                                        )}
+                                        {force.source_credibility && (
+                                            <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${
+                                                force.source_credibility === 'high' ? 'bg-emerald-500/15 text-emerald-500' :
+                                                force.source_credibility === 'medium' ? 'bg-amber-500/15 text-amber-500' :
+                                                'bg-rose-500/15 text-rose-500'
+                                            }`}>
+                                                {force.source_credibility}
+                                            </span>
                                         )}
                                         {force.osint_validation && (
                                             <span className="text-[10px] text-slate-500 italic ml-auto">{force.osint_validation}</span>

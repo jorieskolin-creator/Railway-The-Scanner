@@ -4,6 +4,11 @@ strategic_foresight.py — Strategic Foresight module for forward-looking analys
 Generates per-dimension industry forces, cross-impact chains, micro-scenarios,
 and optional climate exposure assessment. Uses Gemini + Google Search grounding.
 
+Includes post-generation validation:
+- URL verification (HEAD/GET probe) for all source_url fields
+- Reality-check pass (source quality, confidence calibration, claim plausibility)
+- Extraction of validated sources into foresight_links (mirrors evidence_links schema)
+
 Methodology inspired by Futures Platform's 30-theme taxonomy (NAICS/SIC-based)
 and SIFT/Lateral Reading OSINT validation principles.
 """
@@ -12,6 +17,7 @@ import json
 import os
 import re
 import time
+import concurrent.futures
 
 from google import genai
 from google.genai import types as genai_types
@@ -576,3 +582,305 @@ Output only the prose text. Nothing else."""
             continue
 
     return "", ""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FORESIGHT VALIDATION — URL verification + reality-check pass
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Valid source types that the SIFT protocol considers credible
+_CREDIBLE_SOURCE_TYPES = {"academic", "think_tank", "industry_analyst", "government", "news"}
+
+# Domains known to be high-credibility sources
+_HIGH_CREDIBILITY_DOMAINS = {
+    "oecd.org", "mckinsey.com", "bcg.com", "hbr.org", "gartner.com",
+    "forrester.com", "idc.com", "weforum.org", "imf.org", "worldbank.org",
+    "ec.europa.eu", "deloitte.com", "pwc.com", "ey.com", "kpmg.com",
+    "reuters.com", "ft.com", "bloomberg.com", "economist.com",
+    "nature.com", "sciencedirect.com", "arxiv.org", "ssrn.com",
+    "ieee.org", "acm.org", "nist.gov", "europa.eu", "un.org",
+}
+
+# Domains that indicate low-credibility or marketing sources
+_LOW_CREDIBILITY_DOMAINS = {
+    "medium.com", "wordpress.com", "blogspot.com", "substack.com",
+    "pr.com", "prnewswire.com", "businesswire.com", "globenewswire.com",
+}
+
+
+def _verify_foresight_url(url, timeout=4):
+    """
+    Verify a single foresight URL exists via HTTP HEAD request.
+    Returns True if the URL responds with a success/redirect status (2xx, 3xx).
+    Returns False for 4xx, 5xx, timeouts, or connection errors.
+    Mirrors scanner_two._verify_url for consistent verification behavior.
+    """
+    if not url or not url.startswith("http"):
+        return False
+    try:
+        import requests as http_requests
+        resp = http_requests.head(
+            url, timeout=timeout, allow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; AdaptabilityScanner/1.0)"},
+        )
+        return resp.status_code < 400
+    except Exception:
+        # Timeout, connection error, SSL error — try GET as fallback
+        try:
+            import requests as http_requests
+            resp = http_requests.get(
+                url, timeout=timeout, allow_redirects=True, stream=True,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; AdaptabilityScanner/1.0)"},
+            )
+            resp.close()
+            return resp.status_code < 400
+        except Exception:
+            return False
+
+
+def _get_url_domain(url):
+    """Extract the domain from a URL, stripping www. prefix."""
+    if not url:
+        return ""
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        domain = parsed.netloc
+        if domain.startswith("www."):
+            domain = domain[4:]
+        return domain.lower()
+    except Exception:
+        return ""
+
+
+def validate_foresight_urls(foresight_data, max_workers=6):
+    """
+    URL Validation Gate for foresight signals.
+
+    Verifies source_url in each dimension_force via parallel HEAD/GET probes.
+    Adds 'url_verified' field (True/False) to each force.
+    Returns (foresight_data, verified_count, dead_count).
+    """
+    if not foresight_data or not foresight_data.get("dimension_forces"):
+        return foresight_data, 0, 0
+
+    start = time.time()
+    forces = foresight_data["dimension_forces"]
+
+    # Collect unique URLs to check
+    url_map = {}
+    for force in forces:
+        url = (force.get("source_url") or "").strip()
+        if url and url.startswith("http") and url not in url_map:
+            url_map[url] = None
+
+    if not url_map:
+        for force in forces:
+            force["url_verified"] = False
+        return foresight_data, 0, 0
+
+    # Verify in parallel
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_url = {executor.submit(_verify_foresight_url, url): url for url in url_map}
+        for future in concurrent.futures.as_completed(future_to_url):
+            url = future_to_url[future]
+            try:
+                url_map[url] = future.result()
+            except Exception:
+                url_map[url] = False
+
+    # Apply results to forces
+    verified_count = 0
+    dead_count = 0
+    for force in forces:
+        url = (force.get("source_url") or "").strip()
+        if url and url in url_map:
+            force["url_verified"] = url_map[url]
+            if url_map[url]:
+                verified_count += 1
+            else:
+                dead_count += 1
+        else:
+            force["url_verified"] = False
+
+    elapsed = int((time.time() - start) * 1000)
+    total = verified_count + dead_count
+    print(f"   🔗 [Foresight URL Validation] {verified_count}/{total} URLs verified, {dead_count} dead/unreachable ({elapsed}ms)")
+
+    return foresight_data, verified_count, dead_count
+
+
+def reality_check_foresight(foresight_data, company_name=""):
+    """
+    Reality-check pass for foresight signals — SIFT-based quality assessment.
+
+    Evaluates each dimension_force for:
+    - Source credibility (source_type + domain reputation)
+    - URL verification status
+    - OSINT validation quality
+    - Confidence calibration
+
+    Adds per-force fields:
+    - 'source_credibility': "high" | "medium" | "low"
+    - 'validation_flags': list of warning strings
+    - 'validated': True if force passes minimum quality threshold
+
+    Adds aggregate fields to foresight_data:
+    - 'validation_summary': dict with counts and overall quality assessment
+    """
+    if not foresight_data or not foresight_data.get("dimension_forces"):
+        return foresight_data
+
+    forces = foresight_data["dimension_forces"]
+    total_validated = 0
+    total_flagged = 0
+    all_flags = []
+
+    for force in forces:
+        flags = []
+        source_url = (force.get("source_url") or "").strip()
+        source_type = (force.get("source_type") or "").strip().lower()
+        confidence = (force.get("confidence") or "").strip().lower()
+        osint_validation = (force.get("osint_validation") or "").strip()
+        url_verified = force.get("url_verified", False)
+        domain = _get_url_domain(source_url)
+
+        # --- Source type validation ---
+        if source_type not in _CREDIBLE_SOURCE_TYPES:
+            flags.append(f"Unknown source type: '{source_type}'")
+
+        # --- URL verification ---
+        if not source_url or not source_url.startswith("http"):
+            flags.append("No source URL provided")
+        elif not url_verified:
+            flags.append("Source URL could not be verified (dead/unreachable)")
+
+        # --- Domain credibility assessment ---
+        credibility = "medium"  # default
+        if domain:
+            if domain in _HIGH_CREDIBILITY_DOMAINS or any(domain.endswith("." + hcd) for hcd in _HIGH_CREDIBILITY_DOMAINS):
+                credibility = "high"
+            elif domain in _LOW_CREDIBILITY_DOMAINS or any(domain.endswith("." + lcd) for lcd in _LOW_CREDIBILITY_DOMAINS):
+                credibility = "low"
+                flags.append(f"Low-credibility domain: {domain}")
+            elif source_type in ("academic", "government", "think_tank"):
+                credibility = "high"
+            elif source_type == "industry_analyst":
+                credibility = "medium"
+
+            # Company self-reporting check (SIFT principle: investigate the source)
+            company_name_lower = company_name.lower().replace(" ", "") if company_name else ""
+            if company_name_lower and company_name_lower in domain.replace(".", ""):
+                flags.append("Source appears to be company's own website — may be self-reported")
+                credibility = "low"
+        else:
+            credibility = "low"
+            if source_url:
+                flags.append("Could not extract domain from URL")
+
+        # --- OSINT validation quality ---
+        if not osint_validation:
+            flags.append("No OSINT validation description provided")
+        elif len(osint_validation) < 20:
+            flags.append("OSINT validation description too brief")
+
+        # --- Confidence calibration ---
+        # Downgrade confidence if URL is dead or source is low-credibility
+        if confidence == "high" and (not url_verified or credibility == "low"):
+            force["confidence"] = "medium"
+            flags.append(f"Confidence downgraded from high to medium (url_verified={url_verified}, credibility={credibility})")
+        elif confidence == "medium" and not url_verified and credibility == "low":
+            force["confidence"] = "low"
+            flags.append("Confidence downgraded from medium to low (unverified + low-credibility)")
+
+        # --- Determine validation status ---
+        # A force is "validated" if it has a verified URL from a credible source
+        validated = url_verified and credibility in ("high", "medium") and len(flags) <= 2
+        force["source_credibility"] = credibility
+        force["validation_flags"] = flags
+        force["validated"] = validated
+
+        if validated:
+            total_validated += 1
+        if flags:
+            total_flagged += 1
+            all_flags.extend(flags)
+
+    # --- Aggregate validation summary ---
+    total_forces = len(forces)
+    quality = "high" if total_validated == total_forces else (
+        "medium" if total_validated >= total_forces * 0.5 else "low"
+    )
+
+    foresight_data["validation_summary"] = {
+        "total_forces": total_forces,
+        "validated_forces": total_validated,
+        "flagged_forces": total_flagged,
+        "quality": quality,
+        "all_flags": all_flags[:20],  # cap to prevent bloat
+    }
+
+    print(f"   🔍 [Foresight Reality Check] {total_validated}/{total_forces} forces validated, "
+          f"quality={quality}, {len(all_flags)} total flags")
+
+    return foresight_data
+
+
+def extract_foresight_links(foresight_data, company_name=""):
+    """
+    Extract validated foresight sources into a foresight_links array
+    that mirrors the evidence_links schema used throughout the Scanner.
+
+    Each link has:
+    - title: Force trend name
+    - url: source_url
+    - snippet: impact_on_company text
+    - source_type: academic/think_tank/etc.
+    - verified: True/False (from URL verification)
+    - source_credibility: high/medium/low (from reality check)
+    - validated: True/False (passed quality threshold)
+    - kb_dimension: Which KB dimension this force impacts
+    - fp_theme: Futures Platform theme
+    - timeframe: Force timeframe
+    - force_type: Plausible/Maturing, etc.
+    - origin: "foresight" (to distinguish from forensic evidence_links)
+
+    Returns list of foresight_link dicts, sorted by credibility (high first).
+    """
+    if not foresight_data or not foresight_data.get("dimension_forces"):
+        return []
+
+    links = []
+    for force in foresight_data["dimension_forces"]:
+        source_url = (force.get("source_url") or "").strip()
+        if not source_url or not source_url.startswith("http"):
+            continue
+
+        link = {
+            "title": force.get("trend", "Unknown Force"),
+            "url": source_url,
+            "snippet": (force.get("impact_on_company") or "")[:300],
+            "source_type": force.get("source_type", "unknown"),
+            "verified": force.get("url_verified", False),
+            "source_credibility": force.get("source_credibility", "unknown"),
+            "validated": force.get("validated", False),
+            "kb_dimension": force.get("kb_dimension", ""),
+            "fp_theme": force.get("fp_theme", ""),
+            "timeframe": force.get("timeframe", ""),
+            "force_type": force.get("type", ""),
+            "origin": "foresight",
+        }
+        links.append(link)
+
+    # Sort: validated first, then by credibility
+    credibility_order = {"high": 0, "medium": 1, "low": 2, "unknown": 3}
+    links.sort(key=lambda l: (
+        0 if l["validated"] else 1,
+        credibility_order.get(l["source_credibility"], 3),
+    ))
+
+    if links:
+        validated_count = sum(1 for l in links if l["validated"])
+        print(f"   📎 [Foresight Links] Extracted {len(links)} source links ({validated_count} validated)")
+
+    return links
