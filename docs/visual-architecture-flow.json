@@ -1,0 +1,792 @@
+{
+  "document_type": "Visual Architecture & Thinking Process",
+  "application": "Adaptability Scanner — Forensic Modernization Intelligence",
+  "version": "1.0",
+  "purpose": "Step-by-step visual description of how the application thinks, processes, and creates outcomes at each phase. Designed for visual rendering and stakeholder communication.",
+  "safe_to_share": true,
+
+  "overview": {
+    "tagline": "Detect the gap between what companies SAY and what EVIDENCE shows they actually ARE",
+    "core_formula": "Reality Gap = Intent Score - Reality Score",
+    "total_phases": 9,
+    "ai_models_used": [
+      "Claude Sonnet 4.6 (Extended Thinking + Brave Web Search) — Primary reality scanner",
+      "Claude Opus 4.6 (Extended Thinking, 10K budget) — Primary synthesis engine",
+      "Gemini 3.1 Pro (Google Search grounding) — Fact-checker + fallback",
+      "Gemini 3 Pro — Fallback synthesis",
+      "Gemini 2.5 Pro — Last-resort fallback",
+      "Rule-based keyword engine — Intent analysis (no AI model)"
+    ],
+    "agentic_ai_patterns": [
+      "5-Jury Autonomous Evidence Hunting (Phase 3)",
+      "Confidence-Driven Research Loops (Phase 3)",
+      "Self-Analysis & Score Drift Detection (Phase 5)",
+      "Autonomous Foresight KB Harvesting (Phase 1)",
+      "Delta Verification Re-scan (Phase 3)",
+      "Evidence Recovery Agent (Phase 3)",
+      "Blind Cross-Verification Agent (Phase 6)"
+    ]
+  },
+
+  "flow": [
+    {
+      "phase_id": "PHASE_0",
+      "name": "Knowledge Base Foundation",
+      "icon": "brain",
+      "color": "#8b5cf6",
+      "category": "foundation",
+      "short_description": "The shared vocabulary that grounds ALL analysis",
+      "what_happens": "Before any scan runs, the system maintains a centralized Knowledge Base (KB) that defines the vocabulary, dimensions, archetypes, and anti-patterns. This ensures every AI model and every phase speaks the same language.",
+      "five_dimensions": [
+        {
+          "name": "Operating Model",
+          "good_signals": ["Autonomy", "Stream-aligned teams", "Flow efficiency", "Platform teams", "Cross-functional", "Distributed authority"],
+          "bad_signals": ["Command-and-control", "Functional silos", "Waterfall", "Micromanagement", "Digital Taylorism"],
+          "what_it_measures": "How the company organizes work and decision-making"
+        },
+        {
+          "name": "Strategy",
+          "good_signals": ["Adaptive", "Customer-centric", "Digital transformation with execution", "North Star", "Emergent strategy"],
+          "bad_signals": ["Static", "Top-down", "Cost-cutting only", "Budget-driven", "Reactive"],
+          "what_it_measures": "How the company plans and adapts to change"
+        },
+        {
+          "name": "Culture & Values",
+          "good_signals": ["Psychological safety", "Learning culture", "Trust", "Talent retention", "Empowerment"],
+          "bad_signals": ["Compliance-driven", "Fear culture", "High turnover", "Blame culture", "Control"],
+          "what_it_measures": "The human side — can people thrive and innovate?"
+        },
+        {
+          "name": "Service Portfolio",
+          "good_signals": ["SaaS", "API-first", "Platform", "Composable", "Product-led", "Recurring revenue"],
+          "bad_signals": ["Legacy project-based", "Monolithic", "Consulting hours", "Feature factory", "Vendor lock-in"],
+          "what_it_measures": "What they sell and how modern their offerings are"
+        },
+        {
+          "name": "AI Readiness",
+          "good_signals": ["Data platforms", "ML adoption", "R&D publications", "Cloud-native", "Augmented workflows"],
+          "bad_signals": ["Spreadsheets", "Legacy systems", "AI buzzwords without adoption", "Pilot purgatory"],
+          "what_it_measures": "Technical maturity and readiness for AI-driven transformation"
+        }
+      ],
+      "four_archetypes": {
+        "Thriving": { "condition": "Reality >= 50 AND Financial >= 50", "meaning": "Modern operations AND healthy business", "color": "#10b981" },
+        "Modernizing": { "condition": "Reality >= 50 AND Financial < 50", "meaning": "Strong ops but financial pressure — investing in transformation", "color": "#22d3ee" },
+        "Cash Cow": { "condition": "Reality < 50 AND Financial >= 50", "meaning": "Profitable but operationally outdated — living on legacy advantages", "color": "#f59e0b" },
+        "At Risk": { "condition": "Reality < 50 AND Financial < 50", "meaning": "Both operations and finances under pressure — unsustainable", "color": "#fb7185" }
+      },
+      "anti_patterns_detected": ["Digital Taylorism", "Pilot Purgatory", "Innovation Theatre", "Modernization Washing", "AI Washing", "Agile Washing", "Green Washing"],
+      "ai_model_used": "None — curated human expertise encoded as structured data",
+      "agentic_ai": false,
+      "outputs": ["Shared vocabulary for all phases", "Scoring dimensions", "Archetype classification rules", "Anti-pattern detection patterns"]
+    },
+
+    {
+      "phase_id": "PHASE_1",
+      "name": "Foresight Knowledge Base Harvesting",
+      "icon": "telescope",
+      "color": "#14b8a6",
+      "category": "foresight",
+      "short_description": "Autonomous AI agent harvests megatrend signals from 30 futures themes",
+      "what_happens": "An autonomous AI agent searches the web for megatrend signals across 30 strategic foresight (FP) themes. Each theme is mapped to Knowledge Base dimensions. The agent harvests signals, classifies their force type, timeframe, and confidence, then stores them for later use during company scans.",
+      "thinking_process": [
+        {
+          "step": 1,
+          "action": "Theme Selection",
+          "detail": "System iterates through 30 pre-defined Futures Platform (FP) themes covering technology, society, economy, environment, and governance"
+        },
+        {
+          "step": 2,
+          "action": "AI Web Search per Theme",
+          "detail": "For each theme, AI performs live web searches to find recent signals, reports, and evidence of emerging trends"
+        },
+        {
+          "step": 3,
+          "action": "Signal Classification",
+          "detail": "Each signal is classified by: force_type (Probable/Emerging, Plausible/Maturing, Weakening/Declining, Preposterous/Black Swan), timeframe (6-12mo, 12-24mo, 24-36mo), and confidence (high/medium/low)"
+        },
+        {
+          "step": 4,
+          "action": "KB Dimension Mapping",
+          "detail": "Each signal is mapped to one or more of the 5 Knowledge Base dimensions so it can later be applied to company-specific analysis"
+        },
+        {
+          "step": 5,
+          "action": "Source Verification",
+          "detail": "URLs are verified via HTTP. Source credibility is assessed (high/medium/low). Only verified signals are stored."
+        },
+        {
+          "step": 6,
+          "action": "Storage",
+          "detail": "Harvested signals are stored in the Foresight Knowledge Base for use during company scans. ~15-20 minutes for full harvest."
+        }
+      ],
+      "ai_model_used": "Gemini 3.1 Pro with Google Search grounding",
+      "agentic_ai": true,
+      "agentic_pattern": "Autonomous harvest agent — iterates 30 themes, searches web, classifies signals, verifies sources, stores results. Runs ~15-20 minutes unattended.",
+      "trigger": "Admin-initiated (manual) or scheduled",
+      "duration": "15-20 minutes for 30 themes",
+      "outputs": ["Foresight signals database", "Per-theme megatrend evidence", "Classified force types and timeframes", "Verified source URLs"]
+    },
+
+    {
+      "phase_id": "PHASE_2",
+      "name": "Scan Initiation & Data Collection",
+      "icon": "input",
+      "color": "#6366f1",
+      "category": "input",
+      "short_description": "User provides company name + optional sources; system auto-discovers URL",
+      "what_happens": "The scan begins when a user enters a company name. The system auto-discovers the company URL if not provided. Users can optionally upload internal documents (PDF/HTML, max 3 files, 10MB each) and paste additional narrative text. The system also supports URL-based auto-scraping.",
+      "inputs": [
+        {
+          "name": "Company Name",
+          "required": true,
+          "example": "Kone, Neste, Nokia",
+          "how_used": "Primary identifier for all searches and storage"
+        },
+        {
+          "name": "Company URL",
+          "required": false,
+          "auto_discovered": true,
+          "example": "https://www.kone.com",
+          "how_used": "Enables website scraping for narrative text; AI auto-discovers if left blank"
+        },
+        {
+          "name": "Internal Documents",
+          "required": false,
+          "formats": ["PDF", "HTML"],
+          "limits": "Max 3 files, 10MB each",
+          "how_used": "Extracted text feeds into Intent Analysis for deep-dive scoring"
+        },
+        {
+          "name": "Narrative Text",
+          "required": false,
+          "example": "Annual report text, strategy documents, 'About Us' content",
+          "how_used": "Direct text input for Intent Analysis keyword scanning"
+        }
+      ],
+      "auto_discovery": {
+        "description": "When user enters company name and leaves URL blank, system calls /api/find-url to auto-discover the company website",
+        "ai_model_used": "Backend AI URL resolution"
+      },
+      "ai_model_used": "None for input collection (AI used for URL auto-discovery)",
+      "agentic_ai": false,
+      "outputs": ["Company name", "Company URL (auto or manual)", "Extracted document text", "Narrative text", "Scan configuration"]
+    },
+
+    {
+      "phase_id": "PHASE_3",
+      "name": "Scanner 1: Intent Analysis",
+      "icon": "search-text",
+      "color": "#818cf8",
+      "category": "analysis",
+      "short_description": "Rule-based keyword engine measures narrative ambition across 5 dimensions",
+      "what_happens": "The system scans ALL collected text (website content, uploaded documents, pasted text) for positive and negative keywords defined in the Knowledge Base. This produces the Intent Score — a measure of how ambitious the company's narrative is.",
+      "question_it_answers": "How ambitious is this company's narrative compared to typical companies?",
+      "thinking_process": [
+        {
+          "step": 1,
+          "action": "Text Aggregation",
+          "detail": "Combine website scraped text + uploaded document text + user-pasted text into single corpus"
+        },
+        {
+          "step": 2,
+          "action": "Keyword Scanning per Dimension",
+          "detail": "For each of the 5 KB dimensions, scan text for positive keywords (e.g., 'Autonomy', 'Platform', 'SaaS') and negative keywords (e.g., 'Silos', 'Legacy', 'Waterfall'). Each dimension has 25 positive and 25 negative keywords."
+        },
+        {
+          "step": 3,
+          "action": "Negation Detection",
+          "detail": "Phrases like 'we avoid waterfall' or 'moving away from silos' are NOT counted as negative signals. Prevents false positives."
+        },
+        {
+          "step": 4,
+          "action": "Word Boundary Matching",
+          "detail": "Regex word-boundary matching prevents partial-word false hits (e.g., 'platform' in 'platforming' context)"
+        },
+        {
+          "step": 5,
+          "action": "Threshold Counting",
+          "detail": "Good keywords require >= 3 mentions to count as a signal. Bad keywords require >= 1 mention. This prevents noise from single casual mentions."
+        },
+        {
+          "step": 6,
+          "action": "Net Score Calculation",
+          "detail": "Per dimension: net_result = unique_good_found - unique_bad_found. Category score = (net_result / 25) * 100, capped at 100."
+        },
+        {
+          "step": 7,
+          "action": "Global Intent Score",
+          "detail": "Average of all dimension scores. Also calculates Friction Index (contradictory signals) and Vibrancy Score (keyword density)."
+        },
+        {
+          "step": 8,
+          "action": "Text Length Normalization",
+          "detail": "Short documents are not penalized; long documents are not inflated. Prevents length bias."
+        }
+      ],
+      "ai_model_used": "None — Rule-based keyword analysis engine",
+      "agentic_ai": false,
+      "why_no_ai": "Keyword matching is deterministic, fast, and reproducible. AI would add latency and non-determinism without improving accuracy for this specific task.",
+      "languages_supported": ["English", "Finnish", "French"],
+      "outputs": {
+        "intent_score": "0-100, average ambition across all 5 dimensions",
+        "per_dimension_breakdown": "Individual scores per dimension with matched keyword counts",
+        "friction_index": "0-1, degree of contradictory messaging (high = mixed signals)",
+        "vibrancy_score": "0-100, keyword density / richness of narrative"
+      },
+      "accuracy_safeguards": [
+        "Negation detection prevents false positives",
+        "Word boundary checks prevent partial matches",
+        "Threshold counting prevents noise from single mentions",
+        "Text length normalization prevents size bias",
+        "High friction index flags contradictory messaging for human review"
+      ]
+    },
+
+    {
+      "phase_id": "PHASE_4",
+      "name": "Scanner 2: Reality Check (5-Jury Agentic Model)",
+      "icon": "shield-search",
+      "color": "#06b6d4",
+      "category": "analysis",
+      "short_description": "Five autonomous AI jury-agents independently hunt for real-world evidence",
+      "what_happens": "This is the core agentic AI phase. Five independent AI 'jury' agents each search the live web for evidence in their specialist area. They operate autonomously, making search decisions, evaluating evidence quality, and scoring independently. The system then aggregates their findings.",
+      "question_it_answers": "What does independent external evidence ACTUALLY show about this company's operational maturity?",
+      "runs_in_parallel_with": ["PHASE_4B (Financial Health Index)"],
+      "thinking_process": [
+        {
+          "step": 1,
+          "action": "Jury Deployment (5 Independent Agents)",
+          "detail": "Five specialist jury-agents are launched, each with their own search strategy and evaluation criteria. They operate independently and do not see each other's results.",
+          "sub_agents": {
+            "jury_1_architecture": {
+              "name": "Architecture & Engineering Jury",
+              "searches_for": "GitHub repos, engineering blogs, tech stacks, job postings, DevOps evidence",
+              "determines": "Modern vs legacy architecture. Platform engineering adoption. Technical debt indicators."
+            },
+            "jury_2_strategy": {
+              "name": "Strategy & Finance Jury",
+              "searches_for": "Annual reports, financial databases, investment signals, M&A activity",
+              "determines": "Are they investing in digital transformation? Is strategy adaptive or static?"
+            },
+            "jury_3_culture": {
+              "name": "Culture & Talent Jury",
+              "searches_for": "Glassdoor reviews, LinkedIn hiring patterns, meetup sponsorships, employer branding",
+              "determines": "Can they retain talent? Is psychological safety real or performative?"
+            },
+            "jury_4_ai_data": {
+              "name": "AI & Data Maturity Jury",
+              "searches_for": "Hugging Face models, cloud case studies, academic papers, AI product launches",
+              "determines": "Real ML adoption or pilot purgatory? Data platform maturity."
+            },
+            "jury_5_service_portfolio": {
+              "name": "Service & Product Jury",
+              "searches_for": "Service pages, case studies, analyst reports, product launches, partnership ecosystem",
+              "determines": "Can they deliver modern services? Platform vs project-based?"
+            }
+          }
+        },
+        {
+          "step": 2,
+          "action": "Evidence Scoring",
+          "detail": "Starting from a neutral base of 50, each jury adjusts the score based on evidence found. Recent evidence (<12 months) has 100% impact. Old evidence (>18 months) has only 20% impact. Technical debt evidence incurs -20 to -35 penalty. Near-zero evidence across all juries incurs -35 to -50 penalty.",
+          "scoring_rules": {
+            "base_score": 50,
+            "adjustment_range": "-50 to +50 based on evidence strength",
+            "recency_weighting": "Recent (<12mo) = 100%, Old (>18mo) = 20%",
+            "technical_debt_penalty": "-20 to -35 for legacy/manual workarounds",
+            "near_zero_evidence_penalty": "-35 to -50 if almost no evidence found"
+          }
+        },
+        {
+          "step": 3,
+          "action": "Confidence-Driven Research Loop (Agentic)",
+          "detail": "If initial confidence < 45 OR evidence links < 3, the system autonomously identifies which juries are weak, builds broader search terms, re-searches, and merges new findings. This is a self-directed research loop.",
+          "agentic_behavior": "The system decides ON ITS OWN whether to do more research, what to search for, and when to stop.",
+          "loop_rules": {
+            "trigger": "Confidence < 45 OR evidence_links < 3",
+            "per_new_finding": "+5 confidence",
+            "per_resolved_jury": "+10 confidence",
+            "max_loops": "2 (single scan) or 1 (batch scan)",
+            "stop_condition": "Confidence >= 45 or no new evidence found"
+          }
+        },
+        {
+          "step": 4,
+          "action": "Evidence URL Validation",
+          "detail": "Every evidence URL is verified via HTTP request. Dead links are detected and counted.",
+          "dead_link_handling": {
+            "if_over_20_percent_dead": "Trigger URL Recovery Re-Search agent",
+            "confidence_penalties": {
+              "over_50_percent_dead": "-30 confidence",
+              "over_25_percent_dead": "-15 confidence"
+            }
+          }
+        },
+        {
+          "step": 5,
+          "action": "Delta Verification (Agentic Re-scan)",
+          "detail": "If the score changed >= 15 points from the previous scan, the ENTIRE search is re-run autonomously to verify the change is real.",
+          "agentic_behavior": "System autonomously decides to re-run based on score delta, without human intervention.",
+          "outcome_rules": {
+            "both_runs_agree": "Accept as genuine change, average the two scores",
+            "runs_disagree": "Use conservative score (closer to previous)"
+          }
+        },
+        {
+          "step": 6,
+          "action": "Evidence Persistence",
+          "detail": "Previous findings carry forward for 90 days. The principle is 'Innocent until proven fixed' — not re-finding something is treated as search noise, not improvement.",
+          "rationale": "Search engines return different results each time. A company doesn't fix its problems just because Google showed different results today."
+        },
+        {
+          "step": 7,
+          "action": "Washing Detection",
+          "detail": "Cross-references Intent Score with Reality Score. If Intent > 60 AND Reality is significantly below, flags potential washing.",
+          "washing_types": [
+            "AI Washing: AI buzzwords without real adoption evidence",
+            "Agile Washing: Claims modern practices, evidence shows waterfall",
+            "Green Washing: ESG narrative without sustainable operations evidence",
+            "Modernization Washing: 'Digital transformation' messaging with no operational evidence"
+          ],
+          "safety_checks": [
+            "Cannot flag washing if Intent < 40 (low ambition can't be washing)",
+            "Re-checked after synthesis: if Reality >= Intent, washing flag removed"
+          ]
+        }
+      ],
+      "ai_model_used": "Claude Sonnet 4.6 with Extended Thinking + Brave Web Search (primary, 10 searches per jury). Gemini 3.1 Pro with Google Search grounding (fallback + fact-check).",
+      "agentic_ai": true,
+      "agentic_patterns": [
+        "5 independent jury-agents searching autonomously",
+        "Self-directed confidence-driven research loops",
+        "Autonomous delta verification re-scans",
+        "Dead link recovery agent",
+        "Evidence persistence memory (90-day carry-forward)"
+      ],
+      "outputs": {
+        "reality_score": "0-100, evidence-based operational maturity",
+        "jury_findings": "Per-jury evidence with sentiment, recency, source type",
+        "evidence_links": "Verified URLs with titles, snippets, source domains",
+        "key_people": "Executives discovered in evidence (name, role, relevance)",
+        "confidence_score": "0-100, how robust the evidence base is",
+        "washing_flag": "Boolean + type if detected (AI/Agile/Green/Modernization Washing)"
+      }
+    },
+
+    {
+      "phase_id": "PHASE_4B",
+      "name": "Financial Health Index",
+      "icon": "trending-up",
+      "color": "#10b981",
+      "category": "analysis",
+      "short_description": "AI-powered financial analysis running in parallel with Reality Check",
+      "what_happens": "While Scanner 2 hunts for operational evidence, a parallel AI agent searches for financial data. It evaluates four dimensions of business health and produces the Financial Health Index used for archetype classification.",
+      "question_it_answers": "How financially healthy is this company?",
+      "runs_in_parallel_with": ["PHASE_4 (Reality Check)"],
+      "four_dimensions": [
+        { "name": "Revenue Trend", "weight": "30%", "range": "0-25", "measures": "Declining, stable, or growing revenue trajectory" },
+        { "name": "Profitability", "weight": "40%", "range": "0-25", "measures": "Operating margins, net profit, EBITDA trends" },
+        { "name": "Efficiency", "weight": "15%", "range": "0-25", "measures": "Revenue per employee, operational leverage" },
+        { "name": "Investment Signal", "weight": "15%", "range": "0-25", "measures": "R&D spending, growth investment, M&A activity" }
+      ],
+      "core_health_gate": {
+        "description": "If BOTH Revenue and Profitability are weak, the composite score is dampened regardless of Efficiency/Investment scores",
+        "floor": "25% of weighted base when fundamentals are weak",
+        "fully_open": "When Revenue + Profitability reach 60% of maximum",
+        "rationale": "A company that invests heavily but doesn't generate revenue is not financially healthy"
+      },
+      "ai_model_used": "Claude Sonnet 4.6 with Extended Thinking + Brave Web Search",
+      "agentic_ai": true,
+      "agentic_pattern": "Autonomous financial evidence search with structured scoring",
+      "non_blocking": "If financial search fails, the scan continues with Financial Index = null. Intent Score is used as proxy for archetype classification.",
+      "outputs": {
+        "financial_index": "0-100 composite score",
+        "sub_scores": "Revenue Trend (0-25), Profitability (0-25), Efficiency (0-25), Investment Signal (0-25)",
+        "financial_findings": "Per-dimension evidence with quotes and sources",
+        "financial_confidence": "0-100",
+        "revenue_avg_3yr": "3-year average revenue in EUR millions (determines company size tier: S/M/L/XL)"
+      }
+    },
+
+    {
+      "phase_id": "PHASE_5",
+      "name": "Self-Analysis Loop",
+      "icon": "brain-circuit",
+      "color": "#f97316",
+      "category": "quality",
+      "short_description": "AI diagnoses WHY its own scores changed — search variance, gaps, or real change?",
+      "what_happens": "When scores change significantly between scans, the system performs autonomous self-diagnosis. It computes pre-computed diagnostics and uses AI to classify the root cause of score drift. This prevents false confidence in changed scores.",
+      "question_it_answers": "Why did the scanner produce different results this time? Is it noise or genuine change?",
+      "trigger": "Score changed >= 15 points within 7 days of previous scan",
+      "thinking_process": [
+        {
+          "step": 1,
+          "action": "Pre-computed Diagnostics",
+          "detail": "Automatically computed: source diversity (unique domains), jury coverage, evidence recency ratio, URL overlap between scans (low overlap <20% = strong search variance indicator)"
+        },
+        {
+          "step": 2,
+          "action": "Root Cause Classification",
+          "detail": "AI classifies the drift into one of 4 causes",
+          "causes": [
+            "Search Variance: Different Google results each time (most common, ~60% of cases)",
+            "Evidence Gap: One scan found sources the other missed",
+            "Prompt Sensitivity: Same evidence, AI interpreted differently",
+            "Genuine Change: Real company change (unlikely within 7 days)"
+          ]
+        },
+        {
+          "step": 3,
+          "action": "Score Drift Guard",
+          "detail": "Maximum drift of 15 points per 7-day window. Larger changes are dampened to previous ± 15 max. Protects against volatile AI search results."
+        }
+      ],
+      "ai_model_used": "Uses the diagnostics computed from the scan data + AI classification",
+      "agentic_ai": true,
+      "agentic_pattern": "Self-reflective agent that monitors its own output quality and automatically applies corrections",
+      "outputs": ["Root cause classification", "Dampened score (if drift exceeded)", "Diagnostic metadata for admin review"]
+    },
+
+    {
+      "phase_id": "PHASE_6",
+      "name": "Synthesis & Cross-Verification (Wisdom Layer)",
+      "icon": "sparkles",
+      "color": "#a855f7",
+      "category": "synthesis",
+      "short_description": "Senior AI model reads ALL evidence blindly, scores independently, then cross-verifies against Scanner scores",
+      "what_happens": "This is the 'wisdom layer'. A senior AI model (Claude Opus 4.6) reads ALL collected evidence WITHOUT seeing any Scanner scores. It independently evaluates Reality and Intent. Its blind scores are then compared to Scanner scores, and disagreements are resolved through a blending protocol.",
+      "question_it_answers": "Do independent AI eyes validate the automated scanners? What is the diagnosis and strategic pitch?",
+      "thinking_process": [
+        {
+          "step": 1,
+          "action": "Blind Scoring (Part 1)",
+          "detail": "Senior AI model receives ALL evidence (jury findings, URLs, key people, financial data) but ZERO Scanner scores. It independently scores each KB dimension 0-20, totaling 0-100 for Reality. Also independently assesses Intent.",
+          "why_blind": "Prevents anchoring bias. If the model saw Scanner scores first, it would unconsciously validate them rather than truly verify."
+        },
+        {
+          "step": 2,
+          "action": "Cross-Verification (Part 2)",
+          "detail": "Compare blind Synthesis scores vs Scanner scores and resolve disagreements",
+          "resolution_rules": {
+            "delta_0_to_5": "Agreement — keep Scanner score (search-grounded, more reliable for small variations)",
+            "delta_6_to_10": "Mild disagreement — blended average: 60% Scanner + 40% Synthesis",
+            "delta_over_10": "Strong disagreement — Synthesis overrides (broader context, extended thinking)"
+          }
+        },
+        {
+          "step": 3,
+          "action": "Narrative Generation (Part 3)",
+          "detail": "Using verified scores and all evidence, the model generates two key outputs",
+          "outputs": {
+            "diagnosis": "180-220 words. States archetype, maps findings to KB dimensions, uses KB terminology. Written for C-level audience.",
+            "strategic_pitch": "90-110 words. C-level cold-outreach with exactly 2 concrete proposals derived from the weakest KB dimensions."
+          }
+        },
+        {
+          "step": 4,
+          "action": "WHY/WHAT Proposals Generation",
+          "detail": "AI generates 2 Desired Impact (WHY) proposals and 2 Desired Effect (WHAT) proposals based on the weakest KB dimensions. These are actionable conversation starters for consultants.",
+          "constraint": "Proposals MUST be grounded in the company's actual weaknesses, not generic advice"
+        }
+      ],
+      "ai_model_used": "Claude Opus 4.6 with Extended Thinking (primary, 10K thinking budget)",
+      "fallback_chain": [
+        "Claude Opus 4.6 with Extended Thinking (primary)",
+        "Gemini 3.1 Pro (fallback 1)",
+        "Gemini 3 Pro (fallback 2)",
+        "Gemini 2.5 Pro (fallback 3)"
+      ],
+      "why_fallback_chain": "During high API load, any single provider may be unavailable. The 4-model chain ensures synthesis ALWAYS completes.",
+      "agentic_ai": true,
+      "agentic_pattern": "Blind cross-verification agent with autonomous fallback chain. Extended Thinking allows the model to reason through conflicting evidence before committing to scores.",
+      "outputs": {
+        "verified_reality_score": "Final reality score after cross-verification",
+        "verified_intent_score": "Final intent score after cross-verification",
+        "summary_text": "180-220 word forensic diagnosis",
+        "pitch_text": "90-110 word strategic pitch",
+        "why_proposals": "2 Desired Impact proposals",
+        "what_proposals": "2 Desired Effect proposals"
+      }
+    },
+
+    {
+      "phase_id": "PHASE_7",
+      "name": "Fact-Check & Evidence Integrity Gate",
+      "icon": "shield-check",
+      "color": "#ef4444",
+      "category": "quality",
+      "short_description": "Independent AI with live web search verifies every claim against reality",
+      "what_happens": "An independent AI model (Gemini 3.1 Pro with Google Search) reads the generated summary and pitch, then independently verifies every factual claim using live web search. This catches EVIDENCE CONTAMINATION — the real problem is not hallucination but wrong evidence feeding correct-looking summaries.",
+      "question_it_answers": "Are the claims in the AI-generated summary actually TRUE?",
+      "core_insight": "Checking AI output against its own evidence is CIRCULAR. The evidence itself may be wrong. An independent model with live web search must verify against the REAL WORLD.",
+      "thinking_process": [
+        {
+          "step": 1,
+          "action": "Heuristic Hallucination Pre-scan",
+          "detail": "Rule-based checks: Does summary reference people not in evidence? Claims with no supporting links? Generic template language? Low confidence but certain tone? Produces risk score (0-100) — diagnostic only, does not block pipeline."
+        },
+        {
+          "step": 2,
+          "action": "AI Fact-Check (Independent Model)",
+          "detail": "Gemini 3.1 Pro with Google Search grounding receives the full summary, pitch, evidence links, and company name. It uses Google Search to independently verify each factual claim. Classifies each claim as verified (true) or false.",
+          "single_pass_guarantee": "Runs EXACTLY once. No recursive loops. Fixes what it finds in a single pass."
+        },
+        {
+          "step": 3,
+          "action": "If Clean — Pipeline Continues",
+          "detail": "No false claims found. Original synthesis stands. Continue to Archetype Classification."
+        },
+        {
+          "step": 4,
+          "action": "If False Claims Found — Evidence Purging + Correction",
+          "detail": "False claims trigger a 4-step correction",
+          "sub_steps": [
+            "A. Evidence Purging: Remove contaminated sources that supported false claims",
+            "B. Apply Corrected Summary: Use the corrected text produced by the fact-checker (inline correction — preferred)",
+            "C. Fallback Re-synthesis: If inline correction unavailable, trigger full re-synthesis with cleaned evidence, explicitly listing false claims to avoid",
+            "D. Clear Stale Flags: Remove washing flags that were based on now-purged false claims"
+          ]
+        }
+      ],
+      "ai_model_used": "Gemini 3.1 Pro with Google Search grounding",
+      "agentic_ai": true,
+      "agentic_pattern": "Independent fact-checking agent with live web access. Acts as a quality gate that can autonomously purge evidence and correct outputs.",
+      "outputs": {
+        "verified": "Boolean — did the summary pass fact-check?",
+        "false_claims": "List of specific false claims detected",
+        "corrected_summary": "Fixed summary (if needed)",
+        "corrected_pitch": "Fixed pitch (if needed)",
+        "evidence_purged": "Count and details of removed contaminated sources"
+      }
+    },
+
+    {
+      "phase_id": "PHASE_8",
+      "name": "Strategic Foresight Application",
+      "icon": "compass",
+      "color": "#14b8a6",
+      "category": "foresight",
+      "short_description": "Foresight KB signals are applied to the specific company context",
+      "what_happens": "The harvested megatrend signals from the Foresight KB (Phase 1) are now applied to this specific company. The system identifies which forces are most relevant to the company's KB dimension weaknesses and strengths, generates dimension-specific forces, a cross-impact chain, and micro-scenarios.",
+      "question_it_answers": "What external forces will impact THIS company's future, given its specific strengths and weaknesses?",
+      "thinking_process": [
+        {
+          "step": 1,
+          "action": "Dimension-Force Matching",
+          "detail": "Match harvested foresight signals to the company's KB dimension scores. Prioritize forces that impact the company's weakest dimensions."
+        },
+        {
+          "step": 2,
+          "action": "Force Card Generation",
+          "detail": "For each relevant force: describe the trend, its impact on this specific company, timeframe, force type, confidence level, and source verification status."
+        },
+        {
+          "step": 3,
+          "action": "Cross-Impact Chain",
+          "detail": "Generate a causal chain showing how forces cascade: e.g., 'AI automation pressure -> impacts Operating Model -> which cascades to Service Portfolio -> ultimately affecting Financial Health'"
+        },
+        {
+          "step": 4,
+          "action": "Micro-Scenario Generation",
+          "detail": "Generate 3 micro-scenarios: Acceleration (best case), Stagnation (status quo), Disruption (worst case). Each grounded in the specific forces identified."
+        },
+        {
+          "step": 5,
+          "action": "Source Validation",
+          "detail": "All foresight sources are independently verified. Quality assessment (high/medium/low). Insufficient evidence is flagged with warning."
+        },
+        {
+          "step": 6,
+          "action": "Foresight Narrative",
+          "detail": "Generate a forward-looking narrative summary integrating the forces, chain, and scenarios into a coherent strategic outlook."
+        }
+      ],
+      "ai_model_used": "Claude Sonnet 4.6 with Extended Thinking (for company-specific application)",
+      "agentic_ai": true,
+      "agentic_pattern": "Foresight application agent that autonomously matches signals to company context and generates strategic outlook",
+      "outputs": {
+        "dimension_forces": "Array of force cards with trend, impact, timeframe, confidence, sources",
+        "cross_impact_chain": "Causal chain string (A -> B -> C -> D)",
+        "scenarios": { "acceleration": "Best case", "stagnation": "Status quo", "disruption": "Worst case" },
+        "foresight_summary": "Forward-looking narrative text",
+        "foresight_links": "Validated source links with credibility ratings",
+        "validation_summary": "Quality assessment of the foresight evidence base"
+      }
+    },
+
+    {
+      "phase_id": "PHASE_9",
+      "name": "Archetype Classification & Storage",
+      "icon": "layout-grid",
+      "color": "#22c55e",
+      "category": "output",
+      "short_description": "Final classification, persistence, and dashboard display",
+      "what_happens": "All verified scores are used to classify the company into one of four archetypes (Thriving, Modernizing, Cash Cow, At Risk). The complete result — scores, evidence, summary, pitch, proposals, foresight — is persisted to storage and appears on the dashboard's Truth Matrix scatter plot.",
+      "thinking_process": [
+        {
+          "step": 1,
+          "action": "Archetype Determination",
+          "detail": "Apply the 2x2 matrix: Reality Score (Y-axis) vs Financial Index (X-axis). If Financial unavailable, Intent Score used as proxy.",
+          "matrix": {
+            "top_right": "Thriving (Reality >= 50, Financial >= 50)",
+            "top_left": "Modernizing (Reality >= 50, Financial < 50)",
+            "bottom_right": "Cash Cow (Reality < 50, Financial >= 50)",
+            "bottom_left": "At Risk (Reality < 50, Financial < 50)"
+          }
+        },
+        {
+          "step": 2,
+          "action": "Post-Verification Logic",
+          "detail": "Final consistency checks: washing impossible if Reality >= Intent. Archetype recalculated from final verified scores. Confidence score reflects evidence robustness."
+        },
+        {
+          "step": 3,
+          "action": "Data Persistence",
+          "detail": "Full result stored to Vercel Blob Storage. Dashboard index updated. Scan history maintained (rolling 12-scan window for trend analysis)."
+        },
+        {
+          "step": 4,
+          "action": "Dashboard Visualization",
+          "detail": "Company appears on the Truth Matrix scatter plot. Dot color = archetype. Dot size = revenue tier (S/M/L/XL). Reference companies (Tesla, Buurtzorg, Supercell, etc.) shown with pulsing green dots."
+        }
+      ],
+      "ai_model_used": "None — deterministic rule-based classification",
+      "agentic_ai": false,
+      "outputs": {
+        "archetype": "One of: Thriving, Modernizing, Cash Cow, At Risk",
+        "complete_report": "All scores, evidence, summary, pitch, proposals, foresight, stored as JSON",
+        "dashboard_entry": "Summary row in the Forensic Index table",
+        "truth_matrix_dot": "Positioned on X (Financial) / Y (Reality) scatter plot"
+      }
+    }
+  ],
+
+  "post_scan_capabilities": {
+    "batch_refresh": {
+      "description": "Server-side autonomous batch that re-scans ALL companies in the database",
+      "trigger": "Admin-initiated",
+      "agentic_behavior": "Runs unattended on the server — admin can close browser. Progress tracked via polling.",
+      "ai_model_used": "Same pipeline as single scan, applied to each company sequentially"
+    },
+    "reality_check_all": {
+      "description": "Re-verify all stored company summaries against live web data",
+      "trigger": "Admin-initiated",
+      "ai_model_used": "Gemini 3.1 Pro with Google Search grounding",
+      "auto_cleaning": "Automatically purges false claims and corrects summaries"
+    },
+    "stakeholder_enrichment": {
+      "description": "Enrich key people data with LinkedIn insights — career moves, topics, notable posts",
+      "trigger": "Admin-initiated (per-company or all)",
+      "ai_model_used": "AI with web search for LinkedIn intelligence gathering"
+    },
+    "proposal_refresh": {
+      "description": "Regenerate WHY/WHAT proposals for companies using latest evidence",
+      "trigger": "Admin-initiated (per-company or all)",
+      "ai_model_used": "Same synthesis model chain (Opus -> Gemini fallbacks)"
+    },
+    "statistical_analysis": {
+      "description": "Cross-company statistical intelligence — correlations, distributions, rankings",
+      "analyses": [
+        "Spearman rank correlation (primary — robust to non-normal data)",
+        "Kendall's Tau (secondary)",
+        "Pearson (reference only)",
+        "Archetype distribution",
+        "Domain and ownership breakdowns",
+        "Score histograms",
+        "Regression residuals (outlier detection)",
+        "Top 10 / Bottom 10 rankings"
+      ],
+      "trigger": "Admin on-demand",
+      "ai_model_used": "Server-side statistical computation (no AI model — pure math)"
+    },
+    "longitudinal_trend_analysis": {
+      "description": "Track how companies evolve across multiple scans over time",
+      "lookback": "Up to 3 previous scans (rolling 12-scan history window)",
+      "trend_types": ["Improving (+5)", "Declining (-5)", "Stable (±5)"],
+      "persistent_pattern_detection": "2+ scans = high confidence pattern. 1 scan = possible search variance."
+    }
+  },
+
+  "verification_layers": {
+    "summary": "Seven layers of accuracy assurance operate across the entire pipeline",
+    "layers": [
+      {
+        "layer": 1,
+        "name": "Jury Diversity",
+        "phase": "PHASE_4",
+        "description": "Five independent evidence hunts. Confidence requires 3+ juries with evidence.",
+        "prevents": "Single-source bias, incomplete picture"
+      },
+      {
+        "layer": 2,
+        "name": "Evidence Validation",
+        "phase": "PHASE_4",
+        "description": "Every URL verified via HTTP. Dead links trigger recovery. Remaining dead links penalize confidence.",
+        "prevents": "Stale evidence, broken source references"
+      },
+      {
+        "layer": 3,
+        "name": "Blind Cross-Verification",
+        "phase": "PHASE_6",
+        "description": "Synthesis model scores independently without seeing Scanner scores. Disagreements trigger blending or override.",
+        "prevents": "Anchoring bias, uncritical score acceptance"
+      },
+      {
+        "layer": 4,
+        "name": "AI Fact-Check",
+        "phase": "PHASE_7",
+        "description": "Independent Gemini model with live Google Search verifies every claim. False claims trigger evidence purging. Single-pass guarantee.",
+        "prevents": "Evidence contamination, circular validation, hallucinated facts"
+      },
+      {
+        "layer": 5,
+        "name": "Score Drift Guard",
+        "phase": "PHASE_5",
+        "description": "Max ±15 points per 7-day window. Large changes trigger self-analysis diagnostic.",
+        "prevents": "Volatile scores from search engine randomness"
+      },
+      {
+        "layer": 6,
+        "name": "Evidence Persistence",
+        "phase": "PHASE_4",
+        "description": "Previous findings carry forward for 90 days. Not re-finding ≠ improvement.",
+        "prevents": "False improvements from lucky search results"
+      },
+      {
+        "layer": 7,
+        "name": "Logic Consistency",
+        "phase": "PHASE_9",
+        "description": "Post-verification: washing impossible if Reality >= Intent. Archetype recalculated from final scores.",
+        "prevents": "Contradictory outputs, stale flags"
+      }
+    ]
+  },
+
+  "technology_stack": {
+    "frontend": "React 19 + Recharts (scatter plot, radar charts, line charts) + Tailwind CSS + Lucide icons",
+    "backend": "Node.js server with Express-style API routes",
+    "storage": "Vercel Blob Storage (JSON persistence)",
+    "hosting": "Railway / Vercel",
+    "ai_providers": ["Anthropic (Claude Opus 4.6, Claude Sonnet 4.6)", "Google (Gemini 3.1 Pro, Gemini 3 Pro, Gemini 2.5 Pro)"],
+    "search_providers": ["Brave Web Search (via Claude)", "Google Search (via Gemini grounding)"],
+    "document_processing": "PDF and HTML text extraction for uploaded documents"
+  },
+
+  "data_flow_summary": {
+    "description": "Visual flow: Input -> Intent -> Reality (5 juries) + Financial (parallel) -> Self-Analysis -> Synthesis (blind) -> Fact-Check -> Foresight -> Classification -> Dashboard",
+    "flow_arrows": [
+      "User Input (PHASE_2) --> Intent Analysis (PHASE_3)",
+      "User Input (PHASE_2) --> Reality Check (PHASE_4) [parallel]",
+      "User Input (PHASE_2) --> Financial Health (PHASE_4B) [parallel]",
+      "Reality Check (PHASE_4) --> Self-Analysis (PHASE_5) [if score delta >= 15]",
+      "Intent (PHASE_3) + Reality (PHASE_4) + Financial (PHASE_4B) --> Synthesis (PHASE_6)",
+      "Synthesis (PHASE_6) --> Fact-Check (PHASE_7)",
+      "Fact-Check (PHASE_7) --> Foresight Application (PHASE_8)",
+      "Foresight KB (PHASE_1) --> Foresight Application (PHASE_8)",
+      "Foresight Application (PHASE_8) --> Classification & Storage (PHASE_9)",
+      "Classification (PHASE_9) --> Dashboard (Truth Matrix + Forensic Index)"
+    ]
+  }
+}
