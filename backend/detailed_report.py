@@ -143,7 +143,7 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
     if delta:
         result["reality_score"] = full_data.get("reality_score", 0)
 
-    # Foresight data (if available)
+    # Foresight data (if available) — pass rich context for evidence-grounded narrative
     if foresight_data and foresight_data.get("dimension_forces"):
         result["foresight"] = {
             "forces": [
@@ -152,9 +152,13 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
                     "type": f.get("type", ""),
                     "timeframe": f.get("timeframe", ""),
                     "kb_dimension": f.get("kb_dimension", ""),
+                    "fp_theme": f.get("fp_theme", ""),
                     "impact_on_company": f.get("impact_on_company", ""),
+                    "proposal_angle": f.get("proposal_angle", ""),
+                    "confidence": f.get("confidence", ""),
+                    "source_type": f.get("source_type", ""),
                 }
-                for f in foresight_data["dimension_forces"][:3]
+                for f in foresight_data["dimension_forces"][:4]
             ],
             "cross_impact_chain": foresight_data.get("cross_impact_chain", ""),
             "scenarios": foresight_data.get("scenarios", {}),

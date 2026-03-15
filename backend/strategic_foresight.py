@@ -1003,12 +1003,12 @@ def _generate_foresight_from_kb(
                 print(f"   ⚠️ [KB Synthesis] {model_name} returned incomplete structure ({elapsed}ms)")
                 continue
 
-            # Mark all forces as pre-validated from KB (URLs already verified by caller)
+            # Mark all forces as pre-validated from KB and carry over rich KB data
             for force in data["dimension_forces"]:
                 force["url_verified"] = True
                 force["validated"] = True
                 force["_from_kb"] = True
-                # Carry over supporting sources from KB signals
+                # Match force to KB signal by source_url and carry over rich fields
                 source_url = (force.get("source_url") or "").strip()
                 for sig in kb_signals:
                     if sig.get("source_url", "").strip() == source_url:
@@ -1016,6 +1016,9 @@ def _generate_foresight_from_kb(
                             force["supporting_sources"] = sig["supporting_sources"]
                         force["source_credibility"] = sig.get("source_credibility", "medium")
                         force["source_count"] = 1 + len(sig.get("supporting_sources", []))
+                        # Carry KB signal description for downstream consumers (Sonnet)
+                        if sig.get("description"):
+                            force["_kb_description"] = sig["description"]
                         break
                 else:
                     force["source_credibility"] = "medium"
@@ -1211,8 +1214,11 @@ def format_foresight_for_synthesis(foresight_data: dict, company_name: str, doma
     for f in foresight_data["dimension_forces"]:
         forces_text += (
             f"- [{f.get('type', '?')}] {f.get('trend', '?')} ({f.get('timeframe', '?')}) "
-            f"→ impacts {f.get('kb_dimension', '?')}: {f.get('impact_on_company', '?')}\n"
+            f"→ impacts {f.get('kb_dimension', '?')}: {f.get('impact_on_company', '?')}"
         )
+        if f.get("proposal_angle"):
+            forces_text += f" — {f['proposal_angle']}"
+        forces_text += "\n"
 
     scenarios = foresight_data.get("scenarios", {})
     cross_impact = foresight_data.get("cross_impact_chain", "")
@@ -1264,13 +1270,21 @@ def generate_foresight_summary(
     if not foresight_data or not foresight_data.get("dimension_forces"):
         return "", ""
 
-    # Format forces for the prompt
+    # Format forces for the prompt — include rich context for better narrative
     forces_text = ""
     for f in foresight_data["dimension_forces"]:
         forces_text += (
-            f"- [{f.get('type', '?')}] {f.get('trend', '?')} ({f.get('timeframe', '?')}) "
-            f"→ impacts {f.get('kb_dimension', '?')}: {f.get('impact_on_company', '?')}\n"
+            f"Force: {f.get('trend', '?')}\n"
+            f"  Type: {f.get('type', '?')} | Timeframe: {f.get('timeframe', '?')} | "
+            f"Theme: {f.get('fp_theme', '?')} | Confidence: {f.get('confidence', '?')}\n"
+            f"  Impacts: {f.get('kb_dimension', '?')}\n"
+            f"  Company impact: {f.get('impact_on_company', '?')}\n"
         )
+        if f.get("proposal_angle"):
+            forces_text += f"  Strategic imperative: {f['proposal_angle']}\n"
+        if f.get("_kb_description"):
+            forces_text += f"  Background: {f['_kb_description']}\n"
+        forces_text += "\n"
 
     scenarios = foresight_data.get("scenarios", {})
     cross_impact = foresight_data.get("cross_impact_chain", "")
