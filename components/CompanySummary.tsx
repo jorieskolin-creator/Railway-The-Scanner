@@ -260,6 +260,10 @@ const CompanySummary = ({ data }) => {
                 escaped = escaped.replace(/>/g, '&gt;');
                 // Convert **bold** markers to styled spans for key forces
                 escaped = escaped.replace(/\*\*([^*]+)\*\*/g, '<span class="font-semibold text-teal-300">$1</span>');
+                // Style "Foresight basis:" line as a footnote
+                if (para.indexOf('Foresight basis:') === 0) {
+                    return '<p class="mt-5 pt-3 border-t border-teal-800/40 text-[11px] text-slate-400 font-mono tracking-wide">' + escaped + '</p>';
+                }
                 var cls = 'text-slate-200 leading-relaxed text-sm font-light' + (pi > 0 ? ' mt-4' : '');
                 return '<p class="' + cls + '">' + escaped + '</p>';
             }).join('\n');
@@ -1268,13 +1272,19 @@ const CompanySummary = ({ data }) => {
                     </p>
                     <div>
                         {data.foresight_summary.split(/\n\n+/).map((para, pi) => (
-                            <p key={pi} className={`text-slate-200 leading-relaxed text-sm font-light${pi > 0 ? " mt-4" : ""}`}>
-                                {para.split(/\*\*([^*]+)\*\*/).map((segment, si) =>
-                                    si % 2 === 1
-                                        ? <span key={si} className="font-semibold text-teal-300">{segment}</span>
-                                        : <React.Fragment key={si}>{segment}</React.Fragment>
-                                )}
-                            </p>
+                            para.startsWith("Foresight basis:") ? (
+                                <p key={pi} className="mt-5 pt-3 border-t border-teal-800/40 text-[11px] text-slate-400 font-mono tracking-wide">
+                                    {para}
+                                </p>
+                            ) : (
+                                <p key={pi} className={`text-slate-200 leading-relaxed text-sm font-light${pi > 0 ? " mt-4" : ""}`}>
+                                    {para.split(/\*\*([^*]+)\*\*/).map((segment, si) =>
+                                        si % 2 === 1
+                                            ? <span key={si} className="font-semibold text-teal-300">{segment}</span>
+                                            : <React.Fragment key={si}>{segment}</React.Fragment>
+                                    )}
+                                </p>
+                            )
                         ))}
                     </div>
                 </div>

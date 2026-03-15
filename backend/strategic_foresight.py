@@ -1296,6 +1296,15 @@ def generate_foresight_summary(
 
     # Format forces for the prompt — include rich context for better narrative
     forces = foresight_data["dimension_forces"]
+
+    # Build "Foresight basis" line — shows which DB themes & source counts were used
+    _theme_sources: dict[str, int] = {}
+    for f in forces:
+        theme = f.get("fp_theme", "Unknown")
+        n_src = 1 + len(f.get("verified_supporting_sources", []) or f.get("supporting_sources", []))
+        _theme_sources[theme] = _theme_sources.get(theme, 0) + n_src
+    _basis_parts = [f"{theme} ({n} sources)" for theme, n in _theme_sources.items()]
+    _basis_line = "Foresight basis: " + ", ".join(_basis_parts) + "." if _basis_parts else ""
     forces_text = ""
     for idx, f in enumerate(forces, 1):
         n_supporting = len(f.get("verified_supporting_sources", []) or f.get("supporting_sources", []))
@@ -1400,6 +1409,8 @@ Output only the prose text. Nothing else."""
             print(f"   🔮 [Future Insight] {SONNET_MODEL}: {wc} words ({elapsed}ms)")
 
             if text and wc >= 100:
+                if _basis_line:
+                    text += "\n\n" + _basis_line
                 return text, SONNET_MODEL
 
             print(f"   ⚠️ [Future Insight] Sonnet too short ({wc} words) — falling back to Gemini")
@@ -1446,6 +1457,8 @@ Output only the prose text. Nothing else."""
             print(f"   [Future Insight] {model_name}: {wc} words ({elapsed}ms)")
 
             if text and wc >= 100:
+                if _basis_line:
+                    text += "\n\n" + _basis_line
                 return text, model_name
 
             print(f"   ⚠️ [Future Insight] {model_name} too short ({wc} words) — trying next")
