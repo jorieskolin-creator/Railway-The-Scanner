@@ -18,6 +18,7 @@ from knowledge_base import get_evolving_framework
 from storage import BlobStorage
 from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, purge_false_evidence
 from general_summary import generate_general_summary
+from source_quality import manage_evidence_sources
 from google import genai
 from google.genai import types
 import anthropic
@@ -778,6 +779,17 @@ Respond with valid JSON only. Six fields required:
             else:
                 archetype = "Cash Cow" if fin_for_archetype >= 50 else "At Risk"
 
+            # --- SOURCE MANAGEMENT: Merge new evidence with existing, cap at 15 ---
+            existing_evidence = existing_company_data.get("evidence_links", []) if existing_company_data else []
+            from scanner_two import get_clean_domain as _get_clean_domain
+            _company_site_domain = _get_clean_domain(company["url"]) if company.get("url") else ""
+            source_mgmt = manage_evidence_sources(
+                existing_links=existing_evidence,
+                new_links=reality_results["links"],
+                company_domain=_company_site_domain,
+            )
+            managed_evidence_links = source_mgmt["links"]
+
             full_data = {
                 "id": result_id,
                 "companyName": company_name,
@@ -797,7 +809,8 @@ Respond with valid JSON only. Six fields required:
                 "intent_breakdown": intent_results["breakdown"],
                 "metrics": intent_results.get("metrics", {}),
                 "reality_checklist": reality_results["checklist"],
-                "evidence_links": reality_results["links"],
+                "evidence_links": managed_evidence_links,
+                "evidence_gold_standard": source_mgmt["gold_standard"],
                 "key_people": key_people,
                 "summary_text": summary_text,
                 "pitch_text": pitch_text,

@@ -7,6 +7,10 @@ Used by scanner_two.py (core scanner) and strategic_foresight.py (foresight sign
 Key distinction:
 - "verified" = URL is reachable (HTTP 200) — says NOTHING about quality
 - "source_credibility" = domain authority assessment — high/medium/low/unknown
+
+Source Management (manage_evidence_sources):
+- Caps evidence at MAX_EVIDENCE_SOURCES (15) with credibility-tiered eviction.
+- "Gold Standard" detection: 15 high-credibility verified sources → skip new search.
 """
 
 from urllib.parse import urlparse
@@ -289,3 +293,193 @@ def confidence_quality_penalty(confidence: float, links: list, company_domain: s
         print(f"   ⚠️ [Source Quality] No high-credibility sources → confidence capped at 65 ({old} → 65)")
 
     return confidence
+
+
+# === SOURCE CAP & EVICTION ===
+
+MAX_EVIDENCE_SOURCES = 15
+
+# Eviction priority: lower value = evicted first
+_EVICTION_RANK = {
+    ("low", False):    0,   # dead low — worst, first to go
+    ("low", True):     1,   # live low — still low value
+    ("medium", False): 2,   # dead medium — was decent but unreachable
+    ("medium", True):  3,   # live medium — solid, keep if possible
+    ("high", False):   4,   # dead high — was great, might come back
+    ("high", True):    5,   # live high — never evicted by replacement
+}
+
+
+def _eviction_rank(link: dict) -> int:
+    """Return eviction priority for a source. Lower = evicted first."""
+    cred = link.get("source_credibility", "medium")
+    verified = link.get("verified", False)
+    return _EVICTION_RANK.get((cred, bool(verified)), 2)
+
+
+def manage_evidence_sources(
+    existing_links: list,
+    new_links: list,
+    company_domain: str = "",
+) -> dict:
+    """
+    Merge new evidence sources into existing ones, respecting the MAX_EVIDENCE_SOURCES cap
+    with credibility-tiered eviction.
+
+    Decision tree:
+    1. If existing has < MAX sources → add new sources up to cap (best first)
+    2. If existing has MAX sources AND all are high + verified → "gold_standard":
+       skip adding, flag for re-verification only
+    3. If at cap with mixed quality → apply eviction rules:
+       - new high → evicts lowest-ranked existing source
+       - new medium → evicts only low sources
+       - new low → rejected (never added when at cap)
+
+    Returns dict:
+    {
+        "links": [...],              # final merged evidence list (max 15)
+        "gold_standard": bool,       # True if all 15 are high+verified
+        "skipped_search": bool,      # True if gold_standard (caller should skip new search)
+        "added": int,                # how many new sources were added
+        "evicted": int,              # how many old sources were replaced
+        "rejected": int,             # how many new sources were rejected (no room)
+        "stats": {"high": n, "medium": n, "low": n}
+    }
+    """
+    # Ensure all sources have credibility assessed
+    for link in existing_links + new_links:
+        url = (link.get("url") or link.get("source_url") or "").strip()
+        source_type = (link.get("source_type") or link.get("category") or "").strip()
+        if "source_credibility" not in link:
+            link["source_credibility"] = assess_source_credibility(url, source_type, company_domain)
+
+    # Dedup existing by URL
+    seen_urls = set()
+    deduped_existing = []
+    for link in existing_links:
+        url = (link.get("url") or link.get("source_url") or "").strip()
+        if url and url not in seen_urls:
+            seen_urls.add(url)
+            deduped_existing.append(link)
+        elif not url:
+            deduped_existing.append(link)
+
+    pool = list(deduped_existing)
+
+    # --- Gold Standard check ---
+    if len(pool) >= MAX_EVIDENCE_SOURCES:
+        all_high_verified = all(
+            link.get("source_credibility") == "high" and link.get("verified") is True
+            for link in pool[:MAX_EVIDENCE_SOURCES]
+        )
+        if all_high_verified:
+            final = pool[:MAX_EVIDENCE_SOURCES]
+            high, medium, low, _ = assess_evidence_quality(final, company_domain)
+            print(f"   ⭐ [Source Manager] Gold Standard: {MAX_EVIDENCE_SOURCES}/{MAX_EVIDENCE_SOURCES} high-credibility verified sources. Skipping new search.")
+            return {
+                "links": final,
+                "gold_standard": True,
+                "skipped_search": True,
+                "added": 0,
+                "evicted": 0,
+                "rejected": 0,
+                "stats": {"high": high, "medium": medium, "low": low},
+            }
+
+    # --- Merge new sources ---
+    added = 0
+    evicted = 0
+    rejected = 0
+
+    # Sort new links: high first, then medium, then low (best candidates first)
+    cred_order = {"high": 0, "medium": 1, "low": 2}
+    sorted_new = sorted(new_links, key=lambda l: cred_order.get(l.get("source_credibility", "medium"), 1))
+
+    for new_link in sorted_new:
+        new_url = (new_link.get("url") or new_link.get("source_url") or "").strip()
+
+        # Dedup: if URL already exists, update metadata in-place
+        if new_url and new_url in seen_urls:
+            for existing in pool:
+                existing_url = (existing.get("url") or existing.get("source_url") or "").strip()
+                if existing_url == new_url:
+                    # Update metadata fields (snippet, title, verified, etc.)
+                    for key in ("snippet", "title", "verified", "is_recent", "source_type"):
+                        if new_link.get(key) is not None:
+                            existing[key] = new_link[key]
+                    break
+            continue
+
+        new_cred = new_link.get("source_credibility", "medium")
+
+        # Room available — just add
+        if len(pool) < MAX_EVIDENCE_SOURCES:
+            pool.append(new_link)
+            if new_url:
+                seen_urls.add(new_url)
+            added += 1
+            continue
+
+        # At cap — apply eviction rules
+        if new_cred == "low":
+            # Low sources never added when at cap
+            rejected += 1
+            continue
+
+        # Find the weakest existing source
+        weakest_idx = None
+        weakest_rank = _eviction_rank(new_link)  # new source must be better than what it replaces
+
+        for i, existing in enumerate(pool):
+            rank = _eviction_rank(existing)
+            if rank < weakest_rank:
+                if weakest_idx is None or rank < _eviction_rank(pool[weakest_idx]):
+                    weakest_idx = i
+
+        if new_cred == "medium":
+            # Medium can only evict low sources
+            if weakest_idx is not None and pool[weakest_idx].get("source_credibility") == "low":
+                old_url = (pool[weakest_idx].get("url") or "").strip()
+                if old_url:
+                    seen_urls.discard(old_url)
+                pool[weakest_idx] = new_link
+                if new_url:
+                    seen_urls.add(new_url)
+                added += 1
+                evicted += 1
+            else:
+                rejected += 1
+        elif new_cred == "high":
+            # High can evict anything below high+verified
+            if weakest_idx is not None:
+                old_url = (pool[weakest_idx].get("url") or "").strip()
+                if old_url:
+                    seen_urls.discard(old_url)
+                pool[weakest_idx] = new_link
+                if new_url:
+                    seen_urls.add(new_url)
+                added += 1
+                evicted += 1
+            else:
+                rejected += 1
+        else:
+            rejected += 1
+
+    # Final sort: high verified first, then by credibility tier
+    pool.sort(key=lambda l: -_eviction_rank(l))
+    final = pool[:MAX_EVIDENCE_SOURCES]
+
+    high, medium, low, _ = assess_evidence_quality(final, company_domain)
+
+    if added or evicted:
+        print(f"   📊 [Source Manager] Sources: {added} added, {evicted} evicted, {rejected} rejected. Final: {high} high, {medium} medium, {low} low ({len(final)}/{MAX_EVIDENCE_SOURCES})")
+
+    return {
+        "links": final,
+        "gold_standard": False,
+        "skipped_search": False,
+        "added": added,
+        "evicted": evicted,
+        "rejected": rejected,
+        "stats": {"high": high, "medium": medium, "low": low},
+    }

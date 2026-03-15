@@ -30,6 +30,7 @@ from analyze_scores import run_analysis
 from knowledge_base import get_evolving_framework
 from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, clean_summary, purge_false_evidence
 from general_summary import generate_general_summary
+from source_quality import manage_evidence_sources
 from domain_classifier import infer_domain
 from gemini_backoff import call_with_503_backoff
 
@@ -2413,6 +2414,17 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
         else:
             archetype = "Cash Cow" if fin_for_archetype >= 50 else "At Risk"
 
+        # --- SOURCE MANAGEMENT: Merge new evidence with existing, cap at 15 ---
+        existing_evidence = existing_data.get("evidence_links", []) if existing_data else []
+        from scanner_two import get_clean_domain as _get_clean_domain
+        _company_site_domain = _get_clean_domain(target_url) if target_url else ""
+        source_mgmt = manage_evidence_sources(
+            existing_links=existing_evidence,
+            new_links=reality_results["links"],
+            company_domain=_company_site_domain,
+        )
+        managed_evidence_links = source_mgmt["links"]
+
         full_data = {
             "id": result_id,
             "companyName": companyName,
@@ -2432,7 +2444,8 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
             "intent_breakdown": intent_results["breakdown"],
             "metrics": intent_results.get("metrics", {}),
             "reality_checklist": reality_results["checklist"],
-            "evidence_links": reality_results["links"],
+            "evidence_links": managed_evidence_links,
+            "evidence_gold_standard": source_mgmt["gold_standard"],
             "key_people": key_people,
             "summary_text": _strip_tac_codes(summary),
             "pitch_text": pitch,
