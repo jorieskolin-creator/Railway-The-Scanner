@@ -124,6 +124,9 @@ FP_THEME_SOURCES = {
         "site:iftf.org media communication",
         "site:weforum.org media transformation",
         "site:oxfordmartin.ox.ac.uk media",
+        "site:niemanlab.org future journalism media",              # Harvard Nieman Lab — future of journalism
+        "site:pewresearch.org media consumption",                  # Pew — media consumption data, trust surveys
+        "site:cifs.dk media communication trends",                 # CIFS — megatrend coverage, media futures
     ],
 
     # --- Economy & Business ---
@@ -140,6 +143,9 @@ FP_THEME_SOURCES = {
         "site:imf.org financial system",
         "site:mckinsey.com financial services",
         "site:weforum.org financial system",
+        "site:fsb.org fintech financial stability",                # Financial Stability Board — systemic risk, fintech
+        "site:sitra.fi finance ownership models",                  # Sitra — fair data economy, new ownership models
+        "site:chathamhouse.org finance global",                    # Chatham House — global financial system analysis
     ],
     "Global Economy": [
         "site:oecd.org economic outlook",
@@ -155,12 +161,18 @@ FP_THEME_SOURCES = {
         "site:weforum.org sharing economy",
         "site:mckinsey.com platform economy",
         "site:iftf.org future of work platforms",
+        "site:ec.europa.eu platform economy digital markets",      # EU — Digital Markets Act, platform regulation
+        "site:sitra.fi fair data economy",                         # Sitra — fair data economy programme
+        "site:deloitte.com platform sharing economy",              # Deloitte — platform business model analysis
     ],
     "Services": [
         "site:mckinsey.com service industry",
         "site:forrester.com customer experience",
         "site:hbr.org service innovation",
         "site:deloitte.com service transformation",
+        "site:weforum.org services customer future",               # WEF — service transformation, customer trends
+        "site:oecd.org services trade innovation",                 # OECD — services sector trade & innovation
+        "site:sitra.fi services innovation",                       # Sitra — public service innovation
     ],
 
     # --- Industry & Infrastructure ---
@@ -194,6 +206,9 @@ FP_THEME_SOURCES = {
         "site:mckinsey.com logistics",
         "site:oecd.org trade logistics",
         "site:deloitte.com supply chain",
+        "site:iea.org transport freight decarbonisation",          # IEA — freight decarbonisation pathways
+        "site:isi.fraunhofer.de logistics supply chain",           # Fraunhofer — supply chain innovation
+        "site:ilo.org supply chain labour",                        # ILO — supply chain labour standards
     ],
     "Private & Public Transport": [
         "site:iea.org transport",
@@ -345,6 +360,9 @@ FP_THEME_SOURCES = {
         "site:weforum.org consumer lifestyle",
         "site:deloitte.com consumer trends",
         "site:cifs.dk lifestyle trends",
+        "site:pewresearch.org consumer lifestyle trends",          # Pew — consumer behaviour, lifestyle data
+        "site:oecd.org tourism leisure economy",                   # OECD — tourism outlook, leisure economy
+        "site:iftf.org consumer future lifestyle",                 # IFTF — consumer futures, lifestyle shifts
     ],
 
     # --- Science & Demographics ---
