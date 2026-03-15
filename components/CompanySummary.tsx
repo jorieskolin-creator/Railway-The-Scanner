@@ -262,7 +262,7 @@ const CompanySummary = ({ data }) => {
                 escaped = escaped.replace(/\*\*([^*]+)\*\*/g, '<span class="font-semibold text-teal-300">$1</span>');
                 // Style Foresight attribution line as a footnote
                 if (para.indexOf('This Future Insight is based on') === 0) {
-                    return '<p class="mt-5 pt-3 border-t border-teal-800/40 text-[11px] text-slate-400 font-mono tracking-wide">' + escaped + '</p>';
+                    return '<p class="mt-5 pt-3 border-t border-teal-800/40 text-[10px] text-slate-500 uppercase tracking-wider font-mono">' + escaped + '</p>';
                 }
                 var cls = 'text-slate-200 leading-relaxed text-sm font-light' + (pi > 0 ? ' mt-4' : '');
                 return '<p class="' + cls + '">' + escaped + '</p>';
@@ -1273,7 +1273,7 @@ const CompanySummary = ({ data }) => {
                     <div>
                         {data.foresight_summary.split(/\n\n+/).map((para, pi) => (
                             para.startsWith("This Future Insight is based on") ? (
-                                <p key={pi} className="mt-5 pt-3 border-t border-teal-800/40 text-[11px] text-slate-400 font-mono tracking-wide">
+                                <p key={pi} className="mt-5 pt-3 border-t border-teal-800/40 text-[10px] text-slate-500 uppercase tracking-wider font-mono">
                                     {para}
                                 </p>
                             ) : (

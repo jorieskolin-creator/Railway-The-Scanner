@@ -1305,7 +1305,7 @@ def generate_foresight_summary(
             _themes_used.add(theme)
     _theme_list = sorted(_themes_used)
     _basis_line = (
-        "This Future Insight is based on the following Foresight(s): "
+        "This Future Insight is based on the following Foresight(s) Database: "
         + ", ".join(_theme_list) + "."
     ) if _theme_list else ""
     forces_text = ""
