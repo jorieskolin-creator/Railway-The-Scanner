@@ -1013,32 +1013,70 @@ const CompanySummary = ({ data }) => {
             return (
                 <div className="space-y-5 mt-6">
 
-                    {/* Validation Summary Badge */}
-                    {sf.validation_summary && (
-                        <div className="flex flex-wrap items-center gap-3 px-4 py-2.5 rounded-xl bg-white/5 border border-white/10">
-                            <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${
-                                sf.insufficient_evidence ? 'bg-rose-500/30 text-rose-300' :
-                                sf.validation_summary.quality === 'high' ? 'bg-emerald-500/20 text-emerald-400' :
-                                sf.validation_summary.quality === 'medium' ? 'bg-amber-500/20 text-amber-400' :
-                                'bg-rose-500/20 text-rose-400'
-                            }`}>
-                                {sf.insufficient_evidence ? 'insufficient evidence' : `${sf.validation_summary.quality} quality`}
-                            </span>
-                            <span className="text-[10px] text-slate-400">
-                                {sf.validation_summary.validated_forces}/{sf.validation_summary.total_forces} sources validated
-                            </span>
-                            {sf.validation_summary.total_verified_urls > 0 && (
-                                <span className="text-[10px] text-slate-500">
-                                    · {sf.validation_summary.total_verified_urls} total verified URLs
+                    {/* Validation Summary Badge — shows all sources analyzed */}
+                    {sf.validation_summary && (() => {
+                        // Count sources by credibility level across all forces
+                        const credCounts = { high: 0, medium: 0, low: 0 };
+                        const totalSources = sf.dimension_forces.reduce((acc, f) => {
+                            const cred = f.source_credibility || 'low';
+                            credCounts[cred] = (credCounts[cred] || 0) + 1;
+                            let count = f.url_verified ? 1 : 0;
+                            if (f.verified_supporting_sources?.length) {
+                                count += f.verified_supporting_sources.length;
+                                f.verified_supporting_sources.forEach(ss => {
+                                    const ssCred = ss.source_credibility || 'medium';
+                                    credCounts[ssCred] = (credCounts[ssCred] || 0) + 1;
+                                });
+                            }
+                            return acc + count;
+                        }, 0);
+                        return (
+                        <div className="flex flex-col gap-2 px-4 py-3 rounded-xl bg-white/5 border border-white/10">
+                            <div className="flex flex-wrap items-center gap-3">
+                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${
+                                    sf.insufficient_evidence ? 'bg-rose-500/30 text-rose-300' :
+                                    sf.validation_summary.quality === 'high' ? 'bg-emerald-500/20 text-emerald-400' :
+                                    sf.validation_summary.quality === 'medium' ? 'bg-amber-500/20 text-amber-400' :
+                                    'bg-rose-500/20 text-rose-400'
+                                }`}>
+                                    {sf.insufficient_evidence ? 'insufficient evidence' : `${sf.validation_summary.quality} quality`}
                                 </span>
-                            )}
-                            {sf.validation_summary.flagged_forces > 0 && (
-                                <span className="text-[10px] text-amber-500/70">
-                                    · {sf.validation_summary.flagged_forces} flagged
+                                <span className="text-[10px] text-slate-400">
+                                    {sf.validation_summary.total_forces} {sf.validation_summary.total_forces === 1 ? 'force' : 'forces'} analyzed · {sf.validation_summary.validated_forces} validated
                                 </span>
-                            )}
+                                {sf.validation_summary.total_verified_urls > 0 && (
+                                    <span className="text-[10px] text-slate-500">
+                                        · {sf.validation_summary.total_verified_urls} verified {sf.validation_summary.total_verified_urls === 1 ? 'URL' : 'URLs'}
+                                    </span>
+                                )}
+                                {sf.validation_summary.flagged_forces > 0 && (
+                                    <span className="text-[10px] text-amber-500/70">
+                                        · {sf.validation_summary.flagged_forces} flagged
+                                    </span>
+                                )}
+                            </div>
+                            {/* Source credibility breakdown */}
+                            <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-[9px] text-slate-500 uppercase tracking-wider font-mono">Sources:</span>
+                                {credCounts.high > 0 && (
+                                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 font-mono">
+                                        {credCounts.high} high
+                                    </span>
+                                )}
+                                {credCounts.medium > 0 && (
+                                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 font-mono">
+                                        {credCounts.medium} medium
+                                    </span>
+                                )}
+                                {credCounts.low > 0 && (
+                                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-400 font-mono">
+                                        {credCounts.low} low
+                                    </span>
+                                )}
+                            </div>
                         </div>
-                    )}
+                        );
+                    })()}
                     {sf.insufficient_evidence && (
                         <div className="px-4 py-2 rounded-lg bg-rose-500/10 border border-rose-500/20 text-[11px] text-rose-300/80">
                             Foresight evidence is below the minimum quality threshold. Sources could not be independently verified.

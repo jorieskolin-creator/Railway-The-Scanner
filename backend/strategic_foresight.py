@@ -703,7 +703,7 @@ Per force, provide:
 - "supporting_sources": Use the supporting sources from the signal above
 - "source_type": Use the source_type from the signal
 - "confidence": Use the confidence from the signal
-- "osint_validation": "Pre-validated via Foresight Knowledge Base with [N] corroborating sources"
+- "osint_validation": "Pre-validated via Foresight Knowledge Base with [N] corroborating source(s)" — use correct grammar: "1 corroborating source" or "2 corroborating sources"
 
 TASK 2 — CROSS-IMPACT CHAIN:
 Trace how the strongest force cascades through {company_name}'s weakest dimensions. Format: "Force X → impacts Dimension A → cascades to Dimension B → ultimately affecting Dimension C."
@@ -1292,12 +1292,16 @@ def generate_foresight_summary(
         return "", ""
 
     # Format forces for the prompt — include rich context for better narrative
+    forces = foresight_data["dimension_forces"]
     forces_text = ""
-    for f in foresight_data["dimension_forces"]:
+    for idx, f in enumerate(forces, 1):
+        n_supporting = len(f.get("verified_supporting_sources", []) or f.get("supporting_sources", []))
         forces_text += (
-            f"Force: {f.get('trend', '?')}\n"
+            f"Force {idx}/{len(forces)}: {f.get('trend', '?')}\n"
             f"  Type: {f.get('type', '?')} | Timeframe: {f.get('timeframe', '?')} | "
             f"Theme: {f.get('fp_theme', '?')} | Confidence: {f.get('confidence', '?')}\n"
+            f"  Source credibility: {f.get('source_credibility', 'unknown')} | "
+            f"Corroborating sources: {n_supporting}\n"
             f"  Impacts: {f.get('kb_dimension', '?')}\n"
             f"  Company impact: {f.get('impact_on_company', '?')}\n"
         )
@@ -1306,6 +1310,14 @@ def generate_foresight_summary(
         if f.get("_kb_description"):
             forces_text += f"  Background: {f['_kb_description']}\n"
         forces_text += "\n"
+
+    # Validation summary for overall evidence quality context
+    vs = foresight_data.get("validation_summary", {})
+    if vs:
+        forces_text += (
+            f"Overall validation: {vs.get('validated_forces', 0)}/{vs.get('total_forces', len(forces))} forces validated, "
+            f"{vs.get('total_verified_urls', 0)} verified URLs, quality={vs.get('quality', 'unknown')}\n\n"
+        )
 
     scenarios = foresight_data.get("scenarios", {})
     cross_impact = foresight_data.get("cross_impact_chain", "")
@@ -1333,6 +1345,8 @@ Key scenarios:
 
 RULES:
 - 250-300 words, 3-4 paragraphs separated by \\n\\n
+- IMPORTANT: This analysis is based on {len(forces)} distinct external forces. Address ALL of them — do not focus on just one.
+  Weight each force by its confidence level and source credibility (high-credibility sources carry more weight).
 - First paragraph: The 2-3 most impactful external forces and their timeframe.
   Name the forces concretely — no vague "market changes are coming."
   Wrap each key force name in **double asterisks** when first mentioned (e.g., "**EU SFDR 2.0 implementation**").

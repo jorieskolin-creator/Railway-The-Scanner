@@ -2756,33 +2756,38 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                         "reason": "Gemini re-synthesis failed",
                     }
 
-        # --- STEP 3.5 & 3.6: GENERAL SUMMARY + DETAILED REPORT (parallel) ---
+        # --- STEP 3.5 & 3.6: GENERAL SUMMARY + FUTURE INSIGHT (parallel) ---
         # General Summary: Plain-language narrative (225-275 words) from already-verified data.
-        # Detailed Report: Deep diagnostic (800-1200 words) with evidence, stakeholder context, foresight.
-        # Both run after fact-check so evidence_links are already purged/verified.
-        # Failure is non-fatal for both — old records without these fields are handled gracefully.
+        # Future Insight: Forward-looking narrative based on foresight data (250-300 words).
+        # Both run in parallel after fact-check so evidence_links are already purged/verified.
+        # Failure is non-fatal — old records without these fields are handled gracefully.
         gs_text, gs_model = "", ""
-        dr_text, dr_model = "", ""
+        fs_text, fs_model = "", ""
         try:
-            from detailed_report import generate_detailed_report
             parallel_start = time.time()
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
                 gs_future = pool.submit(generate_general_summary, full_data, companyName)
-                dr_future = pool.submit(generate_detailed_report, full_data, companyName, foresight_data)
+
+                # Future Insight runs in parallel with General Summary
+                fs_future = None
+                if foresight_data and foresight_data.get("dimension_forces"):
+                    from strategic_foresight import generate_foresight_summary
+                    fs_future = pool.submit(generate_foresight_summary, foresight_data, companyName, company_domain)
 
                 try:
                     gs_text, gs_model = gs_future.result(timeout=120)
                 except Exception as gs_err:
                     print(f"   ⚠️ [General Summary] Failed: {gs_err} — skipping")
 
-                try:
-                    dr_text, dr_model = dr_future.result(timeout=120)
-                except Exception as dr_err:
-                    print(f"   ⚠️ [Detailed Report] Failed: {dr_err} — skipping")
+                if fs_future:
+                    try:
+                        fs_text, fs_model = fs_future.result(timeout=120)
+                    except Exception as fs_err:
+                        print(f"   ⚠️ [Future Insight] Failed: {fs_err} — skipping")
 
             parallel_ms = int((time.time() - parallel_start) * 1000)
         except Exception as parallel_err:
-            print(f"   ⚠️ [Summary+Report] Parallel execution failed: {parallel_err}")
+            print(f"   ⚠️ [Summary+Foresight] Parallel execution failed: {parallel_err}")
             # Fallback: try general summary alone
             try:
                 gs_text, gs_model = generate_general_summary(full_data, companyName)
@@ -2801,31 +2806,57 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
         else:
             print(f"   ⚠️ [General Summary] Generation returned empty — skipping field")
 
+        if fs_text:
+            full_data["foresight_summary"] = fs_text
+            full_data["foresight_summary_model"] = fs_model
+            wc = len(fs_text.split())
+            print(f"   ✅ [Future Insight] {wc} words, model={fs_model} ({parallel_ms}ms)")
+        else:
+            if foresight_data and foresight_data.get("dimension_forces"):
+                print(f"   ⚠️ [Future Insight] Generation returned empty — skipping")
+
+        # --- STEP 3.7: DETAILED FORENSIC REPORT (meta-synthesis) ---
+        # Runs AFTER General Summary and Future Insight so it can synthesize all
+        # prior analyses into a unified 800-1200 word diagnostic. No new searches —
+        # works entirely from data already in memory (General Summary, AI Diagnosis,
+        # Foresight Insight, Why/What proposals, all metrics and evidence).
+        dr_text, dr_model = "", ""
+        try:
+            from detailed_report import generate_detailed_report
+            dr_start = time.time()
+
+            # Collect all prior analyses for meta-synthesis
+            prior_summaries = {}
+            if full_data.get("general_summary"):
+                prior_summaries["general_summary"] = full_data["general_summary"]
+            if full_data.get("foresight_summary"):
+                prior_summaries["foresight_summary"] = full_data["foresight_summary"]
+            if full_data.get("summary_text"):
+                prior_summaries["ai_summary"] = full_data["summary_text"]
+            why_what_parts = []
+            if full_data.get("why_proposals"):
+                why_what_parts.append("Why: " + "; ".join(full_data["why_proposals"]))
+            if full_data.get("what_proposals"):
+                why_what_parts.append("What: " + "; ".join(full_data["what_proposals"]))
+            if why_what_parts:
+                prior_summaries["why_what"] = " | ".join(why_what_parts)
+
+            dr_text, dr_model = generate_detailed_report(
+                full_data, companyName, foresight_data,
+                prior_summaries=prior_summaries if prior_summaries else None,
+            )
+            dr_ms = int((time.time() - dr_start) * 1000)
+        except Exception as dr_err:
+            dr_ms = 0
+            print(f"   ⚠️ [Detailed Report] Failed: {dr_err} — skipping")
+
         if dr_text:
             full_data["detailed_report"] = dr_text
             full_data["detailed_report_model"] = dr_model
             wc = len(dr_text.split())
-            print(f"   ✅ [Detailed Report] {wc} words, model={dr_model} ({parallel_ms}ms)")
+            print(f"   ✅ [Detailed Report] {wc} words, model={dr_model} ({dr_ms}ms)")
         else:
             print(f"   ⚠️ [Detailed Report] Generation returned empty — skipping field")
-
-        # --- STEP 3.7: FUTURE INSIGHT SUMMARY ---
-        # 150-200 word forward-looking narrative based on foresight data.
-        # Only generated if foresight_data is available.
-        if foresight_data and foresight_data.get("dimension_forces"):
-            try:
-                from strategic_foresight import generate_foresight_summary
-                fs_start = time.time()
-                fs_text, fs_model = generate_foresight_summary(foresight_data, companyName, company_domain)
-                if fs_text:
-                    full_data["foresight_summary"] = fs_text
-                    full_data["foresight_summary_model"] = fs_model
-                    wc = len(fs_text.split())
-                    print(f"   ✅ [Future Insight] {wc} words, model={fs_model} ({int((time.time()-fs_start)*1000)}ms)")
-                else:
-                    print(f"   ⚠️ [Future Insight] Generation returned empty — skipping")
-            except Exception as fs_err:
-                print(f"   ⚠️ [Future Insight] Failed: {fs_err} — skipping, scan continues")
 
         # --- STEP 4: SAVE ---
         if saveToDatabase:

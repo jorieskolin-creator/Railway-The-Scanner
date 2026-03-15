@@ -32,8 +32,13 @@ _WORD_MIN = 800
 _WORD_MAX = 1200
 
 
-def _build_input_payload(full_data: dict, company_name: str, foresight_data: dict | None) -> dict:
-    """Build a rich evidence payload for the detailed report — more depth than general_summary."""
+def _build_input_payload(full_data: dict, company_name: str, foresight_data: dict | None, prior_summaries: dict | None = None) -> dict:
+    """Build a rich evidence payload for the detailed report — more depth than general_summary.
+
+    When prior_summaries is provided, the report acts as a meta-synthesis of all
+    previously generated analyses (General Summary, AI Diagnosis, Foresight Insight,
+    metrics, etc.) rather than duplicating analysis from raw evidence.
+    """
 
     # Legal/ToS exclusion (same pattern as general_summary.py)
     _LEGAL_PATH_SEGMENTS = (
@@ -165,6 +170,19 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
             "climate_exposure": foresight_data.get("climate_exposure"),
         }
 
+    # Prior summaries — when available, the detailed report synthesizes these
+    # instead of duplicating the analysis work they already performed.
+    if prior_summaries:
+        result["prior_analyses"] = {}
+        if prior_summaries.get("general_summary"):
+            result["prior_analyses"]["general_summary"] = prior_summaries["general_summary"]
+        if prior_summaries.get("foresight_summary"):
+            result["prior_analyses"]["foresight_summary"] = prior_summaries["foresight_summary"]
+        if prior_summaries.get("ai_summary"):
+            result["prior_analyses"]["ai_diagnosis"] = prior_summaries["ai_summary"]
+        if prior_summaries.get("why_what"):
+            result["prior_analyses"]["why_and_what"] = prior_summaries["why_what"]
+
     return result
 
 
@@ -184,10 +202,23 @@ Based on the foresight data in the evidence below:
 - Mention the most relevant scenario (status quo or disruption)
 Use plain, forward-looking language."""
 
+    # Meta-synthesis instruction when prior analyses are available
+    synthesis_instruction = ""
+    if payload.get("prior_analyses"):
+        available = ", ".join(k.replace("_", " ").title() for k in payload["prior_analyses"])
+        synthesis_instruction = f"""
+IMPORTANT — META-SYNTHESIS APPROACH:
+This report has access to previously generated analyses: {available}.
+Your job is to SYNTHESIZE and DEEPEN these prior analyses into a coherent, unified diagnostic narrative.
+Do NOT simply repeat what they say — instead, find the through-lines, contradictions, and deeper implications
+that emerge when all analyses are read together. Add analytical depth that individual summaries could not provide.
+Use the prior analyses as your PRIMARY input; the raw evidence data is provided for fact-checking and detail only.
+"""
+
     return f"""You are a senior B2B intelligence analyst writing the detailed diagnostic section of a forensic company assessment report about {company_name}.
 
 This report will be read by strategy consultants and C-level advisors. It must be evidence-grounded, analytically rigorous, and provide depth that an executive summary cannot.
-
+{synthesis_instruction}
 STRUCTURED INPUT DATA:
 {json.dumps(payload, ensure_ascii=False, indent=2)}
 
@@ -253,15 +284,21 @@ def generate_detailed_report(
     full_data: dict,
     company_name: str,
     foresight_data: dict | None = None,
+    prior_summaries: dict | None = None,
 ) -> tuple[str, str]:
     """
     Generate an 800-1200 word detailed diagnostic report.
+
+    When prior_summaries is provided (general_summary, foresight_summary, ai_summary,
+    why_what), the report acts as a meta-synthesis of all previously generated
+    analyses rather than duplicating analysis from raw evidence. No new searches
+    are performed — it works entirely from data already in memory.
 
     Model chain: Sonnet 4.6 → Gemini 3.1 Pro → Gemini 2.5 Pro.
     Returns (report_text, model_used).
     Returns ("", "") on failure.
     """
-    payload = _build_input_payload(full_data, company_name, foresight_data)
+    payload = _build_input_payload(full_data, company_name, foresight_data, prior_summaries)
     prompt = _build_prompt(payload, company_name)
 
     # --- Attempt 1: Claude Sonnet 4.6 (primary) ---
