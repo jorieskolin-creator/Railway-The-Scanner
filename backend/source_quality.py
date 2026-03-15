@@ -151,6 +151,26 @@ def _domain_matches_patterns(domain: str) -> bool:
     return False
 
 
+def _is_institutional_tld(domain: str) -> bool:
+    """Check if domain has a TLD associated with institutional credibility."""
+    # Government TLDs (any country)
+    if domain.endswith(".gov") or ".gov." in domain:
+        return True
+    # Education TLDs
+    if domain.endswith(".edu") or ".edu." in domain:
+        return True
+    # Academic institution patterns (UK, AU, etc.)
+    if ".ac." in domain:
+        return True
+    # Military
+    if domain.endswith(".mil") or ".mil." in domain:
+        return True
+    # European/international institutional
+    if domain.endswith(".int"):
+        return True
+    return False
+
+
 def assess_source_credibility(url: str, source_type: str = "", company_domain: str = "") -> str:
     """
     Assess a single source URL's credibility tier.
@@ -161,8 +181,9 @@ def assess_source_credibility(url: str, source_type: str = "", company_domain: s
     1. Known high-credibility domain → "high"
     2. Known low-credibility domain or pattern → "low"
     3. Company's own domain (self-reporting) → "low"
-    4. Source type "academic"/"government"/"think_tank" on unknown domain → "medium"
-    5. Everything else → "low" (default-deny for unknown sources)
+    4. Institutional TLD (.gov, .edu, .ac.*, .mil, .int) → "high"
+    5. Source type "academic"/"government"/"think_tank" on unknown domain → "medium"
+    6. Everything else → "medium" (unknown ≠ low; low-credibility list catches bad sources)
     """
     domain = _get_domain(url)
     if not domain:
@@ -186,14 +207,22 @@ def assess_source_credibility(url: str, source_type: str = "", company_domain: s
         if clean_company and (domain == clean_company or domain.endswith("." + clean_company)):
             return "low"
 
+    # Institutional TLDs are inherently credible (gov, edu, academic, military)
+    if _is_institutional_tld(domain):
+        return "high"
+
     # If the AI labeled it as academic/government/think_tank, give benefit of doubt
     source_type_lower = (source_type or "").strip().lower()
     if source_type_lower in ("academic", "government", "think_tank"):
         return "medium"
 
-    # Default: unknown source = low credibility
-    # This is the critical change — previously defaulted to "medium"
-    return "low"
+    # Default: unknown source = medium credibility
+    # Unknown domains that passed the low-credibility filters deserve benefit of doubt.
+    # The LOW_CREDIBILITY_DOMAINS and LOW_CREDIBILITY_PATTERNS lists already catch
+    # blogs, content farms, press releases, social media, and SEO sites.
+    # Remaining unknowns are typically legitimate industry sites, news outlets,
+    # professional organizations, or niche publications.
+    return "medium"
 
 
 def assess_evidence_quality(links: list, company_domain: str = "") -> tuple:
