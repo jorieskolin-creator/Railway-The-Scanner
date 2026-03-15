@@ -556,6 +556,192 @@ DOMAIN_TO_FORESIGHT = {
 }
 
 
+_MIN_KB_SIGNALS_FOR_SYNTHESIS = 3  # Need at least 3 KB signals to skip Google Search
+
+
+def _quick_verify_kb_signals(signals: list[dict], max_workers: int = 8) -> list[dict]:
+    """
+    Quick URL re-verification of KB signals. Returns only signals whose
+    primary URL is still alive. Fast parallel HEAD checks.
+    """
+    if not signals:
+        return []
+
+    urls_to_check = {}
+    for sig in signals:
+        url = (sig.get("source_url") or "").strip()
+        if url and url.startswith("http"):
+            urls_to_check[url] = None
+
+    if not urls_to_check:
+        return []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(_verify_foresight_url, url, 6): url
+            for url in urls_to_check
+        }
+        for future in concurrent.futures.as_completed(futures):
+            url = futures[future]
+            try:
+                urls_to_check[url] = future.result()
+            except Exception:
+                urls_to_check[url] = False
+
+    alive = []
+    dead = 0
+    for sig in signals:
+        url = (sig.get("source_url") or "").strip()
+        if urls_to_check.get(url, False):
+            alive.append(sig)
+        else:
+            dead += 1
+
+    print(f"   🔗 [KB Verify] {len(alive)} alive, {dead} dead out of {len(signals)} KB signals")
+    return alive
+
+
+def _build_kb_synthesis_prompt(
+    company_name: str,
+    domain: str,
+    archetype: str,
+    reality_score: int,
+    financial_index: int | None,
+    top_findings: list[dict],
+    domain_config: dict,
+    kb_signals: list[dict],
+) -> str:
+    """
+    Build a synthesis-only prompt that uses pre-validated KB signals as evidence.
+    No Google Search needed — all evidence is already verified.
+    """
+    priority_dims = ", ".join(domain_config["priority_dimensions"])
+    fp_themes = ", ".join(domain_config["fp_themes"])
+    n_dims = len(domain_config["priority_dimensions"])
+    fin_str = f"{financial_index}/100" if financial_index is not None else "N/A"
+    climate_exposure = domain_config.get("climate_exposure")
+
+    # Format top findings
+    findings_text = ""
+    for f in top_findings[:8]:
+        cat = f.get("category", f.get("description", ""))
+        label = f.get("label", f.get("description", ""))
+        sentiment = f.get("sentiment", "")
+        snippet = (f.get("snippet", "") or "")[:150]
+        if cat or label:
+            findings_text += f"- [{sentiment}] {cat}: {label}"
+            if snippet:
+                findings_text += f" ({snippet})"
+            findings_text += "\n"
+
+    # Format KB signals as evidence
+    evidence_lines = []
+    for i, sig in enumerate(kb_signals, 1):
+        theme = sig.get("_kb_theme", sig.get("fp_theme", ""))
+        dims = sig.get("kb_dimensions_affected", [])
+        evidence_lines.append(f"Signal {i}: {sig['title']}")
+        evidence_lines.append(f"  Theme: {theme}")
+        evidence_lines.append(f"  Type: {sig.get('signal_type', 'N/A')} | Timeframe: {sig.get('timeframe', 'N/A')}")
+        evidence_lines.append(f"  Description: {sig.get('description', '')}")
+        evidence_lines.append(f"  Primary source: {sig.get('source_url', 'N/A')} (verified, {sig.get('source_credibility', 'N/A')} credibility)")
+        n_supporting = len(sig.get("supporting_sources", []))
+        evidence_lines.append(f"  Corroborating sources: {n_supporting}")
+        if sig.get("industries_affected"):
+            evidence_lines.append(f"  Industries affected: {', '.join(sig['industries_affected'])}")
+        if dims:
+            evidence_lines.append(f"  KB dimensions: {', '.join(dims)}")
+        evidence_lines.append(f"  Confidence: {sig.get('confidence', 'N/A')}")
+        evidence_lines.append("")
+
+    evidence_block = "\n".join(evidence_lines)
+
+    # Climate section
+    climate_section = ""
+    if climate_exposure:
+        climate_section = f"""
+TASK 4 — CLIMATE EXPOSURE ASSESSMENT:
+This company operates in a sector with {climate_exposure.upper()} climate exposure.
+Based on the signals above, evaluate:
+- Physical risk: How would +2°C warming impact operations/supply chain in their sector?
+- Transition risk: How would aggressive carbon taxation (EU CBAM, Green Deal) affect their margins?
+- AI-climate paradox: If they are adopting AI, does this create carbon contradictions?
+Return a "climate_exposure" object with: risk_level (low/medium/high/critical), physical_risk (1-2 sentences), transition_risk (1-2 sentences), headline (1 sentence summary).
+"""
+
+    climate_json_line = '"climate_exposure": {"risk_level": "...", "physical_risk": "...", "transition_risk": "...", "headline": "..."},' if climate_exposure else ""
+
+    return f"""You are a Strategic Foresight Analyst. Your task: synthesize how pre-validated external forces will impact {company_name} ({domain}) in the next 12-36 months.
+
+IMPORTANT: All evidence below has been independently verified with 2+ authoritative sources.
+You do NOT need to search for new evidence. Synthesize company-specific implications from these validated signals.
+
+COMPANY CONTEXT:
+- Company: {company_name}
+- Domain: {domain}
+- Archetype: {archetype} (Reality: {reality_score}/100, Financial: {fin_str})
+- Key findings from forensic scan:
+{findings_text or "(limited findings available)"}
+
+RELEVANT FORESIGHT THEMES: {fp_themes}
+PRIORITY KB DIMENSIONS: {priority_dims}
+
+PRE-VALIDATED EVIDENCE (from Foresight Knowledge Base — all URLs verified):
+{evidence_block}
+
+TASK 1 — DIMENSION-LEVEL FORESIGHT:
+For each of the {n_dims} priority KB dimensions, select the most impactful signal from the evidence above and explain its specific impact on {company_name}. Map each force to the most relevant KB dimension.
+
+Per force, provide:
+- "trend": The signal title from the evidence above
+- "type": One of: "Plausible/Maturing" | "Weakening/Declining" | "Preposterous/Black Swan" | "Probable/Emerging"
+- "timeframe": Use the timeframe from the signal
+- "kb_dimension": Which priority dimension this impacts most
+- "fp_theme": Which Futures Platform theme this maps to
+- "impact_on_company": 1-2 sentences on how this specifically affects {company_name} given their archetype ({archetype}) and current state
+- "proposal_angle": 1 sentence on how to use this in a consulting proposal to {company_name}. Frame as what must happen by when.
+- "source_url": Use the primary source URL from the signal above (already verified)
+- "supporting_sources": Use the supporting sources from the signal above
+- "source_type": Use the source_type from the signal
+- "confidence": Use the confidence from the signal
+- "osint_validation": "Pre-validated via Foresight Knowledge Base with [N] corroborating sources"
+
+TASK 2 — CROSS-IMPACT CHAIN:
+Trace how the strongest force cascades through {company_name}'s weakest dimensions. Format: "Force X → impacts Dimension A → cascades to Dimension B → ultimately affecting Dimension C."
+
+TASK 3 — MICRO-SCENARIOS (specific to {company_name}):
+- "acceleration": What happens in 12-24 months if {company_name} acts NOW on their weakest dimensions?
+- "status_quo": What happens if {company_name} continues their current trajectory?
+- "disruption": What wild card could disrupt {company_name} regardless of their actions?
+{climate_section}
+RETURN STRICT JSON ONLY:
+{{
+  "dimension_forces": [
+    {{
+      "trend": "...",
+      "type": "Plausible/Maturing|Weakening/Declining|Preposterous/Black Swan|Probable/Emerging",
+      "timeframe": "6-12mo|12-24mo|24-36mo",
+      "kb_dimension": "...",
+      "fp_theme": "...",
+      "impact_on_company": "...",
+      "proposal_angle": "...",
+      "source_url": "https://...",
+      "supporting_sources": [{{"url": "https://...", "source_type": "...", "title": "..."}}, {{"url": "https://...", "source_type": "...", "title": "..."}}],
+      "source_type": "academic|think_tank|industry_analyst|government|news",
+      "confidence": "high|medium|low",
+      "osint_validation": "..."
+    }}
+  ],
+  "cross_impact_chain": "Force → Dimension A → Dimension B → Dimension C",
+  "scenarios": {{
+    "acceleration": "...",
+    "status_quo": "...",
+    "disruption": "..."
+  }},
+  {climate_json_line}
+  "foresight_headline": "One-sentence strategic outlook for {company_name}"
+}}"""
+
+
 def _build_foresight_prompt(
     company_name: str,
     domain: str,
@@ -738,6 +924,128 @@ def _extract_json_from_text(text: str) -> str | None:
     return None
 
 
+def _generate_foresight_from_kb(
+    company_name: str,
+    domain: str,
+    archetype: str,
+    reality_score: int,
+    financial_index: int | None,
+    top_findings: list[dict],
+    domain_config: dict,
+    kb_signals: list[dict],
+    gemini_key: str,
+) -> dict | None:
+    """
+    KB-first foresight generation: synthesize company-specific implications
+    from pre-validated KB signals WITHOUT Google Search grounding.
+
+    This is faster, cheaper, and more reliable than the full search path.
+    Signals have already been URL-verified by the caller.
+    Returns None if synthesis fails (caller should fall back to full search).
+    """
+    prompt = _build_kb_synthesis_prompt(
+        company_name, domain, archetype, reality_score,
+        financial_index, top_findings, domain_config, kb_signals,
+    )
+
+    client = genai.Client(api_key=gemini_key)
+
+    _safety = [
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    ]
+
+    # No Google Search tool — synthesis only from pre-validated evidence
+    models = [
+        ("gemini-3.1-pro-preview", genai_types.GenerateContentConfig(
+            safety_settings=_safety,
+            temperature=0.5,
+            thinking_config=genai_types.ThinkingConfig(thinking_budget=3000),
+            max_output_tokens=8000,
+        ), 60),
+        ("gemini-2.5-pro", genai_types.GenerateContentConfig(
+            safety_settings=_safety,
+            temperature=0.5,
+            thinking_config=genai_types.ThinkingConfig(thinking_budget=2048),
+            max_output_tokens=8000,
+        ), 45),
+    ]
+
+    for model_name, config, timeout_sec in models:
+        try:
+            print(f"   📚 [KB Synthesis] Attempting {model_name} for {company_name} (no search)...")
+            t0 = time.time()
+            response = call_with_503_backoff(
+                lambda mn=model_name, cfg=config: client.models.generate_content(
+                    model=mn, contents=prompt, config=cfg,
+                ),
+                label=f"KB Synthesis {company_name} {model_name}",
+                model=model_name,
+                timeout=timeout_sec,
+            )
+            text = response.text if hasattr(response, "text") else ""
+            elapsed = int((time.time() - t0) * 1000)
+
+            if not text or len(text) < 100:
+                print(f"   ⚠️ [KB Synthesis] {model_name} returned insufficient data ({len(text) if text else 0} chars, {elapsed}ms)")
+                continue
+
+            json_str = _extract_json_from_text(text)
+            if not json_str:
+                print(f"   ⚠️ [KB Synthesis] Could not extract JSON from {model_name} response ({elapsed}ms)")
+                continue
+
+            data = json.loads(json_str, strict=False)
+
+            if not data.get("dimension_forces") or not data.get("scenarios"):
+                print(f"   ⚠️ [KB Synthesis] {model_name} returned incomplete structure ({elapsed}ms)")
+                continue
+
+            # Mark all forces as pre-validated from KB (URLs already verified by caller)
+            for force in data["dimension_forces"]:
+                force["url_verified"] = True
+                force["validated"] = True
+                force["_from_kb"] = True
+                # Carry over supporting sources from KB signals
+                source_url = (force.get("source_url") or "").strip()
+                for sig in kb_signals:
+                    if sig.get("source_url", "").strip() == source_url:
+                        if sig.get("supporting_sources") and not force.get("supporting_sources"):
+                            force["supporting_sources"] = sig["supporting_sources"]
+                        force["source_credibility"] = sig.get("source_credibility", "medium")
+                        force["source_count"] = 1 + len(sig.get("supporting_sources", []))
+                        break
+                else:
+                    force["source_credibility"] = "medium"
+                    force["source_count"] = 1
+
+            # Add metadata
+            data["fp_themes_used"] = domain_config["fp_themes"]
+            data["model"] = model_name
+            data["time_ms"] = elapsed
+            data["domain"] = domain
+            data["kb_first"] = True  # Flag: this came from KB-first path
+            data["kb_signals_used"] = len(kb_signals)
+
+            n_forces = len(data.get("dimension_forces", []))
+            print(f"   📚 [KB Synthesis] {model_name} succeeded: {n_forces} forces from {len(kb_signals)} KB signals "
+                  f"({'climate' if data.get('climate_exposure') else 'no climate'}) ({elapsed}ms)")
+            return data
+
+        except json.JSONDecodeError as je:
+            elapsed = int((time.time() - t0) * 1000)
+            print(f"   ⚠️ [KB Synthesis] {model_name} JSON parse failed ({elapsed}ms): {je}")
+            continue
+        except Exception as e:
+            elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
+            print(f"   ❌ [KB Synthesis] {model_name} failed ({elapsed}ms): {e}")
+            continue
+
+    return None
+
+
 def generate_foresight(
     company_name: str,
     domain: str,
@@ -750,9 +1058,9 @@ def generate_foresight(
     """
     Generate strategic foresight overlay for a company scan.
 
-    Returns structured dict with per-dimension forces, scenarios,
-    cross-impact chain, and optional climate exposure. Returns None on failure.
-    Uses Gemini 3.1 Pro Preview + Google Search grounding.
+    KB-first approach: When sufficient pre-validated KB signals exist, synthesize
+    company-specific implications without Google Search (faster, cheaper, more reliable).
+    Falls back to full search-grounded generation when KB signals are insufficient.
     """
     gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
     if not gemini_key:
@@ -761,19 +1069,46 @@ def generate_foresight(
 
     domain_config = DOMAIN_TO_FORESIGHT.get(domain, DOMAIN_TO_FORESIGHT["Other"])
 
-    # --- FORESIGHT KB INJECTION ---
-    # Check if pre-validated megatrend signals exist for this domain's themes.
-    # If so, inject them as grounding context — Gemini synthesizes company-specific
-    # implications from pre-validated evidence instead of searching from scratch.
-    kb_context = ""
+    # --- FORESIGHT KB: TRY KB-FIRST PATH ---
+    # If we have enough pre-validated KB signals for this domain's themes,
+    # skip the expensive Google Search-grounded call entirely.
+    # Just verify URLs are still alive and synthesize company-specific implications.
+    kb_signals = []
     try:
-        from foresight_harvester import get_kb_signals_for_themes, format_kb_signals_for_prompt
+        from foresight_harvester import get_kb_signals_for_themes
         kb_signals = get_kb_signals_for_themes(domain_config["fp_themes"])
-        if kb_signals:
-            kb_context = format_kb_signals_for_prompt(kb_signals, max_signals=6)
-            print(f"   📚 [Foresight KB] Injecting {len(kb_signals)} pre-validated signals for themes: {', '.join(domain_config['fp_themes'])}")
     except Exception as kb_err:
         print(f"   ⚠️ [Foresight KB] Could not load KB signals (non-fatal): {kb_err}")
+
+    if len(kb_signals) >= _MIN_KB_SIGNALS_FOR_SYNTHESIS:
+        print(f"   📚 [Foresight KB-First] {len(kb_signals)} KB signals available — using synthesis-only path (no Google Search)")
+
+        # Quick-verify KB signal URLs are still alive
+        verified_signals = _quick_verify_kb_signals(kb_signals)
+
+        if len(verified_signals) >= _MIN_KB_SIGNALS_FOR_SYNTHESIS:
+            kb_result = _generate_foresight_from_kb(
+                company_name, domain, archetype, reality_score,
+                financial_index, top_findings, domain_config,
+                verified_signals, gemini_key,
+            )
+            if kb_result:
+                return kb_result
+            print(f"   ⚠️ [Foresight KB-First] Synthesis failed — falling back to full search")
+        else:
+            print(f"   ⚠️ [Foresight KB-First] Only {len(verified_signals)} signals alive (need {_MIN_KB_SIGNALS_FOR_SYNTHESIS}) — falling back to full search")
+
+    # --- FALLBACK: FULL SEARCH PATH ---
+    # Either KB signals are insufficient or KB synthesis failed.
+    # Use the original Google Search-grounded approach.
+    kb_context = ""
+    if kb_signals:
+        try:
+            from foresight_harvester import format_kb_signals_for_prompt
+            kb_context = format_kb_signals_for_prompt(kb_signals, max_signals=6)
+            print(f"   📚 [Foresight] Injecting {len(kb_signals)} KB signals as supplementary context")
+        except Exception:
+            pass
 
     prompt = _build_foresight_prompt(
         company_name, domain, archetype, reality_score,

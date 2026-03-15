@@ -6,6 +6,7 @@
 - `gemini-3-pro-preview` removed from all fallback chains
 - `domain_classifier.py` wrapped with `call_with_503_backoff`
 - Mistral Large added as independent-provider fallback in synthesis/summary stages
+- **KB-first foresight path** — when sufficient pre-validated KB signals exist (>= 3), `generate_foresight()` synthesizes company-specific implications WITHOUT Google Search grounding. Saves 1-2 expensive API calls per scan, reduces 503 exposure, and skips the source retry loop. Falls back to full search when KB is insufficient. (`strategic_foresight.py`, `main.py`)
 
 ## What Remains — This Plan
 

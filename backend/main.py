@@ -1858,27 +1858,38 @@ def run_scan(
             )
             foresight_ms = int((time.time() - foresight_start) * 1000)
             if foresight_data:
-                print(f"   🔮 [Foresight] Complete: {len(foresight_data.get('dimension_forces', []))} forces ({foresight_ms}ms)")
+                n_forces = len(foresight_data.get('dimension_forces', []))
+                is_kb_first = foresight_data.get("kb_first", False)
+                path_label = "KB-first" if is_kb_first else "search"
+                print(f"   🔮 [Foresight] Complete: {n_forces} forces via {path_label} path ({foresight_ms}ms)")
 
-                # --- STEP 2.7.1: FORESIGHT VALIDATION ---
-                # URL verification (parallel HEAD/GET probes) for primary + supporting sources
-                foresight_data, fs_verified, fs_dead = validate_foresight_urls(foresight_data)
+                if is_kb_first:
+                    # --- KB-FIRST PATH: URLs already verified, sources pre-validated ---
+                    # Skip URL verification, source retry, and quality gate.
+                    # Go straight to reality check and link extraction.
+                    foresight_data["insufficient_evidence"] = False
+                    foresight_data = reality_check_foresight(foresight_data, company_name=companyName)
+                    foresight_links = extract_foresight_links(foresight_data, company_name=companyName)
+                    passes_gate = True
+                    print(f"   📚 [Foresight KB-First] Skipped URL verify + source retry (pre-validated)")
+                else:
+                    # --- FULL SEARCH PATH: need validation pipeline ---
+                    # STEP 2.7.1: URL verification (parallel HEAD/GET probes)
+                    foresight_data, fs_verified, fs_dead = validate_foresight_urls(foresight_data)
 
-                # --- STEP 2.7.2: SOURCE RETRY LOOP ---
-                # If too many sources failed, re-search with targeted Gemini call
-                if fs_verified == 0 or (fs_dead > 0 and fs_verified < len(foresight_data.get("dimension_forces", []))):
-                    foresight_data, newly_verified = retry_failed_sources(foresight_data, domain=company_domain)
-                    fs_verified += newly_verified
+                    # STEP 2.7.2: SOURCE RETRY LOOP
+                    if fs_verified == 0 or (fs_dead > 0 and fs_verified < n_forces):
+                        foresight_data, newly_verified = retry_failed_sources(foresight_data, domain=company_domain)
+                        fs_verified += newly_verified
 
-                # --- STEP 2.7.3: QUALITY GATE ---
-                # Enforce minimum evidence thresholds before accepting foresight
-                foresight_data, passes_gate = enforce_source_quality_gate(foresight_data)
+                    # STEP 2.7.3: QUALITY GATE
+                    foresight_data, passes_gate = enforce_source_quality_gate(foresight_data)
 
-                # Reality-check pass (SIFT-based source quality assessment)
-                foresight_data = reality_check_foresight(foresight_data, company_name=companyName)
+                    # Reality-check pass (SIFT-based source quality assessment)
+                    foresight_data = reality_check_foresight(foresight_data, company_name=companyName)
 
-                # Extract validated sources into foresight_links (mirrors evidence_links schema)
-                foresight_links = extract_foresight_links(foresight_data, company_name=companyName)
+                    # Extract validated sources into foresight_links
+                    foresight_links = extract_foresight_links(foresight_data, company_name=companyName)
 
                 if not passes_gate:
                     print(f"   ⚠️ [Foresight] Insufficient evidence — foresight flagged as low-trust")

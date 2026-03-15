@@ -225,6 +225,29 @@ Domain classification results are fully deterministic and could be cached perman
 
 ---
 
+## KB-First Foresight Path (Implemented)
+
+**Files:** `strategic_foresight.py`, `main.py`
+
+The Foresight Knowledge Base harvester (`foresight_harvester.py`) pre-validates megatrend signals for all 30 FP themes with URL verification and multi-source corroboration. The **KB-first path** leverages this pre-validated evidence to eliminate expensive Google Search-grounded Gemini calls during foresight generation:
+
+**How it works:**
+1. Load pre-validated KB signals for the company's domain themes
+2. If >= 3 signals exist, quick-verify their URLs are still alive (parallel HEAD checks)
+3. Use a lighter Gemini call WITHOUT Google Search to synthesize company-specific implications
+4. Skip the source retry loop entirely (signals already validated)
+5. Go straight to reality check and link extraction
+
+**Impact:**
+- Saves 1-2 Gemini API calls per scan (the search-grounded foresight call + source retry)
+- Reduces timeout from 120s to 60s (synthesis is faster without search tool)
+- Eliminates source retry loop (another potential 60-90s Gemini call)
+- Falls back to full search if KB signals are insufficient or synthesis fails
+
+**Net effect on per-scan Gemini calls during 503 storms:** When KB is populated, the foresight stage drops from 2-4 search-grounded calls to 1 synthesis-only call. Combined with the circuit breaker, this further reduces the blast radius.
+
+---
+
 ## Conclusion
 
-The core fragility is structural: **too many independent Gemini calls, each with its own short-fuse retry logic, and no coordination between them.** The most impactful single change is the **circuit breaker** — it turns 45+ doomed calls during an outage into 3-9 calls (only the first stage discovers the outage; subsequent stages skip immediately). Combined with longer backoff delays and removing the expiring middle model, this should reduce scan failure rates during 503 storms by 60-80%.
+The core fragility is structural: **too many independent Gemini calls, each with its own short-fuse retry logic, and no coordination between them.** The most impactful single change is the **circuit breaker** — it turns 45+ doomed calls during an outage into 3-9 calls (only the first stage discovers the outage; subsequent stages skip immediately). Combined with longer backoff delays, removing the expiring middle model, and the **KB-first foresight path** (which eliminates 1-3 search-grounded calls when KB data exists), this should reduce scan failure rates during 503 storms by 60-80%.
