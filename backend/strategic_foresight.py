@@ -1008,21 +1008,42 @@ def _generate_foresight_from_kb(
                 force["url_verified"] = True
                 force["validated"] = True
                 force["_from_kb"] = True
-                # Match force to KB signal by source_url and carry over rich fields
+
+                # Match force to KB signal — try source_url first, then title
                 source_url = (force.get("source_url") or "").strip()
+                force_title = (force.get("trend") or "").strip().lower()
+                matched_sig = None
                 for sig in kb_signals:
-                    if sig.get("source_url", "").strip() == source_url:
-                        if sig.get("supporting_sources") and not force.get("supporting_sources"):
-                            force["supporting_sources"] = sig["supporting_sources"]
-                        force["source_credibility"] = sig.get("source_credibility", "medium")
-                        force["source_count"] = 1 + len(sig.get("supporting_sources", []))
-                        # Carry KB signal description for downstream consumers (Sonnet)
-                        if sig.get("description"):
-                            force["_kb_description"] = sig["description"]
+                    if source_url and sig.get("source_url", "").strip() == source_url:
+                        matched_sig = sig
                         break
+                if not matched_sig and force_title:
+                    for sig in kb_signals:
+                        sig_title = (sig.get("title") or "").strip().lower()
+                        if sig_title and (sig_title in force_title or force_title in sig_title):
+                            matched_sig = sig
+                            # Also fix the source_url to use the verified KB URL
+                            if sig.get("source_url"):
+                                force["source_url"] = sig["source_url"]
+                            break
+
+                if matched_sig:
+                    kb_supporting = matched_sig.get("supporting_sources", [])
+                    if kb_supporting and not force.get("supporting_sources"):
+                        force["supporting_sources"] = kb_supporting
+                    # Set verified_supporting_sources (reality_check_foresight needs this)
+                    force["verified_supporting_sources"] = [
+                        {**ss, "url_verified": True}
+                        for ss in (force.get("supporting_sources") or kb_supporting)
+                    ]
+                    force["source_credibility"] = matched_sig.get("source_credibility", "medium")
+                    force["source_count"] = 1 + len(force["verified_supporting_sources"])
+                    if matched_sig.get("description"):
+                        force["_kb_description"] = matched_sig["description"]
                 else:
                     force["source_credibility"] = "medium"
                     force["source_count"] = 1
+                    force["verified_supporting_sources"] = []
 
             # Add metadata
             data["fp_themes_used"] = domain_config["fp_themes"]
