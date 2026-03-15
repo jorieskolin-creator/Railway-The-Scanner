@@ -34,7 +34,7 @@ from strategic_foresight import (
 )
 from storage import BlobStorage
 
-MAX_SIGNALS_PER_THEME = 10
+MAX_SIGNALS_PER_THEME = 15
 
 
 def _theme_to_slug(theme: str) -> str:
