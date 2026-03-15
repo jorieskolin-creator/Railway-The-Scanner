@@ -636,7 +636,7 @@ def _build_evidence_anchors(previous_context):
 JURY_CATEGORY_MAP = {
     1: ["Operating Model", "Engineering", "Architecture", "Code", "API", "Design System", "Job", "Tech Stack"],
     2: ["Strategy", "Business", "Procurement", "Revenue", "Investment", "Leadership"],
-    3: ["Culture", "Talent", "Employee", "Inclusion", "Community", "HR", "People", "Careers"],
+    3: ["Values", "Culture", "Talent", "Employee", "Inclusion", "Community", "HR", "People", "Careers"],
     4: ["AI", "Data", "Technology", "Cloud", "Academic", "Research"],
     5: ["Service", "Portfolio", "Delivery", "Platform", "Solution", "Client", "Reference"],
 }

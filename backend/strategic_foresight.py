@@ -405,7 +405,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "Healthcare": {
         "fp_themes": ["Health & Wellbeing", "Artificial Intelligence", "Sciences & Research"],
-        "priority_dimensions": ["AI Readiness", "Service Portfolio", "Culture"],
+        "priority_dimensions": ["AI Readiness", "Service Portfolio", "Values"],
         "osint_keywords": "healthcare AI diagnostics regulation, digital health transformation, pharmaceutical supply chain risks",
         "target_sources": [
             "site:mckinsey.com healthcare transformation",

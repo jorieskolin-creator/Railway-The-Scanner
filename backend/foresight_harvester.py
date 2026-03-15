@@ -187,7 +187,7 @@ For each signal, provide:
 - "source_type": "academic" | "think_tank" | "industry_analyst" | "government" | "news"
 - "confidence": "high" (3+ sources) | "medium" (2 sources) | "low" (1 source)
 - "industries_affected": Array of 2-4 industry domains most impacted (e.g., ["Technology & Software", "Financial Services", "Healthcare"])
-- "kb_dimensions_affected": Array of 1-3 KB dimensions impacted: "Operating Model", "Strategy", "Culture", "Service Portfolio", "AI Readiness"
+- "kb_dimensions_affected": Array of 1-3 KB dimensions impacted: "Operating Model", "Strategy", "Values", "Service Portfolio", "AI Readiness"
 
 CRITICAL: Every URL must be real and retrieved from web search. Do NOT fabricate URLs.
 

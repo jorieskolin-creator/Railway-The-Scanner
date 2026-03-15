@@ -32,7 +32,7 @@ Evaluate companies against these 5 Dimensions. Use these terms explicitly.
 - **Bad (Old Way):** "Fake Agile" / "Zombie Scrum". Using agile rituals within a strict Waterfall budget. "HiPPO" decision making (Highest Paid Person's Opinion).
 - **Good (Modern Way):** "Adaptive Strategy". Rolling forecasts, "Beyond Budgeting", and "Sense and Respond" loops.
 
-### C. CULTURE (Safety vs. Fear)
+### C. VALUES (Safety vs. Fear)
 - **Bad (Old Way):** "Blame Culture". Fear of failure, scapegoating, information hoarding, and gatekeeping (Portinvartijuus).
 - **Good (Modern Way):** "Psychological Safety". Blameless post-mortems, high trust, and radical transparency.
 
