@@ -1297,14 +1297,17 @@ def generate_foresight_summary(
     # Format forces for the prompt — include rich context for better narrative
     forces = foresight_data["dimension_forces"]
 
-    # Build "Foresight basis" line — shows which DB themes & source counts were used
-    _theme_sources: dict[str, int] = {}
+    # Build attribution line — shows which Foresight themes from the DB were used
+    _themes_used: set[str] = set()
     for f in forces:
         theme = f.get("fp_theme", "Unknown")
-        n_src = 1 + len(f.get("verified_supporting_sources", []) or f.get("supporting_sources", []))
-        _theme_sources[theme] = _theme_sources.get(theme, 0) + n_src
-    _basis_parts = [f"{theme} ({n} sources)" for theme, n in _theme_sources.items()]
-    _basis_line = "Foresight basis: " + ", ".join(_basis_parts) + "." if _basis_parts else ""
+        if theme and theme != "Unknown":
+            _themes_used.add(theme)
+    _theme_list = sorted(_themes_used)
+    _basis_line = (
+        "This Future Insight is based on the following Foresight(s): "
+        + ", ".join(_theme_list) + "."
+    ) if _theme_list else ""
     forces_text = ""
     for idx, f in enumerate(forces, 1):
         n_supporting = len(f.get("verified_supporting_sources", []) or f.get("supporting_sources", []))
