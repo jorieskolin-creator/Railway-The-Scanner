@@ -556,7 +556,73 @@ DOMAIN_TO_FORESIGHT = {
 }
 
 
-_MIN_KB_SIGNALS_FOR_SYNTHESIS = 3  # Need at least 3 KB signals to skip Google Search
+_MIN_KB_SIGNALS_FOR_SYNTHESIS = 3  # Need at least 3 KB signals for synthesis
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# THEME FALLBACK MAP — Near-fit substitution for missing KB themes
+#
+# When a requested FP theme has no data in the Foresight KB, substitute signals
+# from a semantically related theme instead of triggering a live Google Search.
+# This eliminates hallucination risk: all foresight data flows through the
+# harvester's controlled pipeline (URL verification + credibility checks).
+#
+# Organised by KB dimension clusters — themes in the same cluster share enough
+# strategic overlap that cross-referencing is safe and informative.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+THEME_FALLBACK_MAP = {
+    # --- Operating Model cluster ---
+    "Management & HR":              ["Business", "Data & Digitalisation", "Work & Income"],
+    "Data & Digitalisation":        ["Artificial Intelligence", "Business", "Communication & Media"],
+    "Business":                     ["Data & Digitalisation", "Global Economy", "Services"],
+
+    # --- Values cluster ---
+    "Values & Ethics":              ["Society", "Public Governance", "Work & Income"],
+    "Society":                      ["Values & Ethics", "Work & Income", "Public Governance"],
+    "Work & Income":                ["Management & HR", "Society", "Education & Knowledge"],
+
+    # --- Strategy cluster ---
+    "Global Economy":               ["Geopolitics", "Finance & Ownership", "Business"],
+    "Geopolitics":                   ["Global Economy", "Security & Safety", "Public Governance"],
+    "Climate Change":                ["Sustainability & Recycling", "Energy", "Nature"],
+
+    # --- Service Portfolio cluster ---
+    "Digital & Sharing Economies":   ["Business", "Services", "Data & Digitalisation"],
+    "Services":                      ["Business", "Digital & Sharing Economies", "Data & Digitalisation"],
+
+    # --- AI Readiness cluster ---
+    "Artificial Intelligence":       ["Data & Digitalisation", "Sciences & Research", "Industry & Manufacturing"],
+
+    # --- Industry & Infrastructure ---
+    "Industry & Manufacturing":      ["Artificial Intelligence", "Energy", "Business"],
+    "Construction & Urbanisation":   ["Energy", "Sustainability & Recycling", "Industry & Manufacturing"],
+    "Energy":                        ["Climate Change", "Sustainability & Recycling", "Industry & Manufacturing"],
+    "Freight & Logistics":           ["Private & Public Transport", "Industry & Manufacturing", "Global Economy"],
+    "Private & Public Transport":    ["Freight & Logistics", "Energy", "Construction & Urbanisation"],
+
+    # --- Environment & Resources ---
+    "Sustainability & Recycling":    ["Climate Change", "Nature", "Energy"],
+    "Nature":                        ["Climate Change", "Sustainability & Recycling", "Water & Oceans"],
+    "Food":                          ["Nature", "Sustainability & Recycling", "Health & Wellbeing"],
+    "Water & Oceans":                ["Nature", "Climate Change", "Sustainability & Recycling"],
+
+    # --- Society & Governance ---
+    "Public Governance":             ["Geopolitics", "Values & Ethics", "Society"],
+    "Security & Safety":             ["Geopolitics", "Artificial Intelligence", "Public Governance"],
+
+    # --- People & Well-being ---
+    "Health & Wellbeing":            ["Sciences & Research", "Artificial Intelligence", "Society"],
+    "Education & Knowledge":         ["Work & Income", "Artificial Intelligence", "Management & HR"],
+    "Leisure & Lifestyles":          ["Digital & Sharing Economies", "Society", "Services"],
+
+    # --- Science & Demographics ---
+    "Sciences & Research":           ["Artificial Intelligence", "Health & Wellbeing", "Energy"],
+    "Population & Demographics":     ["Global Economy", "Society", "Work & Income"],
+
+    # --- Media ---
+    "Communication & Media":         ["Data & Digitalisation", "Artificial Intelligence", "Values & Ethics"],
+    "Finance & Ownership":           ["Global Economy", "Business", "Security & Safety"],
+}
 
 
 def _quick_verify_kb_signals(signals: list[dict], max_workers: int = 8) -> list[dict]:
@@ -1082,9 +1148,13 @@ def generate_foresight(
     """
     Generate strategic foresight overlay for a company scan.
 
-    KB-first approach: When sufficient pre-validated KB signals exist, synthesize
-    company-specific implications without Google Search (faster, cheaper, more reliable).
-    Falls back to full search-grounded generation when KB signals are insufficient.
+    KB-only approach: All foresight data comes from the pre-validated Foresight KB.
+    No live Google Search is performed during per-company analysis — this eliminates
+    hallucination risk. New data enters the system only through the harvester's
+    controlled pipeline (URL verification + credibility checks + deduplication).
+
+    When a theme has no KB data, get_kb_signals_for_themes() automatically
+    substitutes signals from the nearest related theme (THEME_FALLBACK_MAP).
     """
     gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
     if not gemini_key:
@@ -1093,133 +1163,48 @@ def generate_foresight(
 
     domain_config = DOMAIN_TO_FORESIGHT.get(domain, DOMAIN_TO_FORESIGHT["Other"])
 
-    # --- FORESIGHT KB: TRY KB-FIRST PATH ---
-    # If we have enough pre-validated KB signals for this domain's themes,
-    # skip the expensive Google Search-grounded call entirely.
-    # Just verify URLs are still alive and synthesize company-specific implications.
+    # --- FORESIGHT KB-ONLY PATH ---
+    # All foresight data comes from the pre-validated KB (with near-fit fallback).
+    # No live Google Search — searches happen only at harvest time.
     kb_signals = []
     try:
         from foresight_harvester import get_kb_signals_for_themes
         kb_signals = get_kb_signals_for_themes(domain_config["fp_themes"])
     except Exception as kb_err:
-        print(f"   ⚠️ [Foresight KB] Could not load KB signals (non-fatal): {kb_err}")
+        print(f"   ⚠️ [Foresight KB] Could not load KB signals: {kb_err}")
 
-    if len(kb_signals) >= _MIN_KB_SIGNALS_FOR_SYNTHESIS:
-        print(f"   📚 [Foresight KB-First] {len(kb_signals)} KB signals available — using synthesis-only path (no Google Search)")
+    if len(kb_signals) < _MIN_KB_SIGNALS_FOR_SYNTHESIS:
+        print(f"   ⚠️ [Foresight KB-Only] Only {len(kb_signals)} KB signals available "
+              f"(need {_MIN_KB_SIGNALS_FOR_SYNTHESIS}) — foresight skipped. "
+              f"Run the harvester to populate the Foresight KB.")
+        return None
 
-        # Quick-verify KB signal URLs are still alive
-        verified_signals = _quick_verify_kb_signals(kb_signals)
+    # Log near-fit substitutions for transparency
+    fallback_count = sum(1 for s in kb_signals if s.get("_kb_fallback_from"))
+    if fallback_count:
+        print(f"   📚 [Foresight KB-Only] {len(kb_signals)} KB signals "
+              f"({fallback_count} from near-fit themes) — synthesis-only path")
+    else:
+        print(f"   📚 [Foresight KB-Only] {len(kb_signals)} KB signals available — synthesis-only path")
 
-        if len(verified_signals) >= _MIN_KB_SIGNALS_FOR_SYNTHESIS:
-            kb_result = _generate_foresight_from_kb(
-                company_name, domain, archetype, reality_score,
-                financial_index, top_findings, domain_config,
-                verified_signals, gemini_key,
-            )
-            if kb_result:
-                return kb_result
-            print(f"   ⚠️ [Foresight KB-First] Synthesis failed — falling back to full search")
-        else:
-            print(f"   ⚠️ [Foresight KB-First] Only {len(verified_signals)} signals alive (need {_MIN_KB_SIGNALS_FOR_SYNTHESIS}) — falling back to full search")
+    # Quick-verify KB signal URLs are still alive
+    verified_signals = _quick_verify_kb_signals(kb_signals)
 
-    # --- FALLBACK: FULL SEARCH PATH ---
-    # Either KB signals are insufficient or KB synthesis failed.
-    # Use the original Google Search-grounded approach.
-    kb_context = ""
-    if kb_signals:
-        try:
-            from foresight_harvester import format_kb_signals_for_prompt
-            kb_context = format_kb_signals_for_prompt(kb_signals, max_signals=6)
-            print(f"   📚 [Foresight] Injecting {len(kb_signals)} KB signals as supplementary context")
-        except Exception:
-            pass
+    if len(verified_signals) < _MIN_KB_SIGNALS_FOR_SYNTHESIS:
+        print(f"   ⚠️ [Foresight KB-Only] Only {len(verified_signals)} signals alive "
+              f"(need {_MIN_KB_SIGNALS_FOR_SYNTHESIS}) — foresight skipped. "
+              f"Run the harvester to refresh stale KB data.")
+        return None
 
-    prompt = _build_foresight_prompt(
+    kb_result = _generate_foresight_from_kb(
         company_name, domain, archetype, reality_score,
         financial_index, top_findings, domain_config,
-        kb_context=kb_context,
+        verified_signals, gemini_key,
     )
+    if kb_result:
+        return kb_result
 
-    client = genai.Client(api_key=gemini_key)
-
-    _safety = [
-        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-    ]
-
-    # Primary: Gemini 3.1 Pro Preview with Google Search grounding
-    models = [
-        ("gemini-3.1-pro-preview", genai_types.GenerateContentConfig(
-            tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
-            safety_settings=_safety,
-            temperature=0.5,
-            thinking_config=genai_types.ThinkingConfig(thinking_budget=3000),
-            max_output_tokens=8000,
-        ), 120),
-        ("gemini-2.5-pro", genai_types.GenerateContentConfig(
-            tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
-            safety_settings=_safety,
-            temperature=0.5,
-            thinking_config=genai_types.ThinkingConfig(thinking_budget=2048),
-            max_output_tokens=8000,
-        ), 90),
-    ]
-
-    for model_name, config, timeout_sec in models:
-        try:
-            print(f"   🔮 [Foresight] Attempting {model_name} for {company_name} ({domain})...")
-            t0 = time.time()
-            response = call_with_503_backoff(
-                lambda mn=model_name, cfg=config: client.models.generate_content(
-                    model=mn, contents=prompt, config=cfg,
-                ),
-                label=f"Foresight {company_name} {model_name}",
-                model=model_name,
-                timeout=timeout_sec,
-            )
-            text = response.text if hasattr(response, "text") else ""
-            elapsed = int((time.time() - t0) * 1000)
-
-            if not text or len(text) < 100:
-                print(f"   ⚠️ [Foresight] {model_name} returned insufficient data ({len(text) if text else 0} chars, {elapsed}ms)")
-                continue
-
-            json_str = _extract_json_from_text(text)
-            if not json_str:
-                print(f"   ⚠️ [Foresight] Could not extract JSON from {model_name} response ({elapsed}ms)")
-                continue
-
-            data = json.loads(json_str, strict=False)
-
-            # Validate minimum structure
-            if not data.get("dimension_forces") or not data.get("scenarios"):
-                print(f"   ⚠️ [Foresight] {model_name} returned incomplete structure ({elapsed}ms)")
-                continue
-
-            # Add metadata
-            data["fp_themes_used"] = domain_config["fp_themes"]
-            data["model"] = model_name
-            data["time_ms"] = elapsed
-            data["domain"] = domain
-
-            n_forces = len(data.get("dimension_forces", []))
-            print(f"   🔮 [Foresight] {model_name} succeeded: {n_forces} forces, "
-                  f"{'climate' if data.get('climate_exposure') else 'no climate'} "
-                  f"({elapsed}ms)")
-            return data
-
-        except json.JSONDecodeError as je:
-            elapsed = int((time.time() - t0) * 1000)
-            print(f"   ⚠️ [Foresight] {model_name} JSON parse failed ({elapsed}ms): {je}")
-            continue
-        except Exception as e:
-            elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
-            print(f"   ❌ [Foresight] {model_name} failed ({elapsed}ms): {e}")
-            continue
-
-    print(f"   ❌ [Foresight] All models failed for {company_name} — foresight skipped")
+    print(f"   ❌ [Foresight KB-Only] Synthesis failed for {company_name} — foresight skipped")
     return None
 
 

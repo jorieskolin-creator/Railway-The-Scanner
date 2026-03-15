@@ -29,7 +29,8 @@ from google.genai import types as genai_types
 from gemini_backoff import call_with_503_backoff
 from source_quality import HIGH_CREDIBILITY_DOMAINS, assess_source_credibility
 from strategic_foresight import (
-    FP_THEMES_30, FP_THEME_SOURCES, _verify_foresight_url, _extract_json_from_text,
+    FP_THEMES_30, FP_THEME_SOURCES, THEME_FALLBACK_MAP,
+    _verify_foresight_url, _extract_json_from_text,
 )
 from storage import BlobStorage
 
@@ -483,6 +484,11 @@ def get_kb_signals_for_themes(theme_names: list[str]) -> list[dict]:
     Retrieve pre-validated signals from the Foresight KB for a set of FP themes.
     Used by generate_foresight() to inject known signals into the company-specific prompt.
 
+    Near-fit fallback: When a requested theme has no KB data, automatically
+    pulls signals from the nearest related theme (via THEME_FALLBACK_MAP)
+    instead of triggering a live Google Search. This keeps all foresight data
+    flowing through the harvester's controlled validation pipeline.
+
     Returns a flat list of signal dicts, sorted by confidence (high first).
     """
     storage = BlobStorage()
@@ -491,13 +497,33 @@ def get_kb_signals_for_themes(theme_names: list[str]) -> list[dict]:
     for theme in theme_names:
         slug = _theme_to_slug(theme)
         data = storage.get_foresight_kb(slug)
+        signals_found = []
+
         if data and data.get("signals"):
-            # Only include validated, high/medium confidence signals
             for sig in data["signals"]:
                 if sig.get("validated") or sig.get("confidence") in ("high", "medium"):
-                    sig["_from_kb"] = True  # Tag as KB-sourced
+                    sig["_from_kb"] = True
                     sig["_kb_theme"] = theme
-                    all_signals.append(sig)
+                    signals_found.append(sig)
+
+        # Near-fit fallback: if no signals for this theme, try related themes
+        if not signals_found:
+            fallback_themes = THEME_FALLBACK_MAP.get(theme, [])
+            for fallback_theme in fallback_themes:
+                fallback_slug = _theme_to_slug(fallback_theme)
+                fallback_data = storage.get_foresight_kb(fallback_slug)
+                if fallback_data and fallback_data.get("signals"):
+                    for sig in fallback_data["signals"]:
+                        if sig.get("validated") or sig.get("confidence") in ("high", "medium"):
+                            sig["_from_kb"] = True
+                            sig["_kb_theme"] = theme  # Tag with the originally requested theme
+                            sig["_kb_fallback_from"] = fallback_theme  # Track substitution source
+                            signals_found.append(sig)
+                    if signals_found:
+                        print(f"   📚 [KB Near-Fit] No data for '{theme}' → using '{fallback_theme}' ({len(signals_found)} signals)")
+                        break  # Use the first fallback that has data
+
+        all_signals.extend(signals_found)
 
     # Sort: high confidence first, then medium, then low
     confidence_order = {"high": 0, "medium": 1, "low": 2}
@@ -520,7 +546,7 @@ def format_kb_signals_for_prompt(signals: list[dict], max_signals: int = 8) -> s
         "PRE-VALIDATED MEGATREND SIGNALS (from Foresight Knowledge Base):",
         "The following signals have been independently verified with 2+ authoritative sources.",
         "Use these as GROUNDING CONTEXT — synthesize their impact on this specific company.",
-        "You may augment with additional search, but these signals are already validated.\n",
+        "Do NOT search for additional sources — these signals are pre-validated and sufficient.\n",
     ]
 
     for i, sig in enumerate(selected, 1):
