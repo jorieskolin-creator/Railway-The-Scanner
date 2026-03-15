@@ -10,11 +10,14 @@
     "core_formula": "Reality Gap = Intent Score - Reality Score",
     "total_phases": 9,
     "ai_models_used": [
-      "Claude Sonnet 4.6 (Extended Thinking + Brave Web Search) — Primary reality scanner",
-      "Claude Opus 4.6 (Extended Thinking, 10K budget) — Primary synthesis engine",
-      "Gemini 3.1 Pro (Google Search grounding) — Fact-checker + fallback",
+      "Claude Sonnet 4.6 (Extended Thinking + Brave Web Search) — Primary reality scanner (Scanner 2)",
+      "Claude Opus 4.6 (Extended Thinking, 10K budget) — Primary synthesis engine & final judge",
+      "Gemini 3.1 Pro Preview (Google Search grounding + Thinking) — Forensic search, foresight generation, fact-checker",
+      "Gemini 3-Flash Preview (Google Search grounding) — URL auto-discovery",
+      "Gemini 2.5 Pro (Google Search grounding) — Financial analysis, general summary generation",
       "Gemini 3 Pro — Fallback synthesis",
-      "Gemini 2.5 Pro — Last-resort fallback",
+      "Mistral Large — Synthesis fallback chain",
+      "GLM-5 (web search grounding) — Optional alternative forensic search",
       "Rule-based keyword engine — Intent analysis (no AI model)"
     ],
     "agentic_ai_patterns": [
@@ -766,12 +769,174 @@
 
   "technology_stack": {
     "frontend": "React 19 + Recharts (scatter plot, radar charts, line charts) + Tailwind CSS + Lucide icons",
-    "backend": "Node.js server with Express-style API routes",
-    "storage": "Vercel Blob Storage (JSON persistence)",
-    "hosting": "Railway / Vercel",
-    "ai_providers": ["Anthropic (Claude Opus 4.6, Claude Sonnet 4.6)", "Google (Gemini 3.1 Pro, Gemini 3 Pro, Gemini 2.5 Pro)"],
-    "search_providers": ["Brave Web Search (via Claude)", "Google Search (via Gemini grounding)"],
-    "document_processing": "PDF and HTML text extraction for uploaded documents"
+    "backend": "FastAPI (Python) with ThreadPoolExecutor for parallel operations",
+    "storage": "Vercel Blob Storage (JSON persistence, versioned — keeps 3 recent versions per company)",
+    "hosting": "Railway (containerized Python backend + static React frontend)",
+    "ai_providers": [
+      "Anthropic (Claude Opus 4.6, Claude Sonnet 4.6)",
+      "Google (Gemini 3.1 Pro Preview, Gemini 3-Flash Preview, Gemini 2.5 Pro, Gemini 3 Pro)",
+      "Mistral (Mistral Large — synthesis fallback)",
+      "GLM-5 (optional alternative web search grounding)"
+    ],
+    "search_providers": ["Brave Web Search (via Claude tool use)", "Google Search (via Gemini grounding tools)"],
+    "document_processing": "PDF and HTML text extraction for uploaded documents (max 3 files, 10MB each)",
+    "resilience": {
+      "retry_strategy": "Exponential backoff for Gemini 503s (3s → 8s → 20s ±30% jitter)",
+      "circuit_breaker": "Tracks model failures, opens circuit if persistent",
+      "fallback_chains": "Every AI phase has 2-4 model fallbacks",
+      "graceful_degradation": "Financial failure → reuse previous index. Synthesis failure → reuse previous summary. Never returns null if fallback available."
+    }
+  },
+
+  "ai_model_matrix": {
+    "description": "Complete mapping of which AI model does what, with reasoning and grounding capabilities",
+    "models": [
+      {
+        "model": "Claude Opus 4.6",
+        "role": "Final judge — synthesizes intent + reality into diagnosis",
+        "phases": ["PHASE_6 (Synthesis)"],
+        "extended_thinking": true,
+        "thinking_budget": "10,000 tokens",
+        "search_grounding": "Uses evidence from Scanner 1+2 (not live search)",
+        "why_this_model": "Deepest reasoning capability. Extended Thinking allows it to reason through conflicting evidence before committing to scores."
+      },
+      {
+        "model": "Gemini 3.1 Pro Preview",
+        "role": "Forensic web search, foresight generation, fact-checking, synthesis fallback",
+        "phases": ["PHASE_1 (Foresight Harvest)", "PHASE_4 (Reality Check fallback)", "PHASE_7 (Fact-Check)", "PHASE_6 (Synthesis fallback 1)"],
+        "extended_thinking": true,
+        "thinking_budget": "2,000-3,000 tokens",
+        "search_grounding": "Google Search grounding (live web access)",
+        "why_this_model": "Best combination of reasoning + live web search. Google Search grounding enables independent fact verification."
+      },
+      {
+        "model": "Gemini 2.5 Pro",
+        "role": "Financial analysis, general summary generation",
+        "phases": ["PHASE_4B (Financial Health)", "General Summary generation"],
+        "extended_thinking": false,
+        "search_grounding": "Google Search grounding",
+        "why_this_model": "Cost-effective for structured financial data extraction. Reliable for factual summarization."
+      },
+      {
+        "model": "Gemini 3-Flash Preview",
+        "role": "URL auto-discovery",
+        "phases": ["PHASE_2 (URL resolution)"],
+        "extended_thinking": false,
+        "search_grounding": "Google Search grounding",
+        "why_this_model": "Fastest model for simple URL lookup tasks. Low cost per call."
+      },
+      {
+        "model": "Claude Sonnet 4.6",
+        "role": "Primary forensic web search for Reality Check",
+        "phases": ["PHASE_4 (Reality Check — primary)"],
+        "extended_thinking": false,
+        "search_grounding": "Brave Web Search (up to 10 searches per jury)",
+        "why_this_model": "Excellent at structured evidence extraction from search results. Brave Search provides diverse sources."
+      },
+      {
+        "model": "Mistral Large",
+        "role": "Synthesis fallback (last resort before Gemini chain)",
+        "phases": ["PHASE_6 (Synthesis fallback 2)"],
+        "extended_thinking": false,
+        "search_grounding": "Text analysis only (no live search)",
+        "why_this_model": "Independent provider ensures synthesis completes even during Anthropic+Google outages."
+      },
+      {
+        "model": "GLM-5",
+        "role": "Optional alternative forensic web search",
+        "phases": ["PHASE_4 (Reality Check — optional substitute for Gemini)"],
+        "extended_thinking": true,
+        "search_grounding": "Web search grounding",
+        "why_this_model": "Provides search diversity — different search index than Google/Brave. Can substitute when primary providers are overloaded."
+      },
+      {
+        "model": "Rule-based Keyword Engine",
+        "role": "Intent analysis — deterministic keyword matching",
+        "phases": ["PHASE_3 (Scanner 1)"],
+        "extended_thinking": false,
+        "search_grounding": "None — operates on collected text only",
+        "why_this_model": "Deterministic, fast, reproducible. AI would add latency and non-determinism for a task that doesn't need it."
+      }
+    ]
+  },
+
+  "backend_architecture": {
+    "description": "Python FastAPI backend with modular scanner pipeline",
+    "key_files": {
+      "main.py": "FastAPI app, all routes, scan orchestration, synthesis pipeline",
+      "scanner_one.py": "Intent analysis — website scraping + keyword matching",
+      "scanner_two.py": "Reality verification — 5-jury X-Ray forensic web search",
+      "strategic_foresight.py": "Megatrend force generation + company-specific application",
+      "general_summary.py": "225-275 word plain-language executive summary",
+      "detailed_report.py": "800-1200 word deep dive report",
+      "reality_check.py": "Hallucination detection + AI fact-checking",
+      "analyze_scores.py": "Statistical analysis (correlations, archetypes, rankings)",
+      "knowledge_base.py": "Evolving Modernization framework loader (remote JSON + fallback)",
+      "source_quality.py": "Evidence credibility tiers, evidence capping (max 15 sources), foresight validation",
+      "foresight_harvester.py": "Autonomous KB signal harvesting from 30 FP themes",
+      "stakeholder_intel.py": "LinkedIn intelligence enrichment for key people",
+      "storage.py": "Vercel Blob persistence (versioned, 3 versions per company)",
+      "gemini_backoff.py": "Exponential backoff retry logic for Gemini API",
+      "gemini_circuit.py": "Circuit breaker for model failure detection",
+      "domain_classifier.py": "Industry domain inference from company data",
+      "finland_list.py": "TOP_100_COMPANIES metadata for Finnish market"
+    },
+    "timeout_management": {
+      "total_scan_budget": "540 seconds (9 minutes)",
+      "reality_check": "Dynamic allocation (min 180s, max 390s)",
+      "synthesis": "120s per model with fallback chain",
+      "foresight": "~60s",
+      "reserve": "150s for post-processing"
+    },
+    "concurrency": {
+      "parallel_phases": "Scanner 2 (reality) + Financial search run via ThreadPoolExecutor",
+      "url_verification": "Parallel HEAD/GET probes (max 6-8 workers, 4s timeout per URL)",
+      "batch_processing": "Sequential per-company, background thread with progress tracking"
+    }
+  },
+
+  "evidence_quality_system": {
+    "description": "Multi-tier evidence management ensuring only high-quality sources inform scores",
+    "credibility_tiers": {
+      "tier_1_high": "Research firms (Gartner, McKinsey, Forrester), major press (Reuters, Bloomberg), academic papers, government statistics",
+      "tier_2_medium": "Company blogs, LinkedIn posts, industry publications, trade press",
+      "tier_3_low": "Content farms, press release wires, forums, unverified blogs"
+    },
+    "evidence_cap": "Maximum 15 sources per company — low-credibility oldest evicted first",
+    "gold_standard": "15+ high-credibility verified sources → skip new searches (sufficient evidence)",
+    "url_verification": "Parallel HEAD/GET probes, marks as verified/dead, retries GET if HEAD fails",
+    "foresight_source_gates": [
+      "Gate 1: All source URLs must be HTTP-reachable",
+      "Gate 2: If <2 verified sources per force, trigger re-search",
+      "Gate 3: Minimum 2 verified sources required or suppress foresight output",
+      "Gate 4: SIFT-based reality check (lateral reading, source credibility assessment)"
+    ]
+  },
+
+  "api_endpoints": {
+    "public": [
+      { "method": "GET", "path": "/api/health", "purpose": "Backend health + storage connection status" },
+      { "method": "GET", "path": "/dashboard-data", "purpose": "All company summaries for landing page" },
+      { "method": "GET", "path": "/company/{name}", "purpose": "Full detailed company analysis" },
+      { "method": "GET", "path": "/api/analyze", "purpose": "Statistical analysis across all companies" },
+      { "method": "GET", "path": "/batch-status", "purpose": "Current batch refresh progress" },
+      { "method": "GET", "path": "/api/find-url", "purpose": "AI-powered URL auto-discovery" },
+      { "method": "GET", "path": "/admin/foresight-kb-status", "purpose": "Foresight KB harvest progress" }
+    ],
+    "admin_authenticated": [
+      { "method": "POST", "path": "/scan", "purpose": "Run single forensic scan (multipart: name + URL + files)" },
+      { "method": "POST", "path": "/batch-refresh", "purpose": "Start background full database refresh" },
+      { "method": "POST", "path": "/batch-refresh/stop", "purpose": "Stop running batch" },
+      { "method": "POST", "path": "/admin/recheck-company/{name}", "purpose": "Re-verify + auto-clean single company" },
+      { "method": "POST", "path": "/admin/recheck-all", "purpose": "Re-verify all companies" },
+      { "method": "POST", "path": "/admin/refresh-proposals/{name}", "purpose": "Regenerate WHY/WHAT proposals" },
+      { "method": "POST", "path": "/admin/refresh-proposals-all", "purpose": "Refresh all proposals" },
+      { "method": "POST", "path": "/admin/enrich-stakeholders/{name}", "purpose": "LinkedIn intelligence enrichment" },
+      { "method": "POST", "path": "/admin/enrich-stakeholders-all", "purpose": "Enrich all stakeholders" },
+      { "method": "POST", "path": "/admin/recalculate-financial", "purpose": "Recompute all financial indices" },
+      { "method": "POST", "path": "/admin/refresh-foresight-kb", "purpose": "Harvest megatrend signals (30 themes)" },
+      { "method": "DELETE", "path": "/admin/company/{name}", "purpose": "Delete company from database" }
+    ]
   },
 
   "data_flow_summary": {
@@ -787,6 +952,57 @@
       "Foresight KB (PHASE_1) --> Foresight Application (PHASE_8)",
       "Foresight Application (PHASE_8) --> Classification & Storage (PHASE_9)",
       "Classification (PHASE_9) --> Dashboard (Truth Matrix + Forensic Index)"
-    ]
+    ],
+    "parallel_execution": {
+      "group_1": "Scanner 1 (Intent) runs first — provides input for Scanner 2",
+      "group_2": "Scanner 2 (Reality) + Financial Health run IN PARALLEL via ThreadPoolExecutor",
+      "group_3": "Self-Analysis runs ONLY IF score delta >= 15 from previous scan",
+      "group_4": "Synthesis → Fact-Check → Foresight → Classification run SEQUENTIALLY"
+    }
+  },
+
+  "complete_scan_example": {
+    "description": "End-to-end walkthrough showing how a single company scan flows through all phases",
+    "company": "Example Corp (fictional)",
+    "step_by_step": [
+      {
+        "phase": "PHASE_2 — Input",
+        "what_happens": "User enters 'Example Corp'. System auto-discovers URL via Gemini 3-Flash: https://example-corp.fi"
+      },
+      {
+        "phase": "PHASE_3 — Intent Analysis",
+        "what_happens": "Website scraped. Keywords found: 'DevOps' (good), 'cloud-native' (good), 'approval chain' (bad), 'waterfall' (bad). Net score across 5 dimensions → Intent Score: 72"
+      },
+      {
+        "phase": "PHASE_4 — Reality Check (5 Juries)",
+        "what_happens": "Jury 1 (Architecture): Finds legacy job postings. Jury 2 (Strategy): Annual report shows cost-cutting. Jury 3 (Culture): Glassdoor mentions micromanagement. Jury 4 (AI): No ML evidence. Jury 5 (Portfolio): Project-based services. → Reality Score: 38"
+      },
+      {
+        "phase": "PHASE_4B — Financial Health (parallel)",
+        "what_happens": "Revenue declining 12%, low profitability, minimal R&D investment → Financial Index: 35"
+      },
+      {
+        "phase": "PHASE_5 — Self-Analysis",
+        "what_happens": "First scan for this company — no previous data to compare. Skipped."
+      },
+      {
+        "phase": "PHASE_6 — Synthesis",
+        "what_happens": "Opus 4.6 reads ALL evidence blindly. Independently scores Reality: 41, Intent: 68. Delta vs Scanner: Reality off by 3 (agreement — keep Scanner score). Generates 200-word diagnosis + 100-word pitch + 2 WHY + 2 WHAT proposals."
+      },
+      {
+        "phase": "PHASE_7 — Fact-Check",
+        "what_happens": "Gemini 3.1 Pro verifies claims via Google Search. All claims verified. Summary passes."
+      },
+      {
+        "phase": "PHASE_8 — Foresight",
+        "what_happens": "KB signals for 'AI adoption barriers' and 'legacy modernization headwinds' applied to Example Corp's weak dimensions. 3 micro-scenarios generated."
+      },
+      {
+        "phase": "PHASE_9 — Classification",
+        "what_happens": "Reality (38) < 50, Financial (35) < 50 → Archetype: AT RISK. Washing detected: Intent (72) >> Reality (38) → 'Modernization Washing'. Stored to Vercel Blob. Dashboard dot appears in bottom-left (red) quadrant."
+      }
+    ],
+    "total_duration": "~3-5 minutes for single scan",
+    "models_invoked": "5 different AI models across 4 providers"
   }
 }
