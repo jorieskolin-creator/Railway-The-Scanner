@@ -263,7 +263,7 @@ def generate_detailed_report(
     # --- Attempt 1: Claude Sonnet 4.6 (primary) ---
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if anthropic_key:
-        SONNET_MODEL = "claude-sonnet-4-6-20250514"
+        SONNET_MODEL = "claude-sonnet-4-6"
         try:
             print(f"   📝 [Detailed Report] Attempting {SONNET_MODEL}...")
             t0 = time.time()
