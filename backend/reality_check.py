@@ -514,11 +514,28 @@ Step 2: Cross-reference each claim strictly against the STORED EVIDENCE SOURCES 
 
 Step 3: Use Google Search to verify real-world accuracy if the claim cannot be proven or disproven by the stored sources alone.
 
+CRITICAL — SELF-REFERENTIAL SOURCE RULE:
+The company's OWN website, blog posts, marketing pages, press releases, and social media are SELF-REPORTED sources. They represent how the company MARKETS itself, not necessarily operational reality. You MUST apply these rules:
+
+1. A company's own website CANNOT be used as the sole evidence to contradict an analytical claim about the company's internal practices, organizational design, execution maturity, or operational reality. Marketing language ("we do Platform Engineering") does not prove internal adoption.
+
+2. "Lack of evidence" claims and analytical assessments (e.g., "no evidence of stream-aligned teams applied internally", "lacks visible execution mechanics", "strategy reads as narrative intent rather than demonstrated governance") are ANALYTICAL OBSERVATIONS about the gap between public positioning and demonstrated operational evidence. These observations can ONLY be contradicted by:
+   - Independent third-party reporting (analyst reports, investigative journalism, industry case studies)
+   - Verifiable operational evidence (published case studies with named clients and measurable outcomes, audited financial results showing execution, independent awards or certifications)
+   - Employee reviews or insider accounts on independent platforms
+   Do NOT use the company's own claims about itself to refute these analytical observations.
+
+3. There is a critical distinction between what a company SELLS as a service vs. what it PRACTICES internally. A consulting firm selling "Platform Engineering" or "AI Governance" as a service to clients does NOT mean it applies those principles to its own internal organization. Similarly, having service descriptions on a website does not constitute "visible execution mechanics" or "demonstrated strategic governance."
+
+4. Press releases and partnership announcements authored or co-authored by the company are promotional material, not independent verification. A company announcing a "strategic partnership" does not independently verify execution maturity or governance quality.
+
+5. If the ONLY sources contradicting an analytical claim are the company's own website and marketing materials, you MUST NOT flag that claim as false. Instead, recognize that the analysis correctly identified a gap between marketing and independently verifiable evidence.
+
 FLAG A CLAIM AS FALSE IF IT MEETS ANY OF THESE CRITERIA:
 
 A. [Fabrication/Unsupported]: The summary states a specific metric, event, or operational fact (e.g., "no digital investments," "10 million euros") that is NOT explicitly supported by the STORED EVIDENCE SOURCES. In an AI summary, adding new unsourced facts is a hallucination.
 
-B. [Contradiction]: The summary makes a claim that directly contradicts the STORED EVIDENCE SOURCES or verifiable facts found via your Google Search.
+B. [Contradiction]: The summary makes a claim that directly contradicts the STORED EVIDENCE SOURCES or verifiable facts found via your Google Search. IMPORTANT: The contradicting evidence must come from INDEPENDENT third-party sources, not the company's own website or marketing materials (see SELF-REFERENTIAL SOURCE RULE above).
 
 C. [Misattribution/Arithmetic]: A number from a source is used in the wrong context. This is the MOST COMMON financial error — pay extra attention:
    - A year-over-year CHANGE (delta) cited as if it were the base figure. Example: a source says "profit decreased by €153.7M" but the summary says "from the €153.7M operating profit" — the €153.7M is the decrease, not the profit itself.
@@ -532,6 +549,7 @@ D. [Organizational Fabrication]: The summary claims or implies leadership gaps, 
 Do NOT ignore qualitative claims if they are based on fabricated underlying metrics.
 Do NOT flag Knowledge Base terminology or archetype labels (e.g. "Digital Taylorism", "Thriving", "At Risk") — these are analytical framework terms, not factual claims.
 Do NOT flag references to previous scan counts, historical score trajectories (e.g. arrow-notation scores like "72→76→75", phrases like "across X scans" or "across X assessments"), or any comparative claim about this scan versus prior assessments — these are sourced from internal scan database records, not externally verifiable data.
+Do NOT flag analytical observations about gaps between marketing/positioning and operational evidence (e.g., "lacks visible execution mechanics", "no evidence of X applied internally", "reads as narrative intent") as false simply because the company's website uses related terminology. These are assessments of execution maturity, not claims about website content.
 
 OUTPUT FORMAT — valid JSON only:
 
@@ -912,6 +930,11 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
     all_claims = []
     all_claims_detailed = []
 
+    # Build company domain pattern for self-referential detection
+    _company_name_lower = (company_name or "").strip().lower()
+    # Extract likely domain fragments from company name (e.g., "Vivicta" → "vivicta")
+    _company_name_words = [w for w in re.split(r'\s+', _company_name_lower) if len(w) > 2]
+
     if result.get("false_claims"):
         for fc in result["false_claims"]:
             claim_text = (fc.get("claim") or str(fc)) if isinstance(fc, dict) else str(fc)
@@ -926,6 +949,74 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
             if not source_indices and _SCAN_HISTORY_RE.search(claim_text):
                 print(f"      [Fact-Check] Skipping internal scan history claim (not externally verifiable): {claim_text[:70]}...")
                 continue
+
+            # ── Self-referential source filter ────────────────────────────
+            # Detect when the fact-checker used only the company's own website
+            # to override an analytical observation. This catches cases where
+            # the LLM ignores the prompt rule about self-referential sources.
+            if error_type == "Contradiction" and reasoning:
+                reasoning_lower = reasoning.lower()
+                # Check if reasoning references the company's own website as evidence
+                _is_self_referential = False
+                _self_ref_indicators = [
+                    f"{w}'s own website" for w in _company_name_words
+                ] + [
+                    f"{w}'s website" for w in _company_name_words
+                ] + [
+                    f"on {w}'s" for w in _company_name_words
+                ] + [
+                    f"{w}.com" for w in _company_name_words
+                ] + [
+                    f"{w}.fi" for w in _company_name_words
+                ] + [
+                    f"{w}.io" for w in _company_name_words
+                ]
+                for indicator in _self_ref_indicators:
+                    if indicator in reasoning_lower:
+                        _is_self_referential = True
+                        break
+
+                # Also check: is the claim an analytical "lack of evidence" observation?
+                _is_analytical_observation = bool(re.search(
+                    r'lack[s]?\s+(of\s+)?(?:visible|evidence|demonstrated|clear)'
+                    r'|no\s+evidence\s+of'
+                    r'|remains?\s+invisible'
+                    r'|not\s+(?:visible|evident|demonstrated)'
+                    r'|reads?\s+as\s+narrative'
+                    r'|positioning\s+rather\s+than'
+                    r'|intent\s+rather\s+than',
+                    claim_text, re.IGNORECASE
+                ))
+
+                # Check if reasoning mentions any independent third-party source
+                _has_independent_source = bool(re.search(
+                    r'gartner|forrester|idc|mckinsey|reuters|bloomberg'
+                    r'|independent\s+(?:report|analysis|audit|review|assessment)'
+                    r'|third.party|analyst\s+report|case\s+study\s+(?:by|from|published)'
+                    r'|glassdoor|employee\s+review',
+                    reasoning_lower
+                ))
+
+                if _is_self_referential and _is_analytical_observation and not _has_independent_source:
+                    print(f"      [Fact-Check] BLOCKED self-referential override: company's own website used to contradict analytical observation: {claim_text[:80]}...")
+                    print(f"        Reasoning (blocked): {reasoning[:200]}")
+                    continue
+
+                # Broader catch: if reasoning is based purely on company's own
+                # website/blog/marketing and the claim is analytical, skip it
+                if _is_self_referential and not _has_independent_source:
+                    # Check for analytical language patterns in the claim
+                    _analytical_patterns = re.search(
+                        r'(?:organizational|execution|governance|operational|strategic)\s+'
+                        r'(?:design|mechanic|maturity|reality|framework|capability)'
+                        r'|internally\b|internal\s+(?:structure|practice|adoption)',
+                        claim_text, re.IGNORECASE
+                    )
+                    if _analytical_patterns:
+                        print(f"      [Fact-Check] BLOCKED self-referential override: company's own marketing cannot refute internal practice claims: {claim_text[:80]}...")
+                        print(f"        Reasoning (blocked): {reasoning[:200]}")
+                        continue
+            # ── End self-referential source filter ────────────────────────
 
             correction = (fc.get("correction") or "") if isinstance(fc, dict) else ""
             wrong_value = (fc.get("wrong_value") or "") if isinstance(fc, dict) else ""
