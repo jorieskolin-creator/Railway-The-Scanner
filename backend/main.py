@@ -265,6 +265,21 @@ async def get_dashboard_data(response: Response):
     data = storage.retrieve_latest_data("index/summary_list")
     if data:
         from domain_classifier import normalize_domain
+        # Deduplicate by companyName (case-insensitive), keeping the last (newest) entry
+        seen = {}
+        deduped = []
+        for item in data:
+            key = item.get("companyName", "").lower()
+            if key in seen:
+                deduped[seen[key]] = item  # overwrite older entry with newer one
+            else:
+                seen[key] = len(deduped)
+                deduped.append(item)
+        if len(deduped) < len(data):
+            print(f"   [Dashboard] Deduplicated index: {len(data)} -> {len(deduped)} entries")
+            data = deduped
+            # Persist the cleaned index so duplicates don't come back
+            storage.save_global_index_direct(data)
         for item in data:
             if item.get("domain"):
                 item["domain"] = normalize_domain(item["domain"])

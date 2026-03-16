@@ -262,10 +262,10 @@ class BlobStorage:
                 if data and isinstance(data, list):
                     current_index = data
 
-            # 2. Upsert company in the list
+            # 2. Upsert company in the list (case-insensitive to avoid duplicates like HIAB/Hiab)
             found = False
             for i, item in enumerate(current_index):
-                if item["companyName"] == summary_entry["companyName"]:
+                if item["companyName"].lower() == summary_entry["companyName"].lower():
                     current_index[i] = summary_entry
                     found = True
                     break
@@ -300,7 +300,7 @@ class BlobStorage:
 
             updated = False
             for item in current_index:
-                if item.get("companyName") == company_name:
+                if item.get("companyName", "").lower() == company_name.lower():
                     item.update(fields)
                     updated = True
                     break
