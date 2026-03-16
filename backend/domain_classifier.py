@@ -62,7 +62,19 @@ _DOMAIN_ALIASES = {
     "shipping": "Transport & Logistics",
     "media": "Media & Publishing",
     "publishing": "Media & Publishing",
+    "industrial &": "Industrial & Manufacturing",
+    "industrial and manufacturing": "Industrial & Manufacturing",
+    "industrial & mfg": "Industrial & Manufacturing",
 }
+
+
+def normalize_domain(raw: str) -> str:
+    """Normalize a stored domain value to its canonical form.
+    Returns the canonical domain or the original value if no match."""
+    if not raw:
+        return "Other"
+    matched = _match_domain(raw)
+    return matched if matched else raw
 
 
 def _match_domain(raw: str) -> str | None:
@@ -78,6 +90,10 @@ def _match_domain(raw: str) -> str | None:
     # Substring match: check if any known domain appears in the response
     for domain in KNOWN_DOMAINS:
         if domain.lower() in cleaned.lower():
+            return domain
+    # Reverse substring: check if the response is a prefix/part of a known domain
+    for domain in KNOWN_DOMAINS:
+        if cleaned.lower() in domain.lower() and len(cleaned) >= 4:
             return domain
     return None
 

@@ -263,6 +263,11 @@ async def find_company_url(name: str):
 async def get_dashboard_data(response: Response):
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     data = storage.retrieve_latest_data("index/summary_list")
+    if data:
+        from domain_classifier import normalize_domain
+        for item in data:
+            if item.get("domain"):
+                item["domain"] = normalize_domain(item["domain"])
     return data or []
 
 @app.get("/api/fp-themes")
