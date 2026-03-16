@@ -166,7 +166,7 @@ Rules:
         client = genai.Client(api_key=gemini_key)
 
         # Attempt 1: Flash (fast, cheap, good for classification)
-        domain = _call_classifier(client, "gemini-2.0-flash", prompt, company_name, timeout=15)
+        domain = _call_classifier(client, "gemini-3-flash-preview", prompt, company_name, timeout=15)
         if domain:
             return domain
 
