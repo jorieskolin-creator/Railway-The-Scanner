@@ -1911,6 +1911,13 @@ def run_scan(
                 key_people = prev_kp
                 print(f"   [Key People] Preserved {len(prev_kp)} stakeholder(s) from previous scan (new scan returned none)")
 
+        # --- KEY PEOPLE NAME VALIDATION ---
+        # Filter out stakeholders with incomplete names (e.g., first name only,
+        # placeholders like "Pirja (Last Name Not Specified)").
+        # This catches both newly extracted and preserved-from-previous-scan entries.
+        from scanner_two import _validate_key_people
+        key_people = _validate_key_people(key_people, companyName)
+
         # --- STAKEHOLDER LINKEDIN ENRICHMENT ---
         if key_people:
             try:

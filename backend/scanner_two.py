@@ -37,6 +37,98 @@ def get_clean_domain(url):
     except:
         return ""
 
+
+# --- STAKEHOLDER NAME VALIDATION ---
+# Placeholder names that indicate no real person was found
+_PLACEHOLDER_NAMES = {"unknown", "unnamed", "n/a", "tbd", "none", "not found",
+                      "not available", "ei tiedossa", "tuntematon", "not specified",
+                      "last name not specified", "name not found"}
+
+# Generic role-only strings that are not person names
+_ROLE_ONLY_PATTERNS = re.compile(
+    r'^(?:cto|cio|cpo|cdo|cfo|ceo|coo|vp|svp|evp|director|head|manager|lead|chief)\b',
+    re.IGNORECASE
+)
+
+# Parenthetical placeholder patterns like "Pirja (Last Name Not Specified)"
+_PAREN_PLACEHOLDER_RE = re.compile(
+    r'\(\s*(?:last\s+name\s+)?not\s+(?:specified|found|available|known)'
+    r'|unknown\s+(?:last\s+name|surname)'
+    r'|\(?\s*last\s+name\s+unknown\s*\)?',
+    re.IGNORECASE
+)
+
+
+def _is_valid_full_name(name: str) -> bool:
+    """
+    Check if a name is a valid full name (first + last name minimum).
+    Returns False for single names, placeholders, role-only strings, and
+    names with placeholder markers like "(Last Name Not Specified)".
+    """
+    if not name:
+        return False
+
+    # Strip and check for placeholder patterns
+    clean = name.strip()
+    if clean.lower() in _PLACEHOLDER_NAMES:
+        return False
+
+    # Check for parenthetical placeholders like "(Last Name Not Specified)"
+    if _PAREN_PLACEHOLDER_RE.search(clean):
+        return False
+
+    # Remove any parenthetical content for word count (e.g. "Pirja (something)")
+    name_without_parens = re.sub(r'\([^)]*\)', '', clean).strip()
+
+    # Check if it's a role-only string
+    if _ROLE_ONLY_PATTERNS.match(name_without_parens):
+        return False
+
+    # Split into word parts — need at least 2 real name parts
+    parts = [p for p in name_without_parens.split() if len(p) > 1]
+    if len(parts) < 2:
+        return False
+
+    # All parts should look like name parts (start with letter, mostly alpha)
+    for part in parts:
+        # Allow hyphens and apostrophes in names (O'Brien, Heiskanen-Smith)
+        alpha_chars = sum(1 for c in part if c.isalpha() or c in "-'")
+        if alpha_chars < len(part) * 0.7:
+            return False
+
+    return True
+
+
+def _validate_key_people(key_people: list, company_name: str) -> list:
+    """
+    Filter key_people list to remove entries with invalid/incomplete names
+    and low-relevance stakeholders.
+
+    Removes:
+    - People with only first name (no last name)
+    - Placeholder names ("Unknown", "N/A", etc.)
+    - Names with parenthetical placeholders like "(Last Name Not Specified)"
+    - Role-only entries (no actual person name)
+    """
+    if not key_people:
+        return key_people
+
+    validated = []
+    removed = []
+
+    for person in key_people:
+        name = (person.get("name") or "").strip()
+
+        if _is_valid_full_name(name):
+            validated.append(person)
+        else:
+            removed.append(name or "(empty)")
+
+    if removed:
+        print(f"   🚫 [Key People] Removed {len(removed)} invalid stakeholder name(s): {', '.join(removed)}")
+
+    return validated
+
 def _find_balanced_json_object(text, start=0):
     """
     Find the first balanced JSON object in text starting from position `start`.
@@ -281,7 +373,7 @@ The expected JSON structure is:
     {{"category": "Operating Model", "label": "Brief Label", "found": true, "sentiment": "positive", "snippet": "Evidence quote...", "title": "Source Title", "url": "https://...", "is_recent": true}}
   ],
   "key_people": [
-    {{"name": "Full Name", "role": "Exact Title", "relevance": "Why relevant"}}
+    {{"name": "First Last (FULL NAME REQUIRED)", "role": "Exact Title", "relevance": "Why relevant to modernization"}}
   ],
   "reality_score_adjustment": <integer -50 to +50>,
   "confidence_score": <integer 0-100>,
@@ -363,7 +455,7 @@ The expected JSON structure is:
     {{"category": "Operating Model", "label": "Brief Label", "found": true, "sentiment": "positive", "snippet": "Evidence quote...", "title": "Source Title", "url": "https://...", "is_recent": true}}
   ],
   "key_people": [
-    {{"name": "Full Name", "role": "Exact Title", "relevance": "Why relevant"}}
+    {{"name": "First Last (FULL NAME REQUIRED)", "role": "Exact Title", "relevance": "Why relevant to modernization"}}
   ],
   "reality_score_adjustment": <integer -50 to +50>,
   "confidence_score": <integer 0-100>,
@@ -762,13 +854,15 @@ def _build_research_prompt(search_name, domain_hint, weak_juries, loop_number, i
         ],
         "key_people": [
             {{
-                "name": "Full Name",
+                "name": "First Name Last Name (FULL NAME REQUIRED — do NOT include if last name unknown)",
                 "role": "Exact Title",
-                "relevance": "Why relevant?"
+                "relevance": "Why relevant to modernization?"
             }}
         ],
         "new_evidence_count": (integer, how many NEW pieces of evidence you found)
     }}
+
+    KEY PEOPLE RULES: Only include stakeholders with VERIFIED full names (first + last). Quality over quantity — 0 is fine if none found.
 
     If you find NO new evidence at all, return: {{"findings": [], "key_people": [], "new_evidence_count": 0}}
     """
@@ -1218,12 +1312,26 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
        - External Reviews: `"{search_name}" review OR "arvostelu" service quality OR "palvelun laatu"`
        - Analyst Reports: `"{search_name}" Gartner OR Forrester OR ISG OR "Magic Quadrant"`
 
-    MANDATORY — IDENTIFY 4 KEY MODERNIZATION STAKEHOLDERS (REQUIRED in JSON output):
-    Search for real names of current executives in these roles:
-    1. Technology (CTO, CIO, VP Engineering)
-    2. People/Culture (CPO, HR Director)
-    3. Transformation (CDO, Head of Strategy)
-    4. Product/Innovation (CPO, Head of Product)
+    IDENTIFY KEY MODERNIZATION STAKEHOLDERS (include in JSON output):
+    Search for real, VERIFIED names of current executives/leaders relevant to modernization.
+    Target roles: Technology (CTO, CIO, VP Engineering), People/Culture (CPO, HR Director),
+    Transformation (CDO, Head of Strategy), Product/Innovation (CPO, Head of Product).
+
+    STAKEHOLDER QUALITY RULES (CRITICAL):
+    1. FULL NAMES ONLY: Every name MUST include both first name AND last name. Do NOT include
+       a person if you only found their first name. "Pirja" alone is NOT acceptable — you need
+       "Pirja Heiskanen" or similar. If you cannot find the full name, DO NOT include that person.
+    2. VERIFIED CONNECTION: Only include people you found through Google Search results that
+       explicitly connect them to {company_name}. Do NOT guess or infer people from partial mentions.
+    3. QUALITY OVER QUANTITY: Include 0-4 stakeholders. It is BETTER to return 1-2 verified,
+       high-relevance stakeholders than 4 uncertain ones. An empty list is acceptable if no
+       verified names were found.
+    4. RELEVANCE: Only include people in leadership/decision-making roles relevant to
+       modernization, digital transformation, technology strategy, or organizational design.
+       Do NOT include random employees, junior staff, or people in unrelated roles (e.g. sales
+       representatives, marketing coordinators, office managers).
+    5. CURRENT EMPLOYEES: Only include people who currently work at the company based on
+       search results. If search results suggest they left, do NOT include them.
 
     VERIFY THESE 5 HYPOTHESES:
     1. "Surveillance": Micromanagement/tracking?
@@ -1960,6 +2068,12 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         washing_type = data.get("washing_type", None)
 
         key_people = data.get("key_people", [])
+
+        # --- KEY PEOPLE VALIDATION GATE ---
+        # Filter out stakeholders with incomplete or invalid names.
+        # This catches cases where the AI only found a first name, used a placeholder,
+        # or included people with no real relevance to modernization.
+        key_people = _validate_key_people(key_people, company_name)
 
         # --- URL VALIDATION GATE ---
         # Verify all evidence URLs actually exist before returning results.
