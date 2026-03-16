@@ -23,7 +23,7 @@ const CATEGORY_COLORS = {
   "Science & Demographics": { bg: "from-teal-900/40 to-cyan-900/30", border: "border-teal-500/40", badge: "bg-teal-500/20 text-teal-300" },
 };
 
-const ThemeExplorer = ({ isOpen, onClose }) => {
+const ThemeExplorer = ({ isOpen, onClose, authToken = '' }) => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -31,15 +31,16 @@ const ThemeExplorer = ({ isOpen, onClose }) => {
   const [expandedThemes, setExpandedThemes] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
-    if (isOpen && !data) {
+    if (isOpen && !data && authToken) {
       setLoading(true);
       setError(null);
-      fetch('/api/fp-themes')
-        .then(r => { if (!r.ok) throw new Error('Failed to load themes'); return r.json(); })
+      fetch('/api/fp-themes', { headers: { 'Authorization': `Bearer ${authToken}` } })
+        .then(r => { if (r.status === 401) throw new Error('Invalid password'); if (!r.ok) throw new Error('Failed to load themes'); return r.json(); })
         .then(d => { setData(d); setLoading(false); })
         .catch(e => { setError(e.message); setLoading(false); });
     }
-  }, [isOpen]);
+    if (!isOpen) { setData(null); setError(null); }
+  }, [isOpen, authToken]);
 
   if (!isOpen) return null;
 

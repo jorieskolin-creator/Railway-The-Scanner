@@ -58,6 +58,7 @@ const App = () => {
 
   // THEME EXPLORER STATE
   const [isThemeExplorerOpen, setIsThemeExplorerOpen] = useState(false);
+  const [themeExplorerToken, setThemeExplorerToken] = useState('');
 
   // SERVER-SIDE BATCH STATE
   const [batchStatus, setBatchStatus] = useState({ is_running: false, current: 0, total: 0, current_name: '' });
@@ -674,7 +675,12 @@ const App = () => {
                 <button onClick={handleOpenAnalytics} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-violet-900/40 hover:bg-violet-800/60 border border-violet-700/50 text-violet-200 font-mono font-bold text-[10px] rounded transition-all">
                     <BarChart3 size={12} /> ANALYZE
                 </button>
-                <button onClick={() => setIsThemeExplorerOpen(true)} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-teal-900/40 hover:bg-teal-800/60 border border-teal-700/50 text-teal-200 font-mono font-bold text-[10px] rounded transition-all">
+                <button onClick={() => {
+                    const pw = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to view Strategic Foresight Themes:");
+                    if (!pw) return;
+                    setThemeExplorerToken(pw);
+                    setIsThemeExplorerOpen(true);
+                }} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-teal-900/40 hover:bg-teal-800/60 border border-teal-700/50 text-teal-200 font-mono font-bold text-[10px] rounded transition-all">
                     <Database size={12} /> THEMES
                 </button>
                 <button onClick={handleOpenDataReview} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-amber-900/40 hover:bg-amber-800/60 border border-amber-700/50 text-amber-200 font-mono font-bold text-[10px] rounded transition-all">
@@ -1652,7 +1658,8 @@ const App = () => {
 
       <ThemeExplorer
         isOpen={isThemeExplorerOpen}
-        onClose={() => setIsThemeExplorerOpen(false)}
+        authToken={themeExplorerToken}
+        onClose={() => { setIsThemeExplorerOpen(false); setThemeExplorerToken(''); }}
       />
 
       <CompanyModal

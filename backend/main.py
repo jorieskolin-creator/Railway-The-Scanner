@@ -271,8 +271,9 @@ async def get_dashboard_data(response: Response):
     return data or []
 
 @app.get("/api/fp-themes")
-async def get_fp_themes():
-    """Return the 30 Strategic Foresight themes with descriptions and source counts."""
+async def get_fp_themes(request: Request):
+    """Return the 30 Strategic Foresight themes with descriptions and source counts. Admin-only."""
+    verify_admin(request)
     from strategic_foresight import FP_THEMES_30, FP_THEME_DESCRIPTIONS, FP_THEME_SOURCES
     categories = {
         "Technology & Digital": FP_THEMES_30[0:3],
