@@ -157,7 +157,7 @@ TASK: Identify the 3-5 most significant current signals/developments for the meg
 
 These signals must be:
 - HORIZONTAL: Industry-agnostic macro forces (not company-specific)
-- RECENT: From the last 12 months (2025-2026)
+- RECENT: From the last 12 months ({datetime.now().year}-{datetime.now().year + 1})
 - VERIFIED: From authoritative sources you can cite with real URLs
 - ACTIONABLE: Relevant to strategic planning for businesses affected by this theme
 

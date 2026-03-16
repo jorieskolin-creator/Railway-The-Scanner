@@ -21,6 +21,7 @@ import os
 import re
 import time
 import concurrent.futures
+from datetime import datetime
 
 import anthropic
 from google import genai
@@ -1127,7 +1128,7 @@ Per force, provide:
 - "kb_dimension": Which priority dimension this impacts most
 - "fp_theme": Which Strategic Foresight theme this maps to
 - "impact_on_company": 1-2 sentences on how this specifically affects {company_name} given their archetype ({archetype}) and current state
-- "proposal_angle": 1 sentence on how to use this in a consulting proposal to {company_name}. Frame as what must happen by when to either capture or defend against this force (e.g., "Must pilot X by Q2 2026 or risk Y").
+- "proposal_angle": 1 sentence on how to use this in a consulting proposal to {company_name}. Frame as what must happen by when to either capture or defend against this force (e.g., "Must pilot X by Q2 {datetime.now().year + 1} or risk Y").
 - "source_url": PRIMARY URL from your web search results (ORIGINAL source only — must be a real, reachable URL)
 - "supporting_sources": Array of 2-3 ADDITIONAL URLs that corroborate this force from DIFFERENT publications/organizations. Each entry: {{"url": "https://...", "source_type": "...", "title": "Brief title of the source"}}. CRITICAL: These must be REAL URLs you found via web search, not fabricated. If you cannot find 2+ corroborating sources, set confidence to "low".
 - "source_type": "academic" | "think_tank" | "industry_analyst" | "government" | "news"
