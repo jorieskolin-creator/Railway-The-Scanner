@@ -265,6 +265,38 @@ async def get_dashboard_data(response: Response):
     data = storage.retrieve_latest_data("index/summary_list")
     return data or []
 
+@app.get("/api/fp-themes")
+async def get_fp_themes():
+    """Return the 30 Strategic Foresight themes with descriptions and source counts."""
+    from strategic_foresight import FP_THEMES_30, FP_THEME_DESCRIPTIONS, FP_THEME_SOURCES
+    categories = {
+        "Technology & Digital": FP_THEMES_30[0:3],
+        "Economy & Business": FP_THEMES_30[3:8],
+        "Industry & Infrastructure": FP_THEMES_30[8:13],
+        "Environment & Resources": FP_THEMES_30[13:18],
+        "Society & Governance": FP_THEMES_30[18:23],
+        "People & Well-being": FP_THEMES_30[23:28],
+        "Science & Demographics": FP_THEMES_30[28:30],
+    }
+    themes = []
+    for cat_name, cat_themes in categories.items():
+        for theme in cat_themes:
+            sources = FP_THEME_SOURCES.get(theme, [])
+            # Extract domain from "site:domain.com search terms" format
+            domains = []
+            for s in sources:
+                if s.startswith("site:"):
+                    parts = s.split(" ", 1)
+                    domains.append(parts[0].replace("site:", ""))
+            themes.append({
+                "name": theme,
+                "category": cat_name,
+                "description": FP_THEME_DESCRIPTIONS.get(theme, ""),
+                "source_count": len(sources),
+                "source_domains": domains,
+            })
+    return {"categories": list(categories.keys()), "themes": themes}
+
 @app.get("/api/analyze")
 async def analyze_scores(response: Response):
     """Run statistical analysis across all company scores (correlations, distributions, archetypes)."""

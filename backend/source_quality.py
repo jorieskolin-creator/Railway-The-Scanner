@@ -70,9 +70,7 @@ HIGH_CREDIBILITY_DOMAINS = {
     "isi.fraunhofer.de",        # Fraunhofer ISI — European tech forecasting, innovation systems
     "pewresearch.org",          # Pew Research Center — demographics, public opinion, social trends
     "soif.org.uk",              # School of International Futures — policy foresight, governance
-    "dubaifuture.gov.ae",       # Dubai Future Foundation — applied gov foresight, emerging tech
     "futures.hawaii.edu",       # Hawaii Research Center for Futures Studies — futures methodology
-    "tellus.org",               # Tellus Institute — Great Transition, systems modeling
     # Climate, Earth systems & ecological foresight
     "sitra.fi",                 # Sitra (Finnish Innovation Fund) — megatrends, circular economy
     "ipcc.ch",                  # IPCC — definitive climate science consensus, SSP scenarios
@@ -84,6 +82,89 @@ HIGH_CREDIBILITY_DOMAINS = {
     "wri.org",                  # World Resources Institute — resource tracking, supply chain risk
     "tyndall.ac.uk",            # Tyndall Centre — decarbonisation, climate justice, carbon budgets
     "futureearth.org",          # Future Earth — sustainability science, 10 New Insights in Climate
+    # Academic institutions & research centres (from curated source analysis)
+    "hai.stanford.edu",         # Stanford HAI — human-centred AI research
+    "turing.ac.uk",             # Alan Turing Institute — AI and data science
+    "brookings.edu",            # Brookings Institution — policy research
+    "carnegieendowment.org",    # Carnegie Endowment — international peace
+    "csis.org",                 # Center for Strategic and International Studies
+    "iiss.org",                 # International Institute for Strategic Studies
+    "sipri.org",                # Stockholm International Peace Research Institute
+    "lse.ac.uk",                # London School of Economics
+    "oii.ox.ac.uk",             # Oxford Internet Institute
+    "bruegel.org",              # Bruegel — European economic policy
+    "piie.com",                 # Peterson Institute for International Economics
+    "belfercenter.org",         # Belfer Center, Harvard — security
+    "hks.harvard.edu",          # Harvard Kennedy School — public policy
+    "sloanreview.mit.edu",      # MIT Sloan Management Review
+    "reutersinstitute.politics.ox.ac.uk",  # Reuters Institute for Journalism
+    "bennettinstitute.cam.ac.uk",  # Bennett Institute, Cambridge — digital policy
+    "ed.stanford.edu",          # Stanford Graduate School of Education
+    # Intergovernmental & UN agencies (additions)
+    "unep.org",                 # UN Environment Programme
+    "ilo.org",                  # International Labour Organization
+    "unctad.org",               # UN Conference on Trade and Development
+    "wto.org",                  # World Trade Organization
+    "unfccc.int",               # UN Framework Convention on Climate Change
+    "ipbes.net",                # Intergovernmental Science-Policy Platform on Biodiversity
+    "iom.int",                  # International Organization for Migration
+    "itu.int",                  # International Telecommunication Union
+    "unido.org",                # UN Industrial Development Organization
+    "unhabitat.org",            # UN Habitat — urban development
+    "unhcr.org",                # UN Refugee Agency
+    "undp.org",                 # UN Development Programme
+    "population.un.org",        # UN Population Division
+    "unwater.org",              # UN Water
+    "en.unesco.org",            # UNESCO
+    "imo.org",                  # International Maritime Organization
+    "cbd.int",                  # UN Convention on Biological Diversity
+    # Specialist research & policy bodies
+    "science.org",              # Science/AAAS — flagship journal
+    "thelancet.com",            # The Lancet — medical research
+    "royalsociety.org",         # Royal Society — UK national academy
+    "aaas.org",                 # American Association for Advancement of Science
+    "erc.europa.eu",            # European Research Council
+    "enisa.europa.eu",          # EU Agency for Cybersecurity
+    "ecdc.europa.eu",           # European Centre for Disease Prevention
+    "ecb.europa.eu",            # European Central Bank
+    "hybridcoe.fi",             # Hybrid CoE Helsinki — hybrid threats
+    "nato.int",                 # NATO — collective security
+    "iucn.org",                 # International Union for Conservation of Nature
+    "rmi.org",                  # Rocky Mountain Institute — clean energy
+    "c40.org",                  # C40 Cities — climate-resilient cities
+    "ellenmacarthurfoundation.org",  # Ellen MacArthur — circular economy
+    "nesta.org.uk",             # NESTA — innovation foundation
+    "fair.work",                # Fairwork Foundation — platform labour
+    "theodi.org",               # Open Data Institute — data governance
+    "oxfordenergy.org",         # Oxford Institute for Energy Studies
+    "ember-climate.org",        # Ember — electricity data analytics
+    "itf-oecd.org",             # International Transport Forum
+    "theicct.org",              # ICCT — clean transportation
+    "cgiar.org",                # CGIAR — agricultural research
+    "ifpri.org",                # IFPRI — food policy research
+    "healthdata.org",           # IHME — global health data
+    "v-dem.net",                # V-Dem — democracy data
+    "transparency.org",         # Transparency International
+    "ineteconomics.org",        # Institute for New Economic Thinking
+    "ssir.org",                 # Stanford Social Innovation Review
+    "nuffieldbioethics.org",    # Nuffield Council on Bioethics
+    "adalovelaceinstitute.org", # Ada Lovelace Institute — AI ethics
+    "tnfd.global",              # Taskforce on Nature-related Financial Disclosures
+    "sciencebasedtargets.org",  # Science Based Targets initiative
+    "cdp.net",                  # CDP — corporate environmental disclosure
+    "globalreporting.org",      # GRI — ESG reporting standards
+    "wellcome.org",             # Wellcome Trust — health research
+    "gatesfoundation.org",      # Gates Foundation — global health
+    "prb.org",                  # Population Reference Bureau
+    "knowledgeworks.org",       # KnowledgeWorks — education foresight
+    "educause.edu",             # EDUCAUSE — EdTech higher education
+    "cipd.org",                 # CIPD — people management
+    "ccl.org",                  # Center for Creative Leadership
+    "unwto.org",                # World Tourism Organization
+    "worldleisure.org",         # World Leisure Organization
+    "atlanticcouncil.org",      # Atlantic Council — transatlantic affairs
+    "ecfr.eu",                  # European Council on Foreign Relations
+    "cfr.org",                  # Council on Foreign Relations
 }
 
 # Tier 2: Low credibility — blogs, press release wires, content farms, marketing

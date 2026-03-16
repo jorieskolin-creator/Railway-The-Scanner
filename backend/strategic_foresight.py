@@ -12,7 +12,7 @@ Includes post-generation validation:
 - Reality-check pass (source quality, confidence calibration, claim plausibility)
 - Extraction of validated sources into foresight_links (mirrors evidence_links schema)
 
-Methodology inspired by Futures Platform's 30-theme taxonomy (NAICS/SIC-based)
+Methodology inspired by Strategic Foresight 30-theme taxonomy (NAICS/SIC-based)
 and SIFT/Lateral Reading OSINT validation principles.
 """
 
@@ -30,7 +30,7 @@ from source_quality import HIGH_CREDIBILITY_DOMAINS, LOW_CREDIBILITY_DOMAINS, as
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# FUTURES PLATFORM 30-THEME TAXONOMY
+# STRATEGIC FORESIGHT 30-THEME TAXONOMY
 # Complete list of the 30 FP Themes utilized in Future Insight creation.
 # Each theme represents a macro-level domain of change that shapes the external
 # environment companies must navigate. Used to tag dimension-level forces and
@@ -39,360 +39,554 @@ from source_quality import HIGH_CREDIBILITY_DOMAINS, LOW_CREDIBILITY_DOMAINS, as
 
 FP_THEMES_30 = [
     # --- Technology & Digital ---
-    "Artificial Intelligence",          #  1 — AI, machine learning, autonomous systems
-    "Data & Digitalisation",            #  2 — Big data, digital transformation, platforms
-    "Communication & Media",            #  3 — Telecom, journalism, social media, content
+    "Artificial Intelligence",          #  1 — Generative AI, AI governance, AI safety, human-AI collaboration
+    "Data & Digitalisation",            #  2 — Data governance, datafication, digital divide, privacy
+    "Communication & Media",            #  3 — Media transformation, disinformation, platform governance
 
     # --- Economy & Business ---
-    "Business",                         #  4 — Business models, strategy, innovation mgmt
-    "Finance & Ownership",              #  5 — Banking, investment, fintech, ownership models
-    "Global Economy",                   #  6 — Trade, macroeconomics, supply chains, sanctions
-    "Digital & Sharing Economies",      #  7 — Platform economy, gig work, collaborative models
-    "Services",                         #  8 — Service design, customer experience, servitization
+    "Business",                         #  4 — Business model transformation, stakeholder capitalism
+    "Finance & Ownership",              #  5 — Banking transformation, fintech, CBDCs, financial inclusion
+    "Global Economy",                   #  6 — Global trade, geoeconomics, deglobalisation, sovereign debt
+    "Digital & Sharing Economies",      #  7 — Platform economy, gig labour rights, digital labour governance
+    "Services",                         #  8 — Service economy transformation, AI-augmented services
 
     # --- Industry & Infrastructure ---
-    "Industry & Manufacturing",         #  9 — Smart factories, automation, industrial IoT
-    "Construction & Urbanisation",      # 10 — Smart cities, urban planning, building tech
-    "Energy",                           # 11 — Renewables, grids, energy storage, nuclear
-    "Freight & Logistics",              # 12 — Supply chains, last-mile, autonomous freight
-    "Private & Public Transport",       # 13 — Mobility-as-a-Service, EVs, public transit
+    "Industry & Manufacturing",         #  9 — Industry 5.0, industrial decarbonisation, reshoring
+    "Construction & Urbanisation",      # 10 — Climate-resilient cities, housing, urban governance
+    "Energy",                           # 11 — Energy transition, hydrogen, energy security, just transition
+    "Freight & Logistics",              # 12 — Supply chain resilience, freight decarbonisation, nearshoring
+    "Private & Public Transport",       # 13 — EVs, autonomous mobility, MaaS, aviation decarbonisation
 
     # --- Environment & Resources ---
-    "Climate Change",                   # 14 — Mitigation, adaptation, carbon markets
-    "Sustainability & Recycling",       # 15 — Circular economy, waste, ESG reporting
-    "Nature",                           # 16 — Biodiversity, ecosystems, land use
-    "Food",                             # 17 — Agri-tech, food security, alternative proteins
-    "Water & Oceans",                   # 18 — Water scarcity, marine economy, blue tech
+    "Climate Change",                   # 14 — Climate tipping points, climate finance, climate justice
+    "Sustainability & Recycling",       # 15 — Circular economy, regenerative systems, ESG transformation
+    "Nature",                           # 16 — Biodiversity, natural capital, nature-based solutions, rewilding
+    "Food",                             # 17 — Food systems transformation, agroecology, cellular proteins
+    "Water & Oceans",                   # 18 — Water security, ocean governance, water-food-energy nexus
 
     # --- Society & Governance ---
-    "Public Governance",                # 19 — Regulation, democracy, public-sector innovation
-    "Geopolitics",                      # 20 — International relations, conflicts, alliances
-    "Security & Safety",                # 21 — Cybersecurity, defence, resilience, privacy
-    "Values & Ethics",                  # 22 — Trust, transparency, corporate responsibility
-    "Society",                          # 23 — Inequality, social cohesion, civil society
+    "Public Governance",                # 19 — Democratic governance, digital governance, institutional trust
+    "Geopolitics",                      # 20 — Great power competition, multipolar order, tech nationalism
+    "Security & Safety",                # 21 — Cybersecurity, hybrid warfare, biosecurity, societal resilience
+    "Values & Ethics",                  # 22 — AI ethics, bioethics, intergenerational justice
+    "Society",                          # 23 — Social inequality, polarisation, social capital, loneliness
 
     # --- People & Well-being ---
-    "Health & Wellbeing",               # 24 — Healthcare, mental health, biotech, longevity
-    "Education & Knowledge",            # 25 — EdTech, lifelong learning, skills transformation
-    "Work & Income",                    # 26 — Future of work, labour markets, UBI
-    "Management & HR",                  # 27 — Leadership, org design, talent management
-    "Leisure & Lifestyles",             # 28 — Consumer culture, tourism, entertainment
+    "Health & Wellbeing",               # 24 — Healthcare transformation, precision medicine, pandemic preparedness
+    "Education & Knowledge",            # 25 — Education futures, AI in education, knowledge democracy
+    "Work & Income",                    # 26 — Future of work, automation displacement, income security models
+    "Management & HR",                  # 27 — Leadership futures, hybrid work, DEI, people analytics
+    "Leisure & Lifestyles",             # 28 — Experience economy, digital leisure, wellness economy
 
     # --- Science & Demographics ---
-    "Sciences & Research",              # 29 — R&D, quantum computing, space, biotech research
-    "Population & Demographics",        # 30 — Aging, migration, urbanisation trends
+    "Sciences & Research",              # 29 — Frontier sciences, convergent technologies, open science
+    "Population & Demographics",        # 30 — Population dynamics, ageing, migration, generational transitions
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# STRATEGIC FORESIGHT THEME DESCRIPTIONS
+# Revised, futures-oriented descriptions for each of the 30 themes.
+# Based on academic analysis applying futures studies methodology.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+FP_THEME_DESCRIPTIONS = {
+    "Artificial Intelligence": "Generative AI, machine learning, autonomous systems, AI governance and regulation, AI safety, human-AI collaboration, societal and economic AI impacts",
+    "Data & Digitalisation": "Data governance and sovereignty, digital transformation, datafication, open data ecosystems, digital divide and inclusion, privacy and data rights",
+    "Communication & Media": "Media transformation, journalism futures, platform governance, disinformation and synthetic media, social media dynamics, digital content ecosystems, trust in information",
+    "Business": "Business model transformation, corporate strategy, entrepreneurship and innovation ecosystems, organizational resilience, stakeholder capitalism, platform disruption",
+    "Finance & Ownership": "Banking transformation, investment futures, fintech and CBDCs, financial inclusion, wealth distribution and inequality, alternative and commons-based ownership models",
+    "Global Economy": "Global trade, macroeconomics, supply chain transformation, geoeconomics, deglobalisation, emerging economies, sovereign debt, global inequality",
+    "Digital & Sharing Economies": "Platform economy, algorithmic management and gig labour rights, peer-to-peer models, platform monopolies, collaborative and commons-based digital economies, digital labour governance",
+    "Services": "Service economy transformation, AI-augmented services, public service innovation, service design futures, platform-mediated services, knowledge-intensive services",
+    "Industry & Manufacturing": "Smart manufacturing and Industry 5.0, industrial automation, industrial decarbonisation, reshoring and industrial resilience, additive manufacturing, green industrial policy",
+    "Construction & Urbanisation": "Urban futures and climate-resilient cities, housing systems, smart urban infrastructure, urban planning innovation, construction technology, built environment sustainability",
+    "Energy": "Renewable energy transition, energy grids and storage, nuclear renaissance, hydrogen economy, energy security, just transition, energy geopolitics",
+    "Freight & Logistics": "Supply chain resilience and transformation, freight decarbonisation, autonomous and digital logistics, nearshoring, maritime and port futures, last-mile innovation",
+    "Private & Public Transport": "Electric vehicles and decarbonisation, autonomous mobility, Mobility-as-a-Service, shared and active mobility, public transit futures, aviation decarbonisation, mobility equity",
+    "Climate Change": "Climate mitigation and adaptation, carbon markets and removal technologies, climate tipping points, climate finance and loss and damage, climate justice, geoengineering governance",
+    "Sustainability & Recycling": "Circular economy, sustainable production and consumption, regenerative systems, ESG and corporate sustainability transformation, material flows, biodegradable innovation",
+    "Nature": "Biodiversity loss and recovery, ecosystem services, natural capital valuation, nature-based solutions, rewilding, land and ocean governance, biodiversity finance",
+    "Food": "Food systems transformation, agricultural innovation, food security and sovereignty, alternative and cellular proteins, agroecology, food waste, nutrition futures",
+    "Water & Oceans": "Water security and freshwater scarcity, ocean governance and health, marine economy, ocean acidification, water-food-energy nexus, desalination and water technology",
+    "Public Governance": "Democratic governance futures, public-sector innovation, digital and AI governance, regulatory transformation, open government and citizen participation, institutional trust",
+    "Geopolitics": "Great power competition, multipolar world order, economic statecraft and tech nationalism, regional alliances, conflict dynamics, multilateral system transformation, climate geopolitics",
+    "Security & Safety": "Cybersecurity, hybrid warfare, critical infrastructure resilience, defence technology, biosecurity, information operations, privacy and surveillance, societal resilience",
+    "Values & Ethics": "Digital and AI ethics, bioethics, intergenerational justice, social trust, value pluralism, corporate ethics and accountability, ethics of emerging technologies",
+    "Society": "Social inequality, polarisation and cohesion, social capital, civil society and social movements, community futures, loneliness and belonging, demographic social transformation",
+    "Health & Wellbeing": "Healthcare transformation, mental health futures, biotech and precision medicine, longevity and ageing health, pandemic preparedness, health equity, AI in healthcare, One Health",
+    "Education & Knowledge": "Education futures, lifelong and distributed learning, AI in education, skills transformation, future of universities, knowledge democracy, learning sciences",
+    "Work & Income": "Future of work, labour market transformation, automation and displacement, digital labour rights, income security models, skills transitions, labour geographies",
+    "Management & HR": "Leadership futures, organisational design transformation, talent management, distributed and hybrid work, DEI strategy, people analytics and HR technology, organisational culture",
+    "Leisure & Lifestyles": "Consumer culture transformation, experience economy, digital leisure and gaming, wellness and wellbeing economy, sustainable tourism, lifestyle futures, platform-mediated consumption",
+    "Sciences & Research": "Frontier sciences, convergent technologies, R&D systems transformation, open science, science-policy interface, quantum computing, space science, synthetic biology",
+    "Population & Demographics": "Population dynamics and fertility trends, ageing societies, migration and climate displacement, demographic dividends, labour demographics, generational transitions",
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # FP THEME → AUTHORITATIVE SOURCE MAPPING
-# Maps each of the 30 Futures Platform themes to the most relevant authoritative
+# Maps each of the 30 Strategic Foresight themes to the most relevant authoritative
 # sources for finding evidence about that theme. These are "horizontal" sources
 # (theme-specific, cross-industry) vs the "vertical" per-industry target_sources.
 #
-# Source categories:
-# - Foresight orgs: Millennium Project, IFTF, CIFS, RAND, HRCFS, Tellus, DFF
-# - Think tanks: Chatham House, Club of Rome, Oxford Martin, SFG, SOIF
-# - Intergovernmental: OECD, WEF, EC, UN agencies, NIC, WMO
-# - Climate & Earth systems: IPCC, NASA Climate, PIK, SRC, IIASA, WRI, Tyndall, Future Earth
-# - Corporate & innovation: Gartner, McKinsey, BCG, Forrester, WBCSD, Arup, Fraunhofer ISI
-# - Public innovation: Sitra
-# - Data & demographics: Pew Research Center
-# - Academic: Nature, IEEE, ScienceDirect, arxiv
+# Source quality tiers (applied during curation):
+# Tier 1 — Highest: Intergovernmental bodies, UN agencies, flagship journals
+# Tier 2 — High: Independent think tanks, major academic institutions
+# Tier 3 — Solid: Specialist research bodies, futures organisations, credible NGOs
+# Tier 4 — Supplementary: Commercial analysts (used selectively)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 FP_THEME_SOURCES = {
     # --- Technology & Digital ---
     "Artificial Intelligence": [
-        "site:iftf.org artificial intelligence",
-        "site:oxfordmartin.ox.ac.uk AI",
-        "site:cser.ac.uk artificial intelligence risk",
-        "site:rand.org artificial intelligence",
-        "site:gartner.com AI trends hype cycle",
-        "site:isi.fraunhofer.de artificial intelligence",       # Fraunhofer — European tech forecasting
-        "site:dubaifuture.gov.ae artificial intelligence",      # Dubai Future Foundation — applied AI
+        "site:oxfordmartin.ox.ac.uk AI governance future risks",           # Oxford Martin — AI governance, future risks
+        "site:hai.stanford.edu AI human-centred",                          # Stanford HAI — human-centred AI, AI Index
+        "site:technologyreview.com artificial intelligence",               # MIT Tech Review — AI trends and critique
+        "site:turing.ac.uk artificial intelligence safety",                # Alan Turing Institute — AI safety, applications
+        "site:cser.ac.uk artificial intelligence existential risk",        # CSER Cambridge — AI existential risk
+        "site:futureoflife.org artificial intelligence governance",        # Future of Life Institute — AI governance, risk
+        "site:ainowinstitute.org social impacts AI",                       # AI Now Institute — social impacts of AI
+        "site:rand.org artificial intelligence policy",                    # RAND — AI policy analysis
+        "site:oecd.org artificial intelligence principles",                # OECD — AI Principles, policy observatory
+        "site:ec.europa.eu AI Act regulation",                             # European Commission — EU AI Act
+        "site:isi.fraunhofer.de artificial intelligence",                  # Fraunhofer ISI — AI technology research
+        "site:brookings.edu artificial intelligence governance",           # Brookings — AI governance
+        "site:weforum.org artificial intelligence impact",                 # WEF — AI global impact, adoption
+        "site:iftf.org artificial intelligence futures",                   # IFTF — long-range AI futures
     ],
     "Data & Digitalisation": [
-        "site:weforum.org digital transformation",
-        "site:mckinsey.com digital transformation",
-        "site:oecd.org digital economy",
-        "site:ec.europa.eu digital strategy",
-        "site:sitra.fi data digital transformation",            # Sitra — fair data economy
-        "site:isi.fraunhofer.de digitalisation",                # Fraunhofer — European digital foresight
+        "site:oecd.org digital economy data policy",                       # OECD — digital economy, data policy
+        "site:ec.europa.eu data strategy digital markets",                 # EU — data strategy, digital markets
+        "site:weforum.org digital transformation",                         # WEF — digital transformation
+        "site:mckinsey.com digitalisation impact",                         # McKinsey — digitalisation impact
+        "site:itu.int digital development connectivity",                   # ITU — digital development, connectivity
+        "site:worldbank.org digital dividends",                            # World Bank — digital dividends
+        "site:isi.fraunhofer.de digitalisation",                           # Fraunhofer ISI — digitalisation research
+        "site:turing.ac.uk data science",                                  # Alan Turing Institute — data science
+        "site:theodi.org data governance",                                 # Open Data Institute — data governance
+        "site:bennettinstitute.cam.ac.uk digital public policy",           # Bennett Institute Cambridge — digital policy
+        "site:sitra.fi fair data economy",                                 # Sitra — fair data economy
+        "site:brookings.edu digital economy",                              # Brookings — digital economy
     ],
     "Communication & Media": [
-        "site:reuters.com media industry future",
-        "site:iftf.org media communication",
-        "site:weforum.org media transformation",
-        "site:oxfordmartin.ox.ac.uk media",
-        "site:niemanlab.org future journalism media",              # Harvard Nieman Lab — future of journalism
-        "site:pewresearch.org media consumption",                  # Pew — media consumption data, trust surveys
-        "site:cifs.dk media communication trends",                 # CIFS — megatrend coverage, media futures
+        "site:reutersinstitute.politics.ox.ac.uk journalism future",       # Reuters Institute — journalism futures, Digital News Report
+        "site:niemanlab.org future journalism",                            # Harvard Nieman Lab — journalism innovation
+        "site:oii.ox.ac.uk platform media disinformation",                 # Oxford Internet Institute — platform media
+        "site:pewresearch.org media consumption news",                     # Pew — media consumption, news habits
+        "site:knightfoundation.org journalism media trust",                # Knight Foundation — journalism, media trust
+        "site:poynter.org journalism ethics fact-checking",                # Poynter Institute — journalism ethics
+        "site:firstdraftnews.org disinformation",                          # First Draft — disinformation research
+        "site:weforum.org media transformation",                           # WEF — media transformation
+        "site:iftf.org communication futures",                             # IFTF — communication futures
+        "site:cifs.dk media communication trends",                         # CIFS — media and communication trends
+        "site:media.mit.edu digital media innovation",                     # MIT Media Lab — digital media innovation
+        "site:freedomhouse.org press freedom",                             # Freedom House — press freedom
     ],
 
     # --- Economy & Business ---
     "Business": [
-        "site:mckinsey.com business model innovation",
-        "site:hbr.org business strategy future",
-        "site:bcg.com business transformation",
-        "site:weforum.org business future",
-        "site:wbcsd.org business sustainability transformation", # WBCSD — Vision 2050, corporate transitions
-        "site:dubaifuture.gov.ae business innovation",          # Dubai Future Foundation — applied foresight
+        "site:mckinsey.com business transformation",                       # McKinsey — business transformation
+        "site:hbr.org strategy management innovation",                     # HBR — strategy and management innovation
+        "site:bcg.com business strategy",                                  # BCG Henderson Institute — business strategy
+        "site:sloanreview.mit.edu management research",                    # MIT Sloan — management research
+        "site:weforum.org global business futures",                        # WEF — global business futures
+        "site:oecd.org business dynamism innovation policy",               # OECD — business dynamism, innovation policy
+        "site:nesta.org.uk innovation ecosystems",                         # NESTA — innovation ecosystems
+        "site:deloitte.com business transformation",                       # Deloitte — business transformation
+        "site:kauffman.org entrepreneurship",                              # Kauffman Foundation — entrepreneurship
+        "site:wbcsd.org sustainable business models",                      # WBCSD — sustainable business models
+        "site:ssir.org social innovation purpose business",                # Stanford Social Innovation Review
+        "site:brookings.edu business economics",                           # Brookings — business economics
     ],
     "Finance & Ownership": [
-        "site:bis.org fintech future",
-        "site:imf.org financial system",
-        "site:mckinsey.com financial services",
-        "site:weforum.org financial system",
-        "site:fsb.org fintech financial stability",                # Financial Stability Board — systemic risk, fintech
-        "site:sitra.fi finance ownership models",                  # Sitra — fair data economy, new ownership models
-        "site:chathamhouse.org finance global",                    # Chatham House — global financial system analysis
+        "site:bis.org fintech monetary policy",                            # BIS — central banking, fintech
+        "site:imf.org financial system stability",                         # IMF — global financial system
+        "site:fsb.org financial stability regulation",                     # FSB — financial stability
+        "site:worldbank.org financial inclusion",                          # World Bank — financial inclusion
+        "site:oecd.org financial markets capital",                         # OECD — financial markets
+        "site:ecb.europa.eu CBDC monetary innovation",                     # ECB — CBDC, monetary innovation
+        "site:mckinsey.com financial services transformation",             # McKinsey — financial services
+        "site:weforum.org financial system futures",                       # WEF — financial system futures
+        "site:chathamhouse.org finance geopolitics",                       # Chatham House — global finance
+        "site:ineteconomics.org alternative economic architectures",       # INET — alternative economics
+        "site:neweconomics.org alternative ownership",                     # NEF — alternative ownership models
+        "site:sitra.fi fair economy ownership",                            # Sitra — fair economy, ownership
+        "site:brookings.edu financial regulation",                         # Brookings — financial regulation
     ],
     "Global Economy": [
-        "site:oecd.org economic outlook",
-        "site:imf.org world economic outlook",
-        "site:weforum.org global economy",
-        "site:chathamhouse.org global economy",
-        "site:millennium-project.org global challenges",
-        "site:dni.gov global trends",                           # NIC — Global Trends reports
-        "site:tellus.org global transition economy",            # Tellus — Great Transition scenarios
+        "site:imf.org world economic outlook",                             # IMF — World Economic Outlook
+        "site:oecd.org economic analysis indicators",                      # OECD — economic analysis
+        "site:worldbank.org development economics",                        # World Bank — development economics
+        "site:wto.org global trade",                                       # WTO — global trade
+        "site:unctad.org trade development",                               # UNCTAD — trade and development
+        "site:weforum.org global competitiveness",                         # WEF — global competitiveness
+        "site:chathamhouse.org geoeconomics",                              # Chatham House — geoeconomics
+        "site:piie.com international economics",                           # Peterson Institute — international economics
+        "site:brookings.edu global economy",                               # Brookings — global economy
+        "site:atlanticcouncil.org economic statecraft",                    # Atlantic Council — economic statecraft
+        "site:bruegel.org european economic policy",                       # Bruegel — European economic policy
+        "site:dni.gov global economic trends",                             # NIC — global economic trends
+        "site:millennium-project.org global economic challenges",          # Millennium Project — global challenges
     ],
     "Digital & Sharing Economies": [
-        "site:oecd.org platform economy",
-        "site:weforum.org sharing economy",
-        "site:mckinsey.com platform economy",
-        "site:iftf.org future of work platforms",
-        "site:ec.europa.eu platform economy digital markets",      # EU — Digital Markets Act, platform regulation
-        "site:sitra.fi fair data economy",                         # Sitra — fair data economy programme
-        "site:deloitte.com platform sharing economy",              # Deloitte — platform business model analysis
+        "site:oecd.org platform economy digital markets",                  # OECD — platform economy
+        "site:ec.europa.eu digital markets act platform regulation",       # EU — Digital Markets Act
+        "site:ilo.org gig work digital labour",                            # ILO — gig work, digital labour
+        "site:mckinsey.com platform economy",                              # McKinsey — platform economy
+        "site:weforum.org sharing economy futures",                        # WEF — sharing economy futures
+        "site:oii.ox.ac.uk platform dynamics digital labour",              # Oxford Internet Institute — digital labour
+        "site:iftf.org future platforms work",                             # IFTF — future platforms and work
+        "site:fair.work platform labour rights",                           # Fairwork Foundation — platform labour
+        "site:sitra.fi fair data economy",                                 # Sitra — fair data economy
+        "site:deloitte.com platform business models",                      # Deloitte — platform models
+        "site:brookings.edu digital competition",                          # Brookings — digital competition
+        "site:media.mit.edu collaborative digital models",                 # MIT Media Lab — collaborative models
     ],
     "Services": [
-        "site:mckinsey.com service industry",
-        "site:forrester.com customer experience",
-        "site:hbr.org service innovation",
-        "site:deloitte.com service transformation",
-        "site:weforum.org services customer future",               # WEF — service transformation, customer trends
-        "site:oecd.org services trade innovation",                 # OECD — services sector trade & innovation
-        "site:sitra.fi services innovation",                       # Sitra — public service innovation
+        "site:mckinsey.com service sector transformation",                 # McKinsey — service sector
+        "site:oecd.org services trade innovation",                         # OECD — services trade and innovation
+        "site:weforum.org services economy futures",                       # WEF — services economy
+        "site:hbr.org service innovation management",                      # HBR — service innovation
+        "site:deloitte.com service transformation",                        # Deloitte — service transformation
+        "site:forrester.com customer experience service futures",          # Forrester — customer experience
+        "site:nesta.org.uk public service innovation",                     # NESTA — public service innovation
+        "site:thegovlab.org data-driven public services",                  # GovLab NYU — public services
+        "site:thersa.org service futures",                                 # RSA — service futures
+        "site:isi.fraunhofer.de service research",                         # Fraunhofer ISI — service research
+        "site:sitra.fi service innovation",                                # Sitra — service innovation
+        "site:pwc.com service industry transformation",                    # PwC — service industry
     ],
 
     # --- Industry & Infrastructure ---
     "Industry & Manufacturing": [
-        "site:weforum.org manufacturing future",
-        "site:mckinsey.com smart manufacturing",
-        "site:oecd.org industrial policy",
-        "site:deloitte.com manufacturing trends",
-        "site:isi.fraunhofer.de manufacturing innovation",      # Fraunhofer — industrial innovation roadmaps
+        "site:weforum.org manufacturing future industry",                  # WEF — manufacturing futures, Industry 4.0/5.0
+        "site:isi.fraunhofer.de industrial technology research",           # Fraunhofer ISI — industrial technology
+        "site:oecd.org industrial policy",                                 # OECD — industrial policy
+        "site:ec.europa.eu industrial strategy",                           # EU — industrial strategy
+        "site:unido.org sustainable industrial development",               # UNIDO — sustainable industrialisation
+        "site:mckinsey.com manufacturing transformation",                  # McKinsey — manufacturing transformation
+        "site:iea.org industrial decarbonisation",                         # IEA — industrial decarbonisation
+        "site:deloitte.com manufacturing trends",                          # Deloitte — manufacturing trends
+        "site:bcg.com industry green manufacturing",                       # BCG — Industry 4.0/5.0
+        "site:brookings.edu reindustrialisation",                          # Brookings — reindustrialisation
+        "site:nesta.org.uk industrial innovation",                         # NESTA — industrial innovation
+        "site:ipc.mit.edu manufacturing competitiveness",                  # MIT Industrial Performance Center
     ],
     "Construction & Urbanisation": [
-        "site:weforum.org urban future",
-        "site:oecd.org urbanisation",
-        "site:mckinsey.com construction",
-        "site:ec.europa.eu urban policy",
-        "site:oxfordmartin.ox.ac.uk urbanisation",
-        "site:arup.com cities future urbanisation",             # Arup — built environment, future cities
+        "site:unhabitat.org urban development housing",                    # UN Habitat — urban development, housing
+        "site:oecd.org urbanisation policy",                               # OECD — urbanisation policy
+        "site:c40.org climate-resilient cities",                           # C40 Cities — climate-resilient cities
+        "site:weforum.org urban transformation",                           # WEF — urban transformation
+        "site:lse.ac.uk cities urban research",                            # LSE Cities — urban research
+        "site:wri.org sustainable cities",                                 # WRI Ross Centre — sustainable cities
+        "site:ec.europa.eu urban agenda",                                  # EU — urban agenda
+        "site:mckinsey.com cities futures",                                # McKinsey — cities futures
+        "site:arup.com built environment futures",                         # Arup — built environment futures
+        "site:oxfordmartin.ox.ac.uk urbanisation",                         # Oxford Martin — urbanisation
+        "site:iclei.org local sustainability",                             # ICLEI — local sustainability
+        "site:uli.org real estate cities",                                 # Urban Land Institute — real estate
+        "site:brookings.edu metropolitan futures",                         # Brookings — metropolitan futures
     ],
     "Energy": [
-        "site:iea.org energy outlook",
-        "site:irena.org renewable energy",
-        "site:weforum.org energy transition",
-        "site:bloombergnef.com energy",
-        "site:clubofrome.org energy",
-        "site:isi.fraunhofer.de energy technology",             # Fraunhofer — energy tech forecasting
-        "site:tyndall.ac.uk energy decarbonisation",            # Tyndall — deep decarbonisation research
-        "site:wri.org energy transition",                       # WRI — resource-based energy foresight
+        "site:iea.org energy outlook",                                     # IEA — global energy outlook
+        "site:irena.org renewable energy",                                 # IRENA — renewable energy
+        "site:weforum.org energy transition",                              # WEF — energy transition
+        "site:rmi.org clean energy transition",                            # RMI — clean energy transition
+        "site:oxfordenergy.org energy markets geopolitics",                # OIES — energy markets, geopolitics
+        "site:isi.fraunhofer.de energy technology",                        # Fraunhofer ISI — energy technology
+        "site:tyndall.ac.uk energy decarbonisation carbon budgets",        # Tyndall Centre — decarbonisation
+        "site:bloombergnef.com energy market data",                        # BloombergNEF — energy market data
+        "site:chathamhouse.org energy security",                           # Chatham House — energy security
+        "site:wri.org energy transition",                                  # WRI — energy transition
+        "site:ember-climate.org electricity data",                         # Ember — electricity data analytics
+        "site:energypolicy.columbia.edu energy geopolitics",               # Columbia SIPA — energy geopolitics
     ],
     "Freight & Logistics": [
-        "site:weforum.org supply chain logistics",
-        "site:mckinsey.com logistics",
-        "site:oecd.org trade logistics",
-        "site:deloitte.com supply chain",
-        "site:iea.org transport freight decarbonisation",          # IEA — freight decarbonisation pathways
-        "site:isi.fraunhofer.de logistics supply chain",           # Fraunhofer — supply chain innovation
-        "site:ilo.org supply chain labour",                        # ILO — supply chain labour standards
+        "site:weforum.org supply chain futures",                           # WEF — supply chain futures
+        "site:itf-oecd.org transport logistics policy",                    # ITF — transport and logistics policy
+        "site:iea.org freight decarbonisation",                            # IEA — freight decarbonisation
+        "site:imo.org maritime shipping regulation",                       # IMO — maritime shipping
+        "site:unctad.org shipping trade data",                             # UNCTAD — shipping and trade data
+        "site:worldbank.org trade logistics",                              # World Bank — trade logistics
+        "site:mckinsey.com supply chain transformation",                   # McKinsey — supply chain transformation
+        "site:ctl.mit.edu supply chain research",                          # MIT CTL — supply chain research
+        "site:isi.fraunhofer.de logistics research",                       # Fraunhofer ISI — logistics research
+        "site:ilo.org supply chain labour",                                # ILO — supply chain labour
+        "site:deloitte.com supply chain strategy",                         # Deloitte — supply chain strategy
+        "site:gartner.com supply chain technology",                        # Gartner — supply chain technology
     ],
     "Private & Public Transport": [
-        "site:iea.org transport",
-        "site:weforum.org mobility future",
-        "site:mckinsey.com mobility",
-        "site:oecd.org transport policy",
-        "site:iftf.org future of mobility",
+        "site:iea.org EV outlook transport energy",                        # IEA — EV outlook, transport energy
+        "site:theicct.org clean transportation standards",                 # ICCT — clean transportation
+        "site:itf-oecd.org transport policy",                              # ITF — transport policy
+        "site:transportenvironment.org transport decarbonisation",         # T&E — transport decarbonisation
+        "site:weforum.org mobility futures",                               # WEF — mobility futures
+        "site:mckinsey.com mobility transformation",                       # McKinsey — mobility transformation
+        "site:oecd.org transport policy",                                  # OECD — transport policy
+        "site:uitp.org public transit",                                    # UITP — public transit
+        "site:rmi.org clean mobility",                                     # RMI — clean mobility
+        "site:deloitte.com mobility trends",                               # Deloitte — mobility trends
+        "site:rand.org transport scenarios",                               # RAND — transport scenarios
+        "site:iftf.org mobility futures",                                  # IFTF — mobility futures
     ],
 
     # --- Environment & Resources ---
     "Climate Change": [
-        "site:ipcc.ch climate",
-        "site:weforum.org climate change",
-        "site:clubofrome.org climate",
-        "site:oxfordmartin.ox.ac.uk climate",
-        "site:iea.org climate",
-        "site:millennium-project.org climate",
-        "site:climate.nasa.gov climate change",                 # NASA — satellite data, physical modeling
-        "site:wmo.int climate state",                           # WMO — extreme weather, climate benchmarks
-        "site:pik-potsdam.de climate tipping points",           # PIK — tipping elements, thresholds
-        "site:stockholmresilience.org climate planetary",       # SRC — Planetary Boundaries, resilience
-        "site:tellus.org climate transition",                   # Tellus — Great Transition, systemic paths
-        "site:futureearth.org climate science",                 # Future Earth — 10 New Insights in Climate
-        "site:sitra.fi climate megatrends",                     # Sitra — Finnish megatrend mapping
-        "site:tyndall.ac.uk climate carbon budget",             # Tyndall — carbon budgets, climate justice
+        "site:ipcc.ch climate science",                                    # IPCC — climate science authority
+        "site:unep.org emissions gap adaptation",                          # UNEP — Emissions Gap, Adaptation Gap
+        "site:wmo.int climate state weather",                              # WMO — weather and climate data
+        "site:pik-potsdam.de climate tipping points earth system",         # PIK — tipping points, earth system
+        "site:stockholmresilience.org planetary boundaries",               # SRC — planetary boundaries
+        "site:tyndall.ac.uk carbon budgets decarbonisation",               # Tyndall Centre — carbon budgets
+        "site:oxfordmartin.ox.ac.uk climate policy",                       # Oxford Martin — climate policy
+        "site:weforum.org climate action global risks",                    # WEF — Global Risks, climate action
+        "site:iea.org energy climate nexus",                               # IEA — energy-climate nexus
+        "site:futureearth.org climate systems science",                    # Future Earth — climate systems science
+        "site:climate.nasa.gov climate data monitoring",                   # NASA — climate data and monitoring
+        "site:unfccc.int climate policy framework",                        # UNFCCC — climate policy framework
+        "site:wri.org climate solutions",                                  # WRI — climate solutions
+        "site:sitra.fi climate megatrends",                                # Sitra — climate megatrends
     ],
     "Sustainability & Recycling": [
-        "site:weforum.org circular economy",
-        "site:ec.europa.eu circular economy",
-        "site:oecd.org sustainability",
-        "site:clubofrome.org sustainability",
-        "site:ellenmacarthurfoundation.org circular economy",
-        "site:wbcsd.org sustainability circular economy",       # WBCSD — Vision 2050, corporate pathways
-        "site:stockholmresilience.org sustainability",          # SRC — social-ecological systems
-        "site:sitra.fi circular economy",                       # Sitra — circular economy frameworks
-        "site:wri.org sustainability resources",                # WRI — resource tracking, supply chains
+        "site:ellenmacarthurfoundation.org circular economy",              # Ellen MacArthur — circular economy
+        "site:ec.europa.eu circular economy action plan",                  # EU — Circular Economy Action Plan
+        "site:unep.org global sustainability frameworks",                  # UNEP — sustainability frameworks
+        "site:weforum.org ESG sustainability transformation",              # WEF — ESG, sustainability
+        "site:oecd.org sustainability policy",                             # OECD — sustainability policy
+        "site:wbcsd.org corporate sustainability",                         # WBCSD — corporate sustainability
+        "site:globalreporting.org ESG reporting standards",                # GRI — ESG reporting standards
+        "site:stockholmresilience.org sustainability science",             # SRC — sustainability science
+        "site:clubofrome.org systemic sustainability",                     # Club of Rome — systemic sustainability
+        "site:cdp.net corporate environmental data",                       # CDP — corporate environmental data
+        "site:wri.org resource efficiency",                                # WRI — resource efficiency
+        "site:sciencebasedtargets.org corporate net-zero",                 # SBTi — corporate net-zero
+        "site:sitra.fi circular economy",                                  # Sitra — circular economy
     ],
     "Nature": [
-        "site:weforum.org biodiversity",
-        "site:un.org biodiversity",
-        "site:clubofrome.org nature",
-        "site:oxfordmartin.ox.ac.uk biodiversity",
-        "site:fao.org ecosystems",
-        "site:stockholmresilience.org biodiversity planetary",  # SRC — Planetary Boundaries, biodiversity
-        "site:futureearth.org biodiversity ecosystems",         # Future Earth — sustainability science
-        "site:wri.org forests biodiversity",                    # WRI — forest & ecosystem tracking
+        "site:ipbes.net biodiversity science assessment",                  # IPBES — biodiversity science authority
+        "site:iucn.org conservation nature policy",                        # IUCN — conservation status, nature policy
+        "site:cbd.int biodiversity framework",                             # UN CBD — Biodiversity Framework
+        "site:stockholmresilience.org planetary boundaries biodiversity",  # SRC — planetary boundaries
+        "site:weforum.org nature biodiversity",                            # WEF — nature and biodiversity
+        "site:futureearth.org biodiversity research",                      # Future Earth — biodiversity research
+        "site:unep-wcmc.org nature monitoring",                            # UNEP-WCMC — nature monitoring
+        "site:wri.org forests biodiversity",                               # WRI — forests and biodiversity
+        "site:fao.org land ecosystems",                                    # FAO — land ecosystems
+        "site:oxfordmartin.ox.ac.uk biodiversity",                         # Oxford Martin — biodiversity
+        "site:tnfd.global nature-related financial disclosure",            # TNFD — nature financial disclosure
+        "site:capitalscoalition.org natural capital valuation",            # Capitals Coalition — natural capital
     ],
     "Food": [
-        "site:fao.org food security",
-        "site:weforum.org food future",
-        "site:oecd.org agriculture food",
-        "site:oxfordmartin.ox.ac.uk food",
-        "site:nature.com food systems",
-        "site:wri.org food systems agriculture",                # WRI — food supply chain, resource scarcity
+        "site:fao.org food security agriculture",                          # FAO — food security, agriculture
+        "site:wfp.org food security hunger",                               # WFP — food security, hunger
+        "site:cgiar.org agricultural research",                            # CGIAR — agricultural research
+        "site:ifpri.org food policy",                                      # IFPRI — food policy
+        "site:weforum.org food systems",                                   # WEF — food systems
+        "site:oecd.org agriculture food",                                  # OECD — agriculture and food
+        "site:wri.org food systems land use",                              # WRI — food systems, land use
+        "site:eatforum.org sustainable diets",                             # EAT Forum — sustainable diets
+        "site:gfi.org alternative proteins",                               # Good Food Institute — alternative proteins
+        "site:oxfordmartin.ox.ac.uk food futures",                         # Oxford Martin — food futures
+        "site:ipes-food.org food system governance",                       # IPES-Food — food system governance
+        "site:nature.com food systems research",                           # Nature — food systems research
     ],
     "Water & Oceans": [
-        "site:un.org water scarcity",
-        "site:weforum.org water",
-        "site:oecd.org water policy",
-        "site:millennium-project.org water",
-        "site:nature.com ocean",
-        "site:strategicforesight.com water diplomacy",          # SFG — transnational water conflicts
-        "site:wmo.int water climate",                           # WMO — water cycle, hydrological futures
-        "site:iiasa.ac.at water scarcity",                      # IIASA — water-climate-population modeling
+        "site:unwater.org water governance",                               # UN Water — water governance
+        "site:oecd.org water policy",                                      # OECD — water policy
+        "site:weforum.org water ocean futures",                            # WEF — water and ocean futures
+        "site:unep.org ocean environment",                                 # UNEP — ocean environment
+        "site:wmo.int hydrological data",                                  # WMO — hydrological data
+        "site:iiasa.ac.at water scenarios",                                # IIASA — water scenarios
+        "site:worldwatercouncil.org water policy",                         # World Water Council — water policy
+        "site:en.unesco.org water resources",                              # UNESCO-IHP — water resources
+        "site:oceana.org ocean conservation",                              # Oceana — ocean conservation
+        "site:wwf.org freshwater ecosystems",                              # WWF — freshwater ecosystems
+        "site:nature.com ocean water research",                            # Nature — ocean and water research
+        "site:strategicforesight.com water diplomacy",                     # SFG — water diplomacy
+        "site:millennium-project.org water futures",                       # Millennium Project — water futures
     ],
 
     # --- Society & Governance ---
     "Public Governance": [
-        "site:oecd.org governance innovation",
-        "site:ec.europa.eu governance",
-        "site:weforum.org governance future",
-        "site:chathamhouse.org governance",
-        "site:rand.org governance",
-        "site:soif.org.uk governance foresight",                # SOIF — policy foresight, future generations
-        "site:dni.gov governance global trends",                # NIC — government-grade strategic foresight
-        "site:sitra.fi governance society",                     # Sitra — societal innovation, public policy
+        "site:oecd.org governance innovation open government",             # OECD — governance, open government
+        "site:v-dem.net democracy data",                                   # V-Dem Institute — democracy data
+        "site:freedomhouse.org democracy indices",                         # Freedom House — democracy indices
+        "site:thegovlab.org digital governance",                           # GovLab NYU — digital governance
+        "site:opengovpartnership.org transparency",                        # OGP — transparency
+        "site:weforum.org governance futures",                             # WEF — governance futures
+        "site:transparency.org anti-corruption",                           # Transparency International — anti-corruption
+        "site:ec.europa.eu regulatory innovation",                         # EU — regulatory innovation
+        "site:chathamhouse.org governance",                                # Chatham House — governance
+        "site:rand.org governance policy",                                 # RAND — governance policy
+        "site:hks.harvard.edu public policy",                              # Harvard Kennedy School — public policy
+        "site:soif.org.uk governance foresight",                           # SOIF — governance foresight
+        "site:sitra.fi public innovation",                                 # Sitra — public innovation
     ],
     "Geopolitics": [
-        "site:chathamhouse.org geopolitics",
-        "site:rand.org geopolitics",
-        "site:weforum.org geopolitics",
-        "site:cifs.dk geopolitics",
-        "site:millennium-project.org geopolitics",
-        "site:dni.gov geopolitics global trends",               # NIC — US Intelligence Community foresight
-        "site:strategicforesight.com geopolitics peace",        # SFG — Global South, cost of conflict
+        "site:chathamhouse.org international relations",                   # Chatham House — international relations
+        "site:carnegieendowment.org international peace",                  # Carnegie — international peace
+        "site:cfr.org global governance",                                  # CFR — global governance
+        "site:iiss.org strategic military affairs",                        # IISS — strategic affairs
+        "site:rand.org geopolitical analysis",                             # RAND — geopolitical analysis
+        "site:ecfr.eu european geopolitics",                               # ECFR — European geopolitics
+        "site:dni.gov global trends",                                      # NIC — Global Trends assessment
+        "site:atlanticcouncil.org transatlantic affairs",                   # Atlantic Council — transatlantic
+        "site:sipri.org peace security conflict",                          # SIPRI — peace, security, conflict
+        "site:csis.org strategic studies",                                 # CSIS — strategic studies
+        "site:strategicforesight.com conflict prevention",                 # SFG — conflict prevention
+        "site:millennium-project.org geopolitical foresight",              # Millennium Project — geopolitical foresight
     ],
     "Security & Safety": [
-        "site:rand.org cybersecurity",
-        "site:cser.ac.uk security risk",
-        "site:chathamhouse.org security",
-        "site:weforum.org cybersecurity",
-        "site:gartner.com security trends",
-        "site:dni.gov security threats",                        # NIC — national security megatrends
-        "site:strategicforesight.com security conflict",        # SFG — peace & security foresight
+        "site:rand.org security analysis cybersecurity",                   # RAND — security analysis
+        "site:iiss.org strategic military security",                       # IISS — strategic security
+        "site:sipri.org security conflict data",                           # SIPRI — security and conflict data
+        "site:chathamhouse.org security policy",                           # Chatham House — security policy
+        "site:dni.gov threat assessment",                                  # NIC — threat assessment
+        "site:enisa.europa.eu cybersecurity",                              # ENISA — European cybersecurity
+        "site:weforum.org global risks cyber",                             # WEF — Global Risks, cyber
+        "site:nato.int collective security defence",                       # NATO — collective security
+        "site:hybridcoe.fi hybrid threats",                                # Hybrid CoE Helsinki — hybrid threats
+        "site:belfercenter.org international security",                    # Belfer Center Harvard — security
+        "site:atlanticcouncil.org cybersecurity defence",                  # Atlantic Council — cybersecurity
+        "site:cser.ac.uk existential security risks",                      # CSER Cambridge — existential risks
     ],
     "Values & Ethics": [
-        "site:weforum.org ethics trust",
-        "site:oxfordmartin.ox.ac.uk ethics",
-        "site:oecd.org AI ethics",
-        "site:cifs.dk values ethics",
-        "site:millennium-project.org ethics",
-        "site:futures.hawaii.edu futures values",               # HRCFS — futures epistemology, alternative futures
-        "site:pewresearch.org values society",                  # Pew — generational values, public opinion
+        "site:oxfordmartin.ox.ac.uk futures ethics future generations",    # Oxford Martin — futures ethics
+        "site:oecd.org AI ethics principles",                              # OECD — AI ethics principles
+        "site:nuffieldbioethics.org bioethics",                            # Nuffield Council — bioethics
+        "site:adalovelaceinstitute.org data AI ethics",                    # Ada Lovelace Institute — AI ethics
+        "site:weforum.org global ethics trust",                            # WEF — global ethics, trust
+        "site:partnershiponai.org responsible AI",                         # Partnership on AI — responsible AI
+        "site:futures.hawaii.edu values futures",                          # HRCFS — values futures
+        "site:pewresearch.org social values trust",                        # Pew — social values, trust
+        "site:ethicsinaction.ieee.org technology ethics standards",        # IEEE — technology ethics
+        "site:millennium-project.org ethical scenarios",                   # Millennium Project — ethical scenarios
+        "site:cifs.dk cultural values trends",                             # CIFS — cultural values
+        "site:futuregenerations.wales intergenerational ethics",           # Future Generations Commissioner
     ],
     "Society": [
-        "site:oecd.org inequality social",
-        "site:weforum.org inequality society",
-        "site:oxfordmartin.ox.ac.uk inequality",
-        "site:chathamhouse.org social change",
-        "site:clubofrome.org society",
-        "site:pewresearch.org society trends",                  # Pew — social trends, inequality data
-        "site:soif.org.uk society future generations",          # SOIF — intergenerational fairness
-        "site:tellus.org society transition",                   # Tellus — societal resilience pathways
-        "site:futures.hawaii.edu society futures",              # HRCFS — Four Futures archetypes
+        "site:oecd.org inequality social well-being",                      # OECD — inequality, well-being
+        "site:undp.org human development report",                          # UNDP — Human Development Report
+        "site:weforum.org social cohesion inclusion",                      # WEF — social cohesion
+        "site:oxfordmartin.ox.ac.uk inequality social change",             # Oxford Martin — inequality
+        "site:pewresearch.org social trends",                              # Pew — social trends
+        "site:brookings.edu social policy",                                # Brookings — social policy
+        "site:lse.ac.uk social science research",                          # LSE — social science
+        "site:chathamhouse.org social political change",                   # Chatham House — social change
+        "site:soif.org.uk social futures",                                 # SOIF — social futures
+        "site:thersa.org social innovation",                               # RSA — social innovation
+        "site:jrf.org.uk poverty inequality",                              # Joseph Rowntree Foundation — poverty
+        "site:futures.hawaii.edu society futures",                         # HRCFS — society futures
     ],
 
     # --- People & Well-being ---
     "Health & Wellbeing": [
-        "site:who.int health future",
-        "site:weforum.org health",
-        "site:mckinsey.com healthcare future",
-        "site:nature.com health",
-        "site:oxfordmartin.ox.ac.uk health",
+        "site:who.int health future",                                      # WHO — global health authority
+        "site:thelancet.com health systems medical science",               # Lancet — medical science
+        "site:wellcome.org health research",                               # Wellcome Trust — health research
+        "site:healthdata.org global disease burden",                       # IHME — global disease burden data
+        "site:gatesfoundation.org global health equity",                   # Gates Foundation — global health
+        "site:weforum.org health transformation",                          # WEF — health transformation
+        "site:oxfordmartin.ox.ac.uk health futures",                       # Oxford Martin — health futures
+        "site:mckinsey.com healthcare economics",                          # McKinsey — healthcare economics
+        "site:rand.org health policy",                                     # RAND — health policy
+        "site:ecdc.europa.eu public health",                               # ECDC — European public health
+        "site:nih.gov biomedical innovation",                              # NIH — biomedical innovation
+        "site:nuffieldtrust.org.uk health systems",                        # Nuffield Trust — health systems
+        "site:nature.com biomedical research",                             # Nature — biomedical research
     ],
     "Education & Knowledge": [
-        "site:oecd.org education future",
-        "site:weforum.org education",
-        "site:mckinsey.com education",
-        "site:iftf.org learning future",
-        "site:ec.europa.eu education skills",
+        "site:oecd.org education systems PISA",                            # OECD — education systems, PISA
+        "site:en.unesco.org education global",                             # UNESCO — global education
+        "site:worldbank.org education development",                        # World Bank — education development
+        "site:weforum.org education skills futures",                       # WEF — education and skills
+        "site:ec.europa.eu education skills agenda",                       # EU — education skills agenda
+        "site:iftf.org learning futures",                                  # IFTF — learning futures
+        "site:knowledgeworks.org education foresight",                     # KnowledgeWorks — education foresight
+        "site:educause.edu EdTech higher education",                       # EDUCAUSE — EdTech
+        "site:ed.stanford.edu learning sciences",                          # Stanford GSE — learning sciences
+        "site:mckinsey.com education skills",                              # McKinsey — education and skills
+        "site:wise-qatar.org education innovation",                        # WISE — education innovation
+        "site:openlearning.mit.edu digital education",                     # MIT OpenLearning — digital education
     ],
     "Work & Income": [
-        "site:oecd.org future of work",
-        "site:weforum.org future of work",
-        "site:mckinsey.com future of work",
-        "site:iftf.org future of work",
-        "site:ilo.org future of work",
-        "site:pewresearch.org work income employment",          # Pew — labour market data, gig economy
+        "site:ilo.org labour policy standards",                            # ILO — labour policy and standards
+        "site:oecd.org future of work",                                    # OECD — future of work
+        "site:weforum.org jobs skills",                                    # WEF — jobs and skills
+        "site:mckinsey.com automation impact future of work",              # McKinsey — automation impact
+        "site:workofthefuture.mit.edu technology work",                    # MIT Work of the Future — technology and work
+        "site:brookings.edu employment futures",                           # Brookings — employment futures
+        "site:iftf.org work futures",                                      # IFTF — work futures
+        "site:oii.ox.ac.uk digital labour",                               # Oxford Internet Institute — digital labour
+        "site:epi.org labour economics",                                   # Economic Policy Institute — labour economics
+        "site:pewresearch.org work employment",                            # Pew — work and employment
+        "site:thersa.org future of work",                                  # RSA — future of work
+        "site:fair.work platform work rights",                             # Fairwork Foundation — platform work
     ],
     "Management & HR": [
-        "site:mckinsey.com talent management",
-        "site:hbr.org future of management",
-        "site:weforum.org talent",
-        "site:deloitte.com human capital trends",
-        "site:gartner.com HR trends",
+        "site:mckinsey.com leadership management",                         # McKinsey — leadership and management
+        "site:hbr.org management innovation",                              # HBR — management innovation
+        "site:deloitte.com human capital workforce trends",                # Deloitte — workforce trends
+        "site:weforum.org talent workforce",                               # WEF — talent and workforce
+        "site:gartner.com HR technology trends",                           # Gartner — HR technology
+        "site:cipd.org people management",                                 # CIPD — people management
+        "site:sloanreview.mit.edu management research",                    # MIT Sloan — management research
+        "site:gallup.com workforce engagement",                            # Gallup — workforce engagement
+        "site:insead.edu leadership research",                             # INSEAD — leadership research
+        "site:ccl.org leadership development",                             # CCL — leadership development
+        "site:shrm.org HR practices",                                      # SHRM — HR practices
+        "site:sbs.ox.ac.uk management research",                          # Oxford Said — management research
     ],
     "Leisure & Lifestyles": [
-        "site:mckinsey.com consumer trends",
-        "site:weforum.org consumer lifestyle",
-        "site:deloitte.com consumer trends",
-        "site:cifs.dk lifestyle trends",
-        "site:pewresearch.org consumer lifestyle trends",          # Pew — consumer behaviour, lifestyle data
-        "site:oecd.org tourism leisure economy",                   # OECD — tourism outlook, leisure economy
-        "site:iftf.org consumer future lifestyle",                 # IFTF — consumer futures, lifestyle shifts
+        "site:mckinsey.com consumer trends",                               # McKinsey — consumer trends
+        "site:oecd.org leisure tourism economy",                           # OECD — leisure, tourism economy
+        "site:unwto.org tourism futures",                                  # UNWTO — tourism futures
+        "site:weforum.org consumer lifestyle",                             # WEF — consumer lifestyle
+        "site:pewresearch.org consumer lifestyle trends",                  # Pew — consumer and lifestyle trends
+        "site:cifs.dk lifestyle megatrends",                               # CIFS — lifestyle megatrends
+        "site:deloitte.com consumer industry",                             # Deloitte — consumer industry
+        "site:iftf.org consumer futures",                                  # IFTF — consumer futures
+        "site:euromonitor.com global consumer markets",                    # Euromonitor — global consumer markets
+        "site:wundermanthompson.com consumer culture trends",              # JWT/WT — consumer culture trends
+        "site:mintel.com consumer insights",                               # Mintel — consumer insights
+        "site:worldleisure.org leisure futures",                           # World Leisure Organization — leisure
     ],
 
     # --- Science & Demographics ---
     "Sciences & Research": [
-        "site:nature.com science future",
-        "site:oxfordmartin.ox.ac.uk research",
-        "site:cser.ac.uk technology risk",
-        "site:rand.org technology",
-        "site:weforum.org technology science",
-        "site:isi.fraunhofer.de research innovation",           # Fraunhofer — European R&D roadmaps
-        "site:dubaifuture.gov.ae science technology",           # DFF — emerging tech prototyping
-        "site:futureearth.org research sustainability",         # Future Earth — cutting-edge climate science
-        "site:pik-potsdam.de research earth system",            # PIK — Earth system science
-        "site:iiasa.ac.at systems research",                    # IIASA — complex systems modeling
+        "site:nature.com scientific research",                             # Nature — scientific research authority
+        "site:science.org multidisciplinary research",                     # Science/AAAS — multidisciplinary research
+        "site:oxfordmartin.ox.ac.uk emerging science",                     # Oxford Martin — emerging science
+        "site:royalsociety.org scientific horizon scanning",               # Royal Society — horizon scanning
+        "site:aaas.org science advancement policy",                        # AAAS — science advancement
+        "site:erc.europa.eu frontier research",                            # ERC — frontier research
+        "site:oecd.org R&D indicators science policy",                     # OECD — R&D indicators
+        "site:isi.fraunhofer.de applied research innovation",             # Fraunhofer ISI — applied research
+        "site:iiasa.ac.at systems science",                                # IIASA — systems science
+        "site:cser.ac.uk technology risk",                                 # CSER Cambridge — technology risk
+        "site:pik-potsdam.de earth system science",                        # PIK — earth system science
+        "site:futureearth.org sustainability science",                     # Future Earth — sustainability science
+        "site:en.unesco.org science policy open science",                   # UNESCO — science policy, open science
     ],
     "Population & Demographics": [
-        "site:oecd.org demographics population",
-        "site:weforum.org demographics",
-        "site:un.org population",
-        "site:cifs.dk demographics megatrends",
-        "site:oxfordmartin.ox.ac.uk demographics",
-        "site:pewresearch.org demographics population",         # Pew — global religion, migration, aging data
-        "site:iiasa.ac.at population demographics",             # IIASA — demographic-climate interaction models
-        "site:dni.gov demographics population trends",          # NIC — demographic power shift projections
+        "site:population.un.org world population prospects",               # UN Population Division — population data
+        "site:oecd.org ageing societies",                                  # OECD — ageing societies
+        "site:iom.int migration data policy",                             # IOM — migration data and policy
+        "site:unhcr.org displacement refugees",                            # UNHCR — displacement and refugees
+        "site:pewresearch.org demographic trends",                         # Pew — demographic trends
+        "site:iiasa.ac.at population scenarios",                           # IIASA — population scenarios
+        "site:oxfordmartin.ox.ac.uk demographics",                         # Oxford Martin — demographics
+        "site:prb.org population analysis",                                # Population Reference Bureau — analysis
+        "site:dni.gov demographic global trends",                          # NIC — demographic global trends
+        "site:brookings.edu demographic change",                           # Brookings — demographic change
+        "site:weforum.org demographic futures",                            # WEF — demographic futures
+        "site:oeaw.ac.at demographic research",                            # Vienna Institute of Demography
+        "site:cifs.dk demographic megatrends",                             # CIFS — demographic megatrends
     ],
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # DOMAIN → FORESIGHT THEME MAPPING
-# Maps the scanner's 14 KNOWN_DOMAINS to Futures Platform's 30-theme taxonomy
+# Maps the scanner's 14 KNOWN_DOMAINS to the Strategic Foresight 30-theme taxonomy
 # and identifies which KB dimensions are most impacted by external forces.
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -780,7 +974,7 @@ Per force, provide:
 - "type": One of: "Plausible/Maturing" | "Weakening/Declining" | "Preposterous/Black Swan" | "Probable/Emerging"
 - "timeframe": Use the timeframe from the signal
 - "kb_dimension": Which priority dimension this impacts most
-- "fp_theme": Which Futures Platform theme this maps to
+- "fp_theme": Which Strategic Foresight theme this maps to
 - "impact_on_company": 1-2 sentences on how this specifically affects {company_name} given their archetype ({archetype}) and current state
 - "proposal_angle": 1 sentence on how to use this in a consulting proposal to {company_name}. Frame as what must happen by when.
 - "source_url": Use the primary source URL from the signal above (already verified)
@@ -901,7 +1095,7 @@ COMPANY CONTEXT:
 - Key findings from forensic scan:
 {findings_text or "(limited findings available)"}
 
-RELEVANT FORESIGHT THEMES (from Futures Platform taxonomy): {fp_themes}
+RELEVANT FORESIGHT THEMES (from Strategic Foresight taxonomy): {fp_themes}
 PRIORITY KB DIMENSIONS TO EVALUATE: {priority_dims}
 DOMAIN-SPECIFIC OSINT KEYWORDS: {osint_kw}
 
@@ -916,10 +1110,10 @@ Theme-specific searches for {fp_themes}:
 
 {kb_context}
 ALLOWED SOURCE DOMAINS (use ONLY these for primary sources):
-Tier 1 (preferred analysts): gartner.com, forrester.com, mckinsey.com, bcg.com, deloitte.com, pwc.com, ey.com, kpmg.com, accenture.com, hbr.org, idc.com, isg-one.com
-Tier 2 (quality news): reuters.com, ft.com, bloomberg.com, economist.com, wsj.com, bbc.com
-Tier 3 (academic/gov): oecd.org, imf.org, worldbank.org, ec.europa.eu, europa.eu, nature.com, sciencedirect.com, arxiv.org, ieee.org, un.org, who.int, fao.org, iea.org, irena.org, bis.org, ipcc.ch
-Tier 4 (foresight orgs): weforum.org, millennium-project.org, iftf.org, cifs.dk, rand.org, chathamhouse.org, clubofrome.org, oxfordmartin.ox.ac.uk, cser.ac.uk, wfsf.org, ilo.org
+Tier 1 (intergovernmental/UN/flagship journals): ipcc.ch, who.int, iea.org, irena.org, imf.org, worldbank.org, oecd.org, nature.com, science.org, thelancet.com, bis.org, fao.org, ilo.org, unep.org, wto.org, unctad.org, unfccc.int, ipbes.net, iom.int, un.org, ec.europa.eu, europa.eu, wmo.int
+Tier 2 (think tanks/academic): chathamhouse.org, rand.org, brookings.edu, carnegieendowment.org, csis.org, iiss.org, sipri.org, oxfordmartin.ox.ac.uk, turing.ac.uk, hai.stanford.edu, lse.ac.uk, oii.ox.ac.uk, bruegel.org, cser.ac.uk, belfercenter.org, hks.harvard.edu, piie.com
+Tier 3 (specialist research/foresight): iftf.org, cifs.dk, soif.org.uk, futures.hawaii.edu, weforum.org, ellenmacarthurfoundation.org, wri.org, rmi.org, iucn.org, fair.work, sitra.fi, nesta.org.uk, c40.org, millennium-project.org, clubofrome.org, wfsf.org, hybridcoe.fi, enisa.europa.eu
+Tier 4 (commercial/supplementary): mckinsey.com, deloitte.com, gartner.com, forrester.com, bcg.com, pwc.com, hbr.org, reuters.com, ft.com, bloomberg.com, economist.com, wsj.com, bbc.com, idc.com, accenture.com
 
 DO NOT USE sources from: blogs, content farms, regional tech news sites, outsourcing directories, marketing sites, press release wires, social media, or any site not recognized as an established research/analyst/news organization.
 
@@ -931,7 +1125,7 @@ Per force, provide:
 - "type": One of: "Plausible/Maturing" (gathering momentum, validated trend) | "Weakening/Declining" (losing relevance or reversing) | "Preposterous/Black Swan" (low probability, massive impact — see HORIZON SCANNING instruction below) | "Probable/Emerging" (early signal, gaining traction but insufficient data)
 - "timeframe": "6-12mo" | "12-24mo" | "24-36mo"
 - "kb_dimension": Which priority dimension this impacts most
-- "fp_theme": Which Futures Platform theme this maps to
+- "fp_theme": Which Strategic Foresight theme this maps to
 - "impact_on_company": 1-2 sentences on how this specifically affects {company_name} given their archetype ({archetype}) and current state
 - "proposal_angle": 1 sentence on how to use this in a consulting proposal to {company_name}. Frame as what must happen by when to either capture or defend against this force (e.g., "Must pilot X by Q2 2026 or risk Y").
 - "source_url": PRIMARY URL from your web search results (ORIGINAL source only — must be a real, reachable URL)
@@ -2058,7 +2252,7 @@ def extract_foresight_links(foresight_data, company_name=""):
     - source_credibility: high/medium/low (from reality check)
     - validated: True/False (passed quality threshold)
     - kb_dimension: Which KB dimension this force impacts
-    - fp_theme: Futures Platform theme
+    - fp_theme: Strategic Foresight theme
     - timeframe: Force timeframe
     - force_type: Plausible/Maturing, etc.
     - origin: "foresight" (to distinguish from forensic evidence_links)
