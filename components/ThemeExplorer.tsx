@@ -180,10 +180,30 @@ const ThemeExplorer = ({ isOpen, onClose, authToken = '' }) => {
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-3 border-t border-slate-700/50 bg-slate-900/30 flex-shrink-0">
-          <p className="text-[10px] text-slate-500 text-center">
+        <div className="px-6 py-3 border-t border-slate-700/50 bg-slate-900/30 flex-shrink-0 overflow-y-auto max-h-[40vh]">
+          <p className="text-[10px] text-slate-500 text-center mb-3">
             Sources curated using 4-tier academic quality framework · Prioritises intergovernmental, academic, and independent research institutions
           </p>
+          <div className="text-[10px] text-slate-400 space-y-2 px-2">
+            <h4 className="text-[11px] font-semibold text-slate-300">1.3 Source Quality Framework</h4>
+            <p className="text-slate-500">The following quality tiers were applied in evaluating and adding sources:</p>
+            <div>
+              <p className="font-semibold text-slate-300">TIER 1 — Highest Authority:</p>
+              <p className="text-slate-500">Intergovernmental bodies and UN agencies (IPCC, WHO, IEA, IRENA, IMF, World Bank, OECD, UN agencies); peer-reviewed flagship journals (Nature, Science, Lancet); national academies (Royal Society, AAAS).</p>
+            </div>
+            <div>
+              <p className="font-semibold text-slate-300">TIER 2 — High Authority:</p>
+              <p className="text-slate-500">Leading independent think tanks (Chatham House, RAND, Brookings, Carnegie, CSIS, IISS, SIPRI); major academic institutions (Oxford, Cambridge, MIT, Harvard, Stanford, LSE); European institutions (JRC, EEA, ECFR, Bruegel).</p>
+            </div>
+            <div>
+              <p className="font-semibold text-slate-300">TIER 3 — Solid Specialist:</p>
+              <p className="text-slate-500">Specialist research bodies (ILO, FAO, UNEP, ITU, WTO, UNCTAD); futures organisations (IFTF, CIFS, SOIF, Hawaii Research Center); well-established NGOs with research credibility (Ellen MacArthur Foundation, WRI, IUCN, Fairwork).</p>
+            </div>
+            <div>
+              <p className="font-semibold text-slate-300">TIER 4 — Supplementary (use selectively):</p>
+              <p className="text-slate-500">Commercial analysts (McKinsey, Deloitte, Gartner, Forrester, BCG); government-funded bodies (Dubai Future Foundation); professional associations (WEF). These sources are retained where specifically authoritative but are not the primary bases for analysis.</p>
+            </div>
+          </div>
         </div>
       </div>
     </div>
