@@ -637,24 +637,41 @@ Each false_claims object must have:
     # ── Helper: extract text from response (response.text first, parts fallback)
     def _extract_text(response, label):
         try:
-            _finish = getattr(response.candidates[0], 'finish_reason', 'unknown')
-            text = response.text if response.text else ""
+            candidates = getattr(response, 'candidates', None)
+            if not candidates:
+                print(f"   🔍 [Fact-Check] {label}: no candidates in response")
+                return ""
+            _finish = getattr(candidates[0], 'finish_reason', 'unknown')
+            text = ""
+            try:
+                text = response.text or ""
+            except Exception:
+                pass
             if not text:
-                parts = response.candidates[0].content.parts
-                text = "".join(
-                    p.text for p in parts
-                    if p.text and not getattr(p, 'thought', False)
-                ).strip()
+                content = getattr(candidates[0], 'content', None)
+                parts = getattr(content, 'parts', None) if content else None
+                if parts:
+                    text = "".join(
+                        p.text for p in parts
+                        if p and getattr(p, 'text', None) and not getattr(p, 'thought', False)
+                    ).strip()
             _part_sizes = []
             try:
-                _part_sizes = [(getattr(p, 'thought', False), len(p.text) if p.text else 0)
-                               for p in response.candidates[0].content.parts]
+                content = getattr(candidates[0], 'content', None)
+                parts = getattr(content, 'parts', None) if content else None
+                if parts:
+                    _part_sizes = [(getattr(p, 'thought', False), len(p.text) if p.text else 0)
+                                   for p in parts if p]
             except Exception:
                 pass
             print(f"   🔍 [Fact-Check] {label}: finish={_finish}, text_len={len(text)}, parts={_part_sizes}")
             return text
         except Exception as _diag_e:
-            text = response.text if response.text else ""
+            text = ""
+            try:
+                text = response.text or ""
+            except Exception:
+                pass
             print(f"   🔍 [Fact-Check] {label}: response access failed ({_diag_e}), response.text len={len(text)}")
             return text
 
@@ -686,6 +703,13 @@ Each false_claims object must have:
                     print(f"   ⚠️ [Fact-Check S1] {model_name} returned empty response ({elapsed_ms}ms)")
                     continue
 
+                # Suspiciously short responses (< 30 chars) are almost always
+                # malformed / truncated.  E.g. '{"false_claims":}' (17 chars)
+                # or '{"false_claims": null}' (22 chars).  Skip to next model.
+                if len(text.strip()) < 30:
+                    print(f"   ⚠️ [Fact-Check S1] {model_name} response too short ({len(text)} chars), likely malformed — skipping ({elapsed_ms}ms)")
+                    continue
+
                 result = _robust_parse_json(text)
                 if not result or "false_claims" not in result:
                     print(f"   ⚠️ [Fact-Check S1] Could not parse {model_name} response: {text[:1000]}")
@@ -696,7 +720,7 @@ Each false_claims object must have:
                     print(f"   ✅ [Fact-Check S1] {model_name} explicitly said summary_accurate=true ({elapsed_ms}ms)")
                     return {"false_claims": [], "corrected_summary": "", "corrected_pitch": "", "model": model_name, "time_ms": elapsed_ms}
 
-                raw_claims = result.get("false_claims", [])
+                raw_claims = result.get("false_claims") or []
                 false_claims = []
                 for fc in raw_claims[:10]:
                     if isinstance(fc, str):
@@ -705,22 +729,22 @@ Each false_claims object must have:
                             continue
                         false_claims.append({"claim": fc, "error_type": "Unknown", "reasoning": "", "source_indices": [], "source_urls": []})
                     elif isinstance(fc, dict):
-                        claim_text = fc.get("claim", str(fc))
+                        claim_text = fc.get("claim") or str(fc)
                         if any(p in claim_text.lower() for p in _not_real):
                             print(f"   ⏭️ [Fact-Check S1] Skipping non-issue entry: {claim_text[:80]}")
                             continue
-                        error_type = fc.get("error_type", "Unknown")
-                        reasoning = fc.get("reasoning", "")
-                        indices = fc.get("source_indices", [])
+                        error_type = fc.get("error_type") or "Unknown"
+                        reasoning = fc.get("reasoning") or ""
+                        indices = fc.get("source_indices") or []
                         source_urls = []
                         for idx in indices:
                             if isinstance(idx, int) and 1 <= idx <= len(verified_links):
                                 url = verified_links[idx - 1].get("url", "")
                                 if url:
                                     source_urls.append(url)
-                        correction = fc.get("correction", "")
-                        wrong_value = fc.get("wrong_value", "")
-                        correct_value = fc.get("correct_value", "")
+                        correction = fc.get("correction") or ""
+                        wrong_value = fc.get("wrong_value") or ""
+                        correct_value = fc.get("correct_value") or ""
                         false_claims.append({
                             "claim": claim_text,
                             "error_type": error_type,
@@ -888,13 +912,13 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
     all_claims = []
     all_claims_detailed = []
 
-    if result["false_claims"]:
+    if result.get("false_claims"):
         for fc in result["false_claims"]:
-            claim_text = fc.get("claim", str(fc)) if isinstance(fc, dict) else str(fc)
-            error_type = fc.get("error_type", "Unknown") if isinstance(fc, dict) else "Unknown"
-            reasoning = fc.get("reasoning", "") if isinstance(fc, dict) else ""
-            source_urls = fc.get("source_urls", []) if isinstance(fc, dict) else []
-            source_indices = fc.get("source_indices", []) if isinstance(fc, dict) else []
+            claim_text = (fc.get("claim") or str(fc)) if isinstance(fc, dict) else str(fc)
+            error_type = (fc.get("error_type") or "Unknown") if isinstance(fc, dict) else "Unknown"
+            reasoning = (fc.get("reasoning") or "") if isinstance(fc, dict) else ""
+            source_urls = (fc.get("source_urls") or []) if isinstance(fc, dict) else []
+            source_indices = (fc.get("source_indices") or []) if isinstance(fc, dict) else []
 
             # Skip internal scan history false positives — score trajectories and
             # scan count references are based on internal DB records and will never
@@ -903,9 +927,9 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
                 print(f"      [Fact-Check] Skipping internal scan history claim (not externally verifiable): {claim_text[:70]}...")
                 continue
 
-            correction = fc.get("correction", "") if isinstance(fc, dict) else ""
-            wrong_value = fc.get("wrong_value", "") if isinstance(fc, dict) else ""
-            correct_value = fc.get("correct_value", "") if isinstance(fc, dict) else ""
+            correction = (fc.get("correction") or "") if isinstance(fc, dict) else ""
+            wrong_value = (fc.get("wrong_value") or "") if isinstance(fc, dict) else ""
+            correct_value = (fc.get("correct_value") or "") if isinstance(fc, dict) else ""
 
             all_claims.append(claim_text)
             all_claims_detailed.append({
@@ -927,8 +951,8 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
 
     total_ms = int((time.time() - total_start) * 1000)
 
-    corrected_summary = result.get("corrected_summary", "")
-    corrected_pitch = result.get("corrected_pitch", "")
+    corrected_summary = result.get("corrected_summary") or ""
+    corrected_pitch = result.get("corrected_pitch") or ""
     fact_check_skipped = result.get("fact_check_skipped", False)
 
     return {
