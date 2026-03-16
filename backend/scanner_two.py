@@ -1326,10 +1326,11 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     3. QUALITY OVER QUANTITY: Include 0-4 stakeholders. It is BETTER to return 1-2 verified,
        high-relevance stakeholders than 4 uncertain ones. An empty list is acceptable if no
        verified names were found.
-    4. RELEVANCE: Only include people in leadership/decision-making roles relevant to
-       modernization, digital transformation, technology strategy, or organizational design.
-       Do NOT include random employees, junior staff, or people in unrelated roles (e.g. sales
-       representatives, marketing coordinators, office managers).
+    4. RELEVANCE TO KEY CHALLENGES: Only include people in leadership/decision-making roles
+       that are directly linked to the defined and detected key challenges (e.g., if "Legacy Inertia"
+       is detected, a CTO or VP Engineering is relevant; if "Silos" is detected, a Head of Strategy
+       or CDO is relevant). Do NOT include random employees, junior staff, or people in unrelated
+       roles (e.g. sales representatives, marketing coordinators, office managers).
     5. CURRENT EMPLOYEES: Only include people who currently work at the company based on
        search results. If search results suggest they left, do NOT include them.
 
