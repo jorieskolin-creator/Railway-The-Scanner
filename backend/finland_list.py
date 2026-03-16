@@ -50,7 +50,7 @@ TOP_100_COMPANIES = [
      "domain": "Industrial & Manufacturing", "revenue_avg_3yr": 3800, "employees": 19000, "ownership": "Public", "hq_country": "FI"},
     {"name": "Cargotec Oyj", "url": "https://www.cargotec.com",
      "domain": "Industrial & Manufacturing", "revenue_avg_3yr": 4000, "employees": 11000, "ownership": "Public", "hq_country": "FI"},
-    {"name": "HIAB", "url": "https://www.hiab.com",
+    {"name": "Hiab", "url": "https://www.hiab.com",
      "domain": "Industrial & Manufacturing", "revenue_avg_3yr": 1500, "employees": 3500, "ownership": "Subsidiary", "hq_country": "FI"},
     {"name": "SSAB Europe", "url": "https://www.ssab.com",
      "domain": "Industrial & Manufacturing", "revenue_avg_3yr": 9000, "employees": 15000, "ownership": "Public", "hq_country": "SE"},
