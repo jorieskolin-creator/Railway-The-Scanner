@@ -6,6 +6,7 @@ imports (main imports seed_manager; seed_manager must not import main).
 """
 
 import os
+import time
 
 from google import genai
 from google.genai import types as genai_types
@@ -20,18 +21,111 @@ KNOWN_DOMAINS = [
     "Transport & Logistics", "Media & Publishing", "Other",
 ]
 
+# Lowercase lookup for fuzzy matching
+_DOMAIN_LOOKUP = {d.lower(): d for d in KNOWN_DOMAINS}
+
+# Common aliases / alternate phrasings → canonical domain
+_DOMAIN_ALIASES = {
+    "technology": "Technology & Software",
+    "software": "Technology & Software",
+    "tech": "Technology & Software",
+    "it services": "IT Services & Consulting",
+    "it consulting": "IT Services & Consulting",
+    "consulting": "IT Services & Consulting",
+    "health": "Healthcare",
+    "medical": "Healthcare",
+    "pharma": "Healthcare",
+    "retail": "Retail & Consumer",
+    "consumer": "Retail & Consumer",
+    "food": "Retail & Consumer",
+    "restaurant": "Retail & Consumer",
+    "fmcg": "Retail & Consumer",
+    "industrial": "Industrial & Manufacturing",
+    "manufacturing": "Industrial & Manufacturing",
+    "energy": "Energy & Utilities",
+    "utilities": "Energy & Utilities",
+    "oil": "Energy & Utilities",
+    "finance": "Financial Services",
+    "financial": "Financial Services",
+    "banking": "Financial Services",
+    "insurance": "Insurance & Pensions",
+    "pensions": "Insurance & Pensions",
+    "forest": "Forest & Paper",
+    "paper": "Forest & Paper",
+    "forestry": "Forest & Paper",
+    "telecom": "Telecommunications",
+    "telecommunications": "Telecommunications",
+    "construction": "Construction & Real Estate",
+    "real estate": "Construction & Real Estate",
+    "transport": "Transport & Logistics",
+    "logistics": "Transport & Logistics",
+    "shipping": "Transport & Logistics",
+    "media": "Media & Publishing",
+    "publishing": "Media & Publishing",
+}
+
+
+def _match_domain(raw: str) -> str | None:
+    """Try to match a raw Gemini response to a known domain.
+    Returns canonical domain name or None."""
+    cleaned = raw.strip().strip('"').strip("'").strip(".")
+    # Exact match (case-insensitive)
+    if cleaned.lower() in _DOMAIN_LOOKUP:
+        return _DOMAIN_LOOKUP[cleaned.lower()]
+    # Alias match
+    if cleaned.lower() in _DOMAIN_ALIASES:
+        return _DOMAIN_ALIASES[cleaned.lower()]
+    # Substring match: check if any known domain appears in the response
+    for domain in KNOWN_DOMAINS:
+        if domain.lower() in cleaned.lower():
+            return domain
+    return None
+
+
+def _call_classifier(client, model: str, prompt: str, company_name: str, timeout: int = 30) -> str | None:
+    """Single classification attempt. Returns domain or None."""
+    try:
+        response = call_with_503_backoff(
+            lambda: client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=genai_types.GenerateContentConfig(
+                    temperature=0.0,
+                    max_output_tokens=30,
+                ),
+            ),
+            label=f"Domain Classification {model}",
+            model=model,
+            timeout=timeout,
+        )
+        result = (response.text or "").strip()
+        matched = _match_domain(result)
+        if matched and matched != "Other":
+            print(f"   [Domain] Inferred: '{matched}' for {company_name} (model={model}, raw='{result}')")
+            return matched
+        if matched == "Other":
+            print(f"   [Domain] Model explicitly returned 'Other' for {company_name}")
+            return "Other"
+        print(f"   [Domain] Unrecognised response '{result}' from {model}")
+        return None
+    except Exception as e:
+        print(f"   [Domain] {model} failed: {e}")
+        return None
+
 
 def infer_domain(company_name: str, company_url: str, reality_results: dict, financial_results: dict) -> str:
     """
     Classify the company into one of KNOWN_DOMAINS using already-computed
     scan evidence. Only called when the finland_list lookup returned 'Other'.
 
-    Uses Gemini Flash with thinking disabled — pure classification, ~2-4s.
+    Uses Gemini Flash (no thinking) — pure classification, ~1-3s.
+    Falls back to a second model on failure.
     Non-fatal: returns 'Other' on any failure.
     """
     try:
         gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
         if not gemini_key:
+            print("   [Domain] No API key available — skipping classification")
             return "Other"
 
         # Compact evidence summary
@@ -43,10 +137,11 @@ def infer_domain(company_name: str, company_url: str, reality_results: dict, fin
         )[:1200]
 
         fin_findings = "\n".join(
-            str(f) for f in (financial_results.get("financial_findings") or [])[:3]
+            f.get('assessment', '') if isinstance(f, dict) else ''
+            for f in (financial_results.get("financial_findings") or [])[:3]
         )
 
-        domains_list = ", ".join(f'"{d}"' for d in KNOWN_DOMAINS)
+        domains_list = ", ".join(f'"{d}"' for d in KNOWN_DOMAINS if d != "Other")
 
         prompt = f"""Classify this company into exactly one industry domain.
 
@@ -62,31 +157,26 @@ Financial context:
 Choose exactly one from this list: {domains_list}
 
 Rules:
-- Output only the domain name, nothing else. No explanation.
+- Output ONLY the domain name, nothing else. No explanation, no quotes, no punctuation.
+- Use the company name and website URL as strong signals — they often reveal the industry.
 - If the evidence clearly fits one domain, use it.
 - If genuinely unclear or mixed, output "Other".
 - Do not invent a domain not in the list."""
 
         client = genai.Client(api_key=gemini_key)
-        response = call_with_503_backoff(
-            lambda: client.models.generate_content(
-                model="gemini-2.5-pro",
-                contents=prompt,
-                config=genai_types.GenerateContentConfig(
-                    temperature=0.5,
-                    max_output_tokens=20,
-                    thinking_config=genai_types.ThinkingConfig(thinking_budget=1024),
-                ),
-            ),
-            label="Domain Classification gemini-2.5-pro",
-            model="gemini-2.5-pro",
-            timeout=30,
-        )
-        result = (response.text or "").strip().strip('"').strip("'")
-        if result in KNOWN_DOMAINS:
-            print(f"   [Domain] Inferred: '{result}' for {company_name}")
-            return result
-        print(f"   [Domain] Unrecognised response '{result}' — keeping 'Other'")
+
+        # Attempt 1: Flash (fast, cheap, good for classification)
+        domain = _call_classifier(client, "gemini-2.0-flash", prompt, company_name, timeout=15)
+        if domain:
+            return domain
+
+        # Attempt 2: Retry with Pro after brief delay
+        time.sleep(1)
+        domain = _call_classifier(client, "gemini-2.5-pro", prompt, company_name, timeout=30)
+        if domain:
+            return domain
+
+        print(f"   ⚠️ [Domain] All classification attempts failed for {company_name}")
         return "Other"
     except Exception as e:
         print(f"   [Domain] Classification failed: {e} — keeping 'Other'")
