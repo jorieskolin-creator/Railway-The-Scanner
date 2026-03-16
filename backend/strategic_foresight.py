@@ -1242,7 +1242,7 @@ def _generate_foresight_from_kb(
             temperature=0.5,
             thinking_config=genai_types.ThinkingConfig(thinking_budget=3000),
             max_output_tokens=8000,
-        ), 60),
+        ), 90),
         ("gemini-2.5-pro", genai_types.GenerateContentConfig(
             safety_settings=_safety,
             temperature=0.5,
