@@ -347,21 +347,32 @@ def _recheck_company_data(company_name: str, data: dict) -> dict:
     # Step 3: Persist AI verification result back to stored data
     data["ai_verification"] = {
         "verified": ai_result["verified"],
+        "fact_check_skipped": ai_result.get("fact_check_skipped", False),
         "false_claims": ai_result["false_claims"],
         "false_claims_detailed": ai_result.get("false_claims_detailed", []),
         "model": ai_result["fact_check_model"],
         "time_ms": ai_result["fact_check_time_ms"],
     }
+    if ai_result.get("fact_check_skipped"):
+        print(f"   ⚠️ [Admin Recheck] All fact-check models failed — summary stored as UNVERIFIED")
     storage.save_company_data(company_name, data)
     storage.update_global_index_field(company_name, "ai_verified", ai_result["verified"])
 
     # Step 4: Auto-clean if AI found false claims
     # Prefer corrected summary from fact-checker (inline correction) over separate clean
     clean_result = None
-    if not ai_result["verified"] and ai_result["false_claims"]:
+    if not ai_result["verified"] and not ai_result.get("fact_check_skipped") and ai_result["false_claims"]:
+        # Purge contaminated evidence sources (parity with Deep Scan pipeline)
+        rc_detailed_claims = ai_result.get("false_claims_detailed", [])
+        print(f"   🗑️ [Admin Recheck] Removing contaminated evidence from stored data...")
+        purge_result = purge_false_evidence(
+            data,
+            ai_result["false_claims"],
+            detailed_claims=rc_detailed_claims,
+        )
+
         corrected_summary = ai_result.get("corrected_summary", "")
         corrected_pitch = ai_result.get("corrected_pitch", "")
-        rc_detailed_claims = ai_result.get("false_claims_detailed", [])
         _kp_before_rc = len(data.get("key_people") or [])
         if corrected_summary:
             # Fact-checker produced corrected summary — apply directly
@@ -374,6 +385,10 @@ def _recheck_company_data(company_name: str, data: dict) -> dict:
             data["ai_verification"]["false_claims"] = []
             data["ai_verification"]["note"] = "Corrected by Gemini 3.1 Pro fact-checker inline"
             data["summary_cleaned"] = True
+            # Clear stale washing flags (parity with Deep Scan pipeline)
+            data["washing_flag"] = False
+            data["washing_type"] = None
+            print(f"   ✅ [Admin Recheck] Cleared washing flags (false claims corrected by fact-checker)")
 
             # Verify key_people survived the correction — it is a separate field and
             # should never be touched by Stage 2, but an empty array means the
@@ -414,7 +429,9 @@ def _recheck_company_data(company_name: str, data: dict) -> dict:
     storage.save_company_data(company_name, data)
 
     # Step 6: Determine recommendation
-    if summary_result["risk"] == "high":
+    if ai_result.get("fact_check_skipped"):
+        recommendation = "Deep scan recommended — fact-check could not run, summary is unverified"
+    elif summary_result["risk"] == "high":
         recommendation = "Refresh database — high hallucination risk, full rescan needed"
     elif clean_result and clean_result.get("action") == "cleaned" and clean_result.get("re_verified"):
         recommendation = "OK — cleaned successfully"
