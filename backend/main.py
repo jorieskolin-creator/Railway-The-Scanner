@@ -974,7 +974,7 @@ def _clean_company_data(company_name: str, data: dict) -> dict:
     if fin_score is not None:
         findings = data.get("financial_findings", [])
         findings_text = '; '.join(
-            f.get('assessment', '') if isinstance(f, dict) else str(f)
+            f.get('assessment', '') if isinstance(f, dict) else ''
             for f in findings[:5]
         ) if findings else 'No specific findings'
         financial_context = f"FINANCIAL HEALTH CONTEXT (do NOT cite numeric scores — the index is displayed separately): {findings_text}. You may reference financial health qualitatively (e.g. 'declining revenue', 'strong profitability') but never mention specific index numbers."
@@ -1958,7 +1958,7 @@ def run_scan(
                     fi = financial_results
                     findings = fi.get('financial_findings', [])
                     findings_text = '; '.join(
-                        f.get('assessment', '') if isinstance(f, dict) else str(f)
+                        f.get('assessment', '') if isinstance(f, dict) else ''
                         for f in findings[:5]
                     ) if findings else 'No specific findings'
                     financial_context = f"FINANCIAL HEALTH CONTEXT (do NOT cite numeric scores — the index is displayed separately): {findings_text}. You may reference financial health qualitatively (e.g. 'declining revenue', 'strong profitability') but never mention specific index numbers."

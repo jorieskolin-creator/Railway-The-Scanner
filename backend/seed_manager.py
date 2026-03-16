@@ -447,7 +447,7 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
                         fi = financial_results
                         findings = fi.get('financial_findings', [])
                         findings_text = '; '.join(
-                            f.get('assessment', '') if isinstance(f, dict) else str(f)
+                            f.get('assessment', '') if isinstance(f, dict) else ''
                             for f in findings[:5]
                         ) if findings else 'No specific findings'
                         financial_context = f"FINANCIAL HEALTH CONTEXT (do NOT cite numeric scores — the index is displayed separately): {findings_text}. You may reference financial health qualitatively (e.g. 'declining revenue', 'strong profitability') but never mention specific index numbers."
@@ -968,7 +968,7 @@ Respond with valid JSON only. Six fields required:
                     if fc_fin_score is not None:
                         fc_findings = full_data.get("financial_findings", [])
                         fc_findings_text = '; '.join(
-                            f.get('assessment', '') if isinstance(f, dict) else str(f)
+                            f.get('assessment', '') if isinstance(f, dict) else ''
                             for f in fc_findings[:5]
                         ) if fc_findings else 'No specific findings'
                         fc_financial_context = f"FINANCIAL HEALTH CONTEXT (do NOT cite numeric scores — the index is displayed separately): {fc_findings_text}. You may reference financial health qualitatively but never mention specific index numbers."

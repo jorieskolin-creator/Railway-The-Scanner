@@ -2346,30 +2346,47 @@ CONFIDENCE GUIDE:
 - 81-100: Comprehensive (detailed financials, analyst coverage, multiple sources)
 """
 
-    # Attempt 1: Primary model
+    # Attempt 1: Primary model with one retry
     data = _execute_financial_search(api_key, primary_model, prompt, company_name)
-
-    # Attempt 2: Fallback to Gemini 3 Flash
     if not data:
+        print(f"   [Financial Health] Primary model failed, retrying in 2s...")
+        time.sleep(2)
+        data = _execute_financial_search(api_key, primary_model, prompt, company_name)
+
+    # Attempt 2: Fallback to Gemini 3 Flash with one retry
+    if not data:
+        print(f"   [Financial Health] Primary exhausted. Falling back to flash model...")
+        data = _execute_financial_search(api_key, "gemini-3-flash-preview", prompt, company_name)
+    if not data:
+        time.sleep(2)
         data = _execute_financial_search(api_key, "gemini-3-flash-preview", prompt, company_name)
 
+    # Abort: all attempts exhausted — return explicit no-data result
     if not data:
-        print(f"   [Financial Health] All models failed for {company_name}. Using defaults.")
+        print(f"   ❌ [Financial Health] ABORT: All 4 attempts failed for {company_name}. No financial data available.")
         return DEFAULT_RESULT
 
     # Assemble result
     dimensions = ["revenue_trend", "profitability", "financial_stability", "investment_signal"]
     sub_scores = {}
     findings = []
+    defaulted_count = 0
 
     for dim in dimensions:
         dim_data = data.get(dim, {})
-        if isinstance(dim_data, dict):
+        if isinstance(dim_data, dict) and "score" in dim_data:
             score = max(0, min(25, int(dim_data.get("score", 10))))
         else:
             score = 10
-            dim_data = {}
+            defaulted_count += 1
+            dim_data = dim_data if isinstance(dim_data, dict) else {}
         sub_scores[dim] = score
+
+    # Quality gate: if all dimensions fell back to defaults, the API returned
+    # no real financial data — treat the entire result as missing.
+    if defaulted_count == len(dimensions):
+        print(f"   ⚠️ [Financial Health] All dimensions defaulted for {company_name}. Treating as no data.")
+        return DEFAULT_RESULT
         findings.append({
             "dimension": dim.replace("_", " ").title(),
             "score": score,
