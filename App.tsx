@@ -11,7 +11,7 @@ const Icons = new Proxy(LucideRaw, {
     }
 });
 
-const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock, HardDrive, Radio, Cpu, BarChart3, TrendingUp, TrendingDown, Minus, Trash2, Eye, ShieldAlert, Calculator, Zap } = Icons;
+const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock, HardDrive, Radio, Cpu, BarChart3, TrendingUp, TrendingDown, Minus, Trash2, Eye, ShieldAlert, Calculator, Zap, Pencil, Save, Check } = Icons;
 
 const TruthMatrix = (window as any).TruthMatrix;
 const ScannerInput = (window as any).ScannerInput;
@@ -80,6 +80,12 @@ const App = () => {
   const [enrichingStakeholderCompany, setEnrichingStakeholderCompany] = useState(null);
   const [foresightKbLoading, setForesightKbLoading] = useState(false);
   const [foresightKbStatus, setForesightKbStatus] = useState(null);
+
+  // MANUAL EDIT STATE
+  const [editingCompany, setEditingCompany] = useState(null);  // company name being edited
+  const [editData, setEditData] = useState({ summary_text: '', pitch_text: '', general_summary: '' });
+  const [editLoading, setEditLoading] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
 
   const prevDataLengthRef = useRef(0);
 
@@ -552,6 +558,61 @@ const App = () => {
         setForesightKbLoading(false);
       }
     } catch (e) { console.error(e); alert("Foresight KB refresh failed."); setForesightKbLoading(false); }
+  };
+
+  // MANUAL EDIT HANDLERS
+  const handleOpenEdit = async (companyName) => {
+    const password = prompt(`Enter Admin Password to edit "${companyName}":`);
+    if (!password) return;
+    setEditLoading(true);
+    setEditingCompany(companyName);
+    try {
+      const res = await fetch(`/admin/get-company/${encodeURIComponent(companyName)}`, {
+        headers: { 'Authorization': `Bearer ${password}` }
+      });
+      if (res.status === 401) { alert("ACCESS DENIED"); setEditingCompany(null); return; }
+      if (!res.ok) { alert("Failed to load company data."); setEditingCompany(null); return; }
+      const data = await res.json();
+      setEditData({
+        summary_text: data.summary_text || '',
+        pitch_text: data.pitch_text || '',
+        general_summary: data.general_summary || '',
+        _password: password,
+      });
+    } catch (e) { console.error(e); alert("Failed to load company data."); setEditingCompany(null); }
+    finally { setEditLoading(false); }
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingCompany) return;
+    const password = editData._password;
+    if (!password) { alert("Session expired. Close and reopen edit."); return; }
+    setEditSaving(true);
+    try {
+      const res = await fetch(`/admin/save-company-edit/${encodeURIComponent(editingCompany)}`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${password}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          summary_text: editData.summary_text,
+          pitch_text: editData.pitch_text,
+          general_summary: editData.general_summary,
+        }),
+      });
+      if (res.status === 401) { alert("ACCESS DENIED"); return; }
+      if (!res.ok) { alert("Save failed: " + (await res.text())); return; }
+      const json = await res.json();
+      if (json.status === 'no_change') {
+        alert("No changes detected.");
+      } else {
+        alert(`Saved: ${json.changed_fields.join(', ')}`);
+        // Refresh review list and dashboard
+        const reviewRes = await fetch('/admin/review-data', { headers: { 'Authorization': `Bearer ${password}` } });
+        if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
+        fetchSummaryData(true);
+      }
+      setEditingCompany(null);
+    } catch (e) { console.error(e); alert("Save failed."); }
+    finally { setEditSaving(false); }
   };
 
   const handleSort = (key) => {
@@ -1573,7 +1634,8 @@ const App = () => {
                       const isFlaggedSummary = (item.summary_preview || '').includes('[FLAGGED]');
                       const hasUnverifiedClaims = item.ai_verified === false && item.unsupported_claims?.length > 0;
                       return (
-                        <div key={idx} className={`flex items-center justify-between px-3 py-2 rounded-lg border transition-all ${
+                        <div key={idx} className="space-y-1">
+                        <div className={`flex items-center justify-between px-3 py-2 rounded-lg border transition-all ${
                           isHighRisk || isFlaggedSummary ? 'bg-rose-500/5 border-rose-500/20' :
                           hasUnverifiedClaims ? 'bg-orange-500/5 border-orange-500/20' :
                           isMediumRisk ? 'bg-amber-500/5 border-amber-500/20' :
@@ -1638,6 +1700,14 @@ const App = () => {
                               {cleaningCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <ShieldAlert size={14} />}
                             </button>
                             <button
+                              onClick={() => handleOpenEdit(item.companyName)}
+                              disabled={editLoading && editingCompany === item.companyName}
+                              className="text-slate-500 hover:text-sky-400 p-1.5 rounded hover:bg-sky-500/10 transition-all disabled:opacity-50"
+                              title={`Edit ${item.companyName}`}
+                            >
+                              {editLoading && editingCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <Pencil size={14} />}
+                            </button>
+                            <button
                               onClick={() => handleDeleteCompany(item.companyName)}
                               className="text-slate-500 hover:text-rose-400 p-1.5 rounded hover:bg-rose-500/10 transition-all"
                               title={`Delete ${item.companyName}`}
@@ -1646,6 +1716,61 @@ const App = () => {
                             </button>
                           </div>
                         </div>
+                        {/* INLINE EDIT PANEL */}
+                        {editingCompany === item.companyName && !editLoading && (
+                          <div className="bg-sky-500/5 border border-sky-500/20 rounded-lg p-4 space-y-3">
+                            <div className="flex items-center justify-between">
+                              <span className="text-sky-300 text-xs font-mono font-bold">EDITING: {item.companyName}</span>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={handleSaveEdit}
+                                  disabled={editSaving}
+                                  className="flex items-center gap-1.5 px-3 py-1 bg-emerald-900/40 hover:bg-emerald-800/60 border border-emerald-600/50 text-emerald-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
+                                >
+                                  {editSaving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+                                  SAVE
+                                </button>
+                                <button
+                                  onClick={() => setEditingCompany(null)}
+                                  className="text-slate-400 hover:text-white p-1"
+                                >
+                                  <X size={14} />
+                                </button>
+                              </div>
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-slate-400 font-mono uppercase tracking-wider block mb-1">Summary</label>
+                              <textarea
+                                value={editData.summary_text}
+                                onChange={(e) => setEditData(prev => ({ ...prev, summary_text: e.target.value }))}
+                                className="w-full bg-black/40 border border-white/10 rounded-lg p-3 text-slate-200 text-xs font-mono resize-y min-h-[120px] focus:border-sky-500/50 focus:outline-none"
+                                rows={8}
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-slate-400 font-mono uppercase tracking-wider block mb-1">Elevator Pitch</label>
+                              <textarea
+                                value={editData.pitch_text}
+                                onChange={(e) => setEditData(prev => ({ ...prev, pitch_text: e.target.value }))}
+                                className="w-full bg-black/40 border border-white/10 rounded-lg p-3 text-slate-200 text-xs font-mono resize-y min-h-[80px] focus:border-sky-500/50 focus:outline-none"
+                                rows={4}
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] text-slate-400 font-mono uppercase tracking-wider block mb-1">General Summary</label>
+                              <textarea
+                                value={editData.general_summary}
+                                onChange={(e) => setEditData(prev => ({ ...prev, general_summary: e.target.value }))}
+                                className="w-full bg-black/40 border border-white/10 rounded-lg p-3 text-slate-200 text-xs font-mono resize-y min-h-[80px] focus:border-sky-500/50 focus:outline-none"
+                                rows={4}
+                              />
+                            </div>
+                            <div className="text-[9px] text-slate-600 font-mono">
+                              Quick fix — next scan will overwrite these edits.
+                            </div>
+                          </div>
+                        )}
+                      </div>
                       );
                     })}
                   </div>

@@ -532,6 +532,53 @@ async def recheck_company(company_name: str, request: Request):
 
     return _recheck_company_data(company_name, data)
 
+@app.post("/admin/save-company-edit/{company_name}")
+async def save_company_edit(company_name: str, request: Request):
+    """
+    Save manual edits to a company's data.
+    Accepts a JSON body with editable fields (summary_text, pitch_text, general_summary).
+    Manual edits are treated like normal data — the next scan will overwrite them.
+    """
+    verify_admin(request)
+    data = storage.get_company_data(company_name)
+    if not data:
+        raise HTTPException(status_code=404, detail=f"Company '{company_name}' not found in database.")
+
+    body = await request.json()
+
+    # Only allow editing specific safe fields
+    EDITABLE_FIELDS = ["summary_text", "pitch_text", "general_summary"]
+    changes = {}
+    for field in EDITABLE_FIELDS:
+        if field in body and body[field] is not None:
+            old_val = data.get(field, "")
+            new_val = body[field].strip()
+            if new_val != old_val:
+                data[field] = new_val
+                changes[field] = True
+
+    if not changes:
+        return {"status": "no_change", "company": company_name}
+
+    # Mark as manually edited (informational only — no special protection)
+    data["last_manual_edit"] = datetime.utcnow().isoformat() + "Z"
+    data["last_manual_edit_fields"] = list(changes.keys())
+
+    # Save to storage (normal save, next scan will overwrite)
+    storage.save_company_data(company_name, data)
+    print(f"   ✏️ [Manual Edit] Saved edits for '{company_name}': {list(changes.keys())}")
+
+    return {"status": "saved", "company": company_name, "changed_fields": list(changes.keys())}
+
+@app.get("/admin/get-company/{company_name}")
+async def get_company_for_edit(company_name: str, request: Request):
+    """Returns full company data for inline editing in the admin review panel."""
+    verify_admin(request)
+    data = storage.get_company_data(company_name)
+    if not data:
+        raise HTTPException(status_code=404, detail=f"Company '{company_name}' not found in database.")
+    return data
+
 @app.post("/admin/recalculate-financial")
 async def recalculate_financial_index(request: Request):
     """
