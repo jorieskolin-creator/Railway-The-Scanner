@@ -3,9 +3,10 @@ Reality Check — Hallucination Detection for AI-Generated Summaries
 
 Two layers:
 1. Heuristic pattern matching (zero API cost) — catches obvious fakes
-2. AI-powered fact-check (Gemini 3.1 Pro / 2.5 Pro + web search grounding)
-   — verifies synthesis claims against live web data
-   — if false claims found, also produces corrected summary in the same call
+2. AI-powered fact-check (Gemini 2.5 Pro / 3.1 Pro + web search grounding,
+   Mistral Large fallback without web search)
+   — verifies synthesis claims against live web data (or LLM knowledge if Mistral)
+   — if false claims found, also produces corrected summary in a follow-up call
 
 Returns a hallucination risk level: "low", "medium", "high"
 and a list of specific flags explaining what was detected.
@@ -418,8 +419,9 @@ def validate_pitch(pitch_text, company_name):
 
 
 # --- AI-POWERED FACT-CHECK (Layer 2) ---
-# Single-phase verification using Gemini 3.1 Pro (backup: 3 Pro / 2.5 Pro) with Google Search grounding.
-# Gemini searches the web independently and fact-checks the synthesis against live data.
+# Two-stage verification: Gemini 2.5 Pro / 3.1 Pro with Google Search grounding,
+# Mistral Large as non-Google fallback (no web search, uses LLM knowledge).
+# Gemini searches the web independently; Mistral relies on training data.
 # This catches both evidence-sourced errors AND fabricated claims with no basis.
 #
 # Architecture rationale (replaces old two-phase Haiku contradiction + Flash fresh search):
@@ -784,8 +786,80 @@ Each false_claims object must have:
                 print(f"   ❌ [Fact-Check S1] {model_name} failed: {e}")
                 continue
 
+    # ── Mistral fallback for Stage 1 — independent provider (no Google Search) ──
     if stage1_false_claims is None:
-        print(f"   ❌ [Fact-Check] All Stage 1 models failed — skipping fact-check")
+        mistral_key = os.environ.get("MISTRAL_API_KEY")
+        if mistral_key:
+            try:
+                from mistralai import Mistral
+                print(f"   🔄 [Fact-Check S1] All Gemini models failed — trying Mistral Large fallback (no web search)...")
+                m_start = time.time()
+                mistral_client = Mistral(api_key=mistral_key)
+                mistral_resp = mistral_client.chat.complete(
+                    model="mistral-large-latest",
+                    temperature=0.1,
+                    response_format={"type": "json_object"},
+                    max_tokens=8000,
+                    messages=[{"role": "user", "content": stage1_prompt}],
+                )
+                m_text = (mistral_resp.choices[0].message.content or "").strip()
+                m_elapsed = int((time.time() - m_start) * 1000)
+
+                if m_text and len(m_text) >= 30:
+                    m_result = _robust_parse_json(m_text)
+                    if m_result and "false_claims" in m_result:
+                        if m_result.get("summary_accurate") is True and m_result.get("false_claims"):
+                            print(f"   ✅ [Fact-Check S1] mistral-large-latest explicitly said summary_accurate=true ({m_elapsed}ms)")
+                            return {"false_claims": [], "corrected_summary": "", "corrected_pitch": "", "model": "mistral-large-latest", "time_ms": m_elapsed}
+
+                        raw_claims = m_result.get("false_claims") or []
+                        false_claims = []
+                        for fc in raw_claims[:10]:
+                            if isinstance(fc, str):
+                                if any(p in fc.lower() for p in _not_real):
+                                    continue
+                                false_claims.append({"claim": fc, "error_type": "Unknown", "reasoning": "", "source_indices": [], "source_urls": []})
+                            elif isinstance(fc, dict):
+                                claim_text = fc.get("claim") or str(fc)
+                                if any(p in claim_text.lower() for p in _not_real):
+                                    continue
+                                error_type = fc.get("error_type") or "Unknown"
+                                reasoning = fc.get("reasoning") or ""
+                                indices = fc.get("source_indices") or []
+                                source_urls = []
+                                for idx in indices:
+                                    if isinstance(idx, int) and 1 <= idx <= len(verified_links):
+                                        url = verified_links[idx - 1].get("url", "")
+                                        if url:
+                                            source_urls.append(url)
+                                correction = fc.get("correction") or ""
+                                wrong_value = fc.get("wrong_value") or ""
+                                correct_value = fc.get("correct_value") or ""
+                                false_claims.append({
+                                    "claim": claim_text,
+                                    "error_type": error_type,
+                                    "reasoning": reasoning,
+                                    "correction": correction,
+                                    "wrong_value": wrong_value,
+                                    "correct_value": correct_value,
+                                    "source_indices": indices,
+                                    "source_urls": source_urls,
+                                })
+
+                        print(f"   {'⚠️' if false_claims else '✅'} [Fact-Check S1] mistral-large-latest: {len(false_claims)} false claim(s) ({m_elapsed}ms, no web search)")
+                        stage1_false_claims = false_claims
+                        stage1_model_name = "mistral-large-latest"
+                        stage1_time_ms = m_elapsed
+                    else:
+                        print(f"   ⚠️ [Fact-Check S1] Could not parse Mistral response: {m_text[:500]}")
+                else:
+                    print(f"   ⚠️ [Fact-Check S1] Mistral response too short ({len(m_text) if m_text else 0} chars)")
+
+            except Exception as e:
+                print(f"   ❌ [Fact-Check S1] mistral-large-latest failed: {e}")
+
+    if stage1_false_claims is None:
+        print(f"   ❌ [Fact-Check] All Stage 1 models failed (including Mistral fallback) — skipping fact-check")
         return {"false_claims": [], "corrected_summary": "", "corrected_pitch": "", "model": "all_models_failed", "time_ms": 0, "fact_check_skipped": True}
 
     # No false claims → done, Stage 2 not needed
@@ -875,7 +949,45 @@ OUTPUT FORMAT — valid JSON only:
                 print(f"   ⚠️ [Fact-Check S2] Empty response from Stage 2")
 
         except Exception as e:
-            print(f"   ❌ [Fact-Check S2] gemini-3.1-pro-preview failed: {e} — returning claims without correction")
+            print(f"   ❌ [Fact-Check S2] gemini-3.1-pro-preview failed: {e}")
+
+    # ── Mistral fallback for Stage 2 correction ──────────────────────────────
+    if not corrected_summary:
+        mistral_key = os.environ.get("MISTRAL_API_KEY")
+        if mistral_key:
+            try:
+                from mistralai import Mistral
+                print(f"   🔄 [Fact-Check S2] Gemini correction failed — trying Mistral Large fallback...")
+                m2_start = time.time()
+                mistral_client = Mistral(api_key=mistral_key)
+                mistral_resp = mistral_client.chat.complete(
+                    model="mistral-large-latest",
+                    temperature=0.2,
+                    response_format={"type": "json_object"},
+                    max_tokens=10000,
+                    messages=[{"role": "user", "content": stage2_prompt}],
+                )
+                m2_text = (mistral_resp.choices[0].message.content or "").strip()
+                m2_elapsed = int((time.time() - m2_start) * 1000)
+
+                if m2_text:
+                    m2_result = _robust_parse_json(m2_text)
+                    if m2_result:
+                        corrected_summary = m2_result.get("corrected_summary", "")
+                        corrected_pitch = m2_result.get("corrected_pitch", "")
+                        if corrected_summary:
+                            print(f"   ✏️ [Fact-Check S2] Mistral correction produced ({len(corrected_summary.split())} words, {m2_elapsed}ms)")
+                            s2_model_name = "mistral-large"
+                            elapsed2 = m2_elapsed
+                        else:
+                            print(f"   ⚠️ [Fact-Check S2] Mistral parsed but no corrected_summary")
+                    else:
+                        print(f"   ⚠️ [Fact-Check S2] Could not parse Mistral Stage 2 response: {m2_text[:500]}")
+                else:
+                    print(f"   ⚠️ [Fact-Check S2] Mistral returned empty Stage 2 response")
+
+            except Exception as e2:
+                print(f"   ❌ [Fact-Check S2] mistral-large-latest fallback failed: {e2} — returning claims without correction")
 
     return {
         "false_claims": stage1_false_claims,
@@ -889,8 +1001,8 @@ OUTPUT FORMAT — valid JSON only:
 def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text=None):
     """
     AI-powered fact-check — two-stage pipeline:
-      Stage 1: Gemini 3.1 Pro → 2.5 Pro fallback — detects false claims via web search.
-      Stage 2: Gemini 3.1 Pro — surgically corrects false claims.
+      Stage 1: Gemini 2.5 Pro → 3.1 Pro → Mistral Large fallback — detects false claims.
+      Stage 2: Gemini 3.1 Pro → Mistral Large fallback — surgically corrects false claims.
 
     The fact-checker independently verifies the synthesis claims against live
     web data. This catches both evidence-sourced errors (contaminated evidence)
@@ -1181,12 +1293,41 @@ def _clean_with_gemini(prompt):
         response = future.result(timeout=60)
     except concurrent.futures.TimeoutError:
         pool.shutdown(wait=False)
-        raise ValueError("All Gemini models failed — Gemini 2.5 Pro timed out after 60s")
+        print(f"   ❌ [Clean] Gemini 2.5 Pro timed out after 60s")
+        response = None
+
     pool.shutdown(wait=False)
 
-    elapsed_ms = int((time.time() - start) * 1000)
-    response_text = response.text if response.text else ""
-    return response_text, elapsed_ms, "gemini-2.5-pro"
+    if response:
+        elapsed_ms = int((time.time() - start) * 1000)
+        response_text = response.text if response.text else ""
+        if response_text:
+            return response_text, elapsed_ms, "gemini-2.5-pro"
+
+    # --- Fallback: Mistral Large (independent provider — survives Google outages) ---
+    mistral_key = os.environ.get("MISTRAL_API_KEY")
+    if mistral_key:
+        try:
+            from mistralai import Mistral
+            print(f"   🔄 [Clean] All Gemini models failed — falling back to Mistral Large...")
+            m_start = time.time()
+            mistral_client = Mistral(api_key=mistral_key)
+            mistral_resp = mistral_client.chat.complete(
+                model="mistral-large-latest",
+                temperature=0.1,
+                response_format={"type": "json_object"},
+                max_tokens=6000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            m_text = (mistral_resp.choices[0].message.content or "").strip()
+            m_elapsed = int((time.time() - m_start) * 1000)
+            if m_text:
+                return m_text, m_elapsed, "mistral-large-latest"
+            print(f"   ⚠️ [Clean] Mistral Large returned empty response")
+        except Exception as mistral_err:
+            print(f"   ❌ [Clean] Mistral Large fallback failed: {mistral_err}")
+
+    raise ValueError("All models failed (Gemini 3.1 Pro, 2.5 Pro, Mistral Large)")
 
 
 def _validate_clean_result(result, summary_text, pitch_text, model_name, elapsed_ms):
