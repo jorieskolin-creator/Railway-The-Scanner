@@ -70,6 +70,8 @@ TOP_100_COMPANIES = [
      "domain": "Insurance & Pensions", "revenue_avg_3yr": 6000, "employees": 600, "ownership": "Private", "hq_country": "FI"},
     {"name": "Ilmarinen", "url": "https://www.ilmarinen.fi",
      "domain": "Insurance & Pensions", "revenue_avg_3yr": 5500, "employees": 600, "ownership": "Private", "hq_country": "FI"},
+    {"name": "Maatalousyrittäjien eläkelaitos", "url": "https://www.mela.fi",
+     "domain": "Insurance & Pensions", "revenue_avg_3yr": 3000, "employees": 400, "ownership": "State-owned", "hq_country": "FI"},
     {"name": "HKFoods Oyj", "url": "https://www.hkfoods.com",
      "domain": "Retail & Consumer", "revenue_avg_3yr": 1900, "employees": 6000, "ownership": "Public", "hq_country": "FI"},
     {"name": "Atria Oyj", "url": "https://www.atria.com",
