@@ -162,6 +162,9 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
                     "proposal_angle": f.get("proposal_angle", ""),
                     "confidence": f.get("confidence", ""),
                     "source_type": f.get("source_type", ""),
+                    "lifecycle_stage": f.get("lifecycle_stage", ""),
+                    "trend_momentum": f.get("trend_momentum", ""),
+                    "action_timing": f.get("action_timing", ""),
                 }
                 for f in foresight_data["dimension_forces"][:4]
             ],

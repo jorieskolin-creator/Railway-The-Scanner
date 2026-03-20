@@ -1344,6 +1344,10 @@ def _generate_foresight_from_kb(
                     force["source_count"] = 1 + len(force["verified_supporting_sources"])
                     if matched_sig.get("description"):
                         force["_kb_description"] = matched_sig["description"]
+                    # Carry over lifecycle fields from KB signal if force lacks them
+                    for lc_field in ("lifecycle_stage", "trend_momentum", "action_timing"):
+                        if matched_sig.get(lc_field) and not force.get(lc_field):
+                            force[lc_field] = matched_sig[lc_field]
                 else:
                     force["source_credibility"] = "medium"
                     force["source_count"] = 1
@@ -1456,8 +1460,11 @@ def format_foresight_for_synthesis(foresight_data: dict, company_name: str, doma
 
     forces_text = ""
     for f in foresight_data["dimension_forces"]:
+        lc_tag = ""
+        if f.get("lifecycle_stage"):
+            lc_tag = f" [{f['lifecycle_stage']}/{f.get('trend_momentum', '?')}]"
         forces_text += (
-            f"- [{f.get('type', '?')}] {f.get('trend', '?')} ({f.get('timeframe', '?')}) "
+            f"- [{f.get('type', '?')}] {f.get('trend', '?')} ({f.get('timeframe', '?')}){lc_tag} "
             f"→ impacts {f.get('kb_dimension', '?')}: {f.get('impact_on_company', '?')}"
         )
         if f.get("proposal_angle"):
@@ -2339,6 +2346,9 @@ def extract_foresight_links(foresight_data, company_name=""):
                 "fp_theme": force.get("fp_theme", ""),
                 "timeframe": force.get("timeframe", ""),
                 "force_type": force.get("type", ""),
+                "lifecycle_stage": force.get("lifecycle_stage", ""),
+                "trend_momentum": force.get("trend_momentum", ""),
+                "action_timing": force.get("action_timing", ""),
                 "origin": "foresight",
                 "is_primary": True,
             }
