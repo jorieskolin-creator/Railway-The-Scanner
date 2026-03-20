@@ -1589,7 +1589,7 @@ Key scenarios:
 
 RULES:
 - 250-300 words, 3-4 paragraphs separated by \\n\\n
-- IMPORTANT: This analysis is based on {len(forces)} distinct external forces. Address ALL of them — do not focus on just one.
+- IMPORTANT: This analysis is based on {len(forces)} distinct external forces. Focus on the top 2-3 most impactful.
   Weight each force by its confidence level and source credibility (high-credibility sources carry more weight).
 - First paragraph: The 2-3 most impactful external forces and their timeframe.
   Name the forces concretely — no vague "market changes are coming."
