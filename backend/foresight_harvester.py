@@ -189,6 +189,8 @@ For each signal, provide:
 - "confidence": "high" (3+ sources) | "medium" (2 sources) | "low" (1 source)
 - "industries_affected": Array of 2-4 industry domains most impacted (e.g., ["Technology & Software", "Financial Services", "Healthcare"])
 - "kb_dimensions_affected": Array of 1-3 KB dimensions impacted: "Operating Model", "Strategy", "Values", "Service Portfolio", "AI Readiness"
+- "lifecycle_stage": Assess where this signal sits on the trend adoption S-curve. One of: "weak_signal" | "strong_signal" | "hype_cycle" | "valley_of_death" | "go_to_market" | "market_breakout" | "established_trend" | "market_saturation" | "weakening_trend" | "fading_signal". Assessment guide: only academic/R&D papers → weak_signal; multiple think-tank reports but no products → strong_signal; mainstream media hype but limited real adoption → hype_cycle; prior hype followed by failures/pullbacks → valley_of_death; real products/regulations launched → go_to_market; scaling adoption metrics → market_breakout; widespread adoption, industry standard → established_trend; market leaders consolidating, growth flattening → market_saturation; replacement technologies emerging → weakening_trend; near-zero new adoption → fading_signal
+- "trend_momentum": "accelerating" (adoption rate increasing) | "stable" (steady pace) | "decelerating" (slowing down)
 
 CRITICAL: Every URL must be real and retrieved from web search. Do NOT fabricate URLs.
 
@@ -206,7 +208,9 @@ RETURN STRICT JSON ONLY:
       "source_type": "...",
       "confidence": "...",
       "industries_affected": ["...", "..."],
-      "kb_dimensions_affected": ["...", "..."]
+      "kb_dimensions_affected": ["...", "..."],
+      "lifecycle_stage": "weak_signal|strong_signal|hype_cycle|valley_of_death|go_to_market|market_breakout|established_trend|market_saturation|weakening_trend|fading_signal",
+      "trend_momentum": "accelerating|stable|decelerating"
     }}
   ]
 }}"""

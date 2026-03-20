@@ -930,6 +930,19 @@ def _build_kb_synthesis_prompt(
         if dims:
             evidence_lines.append(f"  KB dimensions: {', '.join(dims)}")
         evidence_lines.append(f"  Confidence: {sig.get('confidence', 'N/A')}")
+        # Lifecycle stage — use stored value or infer from signal_type for backward compat
+        lc_stage = sig.get("lifecycle_stage", "")
+        if not lc_stage:
+            _type_to_lifecycle = {
+                "Preposterous/Black Swan": "weak_signal",
+                "Probable/Emerging": "strong_signal",
+                "Plausible/Maturing": "established_trend",
+                "Weakening/Declining": "weakening_trend",
+            }
+            lc_stage = _type_to_lifecycle.get(sig.get("signal_type", ""), "")
+        if lc_stage:
+            momentum = sig.get("trend_momentum", "stable")
+            evidence_lines.append(f"  Lifecycle stage: {lc_stage} | Momentum: {momentum}")
         evidence_lines.append("")
 
     evidence_block = "\n".join(evidence_lines)
@@ -982,6 +995,9 @@ Per force, provide:
 - "supporting_sources": Use the supporting sources from the signal above
 - "source_type": Use the source_type from the signal
 - "confidence": Use the confidence from the signal
+- "lifecycle_stage": Use the lifecycle_stage from the KB signal if available, otherwise assess based on evidence. One of: "weak_signal" | "strong_signal" | "hype_cycle" | "valley_of_death" | "go_to_market" | "market_breakout" | "established_trend" | "market_saturation" | "weakening_trend" | "fading_signal"
+- "trend_momentum": Use the trend_momentum from the KB signal if available, otherwise assess: "accelerating" | "stable" | "decelerating"
+- "action_timing": Derive from lifecycle_stage and company archetype: "monitor" (weak_signal/strong_signal — track but don't invest yet) | "prepare" (hype_cycle/valley_of_death — build capabilities, run pilots) | "act_now" (go_to_market/market_breakout — invest and execute) | "last_chance" (established_trend — adopt or fall behind competitors) | "optimize" (market_saturation/weakening_trend/fading_signal — extract value, prepare for next wave)
 - "osint_validation": "Pre-validated via Foresight Knowledge Base with [N] corroborating source(s)" — use correct grammar: "1 corroborating source" or "2 corroborating sources"
 
 TASK 2 — CROSS-IMPACT CHAIN:
@@ -1007,6 +1023,9 @@ RETURN STRICT JSON ONLY:
       "supporting_sources": [{{"url": "https://...", "source_type": "...", "title": "..."}}, {{"url": "https://...", "source_type": "...", "title": "..."}}],
       "source_type": "academic|think_tank|industry_analyst|government|news",
       "confidence": "high|medium|low",
+      "lifecycle_stage": "weak_signal|strong_signal|hype_cycle|valley_of_death|go_to_market|market_breakout|established_trend|market_saturation|weakening_trend|fading_signal",
+      "trend_momentum": "accelerating|stable|decelerating",
+      "action_timing": "monitor|prepare|act_now|last_chance|optimize",
       "osint_validation": "..."
     }}
   ],
@@ -1133,6 +1152,9 @@ Per force, provide:
 - "supporting_sources": Array of 2-3 ADDITIONAL URLs that corroborate this force from DIFFERENT publications/organizations. Each entry: {{"url": "https://...", "source_type": "...", "title": "Brief title of the source"}}. CRITICAL: These must be REAL URLs you found via web search, not fabricated. If you cannot find 2+ corroborating sources, set confidence to "low".
 - "source_type": "academic" | "think_tank" | "industry_analyst" | "government" | "news"
 - "confidence": "high" (3+ verified sources) | "medium" (2 verified sources) | "low" (0-1 verified sources)
+- "lifecycle_stage": Assess where this force sits on the trend adoption S-curve. One of: "weak_signal" (barely detectable, fringe/academic sources only) | "strong_signal" (multiple independent confirmations, not yet mainstream) | "hype_cycle" (inflated expectations, media buzz exceeds real-world adoption) | "valley_of_death" (post-hype disillusionment, initiatives stalling) | "go_to_market" (real products/regulations appearing) | "market_breakout" (rapid scaling, early mainstream adoption) | "established_trend" (widely adopted, industry standard) | "market_saturation" (peak adoption, diminishing returns) | "weakening_trend" (declining relevance, being replaced) | "fading_signal" (near-obsolete)
+- "trend_momentum": "accelerating" (adoption rate increasing) | "stable" (steady pace) | "decelerating" (slowing down)
+- "action_timing": Derive from lifecycle_stage and company archetype: "monitor" (weak_signal/strong_signal) | "prepare" (hype_cycle/valley_of_death) | "act_now" (go_to_market/market_breakout) | "last_chance" (established_trend) | "optimize" (market_saturation/weakening_trend/fading_signal)
 - "osint_validation": 1 sentence on how you verified this signal (e.g., "Cross-referenced OECD report with McKinsey survey"). MUST reference specific source names.
 
 HORIZON SCANNING for "Preposterous/Black Swan" forces:
@@ -1169,6 +1191,9 @@ RETURN STRICT JSON ONLY:
       "supporting_sources": [{{"url": "https://...", "source_type": "...", "title": "..."}}, {{"url": "https://...", "source_type": "...", "title": "..."}}],
       "source_type": "academic|think_tank|industry_analyst|government|news",
       "confidence": "high|medium|low",
+      "lifecycle_stage": "weak_signal|strong_signal|hype_cycle|valley_of_death|go_to_market|market_breakout|established_trend|market_saturation|weakening_trend|fading_signal",
+      "trend_momentum": "accelerating|stable|decelerating",
+      "action_timing": "monitor|prepare|act_now|last_chance|optimize",
       "osint_validation": "..."
     }}
   ],
@@ -1512,6 +1537,8 @@ def generate_foresight_summary(
             f"Theme: {f.get('fp_theme', '?')} | Confidence: {f.get('confidence', '?')}\n"
             f"  Source credibility: {f.get('source_credibility', 'unknown')} | "
             f"Corroborating sources: {n_supporting}\n"
+            f"  Lifecycle: {f.get('lifecycle_stage', '?')} | Momentum: {f.get('trend_momentum', '?')} | "
+            f"Action timing: {f.get('action_timing', '?')}\n"
             f"  Impacts: {f.get('kb_dimension', '?')}\n"
             f"  Company impact: {f.get('impact_on_company', '?')}\n"
         )
@@ -1572,6 +1599,11 @@ RULES:
 - Do NOT use any of these terms: {forbidden}. Use plain business language.
 - Every claim must trace to a force identified in the foresight analysis.
 - If confidence is low on a force, use hedging language ("emerging signals suggest...")
+- LIFECYCLE TIMING: When each force has lifecycle_stage and action_timing data, explicitly reference WHERE
+  each force sits on its adoption lifecycle and what this means for timing. Use phrases like "still in its
+  hype cycle — prepare but don't over-invest", "at market breakout — act now", or "approaching
+  saturation — optimize existing position". The timing dimension is what makes this actionable.
+  Forces with action_timing "act_now" or "last_chance" should be emphasized as urgent.
 - KEY FORCE HIGHLIGHTING: When naming a key external force for the first time,
   wrap it in **double asterisks** (e.g., "**generative AI disruption**").
   Do this for the 2-4 most important forces only. Do not overuse.
@@ -2178,6 +2210,32 @@ def reality_check_foresight(foresight_data, company_name=""):
         elif confidence == "medium" and not url_verified and credibility == "low":
             force["confidence"] = "low"
             flags.append("Confidence downgraded from medium to low (unverified + low-credibility)")
+
+        # --- Lifecycle stage consistency checks ---
+        lifecycle_stage = (force.get("lifecycle_stage") or "").strip().lower()
+        trend_momentum = (force.get("trend_momentum") or "").strip().lower()
+        if lifecycle_stage:
+            _valid_stages = {
+                "weak_signal", "strong_signal", "hype_cycle", "valley_of_death",
+                "go_to_market", "market_breakout", "established_trend",
+                "market_saturation", "weakening_trend", "fading_signal",
+            }
+            if lifecycle_stage not in _valid_stages:
+                flags.append(f"Unknown lifecycle_stage: '{lifecycle_stage}'")
+            else:
+                # Cross-check lifecycle vs confidence
+                if lifecycle_stage == "established_trend" and confidence == "low":
+                    flags.append("lifecycle_confidence_mismatch: established_trend with low confidence")
+                # Weak signals usually have longer timeframes
+                timeframe = (force.get("timeframe") or "").strip()
+                if lifecycle_stage == "weak_signal" and timeframe == "6-12mo":
+                    flags.append("lifecycle_timeframe_mismatch: weak_signal unlikely to impact in 6-12mo")
+                # Saturation shouldn't be accelerating
+                if lifecycle_stage == "market_saturation" and trend_momentum == "accelerating":
+                    flags.append("lifecycle_momentum_mismatch: market_saturation with accelerating momentum")
+                # Fading signal shouldn't be accelerating
+                if lifecycle_stage == "fading_signal" and trend_momentum == "accelerating":
+                    flags.append("lifecycle_momentum_mismatch: fading_signal with accelerating momentum")
 
         # --- Supporting source quality ---
         verified_supporting = force.get("verified_supporting_sources", [])
