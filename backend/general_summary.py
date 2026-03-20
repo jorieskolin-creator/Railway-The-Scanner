@@ -13,6 +13,7 @@ import re
 import time
 
 from google import genai
+from gemini_client import get_gemini_client
 from google.genai import types as genai_types
 from gemini_backoff import call_with_503_backoff
 
@@ -196,8 +197,9 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
     Returns (summary_text, model_used).
     Returns ("", "") on failure — caller should catch exceptions separately.
     """
-    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-    if not gemini_key:
+    try:
+        client = get_gemini_client()
+    except ValueError:
         print("   ⚠️ [General Summary] No GEMINI_API_KEY — skipping")
         return "", ""
 
@@ -219,8 +221,6 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
         max_output_tokens=6000,
         thinking_config=genai_types.ThinkingConfig(thinking_budget=512),
     )
-
-    client = genai.Client(api_key=gemini_key)
 
     # Attempts 1 & 2: primary model
     for attempt, config in enumerate([FIRST_CONFIG, RETRY_CONFIG], start=1):

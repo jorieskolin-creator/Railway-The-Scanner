@@ -27,6 +27,7 @@ import anthropic
 from google import genai
 from google.genai import types as genai_types
 from gemini_backoff import call_with_503_backoff
+from gemini_client import get_gemini_client
 from source_quality import HIGH_CREDIBILITY_DOMAINS, LOW_CREDIBILITY_DOMAINS, assess_source_credibility
 
 
@@ -1252,7 +1253,7 @@ def _generate_foresight_from_kb(
         financial_index, top_findings, domain_config, kb_signals,
     )
 
-    client = genai.Client(api_key=gemini_key)
+    client = get_gemini_client()
 
     _safety = [
         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
@@ -1656,12 +1657,11 @@ Output only the prose text. Nothing else."""
             print(f"   ❌ [Future Insight] {SONNET_MODEL} failed ({elapsed}ms): {e}")
 
     # --- Attempt 2-3: Gemini fallbacks ---
-    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-    if not gemini_key:
+    try:
+        client = get_gemini_client()
+    except ValueError:
         print("   ⚠️ [Future Insight] No GEMINI_API_KEY — skipping Gemini fallbacks")
         return "", ""
-
-    client = genai.Client(api_key=gemini_key)
 
     gemini_models = [
         ("gemini-3.1-pro-preview", genai_types.GenerateContentConfig(
@@ -1944,13 +1944,12 @@ def retry_failed_sources(foresight_data, domain, max_retries=1):
         print("   [Source Retry] All sources already verified — no retry needed")
         return foresight_data, 0
 
-    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-    if not gemini_key:
+    try:
+        client = get_gemini_client()
+    except ValueError:
         return foresight_data, 0
 
     print(f"   🔄 [Source Retry] {len(failed_forces)}/{len(forces)} forces have unverified sources — attempting re-search...")
-
-    client = genai.Client(api_key=gemini_key)
     _safety = [
         {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
         {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},

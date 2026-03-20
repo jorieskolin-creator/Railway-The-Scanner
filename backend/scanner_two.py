@@ -10,6 +10,7 @@ from gemini_backoff import call_with_503_backoff
 from urllib.parse import urlparse
 from google import genai
 from google.genai import types
+from gemini_client import get_gemini_client
 import anthropic
 from knowledge_base import get_evolving_framework
 from source_quality import assess_evidence_quality, confidence_quality_penalty
@@ -442,11 +443,11 @@ def _structure_with_gemini(raw_text, company_name, model_name):
     Mirrors the prompt schema of _repair_json_with_sonnet so either model can
     fulfil the structuring role — temperature 0.0, no thinking, no tools.
     """
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-    if not api_key:
+    try:
+        client = get_gemini_client()
+    except ValueError:
         return None
     try:
-        client = genai.Client(api_key=api_key)
         structuring_prompt = f"""The following text is a forensic reality-check analysis for "{company_name}" produced by a web-search-grounded AI model. Your job is to structure this analysis into valid JSON, preserving ALL evidence, scores, and assessments exactly as stated.
 
 The expected JSON structure is:
@@ -1096,14 +1097,14 @@ Return STRICT JSON:
 """
 
     try:
-        api_key_val = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-        if not api_key_val:
+        try:
+            client = get_gemini_client()
+        except ValueError:
             print("   [Self-Analysis] No GEMINI_API_KEY found. Skipping.")
             return None
 
         print(f"   [Self-Analysis] Running via Gemini 2.5 Pro (Google Search grounding)...")
         start = time.time()
-        client = genai.Client(api_key=api_key_val)
 
         # Enforce 60s timeout — self-analysis is a lightweight diagnostic task
         def _call_self_analysis():
@@ -1446,7 +1447,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         print(f"   🔄 [Forensic Scan] Attempting {target_model_name} [{pass_label}] for {company_name}...")
         start = time.time()
         try:
-            client = genai.Client(api_key=api_key)
+            client = get_gemini_client()
 
             # Enforce per-call timeout via thread pool.
             # Google GenAI SDK's built-in HttpOptions timeout is unreliable
@@ -2197,6 +2198,27 @@ RETURN STRICT JSON:
                 confidence = max(10, confidence - penalty)
                 print(f"   ⚠️ [URL Validation] {int(dead_ratio*100)}% URLs still dead → confidence penalty -{penalty} ({old_conf} → {int(confidence)})")
 
+        # --- SOURCE-CLAIM RELEVANCE VALIDATION ---
+        # Check if verified sources actually support their claimed snippets.
+        # Only runs when time permits (adds ~5-10s for page fetches + Flash calls).
+        _elapsed = time.time() - _fn_start
+        if _elapsed < (time_budget - 40) and url_verified >= 2:
+            try:
+                from source_claim_validator import validate_source_claims
+                scv_result = validate_source_claims(raw_findings, max_checks=8, max_workers=4)
+                if scv_result["irrelevant"] > 0:
+                    # Penalise confidence for irrelevant sources
+                    irr_ratio = scv_result["irrelevant"] / max(scv_result["checked"], 1)
+                    if irr_ratio > 0.3:
+                        penalty = int(irr_ratio * 15)
+                        old_conf = int(confidence)
+                        confidence = max(10, confidence - penalty)
+                        print(f"   ⚠️ [Source-Claim] {int(irr_ratio*100)}% sources irrelevant → confidence penalty -{penalty} ({old_conf} → {int(confidence)})")
+            except Exception as scv_err:
+                print(f"   ⚠️ [Source-Claim] Validation skipped: {scv_err}")
+        elif _elapsed >= (time_budget - 40):
+            print(f"   ⏰ [Source-Claim] Skipped — time budget exhausted ({int(_elapsed)}s/{time_budget}s)")
+
         # --- SOURCE QUALITY ASSESSMENT ---
         # Evaluate credibility of each source domain (not just URL liveness).
         # Adds 'source_credibility' field to each evidence link.
@@ -2233,7 +2255,7 @@ def _execute_financial_search(api_key, model_name, prompt, company_name):
     try:
         print(f"   [Financial Health] Attempting {model_name} for {company_name}...")
         start = time.time()
-        client = genai.Client(api_key=api_key)
+        client = get_gemini_client()
         response = call_with_503_backoff(
             lambda: client.models.generate_content(
                 model=model_name,

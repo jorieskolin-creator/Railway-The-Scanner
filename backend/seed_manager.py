@@ -22,6 +22,7 @@ from source_quality import manage_evidence_sources
 from google import genai
 from google.genai import types
 import anthropic
+from gemini_client import get_gemini_client
 
 
 def _strip_tac_codes(text: str) -> str:
@@ -100,7 +101,7 @@ def scrape_strategic_content(base_url: str, company_name: str = "Unknown", subsi
                 """
         if api_key:
              try:
-                client = genai.Client(api_key=api_key)
+                client = get_gemini_client()
                 resp = client.models.generate_content(model='gemini-3-flash-preview', contents=fallback_prompt)
                 if resp.text:
                     print(f"   [Scanner 1] ✅ AI Successfully retrieved strategic context for {company_name}.")
@@ -641,28 +642,26 @@ Respond with valid JSON only. Six fields required:
                         print(f"   [{company_name}] ❌ [Synthesis] Opus 4.6 failed: {opus_err}")
 
                         # Fallback 1: Gemini 3.1 Pro Preview (strongest Google model, MEDIUM thinking)
-                        gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-                        if gemini_key:
-                            try:
-                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Gemini 3.1 Pro Preview...")
-                                g_start = time.time()
-                                gemini_client = genai.Client(api_key=gemini_key)
-                                gemini_resp = call_with_503_backoff(
-                                    lambda: gemini_client.models.generate_content(
-                                        model="gemini-3.1-pro-preview",
-                                        contents=synthesis_prompt,
-                                        config=types.GenerateContentConfig(
-                                            temperature=0.5,
-                                            thinking_config=types.ThinkingConfig(thinking_budget=3000),  # MEDIUM = 2000-3500 tokens; explicit cap
-                                            max_output_tokens=4000
-                                        )
-                                    ),
-                                    label=f"Seed Synthesis gemini-3.1-pro-preview [{company_name}]",
-                                )
-                                response_text = gemini_resp.text or ""
-                                print(f"   [{company_name}] ✅ [Synthesis] Gemini 3.1 Pro Preview succeeded in {int((time.time() - g_start) * 1000)}ms")
-                            except Exception as gemini31_err:
-                                print(f"   [{company_name}] ❌ [Synthesis] Gemini 3.1 Pro Preview failed: {gemini31_err}")
+                        try:
+                            gemini_client = get_gemini_client()
+                            print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Gemini 3.1 Pro Preview...")
+                            g_start = time.time()
+                            gemini_resp = call_with_503_backoff(
+                                lambda: gemini_client.models.generate_content(
+                                    model="gemini-3.1-pro-preview",
+                                    contents=synthesis_prompt,
+                                    config=types.GenerateContentConfig(
+                                        temperature=0.5,
+                                        thinking_config=types.ThinkingConfig(thinking_budget=3000),  # MEDIUM = 2000-3500 tokens; explicit cap
+                                        max_output_tokens=4000
+                                    )
+                                ),
+                                label=f"Seed Synthesis gemini-3.1-pro-preview [{company_name}]",
+                            )
+                            response_text = gemini_resp.text or ""
+                            print(f"   [{company_name}] ✅ [Synthesis] Gemini 3.1 Pro Preview succeeded in {int((time.time() - g_start) * 1000)}ms")
+                        except Exception as gemini31_err:
+                            print(f"   [{company_name}] ❌ [Synthesis] Gemini 3.1 Pro Preview failed: {gemini31_err}")
 
                         # gemini-3-pro-preview fallback removed: shares 3.x rate limits with 3.1-pro
                         # and is being deprecated by Google.
@@ -769,7 +768,8 @@ Respond with valid JSON only. Six fields required:
             # --- DOMAIN CLASSIFICATION (if not set by static list) ---
             if company_domain == "Other":
                 from domain_classifier import infer_domain
-                company_domain = infer_domain(company_name, company.get("url", ""), reality_results, financial_results)
+                _cached = existing_company_data.get("domain") if existing_company_data else None
+                company_domain = infer_domain(company_name, company.get("url", ""), reality_results, financial_results, cached_domain=_cached)
 
             # --- FINAL ARCHETYPE (computed from finalized scores) ---
             fin_score = financial_results.get("financial_index")
@@ -1053,33 +1053,31 @@ re-introduce any of the false claims listed above."""
                     resynth_text = ""
                     resynth_model_used = ""
                     resynth_ms = 0
-                    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
 
                     # Primary: Gemini 3.1 Pro Preview
-                    if gemini_key:
-                        try:
-                            print(f"   [{company_name}] 🔄 [Re-Synthesis] Attempting gemini-3.1-pro-preview...")
-                            gemini_resynth_client = genai.Client(api_key=gemini_key)
-                            resynth_response = call_with_503_backoff(
-                                lambda: gemini_resynth_client.models.generate_content(
-                                    model="gemini-3.1-pro-preview",
-                                    contents=resynth_prompt,
-                                    config=types.GenerateContentConfig(
-                                        temperature=0.5,
-                                        thinking_config=types.ThinkingConfig(thinking_budget=3000),
-                                        max_output_tokens=12000
-                                    )
-                                ),
-                                label=f"Re-Synthesis gemini-3.1-pro-preview [{company_name}]",
+                    try:
+                        gemini_resynth_client = get_gemini_client()
+                        print(f"   [{company_name}] 🔄 [Re-Synthesis] Attempting gemini-3.1-pro-preview...")
+                        resynth_response = call_with_503_backoff(
+                            lambda: gemini_resynth_client.models.generate_content(
                                 model="gemini-3.1-pro-preview",
-                                timeout=120,
-                            )
-                            resynth_text = resynth_response.text or ""
-                            resynth_model_used = "gemini-3.1-pro-preview"
-                            resynth_ms = int((time.time() - resynth_start) * 1000)
-                            print(f"   [{company_name}] ✅ [Re-Synthesis] Gemini 3.1 Pro complete ({resynth_ms}ms)")
-                        except Exception as g31_err:
-                            print(f"   [{company_name}] ❌ [Re-Synthesis] Gemini 3.1 Pro failed: {g31_err}")
+                                contents=resynth_prompt,
+                                config=types.GenerateContentConfig(
+                                    temperature=0.5,
+                                    thinking_config=types.ThinkingConfig(thinking_budget=3000),
+                                    max_output_tokens=12000
+                                )
+                            ),
+                            label=f"Re-Synthesis gemini-3.1-pro-preview [{company_name}]",
+                            model="gemini-3.1-pro-preview",
+                            timeout=120,
+                        )
+                        resynth_text = resynth_response.text or ""
+                        resynth_model_used = "gemini-3.1-pro-preview"
+                        resynth_ms = int((time.time() - resynth_start) * 1000)
+                        print(f"   [{company_name}] ✅ [Re-Synthesis] Gemini 3.1 Pro complete ({resynth_ms}ms)")
+                    except Exception as g31_err:
+                        print(f"   [{company_name}] ❌ [Re-Synthesis] Gemini 3.1 Pro failed: {g31_err}")
 
                     # Fallback: Mistral Large (independent provider — survives Anthropic + Google outages)
                     mistral_key = os.environ.get("MISTRAL_API_KEY")

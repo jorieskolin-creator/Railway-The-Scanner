@@ -571,8 +571,8 @@ Each false_claims object must have:
   - "source_indices": array of integer indices referring to STORED EVIDENCE SOURCES that were contradicted or misrepresented. Use an EMPTY array [] if the claim is completely fabricated with no traceable source."""
 
     # ── Gemini client + configs ───────────────────────────────────────────────
-    from google import genai
-    client = genai.Client(api_key=gemini_key)
+    from gemini_client import get_gemini_client
+    client = get_gemini_client()
 
     from google.genai import types
 
@@ -1220,14 +1220,10 @@ def _clean_with_gemini(prompt):
     """Rewrite summary using Gemini 3.1 Pro Preview (higher quality — used in admin recheck).
     Falls back to Gemini 3 Pro → Gemini 2.5 Pro if Gemini 3.1 Pro fails."""
     import concurrent.futures
-    from google import genai
     from google.genai import types
+    from gemini_client import get_gemini_client
 
-    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-    if not gemini_key:
-        raise ValueError("No GEMINI_API_KEY configured")
-
-    client = genai.Client(api_key=gemini_key)
+    client = get_gemini_client()
 
     # --- Try Gemini 3.1 Pro Preview first (MEDIUM thinking) ---
     try:

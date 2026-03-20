@@ -16,6 +16,7 @@ import anthropic
 from google import genai
 from google.genai import types as genai_types
 from gemini_backoff import call_with_503_backoff
+from gemini_client import get_gemini_client
 
 
 _FORBIDDEN_TERMS = [
@@ -343,12 +344,11 @@ def generate_detailed_report(
             print(f"   ❌ [Detailed Report] {SONNET_MODEL} failed ({elapsed}ms): {e}")
 
     # --- Attempt 2-3: Gemini 3.1 Pro Preview (backup) ---
-    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-    if not gemini_key:
+    try:
+        client = get_gemini_client()
+    except ValueError:
         print("   ⚠️ [Detailed Report] No GEMINI_API_KEY — skipping Gemini fallbacks")
         return "", ""
-
-    client = genai.Client(api_key=gemini_key)
     GEMINI_PRIMARY = "gemini-3.1-pro-preview"
 
     FIRST_CONFIG = genai_types.GenerateContentConfig(

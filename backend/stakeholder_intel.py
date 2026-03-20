@@ -222,8 +222,8 @@ def enrich_single_person(person: dict, company_name: str, gemini_key: str) -> di
     Enrich a single key_person dict with LinkedIn insights.
     Returns the person dict with an added 'linkedin_insights' field.
     """
-    from google import genai
     from google.genai import types
+    from gemini_client import get_gemini_client
 
     name = person.get("name", "")
     role = person.get("role", "")
@@ -249,7 +249,7 @@ def enrich_single_person(person: dict, company_name: str, gemini_key: str) -> di
         ]
         try:
             print(f"      🔍 [Stakeholder Intel] Searching for {name} ({role}) via gemini-3.1-pro-preview...")
-            client = genai.Client(api_key=gemini_key)
+            client = get_gemini_client()
             resp = call_with_503_backoff(
                 lambda: client.models.generate_content(
                     model="gemini-3.1-pro-preview",
@@ -275,7 +275,7 @@ def enrich_single_person(person: dict, company_name: str, gemini_key: str) -> di
     if not response_text:
         try:
             print(f"      🔄 [Stakeholder Intel] Falling back to gemini-2.5-pro for {name}...")
-            client = genai.Client(api_key=gemini_key)
+            client = get_gemini_client()
             resp = call_with_503_backoff(
                 lambda: client.models.generate_content(
                     model="gemini-2.5-pro",
@@ -382,8 +382,8 @@ def _enrich_batch(people_with_names: list[dict], company_name: str, gemini_key: 
     Returns True if batch succeeded and all people were enriched,
     False if batch failed (caller should fall back to per-person calls).
     """
-    from google import genai
     from google.genai import types
+    from gemini_client import get_gemini_client
 
     prompt = _build_batch_prompt(people_with_names, company_name)
     names_str = ", ".join(p.get("name", "?") for p in people_with_names)
@@ -401,7 +401,7 @@ def _enrich_batch(people_with_names: list[dict], company_name: str, gemini_key: 
         ]
         try:
             print(f"      🔍 [Stakeholder Intel] Batched search for {len(people_with_names)} people ({names_str}) via gemini-3.1-pro-preview...")
-            client = genai.Client(api_key=gemini_key)
+            client = get_gemini_client()
             resp = call_with_503_backoff(
                 lambda: client.models.generate_content(
                     model="gemini-3.1-pro-preview",
@@ -427,7 +427,7 @@ def _enrich_batch(people_with_names: list[dict], company_name: str, gemini_key: 
     if not response_text:
         try:
             print(f"      🔄 [Stakeholder Intel] Batch falling back to gemini-2.5-pro...")
-            client = genai.Client(api_key=gemini_key)
+            client = get_gemini_client()
             resp = call_with_503_backoff(
                 lambda: client.models.generate_content(
                     model="gemini-2.5-pro",

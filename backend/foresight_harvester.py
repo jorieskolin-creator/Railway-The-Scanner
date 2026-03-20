@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from google import genai
 from google.genai import types as genai_types
 from gemini_backoff import call_with_503_backoff
+from gemini_client import get_gemini_client
 from source_quality import HIGH_CREDIBILITY_DOMAINS, assess_source_credibility
 from strategic_foresight import (
     FP_THEMES_30, FP_THEME_SOURCES, THEME_FALLBACK_MAP,
@@ -389,11 +390,10 @@ def harvest_all_themes(
 
     Returns dict with harvest results and summary.
     """
-    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-    if not gemini_key:
+    try:
+        client = get_gemini_client()
+    except ValueError:
         return {"error": "No GEMINI_API_KEY configured", "harvested": 0}
-
-    client = genai.Client(api_key=gemini_key)
     storage = BlobStorage()
 
     target_themes = themes or FP_THEMES_30

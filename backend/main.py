@@ -20,6 +20,7 @@ from pypdf import PdfReader
 from google import genai
 from google.genai import types
 import anthropic
+from gemini_client import get_gemini_client
 
 from scanner_one import analyze_intent
 from scanner_two import x_ray_search, extract_json_from_text, run_self_analysis, financial_health_search, compute_financial_index, migrate_financial_sub_scores
@@ -219,11 +220,12 @@ async def find_company_url(name: str):
     """
     Uses Gemini Flash + Google Search Grounding to find the official URL.
     """
-    api_key = clean_env_var(os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY"))
-    if not api_key: return {"url": ""}
-    
     try:
-        client = genai.Client(api_key=api_key)
+        client = get_gemini_client()
+    except ValueError:
+        return {"url": ""}
+
+    try:
         response = client.models.generate_content(
             model='gemini-3-flash-preview',
             contents=f"What is the official website homepage URL for the organization '{name}'? Return ONLY the URL string (e.g. https://www.example.com). Do not include markdown or explanations.",
@@ -753,42 +755,36 @@ Respond with valid JSON only:
     # Lightweight task — no need for Opus; Gemini handles focused generation well.
     response_text = ""
     model_used = ""
-    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
     start = _time.time()
 
-    if gemini_key:
-        try:
-            from google import genai
-            from google.genai import types
-            print(f"   🔄 [Refresh Proposals] {company_name}: Attempting gemini-3.1-pro-preview...")
-            gemini_client = genai.Client(api_key=gemini_key)
-            resp = call_with_503_backoff(
-                lambda: gemini_client.models.generate_content(
-                    model="gemini-3.1-pro-preview",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=0.5,
-                        thinking_config=types.ThinkingConfig(thinking_budget=2000),
-                        max_output_tokens=2000
-                    )
-                ),
-                label=f"Refresh Proposals {company_name} gemini-3.1-pro-preview",
+    try:
+        gemini_client = get_gemini_client()
+        print(f"   🔄 [Refresh Proposals] {company_name}: Attempting gemini-3.1-pro-preview...")
+        resp = call_with_503_backoff(
+            lambda: gemini_client.models.generate_content(
                 model="gemini-3.1-pro-preview",
-                timeout=60,
-            )
-            response_text = resp.text or ""
-            model_used = "gemini-3.1-pro-preview"
-            ms = int((_time.time() - start) * 1000)
-            print(f"   ✅ [Refresh Proposals] {company_name}: Gemini 3.1 Pro complete ({ms}ms)")
-        except Exception as g31_err:
-            print(f"   ❌ [Refresh Proposals] {company_name}: Gemini 3.1 Pro failed: {g31_err}")
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.5,
+                    thinking_config=types.ThinkingConfig(thinking_budget=2000),
+                    max_output_tokens=2000
+                )
+            ),
+            label=f"Refresh Proposals {company_name} gemini-3.1-pro-preview",
+            model="gemini-3.1-pro-preview",
+            timeout=60,
+        )
+        response_text = resp.text or ""
+        model_used = "gemini-3.1-pro-preview"
+        ms = int((_time.time() - start) * 1000)
+        print(f"   ✅ [Refresh Proposals] {company_name}: Gemini 3.1 Pro complete ({ms}ms)")
+    except Exception as g31_err:
+        print(f"   ❌ [Refresh Proposals] {company_name}: Gemini 3.1 Pro failed: {g31_err}")
 
-    if not response_text and gemini_key:
+    if not response_text:
         try:
-            from google import genai
-            from google.genai import types
+            gemini_client = get_gemini_client()
             print(f"   🔄 [Refresh Proposals] {company_name}: Falling back to gemini-2.5-pro...")
-            gemini_client = genai.Client(api_key=gemini_key)
             resp = call_with_503_backoff(
                 lambda: gemini_client.models.generate_content(
                     model="gemini-2.5-pro",
@@ -1250,35 +1246,30 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
     resynth_text = ""
     resynth_model_used = ""
 
-    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-
     # Primary: Gemini 3.1 Pro Preview (same as Deep Scanning re-synthesis)
-    if gemini_key:
-        try:
-            from google import genai
-            from google.genai import types
-            print(f"   🔄 [Clean Re-Synthesis] Attempting gemini-3.1-pro-preview...")
-            gemini_client = genai.Client(api_key=gemini_key)
-            resynth_response = call_with_503_backoff(
-                lambda: gemini_client.models.generate_content(
-                    model="gemini-3.1-pro-preview",
-                    contents=synthesis_prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=0.5,
-                        thinking_config=types.ThinkingConfig(thinking_budget=3000),  # MEDIUM = 2000-3500 tokens; explicit cap
-                        max_output_tokens=12000
-                    )
-                ),
-                label="Clean Re-Synthesis gemini-3.1-pro-preview",
+    try:
+        gemini_client = get_gemini_client()
+        print(f"   🔄 [Clean Re-Synthesis] Attempting gemini-3.1-pro-preview...")
+        resynth_response = call_with_503_backoff(
+            lambda: gemini_client.models.generate_content(
                 model="gemini-3.1-pro-preview",
-                timeout=120,
-            )
-            resynth_text = resynth_response.text or ""
-            resynth_model_used = "gemini-3.1-pro-preview"
-            resynth_ms = int((time.time() - resynth_start) * 1000)
-            print(f"   ✅ [Clean Re-Synthesis] Gemini 3.1 Pro complete ({resynth_ms}ms)")
-        except Exception as g31_err:
-            print(f"   ❌ [Clean Re-Synthesis] Gemini 3.1 Pro failed: {g31_err}")
+                contents=synthesis_prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.5,
+                    thinking_config=types.ThinkingConfig(thinking_budget=3000),  # MEDIUM = 2000-3500 tokens; explicit cap
+                    max_output_tokens=12000
+                )
+            ),
+            label="Clean Re-Synthesis gemini-3.1-pro-preview",
+            model="gemini-3.1-pro-preview",
+            timeout=120,
+        )
+        resynth_text = resynth_response.text or ""
+        resynth_model_used = "gemini-3.1-pro-preview"
+        resynth_ms = int((time.time() - resynth_start) * 1000)
+        print(f"   ✅ [Clean Re-Synthesis] Gemini 3.1 Pro complete ({resynth_ms}ms)")
+    except Exception as g31_err:
+        print(f"   ❌ [Clean Re-Synthesis] Gemini 3.1 Pro failed: {g31_err}")
 
     # gemini-3-pro-preview fallback removed: shares 3.x rate limits with 3.1-pro
     # and is being deprecated by Google.
@@ -1954,7 +1945,8 @@ def run_scan(
         company_domain = meta_early.get("domain", "Other")
         if company_domain == "Other":
             from domain_classifier import infer_domain
-            company_domain = infer_domain(companyName, target_url or "", reality_results, financial_results)
+            _cached = existing_data.get("domain") if existing_data else None
+            company_domain = infer_domain(companyName, target_url or "", reality_results, financial_results, cached_domain=_cached)
 
         # --- EARLY ARCHETYPE (needed for foresight before synthesis step) ---
         fin_score_early = financial_results.get("financial_index")
@@ -2006,6 +1998,13 @@ def run_scan(
                     if fs_verified == 0 or (fs_dead > 0 and fs_verified < n_forces):
                         foresight_data, newly_verified = retry_failed_sources(foresight_data, domain=company_domain)
                         fs_verified += newly_verified
+
+                    # STEP 2.7.2b: SOURCE-CLAIM RELEVANCE VALIDATION
+                    try:
+                        from source_claim_validator import validate_foresight_claims
+                        validate_foresight_claims(foresight_data, max_checks=6)
+                    except Exception as scv_err:
+                        print(f"   ⚠️ [Foresight Source-Claim] Validation skipped: {scv_err}")
 
                     # STEP 2.7.3: QUALITY GATE
                     foresight_data, passes_gate = enforce_source_quality_gate(foresight_data)
@@ -2337,7 +2336,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                         try:
                             print(f"   🔄 [Synthesis] Falling back to Gemini 3.1 Pro Preview (timeout: {SYNTH_TIMEOUT}s)...")
                             g_start = time.time()
-                            gemini_client = genai.Client(api_key=gemini_key)
+                            gemini_client = get_gemini_client()
 
                             def _synth_gemini31():
                                 return gemini_client.models.generate_content(
@@ -2528,7 +2527,8 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
         # If the company is in finland_list with a real domain, trust it.
         # Otherwise infer from scan evidence so "Other" stays rare.
         if company_domain == "Other":
-            company_domain = infer_domain(companyName, target_url or "", reality_results, financial_results)
+            _cached = existing_data.get("domain") if existing_data else None
+            company_domain = infer_domain(companyName, target_url or "", reality_results, financial_results, cached_domain=_cached)
 
         # --- FINAL ARCHETYPE (computed from finalized scores) ---
         fin_score = financial_results.get("financial_index")
@@ -2766,7 +2766,7 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                 if gemini_key:
                     try:
                         print(f"   🔄 [Re-Synthesis] Attempting gemini-3.1-pro-preview...")
-                        gemini_client = genai.Client(api_key=gemini_key)
+                        gemini_client = get_gemini_client()
                         resynth_response = call_with_503_backoff(
                             lambda: gemini_client.models.generate_content(
                                 model="gemini-3.1-pro-preview",

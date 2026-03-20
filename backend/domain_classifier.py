@@ -8,9 +8,9 @@ imports (main imports seed_manager; seed_manager must not import main).
 import os
 import time
 
-from google import genai
 from google.genai import types as genai_types
 from gemini_backoff import call_with_503_backoff
+from gemini_client import get_gemini_client
 
 
 KNOWN_DOMAINS = [
@@ -129,18 +129,26 @@ def _call_classifier(client, model: str, prompt: str, company_name: str, timeout
         return None
 
 
-def infer_domain(company_name: str, company_url: str, reality_results: dict, financial_results: dict) -> str:
+def infer_domain(company_name: str, company_url: str, reality_results: dict, financial_results: dict, cached_domain: str = None) -> str:
     """
     Classify the company into one of KNOWN_DOMAINS using already-computed
     scan evidence. Only called when the finland_list lookup returned 'Other'.
+
+    If cached_domain is a valid known domain (not 'Other'), returns it
+    immediately — saves 1 Gemini API call per re-scan.
 
     Uses Gemini Flash (no thinking) — pure classification, ~1-3s.
     Falls back to a second model on failure.
     Non-fatal: returns 'Other' on any failure.
     """
+    if cached_domain and cached_domain in KNOWN_DOMAINS and cached_domain != "Other":
+        print(f"   [Domain] Using cached domain: '{cached_domain}' for {company_name}")
+        return cached_domain
+
     try:
-        gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-        if not gemini_key:
+        try:
+            client = get_gemini_client()
+        except ValueError:
             print("   [Domain] No API key available — skipping classification")
             return "Other"
 
@@ -178,8 +186,6 @@ Rules:
 - If the evidence clearly fits one domain, use it.
 - If genuinely unclear or mixed, output "Other".
 - Do not invent a domain not in the list."""
-
-        client = genai.Client(api_key=gemini_key)
 
         # Attempt 1: Flash (fast, cheap, good for classification)
         domain = _call_classifier(client, "gemini-3-flash-preview", prompt, company_name, timeout=15)
