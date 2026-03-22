@@ -8,7 +8,7 @@ const MIIcons = new Proxy(LucideRaw, {
     return () => null;
   }
 });
-const { X, Loader2, TrendingUp, Target, Crosshair, ShieldAlert, Download, ChevronRight, Activity, BarChart3, Gauge, Radar, RefreshCw } = MIIcons;
+const { X, Loader2, TrendingUp, Target, Crosshair, ShieldAlert, Download, ChevronRight, Activity, BarChart3, Gauge, Radar, RefreshCw, Eye, AlertTriangle } = MIIcons;
 
 const {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -49,6 +49,21 @@ const CATEGORY_SHORT: Record<string, string> = {
   "Society & Governance": "Society",
   "People & Well-being": "People",
   "Science & Demographics": "Science",
+};
+
+// FAVI segment configuration (used in Executive Summary + FAVI tab)
+const SEGMENT_CONFIG: Record<string, { color: string; bg: string; border: string; description: string }> = {
+  "Critical": { color: "text-rose-300", bg: "bg-rose-500/15", border: "border-rose-500/30", description: "Struggling now AND blind to what's coming" },
+  "Sleepwalking": { color: "text-amber-300", bg: "bg-amber-500/15", border: "border-amber-500/30", description: "Looks fine today but forces are building" },
+  "Wounded but Sheltered": { color: "text-blue-300", bg: "bg-blue-500/15", border: "border-blue-500/30", description: "Problems are real but future isn't adding pressure" },
+  "Safe Harbor": { color: "text-emerald-300", bg: "bg-emerald-500/15", border: "border-emerald-500/30", description: "Healthy and future-ready" },
+};
+
+const FAVI_COLOR = (score: number) => {
+  if (score >= 60) return '#f43f5e';
+  if (score >= 40) return '#f59e0b';
+  if (score >= 20) return '#6366f1';
+  return '#10b981';
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -166,6 +181,28 @@ const ExecutiveSummaryTab = ({ data }: { data: any }) => {
           <div className="text-[9px] text-slate-400 uppercase">Vulnerable Companies</div>
         </div>
       </div>
+
+      {/* FAVI Segment Summary (mini preview) */}
+      {data.favi_segments && (
+        <div className="bg-black/20 border border-white/10 rounded-lg p-4">
+          <h4 className="text-[10px] font-bold text-violet-300 uppercase tracking-wide mb-3 flex items-center gap-2">
+            <Eye size={12} /> Foresight Vulnerability Segments (FAVI)
+          </h4>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {(["Critical", "Sleepwalking", "Wounded but Sheltered", "Safe Harbor"] as const).map(seg => {
+              const cfg = SEGMENT_CONFIG[seg];
+              const count = data.favi_segments[seg] || 0;
+              return (
+                <div key={seg} className={`${cfg.bg} border ${cfg.border} rounded-lg p-3 text-center`}>
+                  <div className={`text-2xl font-bold ${cfg.color}`}>{count}</div>
+                  <div className={`text-[9px] font-bold ${cfg.color} uppercase`}>{seg}</div>
+                  <div className="text-[8px] text-slate-500 mt-1">{cfg.description}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -513,6 +550,329 @@ const SalesPrioritiesTab = ({ data, onCompanyClick }: { data: any; onCompanyClic
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// TAB 5: FORESIGHT VULNERABILITY (FAVI)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onCompanyClick: (company: any) => void }) => {
+  const [sortKey, setSortKey] = useState('favi_score');
+  const [sortDir, setSortDir] = useState('desc');
+  const [expandedCompany, setExpandedCompany] = useState<string | null>(null);
+
+  const faviCompanies = data.favi_companies || [];
+  const segments = data.favi_segments || {};
+  const domainPressure = data.favi_domain_pressure || [];
+
+  const sorted = useMemo(() => {
+    return [...faviCompanies].sort((a: any, b: any) => {
+      const va = a[sortKey] ?? 0;
+      const vb = b[sortKey] ?? 0;
+      return sortDir === 'desc' ? vb - va : va - vb;
+    });
+  }, [faviCompanies, sortKey, sortDir]);
+
+  const handleSort = (key: string) => {
+    if (sortKey === key) {
+      setSortDir(sortDir === 'desc' ? 'asc' : 'desc');
+    } else {
+      setSortKey(key);
+      setSortDir('desc');
+    }
+  };
+
+  const handleExportCSV = () => {
+    if (sorted.length === 0) return;
+    const headers = ['Rank', 'Company', 'Domain', 'FAVI Score', 'Foresight Pressure', 'Readiness Gap', 'Adaptation Capacity', 'Current Vuln.', 'Segment', 'Formula'];
+    const rows = sorted.map((v: any, i: number) => [
+      i + 1, v.name, v.domain, v.favi_score, v.fps, v.readiness_gap, v.fac, v.current_vulnerability, v.segment, v.formula
+    ]);
+    const csv = [headers, ...rows].map(r => r.map((c: any) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'favi_vulnerability_index.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const SortHeader = ({ label, dataKey }: { label: string; dataKey: string }) => (
+    <th className="p-2 text-left cursor-pointer hover:text-white select-none whitespace-nowrap" onClick={() => handleSort(dataKey)}>
+      {label} {sortKey === dataKey ? (sortDir === 'desc' ? '\u2193' : '\u2191') : ''}
+    </th>
+  );
+
+  const totalCompanies = Object.values(segments).reduce((s: number, v: any) => s + (v || 0), 0) || 1;
+
+  return (
+    <div className="space-y-6">
+      {/* 2x2 Strategic Segment Matrix */}
+      <div className="bg-black/20 border border-white/10 rounded-lg p-4">
+        <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-4 flex items-center gap-2">
+          <Eye size={12} /> Strategic Foresight Vulnerability Matrix (Current x Future)
+        </h4>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-white/10 rounded-lg overflow-hidden">
+          {/* Top-left: Critical */}
+          <div className={`p-4 ${SEGMENT_CONFIG["Critical"].bg}`}>
+            <div className="flex items-center justify-between mb-2">
+              <div className={`text-sm font-bold ${SEGMENT_CONFIG["Critical"].color}`}>Critical</div>
+              <div className="text-2xl font-bold text-rose-400">{segments["Critical"] || 0}</div>
+            </div>
+            <div className="text-[9px] text-slate-400 mb-1">High Current Vulnerability + High FAVI</div>
+            <div className="text-[9px] text-rose-300/70">{SEGMENT_CONFIG["Critical"].description}</div>
+            <div className="mt-2 h-1 rounded-full bg-white/5 overflow-hidden">
+              <div className="h-full bg-rose-500 rounded-full" style={{ width: `${((segments["Critical"] || 0) / totalCompanies) * 100}%` }} />
+            </div>
+          </div>
+          {/* Top-right: Wounded but Sheltered */}
+          <div className={`p-4 ${SEGMENT_CONFIG["Wounded but Sheltered"].bg}`}>
+            <div className="flex items-center justify-between mb-2">
+              <div className={`text-sm font-bold ${SEGMENT_CONFIG["Wounded but Sheltered"].color}`}>Wounded but Sheltered</div>
+              <div className="text-2xl font-bold text-blue-400">{segments["Wounded but Sheltered"] || 0}</div>
+            </div>
+            <div className="text-[9px] text-slate-400 mb-1">High Current Vulnerability + Low FAVI</div>
+            <div className="text-[9px] text-blue-300/70">{SEGMENT_CONFIG["Wounded but Sheltered"].description}</div>
+            <div className="mt-2 h-1 rounded-full bg-white/5 overflow-hidden">
+              <div className="h-full bg-blue-500 rounded-full" style={{ width: `${((segments["Wounded but Sheltered"] || 0) / totalCompanies) * 100}%` }} />
+            </div>
+          </div>
+          {/* Bottom-left: Sleepwalking */}
+          <div className={`p-4 ${SEGMENT_CONFIG["Sleepwalking"].bg}`}>
+            <div className="flex items-center justify-between mb-2">
+              <div className={`text-sm font-bold ${SEGMENT_CONFIG["Sleepwalking"].color}`}>Sleepwalking</div>
+              <div className="text-2xl font-bold text-amber-400">{segments["Sleepwalking"] || 0}</div>
+            </div>
+            <div className="text-[9px] text-slate-400 mb-1">Low Current Vulnerability + High FAVI</div>
+            <div className="text-[9px] text-amber-300/70">{SEGMENT_CONFIG["Sleepwalking"].description}</div>
+            <div className="mt-2 h-1 rounded-full bg-white/5 overflow-hidden">
+              <div className="h-full bg-amber-500 rounded-full" style={{ width: `${((segments["Sleepwalking"] || 0) / totalCompanies) * 100}%` }} />
+            </div>
+          </div>
+          {/* Bottom-right: Safe Harbor */}
+          <div className={`p-4 ${SEGMENT_CONFIG["Safe Harbor"].bg}`}>
+            <div className="flex items-center justify-between mb-2">
+              <div className={`text-sm font-bold ${SEGMENT_CONFIG["Safe Harbor"].color}`}>Safe Harbor</div>
+              <div className="text-2xl font-bold text-emerald-400">{segments["Safe Harbor"] || 0}</div>
+            </div>
+            <div className="text-[9px] text-slate-400 mb-1">Low Current Vulnerability + Low FAVI</div>
+            <div className="text-[9px] text-emerald-300/70">{SEGMENT_CONFIG["Safe Harbor"].description}</div>
+            <div className="mt-2 h-1 rounded-full bg-white/5 overflow-hidden">
+              <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${((segments["Safe Harbor"] || 0) / totalCompanies) * 100}%` }} />
+            </div>
+          </div>
+        </div>
+        {/* Matrix axis labels */}
+        <div className="flex justify-between mt-3 text-[8px] text-slate-500 uppercase tracking-wider">
+          <div className="flex items-center gap-1">
+            <span className="inline-block w-8 h-px bg-slate-600" />
+            Current Vulnerability (x-axis)
+            <span className="inline-block w-8 h-px bg-slate-600" />
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="inline-block w-8 h-px bg-slate-600" />
+            Foresight Vulnerability / FAVI (y-axis)
+            <span className="inline-block w-8 h-px bg-slate-600" />
+          </div>
+        </div>
+      </div>
+
+      {/* Domain Foresight Pressure + FAVI vs Current Vuln Scatter side by side */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Domain Foresight Pressure */}
+        <div className="bg-black/20 border border-white/10 rounded-lg p-4">
+          <h4 className="text-[10px] font-bold text-violet-300 uppercase tracking-wide mb-3">Domain Foresight Pressure</h4>
+          {domainPressure.length > 0 && BarChart ? (
+            <ResponsiveContainer width="100%" height={250}>
+              <BarChart data={domainPressure} layout="vertical" margin={{ left: 90, right: 20, top: 5, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <XAxis type="number" tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[0, 100]} />
+                <YAxis type="category" dataKey="domain" tick={{ fill: '#cbd5e1', fontSize: 9 }} width={85} />
+                <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }}
+                  formatter={(value: any, name: string) => [typeof value === 'number' ? value.toFixed(1) : value, name === 'avg_pressure' ? 'Avg Pressure' : 'Max Pressure']} />
+                <Bar dataKey="avg_pressure" name="Avg Pressure" radius={[0, 4, 4, 0]}>
+                  {domainPressure.map((entry: any, idx: number) => (
+                    <Cell key={idx} fill={FAVI_COLOR(entry.avg_pressure)} fillOpacity={0.8} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="text-slate-500 text-xs py-8 text-center">No foresight pressure data</div>
+          )}
+        </div>
+
+        {/* FAVI vs Current Vulnerability Scatter */}
+        {sorted.length > 0 && ScatterChart ? (
+          <div className="bg-black/20 border border-white/10 rounded-lg p-4">
+            <h4 className="text-[10px] font-bold text-rose-300 uppercase tracking-wide mb-3">FAVI vs Current Vulnerability</h4>
+            <ResponsiveContainer width="100%" height={250}>
+              <ScatterChart margin={{ left: 10, right: 20, top: 10, bottom: 25 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <XAxis type="number" dataKey="current_vulnerability" name="Current Vuln." tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[0, 100]}
+                  label={{ value: 'Current Vulnerability', fill: '#64748b', fontSize: 9, position: 'bottom', offset: 10 }} />
+                <YAxis type="number" dataKey="favi_score" name="FAVI" tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[0, 100]}
+                  label={{ value: 'FAVI Score', fill: '#64748b', fontSize: 9, angle: -90, position: 'insideLeft' }} />
+                <Tooltip cursor={{ strokeDasharray: '3 3' }}
+                  contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }}
+                  content={({ active, payload }: any) => {
+                    if (!active || !payload?.length) return null;
+                    const d = payload[0]?.payload;
+                    return (
+                      <div className="bg-[#0f172a] border border-white/20 rounded-lg p-2 text-[10px]">
+                        <div className="font-bold text-white">{d?.name}</div>
+                        <div className="text-slate-400">{d?.domain}</div>
+                        <div className="mt-1 text-rose-300">FAVI: {d?.favi_score}</div>
+                        <div className="text-amber-300">Current Vuln: {d?.current_vulnerability}</div>
+                        <div className={`mt-1 font-bold ${SEGMENT_CONFIG[d?.segment]?.color || 'text-slate-300'}`}>{d?.segment}</div>
+                      </div>
+                    );
+                  }} />
+                {/* Quadrant reference lines */}
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <Scatter data={sorted.filter((v: any) => v.favi_score > 0 || v.current_vulnerability > 0)} name="Companies">
+                  {sorted.filter((v: any) => v.favi_score > 0 || v.current_vulnerability > 0).map((v: any, i: number) => {
+                    const segColor = v.segment === 'Critical' ? '#f43f5e' :
+                      v.segment === 'Sleepwalking' ? '#f59e0b' :
+                      v.segment === 'Wounded but Sheltered' ? '#3b82f6' : '#10b981';
+                    return <Cell key={i} fill={segColor} fillOpacity={0.75} />;
+                  })}
+                </Scatter>
+              </ScatterChart>
+            </ResponsiveContainer>
+          </div>
+        ) : null}
+      </div>
+
+      {/* FAVI Company Table */}
+      <div className="bg-black/20 border border-white/10 rounded-lg p-4">
+        <div className="flex justify-between items-center mb-3">
+          <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide flex items-center gap-2">
+            <AlertTriangle size={12} /> Foresight-Adjusted Vulnerability Index (FAVI)
+          </h4>
+          <button onClick={handleExportCSV} className="flex items-center gap-1 px-2 py-1 text-[10px] bg-white/5 hover:bg-white/10 border border-white/10 rounded text-slate-300">
+            <Download size={10} /> CSV
+          </button>
+        </div>
+
+        {sorted.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-[10px]">
+              <thead>
+                <tr className="text-slate-500 border-b border-white/10">
+                  <th className="p-2 text-left">#</th>
+                  <th className="p-2 text-left">Company</th>
+                  <th className="p-2 text-left">Domain</th>
+                  <SortHeader label="FAVI" dataKey="favi_score" />
+                  <SortHeader label="Pressure" dataKey="fps" />
+                  <SortHeader label="Gap" dataKey="readiness_gap" />
+                  <SortHeader label="Adapt." dataKey="fac" />
+                  <SortHeader label="Megatrend" dataKey="megatrend_exposure" />
+                  <SortHeader label="Curr. Vuln" dataKey="current_vulnerability" />
+                  <th className="p-2 text-left">Segment</th>
+                  <th className="p-2 text-left"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map((v: any, i: number) => {
+                  const segCfg = SEGMENT_CONFIG[v.segment] || SEGMENT_CONFIG["Safe Harbor"];
+                  const isExpanded = expandedCompany === v.name;
+                  return (
+                    <>
+                      <tr key={v.name} className="border-t border-white/5 hover:bg-white/5 transition-colors">
+                        <td className="p-2 text-slate-500">{i + 1}</td>
+                        <td className="p-2 text-cyan-300 font-medium cursor-pointer hover:underline"
+                          onClick={() => onCompanyClick({ companyName: v.name, domain: v.domain })}>{v.name}</td>
+                        <td className="p-2 text-slate-400">{v.domain}</td>
+                        <td className="p-2 font-mono font-bold" style={{ color: FAVI_COLOR(v.favi_score) }}>
+                          {v.favi_score}
+                        </td>
+                        <td className={`p-2 font-mono ${v.fps >= 50 ? 'text-rose-400' : v.fps >= 25 ? 'text-amber-400' : 'text-slate-400'}`}>
+                          {v.fps}
+                        </td>
+                        <td className={`p-2 font-mono ${v.readiness_gap >= 50 ? 'text-rose-400' : v.readiness_gap >= 25 ? 'text-amber-400' : 'text-slate-400'}`}>
+                          {v.readiness_gap}
+                        </td>
+                        <td className={`p-2 font-mono ${v.fac >= 60 ? 'text-emerald-400' : v.fac >= 30 ? 'text-amber-400' : 'text-rose-400'}`}>
+                          {v.fac}
+                        </td>
+                        <td className={`p-2 font-mono ${v.megatrend_exposure >= 50 ? 'text-rose-400' : 'text-slate-400'}`}>
+                          {v.megatrend_exposure}%
+                        </td>
+                        <td className={`p-2 font-mono ${v.current_vulnerability >= 40 ? 'text-rose-400' : 'text-slate-400'}`}>
+                          {v.current_vulnerability}
+                        </td>
+                        <td className="p-2">
+                          <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${segCfg.bg} ${segCfg.color} border ${segCfg.border}`}>
+                            {v.segment}
+                          </span>
+                        </td>
+                        <td className="p-2">
+                          <button onClick={() => setExpandedCompany(isExpanded ? null : v.name)}
+                            className="text-slate-500 hover:text-cyan-300 transition-colors text-[9px]">
+                            {isExpanded ? '[-]' : '[+]'}
+                          </button>
+                        </td>
+                      </tr>
+                      {isExpanded && v.gap_details && v.gap_details.length > 0 && (
+                        <tr key={`${v.name}-detail`} className="bg-black/30">
+                          <td colSpan={11} className="p-3">
+                            <div className="text-[9px] text-slate-400 mb-2 font-bold uppercase tracking-wide">
+                              Dimension Readiness Gaps — {v.formula === 'multiplicative' ? 'Full Model' : 'Additive (sparse data)'}
+                              {' '}— {v.foresight_count} foresight signals across {v.dimensions_covered} dimensions
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
+                              {v.gap_details.map((gd: any) => {
+                                const gapPct = Math.min(100, gd.gap);
+                                const pressurePct = Math.min(100, gd.foresight_pressure);
+                                const realityPct = gd.reality_score != null ? Math.min(100, gd.reality_score) : 0;
+                                return (
+                                  <div key={gd.dimension} className="bg-black/40 rounded-lg p-2 border border-white/5">
+                                    <div className="text-[9px] font-bold text-slate-200 mb-2 truncate" title={gd.dimension}>{gd.dimension}</div>
+                                    {/* Pressure bar */}
+                                    <div className="flex items-center gap-1 mb-1">
+                                      <span className="text-[8px] text-violet-400 w-14 shrink-0">Pressure</span>
+                                      <div className="flex-1 h-1.5 rounded-full bg-white/5 overflow-hidden">
+                                        <div className="h-full bg-violet-500 rounded-full" style={{ width: `${pressurePct}%` }} />
+                                      </div>
+                                      <span className="text-[8px] text-violet-300 w-8 text-right font-mono">{gd.foresight_pressure}</span>
+                                    </div>
+                                    {/* Reality bar */}
+                                    <div className="flex items-center gap-1 mb-1">
+                                      <span className="text-[8px] text-emerald-400 w-14 shrink-0">Reality</span>
+                                      <div className="flex-1 h-1.5 rounded-full bg-white/5 overflow-hidden">
+                                        <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${realityPct}%` }} />
+                                      </div>
+                                      <span className="text-[8px] text-emerald-300 w-8 text-right font-mono">{gd.reality_score ?? '—'}</span>
+                                    </div>
+                                    {/* Gap indicator */}
+                                    <div className="flex items-center gap-1">
+                                      <span className="text-[8px] text-rose-400 w-14 shrink-0">Gap</span>
+                                      <div className="flex-1 h-1.5 rounded-full bg-white/5 overflow-hidden">
+                                        <div className="h-full bg-rose-500 rounded-full" style={{ width: `${gapPct}%` }} />
+                                      </div>
+                                      <span className="text-[8px] text-rose-300 w-8 text-right font-mono font-bold">{gd.gap}</span>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="text-slate-500 text-xs py-8 text-center">No FAVI data available — companies need foresight links for forward-looking vulnerability analysis</div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // MAIN MODAL
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -521,6 +881,7 @@ const TABS = [
   { id: 'future', label: 'Future Demand', icon: TrendingUp },
   { id: 'current', label: 'Current Demand', icon: Target },
   { id: 'sales', label: 'Sales Priorities', icon: Crosshair },
+  { id: 'favi', label: 'Foresight Vulnerability', icon: Eye },
 ];
 
 const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, onCompanyClick }: {
@@ -591,6 +952,7 @@ const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, on
               {activeTab === 'future' && <FutureDemandTab data={data} />}
               {activeTab === 'current' && <CurrentDemandTab data={data} />}
               {activeTab === 'sales' && <SalesPrioritiesTab data={data} onCompanyClick={onCompanyClick} />}
+              {activeTab === 'favi' && <ForesightVulnerabilityTab data={data} onCompanyClick={onCompanyClick} />}
             </>
           )}
         </div>

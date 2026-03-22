@@ -12,6 +12,7 @@ Aggregates cross-company data into strategic intelligence views:
   8. Foresight Coverage Meter (database maturity indicator)
   9. Most Vulnerable Companies (from regression residuals + archetypes)
   10. Demand Intensity per KB Dimension
+  11. Foresight-Adjusted Vulnerability Index (FAVI)
 
 Uses existing data structures — no new scanning or API calls required
 (except optional Gemini clustering for proposal analysis).
@@ -23,6 +24,7 @@ import statistics
 from collections import Counter, defaultdict
 
 from analyze_scores import run_analysis, classify_archetype
+from foresight_vulnerability import compute_favi_index
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -614,6 +616,17 @@ def compute_market_intelligence(dashboard_data, company_details, analysis_result
     # 10. Demand Intensity
     result["demand_intensity"] = compute_demand_intensity(company_details, dashboard_data)
     print(f"   [Market Intel] Demand intensity: {len(result['demand_intensity'])} dimensions scored")
+
+    # 11. Foresight-Adjusted Vulnerability Index (FAVI)
+    favi_result = compute_favi_index(
+        company_details, dashboard_data,
+        result["vulnerable_companies"], result["top_foresights"]
+    )
+    result["favi_companies"] = favi_result["favi_companies"]
+    result["favi_segments"] = favi_result["favi_segments"]
+    result["favi_domain_pressure"] = favi_result["favi_domain_pressure"]
+    favi_with_score = [c for c in favi_result["favi_companies"] if c["favi_score"] > 0]
+    print(f"   [Market Intel] FAVI: {len(favi_with_score)} companies scored, segments: {favi_result['favi_segments']}")
 
     print(f"   [Market Intel] ✅ Market intelligence computation complete\n")
     return result

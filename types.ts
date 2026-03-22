@@ -184,6 +184,43 @@ interface MarketIntelDemandIntensity {
   total_companies: number;
 }
 
+interface FAVIGapDetail {
+  dimension: string;
+  foresight_pressure: number;
+  reality_score: number | null;
+  gap: number;
+}
+
+interface FAVICompany {
+  name: string;
+  domain: string;
+  favi_score: number;
+  fps: number;                    // Foresight Pressure Score (0-100)
+  readiness_gap: number;          // Readiness Gap (0-100)
+  fac: number;                    // Financial Adaptation Capacity (0-100)
+  megatrend_exposure: number;     // Megatrend Exposure (0-100)
+  current_vulnerability: number;  // Current vulnerability score
+  segment: string;                // "Critical" | "Sleepwalking" | "Wounded but Sheltered" | "Safe Harbor"
+  formula: string;                // "multiplicative" | "additive"
+  foresight_count: number;
+  dimensions_covered: number;
+  gap_details: FAVIGapDetail[];
+}
+
+interface FAVISegments {
+  Critical: number;
+  "Wounded but Sheltered": number;
+  Sleepwalking: number;
+  "Safe Harbor": number;
+}
+
+interface FAVIDomainPressure {
+  domain: string;
+  avg_pressure: number;
+  max_pressure: number;
+  company_count: number;
+}
+
 interface MarketIntelligenceData {
   company_count: number;
   detailed_count: number;
@@ -197,6 +234,9 @@ interface MarketIntelligenceData {
   foresight_coverage: MarketIntelCoverage;
   vulnerable_companies: MarketIntelVulnerable[];
   demand_intensity: MarketIntelDemandIntensity[];
+  favi_companies: FAVICompany[];
+  favi_segments: FAVISegments;
+  favi_domain_pressure: FAVIDomainPressure[];
 }
 
 // Attach Enums to window so they are available globally
