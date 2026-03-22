@@ -40,6 +40,54 @@ const HEALTH_COLOR = (score: number) => score >= 70 ? "#10b981" : score >= 40 ? 
 
 const RADAR_COLORS = ["#06b6d4", "#8b5cf6", "#f59e0b", "#10b981", "#ec4899", "#f97316", "#6366f1", "#f43f5e"];
 
+// Descriptions for Foresight Themes (Future Demand Pareto)
+const FORESIGHT_THEME_DESCRIPTIONS: Record<string, string> = {
+  "Artificial Intelligence": "Generative AI, machine learning, autonomous systems, AI governance, human-AI collaboration",
+  "Data & Digitalisation": "Data governance, digital transformation, datafication, open data ecosystems, privacy and data rights",
+  "Communication & Media": "Media transformation, platform governance, disinformation, social media dynamics, trust in information",
+  "Business": "Business model transformation, corporate strategy, entrepreneurship, organizational resilience, platform disruption",
+  "Finance & Ownership": "Banking transformation, fintech, financial inclusion, wealth distribution, alternative ownership models",
+  "Global Economy": "Global trade, macroeconomics, supply chain transformation, geoeconomics, deglobalisation",
+  "Digital & Sharing Economies": "Platform economy, gig labour rights, peer-to-peer models, collaborative digital economies",
+  "Services": "Service economy transformation, AI-augmented services, public service innovation, service design futures",
+  "Industry & Manufacturing": "Smart manufacturing, industrial automation, industrial decarbonisation, reshoring, green industrial policy",
+  "Construction & Urbanisation": "Urban futures, climate-resilient cities, housing systems, smart urban infrastructure",
+  "Energy": "Renewable energy transition, energy grids and storage, hydrogen economy, energy security, just transition",
+  "Freight & Logistics": "Supply chain resilience, freight decarbonisation, autonomous logistics, nearshoring",
+  "Private & Public Transport": "Electric vehicles, autonomous mobility, Mobility-as-a-Service, public transit futures",
+  "Climate Change": "Climate mitigation and adaptation, carbon markets, tipping points, climate finance, geoengineering",
+  "Sustainability & Recycling": "Circular economy, sustainable production, regenerative systems, ESG transformation",
+  "Nature": "Biodiversity loss and recovery, ecosystem services, natural capital, nature-based solutions",
+  "Food": "Food systems transformation, agricultural innovation, food security, alternative proteins, agroecology",
+  "Water & Oceans": "Water security, ocean governance, marine economy, water-food-energy nexus",
+  "Public Governance": "Democratic governance futures, public-sector innovation, digital governance, regulatory transformation",
+  "Geopolitics": "Great power competition, multipolar world order, economic statecraft, tech nationalism",
+  "Security & Safety": "Cybersecurity, hybrid warfare, critical infrastructure resilience, defence technology, biosecurity",
+  "Values & Ethics": "Digital and AI ethics, bioethics, intergenerational justice, social trust, value pluralism",
+  "Society": "Social inequality, polarisation, social capital, civil society, community futures",
+  "Health & Wellbeing": "Healthcare transformation, mental health, biotech, precision medicine, pandemic preparedness",
+  "Education & Knowledge": "Education futures, lifelong learning, AI in education, skills transformation",
+  "Work & Income": "Future of work, labour market transformation, automation, income security models",
+  "Management & HR": "Leadership futures, organisational design, talent management, hybrid work, DEI strategy",
+  "Leisure & Lifestyles": "Consumer culture transformation, experience economy, wellness economy, sustainable tourism",
+  "Sciences & Research": "Frontier sciences, convergent technologies, open science, quantum computing, synthetic biology",
+  "Population & Demographics": "Population dynamics, ageing societies, migration, demographic dividends",
+};
+
+// Descriptions for Root Cause clusters (Current Demand Pareto)
+const ROOT_CAUSE_DESCRIPTIONS: Record<string, string> = {
+  "Digital Transformation": "Digital transformation, automation, and digitalization initiatives across business operations",
+  "AI & Data Strategy": "Artificial intelligence, machine learning, data-driven platforms and data strategy development",
+  "Platform & API Modernization": "Platform architecture, API-first approaches, SaaS migration, cloud and microservices adoption",
+  "Customer-Centric Innovation": "Customer experience, user experience design, client-centric personalization and service innovation",
+  "Operational Excellence": "Operating model optimization, operational efficiency, lean management, agile and DevOps practices",
+  "Sustainability & ESG": "Sustainability strategy, ESG compliance, climate action, carbon reduction and circular economy",
+  "Talent & Culture": "Talent acquisition, organizational culture, employee experience, workforce development and HR transformation",
+  "Business Model Innovation": "Business model redesign, revenue model innovation, monetization strategies and recurring revenue",
+  "Strategic Positioning": "Competitive strategy, market positioning, differentiation, strategic growth planning",
+  "Supply Chain & Operations": "Supply chain management, logistics optimization, procurement and manufacturing operations",
+};
+
 // Short labels for radar axes
 const CATEGORY_SHORT: Record<string, string> = {
   "Technology & Digital": "Tech",
@@ -269,6 +317,18 @@ const FutureDemandTab = ({ data }: { data: any }) => {
         ) : (
           <div className="text-slate-500 text-xs py-8 text-center">No foresight data available</div>
         )}
+
+        {/* Theme descriptions */}
+        {paretoData.length > 0 && (
+          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-1.5">
+            {paretoData.map((f: any) => (
+              <div key={f.theme} className="flex gap-2 text-[9px]">
+                <span className="font-bold text-slate-300 whitespace-nowrap" style={{ color: CATEGORY_COLORS[f.category] || '#6366f1' }}>{f.theme}:</span>
+                <span className="text-slate-500">{FORESIGHT_THEME_DESCRIPTIONS[f.theme] || f.category}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Cross-Impact Matrix */}
@@ -359,6 +419,18 @@ const CurrentDemandTab = ({ data }: { data: any }) => {
           </ResponsiveContainer>
         ) : (
           <div className="text-slate-500 text-xs py-8 text-center">No root cause data available</div>
+        )}
+
+        {/* Cluster descriptions */}
+        {causes.length > 0 && (
+          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-1.5">
+            {causes.map((c: any) => (
+              <div key={c.cluster_label} className="flex gap-2 text-[9px]">
+                <span className="font-bold text-slate-300 whitespace-nowrap">{c.cluster_label}:</span>
+                <span className="text-slate-500">{ROOT_CAUSE_DESCRIPTIONS[c.cluster_label] || ''}</span>
+              </div>
+            ))}
+          </div>
         )}
 
         {/* Example proposals */}
@@ -523,28 +595,6 @@ const SalesPrioritiesTab = ({ data, onCompanyClick }: { data: any; onCompanyClic
         )}
       </div>
 
-      {/* Vulnerability Scatter Chart */}
-      {sorted.length > 0 && ScatterChart && (
-        <div className="bg-black/20 border border-white/10 rounded-lg p-4">
-          <h4 className="text-[10px] font-bold text-violet-300 uppercase tracking-wide mb-3">Reality Score vs Financial Index (bubble = vulnerability)</h4>
-          <ResponsiveContainer width="100%" height={350}>
-            <ScatterChart margin={{ left: 10, right: 20, top: 10, bottom: 10 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-              <XAxis type="number" dataKey="reality_score" name="Reality Score" tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[0, 100]} label={{ value: 'Reality Score', fill: '#64748b', fontSize: 10, position: 'bottom' }} />
-              <YAxis type="number" dataKey="financial_index" name="Financial Index" tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[0, 100]} label={{ value: 'Financial Index', fill: '#64748b', fontSize: 10, angle: -90, position: 'insideLeft' }} />
-              <ZAxis type="number" dataKey="vulnerability_score" range={[30, 400]} />
-              <Tooltip cursor={{ strokeDasharray: '3 3' }}
-                contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }}
-                formatter={(value: any, name: string) => [typeof value === 'number' ? value.toFixed(1) : value, name]} />
-              <Scatter data={sorted.filter((v: any) => v.financial_index !== null)} name="Companies">
-                {sorted.filter((v: any) => v.financial_index !== null).map((v: any, i: number) => (
-                  <Cell key={i} fill={v.vulnerability_score >= 60 ? '#f43f5e' : v.vulnerability_score >= 30 ? '#f59e0b' : '#6366f1'} fillOpacity={0.7} />
-                ))}
-              </Scatter>
-            </ScatterChart>
-          </ResponsiveContainer>
-        </div>
-      )}
     </div>
   );
 };
