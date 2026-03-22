@@ -17,6 +17,7 @@ const TruthMatrix = (window as any).TruthMatrix;
 const ScannerInput = (window as any).ScannerInput;
 const CompanyModal = (window as any).CompanyModal;
 const ThemeExplorer = (window as any).ThemeExplorer;
+const MarketIntelligenceModal = (window as any).MarketIntelligenceModal;
 
 const IS_ADMIN_MODE = true; 
 
@@ -55,6 +56,11 @@ const App = () => {
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const [analyticsMatrixType, setAnalyticsMatrixType] = useState('spearman'); // 'spearman' | 'pearson'
   const [analyticsTab, setAnalyticsTab] = useState('reality_financial'); // 'reality_financial' | 'intent_reality' | 'intent_financial'
+
+  // MARKET INTELLIGENCE STATE
+  const [isMarketIntelOpen, setIsMarketIntelOpen] = useState(false);
+  const [marketIntelData, setMarketIntelData] = useState(null);
+  const [marketIntelLoading, setMarketIntelLoading] = useState(false);
 
   // THEME EXPLORER STATE
   const [isThemeExplorerOpen, setIsThemeExplorerOpen] = useState(false);
@@ -291,6 +297,22 @@ const App = () => {
       console.error('Analytics fetch failed:', e);
     } finally {
       setAnalyticsLoading(false);
+    }
+  };
+
+  const handleOpenMarketIntel = async () => {
+    setIsMarketIntelOpen(true);
+    setMarketIntelLoading(true);
+    try {
+      const res = await fetch(`/api/market-intelligence?t=${Date.now()}`);
+      if (res.ok) {
+        const result = await res.json();
+        setMarketIntelData(result);
+      }
+    } catch (e) {
+      console.error('Market intelligence fetch failed:', e);
+    } finally {
+      setMarketIntelLoading(false);
     }
   };
 
@@ -735,6 +757,9 @@ const App = () => {
                 <>
                 <button onClick={handleOpenAnalytics} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-violet-900/40 hover:bg-violet-800/60 border border-violet-700/50 text-violet-200 font-mono font-bold text-[10px] rounded transition-all">
                     <BarChart3 size={12} /> ANALYZE
+                </button>
+                <button onClick={handleOpenMarketIntel} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-cyan-900/40 hover:bg-cyan-800/60 border border-cyan-700/50 text-cyan-200 font-mono font-bold text-[10px] rounded transition-all">
+                    <TrendingUp size={12} /> INTEL
                 </button>
                 <button onClick={() => {
                     const pw = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to view Strategic Foresight Themes:");
@@ -1780,6 +1805,14 @@ const App = () => {
           </div>
         </div>
       )}
+
+      <MarketIntelligenceModal
+        isOpen={isMarketIntelOpen}
+        data={marketIntelData}
+        loading={marketIntelLoading}
+        onClose={() => setIsMarketIntelOpen(false)}
+        onCompanyClick={(company) => { setIsMarketIntelOpen(false); handleCompanyClick(company); }}
+      />
 
       <ThemeExplorer
         isOpen={isThemeExplorerOpen}

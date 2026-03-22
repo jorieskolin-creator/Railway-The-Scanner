@@ -100,6 +100,105 @@ interface AnalysisResult {
   ai_verified?: boolean; // Summary field for landing page badge
 }
 
+// Market Intelligence Data (from /api/market-intelligence endpoint)
+interface MarketIntelForesight {
+  theme: string;
+  category: string;
+  count: number;
+  pct: number;
+  example_companies: string[];
+}
+
+interface MarketIntelCause {
+  cluster_label: string;
+  count: number;
+  why_count: number;
+  what_count: number;
+  examples: { text: string; company: string }[];
+}
+
+interface MarketIntelGapPattern {
+  dimension: string;
+  avg_intent: number;
+  avg_reality: number;
+  avg_gap: number;
+  company_count: number;
+}
+
+interface MarketIntelArchetypeFlow {
+  domain: string;
+  thriving: number;
+  modernizing: number;
+  cash_cow: number;
+  at_risk: number;
+  total: number;
+}
+
+interface MarketIntelCrossImpact {
+  theme: string;
+  dimension: string;
+  count: number;
+}
+
+interface MarketIntelRadar {
+  domain: string;
+  raw_scores: Record<string, number>;
+  normalized_scores: Record<string, number>;
+  total_signals: number;
+}
+
+interface MarketIntelHealth {
+  domain: string;
+  score: number;
+  avg_reality: number;
+  avg_financial: number;
+  avg_gap: number;
+  thriving_pct: number;
+  company_count: number;
+}
+
+interface MarketIntelCoverage {
+  covered: number;
+  total: number;
+  pct: number;
+  themes_detail: { theme: string; category: string; signal_count: number }[];
+}
+
+interface MarketIntelVulnerable {
+  name: string;
+  domain: string;
+  vulnerability_score: number;
+  residual: number;
+  gap: number;
+  archetype: string;
+  reality_score: number;
+  financial_index: number | null;
+  reasons: string[];
+}
+
+interface MarketIntelDemandIntensity {
+  dimension: string;
+  avg_gap: number;
+  max_gap: number;
+  companies_with_gap: number;
+  total_companies: number;
+}
+
+interface MarketIntelligenceData {
+  company_count: number;
+  detailed_count: number;
+  top_foresights: MarketIntelForesight[];
+  top_causes: MarketIntelCause[];
+  gap_patterns: MarketIntelGapPattern[];
+  archetype_flow: MarketIntelArchetypeFlow[];
+  cross_impact: MarketIntelCrossImpact[];
+  industry_radar: MarketIntelRadar[];
+  market_health: MarketIntelHealth[];
+  foresight_coverage: MarketIntelCoverage;
+  vulnerable_companies: MarketIntelVulnerable[];
+  demand_intensity: MarketIntelDemandIntensity[];
+}
+
 // Attach Enums to window so they are available globally
 // We use a simple object check to prevent overwriting if somehow loaded twice
 if (!(window as any).Scanner1Category) {
