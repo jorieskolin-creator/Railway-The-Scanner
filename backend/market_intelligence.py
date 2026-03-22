@@ -514,7 +514,7 @@ def compute_vulnerable_companies(dashboard_data, analysis_result):
             })
 
     vulnerability.sort(key=lambda x: x["vulnerability_score"], reverse=True)
-    return vulnerability[:15]
+    return vulnerability[:30]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
