@@ -28,6 +28,7 @@ from storage import BlobStorage
 from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES, get_company_metadata
 from analyze_scores import run_analysis
+from market_intelligence import compute_market_intelligence
 from knowledge_base import get_evolving_framework
 from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, clean_summary, purge_false_evidence
 from general_summary import generate_general_summary
@@ -328,6 +329,30 @@ async def analyze_scores(response: Response):
     if not data:
         raise HTTPException(status_code=404, detail="No dashboard data found.")
     return run_analysis(data)
+
+@app.get("/api/market-intelligence")
+async def market_intelligence(response: Response):
+    """Aggregate cross-company data into strategic market intelligence views."""
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    # 1. Load dashboard summary data
+    dashboard_data = storage.retrieve_latest_data("index/summary_list")
+    if not dashboard_data:
+        raise HTTPException(status_code=404, detail="No dashboard data found.")
+
+    # 2. Load detailed data for each company (needed for foresight_links, proposals)
+    company_details = []
+    for item in dashboard_data:
+        name = item.get("companyName")
+        if name:
+            detail = storage.get_company_data(name)
+            if detail:
+                company_details.append(detail)
+
+    # 3. Run statistical analysis (reuse existing)
+    analysis_result = run_analysis(dashboard_data)
+
+    # 4. Compute market intelligence
+    return compute_market_intelligence(dashboard_data, company_details, analysis_result)
 
 @app.get("/company/{company_name}")
 async def get_company_details(company_name: str, response: Response):
