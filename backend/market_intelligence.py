@@ -167,7 +167,15 @@ def compute_top_causes(company_details):
         if total > 0:
             examples = []
             for m in (matched_why + matched_what)[:6]:
-                examples.append({"text": m["text"][:300], "company": m["company"]})
+                # Truncate at sentence boundary to avoid cut-off mid-sentence
+                raw = m["text"]
+                if len(raw) > 300:
+                    # Find last sentence-ending punctuation within ~350 chars
+                    truncated = raw[:350]
+                    last_period = max(truncated.rfind('. '), truncated.rfind('.\n'))
+                    if last_period > 100:
+                        raw = truncated[:last_period + 1]
+                examples.append({"text": raw, "company": m["company"]})
             cluster_results.append({
                 "cluster_label": cluster_name,
                 "count": total,
