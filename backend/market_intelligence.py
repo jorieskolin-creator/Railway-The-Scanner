@@ -164,8 +164,8 @@ def compute_top_causes(company_details):
         total = len(matched_why) + len(matched_what)
         if total > 0:
             examples = []
-            for m in (matched_why + matched_what)[:3]:
-                examples.append({"text": m["text"][:120], "company": m["company"]})
+            for m in (matched_why + matched_what)[:6]:
+                examples.append({"text": m["text"][:300], "company": m["company"]})
             cluster_results.append({
                 "cluster_label": cluster_name,
                 "count": total,

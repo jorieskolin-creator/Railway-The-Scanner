@@ -301,7 +301,6 @@ const FutureDemandTab = ({ data }: { data: any }) => {
 
 const CurrentDemandTab = ({ data }: { data: any }) => {
   const causes = data.top_causes || [];
-  const gapPatterns = data.gap_patterns || [];
   const archetypeFlow = data.archetype_flow || [];
 
   return (
@@ -315,8 +314,7 @@ const CurrentDemandTab = ({ data }: { data: any }) => {
               <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
               <XAxis dataKey="cluster_label" tick={{ fill: '#94a3b8', fontSize: 8 }} angle={-30} textAnchor="end" interval={0} height={80} />
               <YAxis tick={{ fill: '#94a3b8', fontSize: 10 }} />
-              <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }}
-                formatter={(value: any, name: string) => [value, name === 'why_count' ? 'WHY (strategic)' : 'WHAT (operational)']} />
+              <Tooltip cursor={false} active={false} contentStyle={{ display: 'none' }} />
               <Legend wrapperStyle={{ fontSize: 10 }} />
               <Bar dataKey="why_count" stackId="a" fill="#3b82f6" name="WHY (strategic)" radius={[0, 0, 0, 0]} />
               <Bar dataKey="what_count" stackId="a" fill="#14b8a6" name="WHAT (operational)" radius={[4, 4, 0, 0]} />
@@ -332,7 +330,7 @@ const CurrentDemandTab = ({ data }: { data: any }) => {
             {causes.slice(0, 5).map((c: any) => (
               <div key={c.cluster_label} className="bg-black/30 rounded p-2">
                 <div className="text-[10px] font-bold text-slate-200">{c.cluster_label} <span className="text-slate-500">({c.count} matches)</span></div>
-                {(c.examples || []).slice(0, 2).map((ex: any, i: number) => (
+                {(c.examples || []).slice(0, 5).map((ex: any, i: number) => (
                   <div key={i} className="text-[9px] text-slate-400 mt-1 flex gap-1">
                     <ChevronRight size={10} className="text-slate-600 shrink-0 mt-0.5" />
                     <span><span className="text-cyan-400">{ex.company}:</span> {ex.text}</span>
@@ -341,26 +339,6 @@ const CurrentDemandTab = ({ data }: { data: any }) => {
               </div>
             ))}
           </div>
-        )}
-      </div>
-
-      {/* Gap Pattern Analysis */}
-      <div className="bg-black/20 border border-white/10 rounded-lg p-4">
-        <h4 className="text-[10px] font-bold text-amber-300 uppercase tracking-wide mb-3">Intent vs Reality Gap (per KB Dimension)</h4>
-        {gapPatterns.length > 0 && BarChart ? (
-          <ResponsiveContainer width="100%" height={250}>
-            <BarChart data={gapPatterns} margin={{ left: 10, right: 20, top: 10, bottom: 10 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-              <XAxis dataKey="dimension" tick={{ fill: '#94a3b8', fontSize: 9 }} />
-              <YAxis tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[0, 100]} />
-              <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }} />
-              <Legend wrapperStyle={{ fontSize: 10 }} />
-              <Bar dataKey="avg_intent" fill="#818cf8" name="Avg Intent" radius={[4, 4, 0, 0]} />
-              <Bar dataKey="avg_reality" fill="#6366f1" name="Avg Reality" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        ) : (
-          <div className="text-slate-500 text-xs py-8 text-center">No gap data available</div>
         )}
       </div>
 
