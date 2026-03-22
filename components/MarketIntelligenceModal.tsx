@@ -134,7 +134,11 @@ const ExecutiveSummaryTab = ({ data }: { data: any }) => {
                 <XAxis type="number" tick={{ fill: '#94a3b8', fontSize: 10 }} />
                 <YAxis type="category" dataKey="dimension" tick={{ fill: '#cbd5e1', fontSize: 10 }} width={75} />
                 <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }} />
-                <Bar dataKey="avg_gap" fill="#f59e0b" radius={[0, 4, 4, 0]} name="Avg Gap" />
+                <Bar dataKey="avg_gap" radius={[0, 4, 4, 0]} name="Avg Gap">
+                  {(data.demand_intensity || []).map((entry: any, idx: number) => (
+                    <Cell key={idx} fill={entry.avg_gap >= 0 ? '#10b981' : '#f43f5e'} />
+                  ))}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           ) : (
