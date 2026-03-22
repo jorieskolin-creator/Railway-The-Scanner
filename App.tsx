@@ -300,8 +300,7 @@ const App = () => {
     }
   };
 
-  const handleOpenMarketIntel = async () => {
-    setIsMarketIntelOpen(true);
+  const fetchMarketIntelData = async () => {
     setMarketIntelLoading(true);
     try {
       const res = await fetch(`/api/market-intelligence?t=${Date.now()}`);
@@ -313,6 +312,13 @@ const App = () => {
       console.error('Market intelligence fetch failed:', e);
     } finally {
       setMarketIntelLoading(false);
+    }
+  };
+
+  const handleOpenMarketIntel = async () => {
+    setIsMarketIntelOpen(true);
+    if (!marketIntelData) {
+      await fetchMarketIntelData();
     }
   };
 
@@ -1811,6 +1817,7 @@ const App = () => {
         data={marketIntelData}
         loading={marketIntelLoading}
         onClose={() => setIsMarketIntelOpen(false)}
+        onRefresh={fetchMarketIntelData}
         onCompanyClick={(company) => { setIsMarketIntelOpen(false); handleCompanyClick(company); }}
       />
 

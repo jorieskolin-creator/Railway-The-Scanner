@@ -8,7 +8,7 @@ const MIIcons = new Proxy(LucideRaw, {
     return () => null;
   }
 });
-const { X, Loader2, TrendingUp, Target, Crosshair, ShieldAlert, Download, ChevronRight, Activity, BarChart3, Gauge, Radar } = MIIcons;
+const { X, Loader2, TrendingUp, Target, Crosshair, ShieldAlert, Download, ChevronRight, Activity, BarChart3, Gauge, Radar, RefreshCw } = MIIcons;
 
 const {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -545,11 +545,12 @@ const TABS = [
   { id: 'sales', label: 'Sales Priorities', icon: Crosshair },
 ];
 
-const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onCompanyClick }: {
+const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, onCompanyClick }: {
   isOpen: boolean;
   data: any;
   loading: boolean;
   onClose: () => void;
+  onRefresh?: () => void;
   onCompanyClick: (company: any) => void;
 }) => {
   const [activeTab, setActiveTab] = useState('executive');
@@ -567,9 +568,16 @@ const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onCompanyClic
             Market Intelligence
             {data && <span className="text-[10px] text-slate-500 font-normal ml-2">{data.company_count} companies analyzed</span>}
           </h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-white">
-            <X size={18} />
-          </button>
+          <div className="flex items-center gap-2">
+            {onRefresh && (
+              <button onClick={onRefresh} disabled={loading} className="text-slate-400 hover:text-cyan-300 disabled:opacity-30 transition-colors" title="Refresh data">
+                <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+              </button>
+            )}
+            <button onClick={onClose} className="text-slate-400 hover:text-white">
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         {/* Tab Navigation */}
