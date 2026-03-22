@@ -40,6 +40,15 @@ const HEALTH_COLOR = (score: number) => score >= 70 ? "#10b981" : score >= 40 ? 
 
 const RADAR_COLORS = ["#06b6d4", "#8b5cf6", "#f59e0b", "#10b981", "#ec4899", "#f97316", "#6366f1", "#f43f5e"];
 
+// Descriptions for KB Dimensions (used in Cross-Impact Matrix tooltips)
+const DIMENSION_DESCRIPTIONS: Record<string, string> = {
+  "Operating Model": "Evaluates how the company is structured and run: team autonomy vs. command-and-control, cross-functional collaboration, decision-making authority, flow efficiency, psychological safety, and whether the organization uses modern approaches (stream-aligned teams, platform teams) or legacy patterns (functional silos, waterfall, micromanagement).",
+  "Service Portfolio": "Evaluates what the company offers and how it delivers value: SaaS vs. on-premise, recurring revenue vs. one-off sales, API-first and cloud-native architecture, product modularity, scalability, self-service capabilities, and whether offerings are modern and composable or legacy, monolithic and maintenance-heavy.",
+  "Values": "Evaluates the organizational culture and guiding principles: trust, transparency, psychological safety, inclusion, learning orientation, growth mindset, purpose-driven leadership — versus fear-based culture, blame, secrecy, rigid hierarchy, risk-aversion, and short-termism.",
+  "Strategy": "Evaluates the company's strategic direction and adaptability: clarity of vision, customer-centricity, data-driven decision-making, innovation focus, resilience planning, ecosystem thinking — versus cost-cutting focus, reactive posture, siloed planning, budget-driven priorities, and status quo orientation.",
+  "AI Readiness": "Evaluates technological maturity and preparedness for AI adoption: cloud infrastructure, data governance, ML/AI capabilities, DevOps practices, automation, cybersecurity posture, modern tech stack — versus legacy systems, siloed data, manual processes, technical debt, and fragmented IT infrastructure.",
+};
+
 // Descriptions for Foresight Themes (Future Demand Pareto)
 const FORESIGHT_THEME_DESCRIPTIONS: Record<string, string> = {
   "Artificial Intelligence": "Generative AI, machine learning, autonomous systems, AI governance, human-AI collaboration",
@@ -340,7 +349,15 @@ const FutureDemandTab = ({ data }: { data: any }) => {
               <tr>
                 <th className="text-left text-slate-400 p-1 font-medium">Theme</th>
                 {ciDimensions.map(d => (
-                  <th key={d} className="text-center text-slate-400 p-1 font-medium whitespace-nowrap">{d}</th>
+                  <th key={d} className="text-center text-slate-400 p-1 font-medium whitespace-nowrap relative group cursor-help">
+                    <span className="border-b border-dashed border-slate-500">{d}</span>
+                    {DIMENSION_DESCRIPTIONS[d] && (
+                      <div className="absolute z-50 hidden group-hover:block bg-slate-900 border border-slate-600 rounded-lg p-3 text-left text-[10px] text-slate-300 font-normal w-[280px] -translate-x-1/2 left-1/2 top-full mt-1 shadow-xl leading-relaxed whitespace-normal">
+                        <div className="font-bold text-cyan-300 mb-1">{d}</div>
+                        {DIMENSION_DESCRIPTIONS[d]}
+                      </div>
+                    )}
+                  </th>
                 ))}
               </tr>
             </thead>
