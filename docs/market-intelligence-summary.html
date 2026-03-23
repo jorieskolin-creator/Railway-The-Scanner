@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Market Intelligence Module &mdash; Product Summary</title>
+<style>
+  :root {
+    --navy: #0f172a;
+    --dark: #1e293b;
+    --card: #1e293b;
+    --cyan: #06b6d4;
+    --cyan-dim: rgba(6,182,212,0.15);
+    --rose: #f43f5e;
+    --amber: #f59e0b;
+    --emerald: #10b981;
+    --violet: #8b5cf6;
+    --slate: #94a3b8;
+    --white: #f1f5f9;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--navy);
+    color: var(--white);
+    line-height: 1.6;
+    padding: 0;
+  }
+
+  /* ── Hero ────────────────────────────────────────────────── */
+  .hero {
+    background: linear-gradient(135deg, #0c1220 0%, #162544 50%, #0c1220 100%);
+    border-bottom: 1px solid rgba(6,182,212,0.2);
+    text-align: center;
+    padding: 60px 24px 50px;
+  }
+  .hero-badge {
+    display: inline-block;
+    background: var(--cyan-dim);
+    border: 1px solid rgba(6,182,212,0.3);
+    color: var(--cyan);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    padding: 4px 14px;
+    border-radius: 20px;
+    margin-bottom: 18px;
+  }
+  .hero h1 {
+    font-size: 38px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    margin-bottom: 12px;
+  }
+  .hero h1 span { color: var(--cyan); }
+  .hero p {
+    color: var(--slate);
+    font-size: 16px;
+    max-width: 600px;
+    margin: 0 auto;
+  }
+
+  /* ── Layout ──────────────────────────────────────────────── */
+  .container { max-width: 960px; margin: 0 auto; padding: 40px 24px; }
+
+  /* ── Section ─────────────────────────────────────────────── */
+  .section { margin-bottom: 48px; }
+  .section-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--cyan);
+    margin-bottom: 6px;
+  }
+  .section h2 {
+    font-size: 24px;
+    font-weight: 700;
+    margin-bottom: 16px;
+  }
+  .section p, .section li {
+    color: var(--slate);
+    font-size: 14px;
+  }
+
+  /* ── Cards ───────────────────────────────────────────────── */
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin-top: 16px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    padding: 20px;
+  }
+  .card-icon {
+    width: 36px; height: 36px;
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+    margin-bottom: 12px;
+  }
+  .card h4 {
+    font-size: 14px;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+  .card p {
+    font-size: 12px;
+    color: var(--slate);
+  }
+
+  /* ── Tabs preview ────────────────────────────────────────── */
+  .tab-strip {
+    display: flex;
+    gap: 4px;
+    margin: 20px 0 16px;
+    flex-wrap: wrap;
+  }
+  .tab-pill {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--slate);
+  }
+  .tab-pill.active {
+    background: var(--cyan-dim);
+    border-color: rgba(6,182,212,0.3);
+    color: var(--cyan);
+  }
+
+  /* ── FAVI diagram ────────────────────────────────────────── */
+  .favi-layers {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+    margin: 20px 0;
+  }
+  .favi-layer {
+    background: var(--card);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    padding: 20px;
+    text-align: center;
+  }
+  .favi-layer .num {
+    font-size: 28px;
+    font-weight: 800;
+    margin-bottom: 4px;
+  }
+  .favi-layer .label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    margin-bottom: 8px;
+  }
+  .favi-layer p { font-size: 12px; color: var(--slate); }
+
+  .formula-box {
+    background: rgba(6,182,212,0.07);
+    border: 1px solid rgba(6,182,212,0.2);
+    border-radius: 10px;
+    padding: 20px;
+    text-align: center;
+    margin: 20px 0;
+  }
+  .formula-box code {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--cyan);
+    letter-spacing: 0.5px;
+  }
+  .formula-box p {
+    font-size: 12px;
+    color: var(--slate);
+    margin-top: 8px;
+  }
+
+  /* ── 2x2 Matrix ──────────────────────────────────────────── */
+  .matrix {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin: 20px 0;
+    max-width: 600px;
+  }
+  .matrix-cell {
+    border-radius: 10px;
+    padding: 18px;
+    border: 1px solid;
+  }
+  .matrix-cell h5 { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+  .matrix-cell p { font-size: 11px; }
+
+  /* ── Flow diagram ────────────────────────────────────────── */
+  .flow {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    margin: 24px 0;
+    flex-wrap: wrap;
+  }
+  .flow-step {
+    flex: 1;
+    min-width: 140px;
+    background: var(--card);
+    border: 1px solid rgba(255,255,255,0.06);
+    padding: 16px;
+    text-align: center;
+    position: relative;
+  }
+  .flow-step:first-child { border-radius: 10px 0 0 10px; }
+  .flow-step:last-child { border-radius: 0 10px 10px 0; }
+  .flow-step .step-num {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--cyan);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 6px;
+  }
+  .flow-step h5 { font-size: 12px; font-weight: 700; margin-bottom: 4px; }
+  .flow-step p { font-size: 10px; color: var(--slate); }
+  .flow-arrow {
+    display: flex; align-items: center; justify-content: center;
+    color: var(--cyan);
+    font-size: 18px;
+    padding: 0 2px;
+  }
+
+  /* ── Highlight box ───────────────────────────────────────── */
+  .highlight {
+    background: rgba(139,92,246,0.08);
+    border: 1px solid rgba(139,92,246,0.2);
+    border-radius: 10px;
+    padding: 20px;
+    margin: 20px 0;
+  }
+  .highlight h4 { color: var(--violet); font-size: 14px; margin-bottom: 8px; }
+  .highlight p, .highlight li { font-size: 13px; color: var(--slate); }
+  .highlight ul { padding-left: 18px; margin-top: 6px; }
+
+  /* ── Table ───────────────────────────────────────────────── */
+  .info-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    font-size: 13px;
+  }
+  .info-table th {
+    text-align: left;
+    padding: 8px 12px;
+    background: rgba(255,255,255,0.03);
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--cyan);
+  }
+  .info-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    color: var(--slate);
+  }
+
+  /* ── Footer ──────────────────────────────────────────────── */
+  .footer {
+    text-align: center;
+    padding: 40px 24px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    color: #475569;
+    font-size: 12px;
+  }
+
+  /* ── Responsive ──────────────────────────────────────────── */
+  @media (max-width: 640px) {
+    .hero h1 { font-size: 26px; }
+    .favi-layers { grid-template-columns: 1fr; }
+    .flow { flex-direction: column; }
+    .flow-step { border-radius: 10px !important; }
+    .flow-arrow { transform: rotate(90deg); padding: 4px 0; }
+  }
+
+  @media print {
+    body { background: #fff; color: #1e293b; }
+    .hero { background: #f8fafc; border-bottom-color: #e2e8f0; }
+    .hero h1 { color: #0f172a; }
+    .card, .favi-layer, .flow-step { background: #f8fafc; border-color: #e2e8f0; }
+    .formula-box { background: #f0f9ff; border-color: #bae6fd; }
+    .highlight { background: #f5f3ff; border-color: #ddd6fe; }
+    p, li, td { color: #475569 !important; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- HERO -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div class="hero">
+  <div class="hero-badge">Scanner Platform</div>
+  <h1><span>Market Intelligence</span> Module</h1>
+  <p>Forward-looking, foresight-driven market analysis that turns company scan data into strategic sales intelligence.</p>
+</div>
+
+<div class="container">
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- WHAT IT IS -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-label">Overview</div>
+  <h2>What Market Intelligence Does</h2>
+  <p>
+    The Market Intelligence module aggregates data from all scanned companies into a single strategic dashboard.
+    Instead of looking at one company at a time, it reveals <strong>market-wide patterns</strong>: which future forces
+    are creating the most pressure, where the biggest readiness gaps are, and which companies are most
+    vulnerable &mdash; both today and looking forward.
+  </p>
+  <p style="margin-top:10px;">
+    It requires <strong>no additional scanning or API calls</strong>. All intelligence is computed from existing
+    company scan data, including foresight links, KB dimension scores, financial sub-scores, and
+    improvement proposals.
+  </p>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- FIVE TABS -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-label">Dashboard</div>
+  <h2>Five Analysis Views</h2>
+
+  <div class="tab-strip">
+    <span class="tab-pill active">Executive Summary</span>
+    <span class="tab-pill">Future Demand</span>
+    <span class="tab-pill">Current Demand</span>
+    <span class="tab-pill">Sales Priorities</span>
+    <span class="tab-pill">Foresight Vulnerability</span>
+  </div>
+
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-icon" style="background:rgba(6,182,212,0.12);">&#x1F4CA;</div>
+      <h4>Executive Summary</h4>
+      <p>Market health gauges per industry domain, foresight coverage ring (how many of 30 themes have signals), FAVI segment distribution, and demand intensity bars across five Knowledge Base dimensions.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon" style="background:rgba(139,92,246,0.12);">&#x1F680;</div>
+      <h4>Future Demand</h4>
+      <p>Pareto chart of the top 10 foresight themes driving change across scanned companies. Cross-impact matrix (theme &times; KB dimension) and industry foresight radar showing domain-level exposure to seven theme categories.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon" style="background:rgba(245,158,11,0.12);">&#x1F3AF;</div>
+      <h4>Current Demand</h4>
+      <p>Top 10 root-cause clusters extracted from company improvement proposals (WHY &amp; WHAT). Archetype flow showing how companies distribute across Thriving, Modernizing, Cash Cow, and At-Risk segments per domain.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon" style="background:rgba(244,63,94,0.12);">&#x2694;&#xFE0F;</div>
+      <h4>Sales Priorities</h4>
+      <p>Ranked list of most vulnerable companies based on statistical regression residuals and archetype classification. Helps sales teams prioritize outreach toward companies with the highest demonstrated need.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon" style="background:rgba(16,185,129,0.12);">&#x1F441;</div>
+      <h4>Foresight Vulnerability</h4>
+      <p>The FAVI index &mdash; a proprietary forward-looking vulnerability score for every company. Includes a 2&times;2 strategic segmentation matrix and per-company drill-down with gap breakdowns by KB dimension.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- PIPELINE -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-label">Pipeline</div>
+  <h2>How It Creates Foresight-Driven Summaries</h2>
+  <p>The intelligence pipeline has four stages, starting from individual company scans and ending with an aggregated market view.</p>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="step-num">Step 1</div>
+      <h5>Company Scan</h5>
+      <p>Each company is scanned against 5 KB dimensions. A foresight module identifies external forces from a validated Knowledge Base of 30 strategic themes.</p>
+    </div>
+    <div class="flow-arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="step-num">Step 2</div>
+      <h5>Foresight Links</h5>
+      <p>Forces are extracted as structured foresight links with theme, dimension, timeframe, force type, credibility, and source URLs.</p>
+    </div>
+    <div class="flow-arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="step-num">Step 3</div>
+      <h5>Aggregation</h5>
+      <p>All company data is fed into 11 computation functions that produce cross-company patterns, rankings, and indices.</p>
+    </div>
+    <div class="flow-arrow">&rarr;</div>
+    <div class="flow-step">
+      <div class="step-num">Step 4</div>
+      <h5>Dashboard</h5>
+      <p>Results are rendered across the five interactive tabs with charts, matrices, gauges, and drill-down company tables.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- FORESIGHT THEMES FLOW -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-label">Foresight Engine</div>
+  <h2>From Company Megatrends to Market Intelligence</h2>
+  <p>
+    During each company scan, the Strategic Foresight engine identifies which of <strong>30 predefined themes</strong>
+    (organized into 7 categories) are exerting pressure on that specific company. These themes cover the full
+    spectrum from <em>Artificial Intelligence</em> and <em>Climate Change</em> to <em>Geopolitics</em> and
+    <em>Population &amp; Demographics</em>.
+  </p>
+
+  <div class="highlight">
+    <h4>The 7 Theme Categories</h4>
+    <ul>
+      <li><strong>Technology &amp; Digital</strong> &mdash; AI, Data &amp; Digitalisation, Communication &amp; Media</li>
+      <li><strong>Economy &amp; Business</strong> &mdash; Business, Finance, Global Economy, Digital Economies, Services</li>
+      <li><strong>Industry &amp; Infrastructure</strong> &mdash; Manufacturing, Construction, Energy, Logistics, Transport</li>
+      <li><strong>Environment &amp; Resources</strong> &mdash; Climate, Sustainability, Nature, Food, Water &amp; Oceans</li>
+      <li><strong>Society &amp; Governance</strong> &mdash; Public Governance, Geopolitics, Security, Values &amp; Ethics, Society</li>
+      <li><strong>People &amp; Well-being</strong> &mdash; Health, Education, Work &amp; Income, Management &amp; HR, Leisure</li>
+      <li><strong>Science &amp; Demographics</strong> &mdash; Sciences &amp; Research, Population &amp; Demographics</li>
+    </ul>
+  </div>
+
+  <p>
+    Each foresight link produced at the company level carries rich metadata:
+  </p>
+  <table class="info-table">
+    <tr><th>Attribute</th><th>Description</th></tr>
+    <tr><td>FP Theme</td><td>Which of the 30 strategic themes this force belongs to</td></tr>
+    <tr><td>KB Dimension</td><td>Which company dimension it impacts (Operating Model, Service Portfolio, Values, Strategy, AI Readiness)</td></tr>
+    <tr><td>Force Type</td><td>Probable/Emerging, Plausible/Maturing, Weakening/Declining, or Preposterous/Black Swan</td></tr>
+    <tr><td>Timeframe</td><td>6&ndash;12 months, 12&ndash;24 months, or 24&ndash;36 months</td></tr>
+    <tr><td>Credibility</td><td>High, Medium, or Low &mdash; based on source quality</td></tr>
+    <tr><td>Source &amp; Verification</td><td>URL with validation status and supporting corroborating sources</td></tr>
+  </table>
+
+  <p style="margin-top: 14px;">
+    When Market Intelligence aggregates these links across all scanned companies, it reveals which themes
+    appear most frequently (future demand), how they distribute across dimensions (cross-impact), and
+    how industries differ in their exposure (radar chart).
+  </p>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- FAVI INDEX -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-label">Core Calculation</div>
+  <h2>FAVI &mdash; Foresight-Adjusted Vulnerability Index</h2>
+  <p>
+    FAVI is a proprietary, forward-looking vulnerability score that measures the gap between where foresight signals
+    say a company <strong>should</strong> be heading versus where it <strong>actually</strong> is &mdash; weighted by
+    the company's financial capacity to adapt.
+  </p>
+
+  <div class="favi-layers">
+    <div class="favi-layer">
+      <div class="num" style="color:var(--violet);">L1</div>
+      <div class="label" style="color:var(--violet);">Foresight Pressure (FPS)</div>
+      <p>How much change is coming? Calculated from force weight &times; timeframe urgency &times; source credibility, averaged across all foresight links.</p>
+    </div>
+    <div class="favi-layer">
+      <div class="num" style="color:var(--amber);">L2</div>
+      <div class="label" style="color:var(--amber);">Readiness Gap (RG)</div>
+      <p>How prepared is the company? For each KB dimension: gap = foresight pressure &minus; current reality score. Only positive gaps count (pressure exceeds readiness).</p>
+    </div>
+    <div class="favi-layer">
+      <div class="num" style="color:var(--emerald);">L3</div>
+      <div class="label" style="color:var(--emerald);">Financial Capacity (FAC)</div>
+      <p>Can they afford to adapt? Composite of Investment Signal (40%), Financial Stability (30%), and Profitability (30%).</p>
+    </div>
+  </div>
+
+  <div class="formula-box">
+    <code>FAVI = FPS &times; (1 &minus; FAC) &times; RG</code>
+    <p>Multiplicative model (0&ndash;100). All three layers must be high for maximum vulnerability.<br>
+    An additive fallback is used when foresight data is sparse: <code style="font-size:12px;">0.35&middot;FPS + 0.35&middot;RG + 0.30&middot;(1&minus;FAC)</code></p>
+  </div>
+
+  <p>Additionally, <strong>Megatrend Exposure</strong> is computed per company: the fraction of its foresight themes that are also top market-wide megatrends &mdash; showing how aligned a company's risks are with the broader market forces.</p>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- 2x2 MATRIX -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-label">Strategic Segmentation</div>
+  <h2>2&times;2 FAVI Segmentation Matrix</h2>
+  <p>Every company is placed in a strategic segment based on two axes: <strong>Current Vulnerability</strong> (from KB dimension scores) and <strong>FAVI Score</strong> (forward-looking pressure). Threshold: 40 on each axis.</p>
+
+  <div class="matrix">
+    <div class="matrix-cell" style="background:rgba(244,63,94,0.08); border-color:rgba(244,63,94,0.25);">
+      <h5 style="color:var(--rose);">Critical</h5>
+      <p style="color:var(--slate);">High Current + High FAVI<br>Struggling now <strong>and</strong> blind to what's coming. Urgent sales opportunities with highest value.</p>
+    </div>
+    <div class="matrix-cell" style="background:rgba(245,158,11,0.08); border-color:rgba(245,158,11,0.25);">
+      <h5 style="color:var(--amber);">Sleepwalking</h5>
+      <p style="color:var(--slate);">Low Current + High FAVI<br>Looks fine today but forces are building. Ideal for foresight-led advisory conversations.</p>
+    </div>
+    <div class="matrix-cell" style="background:rgba(59,130,246,0.08); border-color:rgba(59,130,246,0.25);">
+      <h5 style="color:#60a5fa;">Wounded but Sheltered</h5>
+      <p style="color:var(--slate);">High Current + Low FAVI<br>Problems are real but the future isn't adding pressure. Standard remediation play.</p>
+    </div>
+    <div class="matrix-cell" style="background:rgba(16,185,129,0.08); border-color:rgba(16,185,129,0.25);">
+      <h5 style="color:var(--emerald);">Safe Harbor</h5>
+      <p style="color:var(--slate);">Low Current + Low FAVI<br>Healthy and future-ready. Potential strategic partner or benchmark.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- 11 COMPUTATIONS -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-label">Under the Hood</div>
+  <h2>11 Intelligence Computations</h2>
+  <p>The aggregation engine runs 11 distinct computations on the combined company dataset:</p>
+  <table class="info-table">
+    <tr><th>#</th><th>Computation</th><th>What It Produces</th></tr>
+    <tr><td>1</td><td>Top 10 Foresights</td><td>Most frequent strategic themes across all companies (future demand signals)</td></tr>
+    <tr><td>2</td><td>Top 10 Root Causes</td><td>Most common improvement proposal clusters (current demand signals)</td></tr>
+    <tr><td>3</td><td>Gap Patterns</td><td>Average intent-vs-reality gap per KB dimension</td></tr>
+    <tr><td>4</td><td>Archetype Flow</td><td>Thriving / Modernizing / Cash Cow / At-Risk distribution per industry domain</td></tr>
+    <tr><td>5</td><td>Cross-Impact Matrix</td><td>Theme &times; Dimension signal count matrix (top 15 themes)</td></tr>
+    <tr><td>6</td><td>Industry Radar</td><td>Per-domain exposure across 7 theme categories (top 8 domains)</td></tr>
+    <tr><td>7</td><td>Market Health Gauge</td><td>Composite health score per industry domain</td></tr>
+    <tr><td>8</td><td>Foresight Coverage</td><td>How many of 30 themes have 3+ signals (knowledge base maturity)</td></tr>
+    <tr><td>9</td><td>Vulnerable Companies</td><td>Ranked by regression residuals + archetype classification</td></tr>
+    <tr><td>10</td><td>Demand Intensity</td><td>Average gap per KB dimension across all companies</td></tr>
+    <tr><td>11</td><td>FAVI Index</td><td>Per-company forward-looking vulnerability with 2&times;2 segmentation</td></tr>
+  </table>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- SALES VALUE -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-label">For Sales</div>
+  <h2>How Sales Benefits</h2>
+  <div class="card-grid" style="grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));">
+    <div class="card" style="border-left: 3px solid var(--cyan);">
+      <h4>Prioritize Outreach</h4>
+      <p>The Sales Priorities tab ranks companies by demonstrated vulnerability. The FAVI tab adds a forward-looking dimension &mdash; helping identify companies that don't look distressed yet but will be soon (<em>Sleepwalking</em> segment).</p>
+    </div>
+    <div class="card" style="border-left: 3px solid var(--violet);">
+      <h4>Lead with Foresight</h4>
+      <p>Future Demand data shows exactly which megatrends are creating pressure in a prospect's industry. This lets sales craft conversations around strategic forces rather than generic pain points.</p>
+    </div>
+    <div class="card" style="border-left: 3px solid var(--amber);">
+      <h4>Quantify the Gap</h4>
+      <p>Every company's FAVI breakdown shows the gap between foresight pressure and current readiness per KB dimension. This translates directly into a compelling, data-backed sales narrative.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════ -->
+<!-- KB DIMENSIONS -->
+<!-- ════════════════════════════════════════════════════════════════ -->
+<div class="section">
+  <div class="section-label">Reference</div>
+  <h2>The 5 Knowledge Base Dimensions</h2>
+  <p>All scoring, gap analysis, and foresight pressure mapping revolves around five core dimensions:</p>
+  <table class="info-table">
+    <tr><th>Dimension</th><th>What It Evaluates</th></tr>
+    <tr><td><strong>Operating Model</strong></td><td>Organizational structure, team autonomy, cross-functional collaboration, decision-making, agile practices</td></tr>
+    <tr><td><strong>Service Portfolio</strong></td><td>Product offerings, SaaS vs on-premise, recurring revenue, API-first architecture, scalability</td></tr>
+    <tr><td><strong>Values</strong></td><td>Organizational culture, trust, transparency, psychological safety, learning orientation</td></tr>
+    <tr><td><strong>Strategy</strong></td><td>Vision clarity, customer-centricity, data-driven decisions, innovation focus, ecosystem thinking</td></tr>
+    <tr><td><strong>AI Readiness</strong></td><td>Cloud infrastructure, data governance, ML/AI capabilities, DevOps, tech stack maturity</td></tr>
+  </table>
+</div>
+
+</div><!-- /container -->
+
+<div class="footer">
+  Scanner Platform &mdash; Market Intelligence Module &mdash; Internal Product Summary
+</div>
+
+</body>
+</html>
