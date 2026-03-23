@@ -966,7 +966,7 @@ const TABS = [
   { id: 'executive', label: 'Executive Summary', icon: Gauge },
   { id: 'future', label: 'Future Demand', icon: TrendingUp },
   { id: 'current', label: 'Current Demand', icon: Target },
-  { id: 'sales', label: 'Sales Priorities', icon: Crosshair },
+  { id: 'sales', label: 'Vulnerability Now', icon: Crosshair },
   { id: 'favi', label: 'Foresight Vulnerability', icon: Eye },
 ];
 
