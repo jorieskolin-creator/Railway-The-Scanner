@@ -346,7 +346,7 @@
     <span class="tab-pill active">Executive Summary</span>
     <span class="tab-pill">Future Demand</span>
     <span class="tab-pill">Current Demand</span>
-    <span class="tab-pill">Sales Priorities</span>
+    <span class="tab-pill">Vulnerability Now</span>
     <span class="tab-pill">Foresight Vulnerability</span>
   </div>
 
@@ -368,7 +368,7 @@
     </div>
     <div class="card">
       <div class="card-icon" style="background:rgba(244,63,94,0.12);">&#x2694;&#xFE0F;</div>
-      <h4>Sales Priorities</h4>
+      <h4>Vulnerability Now</h4>
       <p>Ranked list of most vulnerable companies based on statistical regression residuals and archetype classification. Helps sales teams prioritize outreach toward companies with the highest demonstrated need.</p>
     </div>
     <div class="card">
@@ -476,12 +476,12 @@
     <div class="favi-layer">
       <div class="num" style="color:var(--violet);">L1</div>
       <div class="label" style="color:var(--violet);">Foresight Pressure (FPS)</div>
-      <p>How much change is coming? Calculated from force weight &times; timeframe urgency &times; source credibility, averaged across all foresight links.</p>
+      <p>How much change is coming? Per-signal geometric mean: (force &times; urgency &times; credibility)<sup>1/3</sup>, then averaged across all links. Decompresses signal spread vs. raw multiplication.</p>
     </div>
     <div class="favi-layer">
       <div class="num" style="color:var(--amber);">L2</div>
       <div class="label" style="color:var(--amber);">Readiness Gap (RG)</div>
-      <p>How prepared is the company? For each KB dimension: gap = foresight pressure &minus; current reality score. Only positive gaps count (pressure exceeds readiness).</p>
+      <p>How prepared is the company? Per dimension: gap = pressure &times; (1 &minus; readiness / 100). High readiness absorbs pressure; low readiness lets it pass through.</p>
     </div>
     <div class="favi-layer">
       <div class="num" style="color:var(--emerald);">L3</div>
@@ -559,7 +559,7 @@
   <div class="card-grid" style="grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));">
     <div class="card" style="border-left: 3px solid var(--cyan);">
       <h4>Prioritize Outreach</h4>
-      <p>The Sales Priorities tab ranks companies by demonstrated vulnerability. The FAVI tab adds a forward-looking dimension &mdash; helping identify companies that don't look distressed yet but will be soon (<em>Sleepwalking</em> segment).</p>
+      <p>The Vulnerability Now tab ranks companies by demonstrated vulnerability. The FAVI tab adds a forward-looking dimension &mdash; helping identify companies that don't look distressed yet but will be soon (<em>Sleepwalking</em> segment).</p>
     </div>
     <div class="card" style="border-left: 3px solid var(--violet);">
       <h4>Lead with Foresight</h4>
