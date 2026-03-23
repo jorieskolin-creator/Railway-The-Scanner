@@ -350,7 +350,7 @@ const FutureDemandTab = ({ data }: { data: any }) => {
 
       {/* Cross-Impact Matrix */}
       {ciThemes.length > 0 && (
-        <div className="bg-black/20 border border-white/10 rounded-lg p-4 overflow-x-auto">
+        <div className="bg-black/20 border border-white/10 rounded-lg p-4 overflow-visible">
           <h4 className="text-[10px] font-bold text-violet-300 uppercase tracking-wide mb-3">Theme x Dimension Cross-Impact Matrix</h4>
           <table className="w-full text-[10px]">
             <thead>
@@ -360,7 +360,7 @@ const FutureDemandTab = ({ data }: { data: any }) => {
                   <th key={d} className="text-center text-slate-400 p-1 font-medium whitespace-nowrap relative group cursor-help">
                     <span className="border-b border-dashed border-slate-500">{d}</span>
                     {DIMENSION_DESCRIPTIONS[d] && (
-                      <div className="absolute z-50 hidden group-hover:block bg-slate-900 border border-slate-600 rounded-lg p-3 text-left text-[10px] text-slate-300 font-normal w-[280px] -translate-x-1/2 left-1/2 top-full mt-1 shadow-xl leading-relaxed whitespace-normal">
+                      <div className="absolute z-[100] hidden group-hover:block bg-slate-900 border border-slate-600 rounded-lg p-3 text-left text-[10px] text-slate-300 font-normal w-[280px] -translate-x-1/2 left-1/2 top-full mt-1 shadow-xl leading-relaxed whitespace-normal pointer-events-none">
                         <div className="font-bold text-cyan-300 mb-1">{d}</div>
                         {DIMENSION_DESCRIPTIONS[d]}
                       </div>
@@ -370,7 +370,7 @@ const FutureDemandTab = ({ data }: { data: any }) => {
               </tr>
             </thead>
             <tbody>
-              {(ciThemes as string[]).map((theme: string) => (
+              {(ciThemes as string[]).map((theme: string, themeIdx: number) => (
                 <tr key={theme} className="border-t border-white/5">
                   <td className="p-1 text-slate-300 whitespace-nowrap">{theme}</td>
                   {ciDimensions.map(dim => {
@@ -379,11 +379,12 @@ const FutureDemandTab = ({ data }: { data: any }) => {
                     const bg = val > 0
                       ? `rgba(99, 102, 241, ${0.15 + intensity * 0.6})`
                       : 'transparent';
+                    const showBelow = themeIdx < 3;
                     return (
                       <td key={dim} className="p-1 text-center font-mono text-slate-200 relative group cursor-help" style={{ backgroundColor: bg }}>
                         {val > 0 ? val : '-'}
                         {val > 0 && (
-                          <div className="absolute z-50 hidden group-hover:block bg-slate-900 border border-slate-600 rounded-lg p-3 text-left text-[10px] text-slate-300 font-normal w-[260px] -translate-x-1/2 left-1/2 bottom-full mb-1 shadow-xl leading-relaxed whitespace-normal">
+                          <div className={`absolute z-[100] hidden group-hover:block bg-slate-900 border border-slate-600 rounded-lg p-3 text-left text-[10px] text-slate-300 font-normal w-[260px] -translate-x-1/2 left-1/2 shadow-xl leading-relaxed whitespace-normal pointer-events-none ${showBelow ? 'top-full mt-1' : 'bottom-full mb-1'}`}>
                             <div className="font-bold text-cyan-300 mb-1">{theme} &times; {dim}</div>
                             <div className="text-slate-400">
                               <span className="text-white font-bold">{val}</span> foresight signal{val !== 1 ? 's' : ''} across scanned companies link the <span className="text-violet-300">{theme}</span> megatrend to the <span className="text-emerald-300">{dim}</span> dimension.
