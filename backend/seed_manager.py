@@ -13,7 +13,7 @@ from datetime import datetime
 from finland_list import TOP_100_COMPANIES, get_company_metadata
 from gemini_backoff import call_with_503_backoff
 from scanner_one import analyze_intent
-from scanner_two import x_ray_search, extract_json_from_text, run_self_analysis, financial_health_search, migrate_financial_sub_scores
+from scanner_two import x_ray_search, extract_json_from_text, run_self_analysis, financial_health_search, migrate_financial_sub_scores, _validate_key_people
 from knowledge_base import get_evolving_framework
 from storage import BlobStorage
 from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, purge_false_evidence
@@ -402,6 +402,9 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
             washing_type = reality_results.get("washing_type", None)
             key_people = reality_results.get("key_people", [])
 
+            # --- KEY PEOPLE NAME VALIDATION ---
+            key_people = _validate_key_people(key_people, company_name)
+
             # --- STAKEHOLDER LINKEDIN ENRICHMENT ---
             if key_people:
                 try:
@@ -409,6 +412,13 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
                     key_people = enrich_key_people(company_name, key_people)
                 except Exception as enrich_err:
                     print(f"   [{company_name}] ⚠️ [Stakeholder Intel] Enrichment failed (non-fatal): {enrich_err}")
+
+                # Filter out departed stakeholders (verified by enrichment)
+                departed = [p for p in key_people if p.get("linkedin_insights", {}).get("still_at_company") is False]
+                if departed:
+                    departed_names = ", ".join(p.get("name", "?") for p in departed)
+                    print(f"   [{company_name}] 🚫 [Stakeholder Filter] Removing {len(departed)} departed stakeholder(s): {departed_names}")
+                    key_people = [p for p in key_people if p.get("linkedin_insights", {}).get("still_at_company") is not False]
 
             # --- LOGIC CONSISTENCY CHECK ---
             if reality_results["score"] >= intent_results["score"]:
@@ -418,6 +428,14 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
                 washing_flag = False
                 washing_type = None
 
+            # --- EARLY DOMAIN RESOLUTION (needed for foresight before synthesis) ---
+            meta = get_company_metadata(company_name) or company
+            company_domain = meta.get("domain", "Other")
+            if company_domain == "Other":
+                from domain_classifier import infer_domain
+                _cached = existing_company_data.get("domain") if existing_company_data else None
+                company_domain = infer_domain(company_name, company.get("url", ""), reality_results, financial_results, cached_domain=_cached)
+
             # --- ARCHETYPE CALCULATION (Reality vs Financial) ---
             fin_score = financial_results.get("financial_index")
             fin_for_archetype = fin_score if fin_score is not None else intent_results["score"]
@@ -425,6 +443,64 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
                 archetype = "Thriving" if fin_for_archetype >= 50 else "Modernizing"
             else:
                 archetype = "Cash Cow" if fin_for_archetype >= 50 else "At Risk"
+
+            # --- STEP 2.7: STRATEGIC FORESIGHT ---
+            foresight_data = None
+            foresight_links = []
+            try:
+                from strategic_foresight import (
+                    generate_foresight, validate_foresight_urls, reality_check_foresight,
+                    extract_foresight_links, retry_failed_sources, enforce_source_quality_gate,
+                )
+                foresight_data = generate_foresight(
+                    company_name=company_name,
+                    domain=company_domain,
+                    archetype=archetype,
+                    reality_score=reality_results["score"],
+                    financial_index=financial_results.get("financial_index"),
+                    top_findings=reality_results.get("checklist", [])[:8],
+                )
+                if foresight_data:
+                    n_forces = len(foresight_data.get('dimension_forces', []))
+                    is_kb_first = foresight_data.get("kb_first", False)
+                    path_label = "KB-first" if is_kb_first else "search"
+                    print(f"   [{company_name}] 🔮 [Foresight] Complete: {n_forces} forces via {path_label} path")
+
+                    if is_kb_first:
+                        foresight_data["insufficient_evidence"] = False
+                        foresight_data = reality_check_foresight(foresight_data, company_name=company_name)
+                        foresight_links = extract_foresight_links(foresight_data, company_name=company_name, domain=company_domain)
+                        print(f"   [{company_name}] 📚 [Foresight KB-First] Skipped URL verify + source retry (pre-validated)")
+                    else:
+                        foresight_data, fs_verified, fs_dead = validate_foresight_urls(foresight_data)
+                        if fs_verified == 0 or (fs_dead > 0 and fs_verified < n_forces):
+                            foresight_data, newly_verified = retry_failed_sources(foresight_data, domain=company_domain)
+                            fs_verified += newly_verified
+                        try:
+                            from source_claim_validator import validate_foresight_claims
+                            validate_foresight_claims(foresight_data, max_checks=6)
+                        except Exception as scv_err:
+                            print(f"   [{company_name}] ⚠️ [Foresight Source-Claim] Validation skipped: {scv_err}")
+                        foresight_data, passes_gate = enforce_source_quality_gate(foresight_data)
+                        foresight_data = reality_check_foresight(foresight_data, company_name=company_name)
+                        foresight_links = extract_foresight_links(foresight_data, company_name=company_name, domain=company_domain)
+                        if not passes_gate:
+                            print(f"   [{company_name}] ⚠️ [Foresight] Insufficient evidence — foresight flagged as low-trust")
+
+                    # Merge with existing DB foresight links (preserve previously validated)
+                    if existing_company_data and existing_company_data.get("foresight_links"):
+                        db_fl = existing_company_data["foresight_links"]
+                        new_urls = {l.get("url") for l in foresight_links if l.get("url")}
+                        for db_link in db_fl:
+                            if db_link.get("url") and db_link["url"] not in new_urls:
+                                if db_link.get("verified") and db_link.get("validated"):
+                                    foresight_links.append(db_link)
+                                    new_urls.add(db_link["url"])
+                        print(f"   [{company_name}] 📎 [Foresight Links] Merged: {len(foresight_links)} total ({len(db_fl)} from DB)")
+                else:
+                    print(f"   [{company_name}] ⚠️ [Foresight] Returned no data")
+            except Exception as foresight_err:
+                print(f"   [{company_name}] ⚠️ [Foresight] Failed (non-fatal): {foresight_err}")
 
             # 4. SYNTHESIS (Claude Opus 4.6)
             summary_text = "Automated Analysis Complete."
@@ -509,11 +585,24 @@ Score trajectory (oldest → newest):
 Overall direction: {direction}
 Include the trend trajectory in the summary. Note persistent patterns or turning points."""
 
+                    # Foresight context (only when foresight data was generated)
+                    foresight_context = ""
+                    if foresight_data:
+                        from strategic_foresight import format_foresight_for_synthesis
+                        foresight_context = format_foresight_for_synthesis(foresight_data, company_name, company_domain)
+
                     synthesis_prompt = f"""You are a senior organizational analyst conducting a forensic modernization assessment.
+You are conservative and evidence-bound. You would rather say "insufficient evidence" than risk a wrong claim. Your credibility depends on never overstating.
 Your task: synthesize scanner evidence into a precise, evidence-grounded diagnosis using the Knowledge Base framework below.
 
 METHODOLOGY: Read ALL evidence first. Score ONLY what evidence supports. Write ONLY what scores justify.
 If evidence is thin, say so — a short honest analysis beats a long fabricated one.
+
+### ABSOLUTE RULES (repeated throughout for emphasis)
+1. NEVER fabricate findings — if evidence is thin, SAY SO.
+2. NEVER invent organizational or people problems (leadership gaps, succession issues, morale claims, unfilled roles).
+3. Every claim must trace to specific evidence in the SCAN DATA below. No evidence = no claim.
+4. Do NOT extrapolate small signals into sweeping assessments (e.g., a Jira mention in a job ad does NOT reveal corporate strategy).
 
 ### PRIMARY FRAMEWORK (KNOWLEDGE BASE — MANDATORY)
 {knowledge_context}
@@ -525,12 +614,7 @@ NEVER use internal codes (TAC-xxx, DIM-xxx, etc.) — always write the full conc
 
 ### SCAN DATA
 Target: {company_name}
-DIAGNOSIS ARCHETYPE: {archetype.upper()}
-Archetype definitions (Reality vs Financial health):
-  - THRIVING: High Reality + Strong Financials. Modern operations AND healthy business.
-  - MODERNIZING: High Reality + Weak Financials. Strong operations but financial pressure.
-  - CASH COW: Low Reality + Strong Financials. Profitable but operationally outdated.
-  - AT RISK: Low Reality + Weak Financials. Both operations and finances under pressure.
+Financial Health Index: {fin_for_archetype} ({"actual financial index" if fin_score is not None else "fallback: using intent score"})
 Summary Confidence: {confidence}/100
 
 Evidence Found: {evidence_list}
@@ -538,15 +622,16 @@ Intent Data: {intent_narrative}
 {washing_context}
 {financial_context}
 {trend_block}
+{foresight_context}
 {prev_synthesis_block}
 
 ### ANALYSIS PROTOCOL
 
-STEP 1 — SCORE EVALUATION (evaluate before writing anything):
-Score each Knowledge Base dimension (0-20) for reality_score, based on VERIFIED EVIDENCE ONLY:
+STEP 1 — REALITY SCORE (evaluate before writing anything):
+Score each Knowledge Base dimension (0-20) based on VERIFIED EVIDENCE ONLY:
   - Operating Model: Evidence of modern practices (DevOps, platform teams, stream-aligned)? Or legacy/waterfall/silos?
   - Strategy: Clear digital/modernization strategy with visible execution? Or vague/absent?
-  - Culture: Learning culture, psychological safety, talent signals? Or hierarchy/control/fear?
+  - Culture: Learning culture, psychological safety? Evidence of open communication or blameless post-mortems? Or hierarchy/control/fear?
   - Service Portfolio: Product-led, API-first, composable architecture? Or monolithic/legacy?
   - AI Readiness: Concrete AI/ML adoption with measurable outcomes? Or just buzzwords/pilot purgatory?
 
@@ -554,13 +639,22 @@ Scoring rules:
   - No evidence for a dimension = score 10 (neutral). Never score generously without evidence.
   - Evidence of aspiration (website claims, press releases) without execution evidence = score 8-12, not higher.
   - Sum the 5 dimensions → 'reality_score' (0-100).
+  - Do NOT evaluate intent_score or financial_index — those are immutable pipeline outputs.
 
-For 'intent_score' (0-100): How ambitious is their narrative vs. what's typical?
-Score based on the Intent Data provided above.
+STEP 2 — ARCHETYPE DERIVATION (mechanical, from scores):
+Use YOUR reality_score + Financial Health Index ({fin_for_archetype}):
+  - reality_score >= 50 AND Financial Health Index >= 50 → "Thriving"
+  - reality_score >= 50 AND Financial Health Index < 50 → "Modernizing"
+  - reality_score < 50 AND Financial Health Index >= 50 → "Cash Cow"
+  - reality_score < 50 AND Financial Health Index < 50 → "At Risk"
+This is a mechanical derivation — do not override based on narrative interpretation.
 
-STEP 2 — SUMMARY (180-220 words):
+STEP 3 — SUMMARY (up to 375 words):
 Write a diagnostic narrative that reads like an expert assessment, not a template:
-  - First sentence: State the archetype ({archetype}) and what defines this company's position.
+  - Structure: exactly 3-4 paragraphs, each covering a distinct KB dimension (e.g. overall position
+    & operating model / strategy & culture / service portfolio & AI readiness / financial context).
+    Separate paragraphs with \\n\\n in the JSON string — this is required for rendering.
+  - First sentence: State the archetype and what defines this company's position.
   - Body: Map 3-4 key findings to specific KB dimensions. For each finding, connect the evidence
     to the KB pattern it reveals (e.g., "Job postings emphasize hierarchical reporting lines,
     characteristic of Digital Taylorism in the Operating Model dimension").
@@ -570,27 +664,32 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
   - If washing detected, name it: "{washing_type or 'Modernization Washing'}" with the specific gap.
   - Do NOT cite numeric scores in the text — scores display separately in the UI.
   - Do NOT fabricate findings. If evidence is sparse, acknowledge gaps rather than inventing patterns.
+  - TEMPORAL PRECISION: When evidence contains the same metric for different periods (e.g. Q1 vs full-year, 2024 vs 2025), always use the most recent FULL-YEAR / ANNUAL figure — not interim or quarterly snapshots. If only a quarterly figure is available, label it explicitly (e.g. "as of Q1 2025"). Never present a quarterly number as if it were the annual result.
+  - ORGANIZATIONAL CLAIMS PROHIBITION: NEVER claim or imply leadership gaps, unfilled executive roles, succession planning issues, management vacancies, or organizational restructuring unless the evidence EXPLICITLY states this. The absence of a person in scanner results does NOT mean the role is vacant — it means the scanner didn't find them. Do NOT invent risk factors about people, roles, or organizational structure to add analytical depth. If the evidence doesn't mention an organizational problem, the problem does not exist for this analysis.
   - Use ONLY the four archetype labels: Thriving, Modernizing, Cash Cow, At Risk.
 
-STEP 3 — PITCH (90-110 words):
+STEP 4 — PITCH (90-110 words):
 A direct cold-outreach message to a C-level executive at {company_name}:
   - Open with a specific insight from the analysis that would make them stop and read.
-  - Derive exactly 2 CONCRETE PROPOSALS targeting the company's weakest KB dimensions.
+  - Derive 1-2 CONCRETE PROPOSALS targeting the company's weakest KB dimensions.
     Each proposal must name the dimension and suggest a specific transformation direction
     (e.g., "Shift from Digital Taylorism toward Flow Efficiency by restructuring around
     stream-aligned teams with end-to-end ownership").
   - The proposals must feel specific to THIS company's situation, not generic consulting templates.
   - Do NOT use "Forensic Modernization Audit" or any generic service names.
-  - Tone: Professional, provocative, insight-led. The recipient should feel understood, not sold to.
+  - Tone: Professional, direct, evidence-led. Every claim in the pitch must be verifiable from the scan data. The recipient should feel understood, not sold to.
+  - Structure as exactly 3 short paragraphs separated by \\n\\n (opening hook / proposals / closing CTA).
 
-STEP 4 — IMPACT PROPOSALS (derived from Steps 1-3):
-Generate exactly 2 WHY statements and 2 WHAT statements.
+STEP 5 — IMPACT PROPOSALS (derived from Steps 1-4):
+Generate 1-2 WHY statements and 1-2 WHAT statements (matching count).
+If evidence strongly supports 2 distinct weaknesses, produce 2 pairs. If evidence is limited, produce 1 pair. One strong evidence-based proposal beats two fabricated ones.
 
 WHY (Desired Impact) — the strategic reason to act:
   - Each WHY must connect a specific weakness found in Step 1 to a business-level consequence the C-suite cares about.
   - Frame as: "What happens if this stays unfixed?" → strategic risk or missed opportunity.
   - Tone: Executive-level, outcome-oriented. Not technical jargon.
   - Length: 1-2 sentences each.
+  - Example: "Reduce time-to-market for digital services from months to weeks by dissolving project-based handoffs that currently bottleneck every release."
 
 WHAT (Desired Effect) — the measurable business outcome:
   - Each WHAT must propose a concrete, observable change that would prove progress on the corresponding WHY.
@@ -598,22 +697,26 @@ WHAT (Desired Effect) — the measurable business outcome:
   - Must be specific enough to verify, but not a made-up KPI number.
   - Tone: Tangible, verifiable, grounded in this company's context.
   - Length: 1-2 sentences each.
+  - Example: "Cross-functional teams own services end-to-end, eliminating the current approval chain that delays every deployment."
 
 Rules:
-  - WHY1 pairs with WHAT1 (same theme). WHY2 pairs with WHAT2 (different theme).
-  - Draw ONLY from the weakest 2 KB dimensions scored in Step 1.
+  - WHY1 pairs with WHAT1 (same theme). If 2 pairs: WHY2 pairs with WHAT2 (different theme).
+  - Draw ONLY from the weakest KB dimensions scored in Step 1 that have ACTUAL EVIDENCE.
   - Never generic — each must reference something specific from the evidence or diagnosis.
   - These are proposals, not promises — frame as "potential impact" and "potential effect".
 
 ### GUARDRAILS
 - NEVER fabricate evidence, people, events, partnerships, or metrics not present in the scan data.
 - NEVER invent temporal claims ("recently announced", "just launched", "this quarter").
+- NEVER extrapolate small signals into sweeping assessments (e.g., a tool mentioned in a job ad does NOT reveal corporate strategy).
 - If a KB dimension has no supporting evidence, score it neutrally and acknowledge the gap — do not speculate.
 - Every factual claim in the summary must be traceable to a specific piece of evidence above.
 
 ### OUTPUT
 Respond with valid JSON only. Six fields required:
-{{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "intent_score": <int 0-100>, "why_proposals": ["...", "..."], "what_proposals": ["...", "..."]}}"""
+{{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."]}}
+Note: the summary value must contain \\n\\n between paragraphs (3-4 paragraphs total). The pitch value must also contain \\n\\n between its 3 paragraphs.
+Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2."""
 
                     # --- Synthesis with fallback chain: Opus 4.6 → Gemini 3.1 Pro → Gemini 3 Pro → Sonnet 4.6 ---
                     # Opus uses Extended Thinking to reason through evidence before synthesis.
@@ -727,11 +830,28 @@ Respond with valid JSON only. Six fields required:
                              if opus_intent is not None and isinstance(opus_intent, (int, float)):
                                  opus_intent = max(0, min(100, int(opus_intent)))
                                  delta_i = abs(opus_intent - scanner_intent)
+                                 intent_results["opus_intent_score"] = opus_intent
                                  if delta_i <= 5:
                                      print(f"   [{company_name}] ✅ [Score Verify] Intent: Scanner 1 {scanner_intent} ≈ Opus {opus_intent} (delta {delta_i}). Keeping Scanner 1 score.")
                                  else:
                                      print(f"   [{company_name}] ℹ️ [Score Verify] Intent: Scanner 1 {scanner_intent} vs Opus {opus_intent} (delta {delta_i}). Keeping Scanner 1 score (immutable).")
                                      gap = intent_results["score"] - reality_results["score"]
+
+                             # --- ARCHETYPE VERIFICATION ---
+                             opus_archetype = json_data.get("archetype")
+                             final_reality = reality_results["score"]
+                             expected_archetype = ("Thriving" if fin_for_archetype >= 50 else "Modernizing") if final_reality >= 50 else ("Cash Cow" if fin_for_archetype >= 50 else "At Risk")
+
+                             if opus_archetype and opus_archetype != expected_archetype:
+                                 print(f"   [{company_name}] ⚖️ [Archetype Verify] Opus wrote '{opus_archetype}' but scores dictate '{expected_archetype}' (reality={final_reality}, financial={fin_for_archetype}). Correcting summary.")
+                                 valid_archetypes = ["Thriving", "Modernizing", "Cash Cow", "At Risk"]
+                                 for wrong_label in valid_archetypes:
+                                     if wrong_label == expected_archetype:
+                                         continue
+                                     summary_text = summary_text.replace(wrong_label, expected_archetype)
+                                     summary_text = summary_text.replace(wrong_label.upper(), expected_archetype.upper())
+                             elif opus_archetype:
+                                 print(f"   [{company_name}] ✅ [Archetype Verify] Opus archetype '{opus_archetype}' matches score-derived '{expected_archetype}'")
 
                         else:
                              summary_text = response_text
@@ -755,21 +875,15 @@ Respond with valid JSON only. Six fields required:
                     "summary_text": (existing_company_data.get("summary_text", "") or "")[:2500],
                     "findings": existing_company_data.get("reality_checklist", [])[:10],
                     "evidence": existing_company_data.get("evidence_links", [])[:8],
+                    "foresight_evidence": existing_company_data.get("foresight_links", [])[:5],
                 })
                 if len(batch_history) > 12: batch_history = batch_history[-12:]
 
-            meta = get_company_metadata(company_name) or company
-            company_domain = meta.get("domain", "Other")
+            # Domain already resolved before foresight — use metadata for remaining fields
             company_revenue = meta.get("revenue_avg_3yr", None)
             company_employees = meta.get("employees", None)
             company_ownership = meta.get("ownership", None)
             company_hq = meta.get("hq_country", None)
-
-            # --- DOMAIN CLASSIFICATION (if not set by static list) ---
-            if company_domain == "Other":
-                from domain_classifier import infer_domain
-                _cached = existing_company_data.get("domain") if existing_company_data else None
-                company_domain = infer_domain(company_name, company.get("url", ""), reality_results, financial_results, cached_domain=_cached)
 
             # --- FINAL ARCHETYPE (computed from finalized scores) ---
             fin_score = financial_results.get("financial_index")
@@ -812,7 +926,7 @@ Respond with valid JSON only. Six fields required:
                 "evidence_links": managed_evidence_links,
                 "evidence_gold_standard": source_mgmt["gold_standard"],
                 "key_people": key_people,
-                "summary_text": summary_text,
+                "summary_text": _strip_tac_codes(summary_text),
                 "pitch_text": pitch_text,
                 "why_proposals": why_proposals,
                 "what_proposals": what_proposals,
@@ -825,7 +939,9 @@ Respond with valid JSON only. Six fields required:
                 "financial_index": financial_results.get("financial_index"),
                 "financial_sub_scores": financial_results.get("sub_scores", {}),
                 "financial_findings": financial_results.get("financial_findings", []),
-                "financial_confidence": financial_results.get("financial_confidence", 0)
+                "financial_confidence": financial_results.get("financial_confidence", 0),
+                "strategic_foresight": foresight_data,
+                "foresight_links": foresight_links,
             }
 
             # --- REALITY CHECK: Hallucination Detection (diagnostic only) ---
