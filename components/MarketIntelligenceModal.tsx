@@ -173,6 +173,7 @@ const CoverageRing = ({ coverage }: { coverage: any }) => {
         <text x="40" y="48" textAnchor="middle" fill="#94a3b8" fontSize="8">/{coverage.total}</text>
       </svg>
       <div className="text-[9px] text-slate-400 mt-1">themes with 3+ signals</div>
+      <div className="text-[8px] text-slate-500 mt-2 leading-relaxed text-left px-1">How many of the 30 strategic foresight themes have sufficient evidence (3+ validated signals). Higher coverage means broader market visibility.</div>
     </div>
   );
 };
@@ -182,9 +183,10 @@ const ExecutiveSummaryTab = ({ data }: { data: any }) => {
     <div className="space-y-6">
       {/* Market Health Gauges */}
       <div>
-        <h4 className="text-[10px] font-bold text-emerald-300 uppercase tracking-wide mb-3 flex items-center gap-2">
+        <h4 className="text-[10px] font-bold text-emerald-300 uppercase tracking-wide mb-1 flex items-center gap-2">
           <Activity size={12} /> Market Health by Domain
         </h4>
+        <div className="text-[8px] text-slate-500 mb-3 leading-relaxed">Composite health score per industry domain based on average reality scores, intent-reality gaps, and archetype distribution. Higher = healthier market segment. Low scores indicate domains with widespread modernization needs.</div>
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
           {(data.market_health || []).map((h: any) => (
             <HealthGauge key={h.domain} domain={h.domain} score={h.score} companyCount={h.company_count} />
@@ -216,6 +218,7 @@ const ExecutiveSummaryTab = ({ data }: { data: any }) => {
           ) : (
             <div className="text-slate-500 text-xs">Charts unavailable</div>
           )}
+          <div className="text-[8px] text-slate-500 mt-2 leading-relaxed">Average gap between what companies claim (intent) and what evidence shows (reality) per KB dimension. Negative values = market-wide gap where companies underperform their ambitions — the bigger the bar, the stronger the consulting demand signal.</div>
         </div>
       </div>
 
@@ -224,27 +227,32 @@ const ExecutiveSummaryTab = ({ data }: { data: any }) => {
         <div className="bg-black/20 border border-white/10 rounded-lg p-3 text-center">
           <div className="text-2xl font-bold text-white">{data.company_count}</div>
           <div className="text-[9px] text-slate-400 uppercase">Total Companies</div>
+          <div className="text-[8px] text-slate-500 mt-1 leading-relaxed">Companies scanned and included in this market intelligence analysis</div>
         </div>
         <div className="bg-black/20 border border-white/10 rounded-lg p-3 text-center">
           <div className="text-2xl font-bold text-cyan-400">{data.detailed_count}</div>
           <div className="text-[9px] text-slate-400 uppercase">With Full Data</div>
+          <div className="text-[8px] text-slate-500 mt-1 leading-relaxed">Companies with complete scan data (foresight, financials, and KB scores)</div>
         </div>
         <div className="bg-black/20 border border-white/10 rounded-lg p-3 text-center">
           <div className="text-2xl font-bold text-emerald-400">{(data.top_foresights || []).length}</div>
           <div className="text-[9px] text-slate-400 uppercase">Top Foresight Themes</div>
+          <div className="text-[8px] text-slate-500 mt-1 leading-relaxed">Most frequently detected megatrends creating strategic pressure across the market</div>
         </div>
         <div className="bg-black/20 border border-white/10 rounded-lg p-3 text-center">
           <div className="text-2xl font-bold text-rose-400">{(data.vulnerable_companies || []).length}</div>
           <div className="text-[9px] text-slate-400 uppercase">Vulnerable Companies</div>
+          <div className="text-[8px] text-slate-500 mt-1 leading-relaxed">Companies with high intent-reality gap — strongest sales opportunities</div>
         </div>
       </div>
 
       {/* FAVI Segment Summary (mini preview) */}
       {data.favi_segments && (
         <div className="bg-black/20 border border-white/10 rounded-lg p-4">
-          <h4 className="text-[10px] font-bold text-violet-300 uppercase tracking-wide mb-3 flex items-center gap-2">
+          <h4 className="text-[10px] font-bold text-violet-300 uppercase tracking-wide mb-1 flex items-center gap-2">
             <Eye size={12} /> Foresight Vulnerability Segments (FAVI)
           </h4>
+          <div className="text-[8px] text-slate-500 mb-3 leading-relaxed">Companies segmented by current vulnerability (today's gaps) vs. foresight pressure (future forces). This 2×2 matrix reveals who needs help now, who will need it soon, and where the highest-value opportunities lie.</div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {(["Critical", "Sleepwalking", "Wounded but Sheltered", "Safe Harbor"] as const).map(seg => {
               const cfg = SEGMENT_CONFIG[seg];
