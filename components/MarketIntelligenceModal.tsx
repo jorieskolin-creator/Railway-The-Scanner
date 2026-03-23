@@ -372,8 +372,17 @@ const FutureDemandTab = ({ data }: { data: any }) => {
                       ? `rgba(99, 102, 241, ${0.15 + intensity * 0.6})`
                       : 'transparent';
                     return (
-                      <td key={dim} className="p-1 text-center font-mono text-slate-200" style={{ backgroundColor: bg }}>
+                      <td key={dim} className="p-1 text-center font-mono text-slate-200 relative group cursor-help" style={{ backgroundColor: bg }}>
                         {val > 0 ? val : '-'}
+                        {val > 0 && (
+                          <div className="absolute z-50 hidden group-hover:block bg-slate-900 border border-slate-600 rounded-lg p-3 text-left text-[10px] text-slate-300 font-normal w-[260px] -translate-x-1/2 left-1/2 bottom-full mb-1 shadow-xl leading-relaxed whitespace-normal">
+                            <div className="font-bold text-cyan-300 mb-1">{theme} &times; {dim}</div>
+                            <div className="text-slate-400">
+                              <span className="text-white font-bold">{val}</span> foresight signal{val !== 1 ? 's' : ''} across scanned companies link the <span className="text-violet-300">{theme}</span> megatrend to the <span className="text-emerald-300">{dim}</span> dimension.
+                            </div>
+                            <div className="mt-1.5 text-slate-500 text-[9px]">Higher count = stronger cross-impact between this theme and dimension</div>
+                          </div>
+                        )}
                       </td>
                     );
                   })}

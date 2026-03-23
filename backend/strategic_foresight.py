@@ -595,7 +595,7 @@ FP_THEME_SOURCES = {
 DOMAIN_TO_FORESIGHT = {
     "Technology & Software": {
         "fp_themes": ["Artificial Intelligence", "Data & Digitalisation", "Business"],
-        "priority_dimensions": ["AI Readiness", "Operating Model", "Service Portfolio"],
+        "priority_dimensions": ["AI Readiness", "Operating Model", "Service Portfolio", "Strategy", "Values"],
         "osint_keywords": "agentic AI enterprise automation, SaaS market consolidation, open-source AI disruption",
         "target_sources": [
             "site:gartner.com software industry trends",
@@ -607,7 +607,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "IT Services & Consulting": {
         "fp_themes": ["Data & Digitalisation", "Business", "Management & HR"],
-        "priority_dimensions": ["Operating Model", "Strategy", "AI Readiness"],
+        "priority_dimensions": ["Operating Model", "Strategy", "AI Readiness", "Service Portfolio", "Values"],
         "osint_keywords": "consulting industry AI disruption, IT outsourcing market shifts, talent war technology sector",
         "target_sources": [
             "site:gartner.com IT services outsourcing",
@@ -619,7 +619,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "Healthcare": {
         "fp_themes": ["Health & Wellbeing", "Artificial Intelligence", "Sciences & Research"],
-        "priority_dimensions": ["AI Readiness", "Service Portfolio", "Values"],
+        "priority_dimensions": ["AI Readiness", "Service Portfolio", "Values", "Operating Model", "Strategy"],
         "osint_keywords": "healthcare AI diagnostics regulation, digital health transformation, pharmaceutical supply chain risks",
         "target_sources": [
             "site:mckinsey.com healthcare transformation",
@@ -631,7 +631,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "Retail & Consumer": {
         "fp_themes": ["Business", "Data & Digitalisation", "Leisure & Lifestyles"],
-        "priority_dimensions": ["Service Portfolio", "AI Readiness", "Strategy"],
+        "priority_dimensions": ["Service Portfolio", "AI Readiness", "Strategy", "Operating Model", "Values"],
         "osint_keywords": "retail AI personalization, consumer behavior shifts, omnichannel transformation 2025 2026",
         "target_sources": [
             "site:mckinsey.com retail consumer trends",
@@ -643,7 +643,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "Industrial & Manufacturing": {
         "fp_themes": ["Industry & Manufacturing", "Artificial Intelligence", "Sustainability & Recycling"],
-        "priority_dimensions": ["Operating Model", "AI Readiness", "Service Portfolio"],
+        "priority_dimensions": ["Operating Model", "AI Readiness", "Service Portfolio", "Strategy", "Values"],
         "climate_exposure": "high",
         "osint_keywords": "industrial AI automation, smart manufacturing disruption, supply chain reshoring nearshoring",
         "target_sources": [
@@ -656,7 +656,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "Energy & Utilities": {
         "fp_themes": ["Energy", "Climate Change", "Sustainability & Recycling"],
-        "priority_dimensions": ["Strategy", "Service Portfolio", "Operating Model"],
+        "priority_dimensions": ["Strategy", "Service Portfolio", "Operating Model", "AI Readiness", "Values"],
         "climate_exposure": "critical",
         "osint_keywords": "energy transition decarbonization, renewable energy grid transformation, carbon taxation CBAM",
         "target_sources": [
@@ -669,7 +669,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "Financial Services": {
         "fp_themes": ["Finance & Ownership", "Artificial Intelligence", "Security & Safety"],
-        "priority_dimensions": ["AI Readiness", "Strategy", "Operating Model"],
+        "priority_dimensions": ["AI Readiness", "Strategy", "Operating Model", "Service Portfolio", "Values"],
         "osint_keywords": "fintech disruption banking, AI risk management regulation, digital currency CBDC impact",
         "target_sources": [
             "site:mckinsey.com banking financial services",
@@ -681,7 +681,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "Insurance & Pensions": {
         "fp_themes": ["Finance & Ownership", "Data & Digitalisation", "Climate Change"],
-        "priority_dimensions": ["AI Readiness", "Strategy", "Service Portfolio"],
+        "priority_dimensions": ["AI Readiness", "Strategy", "Service Portfolio", "Operating Model", "Values"],
         "climate_exposure": "high",
         "osint_keywords": "insurtech AI underwriting, climate risk insurance pricing, pension fund ESG regulation",
         "target_sources": [
@@ -694,7 +694,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "Forest & Paper": {
         "fp_themes": ["Nature", "Sustainability & Recycling", "Industry & Manufacturing"],
-        "priority_dimensions": ["Service Portfolio", "Strategy", "Operating Model"],
+        "priority_dimensions": ["Service Portfolio", "Strategy", "Operating Model", "AI Readiness", "Values"],
         "climate_exposure": "critical",
         "osint_keywords": "bioeconomy circular economy forest, sustainable packaging disruption, EU deforestation regulation",
         "target_sources": [
@@ -707,7 +707,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "Telecommunications": {
         "fp_themes": ["Communication & Media", "Data & Digitalisation", "Artificial Intelligence"],
-        "priority_dimensions": ["AI Readiness", "Service Portfolio", "Operating Model"],
+        "priority_dimensions": ["AI Readiness", "Service Portfolio", "Operating Model", "Strategy", "Values"],
         "osint_keywords": "telecom AI network optimization, 5G private networks enterprise, telecom industry consolidation",
         "target_sources": [
             "site:mckinsey.com telecommunications trends",
@@ -719,7 +719,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "Construction & Real Estate": {
         "fp_themes": ["Construction & Urbanisation", "Sustainability & Recycling", "Energy"],
-        "priority_dimensions": ["Operating Model", "Service Portfolio", "Strategy"],
+        "priority_dimensions": ["Operating Model", "Service Portfolio", "Strategy", "AI Readiness", "Values"],
         "climate_exposure": "high",
         "osint_keywords": "construction technology disruption, green building regulation, real estate market transformation",
         "target_sources": [
@@ -732,7 +732,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "Transport & Logistics": {
         "fp_themes": ["Freight & Logistics", "Private & Public Transport", "Artificial Intelligence"],
-        "priority_dimensions": ["Operating Model", "AI Readiness", "Service Portfolio"],
+        "priority_dimensions": ["Operating Model", "AI Readiness", "Service Portfolio", "Strategy", "Values"],
         "climate_exposure": "high",
         "osint_keywords": "autonomous logistics AI, supply chain resilience disruption, transport decarbonization regulation",
         "target_sources": [
@@ -745,7 +745,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "Media & Publishing": {
         "fp_themes": ["Communication & Media", "Artificial Intelligence", "Values & Ethics"],
-        "priority_dimensions": ["AI Readiness", "Service Portfolio", "Strategy"],
+        "priority_dimensions": ["AI Readiness", "Service Portfolio", "Strategy", "Operating Model", "Values"],
         "osint_keywords": "generative AI media disruption, content industry transformation, digital advertising AI shift",
         "target_sources": [
             "site:reuters.com media industry trends",
@@ -757,7 +757,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "Other": {
         "fp_themes": ["Business", "Artificial Intelligence", "Global Economy"],
-        "priority_dimensions": ["Strategy", "AI Readiness", "Operating Model"],
+        "priority_dimensions": ["Strategy", "AI Readiness", "Operating Model", "Service Portfolio", "Values"],
         "osint_keywords": "business model disruption AI, digital transformation enterprise, global economic uncertainty outlook",
         "target_sources": [
             "site:mckinsey.com business trends",
