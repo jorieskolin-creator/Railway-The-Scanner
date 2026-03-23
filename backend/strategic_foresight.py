@@ -595,6 +595,7 @@ FP_THEME_SOURCES = {
 DOMAIN_TO_FORESIGHT = {
     "Technology & Software": {
         "fp_themes": ["Artificial Intelligence", "Data & Digitalisation", "Business"],
+        "core_dimensions": ["AI Readiness", "Operating Model", "Service Portfolio"],
         "priority_dimensions": ["AI Readiness", "Operating Model", "Service Portfolio", "Strategy", "Values"],
         "osint_keywords": "agentic AI enterprise automation, SaaS market consolidation, open-source AI disruption",
         "target_sources": [
@@ -607,6 +608,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "IT Services & Consulting": {
         "fp_themes": ["Data & Digitalisation", "Business", "Management & HR"],
+        "core_dimensions": ["Operating Model", "Strategy", "AI Readiness"],
         "priority_dimensions": ["Operating Model", "Strategy", "AI Readiness", "Service Portfolio", "Values"],
         "osint_keywords": "consulting industry AI disruption, IT outsourcing market shifts, talent war technology sector",
         "target_sources": [
@@ -619,6 +621,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "Healthcare": {
         "fp_themes": ["Health & Wellbeing", "Artificial Intelligence", "Sciences & Research"],
+        "core_dimensions": ["AI Readiness", "Service Portfolio", "Values"],
         "priority_dimensions": ["AI Readiness", "Service Portfolio", "Values", "Operating Model", "Strategy"],
         "osint_keywords": "healthcare AI diagnostics regulation, digital health transformation, pharmaceutical supply chain risks",
         "target_sources": [
@@ -631,6 +634,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "Retail & Consumer": {
         "fp_themes": ["Business", "Data & Digitalisation", "Leisure & Lifestyles"],
+        "core_dimensions": ["Service Portfolio", "AI Readiness", "Strategy"],
         "priority_dimensions": ["Service Portfolio", "AI Readiness", "Strategy", "Operating Model", "Values"],
         "osint_keywords": "retail AI personalization, consumer behavior shifts, omnichannel transformation 2025 2026",
         "target_sources": [
@@ -643,6 +647,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "Industrial & Manufacturing": {
         "fp_themes": ["Industry & Manufacturing", "Artificial Intelligence", "Sustainability & Recycling"],
+        "core_dimensions": ["Operating Model", "AI Readiness", "Service Portfolio"],
         "priority_dimensions": ["Operating Model", "AI Readiness", "Service Portfolio", "Strategy", "Values"],
         "climate_exposure": "high",
         "osint_keywords": "industrial AI automation, smart manufacturing disruption, supply chain reshoring nearshoring",
@@ -656,6 +661,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "Energy & Utilities": {
         "fp_themes": ["Energy", "Climate Change", "Sustainability & Recycling"],
+        "core_dimensions": ["Strategy", "Service Portfolio", "Operating Model"],
         "priority_dimensions": ["Strategy", "Service Portfolio", "Operating Model", "AI Readiness", "Values"],
         "climate_exposure": "critical",
         "osint_keywords": "energy transition decarbonization, renewable energy grid transformation, carbon taxation CBAM",
@@ -669,6 +675,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "Financial Services": {
         "fp_themes": ["Finance & Ownership", "Artificial Intelligence", "Security & Safety"],
+        "core_dimensions": ["AI Readiness", "Strategy", "Operating Model"],
         "priority_dimensions": ["AI Readiness", "Strategy", "Operating Model", "Service Portfolio", "Values"],
         "osint_keywords": "fintech disruption banking, AI risk management regulation, digital currency CBDC impact",
         "target_sources": [
@@ -681,6 +688,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "Insurance & Pensions": {
         "fp_themes": ["Finance & Ownership", "Data & Digitalisation", "Climate Change"],
+        "core_dimensions": ["AI Readiness", "Strategy", "Service Portfolio"],
         "priority_dimensions": ["AI Readiness", "Strategy", "Service Portfolio", "Operating Model", "Values"],
         "climate_exposure": "high",
         "osint_keywords": "insurtech AI underwriting, climate risk insurance pricing, pension fund ESG regulation",
@@ -694,6 +702,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "Forest & Paper": {
         "fp_themes": ["Nature", "Sustainability & Recycling", "Industry & Manufacturing"],
+        "core_dimensions": ["Service Portfolio", "Strategy", "Operating Model"],
         "priority_dimensions": ["Service Portfolio", "Strategy", "Operating Model", "AI Readiness", "Values"],
         "climate_exposure": "critical",
         "osint_keywords": "bioeconomy circular economy forest, sustainable packaging disruption, EU deforestation regulation",
@@ -707,6 +716,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "Telecommunications": {
         "fp_themes": ["Communication & Media", "Data & Digitalisation", "Artificial Intelligence"],
+        "core_dimensions": ["AI Readiness", "Service Portfolio", "Operating Model"],
         "priority_dimensions": ["AI Readiness", "Service Portfolio", "Operating Model", "Strategy", "Values"],
         "osint_keywords": "telecom AI network optimization, 5G private networks enterprise, telecom industry consolidation",
         "target_sources": [
@@ -719,6 +729,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "Construction & Real Estate": {
         "fp_themes": ["Construction & Urbanisation", "Sustainability & Recycling", "Energy"],
+        "core_dimensions": ["Operating Model", "Service Portfolio", "Strategy"],
         "priority_dimensions": ["Operating Model", "Service Portfolio", "Strategy", "AI Readiness", "Values"],
         "climate_exposure": "high",
         "osint_keywords": "construction technology disruption, green building regulation, real estate market transformation",
@@ -732,6 +743,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "Transport & Logistics": {
         "fp_themes": ["Freight & Logistics", "Private & Public Transport", "Artificial Intelligence"],
+        "core_dimensions": ["Operating Model", "AI Readiness", "Service Portfolio"],
         "priority_dimensions": ["Operating Model", "AI Readiness", "Service Portfolio", "Strategy", "Values"],
         "climate_exposure": "high",
         "osint_keywords": "autonomous logistics AI, supply chain resilience disruption, transport decarbonization regulation",
@@ -745,6 +757,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "Media & Publishing": {
         "fp_themes": ["Communication & Media", "Artificial Intelligence", "Values & Ethics"],
+        "core_dimensions": ["AI Readiness", "Service Portfolio", "Strategy"],
         "priority_dimensions": ["AI Readiness", "Service Portfolio", "Strategy", "Operating Model", "Values"],
         "osint_keywords": "generative AI media disruption, content industry transformation, digital advertising AI shift",
         "target_sources": [
@@ -757,6 +770,7 @@ DOMAIN_TO_FORESIGHT = {
     },
     "Other": {
         "fp_themes": ["Business", "Artificial Intelligence", "Global Economy"],
+        "core_dimensions": ["Strategy", "AI Readiness", "Operating Model"],
         "priority_dimensions": ["Strategy", "AI Readiness", "Operating Model", "Service Portfolio", "Values"],
         "osint_keywords": "business model disruption AI, digital transformation enterprise, global economic uncertainty outlook",
         "target_sources": [
@@ -2303,7 +2317,7 @@ def reality_check_foresight(foresight_data, company_name=""):
     return foresight_data
 
 
-def extract_foresight_links(foresight_data, company_name=""):
+def extract_foresight_links(foresight_data, company_name="", domain=""):
     """
     Extract validated foresight sources into a foresight_links array
     that mirrors the evidence_links schema used throughout the Scanner.
@@ -2321,11 +2335,16 @@ def extract_foresight_links(foresight_data, company_name=""):
     - timeframe: Force timeframe
     - force_type: Plausible/Maturing, etc.
     - origin: "foresight" (to distinguish from forensic evidence_links)
+    - is_priority_dimension: True if kb_dimension is a core (scoring) dimension for this domain
 
     Returns list of foresight_link dicts, sorted by credibility (high first).
     """
     if not foresight_data or not foresight_data.get("dimension_forces"):
         return []
+
+    # Resolve core dimensions for this domain (the original 3 that feed into FAVI/FPS/RG)
+    domain_config = DOMAIN_TO_FORESIGHT.get(domain, DOMAIN_TO_FORESIGHT.get("Other", {}))
+    core_dims = set(domain_config.get("core_dimensions", domain_config.get("priority_dimensions", [])))
 
     links = []
     seen_urls = set()
@@ -2350,6 +2369,7 @@ def extract_foresight_links(foresight_data, company_name=""):
                 "action_timing": force.get("action_timing", ""),
                 "origin": "foresight",
                 "is_primary": True,
+                "is_priority_dimension": force.get("kb_dimension", "") in core_dims,
             }
             links.append(link)
 
@@ -2372,6 +2392,7 @@ def extract_foresight_links(foresight_data, company_name=""):
                     "force_type": force.get("type", ""),
                     "origin": "foresight",
                     "is_primary": False,
+                    "is_priority_dimension": force.get("kb_dimension", "") in core_dims,
                 }
                 links.append(link)
 

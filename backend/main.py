@@ -2011,7 +2011,7 @@ def run_scan(
                     # Go straight to reality check and link extraction.
                     foresight_data["insufficient_evidence"] = False
                     foresight_data = reality_check_foresight(foresight_data, company_name=companyName)
-                    foresight_links = extract_foresight_links(foresight_data, company_name=companyName)
+                    foresight_links = extract_foresight_links(foresight_data, company_name=companyName, domain=company_domain)
                     passes_gate = True
                     print(f"   📚 [Foresight KB-First] Skipped URL verify + source retry (pre-validated)")
                 else:
@@ -2038,7 +2038,7 @@ def run_scan(
                     foresight_data = reality_check_foresight(foresight_data, company_name=companyName)
 
                     # Extract validated sources into foresight_links
-                    foresight_links = extract_foresight_links(foresight_data, company_name=companyName)
+                    foresight_links = extract_foresight_links(foresight_data, company_name=companyName, domain=company_domain)
 
                 if not passes_gate:
                     print(f"   ⚠️ [Foresight] Insufficient evidence — foresight flagged as low-trust")
