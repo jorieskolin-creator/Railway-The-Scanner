@@ -8,7 +8,7 @@ const MIIcons = new Proxy(LucideRaw, {
     return () => null;
   }
 });
-const { X, Loader2, TrendingUp, Target, Crosshair, ShieldAlert, Download, ChevronRight, Activity, BarChart3, Gauge, Radar, RefreshCw, Eye, AlertTriangle } = MIIcons;
+const { X, Loader2, TrendingUp, Target, Crosshair, ShieldAlert, Download, ChevronRight, Activity, BarChart3, Gauge, Radar, RefreshCw, Eye, AlertTriangle, BookOpen } = MIIcons;
 
 const {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -988,6 +988,12 @@ const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, on
 
         {/* Tab Navigation */}
         <div className="flex items-center gap-1 p-2 bg-black/30 border-b border-white/5 shrink-0 overflow-x-auto">
+          <a href="https://presentations.static2.website/foresight-creation" target="_blank" rel="noopener noreferrer"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[10px] font-bold uppercase tracking-wide transition-all whitespace-nowrap text-violet-400 hover:text-violet-200 hover:bg-violet-500/10 border border-violet-500/25">
+            <BookOpen size={12} />
+            Introduction
+          </a>
+          <div className="w-px h-5 bg-white/10 mx-1" />
           {TABS.map(tab => {
             const Icon = tab.icon;
             return (
