@@ -13,7 +13,7 @@ const { X, Loader2, TrendingUp, Target, Crosshair, ShieldAlert, Download, Chevro
 const {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   RadarChart, Radar: RechartsRadar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
-  ScatterChart, Scatter, Cell, ComposedChart, Line, ZAxis,
+  ScatterChart, Scatter, Cell, ComposedChart, Line, ZAxis, ReferenceLine,
 } = (window as any).Recharts || {};
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -811,8 +811,9 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
                       </div>
                     );
                   }} />
-                {/* Quadrant reference lines */}
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                {/* Quadrant reference lines at segment thresholds */}
+                {ReferenceLine && <ReferenceLine x={40} stroke="#475569" strokeDasharray="6 4" label={{ value: 'Vuln=40', fill: '#475569', fontSize: 8, position: 'top' }} />}
+                {ReferenceLine && <ReferenceLine y={25} stroke="#475569" strokeDasharray="6 4" label={{ value: 'FAVI=25', fill: '#475569', fontSize: 8, position: 'right' }} />}
                 <Scatter data={sorted.filter((v: any) => v.favi_score > 0 || v.current_vulnerability > 0)} name="Companies">
                   {sorted.filter((v: any) => v.favi_score > 0 || v.current_vulnerability > 0).map((v: any, i: number) => {
                     const segColor = v.segment === 'Critical' ? '#f43f5e' :
@@ -901,7 +902,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
                         <tr key={`${v.name}-detail`} className="bg-black/30">
                           <td colSpan={11} className="p-3">
                             <div className="text-[9px] text-slate-400 mb-2 font-bold uppercase tracking-wide">
-                              Dimension Readiness Gaps — {v.formula === 'multiplicative' ? 'Full Model' : 'Additive (sparse data)'}
+                              Dimension Readiness Gaps — {v.formula === 'geometric' ? 'Full Model' : 'Additive (sparse data)'}
                               {' '}— {v.foresight_count} foresight signals across {v.dimensions_covered} dimensions
                             </div>
                             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">

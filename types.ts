@@ -201,7 +201,7 @@ interface FAVICompany {
   megatrend_exposure: number;     // Megatrend Exposure (0-100)
   current_vulnerability: number;  // Current vulnerability score
   segment: string;                // "Critical" | "Sleepwalking" | "Wounded but Sheltered" | "Safe Harbor"
-  formula: string;                // "multiplicative" | "additive"
+  formula: string;                // "geometric" | "additive"
   foresight_count: number;
   dimensions_covered: number;
   gap_details: FAVIGapDetail[];
