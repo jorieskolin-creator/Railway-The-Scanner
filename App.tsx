@@ -316,6 +316,8 @@ const App = () => {
   };
 
   const handleOpenMarketIntel = async () => {
+    const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to open Market Intelligence:");
+    if (!password) return;
     setIsMarketIntelOpen(true);
     if (!marketIntelData) {
       await fetchMarketIntelData();
