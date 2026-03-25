@@ -386,7 +386,7 @@ def fact_check_general_summary(
 
     # Stage 1: Detect unsupported claims
     # Primary: Gemini 2.5 Pro | Backup: Mistral Large
-    CHECK_MODEL = "gemini-2.5-pro-preview-05-06"
+    CHECK_MODEL = "gemini-2.5-pro"
     false_claims = []
     detection_succeeded = False
 
@@ -424,7 +424,7 @@ def fact_check_general_summary(
                 from mistralai import Mistral
                 mistral_client = Mistral(api_key=mistral_key)
                 mistral_resp = mistral_client.chat.complete(
-                    model="mistral-large-latest",
+                    model="mistral-large-2512",
                     temperature=0.0,
                     max_tokens=2000,
                     messages=[{"role": "user", "content": check_prompt}],
@@ -435,7 +435,7 @@ def fact_check_general_summary(
                 result = json.loads(raw)
                 false_claims = result.get("unsupported_claims", [])
                 detection_succeeded = True
-                print(f"   🔍 [GS Fact-Check] mistral-large-latest backup completed")
+                print(f"   🔍 [GS Fact-Check] mistral-large-2512 backup completed")
             except Exception as e2:
                 print(f"   ⚠️ [GS Fact-Check] Mistral backup also failed: {e2}")
 
