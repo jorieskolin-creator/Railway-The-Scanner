@@ -385,59 +385,63 @@ def fact_check_general_summary(
     t0 = time.time()
 
     # Stage 1: Detect unsupported claims
-    # Primary: Gemini 2.5 Pro | Backup: Mistral Large
-    CHECK_MODEL = "gemini-2.5-pro"
+    # Primary: Gemini 2.5 Pro | Backup 1: Gemini 3.1 Pro | Backup 2: Sonnet 4.6
+    CHECK_MODELS = [
+        ("gemini-2.5-pro", "gemini"),
+        ("gemini-3.1-pro-preview", "gemini"),
+        ("claude-sonnet-4-6", "anthropic"),
+    ]
     false_claims = []
     detection_succeeded = False
 
-    try:
-        print(f"   🔍 [GS Fact-Check] {CHECK_MODEL} checking claims against payload...")
-        resp = call_with_503_backoff(
-            lambda: client.models.generate_content(
-                model=CHECK_MODEL,
-                contents=check_prompt,
-                config=genai_types.GenerateContentConfig(
-                    temperature=0.0,
-                    max_output_tokens=2000,
-                ),
-            ),
-            label="GS Fact-Check",
-            model=CHECK_MODEL,
-            timeout=60,
-        )
-        raw = (resp.text or "").strip()
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    for model_id, provider in CHECK_MODELS:
+        if detection_succeeded:
+            break
 
-        result = json.loads(raw)
-        false_claims = result.get("unsupported_claims", [])
-        detection_succeeded = True
+        try:
+            print(f"   🔍 [GS Fact-Check] {model_id} checking claims against payload...")
 
-    except Exception as e:
-        print(f"   ⚠️ [GS Fact-Check] {CHECK_MODEL} failed: {e} — trying Mistral Large backup")
+            if provider == "gemini":
+                resp = call_with_503_backoff(
+                    lambda m=model_id: client.models.generate_content(
+                        model=m,
+                        contents=check_prompt,
+                        config=genai_types.GenerateContentConfig(
+                            temperature=0.0,
+                            max_output_tokens=2000,
+                        ),
+                    ),
+                    label="GS Fact-Check",
+                    model=model_id,
+                    timeout=60,
+                )
+                raw = (resp.text or "").strip()
 
-    # Backup: Mistral Large (independent provider — survives Google outages)
-    if not detection_succeeded:
-        mistral_key = os.environ.get("MISTRAL_API_KEY")
-        if mistral_key:
-            try:
-                from mistralai import Mistral
-                mistral_client = Mistral(api_key=mistral_key)
-                mistral_resp = mistral_client.chat.complete(
-                    model="mistral-large-2512",
-                    temperature=0.0,
+            elif provider == "anthropic":
+                import anthropic
+                anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+                if not anthropic_key:
+                    print(f"   ⚠️ [GS Fact-Check] No ANTHROPIC_API_KEY — skipping {model_id}")
+                    continue
+                claude_client = anthropic.Anthropic(api_key=anthropic_key)
+                claude_resp = claude_client.messages.create(
+                    model=model_id,
                     max_tokens=2000,
                     messages=[{"role": "user", "content": check_prompt}],
                 )
-                raw = (mistral_resp.choices[0].message.content or "").strip()
-                if raw.startswith("```"):
-                    raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-                result = json.loads(raw)
-                false_claims = result.get("unsupported_claims", [])
-                detection_succeeded = True
-                print(f"   🔍 [GS Fact-Check] mistral-large-2512 backup completed")
-            except Exception as e2:
-                print(f"   ⚠️ [GS Fact-Check] Mistral backup also failed: {e2}")
+                raw = (claude_resp.content[0].text or "").strip()
+
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+
+            result = json.loads(raw)
+            false_claims = result.get("unsupported_claims", [])
+            detection_succeeded = True
+
+        except Exception as e:
+            remaining = [m for m, _ in CHECK_MODELS if m != model_id and not detection_succeeded]
+            next_info = f" — trying {remaining[0]}" if remaining else ""
+            print(f"   ⚠️ [GS Fact-Check] {model_id} failed: {e}{next_info}")
 
     if not detection_succeeded:
         elapsed = int((time.time() - t0) * 1000)
