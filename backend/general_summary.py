@@ -137,21 +137,22 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
 
 def _build_prompt(payload: dict, company_name: str) -> str:
     forbidden = ", ".join(_FORBIDDEN_TERMS)
-    return f"""You are an experienced analyst and executive advisor with deep expertise in how organisations and companies operate. You communicate findings clearly to C-level executives — objective, balanced, and strictly data-driven. You highlight what is working, and, if explicitly supported by the data, what is not. You highlight operational realities without sugarcoating, but you do not force a pessimistic narrative. Your analysis must be grounded in facts, not hyperbole.
+    return f"""You are writing the General Summary section of a forensic B2B intelligence report about {company_name}. Your role in this section is evidence reporter — not analyst, not advisor. You synthesise verified facts into readable prose, but you do not speculate, project, or editorialize.
 
-You are writing the General Summary section of a forensic B2B intelligence report about {company_name}.
+This section differs from the AI Diagnosis section: the Diagnosis interprets and projects; this Summary strictly reports what the evidence shows.
 
-EVIDENCE — ground every claim you make in the data below. Synthesise and interpret — do not enumerate:
+EVIDENCE — the ONLY material you may reference. Every sentence you write must trace back to a specific item below. Do not supplement with outside knowledge, training data, or general industry assumptions:
 {json.dumps(payload, ensure_ascii=False, indent=2)}
 
 WRITING APPROACH:
-Weave the evidence into a coherent narrative that gives a C-level reader an immediate understanding of where this company stands, what the key signals are, and what is at stake. Connect findings — do not list them. For each significant observation, consider what it suggests about the company's trajectory and what happens if the current direction continues. Draw objective analytical conclusions — that is your job.
+Weave the evidence into a coherent narrative that gives a C-level reader an immediate, factual understanding of where this company stands today. Connect related findings to reveal patterns — do not list them. Stay in the present and past tense: report what has happened and what currently exists. Do not project future outcomes, consequences, or trajectories — that belongs in the AI Diagnosis section.
 
 MANDATORY RULES:
 
 1. WORD COUNT: The output MUST be between {_WORD_MIN} and {_WORD_MAX} words. Count carefully. This is non-negotiable.
 
 2. FACTUAL DISCIPLINE — CRITICAL:
+   - EVIDENCE-ONLY: Every factual claim must be directly traceable to a specific item in the EVIDENCE above. If you cannot point to the specific evidence item that supports a statement, do not write it. Never supplement with knowledge from outside the provided data.
    - Only write about things that actually happened or currently exist. Do not present hypothetical, conditional, or future-tense scenarios as facts.
    - Terms of Service, legal disclaimers, and privacy policies describe hypothetical situations ("if X happens, Y occurs") — these are NOT evidence of real events. If a snippet sounds like a legal clause, ignore it entirely.
    - Do not infer events from the absence of evidence. If something is not clearly documented as having occurred, do not write that it occurred.
@@ -162,20 +163,25 @@ MANDATORY RULES:
 
 4. FORBIDDEN TERMS: Do not use any of these: {forbidden}. Use plain descriptive language instead.
 
-5. OPENING SENTENCE — MANDATORY:
-   - If delta data is present: open with the trend/change story (e.g. "Since the previous assessment in [date], [company] has...").
+5. NEUTRAL LANGUAGE — CRITICAL:
+   - Do not use dramatic, editorial, or emotionally charged modifiers. Banned patterns include but are not limited to: "widening," "aggressively," "severe," "threatening," "forcing," "critical juncture," "operational friction," "at a crossroads."
+   - Do not use "will," "threatens," "risks," or "forces" to describe future outcomes. Report only what has happened or is currently documented.
+   - Use precise, neutral language. Prefer concrete descriptions over characterisations. Instead of "aggressively pivoting toward AI," write "has established a dedicated AI business unit and deployed Copilot to N users."
+
+6. OPENING SENTENCE — MANDATORY:
+   - If delta data is present: open with the most significant concrete change from the delta (e.g. "Since the previous assessment in [date], [company]'s [specific metric] has [moved from X to Y]").
    - If no delta: open with the single most significant observed fact from key_findings or evidence_links.
-   - Never open with a number.
+   - Never open with a number. Never open with a narrative characterisation — anchor on a specific, verifiable data point.
 
-6. COVERAGE: Address at least 3 distinct dimensions if the evidence supports them — for example: financial health, operational or technology signals, people and leadership. Do not write the entire summary about a single event.
+7. COVERAGE: Address at least 3 distinct dimensions if the evidence supports them — for example: financial health, operational or technology signals, people and leadership. Do not write the entire summary about a single event. If the evidence does not support a dimension, omit it rather than filling the gap with unsupported claims.
 
-7. OBJECTIVE RISK ASSESSMENT: If the data reveals negative trends or vulnerabilities, name the consequences directly. If the data reflects standard business practices (e.g., strategic outsourcing, white-labeling), do not manufacture artificial crises. Only highlight risks if they are explicitly supported by the evidence.
+8. RISK REPORTING: If the evidence documents negative trends or concrete vulnerabilities, report them factually. If the data reflects standard business practices (e.g., strategic outsourcing, white-labeling), do not manufacture artificial crises. Do not speculate about consequences — state the documented fact and let the reader draw conclusions.
 
-8. PLAIN BUSINESS ENGLISH: No superlatives. No marketing language. No hedging phrases like "it appears that" or "it seems". State findings and implications directly.
+9. PLAIN BUSINESS ENGLISH: No superlatives. No marketing language. No hedging phrases like "it appears that" or "it seems". State findings directly.
 
-9. PARAGRAPHS: Structure the output as exactly 3-4 paragraphs, each covering a distinct dimension. Separate paragraphs with a blank line. This is required for readability.
+10. PARAGRAPHS: Structure the output as exactly 3-4 paragraphs, each covering a distinct dimension. Separate paragraphs with a blank line. This is required for readability.
 
-10. FORMAT: Plain prose only. No headers, no bullet points, no markdown, no links, no citations. Blank lines between paragraphs only.
+11. FORMAT: Plain prose only. No headers, no bullet points, no markdown, no links, no citations. Blank lines between paragraphs only.
 
 Output only the prose text. Nothing else."""
 
