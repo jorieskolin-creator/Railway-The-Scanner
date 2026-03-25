@@ -23,6 +23,45 @@ from google.genai import types as genai_types
 from gemini_backoff import call_with_503_backoff
 
 
+def _extract_json(text: str) -> dict | None:
+    """Extract the first valid JSON object from text, ignoring surrounding content.
+
+    Handles common LLM output issues:
+    - JSON wrapped in markdown code blocks
+    - Explanatory text before or after the JSON
+    - Thinking/reasoning content mixed with output
+    - Multiple JSON objects (takes the first complete one)
+    """
+    if not text or not text.strip():
+        return None
+
+    # Strip markdown code blocks first
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+
+    # Try direct parse first (fastest path)
+    try:
+        return json.loads(cleaned)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Find the first { and try to parse progressively larger substrings
+    start = cleaned.find("{")
+    if start == -1:
+        return None
+
+    # Walk from the end backwards to find the matching closing brace
+    for end in range(len(cleaned), start, -1):
+        if cleaned[end - 1] == "}":
+            try:
+                return json.loads(cleaned[start:end])
+            except (json.JSONDecodeError, ValueError):
+                continue
+
+    return None
+
+
 _FORBIDDEN_TERMS = [
     "Thriving", "Modernizing", "Cash Cow", "At Risk",
     "Digital Taylorism", "Feature Factory", "Command and Control",
@@ -450,7 +489,12 @@ def fact_check_general_summary(
             if raw.startswith("```"):
                 raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
 
-            result = json.loads(raw)
+            # Robust JSON extraction — models often wrap JSON in markdown,
+            # add explanations before/after, or return thinking + JSON.
+            # Find the outermost JSON object regardless of surrounding text.
+            result = _extract_json(raw)
+            if result is None:
+                raise ValueError(f"No valid JSON object found in response ({len(raw)} chars)")
             false_claims = result.get("unsupported_claims", [])
             detection_succeeded = True
 
