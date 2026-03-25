@@ -355,10 +355,10 @@ def fact_check_general_summary(
     company_name: str,
 ) -> dict:
     """
-    Verify the General Summary against its own input payload using Gemini Flash.
+    Verify the General Summary against its own input payload.
 
-    If unsupported claims are found, re-generates the summary with explicit
-    warnings about the false claims.
+    Stage 1: Gemini 2.5 Pro detects unsupported claims (backup: Mistral Large).
+    Stage 2: If false claims found, re-generates with Gemini 3.1 Pro.
 
     Returns:
         dict with:
@@ -384,11 +384,14 @@ def fact_check_general_summary(
 
     t0 = time.time()
 
-    # Stage 1: Detect unsupported claims (Gemini Flash — fast and cheap)
-    CHECK_MODEL = "gemini-2.0-flash"
+    # Stage 1: Detect unsupported claims
+    # Primary: Gemini 2.5 Pro | Backup: Mistral Large
+    CHECK_MODEL = "gemini-2.5-pro-preview-05-06"
     false_claims = []
+    detection_succeeded = False
 
     try:
+        print(f"   🔍 [GS Fact-Check] {CHECK_MODEL} checking claims against payload...")
         resp = call_with_503_backoff(
             lambda: client.models.generate_content(
                 model=CHECK_MODEL,
@@ -400,7 +403,7 @@ def fact_check_general_summary(
             ),
             label="GS Fact-Check",
             model=CHECK_MODEL,
-            timeout=30,
+            timeout=60,
         )
         raw = (resp.text or "").strip()
         if raw.startswith("```"):
@@ -408,10 +411,37 @@ def fact_check_general_summary(
 
         result = json.loads(raw)
         false_claims = result.get("unsupported_claims", [])
+        detection_succeeded = True
 
     except Exception as e:
-        print(f"   ⚠️ [GS Fact-Check] Detection failed: {e} — treating as unverified")
+        print(f"   ⚠️ [GS Fact-Check] {CHECK_MODEL} failed: {e} — trying Mistral Large backup")
+
+    # Backup: Mistral Large (independent provider — survives Google outages)
+    if not detection_succeeded:
+        mistral_key = os.environ.get("MISTRAL_API_KEY")
+        if mistral_key:
+            try:
+                from mistralai import Mistral
+                mistral_client = Mistral(api_key=mistral_key)
+                mistral_resp = mistral_client.chat.complete(
+                    model="mistral-large-latest",
+                    temperature=0.0,
+                    max_tokens=2000,
+                    messages=[{"role": "user", "content": check_prompt}],
+                )
+                raw = (mistral_resp.choices[0].message.content or "").strip()
+                if raw.startswith("```"):
+                    raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                result = json.loads(raw)
+                false_claims = result.get("unsupported_claims", [])
+                detection_succeeded = True
+                print(f"   🔍 [GS Fact-Check] mistral-large-latest backup completed")
+            except Exception as e2:
+                print(f"   ⚠️ [GS Fact-Check] Mistral backup also failed: {e2}")
+
+    if not detection_succeeded:
         elapsed = int((time.time() - t0) * 1000)
+        print(f"   ⚠️ [GS Fact-Check] All detection models failed — treating as unverified ({elapsed}ms)")
         return {"verified": False, "false_claims": [], "corrected_summary": "",
                 "corrected_model": "", "check_time_ms": elapsed,
                 "fact_check_skipped": True}
