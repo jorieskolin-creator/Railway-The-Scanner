@@ -121,18 +121,20 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
     # All verified links are already shown in the AI Diagnosis section of the UI.
     verified_links = [
         {
-            "title": (l.get("title", "Source") or "Source")[:55],
-            "snippet": (l.get("snippet") or "")[:180],
+            "title": (l.get("title", "Source") or "Source")[:80],
+            "snippet": (l.get("snippet") or "")[:350],
+            "is_recent": l.get("is_recent", False),
         }
         for l in full_data.get("evidence_links", [])
         if l.get("verified") is True and l.get("url") and not _is_legal_page(l.get("url", ""))
-    ][:14]
+    ][:18]
 
     # Add validated foresight sources to the evidence pool (max 3, validated only)
     foresight_sources = [
         {
-            "title": (l.get("title", "Foresight") or "Foresight")[:55],
-            "snippet": (l.get("snippet") or "")[:180],
+            "title": (l.get("title", "Foresight") or "Foresight")[:80],
+            "snippet": (l.get("snippet") or "")[:350],
+            "is_recent": True,
         }
         for l in full_data.get("foresight_links", [])
         if l.get("verified") is True and l.get("validated") is True
@@ -143,14 +145,15 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
     key_findings = [
         {
             "description": item.get("description") or item.get("category", ""),
-            "title": ((item.get("title") or item.get("category", "")) or "")[:55],
+            "title": ((item.get("title") or item.get("category", "")) or "")[:80],
+            "sentiment": item.get("sentiment", "neutral"),
         }
         for item in full_data.get("reality_checklist", [])
         if item.get("found") and item.get("url") and not _is_legal_page(item.get("url", ""))
-    ][:8]
+    ][:12]
 
-    # Financial findings (plain strings, max 3)
-    fin_findings = [str(f) for f in (full_data.get("financial_findings") or [])[:3]]
+    # Financial findings (plain strings, all dimensions)
+    fin_findings = [str(f) for f in (full_data.get("financial_findings") or [])[:4]]
 
     # Key people (max 4)
     people = [
