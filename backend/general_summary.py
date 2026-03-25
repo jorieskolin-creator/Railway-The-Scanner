@@ -415,7 +415,23 @@ def fact_check_general_summary(
                     model=model_id,
                     timeout=60,
                 )
-                raw = (resp.text or "").strip()
+                # Extract text robustly — thinking models (2.5 Pro) return
+                # thinking parts that make resp.text empty or unreliable.
+                raw = ""
+                try:
+                    raw = (resp.text or "").strip()
+                except Exception:
+                    pass
+                if not raw:
+                    candidates = getattr(resp, 'candidates', None)
+                    if candidates:
+                        content = getattr(candidates[0], 'content', None)
+                        parts = getattr(content, 'parts', None) if content else None
+                        if parts:
+                            raw = "".join(
+                                p.text for p in parts
+                                if p and getattr(p, 'text', None) and not getattr(p, 'thought', False)
+                            ).strip()
 
             elif provider == "anthropic":
                 import anthropic
