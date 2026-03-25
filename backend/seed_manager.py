@@ -17,7 +17,7 @@ from scanner_two import x_ray_search, extract_json_from_text, run_self_analysis,
 from knowledge_base import get_evolving_framework
 from storage import BlobStorage
 from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, purge_false_evidence
-from general_summary import generate_general_summary
+from general_summary import generate_general_summary, fact_check_general_summary
 from source_quality import manage_evidence_sources
 from google import genai
 from google.genai import types
@@ -1299,12 +1299,22 @@ re-introduce any of the false claims listed above."""
                 gs_start = time.time()
                 gs_text, gs_model = generate_general_summary(full_data, company_name)
                 if gs_text:
-                    full_data["general_summary"] = gs_text
-                    full_data["general_summary_model"] = gs_model
-                    full_data["general_summary_verified"] = True
-                    full_data["general_summary_false_claims"] = []
                     wc = len(gs_text.split())
                     print(f"   [{company_name}] ✅ [General Summary] {wc} words, model={gs_model} ({int((time.time()-gs_start)*1000)}ms)")
+
+                    # Fact-check General Summary against its own input payload
+                    gs_check = fact_check_general_summary(gs_text, full_data, company_name)
+                    if gs_check.get("corrected_summary"):
+                        gs_text = gs_check["corrected_summary"]
+                        gs_model = gs_check["corrected_model"] or gs_model
+                        print(f"   [{company_name}] 🔄 [GS Fact-Check] Replaced with corrected summary ({gs_check['check_time_ms']}ms)")
+
+                    full_data["general_summary"] = gs_text
+                    full_data["general_summary_model"] = gs_model
+                    full_data["general_summary_verified"] = gs_check.get("verified", True)
+                    full_data["general_summary_false_claims"] = [
+                        fc.get("claim", "") for fc in gs_check.get("false_claims", [])
+                    ]
                 else:
                     print(f"   [{company_name}] ⚠️ [General Summary] Generation returned empty — skipping field")
             except Exception as gs_err:
