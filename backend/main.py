@@ -31,7 +31,7 @@ from analyze_scores import run_analysis
 from market_intelligence import compute_market_intelligence
 from knowledge_base import get_evolving_framework
 from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, clean_summary, purge_false_evidence
-from general_summary import generate_general_summary
+from general_summary import generate_general_summary, fact_check_general_summary
 from source_quality import manage_evidence_sources
 from domain_classifier import infer_domain
 from gemini_backoff import call_with_503_backoff
@@ -494,12 +494,22 @@ def _recheck_company_data(company_name: str, data: dict) -> dict:
         gs_start = time.time()
         gs_text, gs_model = generate_general_summary(data, company_name)
         if gs_text:
-            data["general_summary"] = gs_text
-            data["general_summary_model"] = gs_model
-            data["general_summary_verified"] = True
-            data["general_summary_false_claims"] = []
             wc = len(gs_text.split())
             print(f"   ✅ [General Summary] {wc} words, model={gs_model} ({int((time.time()-gs_start)*1000)}ms)")
+
+            # Fact-check General Summary against its own input payload
+            gs_check = fact_check_general_summary(gs_text, data, company_name)
+            if gs_check.get("corrected_summary"):
+                gs_text = gs_check["corrected_summary"]
+                gs_model = gs_check["corrected_model"] or gs_model
+                print(f"   🔄 [GS Fact-Check] Replaced with corrected summary ({gs_check['check_time_ms']}ms)")
+
+            data["general_summary"] = gs_text
+            data["general_summary_model"] = gs_model
+            data["general_summary_verified"] = gs_check.get("verified", True)
+            data["general_summary_false_claims"] = [
+                fc.get("claim", "") for fc in gs_check.get("false_claims", [])
+            ]
         else:
             print(f"   ⚠️ [General Summary] Generation returned empty — skipping field")
     except Exception as gs_err:
@@ -1414,12 +1424,22 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                 gs_start = time.time()
                 gs_text, gs_model = generate_general_summary(data, company_name)
                 if gs_text:
-                    data["general_summary"] = gs_text
-                    data["general_summary_model"] = gs_model
-                    data["general_summary_verified"] = True
-                    data["general_summary_false_claims"] = []
                     wc = len(gs_text.split())
                     print(f"   ✅ [General Summary] {wc} words, model={gs_model} ({int((time.time()-gs_start)*1000)}ms)")
+
+                    # Fact-check General Summary against its own input payload
+                    gs_check = fact_check_general_summary(gs_text, data, company_name)
+                    if gs_check.get("corrected_summary"):
+                        gs_text = gs_check["corrected_summary"]
+                        gs_model = gs_check["corrected_model"] or gs_model
+                        print(f"   🔄 [GS Fact-Check] Replaced with corrected summary ({gs_check['check_time_ms']}ms)")
+
+                    data["general_summary"] = gs_text
+                    data["general_summary_model"] = gs_model
+                    data["general_summary_verified"] = gs_check.get("verified", True)
+                    data["general_summary_false_claims"] = [
+                        fc.get("claim", "") for fc in gs_check.get("false_claims", [])
+                    ]
                 else:
                     print(f"   ⚠️ [General Summary] Generation returned empty — skipping field")
             except Exception as gs_err:
@@ -2957,14 +2977,22 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                 pass
 
         if gs_text:
-            # No web fact-check: General Summary is assembled from already-verified
-            # structured data (computed scores + purged evidence_links).
-            full_data["general_summary"] = gs_text
-            full_data["general_summary_model"] = gs_model
-            full_data["general_summary_verified"] = True
-            full_data["general_summary_false_claims"] = []
             wc = len(gs_text.split())
             print(f"   ✅ [General Summary] {wc} words, model={gs_model} ({parallel_ms}ms)")
+
+            # Fact-check General Summary against its own input payload
+            gs_check = fact_check_general_summary(gs_text, full_data, companyName)
+            if gs_check.get("corrected_summary"):
+                gs_text = gs_check["corrected_summary"]
+                gs_model = gs_check["corrected_model"] or gs_model
+                print(f"   🔄 [GS Fact-Check] Replaced with corrected summary ({gs_check['check_time_ms']}ms)")
+
+            full_data["general_summary"] = gs_text
+            full_data["general_summary_model"] = gs_model
+            full_data["general_summary_verified"] = gs_check.get("verified", True)
+            full_data["general_summary_false_claims"] = [
+                fc.get("claim", "") for fc in gs_check.get("false_claims", [])
+            ]
         else:
             print(f"   ⚠️ [General Summary] Generation returned empty — skipping field")
 

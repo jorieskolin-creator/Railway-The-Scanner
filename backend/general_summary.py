@@ -1,10 +1,15 @@
 """
-general_summary.py — Plain-language General Summary generator.
+general_summary.py — Plain-language General Summary generator + payload fact-check.
 
 Assembles a 225-275 word narrative from already-computed structured scan data
 (jury findings, financial findings, delta). No inline links are included —
 the General Summary is plain prose only; all evidence links are already shown
 in the AI Diagnosis section of the UI.
+
+After generation, fact_check_general_summary() verifies every claim in the
+output traces back to the input payload (catches training-data hallucinations).
+If unsupported claims are found, the summary is re-generated with explicit
+warnings about the false claims.
 """
 
 import json
@@ -289,3 +294,175 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
             print(f"   ❌ [General Summary] mistral-large-latest backup failed: {e}")
 
     return "", ""
+
+
+# ── Payload-based fact-check for General Summary ─────────────────────────────
+# Unlike the AI Diagnosis fact-check (which uses Google Search grounding),
+# this checks the General Summary against its OWN input payload. The Summary
+# should contain ONLY claims traceable to the payload — anything else is
+# hallucination or training-data leakage.
+
+def _build_fact_check_prompt(summary_text: str, payload: dict, company_name: str) -> str:
+    return f"""You are a precision fact-checker. Your job is to verify that EVERY factual claim in the General Summary below is directly supported by the provided evidence payload. The Summary should contain ONLY information from the payload — nothing else.
+
+COMPANY: {company_name}
+
+GENERAL SUMMARY TO VERIFY:
+{summary_text}
+
+EVIDENCE PAYLOAD (the only data the summary was allowed to use):
+{json.dumps(payload, ensure_ascii=False, indent=2)}
+
+INSTRUCTIONS:
+1. Extract every factual claim from the summary: numbers, dates, company names, revenue figures, percentages, product names, people names, strategic initiatives, regulatory references, market statistics.
+2. For each claim, check if it can be traced to a specific item in the evidence payload above.
+3. Flag a claim as UNSUPPORTED if:
+   A. It states a specific fact (metric, event, figure, statistic) that does NOT appear anywhere in the payload.
+   B. It significantly exaggerates or distorts something from the payload.
+   C. It introduces market statistics, industry benchmarks, or regulatory details not present in the payload — these are likely hallucinated from the model's training data.
+4. Do NOT flag:
+   - Reasonable connecting language between evidence points (e.g., "meanwhile," "in parallel")
+   - Direct restatements of payload data, even if paraphrased
+   - The opening trend sentence if it accurately reflects the delta data
+
+OUTPUT FORMAT — valid JSON only:
+
+If all claims are supported:
+{{"unsupported_claims": [], "verified": true}}
+
+If unsupported claims found:
+{{"unsupported_claims": [{{"claim": "The exact quote or close paraphrase from the summary", "reason": "Brief explanation of why this is not in the payload"}}], "verified": false}}"""
+
+
+def _build_regen_prompt(payload: dict, company_name: str, original_text: str, false_claims: list) -> str:
+    """Build a re-generation prompt that incorporates the false claims as explicit warnings."""
+    claims_list = "\n".join(f"- {fc['claim']}: {fc['reason']}" for fc in false_claims)
+    base_prompt = _build_prompt(payload, company_name)
+    return f"""{base_prompt}
+
+CRITICAL CORRECTION — THE PREVIOUS ATTEMPT CONTAINED THESE UNSUPPORTED CLAIMS:
+{claims_list}
+
+The previous attempt:
+{original_text}
+
+You MUST NOT include any of these claims or similar unsupported information. Write a completely new summary using ONLY the evidence payload. Every sentence must trace to a specific payload item."""
+
+
+def fact_check_general_summary(
+    summary_text: str,
+    full_data: dict,
+    company_name: str,
+) -> dict:
+    """
+    Verify the General Summary against its own input payload using Gemini Flash.
+
+    If unsupported claims are found, re-generates the summary with explicit
+    warnings about the false claims.
+
+    Returns:
+        dict with:
+            - verified: bool
+            - false_claims: list of {claim, reason} dicts
+            - corrected_summary: str (re-generated summary if claims found, else "")
+            - corrected_model: str (model used for re-generation, else "")
+            - check_time_ms: int
+    """
+    if not summary_text:
+        return {"verified": True, "false_claims": [], "corrected_summary": "",
+                "corrected_model": "", "check_time_ms": 0}
+
+    try:
+        client = get_gemini_client()
+    except ValueError:
+        print("   ⚠️ [GS Fact-Check] No GEMINI_API_KEY — skipping")
+        return {"verified": True, "false_claims": [], "corrected_summary": "",
+                "corrected_model": "", "check_time_ms": 0}
+
+    payload = _build_input_payload(full_data, company_name)
+    check_prompt = _build_fact_check_prompt(summary_text, payload, company_name)
+
+    t0 = time.time()
+
+    # Stage 1: Detect unsupported claims (Gemini Flash — fast and cheap)
+    CHECK_MODEL = "gemini-2.0-flash"
+    false_claims = []
+
+    try:
+        resp = call_with_503_backoff(
+            lambda: client.models.generate_content(
+                model=CHECK_MODEL,
+                contents=check_prompt,
+                config=genai_types.GenerateContentConfig(
+                    temperature=0.0,
+                    max_output_tokens=2000,
+                ),
+            ),
+            label="GS Fact-Check",
+            model=CHECK_MODEL,
+            timeout=30,
+        )
+        raw = (resp.text or "").strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+
+        result = json.loads(raw)
+        false_claims = result.get("unsupported_claims", [])
+
+    except Exception as e:
+        print(f"   ⚠️ [GS Fact-Check] Detection failed: {e} — treating as unverified")
+        elapsed = int((time.time() - t0) * 1000)
+        return {"verified": False, "false_claims": [], "corrected_summary": "",
+                "corrected_model": "", "check_time_ms": elapsed,
+                "fact_check_skipped": True}
+
+    if not false_claims:
+        elapsed = int((time.time() - t0) * 1000)
+        print(f"   ✅ [GS Fact-Check] All claims supported by payload ({elapsed}ms)")
+        return {"verified": True, "false_claims": [], "corrected_summary": "",
+                "corrected_model": "", "check_time_ms": elapsed}
+
+    # Log the false claims
+    print(f"   ⚠️ [GS Fact-Check] {len(false_claims)} unsupported claim(s) detected:")
+    for fc in false_claims:
+        print(f"      - {fc.get('claim', '?')[:100]}")
+        print(f"        Reason: {fc.get('reason', '?')[:150]}")
+
+    # Stage 2: Re-generate with false claims as explicit warnings
+    regen_prompt = _build_regen_prompt(payload, company_name, summary_text, false_claims)
+
+    REGEN_MODEL = "gemini-3.1-pro-preview"
+    corrected_summary = ""
+    corrected_model = ""
+
+    try:
+        regen_resp = call_with_503_backoff(
+            lambda: client.models.generate_content(
+                model=REGEN_MODEL,
+                contents=regen_prompt,
+                config=genai_types.GenerateContentConfig(
+                    temperature=1.0,
+                    max_output_tokens=6000,
+                    thinking_config=genai_types.ThinkingConfig(thinking_budget=2048),
+                ),
+            ),
+            label="GS Re-generation",
+            model=REGEN_MODEL,
+            timeout=90,
+        )
+        corrected_summary = _strip_links((regen_resp.text or "").strip())
+        corrected_model = REGEN_MODEL
+        wc = _word_count(corrected_summary)
+        print(f"   ✅ [GS Fact-Check] Re-generated clean summary: {wc} words ({REGEN_MODEL})")
+
+    except Exception as e:
+        print(f"   ❌ [GS Fact-Check] Re-generation failed: {e} — keeping original (flagged)")
+
+    elapsed = int((time.time() - t0) * 1000)
+    return {
+        "verified": False,
+        "false_claims": false_claims,
+        "corrected_summary": corrected_summary,
+        "corrected_model": corrected_model,
+        "check_time_ms": elapsed,
+    }
