@@ -1311,6 +1311,16 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     5. DO NOT penalize the group for lack of direct tech content on the holding company website — this is normal for holding structures.
     """
 
+    # --- COMPANY SIZE CONTEXT FOR STAKEHOLDER SELECTION ---
+    if employees and employees >= 5000:
+        _size_block = f"\n    COMPANY SIZE CONTEXT: {company_name} has approximately {employees:,} employees.\n    This is a LARGE organization (5000+). Focus on Tier 1-3 roles. A Manager-level person is NOT a key stakeholder at this scale.\n"
+    elif employees and employees >= 200:
+        _size_block = f"\n    COMPANY SIZE CONTEXT: {company_name} has approximately {employees:,} employees.\n    This is a MID-SIZE organization (200-5000). Focus on Tier 1-4 roles. Manager-level is acceptable only if no higher-tier leaders are found.\n"
+    elif employees:
+        _size_block = f"\n    COMPANY SIZE CONTEXT: {company_name} has approximately {employees:,} employees.\n    This is a SMALLER organization (<200). All tiers are acceptable, as managers may be true decision-makers.\n"
+    else:
+        _size_block = ""
+
     # --- DEFINING THE PROMPT ONCE ---
     prompt = f"""
     Perform a FORENSIC INVESTIGATION on "{search_name}" (Domain: {domain_hint}).
@@ -1381,10 +1391,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     Tier 4 (Director):      Director of Technology, HR Director, Director of Strategy
     Tier 5 (Head of):       Head of Engineering, Head of Product, Head of Digital
     Tier 6 (Manager):       Senior Manager, Program Manager (ONLY for companies with < 200 employees)
-{f"""
-    COMPANY SIZE CONTEXT: {company_name} has approximately {employees:,} employees.
-    {"This is a LARGE organization (5000+). Focus on Tier 1-3 roles. A Manager-level person is NOT a key stakeholder at this scale." if employees >= 5000 else "This is a MID-SIZE organization (200-5000). Focus on Tier 1-4 roles. Manager-level is acceptable only if no higher-tier leaders are found." if employees >= 200 else "This is a SMALLER organization (<200). All tiers are acceptable, as managers may be true decision-makers."}
-""" if employees else ""}
+{_size_block}
     STAKEHOLDER QUALITY RULES (CRITICAL):
     1. FULL NAMES ONLY: Every name MUST include both first name AND last name. Do NOT include
        a person if you only found their first name. "Pirja" alone is NOT acceptable — you need
