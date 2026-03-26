@@ -110,29 +110,9 @@ const CompanySummary = ({ data }) => {
   const frictionColor = frictionPercentage > 60 ? 'text-rose-400' : frictionPercentage > 30 ? 'text-amber-400' : 'text-emerald-400';
   const frictionLabel = frictionPercentage > 60 ? 'Battleground' : frictionPercentage > 30 ? 'Conflicted' : 'Coherent';
   
-  // Confidence Logic
-  const confidence = data.confidence_score !== undefined ? data.confidence_score : 0;
-  let confidenceColor = 'text-slate-400';
-  let confidenceLabel = 'Unknown';
-  let confidenceBg = 'bg-slate-700';
-
-  if (confidence > 80) {
-      confidenceColor = 'text-emerald-400';
-      confidenceLabel = 'High Fidelity';
-      confidenceBg = 'bg-emerald-500';
-  } else if (confidence > 60) {
-      confidenceColor = 'text-cyan-400';
-      confidenceLabel = 'Verified';
-      confidenceBg = 'bg-cyan-500';
-  } else if (confidence > 40) {
-      confidenceColor = 'text-amber-400';
-      confidenceLabel = 'Partial Data';
-      confidenceBg = 'bg-amber-500';
-  } else {
-      confidenceColor = 'text-rose-400';
-      confidenceLabel = 'Manual Review Rec.';
-      confidenceBg = 'bg-rose-500';
-  }
+  // Confidence Logic — retained for admin Review Modal but removed from user-facing view.
+  // Summary Confidence was misleading: penalty pipeline could show 10% even with 14 good
+  // signals, making users distrust solid results. Kept in data for admin triage only.
 
   // --- CHART DATA PREPARATION ---
   const historyRaw = data.history || [];
@@ -490,23 +470,6 @@ const CompanySummary = ({ data }) => {
                     </div>
                 </div>
 
-                <div className="bg-white/5 p-4 rounded-xl border border-white/10 flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                        <div className="p-2 bg-slate-800 rounded-lg text-slate-400">
-                            <Eye size={20} />
-                        </div>
-                        <div>
-                            <h4 className="text-xs text-slate-400 font-bold uppercase tracking-wider">Summary Confidence</h4>
-                            <p className={`text-lg font-bold ${confidenceColor}`}>{confidenceLabel} ({confidence}%)</p>
-                        </div>
-                    </div>
-                    <div className="text-right">
-                         <span className="text-[10px] text-slate-500 block">Based on evidence density</span>
-                         <div className="w-16 h-1.5 bg-slate-700 rounded-full mt-1">
-                            <div className={`h-full ${confidenceBg} rounded-full`} style={{ width: `${confidence}%` }}></div>
-                         </div>
-                    </div>
-                </div>
             </div>
 
             {/* TREND CHART */}
