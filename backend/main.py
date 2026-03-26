@@ -601,8 +601,11 @@ async def save_company_edit(company_name: str, request: Request):
     data["last_manual_edit"] = datetime.utcnow().isoformat() + "Z"
     data["last_manual_edit_fields"] = list(changes.keys())
 
-    # Save to storage (normal save, next scan will overwrite)
-    storage.save_company_data(company_name, data)
+    # Save to storage and update detailsUrl in global index so the
+    # company modal fetches the edited version (not the stale old blob).
+    new_url = storage.save_company_data(company_name, data)
+    if new_url:
+        storage.update_global_index_fields(company_name, {"detailsUrl": new_url})
     print(f"   ✏️ [Manual Edit] Saved edits for '{company_name}': {list(changes.keys())}")
 
     return {"status": "saved", "company": company_name, "changed_fields": list(changes.keys())}
