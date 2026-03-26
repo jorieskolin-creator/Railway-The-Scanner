@@ -188,6 +188,11 @@ const App = () => {
     setSelectedCompany({ ...summaryItem, partial: true });
     setIsModalOpen(true);
 
+    // Lazy-load Market Intelligence (for FAVI data) in background if not yet fetched
+    if (!marketIntelData && !marketIntelLoading) {
+      fetchMarketIntelData();
+    }
+
     try {
         let fullData = null;
         if (summaryItem.detailsUrl) {
@@ -240,9 +245,11 @@ const App = () => {
       const newResult = json.data;
 
       setIsScannerOpen(false);
-      setSelectedCompany(newResult); 
+      setSelectedCompany(newResult);
       setIsModalOpen(true);
-      fetchSummaryData(true); 
+      fetchSummaryData(true);
+      // Refresh Market Intelligence (FAVI data) after new scan
+      fetchMarketIntelData();
       
     } catch (error) {
       console.error(error);
