@@ -5,7 +5,7 @@ const { X, RefreshCw, Calendar, Clock, Loader2: Loader2Icon, UploadCloud, File, 
 
 const CompanySummary = (window as any).CompanySummary;
 
-const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading }) => {
+const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading, marketIntelData }) => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
   const [refreshFiles, setRefreshFiles] = useState([]);
@@ -142,7 +142,9 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading }) => {
                </div>
            ) : (
                <>
-                  <CompanySummary data={company} />
+                  <CompanySummary data={company} faviData={
+                    marketIntelData?.favi_companies?.find((c: any) => c.name === company?.companyName) || null
+                  } />
                </>
            )}
         </div>

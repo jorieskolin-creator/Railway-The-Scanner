@@ -57,7 +57,14 @@ const HighlightText = ({ text }) => {
   );
 };
 
-const CompanySummary = ({ data }) => {
+const FAVI_SEGMENT_CONFIG = {
+  "Critical": { color: "text-rose-400", bg: "bg-rose-500/15", border: "border-rose-500/30", icon: "text-rose-400", description: "High vulnerability + high future pressure" },
+  "Sleepwalking": { color: "text-amber-400", bg: "bg-amber-500/15", border: "border-amber-500/30", icon: "text-amber-400", description: "Looks fine today but forces are building" },
+  "Wounded but Sheltered": { color: "text-blue-400", bg: "bg-blue-500/15", border: "border-blue-500/30", icon: "text-blue-400", description: "Problems are real but future isn't adding pressure" },
+  "Safe Harbor": { color: "text-emerald-400", bg: "bg-emerald-500/15", border: "border-emerald-500/30", icon: "text-emerald-400", description: "Healthy and future-ready" },
+};
+
+const CompanySummary = ({ data, faviData }) => {
   const summaryRef = useRef(null);
   const [copied, setCopied] = useState(false);
   const [pitchCopied, setPitchCopied] = useState(false);
@@ -469,6 +476,30 @@ const CompanySummary = ({ data }) => {
                         <span className="text-[10px] text-slate-500 block">Bad Signals: {metrics.total_bad_mentions}</span>
                     </div>
                 </div>
+
+                {faviData && faviData.segment && (() => {
+                    const seg = FAVI_SEGMENT_CONFIG[faviData.segment] || FAVI_SEGMENT_CONFIG["Sleepwalking"];
+                    return (
+                        <div className={`${seg.bg} p-4 rounded-xl border ${seg.border} flex items-center justify-between`}>
+                            <div className="flex items-center gap-3">
+                                <div className={`p-2 bg-slate-800 rounded-lg ${seg.icon}`}>
+                                    <Eye size={20} />
+                                </div>
+                                <div>
+                                    <h4 className="text-xs text-slate-400 font-bold uppercase tracking-wider">Foresight Vulnerability</h4>
+                                    <p className={`text-lg font-bold ${seg.color}`}>{faviData.segment}</p>
+                                </div>
+                            </div>
+                            <div className="text-right">
+                                <span className="text-[10px] text-slate-500 block">{seg.description}</span>
+                                <div className="flex items-center justify-end gap-2 mt-1">
+                                    <span className="text-[10px] text-slate-500">FAVI</span>
+                                    <span className={`text-sm font-mono font-bold ${seg.color}`}>{faviData.favi_score}</span>
+                                </div>
+                            </div>
+                        </div>
+                    );
+                })()}
 
             </div>
 

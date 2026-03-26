@@ -1839,8 +1839,9 @@ const App = () => {
 
       <CompanyModal
         company={selectedCompany}
-        isOpen={isModalOpen} 
+        isOpen={isModalOpen}
         isLoading={isLoadingDetails}
+        marketIntelData={marketIntelData}
         onClose={() => setIsModalOpen(false)}
         onUpdate={(updated) => {
             setSelectedCompany(updated);
