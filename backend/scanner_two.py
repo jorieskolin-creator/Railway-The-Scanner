@@ -2518,12 +2518,6 @@ CONFIDENCE GUIDE:
             defaulted_count += 1
             dim_data = dim_data if isinstance(dim_data, dict) else {}
         sub_scores[dim] = score
-
-    # Quality gate: if all dimensions fell back to defaults, the API returned
-    # no real financial data — treat the entire result as missing.
-    if defaulted_count == len(dimensions):
-        print(f"   ⚠️ [Financial Health] All dimensions defaulted for {company_name}. Treating as no data.")
-        return DEFAULT_RESULT
         findings.append({
             "dimension": dim.replace("_", " ").title(),
             "score": score,
@@ -2532,6 +2526,12 @@ CONFIDENCE GUIDE:
             "source_url": dim_data.get("source_url", ""),
             "source_title": dim_data.get("source_title", "")
         })
+
+    # Quality gate: if all dimensions fell back to defaults, the API returned
+    # no real financial data — treat the entire result as missing.
+    if defaulted_count == len(dimensions):
+        print(f"   ⚠️ [Financial Health] All dimensions defaulted for {company_name}. Treating as no data.")
+        return DEFAULT_RESULT
 
     composite = compute_financial_index(sub_scores)
     confidence = max(0, min(100, int(data.get("financial_confidence", 40))))

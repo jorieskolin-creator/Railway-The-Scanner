@@ -119,21 +119,28 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
     # ("if the service is down, access is blocked") that models misread as
     # factual historical events.
     # All verified links are already shown in the AI Diagnosis section of the UI.
-    verified_links = [
-        {
-            "title": (l.get("title", "Source") or "Source")[:80],
-            "snippet": (l.get("snippet") or "")[:350],
-            "is_recent": l.get("is_recent", False),
-        }
-        for l in full_data.get("evidence_links", [])
+    #
+    # Tiered snippet depth: top 8 sources get 500 chars (deep context for key
+    # evidence), remaining 10 get 350 chars (sufficient context without dilution).
+    _all_evidence = [
+        l for l in full_data.get("evidence_links", [])
         if l.get("verified") is True and l.get("url") and not _is_legal_page(l.get("url", ""))
     ][:18]
+    verified_links = []
+    for i, l in enumerate(_all_evidence):
+        snippet_limit = 500 if i < 8 else 350
+        verified_links.append({
+            "title": (l.get("title", "Source") or "Source")[:80],
+            "snippet": (l.get("snippet") or "")[:snippet_limit],
+            "is_recent": l.get("is_recent", False),
+        })
 
     # Add validated foresight sources to the evidence pool (max 3, validated only)
+    # Foresight sources always get deep snippets (500 chars) — forward-looking signals.
     foresight_sources = [
         {
             "title": (l.get("title", "Foresight") or "Foresight")[:80],
-            "snippet": (l.get("snippet") or "")[:350],
+            "snippet": (l.get("snippet") or "")[:500],
             "is_recent": True,
         }
         for l in full_data.get("foresight_links", [])
@@ -152,8 +159,29 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
         if item.get("found") and item.get("url") and not _is_legal_page(item.get("url", ""))
     ][:12]
 
-    # Financial findings (plain strings, all dimensions)
-    fin_findings = [str(f) for f in (full_data.get("financial_findings") or [])[:4]]
+    # Financial findings — structured with all dimensions.
+    # Preserves assessment + evidence_snippet as separate fields so the model
+    # can distinguish the analyst's interpretation from the raw data point.
+    # Excludes source_url (causes hallucinated links) but keeps source_title
+    # for attribution context.
+    raw_findings = full_data.get("financial_findings") or []
+    fin_findings = []
+    for f in raw_findings[:4]:
+        if isinstance(f, dict):
+            entry = {
+                "dimension": f.get("dimension", ""),
+                "assessment": f.get("assessment", ""),
+            }
+            snippet = f.get("evidence_snippet", "")
+            if snippet:
+                entry["evidence_snippet"] = snippet
+            source_title = f.get("source_title", "")
+            if source_title:
+                entry["source_title"] = source_title
+            fin_findings.append(entry)
+        else:
+            # Legacy fallback: plain string
+            fin_findings.append(str(f))
 
     # Key people (max 4)
     people = [
