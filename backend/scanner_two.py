@@ -100,16 +100,37 @@ def _is_valid_full_name(name: str) -> bool:
     return True
 
 
-def _validate_key_people(key_people: list, company_name: str) -> list:
+_SENIORITY_TIERS = [
+    (1, re.compile(r'\b(CEO|COO|Managing\s+Director|Country\s+Manager|Toimitusjohtaja|Maajohtaja)\b', re.I)),
+    (2, re.compile(r'\b(CTO|CIO|CDO|CPO|CFO|CHRO|CMO|Chief\s+\w+\s+Officer)\b', re.I)),
+    (3, re.compile(r'\b(SVP|Senior\s+Vice\s+President|VP|Vice\s+President)\b', re.I)),
+    (4, re.compile(r'\b(Director)\b', re.I)),
+    (5, re.compile(r'\b(Head\s+of)\b', re.I)),
+    (6, re.compile(r'\b(Senior\s+Manager|Manager|Lead)\b', re.I)),
+]
+
+def _get_seniority_tier(role: str) -> int:
+    """Return seniority tier (1=highest) for a role string. 7 = unknown/unranked."""
+    if not role:
+        return 7
+    for tier, pattern in _SENIORITY_TIERS:
+        if pattern.search(role):
+            return tier
+    return 7
+
+
+def _validate_key_people(key_people: list, company_name: str, employees: int = None) -> list:
     """
-    Filter key_people list to remove entries with invalid/incomplete names
-    and low-relevance stakeholders.
+    Filter key_people list to remove entries with invalid/incomplete names,
+    low-relevance stakeholders, and too-junior roles for the company size.
+    Results are sorted by seniority (most senior first).
 
     Removes:
     - People with only first name (no last name)
     - Placeholder names ("Unknown", "N/A", etc.)
     - Names with parenthetical placeholders like "(Last Name Not Specified)"
     - Role-only entries (no actual person name)
+    - Manager-level roles at large companies (5000+ employees)
     """
     if not key_people:
         return key_people
@@ -120,13 +141,49 @@ def _validate_key_people(key_people: list, company_name: str) -> list:
     for person in key_people:
         name = (person.get("name") or "").strip()
 
-        if _is_valid_full_name(name):
-            validated.append(person)
-        else:
+        if not _is_valid_full_name(name):
             removed.append(name or "(empty)")
+            continue
+
+        # Filter out too-junior roles for large companies
+        role = (person.get("role") or "").strip()
+        tier = _get_seniority_tier(role)
+        if employees and employees >= 5000 and tier >= 6:
+            removed.append(f"{name} ({role}) [too junior for {employees:,} employee org]")
+            continue
+        if employees and employees >= 200 and tier >= 6:
+            # For mid-size: allow managers only if we'd otherwise have < 3 stakeholders
+            person["_seniority_tier"] = tier
+            person["_maybe_too_junior"] = True
+            validated.append(person)
+            continue
+
+        person["_seniority_tier"] = tier
+        validated.append(person)
+
+    # For mid-size companies: drop junior roles if we have enough senior ones
+    if employees and employees >= 200:
+        senior = [p for p in validated if not p.get("_maybe_too_junior")]
+        junior = [p for p in validated if p.get("_maybe_too_junior")]
+        if len(senior) >= 3 and junior:
+            for j in junior:
+                removed.append(f"{j.get('name')} ({j.get('role')}) [enough senior stakeholders found]")
+            validated = senior
+
+    # Sort by seniority tier (most senior first)
+    validated.sort(key=lambda p: p.get("_seniority_tier", 7))
+
+    # Clean up internal fields
+    for p in validated:
+        p.pop("_seniority_tier", None)
+        p.pop("_maybe_too_junior", None)
+
+    # Cap at 6
+    if len(validated) > 6:
+        validated = validated[:6]
 
     if removed:
-        print(f"   🚫 [Key People] Removed {len(removed)} invalid stakeholder name(s): {', '.join(removed)}")
+        print(f"   🚫 [Key People] Removed {len(removed)} stakeholder(s): {', '.join(removed)}")
 
     return validated
 
@@ -1168,7 +1225,7 @@ Return STRICT JSON:
         return None
 
 
-def x_ray_search(company_name: str, company_url: str = None, model_id: str = None, intent_score: int = 0, previous_context: dict = None, max_research_loops: int = 2, subsidiaries: list = None, time_budget: int = 350):
+def x_ray_search(company_name: str, company_url: str = None, model_id: str = None, intent_score: int = 0, previous_context: dict = None, max_research_loops: int = 2, subsidiaries: list = None, time_budget: int = 350, employees: int = None):
     """
     SCANNER 2: THE REALITY CHECK (External Evidence)
 
@@ -1315,18 +1372,30 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
     IDENTIFY KEY MODERNIZATION STAKEHOLDERS (include in JSON output):
     Search for real, VERIFIED names of current executives/leaders relevant to modernization.
-    Target roles: Technology (CTO, CIO, VP Engineering), People/Culture (CPO, HR Director),
-    Transformation (CDO, Head of Strategy), Product/Innovation (CPO, Head of Product).
+    TARGET: Find 3-6 stakeholders. Search broadly across leadership levels to reach at least 3.
 
+    SENIORITY TIERS — prioritize higher tiers first:
+    Tier 1 (C-Suite):       CEO, COO, Managing Director, Country Manager
+    Tier 2 (CxO Functional): CTO, CIO, CDO, CPO (Product or People), CFO
+    Tier 3 (VP/SVP):        VP Engineering, VP Product, VP Strategy, SVP Operations
+    Tier 4 (Director):      Director of Technology, HR Director, Director of Strategy
+    Tier 5 (Head of):       Head of Engineering, Head of Product, Head of Digital
+    Tier 6 (Manager):       Senior Manager, Program Manager (ONLY for companies with < 200 employees)
+{f"""
+    COMPANY SIZE CONTEXT: {company_name} has approximately {employees:,} employees.
+    {"This is a LARGE organization (5000+). Focus on Tier 1-3 roles. A Manager-level person is NOT a key stakeholder at this scale." if employees >= 5000 else "This is a MID-SIZE organization (200-5000). Focus on Tier 1-4 roles. Manager-level is acceptable only if no higher-tier leaders are found." if employees >= 200 else "This is a SMALLER organization (<200). All tiers are acceptable, as managers may be true decision-makers."}
+""" if employees else ""}
     STAKEHOLDER QUALITY RULES (CRITICAL):
     1. FULL NAMES ONLY: Every name MUST include both first name AND last name. Do NOT include
        a person if you only found their first name. "Pirja" alone is NOT acceptable — you need
        "Pirja Heiskanen" or similar. If you cannot find the full name, DO NOT include that person.
     2. VERIFIED CONNECTION: Only include people you found through Google Search results that
        explicitly connect them to {company_name}. Do NOT guess or infer people from partial mentions.
-    3. QUALITY OVER QUANTITY: Include 0-4 stakeholders. It is BETTER to return 1-2 verified,
-       high-relevance stakeholders than 4 uncertain ones. An empty list is acceptable if no
-       verified names were found.
+    3. TARGET 3-6 STAKEHOLDERS: Search actively to find at least 3 verified stakeholders.
+       Search for CEO/MD first, then CTO/CIO, then other CxOs, then VPs, then Directors.
+       If you have fewer than 3 after the first pass, do an additional search specifically
+       for leadership names. Maximum 6. HOWEVER: if you truly cannot verify 3 names through
+       search results, return only what you can verify. NEVER fabricate or guess names.
     4. RELEVANCE TO KEY CHALLENGES: Only include people in leadership/decision-making roles
        that are directly linked to the defined and detected key challenges (e.g., if "Legacy Inertia"
        is detected, a CTO or VP Engineering is relevant; if "Silos" is detected, a Head of Strategy
@@ -1334,6 +1403,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
        roles (e.g. sales representatives, marketing coordinators, office managers).
     5. CURRENT EMPLOYEES: Only include people who currently work at the company based on
        search results. If search results suggest they left, do NOT include them.
+    6. SENIORITY PRIORITY: Always list the MOST SENIOR person first. If you find a CEO and
+       a Manager, the CEO must come first. Fill slots from Tier 1 downward.
 
     VERIFY THESE 5 HYPOTHESES:
     1. "Surveillance": Micromanagement/tracking?
@@ -2075,7 +2146,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         # Filter out stakeholders with incomplete or invalid names.
         # This catches cases where the AI only found a first name, used a placeholder,
         # or included people with no real relevance to modernization.
-        key_people = _validate_key_people(key_people, company_name)
+        key_people = _validate_key_people(key_people, company_name, employees=employees)
 
         # --- URL VALIDATION GATE ---
         # Verify all evidence URLs actually exist before returning results.

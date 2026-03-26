@@ -1832,6 +1832,10 @@ def run_scan(
         elapsed_so_far = time.time() - scan_start
         reality_budget = max(180, int(SCAN_TOTAL_BUDGET - elapsed_so_far - 150))
         reality_outer_timeout = reality_budget + 10  # small buffer over internal budget
+        # Get employee count for stakeholder seniority filtering
+        _scan_meta = get_company_metadata(companyName) or {}
+        _employee_count = _scan_meta.get("employees")
+
         print(f"   🔄 [Scanner 2 + Financial] Starting parallel execution for {companyName} (reality budget: {reality_budget}s)...")
         s2_start = time.time()
 
@@ -1841,7 +1845,8 @@ def run_scan(
                 model_id=search_model, intent_score=intent_results["score"],
                 previous_context=previous_context, max_research_loops=2,
                 subsidiaries=company_subsidiaries,
-                time_budget=reality_budget
+                time_budget=reality_budget,
+                employees=_employee_count
             )
             financial_future = executor.submit(
                 financial_health_search, companyName, target_url
@@ -1955,7 +1960,7 @@ def run_scan(
         # placeholders like "Pirja (Last Name Not Specified)").
         # This catches both newly extracted and preserved-from-previous-scan entries.
         from scanner_two import _validate_key_people
-        key_people = _validate_key_people(key_people, companyName)
+        key_people = _validate_key_people(key_people, companyName, employees=_employee_count)
 
         # --- STAKEHOLDER LINKEDIN ENRICHMENT ---
         if key_people:

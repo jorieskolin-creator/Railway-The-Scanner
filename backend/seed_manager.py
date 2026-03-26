@@ -314,7 +314,8 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
                     model_id="gemini-3.1-pro-preview", intent_score=intent_results["score"],
                     previous_context=previous_context, max_research_loops=2,
                     subsidiaries=company.get("subsidiaries"),
-                    time_budget=340
+                    time_budget=340,
+                    employees=company.get("employees")
                 )
                 financial_future = sub_executor.submit(
                     financial_health_search, company_name, company["url"]
@@ -403,7 +404,7 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
             key_people = reality_results.get("key_people", [])
 
             # --- KEY PEOPLE NAME VALIDATION ---
-            key_people = _validate_key_people(key_people, company_name)
+            key_people = _validate_key_people(key_people, company_name, employees=company.get("employees"))
 
             # --- STAKEHOLDER LINKEDIN ENRICHMENT ---
             if key_people:
