@@ -638,6 +638,14 @@ const App = () => {
         // Refresh review list and dashboard
         const reviewRes = await fetch('/admin/review-data', { headers: { 'Authorization': `Bearer ${password}` } });
         if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
+        // Refresh company modal with saved data so edits appear immediately
+        if (selectedCompany) {
+          const updated = { ...selectedCompany };
+          for (const field of json.changed_fields) {
+            if (field in editData) updated[field] = editData[field];
+          }
+          setSelectedCompany(updated);
+        }
         fetchSummaryData(true);
       }
       setEditingCompany(null);
