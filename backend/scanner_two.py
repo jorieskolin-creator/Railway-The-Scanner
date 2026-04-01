@@ -310,66 +310,113 @@ def extract_json_from_text(text):
     #    (preserves partial repair progress rather than discarding it)
     return repaired
 
-def _verify_url(url, timeout=4):
+_SOFT_404_PATTERNS = re.compile(
+    r'page\s*not\s*found|'
+    r'404\s*(error|not\s*found)|'
+    r'not\s*found\s*error|'
+    r'could\s*n.?t\s*(find|locate)\s*(this|that|the)?\s*page|'
+    r'no\s*longer\s*(available|exists)|'
+    r'has\s*been\s*(removed|deleted|moved)|'
+    r'this\s*page\s*(does\s*n.?t|doesn.?t)\s*exist|'
+    r'requested\s*page\s*(was|is)\s*not\s*found',
+    re.IGNORECASE
+)
+
+
+def _verify_url(url, timeout=4, company_name=None):
     """
-    Verify a single URL exists via HTTP HEAD request.
-    Returns True if the URL responds with a success/redirect status (2xx, 3xx).
-    Returns False for 4xx, 5xx, timeouts, or connection errors.
+    Verify a single URL exists via HTTP request.
+    Returns a dict with:
+      - verified: True if URL is reachable and not a soft 404
+      - company_mentioned: True if the company name appears on the page (None if not checked)
     """
+    result = {"verified": False, "company_mentioned": None}
     if not url or not url.startswith("http"):
-        return False
+        return result
+
     try:
-        resp = http_requests.head(url, timeout=timeout, allow_redirects=True,
-                                   headers={"User-Agent": "Mozilla/5.0 (compatible; AdaptabilityScanner/1.0)"})
-        return resp.status_code < 400
-    except Exception:
-        # Timeout, connection error, SSL error, etc.
-        # Try GET as fallback — some servers reject HEAD
-        try:
-            resp = http_requests.get(url, timeout=timeout, allow_redirects=True, stream=True,
-                                      headers={"User-Agent": "Mozilla/5.0 (compatible; AdaptabilityScanner/1.0)"})
+        # Use GET instead of HEAD to read body for soft 404 detection
+        resp = http_requests.get(url, timeout=timeout, allow_redirects=True, stream=True,
+                                  headers={"User-Agent": "Mozilla/5.0 (compatible; AdaptabilityScanner/1.0)"})
+
+        if resp.status_code >= 400:
             resp.close()
-            return resp.status_code < 400
+            return result
+
+        # Read first 10KB of body for soft 404 + company name check
+        body_chunk = ""
+        try:
+            raw = resp.raw.read(10240)
+            body_chunk = raw.decode("utf-8", errors="ignore").lower()
         except Exception:
-            return False
+            pass
+        resp.close()
+
+        # Check for soft 404 patterns in the page body
+        if body_chunk and _SOFT_404_PATTERNS.search(body_chunk):
+            # Soft 404 detected — page exists but shows "not found" content
+            return result
+
+        result["verified"] = True
+
+        # Check company name presence if provided
+        if company_name and body_chunk:
+            name_lower = company_name.lower()
+            # Check full name and key parts (e.g., "Vivicta" from "Vivicta Oy")
+            name_parts = [p for p in name_lower.split() if len(p) > 2 and p not in ("oy", "oyj", "ab", "ltd", "group", "inc", "gmbh", "oy:n", "abp")]
+            result["company_mentioned"] = any(part in body_chunk for part in name_parts) if name_parts else True
+
+        return result
+
+    except Exception:
+        return result
 
 
-def _validate_evidence_urls(links, checklist, max_workers=6):
+def _validate_evidence_urls(links, checklist, max_workers=6, company_name=None):
     """
-    URL Validation Gate: Verifies evidence URLs actually exist.
+    URL Validation Gate: Verifies evidence URLs actually exist and are relevant.
     Adds 'verified' field (true/false) to each link and checklist entry.
+    Detects soft 404s (pages returning HTTP 200 with 'not found' content).
+    Optionally checks company name presence on the page.
     Runs in parallel for speed. Logs summary.
     """
     start = time.time()
 
     # Collect all unique URLs to check
-    url_map = {}  # url -> verified (bool)
+    url_set = set()
     for item in links + checklist:
         url = (item.get("url") or item.get("source_url") or "").strip()
-        if url and url.startswith("http") and url not in url_map:
-            url_map[url] = None  # pending
+        if url and url.startswith("http"):
+            url_set.add(url)
 
-    if not url_map:
+    if not url_set:
         return links, checklist, 0, 0
 
-    # Verify in parallel
+    # Verify in parallel — returns dict with verified + company_mentioned
+    url_results = {}  # url -> {"verified": bool, "company_mentioned": bool|None}
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_url = {executor.submit(_verify_url, url): url for url in url_map}
+        future_to_url = {executor.submit(_verify_url, url, 4, company_name): url for url in url_set}
         for future in concurrent.futures.as_completed(future_to_url):
             url = future_to_url[future]
             try:
-                url_map[url] = future.result()
+                url_results[url] = future.result()
             except Exception:
-                url_map[url] = False
+                url_results[url] = {"verified": False, "company_mentioned": None}
 
     # Apply results to links
     verified_count = 0
     dead_count = 0
+    wrong_entity_count = 0
     for item in links:
         url = (item.get("url") or "").strip()
-        if url and url in url_map:
-            item["verified"] = url_map[url]
-            if url_map[url]:
+        if url and url in url_results:
+            r = url_results[url]
+            item["verified"] = r["verified"]
+            # Mark sources about wrong entity — don't hard-reject but flag for downstream
+            if r["verified"] and r.get("company_mentioned") is False:
+                item["wrong_entity"] = True
+                wrong_entity_count += 1
+            if r["verified"]:
                 verified_count += 1
             else:
                 dead_count += 1
@@ -379,13 +426,16 @@ def _validate_evidence_urls(links, checklist, max_workers=6):
     # Apply results to checklist
     for item in checklist:
         url = (item.get("source_url") or item.get("url") or "").strip()
-        if url and url in url_map:
-            item["verified"] = url_map[url]
-        # No URL = no verification needed
+        if url and url in url_results:
+            r = url_results[url]
+            item["verified"] = r["verified"]
+            if r["verified"] and r.get("company_mentioned") is False:
+                item["wrong_entity"] = True
 
     elapsed = int((time.time() - start) * 1000)
     total = verified_count + dead_count
-    print(f"   🔗 [URL Validation] {verified_count}/{total} URLs verified, {dead_count} dead/unreachable ({elapsed}ms)")
+    wrong_msg = f", {wrong_entity_count} wrong entity" if wrong_entity_count else ""
+    print(f"   🔗 [URL Validation] {verified_count}/{total} URLs verified, {dead_count} dead/soft-404{wrong_msg} ({elapsed}ms)")
 
     return links, checklist, verified_count, dead_count
 
@@ -2159,7 +2209,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         # Verify all evidence URLs actually exist before returning results.
         # Marks each link/checklist entry with "verified": true/false.
         # Penalizes confidence when many URLs are dead (hallucinated evidence).
-        raw_findings, checklist, url_verified, url_dead = _validate_evidence_urls(raw_findings, checklist)
+        raw_findings, checklist, url_verified, url_dead = _validate_evidence_urls(raw_findings, checklist, company_name=company_name)
 
         # --- URL-TRIGGERED RE-SCAN ---
         # If >20% of URLs are dead, the evidence base is unreliable.
@@ -2237,7 +2287,7 @@ RETURN STRICT JSON:
 
                 if recovery_links:
                     # Validate the recovery URLs too
-                    recovery_links, _, rec_verified, rec_dead = _validate_evidence_urls(recovery_links, [])
+                    recovery_links, _, rec_verified, rec_dead = _validate_evidence_urls(recovery_links, [], company_name=company_name)
                     print(f"   🔗 [URL Re-Scan] Recovery: {rec_verified} verified, {rec_dead} dead out of {len(recovery_links)} new links")
 
                     # Only keep verified recovery links, dedup against existing URLs

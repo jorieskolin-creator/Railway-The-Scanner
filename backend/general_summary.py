@@ -130,6 +130,7 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
     _all_verified = [
         l for l in full_data.get("evidence_links", [])
         if l.get("verified") is True and l.get("url") and not _is_legal_page(l.get("url", ""))
+        and not l.get("wrong_entity")  # Exclude sources about a different company with same name
     ]
     _recent = [l for l in _all_verified if l.get("is_recent") is True]
     _older = [l for l in _all_verified if l.get("is_recent") is not True]

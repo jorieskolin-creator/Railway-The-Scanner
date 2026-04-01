@@ -1762,43 +1762,58 @@ def _is_paywall_domain(url):
         return False
 
 
+_FORESIGHT_SOFT_404_RE = re.compile(
+    r'page\s*not\s*found|'
+    r'404\s*(error|not\s*found)|'
+    r'not\s*found\s*error|'
+    r'could\s*n.?t\s*(find|locate)\s*(this|that|the)?\s*page|'
+    r'no\s*longer\s*(available|exists)|'
+    r'has\s*been\s*(removed|deleted|moved)|'
+    r'this\s*page\s*(does\s*n.?t|doesn.?t)\s*exist|'
+    r'requested\s*page\s*(was|is)\s*not\s*found',
+    re.IGNORECASE
+)
+
+
 def _verify_foresight_url(url, timeout=8):
     """
-    Verify a single foresight URL exists via HTTP HEAD request.
-    Returns True if the URL responds with a success/redirect status (2xx, 3xx).
-    Also returns True for 403 on known paywalled domains (URL exists but is gated).
-    Returns False for 404, 5xx, timeouts, or connection errors.
+    Verify a single foresight URL exists via HTTP GET request.
+    Detects soft 404s (pages returning HTTP 200 but showing 'not found' content).
+    Returns True for 403 on known paywalled domains (URL exists but is gated).
+    Returns False for 404, 5xx, soft 404s, timeouts, or connection errors.
     """
     if not url or not url.startswith("http"):
         return False
     paywall = _is_paywall_domain(url)
     try:
         import requests as http_requests
-        resp = http_requests.head(
-            url, timeout=timeout, allow_redirects=True,
+        resp = http_requests.get(
+            url, timeout=timeout, allow_redirects=True, stream=True,
             headers={"User-Agent": _BROWSER_UA},
         )
-        if resp.status_code < 400:
-            return True
-        if paywall and resp.status_code == 403:
-            return True
-        return False
-    except Exception:
-        # Timeout, connection error, SSL error — try GET as fallback
-        try:
-            import requests as http_requests
-            resp = http_requests.get(
-                url, timeout=timeout, allow_redirects=True, stream=True,
-                headers={"User-Agent": _BROWSER_UA},
-            )
+
+        if resp.status_code >= 400:
             resp.close()
-            if resp.status_code < 400:
-                return True
             if paywall and resp.status_code == 403:
                 return True
             return False
+
+        # Read first 10KB for soft 404 detection
+        body_chunk = ""
+        try:
+            raw = resp.raw.read(10240)
+            body_chunk = raw.decode("utf-8", errors="ignore").lower()
         except Exception:
+            pass
+        resp.close()
+
+        # Soft 404 check
+        if body_chunk and _FORESIGHT_SOFT_404_RE.search(body_chunk):
             return False
+
+        return True
+    except Exception:
+        return False
 
 
 def _get_url_domain(url):
