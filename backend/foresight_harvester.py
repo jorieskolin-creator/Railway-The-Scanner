@@ -570,3 +570,73 @@ def format_kb_signals_for_prompt(signals: list[dict], max_signals: int = 8) -> s
         lines.append("")
 
     return "\n".join(lines)
+
+
+def cleanup_foresight_kb(progress_callback=None) -> dict:
+    """
+    Standalone KB hygiene: re-verify all stored URLs and remove signals with dead primary sources.
+    Does NOT harvest new signals — just cleans the existing KB.
+    Returns dict with cleanup stats.
+    """
+    from strategic_foresight import _verify_foresight_url
+    storage = BlobStorage()
+
+    all_kb = storage.get_all_foresight_kb()
+    total_themes = len(all_kb)
+    results = {
+        "themes_checked": 0,
+        "themes_cleaned": 0,
+        "signals_before": 0,
+        "signals_after": 0,
+        "signals_removed": 0,
+        "details": [],
+    }
+
+    print(f"\n{'='*70}")
+    print(f"🧹 FORESIGHT KB CLEANUP — {total_themes} themes")
+    print(f"{'='*70}\n")
+
+    for i, (slug, theme_data) in enumerate(all_kb.items()):
+        theme_name = theme_data.get("theme", slug)
+        signals = theme_data.get("signals", [])
+
+        if progress_callback:
+            progress_callback(theme_name, i, total_themes, "cleaning")
+
+        if not signals:
+            results["themes_checked"] += 1
+            continue
+
+        before_count = len(signals)
+        results["signals_before"] += before_count
+
+        # Re-verify all primary URLs in parallel
+        alive_signals = _revalidate_existing_signals(signals, theme_name)
+        after_count = len(alive_signals)
+        removed = before_count - after_count
+        results["signals_after"] += after_count
+        results["signals_removed"] += removed
+        results["themes_checked"] += 1
+
+        if removed > 0:
+            results["themes_cleaned"] += 1
+            # Save the cleaned data back
+            cleaned_data = {**theme_data, "signals": alive_signals, "last_cleanup": datetime.now(timezone.utc).isoformat()}
+            storage.save_foresight_kb(slug, cleaned_data)
+            print(f"   💾 [{i+1}/{total_themes}] {theme_name}: {before_count} → {after_count} (removed {removed})")
+        else:
+            print(f"   ✅ [{i+1}/{total_themes}] {theme_name}: {before_count} signals all alive")
+
+        results["details"].append({
+            "theme": theme_name,
+            "slug": slug,
+            "before": before_count,
+            "after": after_count,
+            "removed": removed,
+        })
+
+    print(f"\n{'='*70}")
+    print(f"🧹 KB CLEANUP COMPLETE: {results['signals_removed']} dead signals removed across {results['themes_cleaned']} themes")
+    print(f"{'='*70}\n")
+
+    return results

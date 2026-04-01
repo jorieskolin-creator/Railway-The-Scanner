@@ -1322,14 +1322,48 @@ def _generate_foresight_from_kb(
                 print(f"   ⚠️ [KB Synthesis] {model_name} returned incomplete structure ({elapsed}ms)")
                 continue
 
-            # Mark all forces as pre-validated from KB and carry over rich KB data
+            # Re-verify KB source URLs before trusting them (they may have gone stale)
+            _kb_urls_to_check = set()
             for force in data["dimension_forces"]:
-                force["url_verified"] = True
-                force["validated"] = True
+                _url = (force.get("source_url") or "").strip()
+                if _url and _url.startswith("http"):
+                    _kb_urls_to_check.add(_url)
+            # Also collect supporting source URLs from KB signals
+            for sig in kb_signals:
+                for ss in sig.get("supporting_sources", []):
+                    _ss_url = (ss.get("url") or "").strip()
+                    if _ss_url and _ss_url.startswith("http"):
+                        _kb_urls_to_check.add(_ss_url)
+
+            _kb_url_status = {}
+            if _kb_urls_to_check:
+                print(f"   🔍 [KB Re-verify] Checking {len(_kb_urls_to_check)} KB URLs for {company_name}...")
+                _rv_t0 = time.time()
+                with concurrent.futures.ThreadPoolExecutor(max_workers=6) as _rv_pool:
+                    _rv_futures = {
+                        _rv_pool.submit(_verify_foresight_url, u, 6): u
+                        for u in _kb_urls_to_check
+                    }
+                    for fut in concurrent.futures.as_completed(_rv_futures):
+                        _u = _rv_futures[fut]
+                        try:
+                            _kb_url_status[_u] = fut.result()
+                        except Exception:
+                            _kb_url_status[_u] = False
+                _alive = sum(1 for v in _kb_url_status.values() if v)
+                _dead = len(_kb_url_status) - _alive
+                print(f"   🔍 [KB Re-verify] {_alive} alive, {_dead} dead ({int((time.time()-_rv_t0)*1000)}ms)")
+
+            # Enrich forces with KB data and apply real verification status
+            for force in data["dimension_forces"]:
                 force["_from_kb"] = True
+                force["validated"] = True
+
+                source_url = (force.get("source_url") or "").strip()
+                # Use real verification result instead of blindly trusting
+                force["url_verified"] = _kb_url_status.get(source_url, False) if source_url else False
 
                 # Match force to KB signal — try source_url first, then title
-                source_url = (force.get("source_url") or "").strip()
                 force_title = (force.get("trend") or "").strip().lower()
                 matched_sig = None
                 for sig in kb_signals:
@@ -1344,15 +1378,16 @@ def _generate_foresight_from_kb(
                             # Also fix the source_url to use the verified KB URL
                             if sig.get("source_url"):
                                 force["source_url"] = sig["source_url"]
+                                force["url_verified"] = _kb_url_status.get(sig["source_url"], False)
                             break
 
                 if matched_sig:
                     kb_supporting = matched_sig.get("supporting_sources", [])
                     if kb_supporting and not force.get("supporting_sources"):
                         force["supporting_sources"] = kb_supporting
-                    # Set verified_supporting_sources (reality_check_foresight needs this)
+                    # Set verified_supporting_sources with real verification status
                     force["verified_supporting_sources"] = [
-                        {**ss, "url_verified": True}
+                        {**ss, "url_verified": _kb_url_status.get((ss.get("url") or "").strip(), False)}
                         for ss in (force.get("supporting_sources") or kb_supporting)
                     ]
                     force["source_credibility"] = matched_sig.get("source_credibility", "medium")
@@ -1367,6 +1402,16 @@ def _generate_foresight_from_kb(
                     force["source_credibility"] = "medium"
                     force["source_count"] = 1
                     force["verified_supporting_sources"] = []
+
+            # Drop forces whose primary URL is dead (keep forces with no URL — they may be valid synthesized insights)
+            _original_count = len(data["dimension_forces"])
+            data["dimension_forces"] = [
+                f for f in data["dimension_forces"]
+                if f.get("url_verified") is True or not (f.get("source_url") or "").strip()
+            ]
+            _dropped = _original_count - len(data["dimension_forces"])
+            if _dropped:
+                print(f"   🗑️ [KB Synthesis] Dropped {_dropped} forces with dead primary URLs")
 
             # Add metadata
             data["fp_themes_used"] = domain_config["fp_themes"]

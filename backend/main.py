@@ -1734,6 +1734,85 @@ def foresight_kb_status():
     return {"harvest": harvest_state, "kb": kb_meta}
 
 
+# --- Foresight KB Cleanup (URL hygiene without full harvest) ---
+_foresight_cleanup_state = {
+    "is_running": False,
+    "started_at": None,
+    "completed_at": None,
+    "current_theme": None,
+    "current": 0,
+    "total": 0,
+    "result": None,
+}
+_foresight_cleanup_lock = threading.Lock()
+
+
+def _run_foresight_kb_cleanup():
+    """Background worker for KB URL cleanup."""
+    try:
+        from foresight_harvester import cleanup_foresight_kb
+
+        def progress_cb(theme, index, total, status):
+            with _foresight_cleanup_lock:
+                _foresight_cleanup_state["current_theme"] = theme
+                _foresight_cleanup_state["current"] = index + 1
+                _foresight_cleanup_state["total"] = total
+
+        result = cleanup_foresight_kb(progress_callback=progress_cb)
+
+        with _foresight_cleanup_lock:
+            _foresight_cleanup_state["result"] = result
+            _foresight_cleanup_state["completed_at"] = datetime.utcnow().isoformat()
+            _foresight_cleanup_state["is_running"] = False
+            _foresight_cleanup_state["current_theme"] = None
+    except Exception as e:
+        print(f"   ❌ [Foresight KB Cleanup] Failed: {e}")
+        with _foresight_cleanup_lock:
+            _foresight_cleanup_state["is_running"] = False
+            _foresight_cleanup_state["result"] = {"error": str(e)}
+            _foresight_cleanup_state["completed_at"] = datetime.utcnow().isoformat()
+
+
+@app.post("/admin/cleanup-foresight-kb")
+def cleanup_foresight_kb_endpoint(request: Request):
+    """
+    Re-verifies all stored KB URLs and removes signals with dead primary sources.
+    Does NOT harvest new signals — just cleans existing KB.
+    Returns immediately — poll /admin/foresight-kb-cleanup-status for progress.
+    """
+    verify_admin(request)
+
+    with _foresight_cleanup_lock:
+        if _foresight_cleanup_state["is_running"]:
+            raise HTTPException(status_code=409, detail="Foresight KB cleanup already in progress.")
+        _foresight_cleanup_state["is_running"] = True
+        _foresight_cleanup_state["current"] = 0
+        _foresight_cleanup_state["total"] = 30
+        _foresight_cleanup_state["current_theme"] = "Starting cleanup..."
+        _foresight_cleanup_state["started_at"] = datetime.utcnow().isoformat()
+        _foresight_cleanup_state["completed_at"] = None
+        _foresight_cleanup_state["result"] = None
+
+    # Also block if a full harvest is running
+    with _foresight_kb_lock:
+        if _foresight_kb_state["is_running"]:
+            with _foresight_cleanup_lock:
+                _foresight_cleanup_state["is_running"] = False
+            raise HTTPException(status_code=409, detail="Cannot cleanup while KB harvest is running.")
+
+    thread = threading.Thread(target=_run_foresight_kb_cleanup, daemon=True)
+    thread.start()
+
+    return {"status": "started", "message": "KB URL cleanup started in background"}
+
+
+@app.get("/admin/foresight-kb-cleanup-status")
+def foresight_kb_cleanup_status():
+    """Returns current Foresight KB cleanup progress."""
+    with _foresight_cleanup_lock:
+        return dict(_foresight_cleanup_state)
+
+
 # --- MAIN SCAN ENDPOINT (MULTIPART) ---
 @app.post("/scan")
 def run_scan(

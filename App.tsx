@@ -86,6 +86,7 @@ const App = () => {
   const [enrichingStakeholderCompany, setEnrichingStakeholderCompany] = useState(null);
   const [foresightKbLoading, setForesightKbLoading] = useState(false);
   const [foresightKbStatus, setForesightKbStatus] = useState(null);
+  const [kbCleanupLoading, setKbCleanupLoading] = useState(false);
 
   // MANUAL EDIT STATE
   const [editingCompany, setEditingCompany] = useState(null);  // company name being edited
@@ -616,6 +617,44 @@ const App = () => {
         setForesightKbLoading(false);
       }
     } catch (e) { console.error(e); alert("Foresight KB refresh failed."); setForesightKbLoading(false); }
+  };
+
+  const handleCleanupForesightKb = async () => {
+    const password = prompt("AUTHENTICATION REQUIRED\n\nClean Foresight KB?\nThis re-verifies all stored URLs and removes signals with dead sources.\n\nEnter Admin Password:");
+    if (!password) return;
+    setKbCleanupLoading(true);
+    try {
+      const res = await fetch('/admin/cleanup-foresight-kb', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${password}` }
+      });
+      if (res.status === 401) { alert("ACCESS DENIED: Incorrect Password."); setKbCleanupLoading(false); return; }
+      if (res.status === 409) { alert((await res.json()).detail); setKbCleanupLoading(false); return; }
+      if (res.ok) {
+        alert("KB cleanup started! Re-verifying all stored URLs in background.");
+        const pollInterval = setInterval(async () => {
+          try {
+            const statusRes = await fetch('/admin/foresight-kb-cleanup-status');
+            if (statusRes.ok) {
+              const status = await statusRes.json();
+              if (!status.is_running && status.completed_at) {
+                clearInterval(pollInterval);
+                setKbCleanupLoading(false);
+                const r = status.result;
+                if (r && !r.error) {
+                  alert(`KB Cleanup Complete!\n\n${r.signals_removed} dead signals removed\n${r.signals_after} signals remaining across ${r.themes_checked} themes`);
+                } else if (r && r.error) {
+                  alert(`KB Cleanup Failed: ${r.error}`);
+                }
+              }
+            }
+          } catch (e) { /* ignore poll errors */ }
+        }, 8000);
+      } else {
+        alert("KB cleanup failed: " + (await res.text()));
+        setKbCleanupLoading(false);
+      }
+    } catch (e) { console.error(e); alert("KB cleanup failed."); setKbCleanupLoading(false); }
   };
 
   // MANUAL EDIT HANDLERS
@@ -1527,6 +1566,15 @@ const App = () => {
                 >
                   {foresightKbLoading ? <Loader2 size={12} className="animate-spin" /> : <Database size={12} />}
                   {foresightKbLoading && foresightKbStatus?.harvest ? `KB ${foresightKbStatus.harvest.current}/${foresightKbStatus.harvest.total}` : 'REFRESH FORESIGHT KB'}
+                </button>
+                <button
+                  onClick={handleCleanupForesightKb}
+                  disabled={kbCleanupLoading || foresightKbLoading}
+                  className="flex items-center gap-1.5 px-3 py-1 bg-teal-900/40 hover:bg-teal-800/60 border border-teal-600/50 text-teal-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
+                  title="Re-verify all stored KB URLs and remove signals with dead sources"
+                >
+                  {kbCleanupLoading ? <Loader2 size={12} className="animate-spin" /> : <Shield size={12} />}
+                  {kbCleanupLoading ? 'CLEANING KB...' : 'CLEAN KB'}
                 </button>
                 <button
                   onClick={handleCleanupIndex}
