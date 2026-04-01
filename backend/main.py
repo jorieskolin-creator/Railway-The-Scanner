@@ -395,6 +395,13 @@ async def dedup_company(company_name: str, request: Request):
     removed = storage.remove_duplicate_from_index(company_name)
     return {"status": "deduped", "company": company_name, "duplicates_removed": removed}
 
+@app.post("/admin/cleanup-index")
+async def cleanup_index(request: Request):
+    """Remove orphaned entries from the summary index (companies without data files)."""
+    verify_admin(request)
+    removed = storage.cleanup_orphaned_index_entries()
+    return {"status": "cleaned", "removed": removed, "removed_count": len(removed)}
+
 @app.get("/admin/review-data")
 async def review_data(request: Request):
     """Returns all stored companies with summary previews and hallucination flags for admin review."""

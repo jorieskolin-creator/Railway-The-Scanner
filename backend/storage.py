@@ -339,6 +339,45 @@ class BlobStorage:
             print(f"   [Storage] Removed {removed_count} duplicate(s) of '{company_name}' from global index")
             return removed_count
 
+    def cleanup_orphaned_index_entries(self):
+        """Remove entries from the summary index where company data files no longer exist."""
+        with BlobStorage._index_lock:
+            blobs = self._list("index/summary_list", limit=10)
+            if not blobs:
+                return []
+            blobs.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
+            latest_url = blobs[0].get("url")
+            data = self._get(latest_url)
+            if not data or not isinstance(data, list):
+                return []
+
+            # Get all existing company file prefixes
+            company_blobs = self._list(prefix="companies/", limit=500) or []
+            existing_keys = set()
+            for b in company_blobs:
+                pathname = b.get("pathname", "")
+                key = pathname.replace("companies/", "").split(".")[0]
+                if key:
+                    existing_keys.add(key)
+
+            # Find orphaned entries
+            orphaned = []
+            cleaned = []
+            for item in data:
+                name = item.get("companyName", "")
+                clean_name = self.sanitize_filename(name)
+                if clean_name in existing_keys:
+                    cleaned.append(item)
+                else:
+                    orphaned.append(name)
+
+            if orphaned:
+                self._put("index/summary_list.json", cleaned)
+                self._prune_old_versions("index/summary_list", keep=3)
+                print(f"   [Storage] Removed {len(orphaned)} orphaned entries from index: {', '.join(orphaned)}")
+
+            return orphaned
+
     def retrieve_latest_data(self, filename_prefix="index/summary_list"):
         """
         Robustly finds the latest index file by listing the directory,

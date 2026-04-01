@@ -370,6 +370,27 @@ const App = () => {
     } catch (e) { console.error(e); alert("Delete failed."); }
   };
 
+  const handleCleanupIndex = async () => {
+    const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to clean orphaned entries from the index:");
+    if (!password) return;
+    try {
+      const res = await fetch('/admin/cleanup-index', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${password}` }
+      });
+      if (res.status === 401) { alert("ACCESS DENIED"); return; }
+      if (res.ok) {
+        const json = await res.json();
+        if (json.removed_count > 0) {
+          alert(`Removed ${json.removed_count} orphaned entries:\n${json.removed.join('\n')}`);
+          fetchSummaryData(true);
+        } else {
+          alert("No orphaned entries found. Index is clean.");
+        }
+      }
+    } catch (e) { console.error(e); alert("Cleanup failed."); }
+  };
+
   const handleCleanCompany = async (companyName) => {
     const password = prompt(`AUTHENTICATION REQUIRED\n\nEnter Admin Password to run Reality Check + CLEAN on "${companyName}":`);
     if (!password) return;
@@ -1506,6 +1527,13 @@ const App = () => {
                 >
                   {foresightKbLoading ? <Loader2 size={12} className="animate-spin" /> : <Database size={12} />}
                   {foresightKbLoading && foresightKbStatus?.harvest ? `KB ${foresightKbStatus.harvest.current}/${foresightKbStatus.harvest.total}` : 'REFRESH FORESIGHT KB'}
+                </button>
+                <button
+                  onClick={handleCleanupIndex}
+                  className="flex items-center gap-1.5 px-3 py-1 bg-rose-900/40 hover:bg-rose-800/60 border border-rose-600/50 text-rose-200 font-mono font-bold text-[10px] rounded transition-all"
+                  title="Remove orphaned entries from the landing page index (companies without data files)"
+                >
+                  <Trash2 size={12} /> CLEAN INDEX
                 </button>
                 <button onClick={() => setIsDataReviewOpen(false)} className="text-slate-400 hover:text-white">
                   <X size={18} />
