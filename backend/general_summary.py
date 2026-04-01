@@ -120,12 +120,25 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
     # factual historical events.
     # All verified links are already shown in the AI Diagnosis section of the UI.
     #
+    # Recency-first selection: recent sources (< 12 months) get priority.
+    # Old sources only fill remaining slots if fewer than 18 recent ones exist.
+    # This prevents outdated evidence (e.g. 2016 Cortana Analytics) from being
+    # treated as current capabilities in the summary.
+    #
     # Tiered snippet depth: top 8 sources get 500 chars (deep context for key
-    # evidence), remaining 10 get 350 chars (sufficient context without dilution).
-    _all_evidence = [
+    # evidence), remaining get 350 chars (sufficient context without dilution).
+    _all_verified = [
         l for l in full_data.get("evidence_links", [])
         if l.get("verified") is True and l.get("url") and not _is_legal_page(l.get("url", ""))
-    ][:18]
+    ]
+    _recent = [l for l in _all_verified if l.get("is_recent") is True]
+    _older = [l for l in _all_verified if l.get("is_recent") is not True]
+    # Fill with recent first, then pad with older if needed (max 18 total)
+    _all_evidence = _recent[:18]
+    remaining_slots = 18 - len(_all_evidence)
+    if remaining_slots > 0 and _older:
+        _all_evidence.extend(_older[:remaining_slots])
+
     verified_links = []
     for i, l in enumerate(_all_evidence):
         snippet_limit = 500 if i < 8 else 350
@@ -233,6 +246,11 @@ MANDATORY RULES:
    - Do not infer events from the absence of evidence. If something is not clearly documented as having occurred, do not write that it occurred.
    - Never invent, combine, or rename financial metrics.
    - CRITICAL: When citing year-over-year financial changes, distinguish between the BASE figure (previous period's actual value) and the CHANGE/DELTA (the difference). Example: if a source says "profit decreased by €153.7M" that means €153.7M is the CHANGE, NOT the previous profit. Always verify: does the number represent the actual metric or the year-over-year movement?
+   - SOURCE RECENCY — CRITICAL: Each evidence source has an "is_recent" field. Sources with is_recent=false are OLDER than 12 months. You MUST apply these rules:
+     (a) STRONGLY PREFER sources with is_recent=true. These reflect the company's current state.
+     (b) NEVER present information from is_recent=false sources as current capabilities, current strategy, or current technology stack. Technologies and platforms mentioned in old sources may have been replaced or discontinued.
+     (c) If you must reference an older source, explicitly qualify it as historical (e.g., "previously used," "historically relied on"). But prefer to OMIT old sources entirely if sufficient recent evidence exists.
+     (d) If a snippet mentions a technology, product, or platform that was clearly from a different era (e.g., discontinued products, legacy platforms), do NOT include it regardless of is_recent value.
 
 3. DATA HANDLING / META-METRICS: Do not reference the report's internal scoring metrics (e.g., "Reality Score," "Ambition Score," "Friction Index," "Integrity Delta") by name in the generated prose. These scores should inform your overall analytical tone, but the summary itself must focus strictly on the company's real-world financial, operational, and organizational data.
 
