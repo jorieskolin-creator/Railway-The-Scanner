@@ -388,6 +388,13 @@ async def delete_company(company_name: str, request: Request):
         "removed_from_index": result["removed_from_index"]
     }
 
+@app.post("/admin/dedup-company/{company_name}")
+async def dedup_company(company_name: str, request: Request):
+    """Remove duplicate entries for a company from the global index, keeping one."""
+    verify_admin(request)
+    removed = storage.remove_duplicate_from_index(company_name)
+    return {"status": "deduped", "company": company_name, "duplicates_removed": removed}
+
 @app.get("/admin/review-data")
 async def review_data(request: Request):
     """Returns all stored companies with summary previews and hallucination flags for admin review."""

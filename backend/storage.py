@@ -312,6 +312,33 @@ class BlobStorage:
                 return new_url
             return None
 
+    def remove_duplicate_from_index(self, company_name):
+        """Remove duplicate entries for a company from the global index, keeping the most recent one."""
+        with BlobStorage._index_lock:
+            blobs = self._list("index/summary_list", limit=10)
+            if not blobs:
+                return 0
+            blobs.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
+            latest_url = blobs[0].get("url")
+            data = self._get(latest_url)
+            if not data or not isinstance(data, list):
+                return 0
+
+            # Find all entries for this company
+            matches = [i for i, item in enumerate(data) if item.get("companyName", "").lower() == company_name.lower()]
+            if len(matches) <= 1:
+                return 0  # No duplicates
+
+            # Keep the first match (most likely the one with best data), remove the rest
+            to_remove = set(matches[1:])
+            cleaned = [item for i, item in enumerate(data) if i not in to_remove]
+            removed_count = len(to_remove)
+
+            self._put("index/summary_list.json", cleaned)
+            self._prune_old_versions("index/summary_list", keep=3)
+            print(f"   [Storage] Removed {removed_count} duplicate(s) of '{company_name}' from global index")
+            return removed_count
+
     def retrieve_latest_data(self, filename_prefix="index/summary_list"):
         """
         Robustly finds the latest index file by listing the directory,
