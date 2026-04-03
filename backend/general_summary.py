@@ -134,11 +134,12 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
     ]
     _recent = [l for l in _all_verified if l.get("is_recent") is True]
     _older = [l for l in _all_verified if l.get("is_recent") is not True]
-    # Fill with recent first, then pad with older if needed (max 18 total)
+    # Fill with recent first; only pad with older if recent coverage is thin (<12)
     _all_evidence = _recent[:18]
-    remaining_slots = 18 - len(_all_evidence)
-    if remaining_slots > 0 and _older:
-        _all_evidence.extend(_older[:remaining_slots])
+    if len(_recent) < 12:
+        remaining_slots = 18 - len(_all_evidence)
+        if remaining_slots > 0 and _older:
+            _all_evidence.extend(_older[:remaining_slots])
 
     verified_links = []
     for i, l in enumerate(_all_evidence):

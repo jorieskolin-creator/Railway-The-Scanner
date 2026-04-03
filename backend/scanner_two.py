@@ -323,14 +323,129 @@ _SOFT_404_PATTERNS = re.compile(
 )
 
 
+# --- Date extraction from URLs and page body ---
+_MONTH_MAP = {
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+# URL path patterns (highest reliability)
+_URL_DATE_FULL = re.compile(r'/(\d{4})[/-](\d{1,2})[/-](\d{1,2})')
+_URL_DATE_COMPACT = re.compile(r'/(\d{4})(\d{2})(\d{2})[/-]')
+_URL_DATE_YEAR = re.compile(r'/(?:press[_-]?releases?|news|blog|articles?)/(\d{4})/', re.I)
+
+# HTML meta tag patterns
+_META_DATE_PATTERNS = [
+    re.compile(r'article:published_time["\s]+content=["\'](\d{4}-\d{2}-\d{2})', re.I),
+    re.compile(r'<time[^>]+datetime=["\'](\d{4}-\d{2}-\d{2})', re.I),
+    re.compile(r'datepublished["\s:]+["\'](\d{4}-\d{2}-\d{2})', re.I),
+]
+
+# Body text patterns (require prefix keyword to avoid copyright-year false positives)
+_BODY_DATE_ISO = re.compile(r'(?:published|posted|date|updated)\s*(?:on|:)?\s*(\d{4}-\d{2}-\d{2})', re.I)
+_BODY_DATE_PROSE = re.compile(
+    r'(?:published|posted|date|updated)\s*(?:on|:)?\s*'
+    r'(\w+)\s+(\d{1,2}),?\s+(\d{4})', re.I
+)
+
+_DATE_FLOOR = date(2000, 1, 1)
+
+
+def _extract_page_date(url, body_chunk):
+    """
+    Extract publication date from URL path and/or page body content.
+    Returns datetime.date or None. Priority: URL > meta tags > body text.
+    """
+    from datetime import timedelta
+    today = date.today()
+    ceiling = today + timedelta(days=7)
+
+    def _valid(d):
+        return d and _DATE_FLOOR <= d <= ceiling
+
+    # 1. URL path — full date (YYYY/MM/DD or YYYY-MM-DD)
+    m = _URL_DATE_FULL.search(url)
+    if m:
+        try:
+            d = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            if _valid(d):
+                return d
+        except (ValueError, OverflowError):
+            pass
+
+    # 2. URL path — compact (YYYYMMDD-)
+    m = _URL_DATE_COMPACT.search(url)
+    if m:
+        try:
+            d = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            if _valid(d):
+                return d
+        except (ValueError, OverflowError):
+            pass
+
+    # 3. URL path — year only (/news/2021/) → Jan 1 of that year (conservative)
+    m = _URL_DATE_YEAR.search(url)
+    if m:
+        try:
+            d = date(int(m.group(1)), 1, 1)
+            if _valid(d):
+                return d
+        except (ValueError, OverflowError):
+            pass
+
+    if not body_chunk:
+        return None
+
+    # 4. HTML meta tags (high reliability)
+    for pat in _META_DATE_PATTERNS:
+        m = pat.search(body_chunk)
+        if m:
+            try:
+                parts = m.group(1).split("-")
+                d = date(int(parts[0]), int(parts[1]), int(parts[2]))
+                if _valid(d):
+                    return d
+            except (ValueError, IndexError, OverflowError):
+                pass
+
+    # 5. Body text — ISO date with prefix
+    m = _BODY_DATE_ISO.search(body_chunk)
+    if m:
+        try:
+            parts = m.group(1).split("-")
+            d = date(int(parts[0]), int(parts[1]), int(parts[2]))
+            if _valid(d):
+                return d
+        except (ValueError, IndexError, OverflowError):
+            pass
+
+    # 6. Body text — prose date with prefix ("February 18, 2021")
+    m = _BODY_DATE_PROSE.search(body_chunk)
+    if m:
+        month_str = m.group(1).lower()
+        month_num = _MONTH_MAP.get(month_str)
+        if month_num:
+            try:
+                d = date(int(m.group(3)), month_num, int(m.group(2)))
+                if _valid(d):
+                    return d
+            except (ValueError, OverflowError):
+                pass
+
+    return None
+
+
 def _verify_url(url, timeout=4, company_name=None):
     """
     Verify a single URL exists via HTTP request.
     Returns a dict with:
       - verified: True if URL is reachable and not a soft 404
       - company_mentioned: True if the company name appears on the page (None if not checked)
+      - extracted_date: Publication date from URL/page content (None if not found)
     """
-    result = {"verified": False, "company_mentioned": None}
+    result = {"verified": False, "company_mentioned": None, "extracted_date": None}
     if not url or not url.startswith("http"):
         return result
 
@@ -354,15 +469,16 @@ def _verify_url(url, timeout=4, company_name=None):
 
         # Check for soft 404 patterns in the page body
         if body_chunk and _SOFT_404_PATTERNS.search(body_chunk):
-            # Soft 404 detected — page exists but shows "not found" content
             return result
 
         result["verified"] = True
 
+        # Extract publication date from URL and page body
+        result["extracted_date"] = _extract_page_date(url, body_chunk)
+
         # Check company name presence if provided
         if company_name and body_chunk:
             name_lower = company_name.lower()
-            # Check full name and key parts (e.g., "Vivicta" from "Vivicta Oy")
             name_parts = [p for p in name_lower.split() if len(p) > 2 and p not in ("oy", "oyj", "ab", "ltd", "group", "inc", "gmbh", "oy:n", "abp")]
             result["company_mentioned"] = any(part in body_chunk for part in name_parts) if name_parts else True
 
@@ -407,6 +523,8 @@ def _validate_evidence_urls(links, checklist, max_workers=6, company_name=None):
     verified_count = 0
     dead_count = 0
     wrong_entity_count = 0
+    date_override_count = 0
+    today = date.today()
     for item in links:
         url = (item.get("url") or "").strip()
         if url and url in url_results:
@@ -418,6 +536,16 @@ def _validate_evidence_urls(links, checklist, max_workers=6, company_name=None):
                 wrong_entity_count += 1
             if r["verified"]:
                 verified_count += 1
+                # Override is_recent with extracted date when available
+                extracted = r.get("extracted_date")
+                if extracted:
+                    new_is_recent = (today - extracted).days < 365
+                    old_is_recent = item.get("is_recent")
+                    if old_is_recent != new_is_recent:
+                        print(f"   📅 [Date Override] {url[:80]} — {extracted}, {'recent' if new_is_recent else 'old'} (was {'recent' if old_is_recent else 'old'} per LLM)")
+                        date_override_count += 1
+                    item["is_recent"] = new_is_recent
+                    item["extracted_date"] = str(extracted)
             else:
                 dead_count += 1
         else:
@@ -431,11 +559,16 @@ def _validate_evidence_urls(links, checklist, max_workers=6, company_name=None):
             item["verified"] = r["verified"]
             if r["verified"] and r.get("company_mentioned") is False:
                 item["wrong_entity"] = True
+            # Override is_recent with extracted date
+            extracted = r.get("extracted_date")
+            if r["verified"] and extracted:
+                item["is_recent"] = (today - extracted).days < 365
 
     elapsed = int((time.time() - start) * 1000)
     total = verified_count + dead_count
     wrong_msg = f", {wrong_entity_count} wrong entity" if wrong_entity_count else ""
-    print(f"   🔗 [URL Validation] {verified_count}/{total} URLs verified, {dead_count} dead/soft-404{wrong_msg} ({elapsed}ms)")
+    date_msg = f", {date_override_count} date overrides" if date_override_count else ""
+    print(f"   🔗 [URL Validation] {verified_count}/{total} URLs verified, {dead_count} dead/soft-404{wrong_msg}{date_msg} ({elapsed}ms)")
 
     return links, checklist, verified_count, dead_count
 
