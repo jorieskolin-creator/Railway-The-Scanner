@@ -101,9 +101,9 @@ def _is_valid_full_name(name: str) -> bool:
 
 
 _SENIORITY_TIERS = [
-    (1, re.compile(r'\b(CEO|COO|Managing\s+Director|Country\s+Manager|Toimitusjohtaja|Maajohtaja)\b', re.I)),
-    (2, re.compile(r'\b(CTO|CIO|CDO|CPO|CFO|CHRO|CMO|Chief\s+\w+\s+Officer)\b', re.I)),
-    (3, re.compile(r'\b(SVP|Senior\s+Vice\s+President|VP|Vice\s+President)\b', re.I)),
+    (1, re.compile(r'\b(CEO|COO|President|Chairman|Toimitusjohtaja|Maajohtaja|Managing\s+Director|Country\s+Manager|Group\s+Executive|Pääjohtaja|Hallituksen\s+puheenjohtaja)\b', re.I)),
+    (2, re.compile(r'\b(CTO|CIO|CDO|CPO|CFO|CHRO|CMO|Chief\s+\w+\s+Officer|Executive\s+Vice\s+President|EVP)\b', re.I)),
+    (3, re.compile(r'\b(SVP|Senior\s+Vice\s+President|VP|Vice\s+President|Board\s+Member|Hallituksen\s+jäsen)\b', re.I)),
     (4, re.compile(r'\b(Director)\b', re.I)),
     (5, re.compile(r'\b(Head\s+of)\b', re.I)),
     (6, re.compile(r'\b(Senior\s+Manager|Manager|Lead)\b', re.I)),
@@ -146,12 +146,13 @@ def _validate_key_people(key_people: list, company_name: str, employees: int = N
             continue
 
         # Filter out too-junior roles for large companies
+        # Only reject tier 6 (known Manager/Lead); tier 7 (unrecognized) may be senior
         role = (person.get("role") or "").strip()
         tier = _get_seniority_tier(role)
-        if employees and employees >= 5000 and tier >= 6:
+        if employees and employees >= 5000 and tier == 6:
             removed.append(f"{name} ({role}) [too junior for {employees:,} employee org]")
             continue
-        if employees and employees >= 200 and tier >= 6:
+        if employees and employees >= 200 and tier == 6:
             # For mid-size: allow managers only if we'd otherwise have < 3 stakeholders
             person["_seniority_tier"] = tier
             person["_maybe_too_junior"] = True
