@@ -53,10 +53,18 @@ EVIDENCE RULE — Every claim must trace to the data provided. Include specific 
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _aggregate_kb_signals(all_kb: dict) -> dict:
-    """Aggregate all KB signals by category, lifecycle, timeframe, and force type."""
+    """Aggregate all KB signals preserving full source context for LLM synthesis.
+
+    Keeps full descriptions, lifecycle stages, momentum, confidence, and source
+    credibility so the LLM can ground its analysis in actual source content
+    rather than just metadata labels.
+    """
     by_category = defaultdict(list)
     by_timeframe = defaultdict(int)
     by_force_type = defaultdict(int)
+    by_lifecycle = defaultdict(int)
+    by_momentum = defaultdict(int)
+    by_credibility = defaultdict(int)
     total = 0
 
     for theme_slug, theme_data in all_kb.items():
@@ -67,28 +75,42 @@ def _aggregate_kb_signals(all_kb: dict) -> dict:
             by_category[category].append({
                 "theme": fp_theme,
                 "dimension": sig.get("kb_dimension", ""),
+                "dimensions_affected": sig.get("kb_dimensions_affected", []),
                 "title": sig.get("title", ""),
-                "description": (sig.get("description", "") or "")[:200],
+                "description": sig.get("description", ""),  # Full description, not truncated
                 "force_type": sig.get("force_type", ""),
                 "timeframe": sig.get("timeframe", ""),
                 "credibility": sig.get("source_credibility", "medium"),
+                "confidence": sig.get("confidence", "medium"),
+                "lifecycle_stage": sig.get("lifecycle_stage", ""),
+                "trend_momentum": sig.get("trend_momentum", ""),
+                "industries_affected": sig.get("industries_affected", []),
+                "source_url": sig.get("source_url", ""),
+                "source_count": sig.get("source_count", 0),
             })
             by_timeframe[sig.get("timeframe", "unknown")] += 1
             by_force_type[sig.get("force_type", "unknown")] += 1
+            by_lifecycle[sig.get("lifecycle_stage", "unknown")] += 1
+            by_momentum[sig.get("trend_momentum", "unknown")] += 1
+            by_credibility[sig.get("source_credibility", "unknown")] += 1
             total += 1
 
     # Count accelerating vs decelerating
     accelerating = by_force_type.get("Probable/Emerging", 0) + by_force_type.get("Plausible/Maturing", 0)
-    decelerating = by_force_type.get("Weakening/Legacy", 0)
+    decelerating = by_force_type.get("Weakening/Legacy", 0) + by_force_type.get("Weakening/Declining", 0)
 
     return {
         "total_signals": total,
         "by_category": dict(by_category),
         "by_timeframe": dict(by_timeframe),
         "by_force_type": dict(by_force_type),
+        "by_lifecycle": dict(by_lifecycle),
+        "by_momentum": dict(by_momentum),
+        "by_credibility": dict(by_credibility),
         "accelerating": accelerating,
         "decelerating": decelerating,
         "theme_count": len(all_kb),
+        "high_confidence_count": by_credibility.get("high", 0),
     }
 
 
@@ -228,15 +250,55 @@ def _aggregate_stakeholder_dynamics(company_details: list, gap_patterns: list) -
 # PROMPT BUILDERS
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _format_top_signals_per_category(by_category: dict, per_cat: int = 5) -> str:
+    """Format the top signals per category with full source context for the LLM.
+
+    Selects the most important signals (high credibility + accelerating momentum)
+    and includes full descriptions so the LLM can ground synthesis in actual content.
+    """
+    blocks = []
+    for cat in ALL_CATEGORIES:
+        signals = by_category.get(cat, [])
+        if not signals:
+            continue
+
+        # Prioritize: high credibility → accelerating momentum → Probable/Emerging type
+        def signal_priority(s):
+            cred = {"high": 3, "medium": 2, "low": 1}.get(s.get("credibility", ""), 1)
+            momentum = {"accelerating": 3, "stable": 2, "decelerating": 1}.get(s.get("trend_momentum", ""), 1)
+            force = {"Probable/Emerging": 3, "Plausible/Maturing": 2, "Preposterous/Black Swan": 2}.get(s.get("force_type", ""), 1)
+            return cred + momentum + force
+
+        sorted_signals = sorted(signals, key=signal_priority, reverse=True)
+        top = sorted_signals[:per_cat]
+
+        lines = [f"\n### {cat} ({len(signals)} signals total, top {len(top)} shown):"]
+        for s in top:
+            lifecycle = s.get("lifecycle_stage", "")
+            momentum = s.get("trend_momentum", "")
+            confidence = s.get("confidence", "")
+            source_count = s.get("source_count", 0)
+            dims = s.get("dimensions_affected") or [s.get("dimension", "")]
+            industries = s.get("industries_affected", [])
+
+            line = f"- **{s['title']}** [{s.get('force_type', '?')} | {s.get('timeframe', '?')}]\n"
+            line += f"  Description: {s.get('description', 'N/A')}\n"
+            line += f"  Lifecycle: {lifecycle} | Momentum: {momentum} | Credibility: {s.get('credibility', '?')} ({source_count} verified sources)\n"
+            if dims:
+                line += f"  Dimensions affected: {', '.join(dims)}\n"
+            if industries:
+                line += f"  Industries affected: {', '.join(industries[:4])}"
+            lines.append(line)
+
+        blocks.append("\n".join(lines))
+
+    return "\n\n".join(blocks)
+
+
 def _build_global_prompt(kb_aggregate: dict, cross_impact: list, top_foresights: list) -> str:
     """Build prompt for Output 1: Global Force Landscape."""
-    # Summarize KB by category
-    cat_summary = []
-    for cat in ALL_CATEGORIES:
-        signals = kb_aggregate["by_category"].get(cat, [])
-        if signals:
-            themes = set(s["theme"] for s in signals)
-            cat_summary.append(f"- {cat}: {len(signals)} signals across themes: {', '.join(sorted(themes))}")
+    # Rich signal evidence — top signals per category with full descriptions
+    signal_evidence = _format_top_signals_per_category(kb_aggregate["by_category"], per_cat=5)
 
     # Top themes by cross-impact density
     cross_summary = ""
@@ -264,6 +326,7 @@ DATA PROVIDED:
 Signal Overview:
 - Total validated signals: {kb_aggregate['total_signals']}
 - Themes covered: {kb_aggregate['theme_count']} of 30
+- High-credibility signals (3+ verified sources): {kb_aggregate.get('high_confidence_count', 0)}
 - Accelerating forces: {kb_aggregate['accelerating']}
 - Decelerating forces: {kb_aggregate['decelerating']}
 
@@ -273,10 +336,17 @@ Timeframe distribution:
 Force type distribution:
 {json.dumps(kb_aggregate['by_force_type'], indent=2)}
 
-Signals by category:
-{chr(10).join(cat_summary)}
+Signal lifecycle distribution (adoption curve position):
+{json.dumps(kb_aggregate.get('by_lifecycle', {}), indent=2)}
 
-Cross-impact density (theme × dimension interactions):
+Signal momentum distribution:
+{json.dumps(kb_aggregate.get('by_momentum', {}), indent=2)}
+
+DETAILED SIGNAL EVIDENCE BY CATEGORY:
+(Top signals per category with full source context — use these descriptions to ground your synthesis in actual evidence, not just signal titles)
+{signal_evidence}
+
+Cross-impact density (theme x dimension interactions):
 {cross_summary}
 
 Top foresight themes affecting companies:
@@ -475,10 +545,19 @@ def _build_domain_prompt(
                 "title": link.get("title", ""),
             })
 
-    # KB signals for this domain's themes
+    # KB signals for this domain's themes — full context
     kb_summary = []
-    for sig in kb_signals[:30]:
-        kb_summary.append(f"- [{sig.get('timeframe', '?')}] {sig.get('title', '?')} ({sig.get('force_type', '?')})")
+    for sig in kb_signals[:20]:
+        lifecycle = sig.get("lifecycle_stage", "")
+        momentum = sig.get("trend_momentum", "")
+        credibility = sig.get("source_credibility", "")
+        desc = sig.get("description", "")
+        line = f"- **{sig.get('title', '?')}** [{sig.get('force_type', '?')} | {sig.get('timeframe', '?')}]"
+        if desc:
+            line += f"\n  {desc}"
+        if lifecycle or momentum:
+            line += f"\n  Lifecycle: {lifecycle} | Momentum: {momentum} | Credibility: {credibility}"
+        kb_summary.append(line)
 
     # Forces by timeframe
     forces_by_tf = defaultdict(list)
@@ -509,8 +588,8 @@ Forces identified in domain companies ({len(domain_forces)} total):
 - Medium-term (12-24mo): {len(forces_by_tf.get('12-24mo', []))} forces
 - Long-term (24-36mo): {len(forces_by_tf.get('24-36mo', []))} forces
 
-KB signals for this domain's themes:
-{chr(10).join(kb_summary[:20])}
+KB SIGNAL EVIDENCE for this domain's themes (full descriptions — use these to ground your analysis in actual source content):
+{chr(10).join(kb_summary)}
 
 ANALYTICAL STRUCTURE:
 
@@ -545,7 +624,7 @@ OUTPUT FORMAT:
 # LLM GENERATION + VERIFICATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _generate_sonnet(prompt: str, max_tokens: int = 4000) -> tuple[str, int]:
+def _generate_sonnet(prompt: str, max_tokens: int = 5000) -> tuple[str, int]:
     """Generate text via Sonnet 4.6. Returns (text, word_count)."""
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not anthropic_key:
