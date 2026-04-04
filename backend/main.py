@@ -1813,6 +1813,91 @@ def foresight_kb_cleanup_status():
         return dict(_foresight_cleanup_state)
 
 
+# --- FORESIGHT OBSERVATORY ENDPOINTS ---
+
+_observatory_state = {
+    "is_running": False,
+    "started_at": None,
+    "completed_at": None,
+    "current_step": None,
+    "current": 0,
+    "total": 0,
+    "result": None,
+}
+_observatory_lock = threading.Lock()
+
+
+def _run_observatory_generation():
+    """Background worker for observatory generation."""
+    try:
+        from foresight_observatory import generate_observatory
+
+        def progress_cb(step_name, index, total):
+            with _observatory_lock:
+                _observatory_state["current_step"] = step_name
+                _observatory_state["current"] = index + 1
+                _observatory_state["total"] = total
+
+        result = generate_observatory(progress_callback=progress_cb)
+
+        with _observatory_lock:
+            _observatory_state["result"] = {"status": "completed", "domain_count": result.get("domain_count", 0)}
+            _observatory_state["completed_at"] = datetime.utcnow().isoformat()
+            _observatory_state["is_running"] = False
+            _observatory_state["current_step"] = None
+    except Exception as e:
+        print(f"   [Observatory] Generation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        with _observatory_lock:
+            _observatory_state["is_running"] = False
+            _observatory_state["result"] = {"error": str(e)}
+            _observatory_state["completed_at"] = datetime.utcnow().isoformat()
+
+
+@app.post("/admin/generate-observatory")
+def generate_observatory_endpoint(request: Request):
+    """
+    Starts Foresight Observatory generation in a background thread.
+    Generates three layers of strategic analysis using Sonnet 4.6 + Gemini verification.
+    Returns immediately — poll /admin/observatory-status for progress.
+    """
+    verify_admin(request)
+
+    with _observatory_lock:
+        if _observatory_state["is_running"]:
+            raise HTTPException(status_code=409, detail="Observatory generation already in progress.")
+        _observatory_state["is_running"] = True
+        _observatory_state["current"] = 0
+        _observatory_state["total"] = 0
+        _observatory_state["current_step"] = "Initializing..."
+        _observatory_state["started_at"] = datetime.utcnow().isoformat()
+        _observatory_state["completed_at"] = None
+        _observatory_state["result"] = None
+
+    thread = threading.Thread(target=_run_observatory_generation, daemon=True)
+    thread.start()
+
+    return {"status": "started"}
+
+
+@app.get("/admin/observatory-status")
+def observatory_status():
+    """Returns current Observatory generation progress. No auth required (read-only)."""
+    with _observatory_lock:
+        return dict(_observatory_state)
+
+
+@app.get("/api/observatory")
+async def get_observatory(response: Response):
+    """Returns the cached observatory analysis. No auth required (read-only)."""
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    data = storage.get_observatory()
+    if not data:
+        raise HTTPException(status_code=404, detail="No observatory data found. Generate one first.")
+    return data
+
+
 # --- MAIN SCAN ENDPOINT (MULTIPART) ---
 @app.post("/scan")
 def run_scan(

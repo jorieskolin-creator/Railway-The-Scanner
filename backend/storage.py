@@ -570,6 +570,26 @@ class BlobStorage:
             "themes": theme_summaries,
         }
 
+    # --- FORESIGHT OBSERVATORY ---
+
+    def save_observatory(self, data: dict):
+        """Saves observatory analysis. Overwrites previous version (single global file)."""
+        prefix = "observatory/latest"
+        filename = f"{prefix}.json"
+        new_url = self._put(filename, data)
+        if new_url:
+            self._prune_old_versions(prefix, keep=2)
+        return new_url
+
+    def get_observatory(self):
+        """Retrieves the latest observatory analysis."""
+        prefix = "observatory/latest"
+        blobs = self._list(prefix=prefix, limit=5)
+        if not blobs:
+            return None
+        blobs.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
+        return self._get(blobs[0].get("url"))
+
     def nuke_everything(self):
         """
         DANGEROUS: Deletes ALL files in the blob storage.

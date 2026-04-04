@@ -18,6 +18,7 @@ const ScannerInput = (window as any).ScannerInput;
 const CompanyModal = (window as any).CompanyModal;
 const ThemeExplorer = (window as any).ThemeExplorer;
 const MarketIntelligenceModal = (window as any).MarketIntelligenceModal;
+const ObservatoryModal = (window as any).ObservatoryModal;
 
 const IS_ADMIN_MODE = true; 
 
@@ -61,6 +62,12 @@ const App = () => {
   const [isMarketIntelOpen, setIsMarketIntelOpen] = useState(false);
   const [marketIntelData, setMarketIntelData] = useState(null);
   const [marketIntelLoading, setMarketIntelLoading] = useState(false);
+
+  // OBSERVATORY STATE
+  const [isObservatoryOpen, setIsObservatoryOpen] = useState(false);
+  const [observatoryData, setObservatoryData] = useState(null);
+  const [observatoryLoading, setObservatoryLoading] = useState(false);
+  const [observatoryPassword, setObservatoryPassword] = useState('');
 
   // THEME EXPLORER STATE
   const [isThemeExplorerOpen, setIsThemeExplorerOpen] = useState(false);
@@ -329,6 +336,31 @@ const App = () => {
     setIsMarketIntelOpen(true);
     if (!marketIntelData) {
       await fetchMarketIntelData();
+    }
+  };
+
+  const fetchObservatoryData = async () => {
+    setObservatoryLoading(true);
+    try {
+      const res = await fetch(`/api/observatory?t=${Date.now()}`);
+      if (res.ok) {
+        const result = await res.json();
+        setObservatoryData(result);
+      }
+    } catch (e) {
+      console.error('Observatory fetch failed:', e);
+    } finally {
+      setObservatoryLoading(false);
+    }
+  };
+
+  const handleOpenObservatory = async () => {
+    const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to open Strategic Observatory:");
+    if (!password) return;
+    setObservatoryPassword(password);
+    setIsObservatoryOpen(true);
+    if (!observatoryData) {
+      await fetchObservatoryData();
     }
   };
 
@@ -843,6 +875,9 @@ const App = () => {
                 </button>
                 <button onClick={handleOpenMarketIntel} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-cyan-900/40 hover:bg-cyan-800/60 border border-cyan-700/50 text-cyan-200 font-mono font-bold text-[10px] rounded transition-all">
                     <TrendingUp size={12} /> INTEL
+                </button>
+                <button onClick={handleOpenObservatory} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-violet-900/40 hover:bg-violet-800/60 border border-violet-700/50 text-violet-200 font-mono font-bold text-[10px] rounded transition-all">
+                    <Eye size={12} /> OBSERVATORY
                 </button>
                 <button onClick={() => {
                     const pw = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to view Strategic Foresight Themes:");
@@ -1912,6 +1947,15 @@ const App = () => {
         onClose={() => setIsMarketIntelOpen(false)}
         onRefresh={fetchMarketIntelData}
         onCompanyClick={(company) => { setIsMarketIntelOpen(false); handleCompanyClick(company); }}
+      />
+
+      <ObservatoryModal
+        isOpen={isObservatoryOpen}
+        data={observatoryData}
+        loading={observatoryLoading}
+        onClose={() => { setIsObservatoryOpen(false); setObservatoryPassword(''); }}
+        onRefresh={fetchObservatoryData}
+        adminPassword={observatoryPassword}
       />
 
       <ThemeExplorer
