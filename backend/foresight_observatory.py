@@ -123,6 +123,107 @@ def _load_all_data(storage: BlobStorage):
     }
 
 
+def _aggregate_stakeholder_dynamics(company_details: list, gap_patterns: list) -> dict:
+    """Aggregate stakeholder data for MACTOR-lite analysis.
+
+    Cross-references key_people topics with KB dimensions and foresight themes
+    to identify which organizational roles champion or resist which forces.
+    """
+    # Role classification buckets
+    ROLE_BUCKETS = {
+        "C-Suite / Executive": ["ceo", "cfo", "cto", "cio", "coo", "chief", "president", "managing director", "vd"],
+        "Board / Governance": ["board", "chairman", "chairwoman", "director", "non-executive"],
+        "Technology / Innovation": ["technology", "innovation", "digital", "data", "architect", "engineering", "r&d"],
+        "Strategy / Commercial": ["strategy", "commercial", "business development", "marketing", "sales", "growth"],
+        "Operations / HR": ["operations", "hr", "human resources", "people", "talent", "supply chain", "logistics"],
+    }
+
+    def classify_role(role_str: str) -> str:
+        role_lower = (role_str or "").lower()
+        for bucket, keywords in ROLE_BUCKETS.items():
+            if any(kw in role_lower for kw in keywords):
+                return bucket
+        return "Other"
+
+    # Dimension keywords for topic matching
+    DIM_KEYWORDS = {
+        "Operating Model": ["agile", "lean", "operating model", "organization", "team", "autonomy", "devops", "process"],
+        "Service Portfolio": ["product", "service", "saas", "platform", "portfolio", "offering", "revenue model"],
+        "Values": ["culture", "values", "trust", "diversity", "inclusion", "wellbeing", "sustainability", "esg"],
+        "Strategy": ["strategy", "growth", "market", "competitive", "vision", "transformation", "future"],
+        "AI Readiness": ["ai", "artificial intelligence", "data", "machine learning", "automation", "digital", "cloud"],
+    }
+
+    # Aggregate: role_bucket → dimension affinity counts
+    role_dim_affinity = defaultdict(lambda: defaultdict(int))
+    role_counts = Counter()
+    stakeholder_count = 0
+    enriched_count = 0
+
+    for company in company_details:
+        for person in (company.get("key_people") or []):
+            stakeholder_count += 1
+            role = person.get("role", "")
+            bucket = classify_role(role)
+            role_counts[bucket] += 1
+
+            insights = person.get("linkedin_insights") or {}
+            if not insights.get("found"):
+                continue
+            enriched_count += 1
+
+            topics = insights.get("topics") or []
+            headline = (insights.get("headline") or "").lower()
+            all_text = " ".join(topics).lower() + " " + headline
+
+            for dim, keywords in DIM_KEYWORDS.items():
+                if any(kw in all_text for kw in keywords):
+                    role_dim_affinity[bucket][dim] += 1
+
+    # Build the stakeholder-dimension matrix as readable text
+    matrix_lines = []
+    for bucket in ROLE_BUCKETS:
+        if role_counts.get(bucket, 0) == 0:
+            continue
+        affinities = role_dim_affinity.get(bucket, {})
+        if not affinities:
+            matrix_lines.append(f"- {bucket} ({role_counts[bucket]} people): No dimension affinity signals detected")
+            continue
+        top_dims = sorted(affinities.items(), key=lambda x: x[1], reverse=True)
+        dim_str = ", ".join(f"{d}={c}" for d, c in top_dims)
+        matrix_lines.append(f"- {bucket} ({role_counts[bucket]} people): focus on {dim_str}")
+
+    # Identify dimension gaps that lack stakeholder champions
+    championed_dims = set()
+    for bucket_affinities in role_dim_affinity.values():
+        for dim, count in bucket_affinities.items():
+            if count >= 2:
+                championed_dims.add(dim)
+
+    unchampioned = [dim for dim in KB_DIMENSIONS if dim not in championed_dims]
+
+    # Identify potential alignment conflicts (C-suite vs Tech roles)
+    conflicts = []
+    csuite = role_dim_affinity.get("C-Suite / Executive", {})
+    tech = role_dim_affinity.get("Technology / Innovation", {})
+    for dim in KB_DIMENSIONS:
+        cs_focus = csuite.get(dim, 0)
+        tech_focus = tech.get(dim, 0)
+        if cs_focus >= 2 and tech_focus == 0:
+            conflicts.append(f"{dim}: strong C-Suite focus but absent from Technology/Innovation discourse")
+        elif tech_focus >= 2 and cs_focus == 0:
+            conflicts.append(f"{dim}: Technology/Innovation advocates but no C-Suite championship")
+
+    return {
+        "stakeholder_count": stakeholder_count,
+        "enriched_count": enriched_count,
+        "role_distribution": dict(role_counts),
+        "matrix_text": "\n".join(matrix_lines),
+        "unchampioned_dimensions": unchampioned,
+        "alignment_conflicts": conflicts,
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # PROMPT BUILDERS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -187,20 +288,54 @@ Section 1 — ANTICIPATION: What forces are converging? Which weak signals are s
 
 Section 2 — PARTICIPATION: Where are organizations already adapting? What patterns emerge from how companies engage with these forces? What does the cross-impact data reveal about which organizational dimensions are most under pressure?
 
-Section 3 — FUTURES LITERACY (Three Scenarios):
-- Acceleration: Forces converge faster than expected — what happens to organizations that haven't adapted their thinking?
-- Drift (Status Quo): Inertia continues — what gradually deteriorates?
-- Disruption: Black swan convergence — what combinations create sudden system shifts?
+Section 3 — FUTURES LITERACY (Scenario Pathways):
+
+This section uses Summary/Scenario Writing methodology — the production of plausible future accounts based on a creative combination of the data above, factual patterns, and reasoned hypotheses. Do NOT simply list three separate scenarios. Instead, identify 2-3 FORCE CLUSTERS — groups of forces from the data that naturally co-occur and amplify each other — and build branching narratives from them.
+
+For each force cluster:
+1. Name the cluster and identify which specific forces from the data compose it (cite the themes/categories)
+2. Describe the PLAUSIBILITY CONDITIONS — what specific signals would need to strengthen for this cluster to become dominant? Reference actual timeframe and force_type data.
+3. Write a SHORT BRANCHING NARRATIVE: "If this cluster accelerates, organizations that [specific posture] will [outcome], while those that [opposite posture] will [different outcome]."
+4. Identify CROSS-FORCE DEPENDENCIES — how does this cluster interact with or block other clusters? ("If cluster A accelerates, it makes cluster B more likely because...")
+
+Frame the three clusters as:
+- A convergence scenario (multiple Probable/Emerging forces compound)
+- A drift scenario (Plausible/Maturing forces stall while weak signals continue building)
+- A disruption scenario (Preposterous/Black Swan forces combine with one accelerating cluster)
+
+End with: What would an organization with genuine futures literacy do differently from one that merely tracks trends? Frame this as a thinking capability, not a technology adoption question.
 
 OUTPUT FORMAT:
-- 800-1000 words
+- 900-1100 words
 - Three sections with headers (## Anticipation, ## Participation, ## Futures Literacy)
 - Analytical essay prose — NO bullet points
 - Written as a futurologist would present to a strategy board
 - End with implications for organizational thinking, never technology adoption"""
 
 
-def _build_finland_prompt(global_analysis: str, mi: dict) -> str:
+def _format_stakeholder_block(stakeholder_data: dict = None) -> str:
+    """Format stakeholder data for inclusion in prompts."""
+    if not stakeholder_data or stakeholder_data.get("enriched_count", 0) == 0:
+        return "STAKEHOLDER DATA: Not available (insufficient LinkedIn enrichment data)."
+
+    sd = stakeholder_data
+    block = f"""STAKEHOLDER-DIMENSION AFFINITY DATA (from {sd['stakeholder_count']} key stakeholders across all companies, {sd['enriched_count']} with LinkedIn insights):
+
+Role distribution: {json.dumps(sd['role_distribution'])}
+
+Stakeholder-Dimension Matrix (which roles focus on which strategic dimensions):
+{sd['matrix_text']}"""
+
+    if sd.get("unchampioned_dimensions"):
+        block += f"\n\nUnchampioned dimensions (under external pressure but lacking internal advocates): {', '.join(sd['unchampioned_dimensions'])}"
+
+    if sd.get("alignment_conflicts"):
+        block += f"\n\nAlignment conflicts detected:\n" + "\n".join(f"- {c}" for c in sd["alignment_conflicts"])
+
+    return block
+
+
+def _build_finland_prompt(global_analysis: str, mi: dict, stakeholder_data: dict = None) -> str:
     """Build prompt for Output 2: Finnish Economy Force Map."""
     # Market health summary
     health_summary = ""
@@ -264,6 +399,8 @@ Top Foresight Themes Affecting Finnish Companies:
 Total companies analyzed: {mi.get('company_count', 0)}
 Companies with detailed data: {mi.get('detailed_count', 0)}
 
+{_format_stakeholder_block(stakeholder_data)}
+
 ANALYTICAL STRUCTURE:
 
 Section 1 — THE FINNISH POSITION: Where does Finnish industry stand in the global force landscape? Use the market health scores and archetype distributions to identify strengths and blind spots. Ground every claim in the numbers above.
@@ -277,9 +414,20 @@ Section 4 — THREE HORIZONS FOR FINLAND:
 - Prepare (12-24 months): What capabilities need building?
 - Position (24-36 months): What "Own Race" opportunities exist?
 
+Section 5 — STAKEHOLDER DYNAMICS (MACTOR-lite analysis):
+
+This section applies Stakeholder Analysis methodology — systematically considering which organizational roles champion or resist specific strategic objectives, to identify potential alliances, conflicts, and intervention points.
+
+Using the stakeholder-dimension affinity data above, analyze:
+1. CHAMPIONS AND BLIND SPOTS: Which organizational dimensions have strong stakeholder champions (C-Suite, Technology, Strategy roles actively discussing them)? Which dimensions are "unchampioned" — under pressure from external forces but lacking internal advocates? This reveals where organizational thinking capacity is weakest.
+2. ALIGNMENT CONFLICTS: Where do different stakeholder groups pull in different directions? For example, if Technology leaders focus on AI Readiness while C-Suite focuses on Strategy, what does this misalignment mean for the organization's ability to adapt coherently?
+3. COALITION POTENTIAL: Based on the role-dimension patterns, where could natural alliances form across Finnish industry? What shared stakeholder dynamics suggest opportunities for cross-company or cross-domain collaboration?
+
+Frame stakeholder dynamics through the lens of organizational thinking capacity — not as political maneuvering but as a diagnostic of whether Finnish companies have the internal alignment needed to run their own race.
+
 OUTPUT FORMAT:
-- 1000-1200 words
-- Four sections with headers
+- 1200-1500 words
+- Five sections with headers
 - Analytical essay prose — NO bullet points
 - Grounded in actual company data patterns (cite specific numbers)"""
 
@@ -375,9 +523,20 @@ Section 2 — FORCES BY TIMESCALE:
 
 Section 3 — THE OWN RACE OPPORTUNITY: What would it mean for companies in {domain} to define their own race rather than react? Specific strategic scenarios.
 
+Section 4 — CONTRARIAN SIGNAL (Genius Forecasting):
+
+This section applies the Genius Forecasting method — the preparation of insight-driven forecasts that require both deep domain expertise and creative pattern recognition to see what conventional analysis misses.
+
+In 2-3 paragraphs, identify:
+1. THE UNDERESTIMATED FORCE: What does the data suggest that most strategists in {domain} would dismiss or overlook? Look for: forces with high credibility but low company engagement, Black Swan/Preposterous signals that connect to accelerating trends, or dimensions where the gap is extreme but nobody is talking about it.
+2. THE CONTRARIAN HYPOTHESIS: Formulate a specific, defensible contrarian view: "The conventional wisdom in {domain} is [X], but the data suggests [Y] because [specific evidence]." This should challenge assumptions about what {domain} companies think their future looks like.
+3. THE IMPLICATION: If the contrarian view is correct, what should organizations in this domain STOP doing that they currently consider essential? What should they START doing that currently seems marginal or irrelevant?
+
+Frame this as strategic foresight, not prediction. The value is in expanding the range of futures that decision-makers consider plausible.
+
 OUTPUT FORMAT:
-- 600-800 words
-- Three sections with headers
+- 700-900 words
+- Four sections with headers
 - Analytical essay prose — NO bullet points
 - Reference actual data from above"""
 
@@ -560,7 +719,9 @@ def generate_observatory(progress_callback=None):
 
     # --- Output 2: Finnish Economy Force Map ---
     progress("Finnish Economy Force Map", 1, total_steps)
-    finland_prompt = _build_finland_prompt(global_text, mi)
+    stakeholder_data = _aggregate_stakeholder_dynamics(data["company_details"], mi.get("gap_patterns", []))
+    print(f"   [Observatory] Stakeholders: {stakeholder_data['stakeholder_count']} total, {stakeholder_data['enriched_count']} enriched, {len(stakeholder_data['alignment_conflicts'])} conflicts detected")
+    finland_prompt = _build_finland_prompt(global_text, mi, stakeholder_data)
     finland_source = f"Companies: {mi.get('company_count', 0)}, Domains: {len(mi.get('market_health', []))}, FAVI segments: {json.dumps(mi.get('favi_segments', {}))}"
     finland_text, finland_verify = _generate_with_verification(finland_prompt, finland_source, "Finnish Economy Force Map")
 
