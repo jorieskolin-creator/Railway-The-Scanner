@@ -341,6 +341,10 @@ const App = () => {
     if (!marketIntelData) {
       await fetchMarketIntelData();
     }
+    // Lazy-load Observatory data for Finnish Economy Force Map in Future Demand tab
+    if (!observatoryData && !observatoryLoading) {
+      fetchObservatoryData();
+    }
   };
 
   const fetchObservatoryData = async () => {
@@ -1951,6 +1955,7 @@ const App = () => {
         onClose={() => setIsMarketIntelOpen(false)}
         onRefresh={fetchMarketIntelData}
         onCompanyClick={(company) => { setIsMarketIntelOpen(false); handleCompanyClick(company); }}
+        observatoryData={observatoryData}
       />
 
       <ObservatoryModal

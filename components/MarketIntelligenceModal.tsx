@@ -8,7 +8,7 @@ const MIIcons = new Proxy(LucideRaw, {
     return () => null;
   }
 });
-const { X, Loader2, TrendingUp, Target, Crosshair, ShieldAlert, Download, ChevronRight, Activity, BarChart3, Gauge, Radar, RefreshCw, Eye, AlertTriangle, BookOpen } = MIIcons;
+const { X, Loader2, TrendingUp, Target, Crosshair, ShieldAlert, Download, ChevronRight, Activity, BarChart3, Gauge, Radar, RefreshCw, Eye, AlertTriangle, BookOpen, Globe } = MIIcons;
 
 const {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -276,7 +276,7 @@ const ExecutiveSummaryTab = ({ data }: { data: any }) => {
 // TAB 2: FUTURE DEMAND
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const FutureDemandTab = ({ data }: { data: any }) => {
+const FutureDemandTab = ({ data, observatoryData = null }: { data: any; observatoryData?: any }) => {
   const foresights = data.top_foresights || [];
   const crossImpact = data.cross_impact || [];
   const industryRadar = data.industry_radar || [];
@@ -420,6 +420,57 @@ const FutureDemandTab = ({ data }: { data: any }) => {
                 </ResponsiveContainer>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* FINNISH ECONOMY FORCE MAP — from Observatory */}
+      {observatoryData?.finland_analysis?.text && (
+        <div className="mt-6 bg-gradient-to-br from-violet-950/30 to-slate-900/50 rounded-xl border border-violet-500/20 overflow-hidden">
+          <div className="px-5 py-4 border-b border-violet-500/10 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-violet-500/20 flex items-center justify-center">
+                <Globe size={16} className="text-violet-400" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-violet-200">Finnish Economy Force Map</h3>
+                <p className="text-[10px] text-slate-500 mt-0.5">Strategic Foresight Observatory — How global forces reshape Finnish business</p>
+              </div>
+            </div>
+            {observatoryData.generated_at && (
+              <span className="text-[9px] font-mono text-slate-600">
+                {new Date(observatoryData.generated_at).toLocaleDateString('en-FI', { day: 'numeric', month: 'short', year: 'numeric' })}
+              </span>
+            )}
+          </div>
+          <div className="px-5 py-4 space-y-0">
+            {observatoryData.finland_analysis.text.split(/\n+/).map((part: string, i: number) => {
+              const trimmed = part.trim();
+              if (!trimmed) return null;
+              if (trimmed.startsWith("## ")) {
+                return <h4 key={i} className="text-sm font-bold text-violet-200 mt-5 mb-2 border-b border-violet-500/10 pb-1">{trimmed.replace(/^##\s*/, "")}</h4>;
+              }
+              if (trimmed.startsWith("# ")) {
+                return <h3 key={i} className="text-base font-bold text-violet-100 mt-5 mb-2">{trimmed.replace(/^#\s*/, "")}</h3>;
+              }
+              const rendered = trimmed.split(/(\*\*[^*]+\*\*)/).map((seg: string, j: number) => {
+                if (seg.startsWith("**") && seg.endsWith("**")) {
+                  return <strong key={j} className="text-violet-200 font-semibold">{seg.slice(2, -2)}</strong>;
+                }
+                return <span key={j}>{seg}</span>;
+              });
+              return <p key={i} className="text-[12px] text-slate-300/90 leading-relaxed mb-2.5">{rendered}</p>;
+            })}
+          </div>
+          {/* Metadata footer */}
+          <div className="px-5 py-2.5 border-t border-violet-500/10 flex items-center gap-4 text-[9px] text-slate-600">
+            {observatoryData.finland_analysis.domains_analyzed && (
+              <span>{observatoryData.finland_analysis.domains_analyzed} domains analyzed</span>
+            )}
+            {observatoryData.finland_analysis.favi_distribution && (
+              <span>FAVI: {Object.entries(observatoryData.finland_analysis.favi_distribution).map(([k, v]: [string, any]) => `${k}: ${v}`).join(' · ')}</span>
+            )}
+            {observatoryData.model && <span>Model: {observatoryData.model}</span>}
           </div>
         </div>
       )}
@@ -970,13 +1021,14 @@ const TABS = [
   { id: 'favi', label: 'Foresight Vulnerability', icon: Eye },
 ];
 
-const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, onCompanyClick }: {
+const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, onCompanyClick, observatoryData = null }: {
   isOpen: boolean;
   data: any;
   loading: boolean;
   onClose: () => void;
   onRefresh?: () => void;
   onCompanyClick: (company: any) => void;
+  observatoryData?: any;
 }) => {
   const [activeTab, setActiveTab] = useState('executive');
 
@@ -1041,7 +1093,7 @@ const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, on
           ) : (
             <>
               {activeTab === 'executive' && <ExecutiveSummaryTab data={data} />}
-              {activeTab === 'future' && <FutureDemandTab data={data} />}
+              {activeTab === 'future' && <FutureDemandTab data={data} observatoryData={observatoryData} />}
               {activeTab === 'current' && <CurrentDemandTab data={data} />}
               {activeTab === 'sales' && <SalesPrioritiesTab data={data} onCompanyClick={onCompanyClick} />}
               {activeTab === 'favi' && <ForesightVulnerabilityTab data={data} onCompanyClick={onCompanyClick} />}
