@@ -200,6 +200,10 @@ const App = () => {
     if (!marketIntelData && !marketIntelLoading) {
       fetchMarketIntelData();
     }
+    // Lazy-load Observatory (for domain dossier) in background if not yet fetched
+    if (!observatoryData && !observatoryLoading) {
+      fetchObservatoryData();
+    }
 
     try {
         let fullData = null;
@@ -1969,6 +1973,7 @@ const App = () => {
         isOpen={isModalOpen}
         isLoading={isLoadingDetails}
         marketIntelData={marketIntelData}
+        observatoryData={observatoryData}
         onClose={() => setIsModalOpen(false)}
         onUpdate={(updated) => {
             setSelectedCompany(updated);

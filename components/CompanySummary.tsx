@@ -64,7 +64,7 @@ const FAVI_SEGMENT_CONFIG = {
   "Safe Harbor": { color: "text-emerald-400", bg: "bg-emerald-500/15", border: "border-emerald-500/30", icon: "text-emerald-400", description: "Healthy and future-ready" },
 };
 
-const CompanySummary = ({ data, faviData }) => {
+const CompanySummary = ({ data, faviData, observatoryData = null }) => {
   const summaryRef = useRef(null);
   const [copied, setCopied] = useState(false);
   const [pitchCopied, setPitchCopied] = useState(false);
@@ -1315,6 +1315,111 @@ const CompanySummary = ({ data, faviData }) => {
                 </div>
             </div>
         )}
+
+        {/* DOMAIN FORCE DOSSIER — from Observatory */}
+        {(() => {
+          const domain = data.domain;
+          const dossier = observatoryData?.domain_dossiers?.find((d: any) => d.domain === domain);
+          if (!dossier || !dossier.text) return null;
+
+          const archDist = dossier.archetype_distribution || {};
+          const forces = dossier.forces_by_timescale || {};
+          const ARCH_COLORS = {
+            "Thriving": "text-emerald-300 bg-emerald-500/15 border-emerald-500/30",
+            "Modernizing": "text-amber-300 bg-amber-500/15 border-amber-500/30",
+            "Cash Cow": "text-blue-300 bg-blue-500/15 border-blue-500/30",
+            "At Risk": "text-rose-300 bg-rose-500/15 border-rose-500/30",
+          };
+
+          return (
+            <div className="bg-gradient-to-r from-amber-900/20 to-orange-900/20 p-8 rounded-2xl border-l-4 border-amber-500 backdrop-blur-sm">
+              <h3 className="text-xl font-bold text-white mb-1 flex items-center gap-2">
+                <Eye className="text-amber-400" size={22} />
+                Domain Force Dossier: {domain}
+              </h3>
+              <p className="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">
+                Strategic foresight analysis for the {domain} domain — from the Observatory
+              </p>
+
+              {/* Domain stats */}
+              <div className="flex flex-wrap gap-2 mb-4">
+                <span className="px-2 py-0.5 bg-black/20 rounded border border-white/10 text-[9px] font-mono text-slate-400">
+                  {dossier.company_count} companies
+                </span>
+                {Object.entries(archDist).map(([k, v]: [string, any]) => (
+                  <span key={k} className={`px-2 py-0.5 rounded border text-[9px] font-mono ${ARCH_COLORS[k] || "text-slate-300 bg-black/20 border-white/10"}`}>
+                    {k}: {v}
+                  </span>
+                ))}
+              </div>
+
+              {/* Forces by timescale badges */}
+              {(forces.act_now?.length > 0 || forces.prepare?.length > 0 || forces.position?.length > 0) && (
+                <div className="flex flex-wrap gap-2 mb-5">
+                  {forces.act_now?.length > 0 && (
+                    <span className="px-2 py-0.5 bg-rose-500/10 border border-rose-500/30 rounded text-[9px] font-mono text-rose-300">
+                      Act Now: {forces.act_now.length} forces
+                    </span>
+                  )}
+                  {forces.prepare?.length > 0 && (
+                    <span className="px-2 py-0.5 bg-amber-500/10 border border-amber-500/30 rounded text-[9px] font-mono text-amber-300">
+                      Prepare: {forces.prepare.length} forces
+                    </span>
+                  )}
+                  {forces.position?.length > 0 && (
+                    <span className="px-2 py-0.5 bg-cyan-500/10 border border-cyan-500/30 rounded text-[9px] font-mono text-cyan-300">
+                      Position: {forces.position.length} forces
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* Dossier essay text */}
+              <div>
+                {dossier.text.split(/\n\n+/).map((block: string, pi: number) => {
+                  const trimmed = block.trim();
+                  if (!trimmed) return null;
+                  // Section headers
+                  const h2Match = trimmed.match(/^##\s+(.+)/);
+                  if (h2Match) {
+                    return (
+                      <h4 key={pi} className={`text-base font-semibold text-amber-300 uppercase tracking-wide${pi > 0 ? " mt-6 mb-2" : " mb-2"}`}>
+                        {h2Match[1]}
+                      </h4>
+                    );
+                  }
+                  const h3Match = trimmed.match(/^###\s+(.+)/);
+                  if (h3Match) {
+                    return (
+                      <h5 key={pi} className={`text-sm font-semibold text-amber-200/80 mt-4 mb-1`}>
+                        {h3Match[1]}
+                      </h5>
+                    );
+                  }
+                  // Bold text within paragraphs
+                  const parts = trimmed.split(/(\*\*[^*]+\*\*)/);
+                  return (
+                    <p key={pi} className={`text-slate-200 leading-relaxed text-sm font-light${pi > 0 ? " mt-4" : ""}`}>
+                      {parts.map((seg: string, j: number) => {
+                        if (seg.startsWith("**") && seg.endsWith("**")) {
+                          return <strong key={j} className="text-slate-100 font-semibold">{seg.slice(2, -2)}</strong>;
+                        }
+                        return <span key={j}>{seg}</span>;
+                      })}
+                    </p>
+                  );
+                })}
+              </div>
+
+              {/* Observatory timestamp */}
+              {observatoryData?.generated_at && (
+                <p className="text-[9px] text-slate-600 font-mono mt-5 pt-3 border-t border-white/5">
+                  Observatory analysis generated: {new Date(observatoryData.generated_at).toLocaleDateString()} | Model: {observatoryData.model}
+                </p>
+              )}
+            </div>
+          );
+        })()}
       </div>
     </div>
   );
