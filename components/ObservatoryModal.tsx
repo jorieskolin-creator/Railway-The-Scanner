@@ -255,26 +255,48 @@ const ObservatoryModal = ({ isOpen, data, loading, onClose, onRefresh, adminPass
 }) => {
   const [generationStatus, setGenerationStatus] = useState<any>(null);
   const pollRef = useRef<any>(null);
+  const hasRefreshedRef = useRef<boolean>(false);
 
-  // Poll for generation status
+  // Poll for generation status — only while generation is running
   useEffect(() => {
     if (!isOpen) return;
+
     const poll = async () => {
       try {
         const res = await fetch(`/admin/observatory-status?t=${Date.now()}`);
         if (res.ok) {
           const status = await res.json();
           setGenerationStatus(status);
-          // If just completed, refresh the data
-          if (status.completed_at && !status.is_running && status.result && !status.result.error) {
+
+          // If just completed, refresh data ONCE and stop polling
+          if (status.completed_at && !status.is_running && status.result && !status.result.error && !hasRefreshedRef.current) {
+            hasRefreshedRef.current = true;
             onRefresh();
+            // Stop polling — generation is done
+            if (pollRef.current) {
+              clearInterval(pollRef.current);
+              pollRef.current = null;
+            }
+          }
+
+          // Stop polling if not running and we already have status
+          if (!status.is_running && pollRef.current) {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
           }
         }
       } catch (e) { /* ignore */ }
     };
+
+    // Initial fetch (one-time, no interval yet)
     poll();
-    pollRef.current = setInterval(poll, 3000);
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
   }, [isOpen]);
 
   const handleGenerate = async () => {
@@ -285,7 +307,28 @@ const ObservatoryModal = ({ isOpen, data, loading, onClose, onRefresh, adminPass
         headers: { "Authorization": `Bearer ${adminPassword}` },
       });
       if (res.ok) {
+        hasRefreshedRef.current = false;  // Reset so we refresh when complete
         setGenerationStatus({ ...generationStatus, is_running: true, current: 0, total: 0, current_step: "Starting..." });
+        // Start polling for progress
+        if (pollRef.current) clearInterval(pollRef.current);
+        const poll = async () => {
+          try {
+            const r = await fetch(`/admin/observatory-status?t=${Date.now()}`);
+            if (r.ok) {
+              const status = await r.json();
+              setGenerationStatus(status);
+              if (status.completed_at && !status.is_running && !hasRefreshedRef.current) {
+                hasRefreshedRef.current = true;
+                onRefresh();
+                if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+              }
+              if (!status.is_running && pollRef.current) {
+                clearInterval(pollRef.current); pollRef.current = null;
+              }
+            }
+          } catch (e) { /* ignore */ }
+        };
+        pollRef.current = setInterval(poll, 3000);
       } else {
         const err = await res.json();
         alert(err.detail || "Failed to start generation");
