@@ -1896,45 +1896,65 @@ const App = () => {
                             )}
                           </div>
                           <div className="flex items-center gap-1 shrink-0">
-                            <button
-                              onClick={() => handleEnrichStakeholdersSingle(item.companyName)}
-                              disabled={enrichingStakeholderCompany === item.companyName}
-                              className="text-slate-500 hover:text-indigo-400 p-1.5 rounded hover:bg-indigo-500/10 transition-all disabled:opacity-50"
-                              title="Stakeholder Intel — Enrich key people with LinkedIn insights"
-                            >
-                              {enrichingStakeholderCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
-                            </button>
-                            <button
-                              onClick={() => handleRefreshProposalsSingle(item.companyName)}
-                              disabled={refreshingProposalsCompany === item.companyName}
-                              className="text-slate-500 hover:text-orange-400 p-1.5 rounded hover:bg-orange-500/10 transition-all disabled:opacity-50"
-                              title="Refresh WHY/WHAT — Regenerate strategic proposals"
-                            >
-                              {refreshingProposalsCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
-                            </button>
-                            <button
-                              onClick={() => handleCleanCompany(item.companyName)}
-                              disabled={cleaningCompany === item.companyName}
-                              className={`${hasUnverifiedClaims ? 'text-orange-400' : 'text-slate-500'} hover:text-emerald-400 p-1.5 rounded hover:bg-emerald-500/10 transition-all disabled:opacity-50`}
-                              title="Reality Check — Verify claims and auto-clean false statements"
-                            >
-                              {cleaningCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <ShieldAlert size={14} />}
-                            </button>
-                            <button
-                              onClick={() => handleOpenEdit(item.companyName)}
-                              disabled={editLoading && editingCompany === item.companyName}
-                              className="text-slate-500 hover:text-sky-400 p-1.5 rounded hover:bg-sky-500/10 transition-all disabled:opacity-50"
-                              title="Edit — Manually edit summary, pitch, and general summary text"
-                            >
-                              {editLoading && editingCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <Pencil size={14} />}
-                            </button>
-                            <button
-                              onClick={() => handleDeleteCompany(item.companyName)}
-                              className="text-slate-500 hover:text-rose-400 p-1.5 rounded hover:bg-rose-500/10 transition-all"
-                              title="Delete — Remove all data for this company from storage"
-                            >
-                              <Trash2 size={14} />
-                            </button>
+                            <div className="relative group/tip">
+                              <button
+                                onClick={() => handleEnrichStakeholdersSingle(item.companyName)}
+                                disabled={enrichingStakeholderCompany === item.companyName}
+                                className="text-slate-500 hover:text-indigo-400 p-1.5 rounded hover:bg-indigo-500/10 transition-all disabled:opacity-50"
+                              >
+                                {enrichingStakeholderCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
+                              </button>
+                              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block z-50 pointer-events-none">
+                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 whitespace-nowrap shadow-xl">Stakeholder Intel<br/><span className="text-slate-500">Enrich key people with LinkedIn insights</span></div>
+                              </div>
+                            </div>
+                            <div className="relative group/tip">
+                              <button
+                                onClick={() => handleRefreshProposalsSingle(item.companyName)}
+                                disabled={refreshingProposalsCompany === item.companyName}
+                                className="text-slate-500 hover:text-orange-400 p-1.5 rounded hover:bg-orange-500/10 transition-all disabled:opacity-50"
+                              >
+                                {refreshingProposalsCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
+                              </button>
+                              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block z-50 pointer-events-none">
+                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 whitespace-nowrap shadow-xl">Refresh WHY/WHAT<br/><span className="text-slate-500">Regenerate strategic proposals</span></div>
+                              </div>
+                            </div>
+                            <div className="relative group/tip">
+                              <button
+                                onClick={() => handleCleanCompany(item.companyName)}
+                                disabled={cleaningCompany === item.companyName}
+                                className={`${hasUnverifiedClaims ? 'text-orange-400' : 'text-slate-500'} hover:text-emerald-400 p-1.5 rounded hover:bg-emerald-500/10 transition-all disabled:opacity-50`}
+                              >
+                                {cleaningCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <ShieldAlert size={14} />}
+                              </button>
+                              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block z-50 pointer-events-none">
+                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 whitespace-nowrap shadow-xl">Reality Check<br/><span className="text-slate-500">Verify claims & auto-clean false statements</span></div>
+                              </div>
+                            </div>
+                            <div className="relative group/tip">
+                              <button
+                                onClick={() => handleOpenEdit(item.companyName)}
+                                disabled={editLoading && editingCompany === item.companyName}
+                                className="text-slate-500 hover:text-sky-400 p-1.5 rounded hover:bg-sky-500/10 transition-all disabled:opacity-50"
+                              >
+                                {editLoading && editingCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <Pencil size={14} />}
+                              </button>
+                              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block z-50 pointer-events-none">
+                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 whitespace-nowrap shadow-xl">Edit Company<br/><span className="text-slate-500">Manually edit summary, pitch & general text</span></div>
+                              </div>
+                            </div>
+                            <div className="relative group/tip">
+                              <button
+                                onClick={() => handleDeleteCompany(item.companyName)}
+                                className="text-slate-500 hover:text-rose-400 p-1.5 rounded hover:bg-rose-500/10 transition-all"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block z-50 pointer-events-none">
+                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-rose-400 whitespace-nowrap shadow-xl">Delete Company<br/><span className="text-slate-500">Remove all data from storage</span></div>
+                              </div>
+                            </div>
                           </div>
                         </div>
                         {/* INLINE EDIT PANEL */}
