@@ -29,6 +29,8 @@ const ThemeExplorer = ({ isOpen, onClose, authToken = '' }) => {
   const [error, setError] = useState(null);
   const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({});
   const [expandedThemes, setExpandedThemes] = useState<Record<string, boolean>>({});
+  const [themeSignals, setThemeSignals] = useState<Record<string, any>>({});
+  const [signalsLoading, setSignalsLoading] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (isOpen && !data && authToken) {
@@ -49,7 +51,18 @@ const ThemeExplorer = ({ isOpen, onClose, authToken = '' }) => {
   };
 
   const toggleTheme = (theme: string) => {
-    setExpandedThemes(prev => ({ ...prev, [theme]: !prev[theme] }));
+    const willExpand = !expandedThemes[theme];
+    setExpandedThemes(prev => ({ ...prev, [theme]: willExpand }));
+    // Load signals on first expand
+    if (willExpand && !themeSignals[theme] && !signalsLoading[theme]) {
+      const slug = theme.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/(^_|_$)/g, '');
+      setSignalsLoading(prev => ({ ...prev, [theme]: true }));
+      fetch(`/api/fp-themes/${slug}/signals`, { headers: { 'Authorization': `Bearer ${authToken}` } })
+        .then(r => r.ok ? r.json() : { signals: [] })
+        .then(d => setThemeSignals(prev => ({ ...prev, [theme]: d })))
+        .catch(() => setThemeSignals(prev => ({ ...prev, [theme]: { signals: [] } })))
+        .finally(() => setSignalsLoading(prev => ({ ...prev, [theme]: false })));
+    }
   };
 
   const categories = data?.categories || [];
@@ -165,6 +178,48 @@ const ThemeExplorer = ({ isOpen, onClose, authToken = '' }) => {
                                     <Globe className="w-2.5 h-2.5 text-slate-500" />
                                     {domain}
                                   </span>
+                                ))}
+                              </div>
+
+                              {/* Harvested KB Signals */}
+                              <div className="mt-4 border-t border-slate-700/30 pt-3">
+                                <h5 className="text-[10px] font-bold text-teal-400 uppercase tracking-wide mb-2">
+                                  Harvested Signals {themeSignals[theme.name] ? `(${themeSignals[theme.name].signal_count || 0})` : ''}
+                                </h5>
+                                {signalsLoading[theme.name] && (
+                                  <div className="flex items-center gap-2 py-3 text-slate-500 text-xs">
+                                    <LoaderIcon className="w-3 h-3 animate-spin" /> Loading signals...
+                                  </div>
+                                )}
+                                {themeSignals[theme.name] && themeSignals[theme.name].signals.length === 0 && (
+                                  <p className="text-[10px] text-slate-600 py-2">No signals harvested yet. Run KB Harvest to populate.</p>
+                                )}
+                                {themeSignals[theme.name] && themeSignals[theme.name].signals.map((sig: any, si: number) => (
+                                  <div key={si} className="mb-2 px-3 py-2 bg-slate-800/30 border border-slate-700/30 rounded-lg">
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div className="min-w-0 flex-1">
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                          <span className="text-[11px] text-slate-200 font-medium">{sig.title}</span>
+                                          {sig.source_url && (
+                                            <a href={sig.source_url} target="_blank" rel="noopener noreferrer" className="text-teal-500 hover:text-teal-300 flex-shrink-0">
+                                              <ExternalLink className="w-3 h-3" />
+                                            </a>
+                                          )}
+                                        </div>
+                                        {sig.description && (
+                                          <p className="text-[10px] text-slate-500 mt-1 leading-relaxed line-clamp-2">{sig.description}</p>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                      {sig.force_type && <span className="text-[8px] px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-400 font-mono">{sig.force_type}</span>}
+                                      {sig.timeframe && <span className="text-[8px] px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-400 font-mono">{sig.timeframe}</span>}
+                                      {sig.lifecycle_stage && <span className="text-[8px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 font-mono">{sig.lifecycle_stage}</span>}
+                                      {sig.trend_momentum && <span className="text-[8px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 font-mono">{sig.trend_momentum}</span>}
+                                      {sig.source_credibility && <span className="text-[8px] px-1.5 py-0.5 rounded bg-slate-500/15 text-slate-400 font-mono">cred: {sig.source_credibility}</span>}
+                                      {sig.kb_dimension && <span className="text-[8px] px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-400 font-mono">{sig.kb_dimension}</span>}
+                                    </div>
+                                  </div>
                                 ))}
                               </div>
                             </div>

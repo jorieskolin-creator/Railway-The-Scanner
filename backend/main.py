@@ -396,6 +396,34 @@ async def get_fp_themes(request: Request):
             })
     return {"categories": list(categories.keys()), "themes": themes}
 
+@app.get("/api/fp-themes/{theme_slug}/signals")
+async def get_theme_signals(theme_slug: str, request: Request):
+    """Return harvested KB signals for a specific FP theme. Admin-only."""
+    verify_admin(request)
+    data = storage.get_foresight_kb(theme_slug)
+    if not data:
+        return {"signals": [], "theme_slug": theme_slug}
+    signals = data.get("signals", [])
+    # Return compact signal data for display
+    return {
+        "theme_slug": theme_slug,
+        "signal_count": len(signals),
+        "signals": [{
+            "title": s.get("title", ""),
+            "description": s.get("description", ""),
+            "source_url": s.get("source_url", ""),
+            "force_type": s.get("force_type", ""),
+            "timeframe": s.get("timeframe", ""),
+            "lifecycle_stage": s.get("lifecycle_stage", ""),
+            "trend_momentum": s.get("trend_momentum", ""),
+            "confidence": s.get("confidence", ""),
+            "source_credibility": s.get("source_credibility", ""),
+            "source_count": s.get("source_count", 0),
+            "kb_dimension": s.get("kb_dimension", ""),
+            "validated": s.get("validated", False),
+        } for s in signals],
+    }
+
 @app.get("/api/analyze")
 async def analyze_scores(response: Response):
     """Run statistical analysis across all company scores (correlations, distributions, archetypes)."""
