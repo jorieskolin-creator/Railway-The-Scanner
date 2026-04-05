@@ -31,20 +31,23 @@ const OBS_CATEGORY_COLORS: Record<string, string> = {
 
 const markdownToHtml = (text: string): string => {
   if (!text) return '';
-  return text
-    .split(/\n/)
-    .map(line => {
-      const t = line.trim();
-      if (!t) return '';
-      if (/^-{3,}$/.test(t)) return '<hr>';
-      if (t.startsWith('## ')) return `<h2>${t.slice(3)}</h2>`;
-      if (t.startsWith('# ')) return `<h1>${t.slice(2)}</h1>`;
-      if (t.startsWith('### ')) return `<h3>${t.slice(4)}</h3>`;
-      // Bold
-      const withBold = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-      return `<p>${withBold}</p>`;
-    })
-    .join('\n');
+  // Split into paragraph blocks (double newline or more)
+  const blocks = text.split(/\n\n+/);
+  return blocks.map(block => {
+    const t = block.trim();
+    if (!t) return '';
+    if (/^-{3,}$/.test(t)) return '<hr>';
+    if (t.startsWith('### ')) return `<h3>${t.slice(4).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</h3>`;
+    if (t.startsWith('## ')) return `<h2>${t.slice(3).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</h2>`;
+    if (t.startsWith('# ')) return `<h1>${t.slice(2).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</h1>`;
+    // Regular paragraph: apply bold markers, then bold the first sentence
+    let html = t.replace(/\n/g, ' ').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    // If no bold exists yet, bold the first sentence (up to first period+space or first period+end)
+    if (!html.includes('<strong>')) {
+      html = html.replace(/^([^.]+\.)(\s|$)/, '<strong>$1</strong>$2');
+    }
+    return `<p>${html}</p>`;
+  }).join('\n');
 };
 
 const exportObservatoryHtml = (data: any, marketIntelData?: any) => {
@@ -189,12 +192,13 @@ const exportObservatoryHtml = (data: any, marketIntelData?: any) => {
     .layer-desc { color: var(--text-dim); font-size: 12px; line-height: 1.6; margin-top: 8px; }
     .layer-body { padding: 24px 28px; }
 
-    .essay h1 { font-size: 20px; margin: 28px 0 12px; color: white; }
-    .essay h2 { font-size: 16px; margin: 24px 0 10px; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
-    .essay h3 { font-size: 14px; margin: 18px 0 8px; color: white; }
-    .essay p { font-size: 14px; color: var(--text); margin-bottom: 14px; }
-    .essay strong { color: white; }
-    .essay hr { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+    .essay h1 { font-size: 20px; margin: 32px 0 14px; color: white; }
+    .essay h2 { font-size: 16px; margin: 32px 0 14px; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+    .essay h3 { font-size: 14px; margin: 24px 0 10px; color: white; font-weight: 600; }
+    .essay p { font-size: 14px; color: var(--text); margin-bottom: 18px; line-height: 1.8; }
+    .essay p strong:first-child { color: white; }
+    .essay strong { color: #f1f5f9; }
+    .essay hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
 
     .domain-dossier { border-top: 1px solid var(--border); padding: 24px 28px; }
     .domain-dossier:first-child { border-top: none; }

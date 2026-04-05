@@ -124,6 +124,334 @@ const FAVI_COLOR = (score: number) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// HTML EXPORT UTILITIES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const MI_HTML_CSS = `
+:root { --bg: #0f172a; --surface: #1e293b; --border: #334155; --text: #e2e8f0; --text-muted: #94a3b8; --text-dim: #64748b; --cyan: #22d3ee; --violet: #a78bfa; --amber: #fbbf24; --emerald: #34d399; --rose: #fb7185; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: var(--bg); color: var(--text); font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.7; max-width: 960px; margin: 0 auto; padding: 40px 24px; }
+h1 { font-size: 24px; margin-bottom: 4px; color: white; }
+h2 { font-size: 16px; margin: 28px 0 12px; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+h3 { font-size: 14px; margin: 20px 0 8px; color: white; }
+.subtitle { color: var(--text-dim); font-size: 12px; font-family: monospace; margin-bottom: 32px; }
+.section { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 24px; padding: 24px 28px; overflow: hidden; }
+.section h2 { margin-top: 0; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+th { text-align: left; padding: 8px 10px; color: var(--text-muted); font-weight: 500; border-bottom: 1px solid var(--border); }
+td { padding: 6px 10px; border-bottom: 1px solid rgba(51,65,85,0.3); color: var(--text); }
+table.matrix th { text-align: center; font-size: 11px; }
+table.matrix td { font-family: monospace; font-size: 11px; color: var(--text-muted); text-align: center; }
+.badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 10px; font-family: monospace; background: var(--bg); border: 1px solid var(--border); color: var(--text-muted); margin: 2px; }
+.badge-critical { color: var(--rose); border-color: rgba(251,113,133,0.3); }
+.badge-sleepwalking { color: var(--amber); border-color: rgba(251,191,36,0.3); }
+.badge-wounded { color: #60a5fa; border-color: rgba(96,165,250,0.3); }
+.badge-safe { color: var(--emerald); border-color: rgba(52,211,153,0.3); }
+.segment-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 16px 0; }
+.segment-card { border-radius: 8px; padding: 16px; }
+.segment-card h4 { font-size: 13px; margin-bottom: 4px; }
+.segment-card .count { font-size: 28px; font-weight: bold; }
+.segment-card .desc { font-size: 11px; color: var(--text-muted); margin-top: 6px; }
+.bar-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.bar-label { font-size: 11px; color: var(--text-muted); min-width: 110px; text-align: right; }
+.bar-track { flex: 1; height: 14px; background: var(--bg); border-radius: 4px; overflow: hidden; position: relative; }
+.bar-fill { height: 100%; border-radius: 4px; }
+.bar-val { font-size: 10px; font-family: monospace; color: var(--text-muted); min-width: 35px; }
+.footer { text-align: center; color: var(--text-dim); font-size: 11px; font-family: monospace; margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--border); }
+@media print {
+  body { background: white; color: #1a1a1a; max-width: 100%; padding: 20px; }
+  .section { border-color: #ddd; background: #fafafa; }
+  h2 { color: #1a1a1a; border-bottom-color: #ddd; }
+  td, th { color: #333; }
+  .badge { background: #f5f5f5; border-color: #ccc; color: #555; }
+  .footer { color: #999; border-color: #ddd; }
+}`;
+
+const downloadHtml = (html: string, filename: string) => {
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+};
+
+const buildSvgPareto = (foresights: any[]): string => {
+  if (!foresights?.length) return '';
+  const total = foresights.reduce((s: number, x: any) => s + x.count, 0) || 1;
+  const maxCount = Math.max(...foresights.map((x: any) => x.count));
+  const chartW = 820, chartH = 340, mL = 50, mR = 50, mT = 20, mB = 110;
+  const plotW = chartW - mL - mR, plotH = chartH - mT - mB;
+  const n = foresights.length, gap = 6;
+  const bw = Math.floor((plotW - gap * (n - 1)) / n);
+
+  let cum = 0;
+  const bars: string[] = [], linePts: string[] = [];
+  foresights.forEach((item: any, i: number) => {
+    const x = mL + i * (bw + gap);
+    const bh = (item.count / maxCount) * plotH;
+    const y = mT + plotH - bh;
+    const col = CATEGORY_COLORS[item.category] || '#6366f1';
+    bars.push(`<rect x="${x}" y="${y}" width="${bw}" height="${bh}" rx="3" fill="${col}" opacity="0.85"/>`);
+    bars.push(`<text x="${x + bw / 2}" y="${y - 5}" text-anchor="middle" fill="#cbd5e1" font-size="9" font-family="sans-serif">${item.count}</text>`);
+    bars.push(`<text x="${x + bw / 2}" y="${mT + plotH + 14}" text-anchor="end" transform="rotate(-35 ${x + bw / 2} ${mT + plotH + 14})" fill="#94a3b8" font-size="9" font-family="sans-serif">${item.theme}</text>`);
+    cum += item.count;
+    const lx = x + bw / 2, ly = mT + plotH - (cum / total) * plotH;
+    linePts.push(`${lx},${ly}`);
+  });
+  const ticks = [0, 0.25, 0.5, 0.75, 1];
+  const grid = ticks.map(t => {
+    const y = mT + plotH - t * plotH;
+    return `<line x1="${mL}" y1="${y}" x2="${mL + plotW}" y2="${y}" stroke="#1e293b" stroke-dasharray="3,3"/>` +
+      `<text x="${mL - 8}" y="${y + 3}" text-anchor="end" fill="#94a3b8" font-size="9" font-family="sans-serif">${Math.round(t * maxCount)}</text>` +
+      `<text x="${mL + plotW + 8}" y="${y + 3}" text-anchor="start" fill="#94a3b8" font-size="9" font-family="sans-serif">${Math.round(t * 100)}%</text>`;
+  }).join('\n');
+  const dots = linePts.map(pt => { const [cx, cy] = pt.split(','); return `<circle cx="${cx}" cy="${cy}" r="3.5" fill="#f43f5e"/>`; }).join('\n');
+
+  return `<svg viewBox="0 0 ${chartW} ${chartH}" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:${chartW}px;height:auto;display:block;margin:0 auto">${grid}\n${bars.join('\n')}\n<polyline points="${linePts.join(' ')}" fill="none" stroke="#f43f5e" stroke-width="2" stroke-linejoin="round"/>\n${dots}</svg>`;
+};
+
+const buildSvgHorizBar = (items: {label: string; value: number; color: string}[], maxVal: number, width = 700, barH = 22): string => {
+  if (!items.length) return '';
+  const mL = 150, mR = 40, mT = 10, gap = 6;
+  const plotW = width - mL - mR;
+  const chartH = mT + items.length * (barH + gap);
+  const bars = items.map((item, i) => {
+    const y = mT + i * (barH + gap);
+    const bw = Math.max(2, (item.value / maxVal) * plotW);
+    return `<text x="${mL - 8}" y="${y + barH / 2 + 4}" text-anchor="end" fill="#94a3b8" font-size="10" font-family="sans-serif">${item.label}</text>` +
+      `<rect x="${mL}" y="${y}" width="${bw}" height="${barH}" rx="3" fill="${item.color}" opacity="0.8"/>` +
+      `<text x="${mL + bw + 6}" y="${y + barH / 2 + 4}" fill="#94a3b8" font-size="10" font-family="monospace">${Math.round(item.value)}</text>`;
+  }).join('\n');
+  return `<svg viewBox="0 0 ${width} ${chartH}" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:${width}px;height:auto;display:block">${bars}</svg>`;
+};
+
+const buildSvgStackedBar = (items: {label: string; segments: {value: number; color: string; name: string}[]}[], width = 800, barH = 24): string => {
+  if (!items.length) return '';
+  const mL = 160, mR = 30, mT = 10, gap = 6;
+  const plotW = width - mL - mR;
+  const chartH = mT + items.length * (barH + gap) + 30;
+  const maxTotal = Math.max(...items.map(it => it.segments.reduce((s, seg) => s + seg.value, 0)));
+
+  const bars = items.map((item, i) => {
+    const y = mT + i * (barH + gap);
+    let xOff = mL;
+    const rects = item.segments.map(seg => {
+      const bw = maxTotal > 0 ? (seg.value / maxTotal) * plotW : 0;
+      const r = bw > 0 ? `<rect x="${xOff}" y="${y}" width="${bw}" height="${barH}" fill="${seg.color}" opacity="0.8"/>` : '';
+      xOff += bw;
+      return r;
+    }).join('');
+    return `<text x="${mL - 8}" y="${y + barH / 2 + 4}" text-anchor="end" fill="#94a3b8" font-size="9" font-family="sans-serif">${item.label}</text>${rects}`;
+  }).join('\n');
+
+  // Legend
+  const legendItems = items[0]?.segments.map((seg, i) => {
+    const x = mL + i * 110;
+    return `<rect x="${x}" y="${chartH - 20}" width="10" height="10" rx="2" fill="${seg.color}"/><text x="${x + 14}" y="${chartH - 11}" fill="#94a3b8" font-size="9" font-family="sans-serif">${seg.name}</text>`;
+  }).join('\n') || '';
+
+  return `<svg viewBox="0 0 ${width} ${chartH}" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:${width}px;height:auto;display:block">${bars}\n${legendItems}</svg>`;
+};
+
+const buildCrossImpactHtml = (crossImpact: any[]): string => {
+  if (!crossImpact?.length) return '';
+  const themes = [...new Set(crossImpact.map((c: any) => c.theme))] as string[];
+  const dims = ["Operating Model", "Service Portfolio", "Values", "Strategy", "AI Readiness"];
+  const matrix: Record<string, Record<string, number>> = {};
+  for (const item of crossImpact) { if (!matrix[item.theme]) matrix[item.theme] = {}; matrix[item.theme][item.dimension] = item.count; }
+  const maxVal = Math.max(...crossImpact.map((c: any) => c.count), 1);
+  return `<table class="matrix"><thead><tr><th style="text-align:left">Theme</th>${dims.map(d => `<th>${d}</th>`).join('')}</tr></thead><tbody>${themes.map(theme =>
+    `<tr><td style="text-align:left;color:#cbd5e1">${theme}</td>${dims.map(dim => {
+      const val = matrix[theme]?.[dim] || 0;
+      const op = val > 0 ? (0.2 + (val / maxVal) * 0.6) : 0;
+      return `<td style="background:rgba(99,102,241,${op})">${val > 0 ? val : '–'}</td>`;
+    }).join('')}</tr>`
+  ).join('')}</tbody></table>`;
+};
+
+const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any) => {
+  if (!data) return;
+  const date = new Date().toLocaleDateString('en-FI', { day: 'numeric', month: 'long', year: 'numeric' });
+  let content = '';
+
+  if (tabName === 'future') {
+    // Pareto chart
+    content += `<div class="section"><h2>Top ${(data.top_foresights || []).length} Foresight Themes (Pareto)</h2>${buildSvgPareto(data.top_foresights || [])}</div>`;
+
+    // Theme descriptions
+    if (data.top_foresights?.length) {
+      const descs = data.top_foresights.map((f: any) => {
+        const col = CATEGORY_COLORS[f.category] || '#6366f1';
+        const desc = FORESIGHT_THEME_DESCRIPTIONS[f.theme] || f.category;
+        return `<div style="display:flex;gap:8px;margin:4px 0"><span style="color:${col};font-weight:bold;font-size:11px;white-space:nowrap">${f.theme}:</span><span style="color:#94a3b8;font-size:11px">${desc}</span></div>`;
+      }).join('');
+      content += `<div class="section"><h2>Theme Descriptions</h2>${descs}</div>`;
+    }
+
+    // Cross-impact matrix
+    if (data.cross_impact?.length) {
+      content += `<div class="section"><h2>Theme × Dimension Cross-Impact Matrix</h2>${buildCrossImpactHtml(data.cross_impact)}</div>`;
+    }
+
+    // Industry radar as table (radar charts too complex for SVG)
+    if (data.industry_radar?.length) {
+      const cats = Object.keys(CATEGORY_SHORT);
+      const radarTable = `<table><thead><tr><th>Domain</th>${cats.map(c => `<th style="font-size:10px">${CATEGORY_SHORT[c]}</th>`).join('')}<th>Signals</th></tr></thead><tbody>${
+        data.industry_radar.slice(0, 8).map((ir: any) => `<tr><td style="color:#cbd5e1;font-weight:600">${ir.domain}</td>${cats.map(c => {
+          const v = ir.normalized_scores?.[c] || 0;
+          const op = v > 0 ? (0.15 + (v / 100) * 0.6) : 0;
+          return `<td style="text-align:center;font-family:monospace;font-size:11px;background:rgba(6,182,212,${op})">${v > 0 ? v : '–'}</td>`;
+        }).join('')}<td style="text-align:center;font-family:monospace;font-size:11px">${ir.total_signals}</td></tr>`
+      ).join('')}</tbody></table>`;
+      content += `<div class="section"><h2>Industry Foresight Radar</h2>${radarTable}</div>`;
+    }
+
+    // Finnish Economy Force Map essay
+    if (observatoryData?.finland_analysis?.text) {
+      const mdToHtml = (t: string) => t.split(/\n\n+/).map(b => {
+        const s = b.trim(); if (!s) return '';
+        if (/^-{3,}$/.test(s)) return '<hr style="border:none;border-top:1px solid #334155;margin:24px 0">';
+        if (s.startsWith('## ')) return `<h2>${s.slice(3).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</h2>`;
+        if (s.startsWith('# ')) return `<h1 style="font-size:20px;margin:24px 0 10px;color:white">${s.slice(2)}</h1>`;
+        let h = s.replace(/\n/g, ' ').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+        if (!h.includes('<strong>')) h = h.replace(/^([^.]+\.)(\s|$)/, '<strong>$1</strong>$2');
+        return `<p style="font-size:13px;line-height:1.8;margin-bottom:16px">${h}</p>`;
+      }).join('\n');
+      content += `<div class="section" style="border-color:rgba(167,139,250,0.3)"><h2 style="color:#a78bfa">Finnish Economy Force Map</h2><p style="font-size:10px;color:#64748b;margin-bottom:16px">Strategic Foresight Observatory — How global forces reshape Finnish business</p>${mdToHtml(observatoryData.finland_analysis.text)}</div>`;
+    }
+  }
+
+  if (tabName === 'current') {
+    // Root causes stacked bar chart
+    if (data.top_causes?.length) {
+      const causes = data.top_causes;
+      const items = causes.map((c: any) => ({
+        label: c.cluster_label,
+        segments: [
+          { value: c.why_count || 0, color: '#3b82f6', name: 'WHY (strategic)' },
+          { value: c.what_count || 0, color: '#14b8a6', name: 'WHAT (operational)' },
+        ]
+      }));
+      content += `<div class="section"><h2>Root Cause Analysis (WHY vs WHAT)</h2>${buildSvgStackedBar(items)}`;
+
+      // Cluster descriptions
+      const descs = causes.map((c: any) => {
+        const desc = ROOT_CAUSE_DESCRIPTIONS[c.cluster_label] || '';
+        return desc ? `<div style="display:flex;gap:8px;margin:4px 0"><span style="color:#cbd5e1;font-weight:bold;font-size:11px;white-space:nowrap">${c.cluster_label}:</span><span style="color:#94a3b8;font-size:11px">${desc}</span></div>` : '';
+      }).filter(Boolean).join('');
+      if (descs) content += `<div style="margin-top:16px">${descs}</div>`;
+
+      // Examples
+      causes.slice(0, 5).forEach((c: any) => {
+        if (c.examples?.length) {
+          content += `<div style="margin-top:16px"><h3 style="font-size:12px;color:#cbd5e1">${c.cluster_label} <span style="color:#64748b;font-weight:normal">(${c.count} matches)</span></h3>`;
+          content += c.examples.slice(0, 5).map((ex: any) => `<div style="font-size:11px;color:#94a3b8;margin:4px 0 4px 12px">→ <span style="color:#22d3ee">${ex.company}</span>: ${ex.text}</div>`).join('');
+          content += '</div>';
+        }
+      });
+      content += '</div>';
+    }
+
+    // Archetype distribution stacked bar
+    if (data.archetype_flow?.length) {
+      const items = data.archetype_flow.map((a: any) => ({
+        label: a.domain,
+        segments: [
+          { value: a.thriving || 0, color: '#10b981', name: 'Thriving' },
+          { value: a.modernizing || 0, color: '#f59e0b', name: 'Modernizing' },
+          { value: a.cash_cow || 0, color: '#3b82f6', name: 'Cash Cow' },
+          { value: a.at_risk || 0, color: '#f43f5e', name: 'At Risk' },
+        ]
+      }));
+      content += `<div class="section"><h2>Archetype Distribution by Domain</h2>${buildSvgStackedBar(items)}</div>`;
+    }
+  }
+
+  if (tabName === 'favi') {
+    // Segment matrix
+    if (data.favi_segments) {
+      const segs = [
+        { key: 'Critical', color: '#f43f5e', bg: 'rgba(244,63,94,0.1)', border: 'rgba(244,63,94,0.3)', desc: 'Struggling now AND blind to what\'s coming' },
+        { key: 'Sleepwalking', color: '#f59e0b', bg: 'rgba(245,158,11,0.1)', border: 'rgba(245,158,11,0.3)', desc: 'Looks fine today but forces are building' },
+        { key: 'Wounded but Sheltered', color: '#3b82f6', bg: 'rgba(59,130,246,0.1)', border: 'rgba(59,130,246,0.3)', desc: 'Problems are real but future isn\'t adding pressure' },
+        { key: 'Safe Harbor', color: '#10b981', bg: 'rgba(16,185,129,0.1)', border: 'rgba(16,185,129,0.3)', desc: 'Healthy and future-ready' },
+      ];
+      const totalCo = Object.values(data.favi_segments).reduce((a: number, b: any) => a + (b || 0), 0) as number;
+      const cards = segs.map(s => {
+        const count = data.favi_segments[s.key] || 0;
+        const pct = totalCo > 0 ? Math.round((count / totalCo) * 100) : 0;
+        return `<div class="segment-card" style="background:${s.bg};border:1px solid ${s.border}"><h4 style="color:${s.color}">${s.key}</h4><div class="count" style="color:${s.color}">${count}</div><div style="font-size:10px;color:#64748b">${pct}% of companies</div><div class="desc">${s.desc}</div></div>`;
+      }).join('');
+      content += `<div class="section"><h2>Strategic Vulnerability Segments</h2><div class="segment-grid">${cards}</div></div>`;
+    }
+
+    // Domain pressure horizontal bar
+    if (data.favi_domain_pressure?.length) {
+      const items = data.favi_domain_pressure.map((d: any) => ({
+        label: d.domain,
+        value: d.avg_pressure,
+        color: FAVI_COLOR(d.avg_pressure),
+      }));
+      const maxP = Math.max(...items.map((i: any) => i.value), 100);
+      content += `<div class="section"><h2>Domain Foresight Pressure</h2>${buildSvgHorizBar(items, maxP)}</div>`;
+    }
+
+    // FAVI company table
+    if (data.favi_companies?.length) {
+      const sorted = [...data.favi_companies].sort((a: any, b: any) => (b.favi_score || 0) - (a.favi_score || 0));
+      const segBadge = (seg: string) => {
+        const cls = seg === 'Critical' ? 'badge-critical' : seg === 'Sleepwalking' ? 'badge-sleepwalking' : seg?.includes('Wounded') ? 'badge-wounded' : 'badge-safe';
+        return `<span class="badge ${cls}">${seg}</span>`;
+      };
+      const rows = sorted.map((c: any, i: number) => {
+        const fc = FAVI_COLOR(c.favi_score || 0);
+        return `<tr>
+          <td style="font-family:monospace;color:#64748b">${i + 1}</td>
+          <td style="color:#22d3ee;font-weight:600">${c.name}</td>
+          <td style="font-size:11px">${c.domain || ''}</td>
+          <td style="color:${fc};font-weight:bold;font-family:monospace">${Math.round(c.favi_score || 0)}</td>
+          <td style="font-family:monospace">${Math.round(c.fps || 0)}</td>
+          <td style="font-family:monospace">${Math.round(c.readiness_gap || 0)}</td>
+          <td style="font-family:monospace">${Math.round(c.fac || 0)}</td>
+          <td style="font-family:monospace">${c.megatrend_exposure ? Math.round(c.megatrend_exposure) + '%' : '–'}</td>
+          <td style="font-family:monospace">${Math.round(c.current_vulnerability || 0)}</td>
+          <td>${segBadge(c.segment)}</td>
+        </tr>`;
+      }).join('');
+      content += `<div class="section"><h2>FAVI Company Rankings</h2><div style="overflow-x:auto"><table><thead><tr><th>#</th><th>Company</th><th>Domain</th><th>FAVI</th><th>Pressure</th><th>Gap</th><th>Adapt.</th><th>Megatrend</th><th>Vuln.</th><th>Segment</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    }
+  }
+
+  const titles: Record<string, string> = {
+    future: 'Future Demand Analysis',
+    current: 'Current Demand Analysis',
+    favi: 'Foresight Vulnerability Analysis',
+  };
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${titles[tabName]} — ${date}</title>
+  <style>${MI_HTML_CSS}</style>
+</head>
+<body>
+  <h1>Market Intelligence: ${titles[tabName]}</h1>
+  <div class="subtitle">${data.company_count || '?'} companies analyzed — ${date}</div>
+  ${content}
+  <div class="footer">Market Intelligence — ${date}<br>Generated by The Scanner</div>
+</body>
+</html>`;
+
+  downloadHtml(html, `mi-${tabName}-${new Date().toISOString().slice(0, 10)}.html`);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // TAB 1: EXECUTIVE SUMMARY
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1103,6 +1431,16 @@ const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, on
             {data && <span className="text-[10px] text-slate-500 font-normal ml-2">{data.company_count} companies analyzed</span>}
           </h3>
           <div className="flex items-center gap-2">
+            {data && ['future', 'current', 'favi'].includes(activeTab) && (
+              <button
+                onClick={() => exportMiTabHtml(activeTab, data, observatoryData)}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 border border-white/10 transition-colors text-[9px] font-mono text-slate-400 hover:text-slate-200"
+                title="Download as HTML"
+              >
+                <Download size={12} />
+                HTML
+              </button>
+            )}
             {onRefresh && (
               <button onClick={onRefresh} disabled={loading} className="text-slate-400 hover:text-cyan-300 disabled:opacity-30 transition-colors" title="Refresh data">
                 <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
