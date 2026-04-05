@@ -446,6 +446,13 @@ def _build_finland_prompt(global_analysis: str, mi: dict, stakeholder_data: dict
 
 TASK: Write a Finnish Economy Force Map — how global forces specifically reshape the Finnish business landscape.
 
+TONE CALIBRATION — Balanced Strategic Assessment:
+- Maintain intellectual honesty: celebrate genuine strength as clearly as you identify genuine weakness.
+- If the data shows domains performing well, say so with conviction. Do not default to pessimism or manufacture risks.
+- Only flag risks and challenges that are clearly grounded in the actual data provided. If a domain is thriving, acknowledge it.
+- The goal is accurate strategic assessment, not alarm. A balanced view earns more credibility than a uniformly critical one.
+- Positive framing is valid: strong archetype distributions, healthy financial indices, and narrow gaps are genuine competitive advantages worth highlighting.
+
 GLOBAL CONTEXT (the analysis you are building upon):
 {global_analysis}
 
@@ -570,6 +577,13 @@ def _build_domain_prompt(
 
 TASK: Write a Domain Force Dossier for {domain}.
 
+TONE CALIBRATION — Let the Data Drive the Tone:
+- Let the actual numbers set the tone. If the domain has strong reality scores, high Thriving ratios, or healthy financials, the analysis should reflect genuine confidence — not forced criticism.
+- Only identify risks that are clearly evidenced in the data. Do not speculate about threats that the numbers do not support.
+- Celebrate what is working: strong archetype distributions, narrow intent-reality gaps, and good market health are real competitive advantages. Say so clearly.
+- The goal is an honest, data-grounded assessment — positive where the data warrants, concerned where the data warrants.
+- A domain with 4 of 5 companies Thriving is genuinely strong. Do not undermine that finding with hypothetical future risks unless the signal evidence specifically supports those risks.
+
 BROADER CONTEXT (reference but don't repeat):
 Global Force Landscape and Finnish Economy Force Map have already been produced. Build on their conclusions.
 
@@ -666,6 +680,7 @@ CHECK LIST:
 2. ANTI-TECHNOLOGY FRAMING: Does the essay frame technology as the key message anywhere? Flag any sentences that say "companies need AI/cloud/digital/technology" rather than focusing on thinking, adaptability, and organizational capability.
 3. STRUCTURE: Are all required sections present? Estimate the word count.
 4. EVIDENCE GROUNDING: Does the essay make claims not supported by the provided data?
+5. TONE BALANCE (for Finnish Economy Force Map and Domain Dossiers only): Does the essay manufacture or exaggerate risks that the data does not support? If the data shows strong performance (high Thriving ratios, healthy scores), does the essay acknowledge that strength clearly? Flag any cases where the tone is unjustifiably negative relative to the actual data.
 
 SOURCE DATA:
 {source_data_summary[:4000]}

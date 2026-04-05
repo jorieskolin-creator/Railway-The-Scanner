@@ -20,12 +20,20 @@ const SECTION_COLORS = {
   domain: { border: "border-amber-500/30", bg: "bg-amber-500/10", text: "text-amber-300", icon: "text-amber-400" },
 };
 
+const LAYER_DESCRIPTIONS: Record<string, string> = {
+  global: "A futurologist's briefing on the converging global forces reshaping business. Synthesizes validated signals from the Foresight Knowledge Base into macro-level patterns — identifying which forces are accelerating, which are decelerating, and where unexpected cross-impacts create strategic inflection points. Frames the future through thinking capacity and adaptability, not technology adoption.",
+  finland: "Maps how global forces specifically land in the Finnish business landscape. Grounds every claim in actual company data — market health scores, archetype distributions, and gap patterns — to reveal where Finnish industry leads, where it lags, and where genuine strategic opportunities exist. Includes stakeholder dynamics analysis across organizational roles.",
+  domain: "Per-domain strategic analysis with timescale mapping. Each dossier examines a specific industry's position using company-level data, identifies forces by urgency horizon (Act Now / Prepare / Position), explores 'Own Race' opportunities, and offers a contrarian signal that challenges conventional domain wisdom.",
+};
+
 const formatEssayText = (text: string) => {
   if (!text) return null;
   const parts = text.split(/\n+/);
   return parts.map((part: string, i: number) => {
     const trimmed = part.trim();
     if (!trimmed) return null;
+    // Skip raw horizontal rules
+    if (/^-{3,}$/.test(trimmed)) return <hr key={i} className="border-slate-700/40 my-6" />;
     // Headers
     if (trimmed.startsWith("## ")) {
       return (
@@ -76,7 +84,7 @@ const VerificationBadge = ({ verification }: { verification: any }) => {
   );
 };
 
-const EssaySection = ({ title, icon: Icon, colorKey, text, verification, metadata, defaultOpen = false }: any) => {
+const EssaySection = ({ title, icon: Icon, colorKey, text, verification, metadata, description, defaultOpen = false }: any) => {
   const [isOpen, setIsOpen] = useState(defaultOpen);
   const colors = SECTION_COLORS[colorKey as keyof typeof SECTION_COLORS] || SECTION_COLORS.global;
 
@@ -98,6 +106,12 @@ const EssaySection = ({ title, icon: Icon, colorKey, text, verification, metadat
           {isOpen ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
         </div>
       </button>
+      {/* Layer description — always visible */}
+      {description && (
+        <div className="px-5 py-3 bg-black/10 border-b border-white/5">
+          <p className="text-[11px] text-slate-400 leading-relaxed">{description}</p>
+        </div>
+      )}
       {isOpen && (
         <div className="px-5 py-4 bg-black/20 max-h-[600px] overflow-y-auto">
           {formatEssayText(text)}
@@ -107,82 +121,101 @@ const EssaySection = ({ title, icon: Icon, colorKey, text, verification, metadat
   );
 };
 
-const DomainDossierTabs = ({ dossiers }: { dossiers: any[] }) => {
+const DomainDossierTabs = ({ dossiers, defaultOpen = false }: { dossiers: any[]; defaultOpen?: boolean }) => {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
   const [activeDomain, setActiveDomain] = useState(0);
   if (!dossiers || dossiers.length === 0) return null;
 
   const active = dossiers[activeDomain];
+  const colors = SECTION_COLORS.domain;
 
   return (
-    <div className="border border-amber-500/30 rounded-lg overflow-hidden">
-      {/* Header */}
-      <div className="px-4 py-3 bg-amber-500/10 flex items-center gap-3">
-        <FileText size={18} className="text-amber-400" />
-        <span className="font-bold text-sm text-amber-300">Domain Force Dossiers</span>
-        <span className="text-[9px] text-slate-500 font-mono ml-auto">{dossiers.length} domains</span>
-      </div>
-
-      {/* Domain tabs */}
-      <div className="flex flex-wrap gap-1 px-3 py-2 bg-black/30 border-b border-white/5">
-        {dossiers.map((d: any, i: number) => (
-          <button
-            key={i}
-            onClick={() => setActiveDomain(i)}
-            className={`px-2.5 py-1 rounded text-[10px] font-mono transition-all ${
-              i === activeDomain
-                ? "bg-amber-500/20 text-amber-200 border border-amber-500/40"
-                : "bg-black/20 text-slate-400 border border-white/5 hover:text-slate-200"
-            }`}
-          >
-            {d.domain}
-          </button>
-        ))}
-      </div>
-
-      {/* Active dossier */}
-      <div className="px-5 py-4 bg-black/20">
-        {/* Domain stats bar */}
-        <div className="flex flex-wrap gap-3 mb-4">
-          <div className="px-2 py-1 bg-black/30 rounded border border-white/5 text-[9px] font-mono text-slate-400">
-            {active.company_count} companies
-          </div>
-          {active.archetype_distribution && Object.entries(active.archetype_distribution).map(([k, v]: [string, any]) => (
-            <div key={k} className={`px-2 py-1 rounded border text-[9px] font-mono ${
-              k === "Thriving" ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300" :
-              k === "Modernizing" ? "bg-amber-500/10 border-amber-500/30 text-amber-300" :
-              k === "Cash Cow" ? "bg-blue-500/10 border-blue-500/30 text-blue-300" :
-              "bg-rose-500/10 border-rose-500/30 text-rose-300"
-            }`}>
-              {k}: {v}
-            </div>
-          ))}
-          {active.verification && <VerificationBadge verification={active.verification} />}
+    <div className={`border ${colors.border} rounded-lg overflow-hidden mb-4`}>
+      {/* Collapsible header — same style as EssaySection */}
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className={`w-full flex items-center justify-between px-4 py-3 ${colors.bg} hover:brightness-110 transition-all`}
+      >
+        <div className="flex items-center gap-3">
+          <FileText size={18} className={colors.icon} />
+          <span className={`font-bold text-sm ${colors.text}`}>Layer 3: Domain Force Dossiers</span>
         </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[9px] text-slate-500 font-mono">{dossiers.length} domains</span>
+          {isOpen ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
+        </div>
+      </button>
 
-        {/* Forces by timescale */}
-        {active.forces_by_timescale && (
-          <div className="flex flex-wrap gap-2 mb-4">
-            {[
-              { key: "act_now", label: "Act Now", color: "rose" },
-              { key: "prepare", label: "Prepare", color: "amber" },
-              { key: "position", label: "Position", color: "cyan" },
-            ].map(({ key, label, color }) => {
-              const forces = active.forces_by_timescale[key] || [];
-              if (forces.length === 0) return null;
-              return (
-                <div key={key} className={`px-2 py-1 bg-${color}-500/10 border border-${color}-500/30 rounded text-[9px] font-mono text-${color}-300`}>
-                  {label}: {forces.length} forces
+      {/* Layer description — always visible */}
+      <div className="px-5 py-3 bg-black/10 border-b border-white/5">
+        <p className="text-[11px] text-slate-400 leading-relaxed">{LAYER_DESCRIPTIONS.domain}</p>
+      </div>
+
+      {isOpen && (
+        <>
+          {/* Domain tabs */}
+          <div className="flex flex-wrap gap-1 px-3 py-2 bg-black/30 border-b border-white/5">
+            {dossiers.map((d: any, i: number) => (
+              <button
+                key={i}
+                onClick={() => setActiveDomain(i)}
+                className={`px-2.5 py-1 rounded text-[10px] font-mono transition-all ${
+                  i === activeDomain
+                    ? "bg-amber-500/20 text-amber-200 border border-amber-500/40"
+                    : "bg-black/20 text-slate-400 border border-white/5 hover:text-slate-200"
+                }`}
+              >
+                {d.domain}
+              </button>
+            ))}
+          </div>
+
+          {/* Active dossier */}
+          <div className="px-5 py-4 bg-black/20">
+            {/* Domain stats bar */}
+            <div className="flex flex-wrap gap-3 mb-4">
+              <div className="px-2 py-1 bg-black/30 rounded border border-white/5 text-[9px] font-mono text-slate-400">
+                {active.company_count} companies
+              </div>
+              {active.archetype_distribution && Object.entries(active.archetype_distribution).map(([k, v]: [string, any]) => (
+                <div key={k} className={`px-2 py-1 rounded border text-[9px] font-mono ${
+                  k === "Thriving" ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300" :
+                  k === "Modernizing" ? "bg-amber-500/10 border-amber-500/30 text-amber-300" :
+                  k === "Cash Cow" ? "bg-blue-500/10 border-blue-500/30 text-blue-300" :
+                  "bg-rose-500/10 border-rose-500/30 text-rose-300"
+                }`}>
+                  {k}: {v}
                 </div>
-              );
-            })}
-          </div>
-        )}
+              ))}
+              {active.verification && <VerificationBadge verification={active.verification} />}
+            </div>
 
-        {/* Essay text */}
-        <div className="max-h-[500px] overflow-y-auto">
-          {formatEssayText(active.text)}
-        </div>
-      </div>
+            {/* Forces by timescale */}
+            {active.forces_by_timescale && (
+              <div className="flex flex-wrap gap-2 mb-4">
+                {[
+                  { key: "act_now", label: "Act Now", color: "rose" },
+                  { key: "prepare", label: "Prepare", color: "amber" },
+                  { key: "position", label: "Position", color: "cyan" },
+                ].map(({ key, label, color }) => {
+                  const forces = active.forces_by_timescale[key] || [];
+                  if (forces.length === 0) return null;
+                  return (
+                    <div key={key} className={`px-2 py-1 bg-${color}-500/10 border border-${color}-500/30 rounded text-[9px] font-mono text-${color}-300`}>
+                      {label}: {forces.length} forces
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Essay text */}
+            <div className="max-h-[500px] overflow-y-auto">
+              {formatEssayText(active.text)}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 };
@@ -395,16 +428,13 @@ const ObservatoryModal = ({ isOpen, data, loading, onClose, onRefresh, adminPass
 
           {!loading && data && (
             <>
-              {/* Summary stats */}
+              {/* Summary stats — without model name */}
               <div className="flex flex-wrap gap-3 mb-4">
                 <div className="px-3 py-1.5 bg-black/30 rounded border border-white/10 text-[10px] font-mono text-slate-300">
                   {data.company_count} companies
                 </div>
                 <div className="px-3 py-1.5 bg-black/30 rounded border border-white/10 text-[10px] font-mono text-slate-300">
                   {data.domain_count} domains
-                </div>
-                <div className="px-3 py-1.5 bg-black/30 rounded border border-white/10 text-[10px] font-mono text-slate-300">
-                  Model: {data.model}
                 </div>
                 {data.global_analysis?.force_count && (
                   <div className="px-3 py-1.5 bg-cyan-500/10 rounded border border-cyan-500/30 text-[10px] font-mono text-cyan-300">
@@ -413,7 +443,7 @@ const ObservatoryModal = ({ isOpen, data, loading, onClose, onRefresh, adminPass
                 )}
               </div>
 
-              {/* Layer 1: Global */}
+              {/* Layer 1: Global — collapsed by default */}
               <EssaySection
                 title="Layer 1: Global Force Landscape"
                 icon={Globe}
@@ -421,10 +451,11 @@ const ObservatoryModal = ({ isOpen, data, loading, onClose, onRefresh, adminPass
                 text={data.global_analysis?.text}
                 verification={data.global_analysis?.verification}
                 metadata={`${data.global_analysis?.accelerating_forces || 0} accelerating`}
-                defaultOpen={true}
+                description={LAYER_DESCRIPTIONS.global}
+                defaultOpen={false}
               />
 
-              {/* Layer 2: Finland */}
+              {/* Layer 2: Finland — collapsed by default */}
               <EssaySection
                 title="Layer 2: Finnish Economy Force Map"
                 icon={Map}
@@ -432,11 +463,13 @@ const ObservatoryModal = ({ isOpen, data, loading, onClose, onRefresh, adminPass
                 text={data.finland_analysis?.text}
                 verification={data.finland_analysis?.verification}
                 metadata={`${data.finland_analysis?.domains_analyzed || 0} domains`}
+                description={LAYER_DESCRIPTIONS.finland}
+                defaultOpen={false}
               />
 
-              {/* Layer 3: Domain Dossiers */}
+              {/* Layer 3: Domain Dossiers — collapsed by default, same pattern */}
               {data.domain_dossiers && data.domain_dossiers.length > 0 && (
-                <DomainDossierTabs dossiers={data.domain_dossiers} />
+                <DomainDossierTabs dossiers={data.domain_dossiers} defaultOpen={false} />
               )}
             </>
           )}
