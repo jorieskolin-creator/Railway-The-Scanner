@@ -8,7 +8,7 @@ const MIIcons = new Proxy(LucideRaw, {
     return () => null;
   }
 });
-const { X, Loader2, TrendingUp, Target, Crosshair, ShieldAlert, Download, ChevronRight, Activity, BarChart3, Gauge, Radar, RefreshCw, Eye, AlertTriangle, BookOpen, Globe } = MIIcons;
+const { X, Loader2, TrendingUp, Target, Crosshair, ShieldAlert, Download, ChevronRight, Activity, BarChart3, Gauge, Radar, RefreshCw, Eye, AlertTriangle, BookOpen, Globe, FileText } = MIIcons;
 
 const {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -127,7 +127,8 @@ const FAVI_COLOR = (score: number) => {
 // TAB 1: EXECUTIVE SUMMARY
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const HealthGauge = ({ domain, score, companyCount }: { domain: string; score: number; companyCount: number }) => {
+const HealthGauge = ({ domain, score, companyCount, dossierSnippet }: { domain: string; score: number; companyCount: number; dossierSnippet?: string | null }) => {
+  const [showTooltip, setShowTooltip] = useState(false);
   const color = HEALTH_COLOR(score);
   const angle = (score / 100) * 180;
   const rad = (angle * Math.PI) / 180;
@@ -139,7 +140,11 @@ const HealthGauge = ({ domain, score, companyCount }: { domain: string; score: n
   const largeArc = angle > 180 ? 1 : 0;
 
   return (
-    <div className="bg-black/20 border border-white/10 rounded-lg p-3 text-center">
+    <div
+      className="bg-black/20 border border-white/10 rounded-lg p-3 text-center relative cursor-default"
+      onMouseEnter={() => dossierSnippet && setShowTooltip(true)}
+      onMouseLeave={() => setShowTooltip(false)}
+    >
       <svg viewBox="0 0 100 60" className="w-full max-w-[120px] mx-auto">
         <path d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`} fill="none" stroke="#334155" strokeWidth="6" />
         {score > 0 && (
@@ -150,6 +155,20 @@ const HealthGauge = ({ domain, score, companyCount }: { domain: string; score: n
       </svg>
       <div className="text-[10px] font-bold text-slate-200 truncate mt-1" title={domain}>{domain}</div>
       <div className="text-[8px] text-slate-500">{companyCount} companies</div>
+      {dossierSnippet && <div className="absolute top-1 right-1.5 text-[7px] text-amber-500/50">&#9670;</div>}
+
+      {/* Observatory dossier tooltip */}
+      {showTooltip && dossierSnippet && (
+        <div className="absolute z-50 left-1/2 -translate-x-1/2 top-full mt-2 w-[340px] bg-slate-900/98 border border-amber-500/30 rounded-lg shadow-2xl p-4 text-left pointer-events-none">
+          <div className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-slate-900 border-l border-t border-amber-500/30 rotate-45" />
+          <div className="text-[9px] font-bold text-amber-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+            <FileText size={10} className="text-amber-400" />
+            Domain Force Dossier
+          </div>
+          <p className="text-[11px] text-slate-300 leading-relaxed">{dossierSnippet}</p>
+          <div className="text-[8px] text-slate-600 mt-2 italic">From Strategic Foresight Observatory</div>
+        </div>
+      )}
     </div>
   );
 };
@@ -178,7 +197,30 @@ const CoverageRing = ({ coverage }: { coverage: any }) => {
   );
 };
 
-const ExecutiveSummaryTab = ({ data }: { data: any }) => {
+const ExecutiveSummaryTab = ({ data, observatoryData = null }: { data: any; observatoryData?: any }) => {
+  // Build a map of domain → dossier snippet from observatory data
+  const dossierSnippets = useMemo(() => {
+    if (!observatoryData?.domain_dossiers) return {};
+    const map: Record<string, string> = {};
+    for (const d of observatoryData.domain_dossiers) {
+      if (!d.text || !d.domain) continue;
+      // Extract first meaningful paragraph (skip headers, rules)
+      const paragraphs = d.text.split(/\n\n+/).filter((p: string) => {
+        const t = p.trim();
+        return t && !t.startsWith('#') && !/^-{3,}$/.test(t) && t.length > 40;
+      });
+      if (paragraphs.length > 0) {
+        // Take first paragraph, truncate to ~200 chars at word boundary
+        let snippet = paragraphs[0].trim().replace(/\*\*/g, '');
+        if (snippet.length > 220) {
+          snippet = snippet.slice(0, 220).replace(/\s+\S*$/, '') + '...';
+        }
+        map[d.domain] = snippet;
+      }
+    }
+    return map;
+  }, [observatoryData]);
+
   return (
     <div className="space-y-6">
       {/* Market Health Gauges */}
@@ -189,7 +231,7 @@ const ExecutiveSummaryTab = ({ data }: { data: any }) => {
         <div className="text-[8px] text-slate-500 mb-3 leading-relaxed">Composite health score per industry domain based on average reality scores, intent-reality gaps, and archetype distribution. Higher = healthier market segment. Low scores indicate domains with widespread modernization needs.</div>
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
           {(data.market_health || []).map((h: any) => (
-            <HealthGauge key={h.domain} domain={h.domain} score={h.score} companyCount={h.company_count} />
+            <HealthGauge key={h.domain} domain={h.domain} score={h.score} companyCount={h.company_count} dossierSnippet={dossierSnippets[h.domain] || null} />
           ))}
         </div>
       </div>
@@ -1092,7 +1134,7 @@ const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, on
             <div className="text-center py-16 text-slate-400">No data available</div>
           ) : (
             <>
-              {activeTab === 'executive' && <ExecutiveSummaryTab data={data} />}
+              {activeTab === 'executive' && <ExecutiveSummaryTab data={data} observatoryData={observatoryData} />}
               {activeTab === 'future' && <FutureDemandTab data={data} observatoryData={observatoryData} />}
               {activeTab === 'current' && <CurrentDemandTab data={data} />}
               {activeTab === 'sales' && <SalesPrioritiesTab data={data} onCompanyClick={onCompanyClick} />}
