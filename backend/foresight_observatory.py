@@ -639,6 +639,15 @@ def _build_domain_prompt(
 
     health_score = market_health.get("score", "N/A") if market_health else "N/A"
 
+    # Build stakeholder block outside the f-string (Python 3.11 can't nest f"""...""")
+    stakeholder_block = ""
+    if domain_stakeholders:
+        stakeholder_block = (
+            f"DOMAIN STAKEHOLDER DYNAMICS ({domain_stakeholders['total']} key people in this domain):\n"
+            f"{domain_stakeholders['summary']}\n"
+            f"Use this to identify whether this domain's leadership has the internal alignment to act on the forces identified above."
+        )
+
     return f"""{SYSTEM_ROLE}
 
 TASK: Write a Domain Force Dossier for {domain}.
@@ -674,9 +683,7 @@ Forces identified in domain companies ({len(domain_forces)} total):
 KB SIGNAL EVIDENCE for this domain's themes (full descriptions — use these to ground your analysis in actual source content):
 {chr(10).join(kb_summary)}
 
-{f"""DOMAIN STAKEHOLDER DYNAMICS ({domain_stakeholders['total']} key people in this domain):
-{domain_stakeholders['summary']}
-Use this to identify whether this domain's leadership has the internal alignment to act on the forces identified above.""" if domain_stakeholders else ""}
+{stakeholder_block}
 
 ANALYTICAL STRUCTURE:
 
