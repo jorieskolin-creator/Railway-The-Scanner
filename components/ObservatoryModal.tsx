@@ -81,24 +81,66 @@ const exportObservatoryHtml = (data: any, marketIntelData?: any) => {
       </div>`;
   }
 
-  // Top foresights
+  // Top foresights — inline SVG Pareto chart
   let foresightsHtml = '';
   if (marketIntelData?.top_foresights?.length > 0) {
     const f = marketIntelData.top_foresights;
     const total = f.reduce((s: number, x: any) => s + x.count, 0) || 1;
+    const maxCount = Math.max(...f.map((x: any) => x.count));
+
+    // Chart dimensions
+    const chartW = 820, chartH = 340;
+    const mL = 50, mR = 50, mT = 20, mB = 110;
+    const plotW = chartW - mL - mR;
+    const plotH = chartH - mT - mB;
+    const n = f.length;
+    const gap = 6;
+    const bw = Math.floor((plotW - gap * (n - 1)) / n);
+
     let cum = 0;
+    const barsSvg: string[] = [];
+    const linePts: string[] = [];
+
+    f.forEach((item: any, i: number) => {
+      const x = mL + i * (bw + gap);
+      const bh = (item.count / maxCount) * plotH;
+      const y = mT + plotH - bh;
+      const col = OBS_CATEGORY_COLORS[item.category] || '#6366f1';
+      barsSvg.push(`<rect x="${x}" y="${y}" width="${bw}" height="${bh}" rx="3" fill="${col}" opacity="0.85"/>`);
+      barsSvg.push(`<text x="${x + bw / 2}" y="${y - 5}" text-anchor="middle" fill="#cbd5e1" font-size="9" font-family="sans-serif">${item.count}</text>`);
+      barsSvg.push(`<text x="${x + bw / 2}" y="${mT + plotH + 14}" text-anchor="end" transform="rotate(-35 ${x + bw / 2} ${mT + plotH + 14})" fill="#94a3b8" font-size="9" font-family="sans-serif">${item.theme}</text>`);
+
+      cum += item.count;
+      const lx = x + bw / 2;
+      const ly = mT + plotH - (cum / total) * plotH;
+      linePts.push(`${lx},${ly}`);
+    });
+
+    // Y gridlines + labels
+    const ticks = [0, 0.25, 0.5, 0.75, 1];
+    const gridSvg = ticks.map(t => {
+      const y = mT + plotH - t * plotH;
+      const val = Math.round(t * maxCount);
+      const pct = Math.round(t * 100);
+      return `<line x1="${mL}" y1="${y}" x2="${mL + plotW}" y2="${y}" stroke="#1e293b" stroke-dasharray="3,3"/>` +
+        `<text x="${mL - 8}" y="${y + 3}" text-anchor="end" fill="#94a3b8" font-size="9" font-family="sans-serif">${val}</text>` +
+        `<text x="${mL + plotW + 8}" y="${y + 3}" text-anchor="start" fill="#94a3b8" font-size="9" font-family="sans-serif">${pct}%</text>`;
+    }).join('\n');
+
+    const dots = linePts.map(pt => {
+      const [cx, cy] = pt.split(',');
+      return `<circle cx="${cx}" cy="${cy}" r="3.5" fill="#f43f5e"/>`;
+    }).join('\n');
+
     foresightsHtml = `
       <div class="section">
-        <h2>Top Foresight Themes</h2>
-        <table class="foresights">
-          <thead><tr><th>Theme</th><th>Category</th><th>Signals</th><th>Cumulative %</th></tr></thead>
-          <tbody>
-            ${f.map((x: any) => {
-              cum += x.count;
-              return `<tr><td><strong>${x.theme}</strong></td><td>${x.category}</td><td>${x.count}</td><td>${Math.round((cum / total) * 100)}%</td></tr>`;
-            }).join('\n')}
-          </tbody>
-        </table>
+        <h2>Top ${n} Foresight Themes (Pareto)</h2>
+        <svg viewBox="0 0 ${chartW} ${chartH}" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:${chartW}px;height:auto;display:block;margin:0 auto">
+          ${gridSvg}
+          ${barsSvg.join('\n')}
+          <polyline points="${linePts.join(' ')}" fill="none" stroke="#f43f5e" stroke-width="2" stroke-linejoin="round"/>
+          ${dots}
+        </svg>
       </div>`;
   }
 
