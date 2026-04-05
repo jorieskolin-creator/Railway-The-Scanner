@@ -157,16 +157,33 @@ const HealthGauge = ({ domain, score, companyCount, dossierSnippet }: { domain: 
       <div className="text-[8px] text-slate-500">{companyCount} companies</div>
       {dossierSnippet && <div className="absolute top-1 right-1.5 text-[7px] text-amber-500/50">&#9670;</div>}
 
-      {/* Observatory dossier tooltip */}
+      {/* Observatory dossier tooltip — Section 1: Domain Reality Check */}
       {showTooltip && dossierSnippet && (
-        <div className="absolute z-50 left-1/2 -translate-x-1/2 top-full mt-2 w-[340px] bg-slate-900/98 border border-amber-500/30 rounded-lg shadow-2xl p-4 text-left pointer-events-none">
-          <div className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-slate-900 border-l border-t border-amber-500/30 rotate-45" />
-          <div className="text-[9px] font-bold text-amber-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-            <FileText size={10} className="text-amber-400" />
-            Domain Force Dossier
+        <div className="fixed z-[200] left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[520px] max-h-[70vh] bg-[#0f172a] border border-amber-500/30 rounded-xl shadow-2xl overflow-hidden pointer-events-none">
+          <div className="px-5 py-3 bg-amber-500/10 border-b border-amber-500/20 flex items-center gap-2">
+            <FileText size={12} className="text-amber-400" />
+            <span className="text-[10px] font-bold text-amber-300 uppercase tracking-wider">Domain Reality Check — {domain}</span>
           </div>
-          <p className="text-[11px] text-slate-300 leading-relaxed">{dossierSnippet}</p>
-          <div className="text-[8px] text-slate-600 mt-2 italic">From Strategic Foresight Observatory</div>
+          <div className="px-5 py-4 overflow-y-auto max-h-[calc(70vh-48px)]">
+            {dossierSnippet.split(/\n\n+/).map((block: string, bi: number) => {
+              const trimmed = block.trim();
+              if (!trimmed) return null;
+              if (/^-{3,}$/.test(trimmed)) return null;
+              if (trimmed.startsWith('### ')) return <h5 key={bi} className="text-xs font-bold text-amber-200/80 mt-4 mb-1">{trimmed.replace(/^###\s*/, '')}</h5>;
+              const parts = trimmed.split(/(\*\*[^*]+\*\*)/);
+              return (
+                <p key={bi} className="text-[11px] text-slate-300 leading-relaxed mb-3">
+                  {parts.map((seg: string, j: number) => {
+                    if (seg.startsWith('**') && seg.endsWith('**')) {
+                      return <strong key={j} className="text-slate-100 font-semibold">{seg.slice(2, -2)}</strong>;
+                    }
+                    return <span key={j}>{seg}</span>;
+                  })}
+                </p>
+              );
+            })}
+          </div>
+          <div className="px-5 py-2 border-t border-white/5 text-[8px] text-slate-600 italic">From Strategic Foresight Observatory — Layer 3</div>
         </div>
       )}
     </div>
@@ -198,24 +215,22 @@ const CoverageRing = ({ coverage }: { coverage: any }) => {
 };
 
 const ExecutiveSummaryTab = ({ data, observatoryData = null }: { data: any; observatoryData?: any }) => {
-  // Build a map of domain → dossier snippet from observatory data
+  // Build a map of domain → Section 1 (Domain Reality Check) full text from observatory data
   const dossierSnippets = useMemo(() => {
     if (!observatoryData?.domain_dossiers) return {};
     const map: Record<string, string> = {};
     for (const d of observatoryData.domain_dossiers) {
       if (!d.text || !d.domain) continue;
-      // Extract first meaningful paragraph (skip headers, rules)
-      const paragraphs = d.text.split(/\n\n+/).filter((p: string) => {
-        const t = p.trim();
-        return t && !t.startsWith('#') && !/^-{3,}$/.test(t) && t.length > 40;
-      });
-      if (paragraphs.length > 0) {
-        // Take first paragraph, truncate to ~200 chars at word boundary
-        let snippet = paragraphs[0].trim().replace(/\*\*/g, '');
-        if (snippet.length > 220) {
-          snippet = snippet.slice(0, 220).replace(/\s+\S*$/, '') + '...';
+      // Extract Section 1 content — everything between "Section 1" header and "Section 2" header
+      const section1Match = d.text.match(/##\s*Section\s*1[^\n]*\n([\s\S]*?)(?=##\s*Section\s*2|$)/i);
+      if (section1Match) {
+        // Clean up: remove markdown bold markers, trim, skip horizontal rules
+        let section = section1Match[1].trim()
+          .replace(/^-{3,}\s*/gm, '')
+          .trim();
+        if (section.length > 0) {
+          map[d.domain] = section;
         }
-        map[d.domain] = snippet;
       }
     }
     return map;
