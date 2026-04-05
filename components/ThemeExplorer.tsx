@@ -55,7 +55,7 @@ const ThemeExplorer = ({ isOpen, onClose, authToken = '' }) => {
     setExpandedThemes(prev => ({ ...prev, [theme]: willExpand }));
     // Load signals on first expand
     if (willExpand && !themeSignals[theme] && !signalsLoading[theme]) {
-      const slug = theme.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/(^_|_$)/g, '');
+      const slug = theme.toLowerCase().replace(/ & /g, '_and_').replace(/&/g, 'and').replace(/[^a-z0-9_]/g, '_').replace(/_{2,}/g, '_').replace(/(^_|_$)/g, '');
       setSignalsLoading(prev => ({ ...prev, [theme]: true }));
       fetch(`/api/fp-themes/${slug}/signals`, { headers: { 'Authorization': `Bearer ${authToken}` } })
         .then(r => r.ok ? r.json() : { signals: [] })
