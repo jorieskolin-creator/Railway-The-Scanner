@@ -405,7 +405,7 @@ Stakeholder-Dimension Matrix (which roles focus on which strategic dimensions):
     return block
 
 
-def _build_finland_prompt(global_analysis: str, mi: dict, stakeholder_data: dict = None) -> str:
+def _build_finland_prompt(global_analysis: str, mi: dict, stakeholder_data: dict = None, kb_aggregate: dict = None) -> str:
     """Build prompt for Output 2: Finnish Economy Force Map."""
     # Market health summary
     health_summary = ""
@@ -442,6 +442,11 @@ def _build_finland_prompt(global_analysis: str, mi: dict, stakeholder_data: dict
             for f in mi["top_foresights"][:10]
         )
 
+    # KB signal evidence — top 5 per category with full descriptions
+    signal_evidence = ""
+    if kb_aggregate and kb_aggregate.get("by_category"):
+        signal_evidence = _format_top_signals_per_category(kb_aggregate["by_category"], per_cat=5)
+
     return f"""{SYSTEM_ROLE}
 
 TASK: Write a Finnish Economy Force Map — how global forces specifically reshape the Finnish business landscape.
@@ -455,6 +460,9 @@ TONE CALIBRATION — Balanced Strategic Assessment:
 
 GLOBAL CONTEXT (the analysis you are building upon):
 {global_analysis}
+
+SOURCE SIGNAL EVIDENCE (top validated signals per category — use these to ground your analysis in actual source content, cite specific signals when making claims):
+{signal_evidence}
 
 FINNISH DATA:
 
@@ -480,9 +488,9 @@ Companies with detailed data: {mi.get('detailed_count', 0)}
 
 ANALYTICAL STRUCTURE:
 
-Section 1 — THE FINNISH POSITION: Where does Finnish industry stand in the global force landscape? Use the market health scores and archetype distributions to identify strengths and blind spots. Ground every claim in the numbers above.
+Section 1 — THE FINNISH POSITION: Where does Finnish industry stand in the global force landscape? Use the market health scores and archetype distributions to identify strengths and blind spots. Ground every claim in the numbers above. Reference specific signals from the evidence above when identifying which forces are most relevant to Finnish industry.
 
-Section 2 — DOMAIN CONVERGENCE: Which forces cut across multiple Finnish domains? What systemic patterns emerge from the cross-domain data? Where are the unexpected connections?
+Section 2 — DOMAIN CONVERGENCE: Which forces cut across multiple Finnish domains? What systemic patterns emerge from the cross-domain data? Where are the unexpected connections? Cite specific signal evidence to support cross-domain patterns.
 
 Section 3 — THE ADAPTABILITY GAP: Use the gap patterns (intent vs reality) to analyze where Finnish companies claim one thing but do another. What does this reveal about organizational thinking capacity? Are Finnish companies running someone else's race?
 
@@ -503,16 +511,74 @@ Using the stakeholder-dimension affinity data above, analyze:
 Frame stakeholder dynamics through the lens of organizational thinking capacity — not as political maneuvering but as a diagnostic of whether Finnish companies have the internal alignment needed to run their own race.
 
 OUTPUT FORMAT:
-- 1200-1500 words
+- 1800-2200 words
 - Five sections with headers
 - Analytical essay prose — NO bullet points
-- Grounded in actual company data patterns (cite specific numbers)"""
+- Grounded in actual company data patterns (cite specific numbers)
+- Reference specific KB signals by name when supporting claims about forces"""
+
+
+def _aggregate_domain_stakeholders(domain_companies: list) -> dict:
+    """Build domain-specific stakeholder summary from company key_people."""
+    ROLE_BUCKETS = {
+        "C-Suite / Executive": ["ceo", "cfo", "cto", "cio", "coo", "chief", "president", "managing director", "vd"],
+        "Technology / Innovation": ["technology", "innovation", "digital", "data", "architect", "engineering", "r&d"],
+        "Strategy / Commercial": ["strategy", "commercial", "business development", "marketing", "sales", "growth"],
+        "Operations / HR": ["operations", "hr", "human resources", "people", "talent", "supply chain", "logistics"],
+    }
+    DIM_KEYWORDS = {
+        "Operating Model": ["agile", "lean", "operating model", "organization", "team", "autonomy", "devops", "process"],
+        "Service Portfolio": ["product", "service", "saas", "platform", "portfolio", "offering", "revenue model"],
+        "Values": ["culture", "values", "trust", "diversity", "inclusion", "wellbeing", "sustainability", "esg"],
+        "Strategy": ["strategy", "growth", "market", "competitive", "vision", "transformation", "future"],
+        "AI Readiness": ["ai", "artificial intelligence", "data", "machine learning", "automation", "digital", "cloud"],
+    }
+
+    role_dim = defaultdict(lambda: defaultdict(int))
+    role_counts = Counter()
+    total = 0
+
+    for company in domain_companies:
+        for person in (company.get("key_people") or []):
+            total += 1
+            role_lower = (person.get("role") or "").lower()
+            bucket = "Other"
+            for bk, kws in ROLE_BUCKETS.items():
+                if any(kw in role_lower for kw in kws):
+                    bucket = bk
+                    break
+            role_counts[bucket] += 1
+
+            insights = person.get("linkedin_insights") or {}
+            if not insights.get("found"):
+                continue
+            all_text = " ".join(insights.get("topics") or []).lower() + " " + (insights.get("headline") or "").lower()
+            for dim, kws in DIM_KEYWORDS.items():
+                if any(kw in all_text for kw in kws):
+                    role_dim[bucket][dim] += 1
+
+    if total == 0:
+        return None
+
+    lines = []
+    for bucket in ROLE_BUCKETS:
+        if role_counts.get(bucket, 0) == 0:
+            continue
+        affs = role_dim.get(bucket, {})
+        if affs:
+            top = sorted(affs.items(), key=lambda x: x[1], reverse=True)
+            lines.append(f"- {bucket} ({role_counts[bucket]}): focus on {', '.join(f'{d}={c}' for d, c in top)}")
+        else:
+            lines.append(f"- {bucket} ({role_counts[bucket]}): no dimension signals")
+
+    return {"total": total, "summary": "\n".join(lines)} if lines else None
 
 
 def _build_domain_prompt(
     domain: str, domain_config: dict, domain_companies: list,
     kb_signals: list, market_health: dict,
     global_analysis: str, finland_analysis: str,
+    domain_stakeholders: dict = None,
 ) -> str:
     """Build prompt for Output 3: Domain Force Dossier."""
     # Company stats
@@ -584,8 +650,11 @@ TONE CALIBRATION — Let the Data Drive the Tone:
 - The goal is an honest, data-grounded assessment — positive where the data warrants, concerned where the data warrants.
 - A domain with 4 of 5 companies Thriving is genuinely strong. Do not undermine that finding with hypothetical future risks unless the signal evidence specifically supports those risks.
 
-BROADER CONTEXT (reference but don't repeat):
-Global Force Landscape and Finnish Economy Force Map have already been produced. Build on their conclusions.
+BROADER CONTEXT — How to use prior analysis layers:
+The Global Force Landscape (Layer 1) and Finnish Economy Force Map (Layer 2) have been produced. Use them strategically:
+- From Layer 1, identify 1-2 global forces most directly relevant to {domain} and reference how they manifest in this specific domain.
+- From Layer 2, use the Finnish positioning insights for {domain} specifically — do not repeat general Finnish findings.
+- Build on their conclusions but add domain-specific depth that the broader analyses could not provide.
 
 DOMAIN DATA:
 
@@ -604,6 +673,10 @@ Forces identified in domain companies ({len(domain_forces)} total):
 
 KB SIGNAL EVIDENCE for this domain's themes (full descriptions — use these to ground your analysis in actual source content):
 {chr(10).join(kb_summary)}
+
+{f"""DOMAIN STAKEHOLDER DYNAMICS ({domain_stakeholders['total']} key people in this domain):
+{domain_stakeholders['summary']}
+Use this to identify whether this domain's leadership has the internal alignment to act on the forces identified above.""" if domain_stakeholders else ""}
 
 ANALYTICAL STRUCTURE:
 
@@ -849,7 +922,7 @@ def generate_observatory(progress_callback=None):
     progress("Finnish Economy Force Map", 1, total_steps)
     stakeholder_data = _aggregate_stakeholder_dynamics(data["company_details"], mi.get("gap_patterns", []))
     print(f"   [Observatory] Stakeholders: {stakeholder_data['stakeholder_count']} total, {stakeholder_data['enriched_count']} enriched, {len(stakeholder_data['alignment_conflicts'])} conflicts detected")
-    finland_prompt = _build_finland_prompt(global_text, mi, stakeholder_data)
+    finland_prompt = _build_finland_prompt(global_text, mi, stakeholder_data, kb_agg)
     finland_source = f"Companies: {mi.get('company_count', 0)}, Domains: {len(mi.get('market_health', []))}, FAVI segments: {json.dumps(mi.get('favi_segments', {}))}"
     finland_text, finland_verify = _generate_with_verification(finland_prompt, finland_source, "Finnish Economy Force Map")
 
@@ -889,9 +962,12 @@ def generate_observatory(progress_callback=None):
                 mh = h
                 break
 
+        # Aggregate domain-specific stakeholder dynamics
+        dom_stakeholders = _aggregate_domain_stakeholders(companies)
+
         domain_prompt = _build_domain_prompt(
             domain, config, companies, kb_signals, mh,
-            global_text, finland_text,
+            global_text, finland_text, dom_stakeholders,
         )
         source = f"Domain: {domain}, Companies: {len(companies)}, KB signals: {len(kb_signals)}"
         text, verify = _generate_with_verification(domain_prompt, source, f"Domain Dossier: {domain}", use_opus=True)
