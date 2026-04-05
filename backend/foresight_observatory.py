@@ -669,6 +669,38 @@ def _generate_sonnet(prompt: str, max_tokens: int = 5000) -> tuple[str, int]:
     return text, wc
 
 
+def _generate_opus(prompt: str, max_tokens: int = 6000) -> tuple[str, int]:
+    """Generate text via Opus 4.6. Returns (text, word_count).
+    Used for Domain Dossiers (Layer 3) where analytical depth matters most."""
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not anthropic_key:
+        raise ValueError("ANTHROPIC_API_KEY not configured")
+
+    client = anthropic.Anthropic(api_key=anthropic_key)
+    t0 = time.time()
+
+    response = client.messages.create(
+        model="claude-opus-4-6",
+        max_tokens=max_tokens,
+        thinking={"type": "enabled", "budget_tokens": 8000},
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    text_parts = []
+    for block in response.content:
+        if block.type == "text":
+            text_parts.append(block.text)
+    text = "\n".join(text_parts).strip()
+
+    # Strip markdown links (keep text only)
+    text = re.sub(r'\[([^\]]+)\]\(https?://[^)]+\)', r'\1', text)
+
+    wc = len(text.split())
+    elapsed = int((time.time() - t0) * 1000)
+    print(f"   [Observatory] Opus 4.6: {wc} words ({elapsed}ms)")
+    return text, wc
+
+
 def _verify_gemini(essay: str, source_data_summary: str, output_type: str) -> dict:
     """Verify essay via Gemini 3.1 Pro. Returns verification result."""
     prompt = f"""You are a quality assurance reviewer for strategic foresight analysis.
@@ -727,9 +759,11 @@ RESPOND IN JSON FORMAT ONLY:
         return {"passed": True, "issues": [], "error": str(e)}
 
 
-def _generate_with_verification(prompt: str, source_summary: str, output_type: str) -> tuple[str, dict]:
-    """Generate via Sonnet 4.6, then verify via Gemini. Returns (text, verification)."""
-    text, wc = _generate_sonnet(prompt)
+def _generate_with_verification(prompt: str, source_summary: str, output_type: str, use_opus: bool = False) -> tuple[str, dict]:
+    """Generate via Claude, then verify via Gemini. Returns (text, verification).
+    use_opus=True uses Opus 4.6 for deeper analytical reasoning (Layer 3)."""
+    generate_fn = _generate_opus if use_opus else _generate_sonnet
+    text, wc = generate_fn(prompt)
 
     if wc < 50:
         raise ValueError(f"Generation too short: {wc} words")
@@ -741,7 +775,7 @@ def _generate_with_verification(prompt: str, source_summary: str, output_type: s
         violations = verification["tech_framing_violations"]
         print(f"   [Observatory] Verification found {len(violations)} tech-framing violations — regenerating...")
         correction = f"\n\nCRITICAL CORRECTION: Your previous attempt contained technology-centric framing. These specific sentences violated the anti-technology rule: {json.dumps(violations)}. Rewrite to focus on organizational thinking, adaptability, and future-readiness instead."
-        text, wc = _generate_sonnet(prompt + correction)
+        text, wc = generate_fn(prompt + correction)
         verification = _verify_gemini(text, source_summary, output_type)
 
     return text, verification
@@ -860,7 +894,7 @@ def generate_observatory(progress_callback=None):
             global_text, finland_text,
         )
         source = f"Domain: {domain}, Companies: {len(companies)}, KB signals: {len(kb_signals)}"
-        text, verify = _generate_with_verification(domain_prompt, source, f"Domain Dossier: {domain}")
+        text, verify = _generate_with_verification(domain_prompt, source, f"Domain Dossier: {domain}", use_opus=True)
 
         # Extract forces by timescale
         forces_by_ts = {"act_now": [], "prepare": [], "position": []}
@@ -897,7 +931,7 @@ def generate_observatory(progress_callback=None):
     # --- Assemble final result ---
     result = {
         "generated_at": datetime.utcnow().isoformat(),
-        "model": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6 (L1-L2) + claude-opus-4-6 (L3)",
         "verification_model": "gemini-3.1-pro-preview",
         "company_count": len(data["dashboard_data"]),
         "domain_count": len(active_domains),
