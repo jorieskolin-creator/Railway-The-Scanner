@@ -29,6 +29,7 @@ from google.genai import types as genai_types
 from gemini_backoff import call_with_503_backoff
 from gemini_client import get_gemini_client
 from source_quality import HIGH_CREDIBILITY_DOMAINS, assess_source_credibility
+from source_claim_validator import _fetch_page_text, _check_relevance
 from strategic_foresight import (
     FP_THEMES_30, FP_THEME_SOURCES, THEME_FALLBACK_MAP,
     _verify_foresight_url, _extract_json_from_text,
@@ -375,6 +376,104 @@ def _validate_harvest_signals(data: dict) -> dict:
     return data
 
 
+def _verify_signal_content(data: dict, max_checks: int = 10, max_workers: int = 4) -> dict:
+    """
+    Verify that signal descriptions are grounded in actual source page content.
+
+    Fetches the primary source page for each signal and uses Gemini Flash to
+    check whether the signal description matches what the source actually says.
+    Signals where the description has NO relation to the source content are
+    removed entirely (same treatment as dead URLs).
+
+    Only runs on signals that already passed URL verification.
+    """
+    if not data or not data.get("signals"):
+        return data
+
+    theme = data.get("theme", "?")
+
+    try:
+        client = get_gemini_client()
+    except ValueError:
+        print(f"   ⚠️ [Content-Verify] {theme}: no Gemini key — skipped")
+        return data
+
+    # Select signals with verified URLs and descriptions worth checking
+    candidates = []
+    for sig in data["signals"]:
+        if not sig.get("url_verified"):
+            continue
+        url = (sig.get("source_url") or "").strip()
+        desc = (sig.get("description") or "").strip()
+        if url and desc and len(desc) > 20:
+            candidates.append(sig)
+
+    if not candidates:
+        return data
+
+    to_check = candidates[:max_checks]
+
+    # Parallel: fetch page text + check relevance
+    content_results = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {}
+        for sig in to_check:
+            url = sig["source_url"]
+            desc = sig["description"]
+            future = pool.submit(_check_relevance, url, desc, client, 12)
+            futures[future] = sig
+
+        for future in concurrent.futures.as_completed(futures):
+            sig = futures[future]
+            try:
+                result = future.result(timeout=20)
+            except Exception:
+                result = {"relevance_score": -1, "relevant": True, "reason": "Timeout"}
+            content_results[sig["source_url"]] = result
+
+    # Annotate signals and remove those with no content match
+    kept = []
+    removed = 0
+    for sig in data["signals"]:
+        url = sig.get("source_url", "")
+        result = content_results.get(url)
+
+        if result is None:
+            # Not checked (exceeded max_checks or no URL) — keep
+            sig["content_verified"] = None
+            kept.append(sig)
+            continue
+
+        score = result.get("relevance_score", -1)
+        if score < 0:
+            # Could not fetch/check (JS-rendered, paywalled) — keep, don't penalise
+            sig["content_verified"] = None
+            kept.append(sig)
+            continue
+
+        sig["content_match_score"] = score
+        sig["content_match_reason"] = result.get("reason", "")
+
+        if score < 25:
+            # Source has NO relation to the signal description — remove entirely
+            removed += 1
+            continue
+
+        sig["content_verified"] = True
+        kept.append(sig)
+
+    data["signals"] = kept
+
+    if "validation" not in data:
+        data["validation"] = {}
+    data["validation"]["content_checked"] = len(content_results)
+    data["validation"]["content_removed"] = removed
+    data["validation"]["signals_after_content_verify"] = len(kept)
+
+    print(f"   📄 [Content-Verify] {theme}: {len(content_results)} checked, {removed} removed (description didn't match source) → {len(kept)} signals kept")
+    return data
+
+
 def harvest_all_themes(
     themes: list[str] | None = None,
     max_concurrent: int = 2,
@@ -424,8 +523,11 @@ def harvest_all_themes(
 
         new_validated_signals = []
         if data and data.get("signals"):
-            # Step 3: Validate new harvest
+            # Step 3: Validate new harvest (URL liveness + credibility)
             data = _validate_harvest_signals(data)
+            # Step 3b: Content verification (signal description vs source page)
+            if data and data.get("signals"):
+                data = _verify_signal_content(data)
             new_validated_signals = data.get("signals", []) if data else []
 
         # Step 4: Merge — combine cleaned existing + validated new

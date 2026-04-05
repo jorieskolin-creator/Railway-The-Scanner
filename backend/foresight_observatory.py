@@ -781,8 +781,28 @@ def _generate_opus(prompt: str, max_tokens: int = 16000) -> tuple[str, int]:
     return text, wc
 
 
-def _verify_gemini(essay: str, source_data_summary: str, output_type: str) -> dict:
-    """Verify essay via Gemini 3.1 Pro. Returns verification result."""
+def _verify_gemini(essay: str, source_data_summary: str, output_type: str, signal_evidence: str = "") -> dict:
+    """Verify essay via Gemini 3.1 Pro. Returns verification result.
+
+    When signal_evidence is provided, adds a claim-level cross-validation check:
+    verifies that narrative claims trace back to actual KB signals rather than
+    being fabricated by the generation model.
+    """
+    signal_check = ""
+    signal_response_fields = ""
+    if signal_evidence:
+        signal_check = f"""6. CLAIM-SIGNAL CROSS-VALIDATION: Compare specific claims, trends, and force descriptions in the essay against the KB SIGNAL EVIDENCE below. Flag any claims that:
+   a) Cite a signal title or trend that does NOT appear in the evidence
+   b) Attribute statistics or data points not found in any signal description
+   c) Describe a force's direction (accelerating/decelerating) opposite to what the signals show
+   Only flag clear fabrications — reasonable synthesis and inference from multiple signals is expected and acceptable.
+
+KB SIGNAL EVIDENCE (the signals that were provided to the generation model):
+{signal_evidence[:6000]}
+
+"""
+        signal_response_fields = ', "unsupported_claims": ["claim 1", ...], "signal_cross_validation_passed": true/false'
+
     prompt = f"""You are a quality assurance reviewer for strategic foresight analysis.
 
 TASK: Verify the following {output_type} essay against its source data.
@@ -793,7 +813,7 @@ CHECK LIST:
 3. STRUCTURE: Are all required sections present? Estimate the word count.
 4. EVIDENCE GROUNDING: Does the essay make claims not supported by the provided data?
 5. TONE BALANCE (for Finnish Economy Force Map and Domain Dossiers only): Does the essay manufacture or exaggerate risks that the data does not support? If the data shows strong performance (high Thriving ratios, healthy scores), does the essay acknowledge that strength clearly? Flag any cases where the tone is unjustifiably negative relative to the actual data.
-
+{signal_check}
 SOURCE DATA:
 {source_data_summary[:4000]}
 
@@ -801,7 +821,7 @@ ESSAY TO VERIFY:
 {essay}
 
 RESPOND IN JSON FORMAT ONLY:
-{{"passed": true/false, "word_count_estimate": N, "issues": ["issue 1", ...], "tech_framing_violations": ["sentence 1", ...], "data_mismatches": ["mismatch 1", ...]}}"""
+{{"passed": true/false, "word_count_estimate": N, "issues": ["issue 1", ...], "tech_framing_violations": ["sentence 1", ...], "data_mismatches": ["mismatch 1", ...]{signal_response_fields}}}"""
 
     try:
         client = get_gemini_client()
@@ -839,24 +859,45 @@ RESPOND IN JSON FORMAT ONLY:
         return {"passed": True, "issues": [], "error": str(e)}
 
 
-def _generate_with_verification(prompt: str, source_summary: str, output_type: str, use_opus: bool = False) -> tuple[str, dict]:
+def _generate_with_verification(prompt: str, source_summary: str, output_type: str, use_opus: bool = False, signal_evidence: str = "") -> tuple[str, dict]:
     """Generate via Claude, then verify via Gemini. Returns (text, verification).
-    use_opus=True uses Opus 4.6 for deeper analytical reasoning (Layer 3)."""
+    use_opus=True uses Opus 4.6 for deeper analytical reasoning (Layer 3).
+    signal_evidence: when provided, enables claim-level cross-validation against KB signals."""
     generate_fn = _generate_opus if use_opus else _generate_sonnet
     text, wc = generate_fn(prompt)
 
     if wc < 50:
         raise ValueError(f"Generation too short: {wc} words")
 
-    verification = _verify_gemini(text, source_summary, output_type)
+    verification = _verify_gemini(text, source_summary, output_type, signal_evidence=signal_evidence)
+
+    # Log cross-validation results if signal evidence was checked
+    if signal_evidence and verification.get("unsupported_claims"):
+        n_claims = len(verification["unsupported_claims"])
+        print(f"   [Observatory] Cross-validation: {n_claims} unsupported claim(s) flagged in {output_type}")
+        for claim in verification["unsupported_claims"][:3]:
+            print(f"      ⚠️ {claim[:120]}")
 
     # If verification finds critical issues and text is regeneratable, try once more
+    needs_regen = False
+    correction_parts = []
+
     if not verification.get("passed", True) and verification.get("tech_framing_violations"):
         violations = verification["tech_framing_violations"]
         print(f"   [Observatory] Verification found {len(violations)} tech-framing violations — regenerating...")
-        correction = f"\n\nCRITICAL CORRECTION: Your previous attempt contained technology-centric framing. These specific sentences violated the anti-technology rule: {json.dumps(violations)}. Rewrite to focus on organizational thinking, adaptability, and future-readiness instead."
+        correction_parts.append(f"Your previous attempt contained technology-centric framing. These specific sentences violated the anti-technology rule: {json.dumps(violations)}. Rewrite to focus on organizational thinking, adaptability, and future-readiness instead.")
+        needs_regen = True
+
+    if verification.get("unsupported_claims") and not verification.get("signal_cross_validation_passed", True):
+        unsupported = verification["unsupported_claims"]
+        print(f"   [Observatory] Cross-validation failed: {len(unsupported)} fabricated claims — regenerating...")
+        correction_parts.append(f"Your previous attempt contained claims not supported by the provided KB signal evidence. These claims could not be traced to any signal: {json.dumps(unsupported[:5])}. Remove or replace these with claims that are directly grounded in the signal evidence provided.")
+        needs_regen = True
+
+    if needs_regen:
+        correction = "\n\nCRITICAL CORRECTION: " + " ".join(correction_parts)
         text, wc = generate_fn(prompt + correction)
-        verification = _verify_gemini(text, source_summary, output_type)
+        verification = _verify_gemini(text, source_summary, output_type, signal_evidence=signal_evidence)
 
     return text, verification
 
@@ -897,6 +938,9 @@ def generate_observatory(progress_callback=None):
     active_domains = [d for d in sorted(domain_companies.keys()) if len(domain_companies[d]) >= 2]
     total_steps = 2 + len(active_domains)  # Global + Finland + N domains
 
+    # --- Pre-compute signal evidence for cross-validation ---
+    signal_evidence = _format_top_signals_per_category(kb_agg["by_category"], per_cat=5)
+
     # --- Output 1: Global Force Landscape ---
     progress("Global Force Landscape", 0, total_steps)
     global_prompt = _build_global_prompt(
@@ -905,7 +949,7 @@ def generate_observatory(progress_callback=None):
         mi.get("top_foresights", []),
     )
     global_source = f"Total signals: {kb_agg['total_signals']}, Themes: {kb_agg['theme_count']}, Accelerating: {kb_agg['accelerating']}, Decelerating: {kb_agg['decelerating']}"
-    global_text, global_verify = _generate_with_verification(global_prompt, global_source, "Global Force Landscape")
+    global_text, global_verify = _generate_with_verification(global_prompt, global_source, "Global Force Landscape", signal_evidence=signal_evidence)
 
     # Extract key convergences from the text (first 3 sentences that mention convergence/force)
     key_convergences = []
@@ -931,7 +975,7 @@ def generate_observatory(progress_callback=None):
     print(f"   [Observatory] Stakeholders: {stakeholder_data['stakeholder_count']} total, {stakeholder_data['enriched_count']} enriched, {len(stakeholder_data['alignment_conflicts'])} conflicts detected")
     finland_prompt = _build_finland_prompt(global_text, mi, stakeholder_data, kb_agg)
     finland_source = f"Companies: {mi.get('company_count', 0)}, Domains: {len(mi.get('market_health', []))}, FAVI segments: {json.dumps(mi.get('favi_segments', {}))}"
-    finland_text, finland_verify = _generate_with_verification(finland_prompt, finland_source, "Finnish Economy Force Map")
+    finland_text, finland_verify = _generate_with_verification(finland_prompt, finland_source, "Finnish Economy Force Map", signal_evidence=signal_evidence)
 
     # Extract top adaptability gaps
     top_gaps = []
@@ -977,7 +1021,12 @@ def generate_observatory(progress_callback=None):
             global_text, finland_text, dom_stakeholders,
         )
         source = f"Domain: {domain}, Companies: {len(companies)}, KB signals: {len(kb_signals)}"
-        text, verify = _generate_with_verification(domain_prompt, source, f"Domain Dossier: {domain}", use_opus=True)
+        # Build domain-specific signal evidence for cross-validation
+        domain_signal_evidence = "\n".join(
+            f"- **{s.get('title', 'N/A')}** [{s.get('force_type', '?')} | {s.get('timeframe', '?')}]\n  Description: {s.get('description', 'N/A')}"
+            for s in kb_signals[:20]
+        )
+        text, verify = _generate_with_verification(domain_prompt, source, f"Domain Dossier: {domain}", use_opus=True, signal_evidence=domain_signal_evidence)
 
         # Extract forces by timescale
         forces_by_ts = {"act_now": [], "prepare": [], "position": []}
