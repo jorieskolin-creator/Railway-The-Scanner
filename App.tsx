@@ -370,6 +370,10 @@ const App = () => {
     if (!observatoryData) {
       await fetchObservatoryData();
     }
+    // Lazy-load Market Intelligence data for charts in Observatory
+    if (!marketIntelData && !marketIntelLoading) {
+      fetchMarketIntelData();
+    }
   };
 
   const handleOpenDataReview = async () => {
@@ -1965,6 +1969,7 @@ const App = () => {
         onClose={() => { setIsObservatoryOpen(false); setObservatoryPassword(''); }}
         onRefresh={fetchObservatoryData}
         adminPassword={observatoryPassword}
+        marketIntelData={marketIntelData}
       />
 
       <ThemeExplorer

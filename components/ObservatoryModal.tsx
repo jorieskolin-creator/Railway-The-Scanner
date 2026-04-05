@@ -8,7 +8,22 @@ const ObsIcons = new Proxy(LucideRaw, {
     return () => null;
   }
 });
-const { X, Loader2, Globe, Map, FileText, ChevronDown, ChevronRight, RefreshCw, Eye, Clock, CheckCircle, AlertTriangle, Telescope } = ObsIcons;
+const { X, Loader2, Globe, Map, FileText, ChevronDown, ChevronRight, RefreshCw, Eye, Clock, CheckCircle, AlertTriangle, Telescope, BarChart3 } = ObsIcons;
+
+const {
+  ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
+} = (window as any).Recharts || {};
+
+// Category colors for Pareto chart (matching MI modal)
+const OBS_CATEGORY_COLORS: Record<string, string> = {
+  "Technology & Digital": "#06b6d4",
+  "Economy & Business": "#8b5cf6",
+  "Industry & Infrastructure": "#f59e0b",
+  "Environment & Resources": "#10b981",
+  "Society & Governance": "#ec4899",
+  "People & Well-being": "#f97316",
+  "Science & Demographics": "#6366f1",
+};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // HELPERS
@@ -221,6 +236,121 @@ const DomainDossierTabs = ({ dossiers, defaultOpen = false }: { dossiers: any[];
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// FORESIGHT LANDSCAPE CHARTS (from Market Intelligence data)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const ForesightCharts = ({ marketIntelData }: { marketIntelData: any }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const foresights = marketIntelData?.top_foresights || [];
+  const crossImpact = marketIntelData?.cross_impact || [];
+
+  if (foresights.length === 0 && crossImpact.length === 0) return null;
+
+  // Pareto data
+  const totalCount = foresights.reduce((s: number, f: any) => s + f.count, 0) || 1;
+  let cumulative = 0;
+  const paretoData = foresights.map((f: any) => {
+    cumulative += f.count;
+    return { ...f, cumPct: Math.round((cumulative / totalCount) * 100) };
+  });
+
+  // Cross-impact matrix
+  const ciThemes = [...new Set(crossImpact.map((c: any) => c.theme))];
+  const ciDimensions = ["Operating Model", "Service Portfolio", "Values", "Strategy", "AI Readiness"];
+  const ciMatrix: Record<string, Record<string, number>> = {};
+  for (const item of crossImpact) {
+    if (!ciMatrix[item.theme]) ciMatrix[item.theme] = {};
+    ciMatrix[item.theme][item.dimension] = item.count;
+  }
+  const maxCICount = Math.max(...crossImpact.map((c: any) => c.count), 1);
+
+  return (
+    <div className="border border-slate-700/40 rounded-lg overflow-hidden mb-4">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full flex items-center justify-between px-4 py-3 bg-slate-800/30 hover:brightness-110 transition-all"
+      >
+        <div className="flex items-center gap-3">
+          <BarChart3 size={18} className="text-slate-400" />
+          <span className="font-bold text-sm text-slate-300">Foresight Landscape</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[9px] text-slate-500 font-mono">{foresights.length} themes &middot; {crossImpact.length} cross-impacts</span>
+          {isOpen ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
+        </div>
+      </button>
+      <div className="px-5 py-3 bg-black/10 border-b border-white/5">
+        <p className="text-[11px] text-slate-400 leading-relaxed">Quantitative foundation for the analysis layers below. The Pareto chart shows which foresight themes appear most frequently across scanned companies. The cross-impact matrix reveals how themes connect to organizational dimensions — where the bars show volume, the matrix shows structural relationships.</p>
+      </div>
+      {isOpen && (
+        <div className="px-5 py-4 bg-black/20 space-y-6">
+          {/* Pareto chart */}
+          {paretoData.length > 0 && ComposedChart && (
+            <div>
+              <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-3">Top {foresights.length} Foresight Themes (Pareto)</h4>
+              <ResponsiveContainer width="100%" height={280}>
+                <ComposedChart data={paretoData} margin={{ left: 10, right: 30, top: 10, bottom: 60 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                  <XAxis dataKey="theme" tick={{ fill: '#94a3b8', fontSize: 8 }} angle={-35} textAnchor="end" interval={0} height={80} />
+                  <YAxis yAxisId="count" tick={{ fill: '#94a3b8', fontSize: 10 }} />
+                  <YAxis yAxisId="pct" orientation="right" tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[0, 100]} unit="%" />
+                  <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }}
+                    formatter={(value: any, name: string) => [value, name === 'cumPct' ? 'Cumulative %' : 'Signals']} />
+                  <Bar yAxisId="count" dataKey="count" name="Signals" radius={[4, 4, 0, 0]}>
+                    {paretoData.map((entry: any, i: number) => (
+                      <Cell key={i} fill={OBS_CATEGORY_COLORS[entry.category] || '#6366f1'} />
+                    ))}
+                  </Bar>
+                  <Line yAxisId="pct" dataKey="cumPct" stroke="#f43f5e" strokeWidth={2} dot={{ r: 3 }} name="Cumulative %" />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {/* Cross-Impact Matrix */}
+          {ciThemes.length > 0 && (
+            <div>
+              <h4 className="text-[10px] font-bold text-violet-300 uppercase tracking-wide mb-3">Theme x Dimension Cross-Impact Matrix</h4>
+              <div className="overflow-x-auto">
+                <table className="w-full text-[10px]">
+                  <thead>
+                    <tr>
+                      <th className="text-left text-slate-400 p-1 font-medium">Theme</th>
+                      {ciDimensions.map(d => (
+                        <th key={d} className="text-center text-slate-400 p-1 font-medium whitespace-nowrap">{d}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(ciThemes as string[]).map((theme: string) => (
+                      <tr key={theme} className="border-t border-white/5">
+                        <td className="p-1 text-slate-300 whitespace-nowrap">{theme}</td>
+                        {ciDimensions.map(dim => {
+                          const val = ciMatrix[theme]?.[dim] || 0;
+                          const intensity = val / maxCICount;
+                          const bg = val > 0
+                            ? `rgba(99, 102, 241, ${0.15 + intensity * 0.6})`
+                            : 'transparent';
+                          return (
+                            <td key={dim} className="p-1 text-center font-mono text-slate-200" style={{ backgroundColor: bg }}>
+                              {val > 0 ? val : '\u2013'}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // GENERATION PANEL
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -278,13 +408,14 @@ const GeneratePanel = ({ onGenerate, generationStatus }: any) => {
 // MAIN MODAL
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const ObservatoryModal = ({ isOpen, data, loading, onClose, onRefresh, adminPassword }: {
+const ObservatoryModal = ({ isOpen, data, loading, onClose, onRefresh, adminPassword, marketIntelData = null }: {
   isOpen: boolean;
   data: any;
   loading: boolean;
   onClose: () => void;
   onRefresh: () => void;
   adminPassword: string;
+  marketIntelData?: any;
 }) => {
   const [generationStatus, setGenerationStatus] = useState<any>(null);
   const pollRef = useRef<any>(null);
@@ -442,6 +573,11 @@ const ObservatoryModal = ({ isOpen, data, loading, onClose, onRefresh, adminPass
                   </div>
                 )}
               </div>
+
+              {/* Foresight Landscape Charts — from Market Intelligence */}
+              {marketIntelData && (marketIntelData.top_foresights?.length > 0 || marketIntelData.cross_impact?.length > 0) && (
+                <ForesightCharts marketIntelData={marketIntelData} />
+              )}
 
               {/* Layer 1: Global — collapsed by default */}
               <EssaySection
