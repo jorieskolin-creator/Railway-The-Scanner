@@ -8,7 +8,7 @@ const ObsIcons = new Proxy(LucideRaw, {
     return () => null;
   }
 });
-const { X, Loader2, Globe, Map, FileText, ChevronDown, ChevronRight, RefreshCw, Eye, Clock, CheckCircle, AlertTriangle, Telescope, BarChart3 } = ObsIcons;
+const { X, Loader2, Globe, Map, FileText, ChevronDown, ChevronRight, RefreshCw, Eye, Clock, CheckCircle, AlertTriangle, Telescope, BarChart3, Download } = ObsIcons;
 
 const {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell,
@@ -23,6 +23,236 @@ const OBS_CATEGORY_COLORS: Record<string, string> = {
   "Society & Governance": "#ec4899",
   "People & Well-being": "#f97316",
   "Science & Demographics": "#6366f1",
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HTML EXPORT
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const markdownToHtml = (text: string): string => {
+  if (!text) return '';
+  return text
+    .split(/\n/)
+    .map(line => {
+      const t = line.trim();
+      if (!t) return '';
+      if (/^-{3,}$/.test(t)) return '<hr>';
+      if (t.startsWith('## ')) return `<h2>${t.slice(3)}</h2>`;
+      if (t.startsWith('# ')) return `<h1>${t.slice(2)}</h1>`;
+      if (t.startsWith('### ')) return `<h3>${t.slice(4)}</h3>`;
+      // Bold
+      const withBold = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      return `<p>${withBold}</p>`;
+    })
+    .join('\n');
+};
+
+const exportObservatoryHtml = (data: any, marketIntelData?: any) => {
+  if (!data) return;
+
+  const date = data.generated_at ? new Date(data.generated_at).toLocaleDateString('en-FI', { day: 'numeric', month: 'long', year: 'numeric' }) : 'Unknown date';
+
+  // Cross-impact matrix HTML
+  let crossImpactHtml = '';
+  if (marketIntelData?.cross_impact?.length > 0) {
+    const ci = marketIntelData.cross_impact;
+    const themes = [...new Set(ci.map((c: any) => c.theme))] as string[];
+    const dims = ["Operating Model", "Service Portfolio", "Values", "Strategy", "AI Readiness"];
+    const matrix: Record<string, Record<string, number>> = {};
+    for (const item of ci) {
+      if (!matrix[item.theme]) matrix[item.theme] = {};
+      matrix[item.theme][item.dimension] = item.count;
+    }
+    const maxVal = Math.max(...ci.map((c: any) => c.count), 1);
+
+    crossImpactHtml = `
+      <div class="section">
+        <h2>Theme × Dimension Cross-Impact Matrix</h2>
+        <table class="matrix">
+          <thead><tr><th>Theme</th>${dims.map(d => `<th>${d}</th>`).join('')}</tr></thead>
+          <tbody>
+            ${themes.map(theme => `<tr><td>${theme}</td>${dims.map(dim => {
+              const val = matrix[theme]?.[dim] || 0;
+              const opacity = val > 0 ? (0.2 + (val / maxVal) * 0.6) : 0;
+              return `<td style="background: rgba(99,102,241,${opacity}); text-align:center">${val > 0 ? val : '–'}</td>`;
+            }).join('')}</tr>`).join('\n')}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  // Top foresights
+  let foresightsHtml = '';
+  if (marketIntelData?.top_foresights?.length > 0) {
+    const f = marketIntelData.top_foresights;
+    const total = f.reduce((s: number, x: any) => s + x.count, 0) || 1;
+    let cum = 0;
+    foresightsHtml = `
+      <div class="section">
+        <h2>Top Foresight Themes</h2>
+        <table class="foresights">
+          <thead><tr><th>Theme</th><th>Category</th><th>Signals</th><th>Cumulative %</th></tr></thead>
+          <tbody>
+            ${f.map((x: any) => {
+              cum += x.count;
+              return `<tr><td><strong>${x.theme}</strong></td><td>${x.category}</td><td>${x.count}</td><td>${Math.round((cum / total) * 100)}%</td></tr>`;
+            }).join('\n')}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  // Domain dossiers
+  const dossiersHtml = (data.domain_dossiers || []).map((d: any) => {
+    const archBadges = d.archetype_distribution
+      ? Object.entries(d.archetype_distribution).map(([k, v]) => `<span class="badge badge-${k.toLowerCase().replace(/\s+/g, '-')}">${k}: ${v}</span>`).join(' ')
+      : '';
+
+    const forceBadges = d.forces_by_timescale ? [
+      d.forces_by_timescale.act_now?.length > 0 ? `<span class="badge badge-act-now">Act Now: ${d.forces_by_timescale.act_now.length}</span>` : '',
+      d.forces_by_timescale.prepare?.length > 0 ? `<span class="badge badge-prepare">Prepare: ${d.forces_by_timescale.prepare.length}</span>` : '',
+      d.forces_by_timescale.position?.length > 0 ? `<span class="badge badge-position">Position: ${d.forces_by_timescale.position.length}</span>` : '',
+    ].filter(Boolean).join(' ') : '';
+
+    return `
+      <div class="domain-dossier">
+        <h2>${d.domain}</h2>
+        <div class="badges">${archBadges} <span class="badge">${d.company_count} companies</span> ${forceBadges}</div>
+        <div class="essay">${markdownToHtml(d.text)}</div>
+      </div>`;
+  }).join('\n');
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Strategic Foresight Observatory — ${date}</title>
+  <style>
+    :root { --bg: #0f172a; --surface: #1e293b; --border: #334155; --text: #e2e8f0; --text-muted: #94a3b8; --text-dim: #64748b; --cyan: #22d3ee; --violet: #a78bfa; --amber: #fbbf24; --emerald: #34d399; --rose: #fb7185; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: var(--bg); color: var(--text); font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.7; max-width: 900px; margin: 0 auto; padding: 40px 24px; }
+    h1 { font-size: 28px; margin-bottom: 4px; color: white; }
+    .subtitle { color: var(--text-dim); font-size: 12px; font-family: monospace; margin-bottom: 32px; }
+    .meta { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 32px; }
+    .meta-item { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 14px; font-size: 12px; font-family: monospace; color: var(--text-muted); }
+    .meta-item.highlight { border-color: rgba(34,211,238,0.3); color: var(--cyan); }
+
+    .layer { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 28px; overflow: hidden; }
+    .layer-header { padding: 20px 28px; border-bottom: 1px solid var(--border); }
+    .layer-header h2 { font-size: 18px; margin-bottom: 4px; }
+    .layer-header.global h2 { color: var(--cyan); }
+    .layer-header.finland h2 { color: var(--violet); }
+    .layer-header.domain h2 { color: var(--amber); }
+    .layer-desc { color: var(--text-dim); font-size: 12px; line-height: 1.6; margin-top: 8px; }
+    .layer-body { padding: 24px 28px; }
+
+    .essay h1 { font-size: 20px; margin: 28px 0 12px; color: white; }
+    .essay h2 { font-size: 16px; margin: 24px 0 10px; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+    .essay h3 { font-size: 14px; margin: 18px 0 8px; color: white; }
+    .essay p { font-size: 14px; color: var(--text); margin-bottom: 14px; }
+    .essay strong { color: white; }
+    .essay hr { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+
+    .domain-dossier { border-top: 1px solid var(--border); padding: 24px 28px; }
+    .domain-dossier:first-child { border-top: none; }
+    .domain-dossier h2 { font-size: 17px; color: var(--amber); margin-bottom: 8px; }
+
+    .badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+    .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 10px; font-family: monospace; background: var(--bg); border: 1px solid var(--border); color: var(--text-muted); }
+    .badge-thriving { color: var(--emerald); border-color: rgba(52,211,153,0.3); }
+    .badge-modernizing { color: var(--amber); border-color: rgba(251,191,36,0.3); }
+    .badge-cash-cow { color: #60a5fa; border-color: rgba(96,165,250,0.3); }
+    .badge-at-risk { color: var(--rose); border-color: rgba(251,113,133,0.3); }
+    .badge-act-now { color: var(--rose); border-color: rgba(251,113,133,0.3); }
+    .badge-prepare { color: var(--amber); border-color: rgba(251,191,36,0.3); }
+    .badge-position { color: var(--cyan); border-color: rgba(34,211,238,0.3); }
+
+    .section { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 28px; padding: 24px 28px; }
+    .section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--violet); margin-bottom: 16px; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th { text-align: left; padding: 8px 10px; color: var(--text-muted); font-weight: 500; border-bottom: 1px solid var(--border); }
+    td { padding: 6px 10px; border-bottom: 1px solid rgba(51,65,85,0.3); color: var(--text); }
+    table.matrix th { text-align: center; font-size: 11px; }
+    table.matrix td { font-family: monospace; font-size: 11px; color: var(--text-muted); }
+
+    .footer { text-align: center; color: var(--text-dim); font-size: 11px; font-family: monospace; margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--border); }
+
+    @media print {
+      body { background: white; color: #1a1a1a; max-width: 100%; padding: 20px; }
+      .layer, .section, .domain-dossier { border-color: #ddd; background: #fafafa; }
+      .essay h2 { color: #1a1a1a; border-bottom-color: #ddd; }
+      .layer-header.global h2, .layer-header.finland h2, .layer-header.domain h2 { color: #1a1a1a; }
+      .essay p, td, th { color: #333; }
+      .badge { background: #f5f5f5; border-color: #ccc; color: #555; }
+      .footer { color: #999; border-color: #ddd; }
+    }
+  </style>
+</head>
+<body>
+  <h1>Strategic Foresight Observatory</h1>
+  <div class="subtitle">Three-layer force analysis — Generated ${date}</div>
+
+  <div class="meta">
+    <div class="meta-item">${data.company_count} companies</div>
+    <div class="meta-item">${data.domain_count} domains</div>
+    ${data.global_analysis?.force_count ? `<div class="meta-item highlight">${data.global_analysis.force_count} forces tracked</div>` : ''}
+  </div>
+
+  ${foresightsHtml}
+  ${crossImpactHtml}
+
+  <!-- Layer 1: Global Force Landscape -->
+  <div class="layer">
+    <div class="layer-header global">
+      <h2>Layer 1: Global Force Landscape</h2>
+      <div class="layer-desc">A futurologist's briefing on the converging global forces reshaping business. Synthesizes validated signals from the Foresight Knowledge Base into macro-level patterns.</div>
+    </div>
+    <div class="layer-body">
+      <div class="essay">${markdownToHtml(data.global_analysis?.text)}</div>
+    </div>
+  </div>
+
+  <!-- Layer 2: Finnish Economy Force Map -->
+  <div class="layer">
+    <div class="layer-header finland">
+      <h2>Layer 2: Finnish Economy Force Map</h2>
+      <div class="layer-desc">Maps how global forces specifically land in the Finnish business landscape. Grounds every claim in actual company data — market health scores, archetype distributions, and gap patterns.</div>
+    </div>
+    <div class="layer-body">
+      <div class="essay">${markdownToHtml(data.finland_analysis?.text)}</div>
+    </div>
+  </div>
+
+  <!-- Layer 3: Domain Force Dossiers -->
+  <div class="layer">
+    <div class="layer-header domain">
+      <h2>Layer 3: Domain Force Dossiers</h2>
+      <div class="layer-desc">Per-domain strategic analysis with timescale mapping. Each dossier examines a specific industry's position, identifies forces by urgency horizon, and offers contrarian signals.</div>
+    </div>
+    <div class="layer-body" style="padding:0">
+      ${dossiersHtml}
+    </div>
+  </div>
+
+  <div class="footer">
+    Strategic Foresight Observatory &mdash; ${date}<br>
+    Generated by The Scanner
+  </div>
+</body>
+</html>`;
+
+  // Trigger download
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `observatory-${new Date(data.generated_at || Date.now()).toISOString().slice(0, 10)}.html`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -528,6 +758,16 @@ const ObservatoryModal = ({ isOpen, data, loading, onClose, onRefresh, adminPass
                 <Clock size={10} />
                 {new Date(data.generated_at).toLocaleDateString()}
               </div>
+            )}
+            {data && (
+              <button
+                onClick={() => exportObservatoryHtml(data, marketIntelData)}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 border border-white/10 transition-colors text-[9px] font-mono text-slate-400 hover:text-slate-200"
+                title="Download as HTML"
+              >
+                <Download size={12} />
+                HTML
+              </button>
             )}
             <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-white/5 transition-colors">
               <X size={18} className="text-slate-400" />
