@@ -1332,58 +1332,65 @@ const CompanySummary = ({ data, faviData, observatoryData = null }) => {
           };
 
           return (
-            <div className="bg-gradient-to-r from-amber-900/20 to-orange-900/20 p-8 rounded-2xl border-l-4 border-amber-500 backdrop-blur-sm">
-              <h3 className="text-xl font-bold text-white mb-1 flex items-center gap-2">
-                <Eye className="text-amber-400" size={22} />
-                Domain Force Dossier: {domain}
-              </h3>
-              <p className="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">
-                Strategic foresight analysis for the {domain} domain — from the Observatory
-              </p>
+            <div className="bg-slate-800/40 rounded-2xl border border-slate-700/50 overflow-hidden backdrop-blur-sm">
+              {/* Header */}
+              <div className="px-8 pt-7 pb-5 border-b border-slate-700/30">
+                <h3 className="text-xl font-bold text-white mb-1 flex items-center gap-2">
+                  <Eye className="text-teal-400" size={22} />
+                  Domain Force Dossier: {domain}
+                </h3>
+                <p className="text-[10px] text-slate-500 uppercase tracking-wider font-mono">
+                  Strategic foresight analysis for the {domain} domain — from the Observatory
+                </p>
 
-              {/* Domain stats */}
-              <div className="flex flex-wrap gap-2 mb-4">
-                <span className="px-2 py-0.5 bg-black/20 rounded border border-white/10 text-[9px] font-mono text-slate-400">
-                  {dossier.company_count} companies
-                </span>
-                {Object.entries(archDist).map(([k, v]: [string, any]) => (
-                  <span key={k} className={`px-2 py-0.5 rounded border text-[9px] font-mono ${ARCH_COLORS[k] || "text-slate-300 bg-black/20 border-white/10"}`}>
-                    {k}: {v}
+                {/* Domain stats */}
+                <div className="flex flex-wrap gap-2 mt-4">
+                  <span className="px-2.5 py-1 bg-slate-700/50 rounded-full text-[10px] font-mono text-slate-400">
+                    {dossier.company_count} companies
                   </span>
-                ))}
+                  {Object.entries(archDist).map(([k, v]: [string, any]) => (
+                    <span key={k} className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${ARCH_COLORS[k] || "text-slate-300 bg-slate-700/50 border-slate-600/30"}`}>
+                      {k}: {v}
+                    </span>
+                  ))}
+                </div>
+
+                {/* Forces by timescale badges */}
+                {(forces.act_now?.length > 0 || forces.prepare?.length > 0 || forces.position?.length > 0) && (
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    {forces.act_now?.length > 0 && (
+                      <span className="px-2.5 py-1 bg-rose-500/10 border border-rose-500/30 rounded-full text-[10px] font-mono text-rose-300">
+                        Act Now: {forces.act_now.length} forces
+                      </span>
+                    )}
+                    {forces.prepare?.length > 0 && (
+                      <span className="px-2.5 py-1 bg-amber-500/10 border border-amber-500/30 rounded-full text-[10px] font-mono text-amber-300">
+                        Prepare: {forces.prepare.length} forces
+                      </span>
+                    )}
+                    {forces.position?.length > 0 && (
+                      <span className="px-2.5 py-1 bg-teal-500/10 border border-teal-500/30 rounded-full text-[10px] font-mono text-teal-300">
+                        Position: {forces.position.length} forces
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
 
-              {/* Forces by timescale badges */}
-              {(forces.act_now?.length > 0 || forces.prepare?.length > 0 || forces.position?.length > 0) && (
-                <div className="flex flex-wrap gap-2 mb-5">
-                  {forces.act_now?.length > 0 && (
-                    <span className="px-2 py-0.5 bg-rose-500/10 border border-rose-500/30 rounded text-[9px] font-mono text-rose-300">
-                      Act Now: {forces.act_now.length} forces
-                    </span>
-                  )}
-                  {forces.prepare?.length > 0 && (
-                    <span className="px-2 py-0.5 bg-amber-500/10 border border-amber-500/30 rounded text-[9px] font-mono text-amber-300">
-                      Prepare: {forces.prepare.length} forces
-                    </span>
-                  )}
-                  {forces.position?.length > 0 && (
-                    <span className="px-2 py-0.5 bg-cyan-500/10 border border-cyan-500/30 rounded text-[9px] font-mono text-cyan-300">
-                      Position: {forces.position.length} forces
-                    </span>
-                  )}
-                </div>
-              )}
-
               {/* Dossier essay text */}
-              <div>
+              <div className="px-8 py-6">
                 {dossier.text.split(/\n\n+/).map((block: string, pi: number) => {
                   const trimmed = block.trim();
                   if (!trimmed) return null;
-                  // Section headers
+                  // Skip raw title line (# Domain Force Dossier: ...)
+                  if (/^#\s+Domain Force Dossier/i.test(trimmed)) return null;
+                  // Skip horizontal rules (---)
+                  if (/^-{3,}$/.test(trimmed)) return <hr key={pi} className="border-slate-700/40 my-6" />;
+                  // Section headers (## SECTION ...)
                   const h2Match = trimmed.match(/^##\s+(.+)/);
                   if (h2Match) {
                     return (
-                      <h4 key={pi} className={`text-base font-semibold text-amber-300 uppercase tracking-wide${pi > 0 ? " mt-6 mb-2" : " mb-2"}`}>
+                      <h4 key={pi} className={`text-[13px] font-bold text-teal-400 uppercase tracking-wide${pi > 0 ? " mt-8 mb-3" : " mb-3"}`}>
                         {h2Match[1]}
                       </h4>
                     );
@@ -1391,7 +1398,7 @@ const CompanySummary = ({ data, faviData, observatoryData = null }) => {
                   const h3Match = trimmed.match(/^###\s+(.+)/);
                   if (h3Match) {
                     return (
-                      <h5 key={pi} className={`text-sm font-semibold text-amber-200/80 mt-4 mb-1`}>
+                      <h5 key={pi} className="text-sm font-bold text-white mt-5 mb-2">
                         {h3Match[1]}
                       </h5>
                     );
@@ -1399,10 +1406,10 @@ const CompanySummary = ({ data, faviData, observatoryData = null }) => {
                   // Bold text within paragraphs
                   const parts = trimmed.split(/(\*\*[^*]+\*\*)/);
                   return (
-                    <p key={pi} className={`text-slate-200 leading-relaxed text-sm font-light${pi > 0 ? " mt-4" : ""}`}>
+                    <p key={pi} className={`text-slate-300 leading-relaxed text-sm${pi > 0 ? " mt-4" : ""}`}>
                       {parts.map((seg: string, j: number) => {
                         if (seg.startsWith("**") && seg.endsWith("**")) {
-                          return <strong key={j} className="text-slate-100 font-semibold">{seg.slice(2, -2)}</strong>;
+                          return <strong key={j} className="text-white font-semibold">{seg.slice(2, -2)}</strong>;
                         }
                         return <span key={j}>{seg}</span>;
                       })}
@@ -1413,9 +1420,9 @@ const CompanySummary = ({ data, faviData, observatoryData = null }) => {
 
               {/* Observatory timestamp */}
               {observatoryData?.generated_at && (
-                <p className="text-[9px] text-slate-600 font-mono mt-5 pt-3 border-t border-white/5">
+                <div className="px-8 py-3 border-t border-slate-700/30 text-[9px] text-slate-600 font-mono">
                   Observatory analysis generated: {new Date(observatoryData.generated_at).toLocaleDateString()} | Model: {observatoryData.model}
-                </p>
+                </div>
               )}
             </div>
           );
