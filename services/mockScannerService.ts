@@ -119,7 +119,7 @@ const FINNISH_COMPANIES = [
   "Nokia Oyj", "Neste Oyj", "Kone Oyj", "UPM-Kymmene Oyj", "Stora Enso Oyj",
   "Kesko Oyj", "Sampo Oyj", "Fortum Oyj", "Metso Oyj", "Wärtsilä Oyj",
   "Valmet Oyj", "Huhtamäki Oyj", "Orion Oyj", "Elisa Oyj", "Kemira Oyj",
-  "Cargotec Oyj", "Tieto Oyj", "YIT Oyj", "Outokumpu Oyj", "Sanoma Oyj",
+  "HIAB", "Tieto Oyj", "YIT Oyj", "Outokumpu Oyj", "Sanoma Oyj",
   "Finnair Oyj", "Kojamo Oyj", "Tokmanni Group", "Caverion Oyj", "Rovio Entertainment",
   "Fiskars Group", "Vaisala Oyj", "Olvi Oyj", "Ponsse Oyj", "Revenio Group"
 ];
