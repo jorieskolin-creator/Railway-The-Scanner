@@ -669,7 +669,7 @@ def _generate_sonnet(prompt: str, max_tokens: int = 5000) -> tuple[str, int]:
     return text, wc
 
 
-def _generate_opus(prompt: str, max_tokens: int = 6000) -> tuple[str, int]:
+def _generate_opus(prompt: str, max_tokens: int = 16000) -> tuple[str, int]:
     """Generate text via Opus 4.6. Returns (text, word_count).
     Used for Domain Dossiers (Layer 3) where analytical depth matters most."""
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
