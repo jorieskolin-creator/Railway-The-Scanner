@@ -1900,7 +1900,7 @@ const App = () => {
                               onClick={() => handleEnrichStakeholdersSingle(item.companyName)}
                               disabled={enrichingStakeholderCompany === item.companyName}
                               className="text-slate-500 hover:text-indigo-400 p-1.5 rounded hover:bg-indigo-500/10 transition-all disabled:opacity-50"
-                              title={`Enrich stakeholder LinkedIn insights for ${item.companyName}`}
+                              title="Stakeholder Intel — Enrich key people with LinkedIn insights"
                             >
                               {enrichingStakeholderCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
                             </button>
@@ -1908,7 +1908,7 @@ const App = () => {
                               onClick={() => handleRefreshProposalsSingle(item.companyName)}
                               disabled={refreshingProposalsCompany === item.companyName}
                               className="text-slate-500 hover:text-orange-400 p-1.5 rounded hover:bg-orange-500/10 transition-all disabled:opacity-50"
-                              title={`Refresh WHY/WHAT proposals for ${item.companyName}`}
+                              title="Refresh WHY/WHAT — Regenerate strategic proposals"
                             >
                               {refreshingProposalsCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
                             </button>
@@ -1916,7 +1916,7 @@ const App = () => {
                               onClick={() => handleCleanCompany(item.companyName)}
                               disabled={cleaningCompany === item.companyName}
                               className={`${hasUnverifiedClaims ? 'text-orange-400' : 'text-slate-500'} hover:text-emerald-400 p-1.5 rounded hover:bg-emerald-500/10 transition-all disabled:opacity-50`}
-                              title={`Reality Check${hasUnverifiedClaims ? ' + Clean' : ''} ${item.companyName}`}
+                              title="Reality Check — Verify claims and auto-clean false statements"
                             >
                               {cleaningCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <ShieldAlert size={14} />}
                             </button>
@@ -1924,14 +1924,14 @@ const App = () => {
                               onClick={() => handleOpenEdit(item.companyName)}
                               disabled={editLoading && editingCompany === item.companyName}
                               className="text-slate-500 hover:text-sky-400 p-1.5 rounded hover:bg-sky-500/10 transition-all disabled:opacity-50"
-                              title={`Edit ${item.companyName}`}
+                              title="Edit — Manually edit summary, pitch, and general summary text"
                             >
                               {editLoading && editingCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <Pencil size={14} />}
                             </button>
                             <button
                               onClick={() => handleDeleteCompany(item.companyName)}
                               className="text-slate-500 hover:text-rose-400 p-1.5 rounded hover:bg-rose-500/10 transition-all"
-                              title={`Delete ${item.companyName}`}
+                              title="Delete — Remove all data for this company from storage"
                             >
                               <Trash2 size={14} />
                             </button>
