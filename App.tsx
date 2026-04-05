@@ -941,14 +941,14 @@ const App = () => {
                 <button onClick={handleOpenObservatory} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-violet-900/40 hover:bg-violet-800/60 border border-violet-700/50 text-violet-200 font-mono font-bold text-[10px] rounded transition-all">
                     <Eye size={12} /> OBSERVATORY
                 </button>
-                <button onClick={() => setIsThemeExplorerOpen(true)} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-teal-900/40 hover:bg-teal-800/60 border border-teal-700/50 text-teal-200 font-mono font-bold text-[10px] rounded transition-all">
-                    <Database size={12} /> THEMES
-                </button>
                 </>
             )}
             {/* Admin-only buttons */}
             {isAdmin && (
                 <>
+                <button onClick={() => setIsThemeExplorerOpen(true)} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-teal-900/40 hover:bg-teal-800/60 border border-teal-700/50 text-teal-200 font-mono font-bold text-[10px] rounded transition-all">
+                    <Database size={12} /> THEMES
+                </button>
                 <button onClick={handleOpenDataReview} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-amber-900/40 hover:bg-amber-800/60 border border-amber-700/50 text-amber-200 font-mono font-bold text-[10px] rounded transition-all">
                     <ShieldAlert size={12} /> REVIEW
                 </button>
