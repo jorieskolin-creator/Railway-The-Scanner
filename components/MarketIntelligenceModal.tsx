@@ -828,23 +828,40 @@ const FutureDemandTab = ({ data, observatoryData = null }: { data: any; observat
               </span>
             )}
           </div>
-          <div className="px-5 py-4 space-y-0">
+          <div className="px-5 py-4">
             {observatoryData.finland_analysis.text.split(/\n+/).map((part: string, i: number) => {
               const trimmed = part.trim();
               if (!trimmed) return null;
+              if (trimmed === '---') return <hr key={i} className="border-violet-500/10 my-4" />;
               if (trimmed.startsWith("## ")) {
-                return <h4 key={i} className="text-sm font-bold text-violet-200 mt-5 mb-2 border-b border-violet-500/10 pb-1">{trimmed.replace(/^##\s*/, "")}</h4>;
+                return <h4 key={i} className="text-sm font-bold text-violet-200 mt-6 mb-3 border-b border-violet-500/10 pb-1.5">{trimmed.replace(/^##\s*/, "")}</h4>;
               }
               if (trimmed.startsWith("# ")) {
-                return <h3 key={i} className="text-base font-bold text-violet-100 mt-5 mb-2">{trimmed.replace(/^#\s*/, "")}</h3>;
+                return <h3 key={i} className="text-base font-bold text-violet-100 mt-6 mb-3">{trimmed.replace(/^#\s*/, "")}</h3>;
               }
-              const rendered = trimmed.split(/(\*\*[^*]+\*\*)/).map((seg: string, j: number) => {
-                if (seg.startsWith("**") && seg.endsWith("**")) {
-                  return <strong key={j} className="text-violet-200 font-semibold">{seg.slice(2, -2)}</strong>;
+              // Process markdown bold markers and auto-bold first sentence
+              const processBold = (text: string) => {
+                return text.split(/(\*\*[^*]+\*\*)/).map((seg: string, j: number) => {
+                  if (seg.startsWith("**") && seg.endsWith("**")) {
+                    return <strong key={j} className="text-violet-200 font-semibold">{seg.slice(2, -2)}</strong>;
+                  }
+                  return <span key={j}>{seg}</span>;
+                });
+              };
+              // Auto-bold first sentence if no markdown bold exists
+              const hasBold = /\*\*[^*]+\*\*/.test(trimmed);
+              if (!hasBold) {
+                const dotIdx = trimmed.indexOf('. ');
+                if (dotIdx > 10 && dotIdx < 150) {
+                  return (
+                    <p key={i} className="text-[12px] text-slate-300/90 leading-relaxed mb-4">
+                      <strong className="text-violet-200 font-semibold">{trimmed.slice(0, dotIdx + 1)}</strong>{' '}
+                      {trimmed.slice(dotIdx + 2)}
+                    </p>
+                  );
                 }
-                return <span key={j}>{seg}</span>;
-              });
-              return <p key={i} className="text-[12px] text-slate-300/90 leading-relaxed mb-2.5">{rendered}</p>;
+              }
+              return <p key={i} className="text-[12px] text-slate-300/90 leading-relaxed mb-4">{processBold(trimmed)}</p>;
             })}
           </div>
           {/* Metadata footer */}
