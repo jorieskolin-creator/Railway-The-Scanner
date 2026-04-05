@@ -5,7 +5,7 @@ const { X, RefreshCw, Calendar, Clock, Loader2: Loader2Icon, UploadCloud, File, 
 
 const CompanySummary = (window as any).CompanySummary;
 
-const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading, marketIntelData, observatoryData = null }) => {
+const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading, marketIntelData, observatoryData = null, isAdmin = false, authToken = '' }) => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
   const [refreshFiles, setRefreshFiles] = useState([]);
@@ -38,18 +38,14 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading, marketInt
   };
 
   const handleRefresh = async () => {
-    // PASSWORD PROTECTION — validated server-side via ADMIN_SECRET env var
-    const password = prompt("AUTHENTICATION REQUIRED\n\nDatabase is in Protected Mode to preserve freshness.\nEnter Admin Password to force a deep refresh:");
-    if (!password) return;
+    if (!isAdmin || !authToken) return;
 
     setIsRefreshing(true);
     try {
-      // Use FormData for file support
       const formData = new FormData();
       formData.append('companyName', company.companyName);
       formData.append('companyUrl', company.companyUrl || "");
 
-      // Include existing summary + pitch as context for the rescan
       const contextParts = [];
       if (company.summary_text) contextParts.push(`--- PREVIOUS SUMMARY ---\n${company.summary_text}`);
       if (company.pitch_text) contextParts.push(`--- PREVIOUS PITCH ---\n${company.pitch_text}`);
@@ -57,7 +53,6 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading, marketInt
 
       formData.append('saveToDatabase', 'true');
 
-      // Append files if any
       refreshFiles.forEach(file => {
           formData.append('files', file);
       });
@@ -65,11 +60,11 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading, marketInt
       const response = await fetch(`/scan`, {
         method: 'POST',
         body: formData,
-        headers: { 'Authorization': `Bearer ${password}` }
+        headers: { 'Authorization': `Bearer ${authToken}` }
       });
 
       if (response.status === 401) {
-        alert("ACCESS DENIED: Incorrect Password.\n\nTip: You can still run a fresh scan via 'New Diagnosis' on the main dashboard.");
+        alert("Session expired. Please log in again.");
         return;
       }
       if (!response.ok) throw new Error("Refresh failed");
@@ -177,6 +172,7 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading, marketInt
               </div>
           )}
 
+          {isAdmin && (
           <div className="flex gap-2">
               <button
                 onClick={() => setShowUpload(!showUpload)}
@@ -209,6 +205,7 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading, marketInt
                 )}
               </button>
           </div>
+          )}
         </div>
       </div>
     </div>

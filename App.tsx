@@ -11,7 +11,7 @@ const Icons = new Proxy(LucideRaw, {
     }
 });
 
-const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock, HardDrive, Radio, Cpu, BarChart3, TrendingUp, TrendingDown, Minus, Trash2, Eye, ShieldAlert, Calculator, Zap, Pencil, Save, Check } = Icons;
+const { Activity, Search, ArrowUpDown, Plus, Loader2, X, Sparkles, Shield, Database, RefreshCw, CheckCircle2, AlertTriangle, Cloud, RotateCcw, Lock, HardDrive, Radio, Cpu, BarChart3, TrendingUp, TrendingDown, Minus, Trash2, Eye, ShieldAlert, Calculator, Zap, Pencil, Save, Check, LogOut, User } = Icons;
 
 const TruthMatrix = (window as any).TruthMatrix;
 const ScannerInput = (window as any).ScannerInput;
@@ -19,8 +19,6 @@ const CompanyModal = (window as any).CompanyModal;
 const ThemeExplorer = (window as any).ThemeExplorer;
 const MarketIntelligenceModal = (window as any).MarketIntelligenceModal;
 const ObservatoryModal = (window as any).ObservatoryModal;
-
-const IS_ADMIN_MODE = true; 
 
 // DYNAMIC REFERENCE CONFIG
 // These names will be highlighted as References in the UI, 
@@ -67,11 +65,67 @@ const App = () => {
   const [isObservatoryOpen, setIsObservatoryOpen] = useState(false);
   const [observatoryData, setObservatoryData] = useState(null);
   const [observatoryLoading, setObservatoryLoading] = useState(false);
-  const [observatoryPassword, setObservatoryPassword] = useState('');
 
   // THEME EXPLORER STATE
   const [isThemeExplorerOpen, setIsThemeExplorerOpen] = useState(false);
-  const [themeExplorerToken, setThemeExplorerToken] = useState('');
+
+  // AUTH STATE — session-based (cleared on tab close)
+  const [userRole, setUserRole] = useState(() => sessionStorage.getItem('scanner_role') || 'none');
+  const [authToken, setAuthToken] = useState(() => sessionStorage.getItem('scanner_token') || '');
+  const [isLoginOpen, setIsLoginOpen] = useState(false);
+  const [loginError, setLoginError] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
+
+  const isAuthenticated = userRole === 'guest' || userRole === 'admin';
+  const isAdmin = userRole === 'admin';
+
+  const authHeaders = () => authToken ? { 'Authorization': `Bearer ${authToken}` } : {};
+
+  const handleLogin = async (password: string) => {
+    setLoginLoading(true);
+    setLoginError('');
+    try {
+      const res = await fetch('/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password })
+      });
+      if (res.status === 429) {
+        const json = await res.json();
+        setLoginError(json.detail || 'Too many attempts. Try again later.');
+        return;
+      }
+      if (!res.ok) {
+        const json = await res.json();
+        setLoginError(json.detail || 'Invalid password.');
+        return;
+      }
+      const { role } = await res.json();
+      setUserRole(role);
+      setAuthToken(password);
+      sessionStorage.setItem('scanner_role', role);
+      sessionStorage.setItem('scanner_token', password);
+      setIsLoginOpen(false);
+      setLoginError('');
+    } catch (e) {
+      setLoginError('Connection failed. Try again.');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleLogout = () => {
+    setUserRole('none');
+    setAuthToken('');
+    sessionStorage.removeItem('scanner_role');
+    sessionStorage.removeItem('scanner_token');
+    // Close any open authenticated modals
+    setIsAnalyticsOpen(false);
+    setIsMarketIntelOpen(false);
+    setIsObservatoryOpen(false);
+    setIsThemeExplorerOpen(false);
+    setIsDataReviewOpen(false);
+  };
 
   // SERVER-SIDE BATCH STATE
   const [batchStatus, setBatchStatus] = useState({ is_running: false, current: 0, total: 0, current_name: '' });
@@ -235,13 +289,12 @@ const App = () => {
   };
 
   const handleRunScan = async (input, isFormData = false) => {
-    const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to run diagnosis:");
-    if (!password) return;
+    if (!isAdmin) return;
 
     setIsScanning(true);
     try {
       let body;
-      let headers: Record<string, string> = { 'Authorization': `Bearer ${password}` };
+      let headers: Record<string, string> = { ...authHeaders() };
 
       if (isFormData) {
           body = input;
@@ -251,7 +304,7 @@ const App = () => {
       }
 
       const response = await fetch(`/scan`, { method: 'POST', headers: headers, body: body });
-      if (response.status === 401) { alert("ACCESS DENIED: Incorrect Password."); return; }
+      if (response.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return; }
       if (!response.ok) throw new Error("Scan failed");
       const json = await response.json();
       const newResult = json.data;
@@ -273,18 +326,16 @@ const App = () => {
 
   // --- SERVER-SIDE BATCH LOGIC ---
   const handleStartBatch = async () => {
-    if (!IS_ADMIN_MODE) return;
-    const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to start a full database refresh:");
-    if (!password) return;
+    if (!isAdmin) return;
 
     if (!confirm("Start full database refresh?\n\nThis runs on the server — you can close this tab safely.\nProgress will be shown in the header.")) return;
 
     try {
         const res = await fetch('/batch-refresh', {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${password}` }
+            headers: authHeaders()
         });
-        if (res.status === 401) { alert("ACCESS DENIED: Incorrect Password."); return; }
+        if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return; }
         if (res.status === 409) { alert("A batch refresh is already in progress."); return; }
         if (!res.ok) throw new Error("Failed to start batch");
         const json = await res.json();
@@ -293,12 +344,11 @@ const App = () => {
   };
 
   const handleStopBatch = async () => {
-    const password = prompt("Enter Admin Password to stop the batch:");
-    if (!password) return;
+    if (!isAdmin) return;
     try {
         await fetch('/batch-refresh/stop', {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${password}` }
+            headers: authHeaders()
         });
     } catch(e) { console.error(e); }
   };
@@ -335,8 +385,7 @@ const App = () => {
   };
 
   const handleOpenMarketIntel = async () => {
-    const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to open Market Intelligence:");
-    if (!password) return;
+    if (!isAuthenticated) return;
     setIsMarketIntelOpen(true);
     if (!marketIntelData) {
       await fetchMarketIntelData();
@@ -363,9 +412,7 @@ const App = () => {
   };
 
   const handleOpenObservatory = async () => {
-    const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to open Strategic Observatory:");
-    if (!password) return;
-    setObservatoryPassword(password);
+    if (!isAuthenticated) return;
     setIsObservatoryOpen(true);
     if (!observatoryData) {
       await fetchObservatoryData();
@@ -377,16 +424,15 @@ const App = () => {
   };
 
   const handleOpenDataReview = async () => {
-    const password = prompt("Enter Admin Password to review stored data:");
-    if (!password) return;
+    if (!isAdmin) return;
     setIsDataReviewOpen(true);
     setDataReviewLoading(true);
     setRecheckResults(null);
     try {
       const res = await fetch('/admin/review-data', {
-        headers: { 'Authorization': `Bearer ${password}` }
+        headers: authHeaders()
       });
-      if (res.status === 401) { alert("ACCESS DENIED"); setIsDataReviewOpen(false); return; }
+      if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return; }
       if (res.ok) {
         const json = await res.json();
         setDataReviewItems(json.companies || []);
@@ -396,16 +442,15 @@ const App = () => {
   };
 
   const handleDeleteCompany = async (companyName) => {
-    const password = prompt(`AUTHENTICATION REQUIRED\n\nEnter Admin Password to DELETE "${companyName}":`);
-    if (!password) return;
+    if (!isAdmin) return;
     if (!confirm(`DELETE all data for "${companyName}"?\n\nThis removes the company from storage and the dashboard index.\nYou can rescan it later to regenerate fresh data.`)) return;
 
     try {
       const res = await fetch(`/admin/company/${encodeURIComponent(companyName)}`, {
         method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${password}` }
+        headers: authHeaders()
       });
-      if (res.status === 401) { alert("ACCESS DENIED: Incorrect Password."); return; }
+      if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return; }
       if (res.ok) {
         setDataReviewItems(prev => prev.filter(c => c.companyName !== companyName));
         fetchSummaryData(true);
@@ -416,14 +461,13 @@ const App = () => {
   };
 
   const handleCleanupIndex = async () => {
-    const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to clean orphaned entries from the index:");
-    if (!password) return;
+    if (!isAdmin) return;
     try {
       const res = await fetch('/admin/cleanup-index', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${password}` }
+        headers: authHeaders()
       });
-      if (res.status === 401) { alert("ACCESS DENIED"); return; }
+      if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return; }
       if (res.ok) {
         const json = await res.json();
         if (json.removed_count > 0) {
@@ -437,16 +481,14 @@ const App = () => {
   };
 
   const handleCleanCompany = async (companyName) => {
-    const password = prompt(`AUTHENTICATION REQUIRED\n\nEnter Admin Password to run Reality Check + CLEAN on "${companyName}":`);
-    if (!password) return;
+    if (!isAdmin) return;
     setCleaningCompany(companyName);
     try {
-      // Full reality check + auto-clean (same procedure as Reality Check All)
       const res = await fetch(`/admin/recheck-company/${encodeURIComponent(companyName)}`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${password}` }
+        headers: authHeaders()
       });
-      if (res.status === 401) { alert("ACCESS DENIED: Incorrect Password."); return; }
+      if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return; }
       if (res.ok) {
         const json = await res.json();
         const rec = json.recommendation || '';
@@ -462,7 +504,7 @@ const App = () => {
           alert(`Reality Check "${companyName}":\n\nRecommendation: ${rec}`);
         }
         // Refresh the review list to show updated verification status
-        const reviewRes = await fetch('/admin/review-data', { headers: { 'Authorization': `Bearer ${password}` } });
+        const reviewRes = await fetch('/admin/review-data', { headers: authHeaders() });
         if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
         fetchSummaryData(true);
       } else {
@@ -473,20 +515,19 @@ const App = () => {
   };
 
   const handleRecheckAll = async () => {
-    const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to run Reality Check on all companies:");
-    if (!password) return;
+    if (!isAdmin) return;
     setRecheckLoading(true);
     try {
       const res = await fetch('/admin/recheck-all', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${password}` }
+        headers: authHeaders()
       });
-      if (res.status === 401) { alert("ACCESS DENIED: Incorrect Password."); setRecheckLoading(false); return; }
+      if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); setRecheckLoading(false); return; }
       if (res.ok) {
         const json = await res.json();
         setRecheckResults(json);
         // Refresh review list since recheck-all now auto-cleans flagged companies
-        const reviewRes = await fetch('/admin/review-data', { headers: { 'Authorization': `Bearer ${password}` } });
+        const reviewRes = await fetch('/admin/review-data', { headers: authHeaders() });
         if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
         fetchSummaryData(true);
       }
@@ -495,21 +536,20 @@ const App = () => {
   };
 
   const handleRecalculateFinancial = async () => {
-    const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to recalculate financial scores:");
-    if (!password) return;
+    if (!isAdmin) return;
     setRecalcLoading(true);
     setRecalcResults(null);
     try {
       const res = await fetch('/admin/recalculate-financial', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${password}` }
+        headers: authHeaders()
       });
-      if (res.status === 401) { alert("ACCESS DENIED: Incorrect Password."); setRecalcLoading(false); return; }
+      if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); setRecalcLoading(false); return; }
       if (res.ok) {
         const json = await res.json();
         setRecalcResults(json);
         // Refresh review list and dashboard
-        const reviewRes = await fetch('/admin/review-data', { headers: { 'Authorization': `Bearer ${password}` } });
+        const reviewRes = await fetch('/admin/review-data', { headers: authHeaders() });
         if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
         fetchSummaryData(true);
       } else {
@@ -520,20 +560,19 @@ const App = () => {
   };
 
   const handleRefreshProposalsAll = async () => {
-    const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to refresh WHY/WHAT proposals for ALL companies:");
-    if (!password) return;
+    if (!isAdmin) return;
     setRefreshProposalsLoading(true);
     setRefreshProposalsResults(null);
     try {
       const res = await fetch('/admin/refresh-proposals-all', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${password}` }
+        headers: authHeaders()
       });
-      if (res.status === 401) { alert("ACCESS DENIED: Incorrect Password."); setRefreshProposalsLoading(false); return; }
+      if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); setRefreshProposalsLoading(false); return; }
       if (res.ok) {
         const json = await res.json();
         setRefreshProposalsResults(json);
-        const reviewRes = await fetch('/admin/review-data', { headers: { 'Authorization': `Bearer ${password}` } });
+        const reviewRes = await fetch('/admin/review-data', { headers: authHeaders() });
         if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
         fetchSummaryData(true);
       } else {
@@ -544,15 +583,14 @@ const App = () => {
   };
 
   const handleRefreshProposalsSingle = async (companyName) => {
-    const password = prompt(`AUTHENTICATION REQUIRED\n\nEnter Admin Password to refresh WHY/WHAT proposals for "${companyName}":`);
-    if (!password) return;
+    if (!isAdmin) return;
     setRefreshingProposalsCompany(companyName);
     try {
       const res = await fetch(`/admin/refresh-proposals/${encodeURIComponent(companyName)}`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${password}` }
+        headers: authHeaders()
       });
-      if (res.status === 401) { alert("ACCESS DENIED: Incorrect Password."); return; }
+      if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return; }
       if (res.ok) {
         const json = await res.json();
         if (json.status === 'refreshed') {
@@ -560,7 +598,7 @@ const App = () => {
         } else {
           alert(`Refresh failed for "${companyName}": ${json.reason || 'Unknown error'}`);
         }
-        const reviewRes = await fetch('/admin/review-data', { headers: { 'Authorization': `Bearer ${password}` } });
+        const reviewRes = await fetch('/admin/review-data', { headers: authHeaders() });
         if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
         fetchSummaryData(true);
       } else {
@@ -571,20 +609,19 @@ const App = () => {
   };
 
   const handleEnrichStakeholdersAll = async () => {
-    const password = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to enrich LinkedIn insights for ALL companies' stakeholders:");
-    if (!password) return;
+    if (!isAdmin) return;
     setEnrichStakeholdersLoading(true);
     setEnrichStakeholdersResults(null);
     try {
       const res = await fetch('/admin/enrich-stakeholders-all', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${password}` }
+        headers: authHeaders()
       });
-      if (res.status === 401) { alert("ACCESS DENIED: Incorrect Password."); setEnrichStakeholdersLoading(false); return; }
+      if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); setEnrichStakeholdersLoading(false); return; }
       if (res.ok) {
         const json = await res.json();
         setEnrichStakeholdersResults(json);
-        const reviewRes = await fetch('/admin/review-data', { headers: { 'Authorization': `Bearer ${password}` } });
+        const reviewRes = await fetch('/admin/review-data', { headers: authHeaders() });
         if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
         fetchSummaryData(true);
       } else {
@@ -595,15 +632,14 @@ const App = () => {
   };
 
   const handleEnrichStakeholdersSingle = async (companyName) => {
-    const password = prompt(`AUTHENTICATION REQUIRED\n\nEnter Admin Password to enrich LinkedIn insights for "${companyName}" stakeholders:`);
-    if (!password) return;
+    if (!isAdmin) return;
     setEnrichingStakeholderCompany(companyName);
     try {
       const res = await fetch(`/admin/enrich-stakeholders/${encodeURIComponent(companyName)}`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${password}` }
+        headers: authHeaders()
       });
-      if (res.status === 401) { alert("ACCESS DENIED: Incorrect Password."); return; }
+      if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return; }
       if (res.ok) {
         const json = await res.json();
         if (json.status === 'enriched') {
@@ -612,7 +648,7 @@ const App = () => {
         } else {
           alert(`Enrichment skipped for "${companyName}": ${json.reason || 'Unknown'}`);
         }
-        const reviewRes = await fetch('/admin/review-data', { headers: { 'Authorization': `Bearer ${password}` } });
+        const reviewRes = await fetch('/admin/review-data', { headers: authHeaders() });
         if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
         fetchSummaryData(true);
       } else {
@@ -623,16 +659,15 @@ const App = () => {
   };
 
   const handleRefreshForesightKb = async () => {
-    const password = prompt("AUTHENTICATION REQUIRED\n\nRefresh Foresight Knowledge Base?\nThis harvests megatrend signals from 30 FP themes (~15-20 min).\n\nEnter Admin Password:");
-    if (!password) return;
+    if (!isAdmin) return;
     setForesightKbLoading(true);
     setForesightKbStatus(null);
     try {
       const res = await fetch('/admin/refresh-foresight-kb', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${password}` }
+        headers: authHeaders()
       });
-      if (res.status === 401) { alert("ACCESS DENIED: Incorrect Password."); setForesightKbLoading(false); return; }
+      if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); setForesightKbLoading(false); return; }
       if (res.status === 409) { alert("Foresight KB harvest already in progress."); setForesightKbLoading(false); return; }
       if (res.ok) {
         alert("Foresight KB harvest started! Harvesting 30 themes in background.\nCheck status with the status indicator.");
@@ -664,15 +699,14 @@ const App = () => {
   };
 
   const handleCleanupForesightKb = async () => {
-    const password = prompt("AUTHENTICATION REQUIRED\n\nClean Foresight KB?\nThis re-verifies all stored URLs and removes signals with dead sources.\n\nEnter Admin Password:");
-    if (!password) return;
+    if (!isAdmin) return;
     setKbCleanupLoading(true);
     try {
       const res = await fetch('/admin/cleanup-foresight-kb', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${password}` }
+        headers: authHeaders()
       });
-      if (res.status === 401) { alert("ACCESS DENIED: Incorrect Password."); setKbCleanupLoading(false); return; }
+      if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); setKbCleanupLoading(false); return; }
       if (res.status === 409) { alert((await res.json()).detail); setKbCleanupLoading(false); return; }
       if (res.ok) {
         alert("KB cleanup started! Re-verifying all stored URLs in background.");
@@ -703,36 +737,32 @@ const App = () => {
 
   // MANUAL EDIT HANDLERS
   const handleOpenEdit = async (companyName) => {
-    const password = prompt(`Enter Admin Password to edit "${companyName}":`);
-    if (!password) return;
+    if (!isAdmin) return;
     setEditLoading(true);
     setEditingCompany(companyName);
     try {
       const res = await fetch(`/admin/get-company/${encodeURIComponent(companyName)}`, {
-        headers: { 'Authorization': `Bearer ${password}` }
+        headers: authHeaders()
       });
-      if (res.status === 401) { alert("ACCESS DENIED"); setEditingCompany(null); return; }
+      if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); setEditingCompany(null); return; }
       if (!res.ok) { alert("Failed to load company data."); setEditingCompany(null); return; }
       const data = await res.json();
       setEditData({
         summary_text: data.summary_text || '',
         pitch_text: data.pitch_text || '',
         general_summary: data.general_summary || '',
-        _password: password,
       });
     } catch (e) { console.error(e); alert("Failed to load company data."); setEditingCompany(null); }
     finally { setEditLoading(false); }
   };
 
   const handleSaveEdit = async () => {
-    if (!editingCompany) return;
-    const password = editData._password;
-    if (!password) { alert("Session expired. Close and reopen edit."); return; }
+    if (!editingCompany || !isAdmin) return;
     setEditSaving(true);
     try {
       const res = await fetch(`/admin/save-company-edit/${encodeURIComponent(editingCompany)}`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${password}`, 'Content-Type': 'application/json' },
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({
           summary_text: editData.summary_text,
           pitch_text: editData.pitch_text,
@@ -747,7 +777,7 @@ const App = () => {
       } else {
         alert(`Saved: ${json.changed_fields.join(', ')}`);
         // Refresh review list and dashboard
-        const reviewRes = await fetch('/admin/review-data', { headers: { 'Authorization': `Bearer ${password}` } });
+        const reviewRes = await fetch('/admin/review-data', { headers: authHeaders() });
         if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
         // Refresh company modal with saved data so edits appear immediately
         if (selectedCompany) {
@@ -869,8 +899,27 @@ const App = () => {
               </h1>
               <span className="text-[10px] text-indigo-200 tracking-[0.15em] uppercase font-medium">Finland Top 100 Index</span>
             </div>
+            {/* Auth indicator */}
+            {!isAuthenticated ? (
+              <button onClick={() => setIsLoginOpen(true)} className="flex items-center gap-1.5 px-2.5 py-1 bg-white/5 hover:bg-white/10 border border-white/10 rounded-md transition-all ml-2">
+                <Lock size={11} className="text-slate-400" />
+                <span className="text-[9px] font-mono uppercase text-slate-400">Login</span>
+              </button>
+            ) : (
+              <div className="relative group ml-2">
+                <button className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border transition-all ${isAdmin ? 'bg-amber-900/30 border-amber-700/50 text-amber-300' : 'bg-teal-900/30 border-teal-700/50 text-teal-300'}`}>
+                  {isAdmin ? <Shield size={11} /> : <Eye size={11} />}
+                  <span className="text-[9px] font-mono uppercase">{userRole}</span>
+                </button>
+                <div className="absolute top-full left-0 mt-1 hidden group-hover:block z-50">
+                  <button onClick={handleLogout} className="flex items-center gap-1.5 px-3 py-1.5 bg-[#0f172a] border border-white/10 rounded-md text-[10px] text-rose-400 hover:text-rose-300 font-mono whitespace-nowrap">
+                    <LogOut size={10} /> Logout
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
-          
+
           <div className="flex items-center gap-4 w-full max-w-md ml-4 justify-end">
             <div className="flex items-center gap-3 mr-2">
                  <div className="hidden sm:flex items-center gap-1.5">
@@ -880,7 +929,8 @@ const App = () => {
                      </span>
                  </div>
             </div>
-            {IS_ADMIN_MODE && (
+            {/* Guest-accessible buttons (guest + admin) */}
+            {isAuthenticated && (
                 <>
                 <button onClick={handleOpenAnalytics} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-violet-900/40 hover:bg-violet-800/60 border border-violet-700/50 text-violet-200 font-mono font-bold text-[10px] rounded transition-all">
                     <BarChart3 size={12} /> ANALYZE
@@ -891,14 +941,14 @@ const App = () => {
                 <button onClick={handleOpenObservatory} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-violet-900/40 hover:bg-violet-800/60 border border-violet-700/50 text-violet-200 font-mono font-bold text-[10px] rounded transition-all">
                     <Eye size={12} /> OBSERVATORY
                 </button>
-                <button onClick={() => {
-                    const pw = prompt("AUTHENTICATION REQUIRED\n\nEnter Admin Password to view Strategic Foresight Themes:");
-                    if (!pw) return;
-                    setThemeExplorerToken(pw);
-                    setIsThemeExplorerOpen(true);
-                }} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-teal-900/40 hover:bg-teal-800/60 border border-teal-700/50 text-teal-200 font-mono font-bold text-[10px] rounded transition-all">
+                <button onClick={() => setIsThemeExplorerOpen(true)} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-teal-900/40 hover:bg-teal-800/60 border border-teal-700/50 text-teal-200 font-mono font-bold text-[10px] rounded transition-all">
                     <Database size={12} /> THEMES
                 </button>
+                </>
+            )}
+            {/* Admin-only buttons */}
+            {isAdmin && (
+                <>
                 <button onClick={handleOpenDataReview} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-amber-900/40 hover:bg-amber-800/60 border border-amber-700/50 text-amber-200 font-mono font-bold text-[10px] rounded transition-all">
                     <ShieldAlert size={12} /> REVIEW
                 </button>
@@ -929,7 +979,7 @@ const App = () => {
             <div className="relative w-full max-w-[240px] hidden sm:block">
               <input type="text" placeholder="Search..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full pl-4 pr-4 py-1.5 bg-[#0f172a]/50 border border-indigo-500/30 rounded-lg text-sm text-slate-100" />
             </div>
-            {IS_ADMIN_MODE && (
+            {isAdmin && (
               <button onClick={() => setIsScannerOpen(true)} className="flex items-center gap-2 px-4 py-2 bg-white/10 rounded-lg text-xs font-bold">
                 <Plus size={14} /> NEW DIAGNOSIS
               </button>
@@ -1952,12 +2002,37 @@ const App = () => {
         </div>
       )}
 
+      {/* Login Modal */}
+      {isLoginOpen && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-[#0f172a] border border-white/10 rounded-xl shadow-2xl p-6 w-full max-w-sm">
+            <div className="flex justify-between items-center mb-5">
+              <h3 className="text-sm font-bold text-white">Authentication Required</h3>
+              <button onClick={() => { setIsLoginOpen(false); setLoginError(''); }} className="text-slate-400 hover:text-white"><X size={16} /></button>
+            </div>
+            <form onSubmit={(e) => { e.preventDefault(); const fd = new FormData(e.target as HTMLFormElement); handleLogin(fd.get('password') as string); }}>
+              <div className="mb-4">
+                <label className="text-[10px] text-slate-400 font-mono uppercase tracking-wider block mb-2">Enter Password</label>
+                <input name="password" type="password" autoFocus className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:border-cyan-500/50 focus:outline-none" placeholder="Guest or Admin password" />
+              </div>
+              {loginError && (
+                <div className="mb-3 text-[11px] text-rose-400 bg-rose-900/20 border border-rose-800/30 rounded-lg px-3 py-2">{loginError}</div>
+              )}
+              <button type="submit" disabled={loginLoading} className="w-full py-2 bg-gradient-to-r from-cyan-600 to-violet-600 hover:from-cyan-500 hover:to-violet-500 text-white text-xs font-bold rounded-lg transition-all disabled:opacity-50">
+                {loginLoading ? 'Verifying...' : 'Login'}
+              </button>
+              <p className="text-[9px] text-slate-500 text-center mt-3">Session expires when you close this tab.</p>
+            </form>
+          </div>
+        </div>
+      )}
+
       <MarketIntelligenceModal
         isOpen={isMarketIntelOpen}
         data={marketIntelData}
         loading={marketIntelLoading}
         onClose={() => setIsMarketIntelOpen(false)}
-        onRefresh={fetchMarketIntelData}
+        onRefresh={isAdmin ? fetchMarketIntelData : undefined}
         onCompanyClick={(company) => { setIsMarketIntelOpen(false); handleCompanyClick(company); }}
         observatoryData={observatoryData}
       />
@@ -1966,16 +2041,16 @@ const App = () => {
         isOpen={isObservatoryOpen}
         data={observatoryData}
         loading={observatoryLoading}
-        onClose={() => { setIsObservatoryOpen(false); setObservatoryPassword(''); }}
+        onClose={() => setIsObservatoryOpen(false)}
         onRefresh={fetchObservatoryData}
-        adminPassword={observatoryPassword}
+        adminPassword={isAdmin ? authToken : ''}
         marketIntelData={marketIntelData}
       />
 
       <ThemeExplorer
         isOpen={isThemeExplorerOpen}
-        authToken={themeExplorerToken}
-        onClose={() => { setIsThemeExplorerOpen(false); setThemeExplorerToken(''); }}
+        authToken={authToken}
+        onClose={() => setIsThemeExplorerOpen(false)}
       />
 
       <CompanyModal
@@ -1985,6 +2060,8 @@ const App = () => {
         marketIntelData={marketIntelData}
         observatoryData={observatoryData}
         onClose={() => setIsModalOpen(false)}
+        isAdmin={isAdmin}
+        authToken={authToken}
         onUpdate={(updated) => {
             setSelectedCompany(updated);
             setData(prev => {

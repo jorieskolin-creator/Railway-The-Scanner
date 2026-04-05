@@ -89,7 +89,7 @@ def clean_env_var(value):
     return value.strip().strip('"').strip("'")
 
 
-# --- ADMIN AUTHENTICATION ---
+# --- AUTHENTICATION ---
 def verify_admin(request: Request):
     """Validate Authorization: Bearer <secret> header against ADMIN_SECRET env var."""
     admin_secret = clean_env_var(os.environ.get("ADMIN_SECRET", ""))
@@ -101,6 +101,51 @@ def verify_admin(request: Request):
     token = auth_header[7:]
     if token != admin_secret:
         raise HTTPException(status_code=401, detail="Invalid credentials.")
+
+
+def verify_guest_or_admin(request: Request) -> str:
+    """Allow access if Bearer token matches ADMIN_SECRET or GUEST_SECRET. Returns role string."""
+    admin_secret = clean_env_var(os.environ.get("ADMIN_SECRET", ""))
+    guest_secret = clean_env_var(os.environ.get("GUEST_SECRET", ""))
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Authorization required.")
+    token = auth_header[7:]
+    if admin_secret and token == admin_secret:
+        return "admin"
+    if guest_secret and token == guest_secret:
+        return "guest"
+    raise HTTPException(status_code=401, detail="Invalid credentials.")
+
+
+# --- LOGIN RATE LIMITING ---
+_login_attempts: dict = {}  # {ip: {"count": int, "locked_until": float}}
+
+def _check_rate_limit(ip: str):
+    """Check if IP is rate-limited. Raises 429 if locked out."""
+    now = time.time()
+    # Clean up expired entries
+    expired = [k for k, v in _login_attempts.items() if v.get("locked_until", 0) < now - 1800]
+    for k in expired:
+        del _login_attempts[k]
+
+    entry = _login_attempts.get(ip)
+    if entry and entry.get("locked_until", 0) > now:
+        remaining = int((entry["locked_until"] - now) / 60) + 1
+        raise HTTPException(status_code=429, detail=f"Too many failed attempts. Try again in {remaining} minutes.")
+
+def _record_failed_attempt(ip: str):
+    """Record a failed login attempt. Lock out after 5 failures."""
+    now = time.time()
+    entry = _login_attempts.get(ip, {"count": 0})
+    entry["count"] = entry.get("count", 0) + 1
+    if entry["count"] >= 5:
+        entry["locked_until"] = now + 1800  # 30 minutes
+    _login_attempts[ip] = entry
+
+def _clear_attempts(ip: str):
+    """Clear failed attempts on successful login."""
+    _login_attempts.pop(ip, None)
 
 app = FastAPI()
 
@@ -146,6 +191,36 @@ app.add_middleware(
 )
 
 storage = BlobStorage()
+
+
+# --- AUTH LOGIN ENDPOINT ---
+class LoginRequest(BaseModel):
+    password: str
+
+@app.post("/auth/login")
+async def auth_login(body: LoginRequest, request: Request):
+    """Validate password and return role (admin/guest). Rate-limited: 5 failures = 30 min lockout."""
+    ip = request.client.host if request.client else "unknown"
+    _check_rate_limit(ip)
+
+    admin_secret = clean_env_var(os.environ.get("ADMIN_SECRET", ""))
+    guest_secret = clean_env_var(os.environ.get("GUEST_SECRET", ""))
+    pw = body.password
+
+    if admin_secret and pw == admin_secret:
+        _clear_attempts(ip)
+        return {"role": "admin"}
+    if guest_secret and pw == guest_secret:
+        _clear_attempts(ip)
+        return {"role": "guest"}
+
+    _record_failed_attempt(ip)
+    entry = _login_attempts.get(ip, {})
+    remaining = 5 - entry.get("count", 0)
+    if remaining <= 0:
+        raise HTTPException(status_code=429, detail="Too many failed attempts. Locked out for 30 minutes.")
+    raise HTTPException(status_code=401, detail=f"Invalid password. {remaining} attempts remaining.")
+
 
 # --- SERVER-SIDE BATCH STATE ---
 _batch_state = {
@@ -290,8 +365,8 @@ async def get_dashboard_data(response: Response):
 
 @app.get("/api/fp-themes")
 async def get_fp_themes(request: Request):
-    """Return the 30 Strategic Foresight themes with descriptions and source counts. Admin-only."""
-    verify_admin(request)
+    """Return the 30 Strategic Foresight themes with descriptions and source counts. Guest or Admin."""
+    verify_guest_or_admin(request)
     from strategic_foresight import FP_THEMES_30, FP_THEME_DESCRIPTIONS, FP_THEME_SOURCES
     categories = {
         "Technology & Digital": FP_THEMES_30[0:3],
