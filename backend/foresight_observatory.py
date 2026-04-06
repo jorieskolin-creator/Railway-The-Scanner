@@ -449,7 +449,7 @@ def _build_finland_prompt(global_analysis: str, mi: dict, stakeholder_data: dict
 
     return f"""{SYSTEM_ROLE}
 
-TASK: Write a Finnish Economy Force Map — how global forces specifically reshape the Finnish business landscape.
+TASK: Write a Finnish Economy Force Map — a deep strategic analysis of how global forces specifically reshape the Finnish business landscape.
 
 TONE CALIBRATION — Balanced Strategic Assessment:
 - Maintain intellectual honesty: celebrate genuine strength as clearly as you identify genuine weakness.
@@ -458,7 +458,10 @@ TONE CALIBRATION — Balanced Strategic Assessment:
 - The goal is accurate strategic assessment, not alarm. A balanced view earns more credibility than a uniformly critical one.
 - Positive framing is valid: strong archetype distributions, healthy financial indices, and narrow gaps are genuine competitive advantages worth highlighting.
 
-GLOBAL CONTEXT (the analysis you are building upon):
+ANALYTICAL LENS — Strategic Asymmetry Mapping:
+Your task is NOT to summarize the data. Your task is to find the ASYMMETRIES — the places where the data contradicts expectations, where strength in one dimension masks vulnerability in another, where forces that seem separate are actually the same force arriving through different channels. Think like a strategist reading the data for what it reveals that the data itself does not say out loud.
+
+GLOBAL CONTEXT (the Layer 1 analysis you are building upon):
 {global_analysis}
 
 SOURCE SIGNAL EVIDENCE (top validated signals per category — use these to ground your analysis in actual source content, cite specific signals when making claims):
@@ -486,34 +489,59 @@ Companies with detailed data: {mi.get('detailed_count', 0)}
 
 {_format_stakeholder_block(stakeholder_data)}
 
-ANALYTICAL STRUCTURE:
+ANALYTICAL STRUCTURE (4 sections):
 
-Section 1 — THE FINNISH POSITION: Where does Finnish industry stand in the global force landscape? Use the market health scores and archetype distributions to identify strengths and blind spots. Ground every claim in the numbers above. Reference specific signals from the evidence above when identifying which forces are most relevant to Finnish industry.
+Section 1 — THE FINNISH FORCE MAP: Strategic Asymmetries in the Finnish Landscape
 
-Section 2 — DOMAIN CONVERGENCE: Which forces cut across multiple Finnish domains? What systemic patterns emerge from the cross-domain data? Where are the unexpected connections? Cite specific signal evidence to support cross-domain patterns.
+Combine the Finnish positioning data with the cross-domain convergence patterns into ONE integrated analysis. Do NOT first describe where Finland stands and then separately describe cross-domain patterns. Instead, identify the 3-4 most important STRATEGIC ASYMMETRIES in the Finnish data — places where:
+- A domain appears healthy by one metric but vulnerable by another
+- Forces converge on multiple domains simultaneously in ways that create compound exposure
+- A gap between intent and reality in one domain amplifies pressure in a connected domain
+- Stakeholder champions exist for well-served dimensions but are absent for the most critical ones
 
-Section 3 — THE ADAPTABILITY GAP: Use the gap patterns (intent vs reality) to analyze where Finnish companies claim one thing but do another. What does this reveal about organizational thinking capacity? Are Finnish companies running someone else's race?
+For each asymmetry, explain WHY it matters strategically — not just what the numbers show, but what the numbers MEAN for Finnish industry's future competitive position. Use specific signal evidence to connect these asymmetries to the global forces identified in Layer 1.
 
-Section 4 — THREE HORIZONS FOR FINLAND:
-- Now (6-12 months): What must Finnish industry address immediately based on the data?
-- Prepare (12-24 months): What capabilities need building?
-- Position (24-36 months): What "Own Race" opportunities exist?
+SO WHAT: End this section with a single paragraph answering: "What is the one pattern in this data that a Finnish board should lose sleep over, and what is the one pattern they should take genuine confidence from?"
 
-Section 5 — STAKEHOLDER DYNAMICS (MACTOR-lite analysis):
+Section 2 — THE ADAPTABILITY GAP: Running Someone Else's Race
 
-This section applies Stakeholder Analysis methodology — systematically considering which organizational roles champion or resist specific strategic objectives, to identify potential alliances, conflicts, and intervention points.
+Use the gap patterns (intent vs reality) to analyze where Finnish companies claim one thing but do another. Go beyond listing the gaps — interpret what the PATTERN of gaps reveals about Finnish organizational thinking.
 
-Using the stakeholder-dimension affinity data above, analyze:
-1. CHAMPIONS AND BLIND SPOTS: Which organizational dimensions have strong stakeholder champions (C-Suite, Technology, Strategy roles actively discussing them)? Which dimensions are "unchampioned" — under pressure from external forces but lacking internal advocates? This reveals where organizational thinking capacity is weakest.
-2. ALIGNMENT CONFLICTS: Where do different stakeholder groups pull in different directions? For example, if Technology leaders focus on AI Readiness while C-Suite focuses on Strategy, what does this misalignment mean for the organization's ability to adapt coherently?
-3. COALITION POTENTIAL: Based on the role-dimension patterns, where could natural alliances form across Finnish industry? What shared stakeholder dynamics suggest opportunities for cross-company or cross-domain collaboration?
+Key analytical questions:
+- When companies overestimate intent and underestimate operational reality, what does this tell us about how Finnish leadership constructs strategy?
+- Are the gap patterns random, or do they reveal a SYSTEMATIC bias in how Finnish companies see themselves?
+- Which gaps are the most dangerous — not because they are the largest, but because they create the most strategic exposure when combined with the force convergence patterns from Section 1?
+- What should Finnish companies STOP doing based on these gaps?
 
-Frame stakeholder dynamics through the lens of organizational thinking capacity — not as political maneuvering but as a diagnostic of whether Finnish companies have the internal alignment needed to run their own race.
+If stakeholder alignment data is available, weave it into this analysis: do the roles that champion certain dimensions align with where the gaps are largest? If not, this is itself a critical finding.
+
+SO WHAT: What does the gap pattern reveal about whether Finnish industry is running its own race or someone else's?
+
+Section 3 — THREE HORIZONS FOR FINLAND:
+- Now (6-12 months): What must Finnish industry address immediately based on the data? Be specific — name the domains and the forces.
+- Prepare (12-24 months): What capabilities need building? Connect to the asymmetries and gaps identified above.
+- Position (24-36 months): What "Own Race" opportunities exist? Where could Finnish industry define new competitive terrain rather than compete on existing terrain?
+
+For each horizon, identify not just WHAT to do but WHO in the stakeholder landscape is best positioned to champion it — or whether the current stakeholder distribution creates a blind spot.
+
+SO WHAT: Which horizon carries the highest cost of inaction, and why?
+
+Section 4 — THE CONTRARIAN SIGNAL: Finland's Dangerous Assumption
+
+This section applies the Genius Forecasting method — insight-driven analysis that requires deep pattern recognition to see what conventional strategic thinking misses.
+
+In 2-3 paragraphs, identify:
+1. THE DANGEROUS ASSUMPTION: What is the single most consequential assumption Finnish industry is currently making that the data suggests is wrong? Look for: dimensions where confidence is high but evidence is weak, domains where all companies cluster in the same archetype (groupthink signal), forces with high credibility signals that Finnish companies are systematically ignoring, or gap patterns that suggest an entire sector is reading the map wrong.
+2. THE CONTRARIAN HYPOTHESIS: Formulate a specific, defensible contrarian view about Finnish industry's strategic direction: "The conventional wisdom in Finnish business is [X], but the data suggests [Y] because [specific evidence from the data above]."
+3. THE IMPLICATION: If this contrarian view is correct, what should Finnish industry collectively STOP doing that it currently considers essential? What should it START doing that currently seems marginal or irrelevant?
+
+Frame this as strategic foresight, not prediction. The value is in expanding the range of futures that Finnish decision-makers consider plausible.
 
 OUTPUT FORMAT:
-- 1800-2200 words
-- Five sections with headers
+- 1800-2400 words
+- Four sections with headers
 - Analytical essay prose — NO bullet points
+- Deep strategic analysis, not data reporting — every paragraph must contain an insight, not just a finding
 - Grounded in actual company data patterns (cite specific numbers)
 - Reference specific KB signals by name when supporting claims about forces"""
 
@@ -975,7 +1003,7 @@ def generate_observatory(progress_callback=None):
     print(f"   [Observatory] Stakeholders: {stakeholder_data['stakeholder_count']} total, {stakeholder_data['enriched_count']} enriched, {len(stakeholder_data['alignment_conflicts'])} conflicts detected")
     finland_prompt = _build_finland_prompt(global_text, mi, stakeholder_data, kb_agg)
     finland_source = f"Companies: {mi.get('company_count', 0)}, Domains: {len(mi.get('market_health', []))}, Foresight Vulnerability segments: {json.dumps(mi.get('favi_segments', {}))}"
-    finland_text, finland_verify = _generate_with_verification(finland_prompt, finland_source, "Finnish Economy Force Map", signal_evidence=signal_evidence)
+    finland_text, finland_verify = _generate_with_verification(finland_prompt, finland_source, "Finnish Economy Force Map", use_opus=True, signal_evidence=signal_evidence)
 
     # Extract top adaptability gaps
     top_gaps = []
