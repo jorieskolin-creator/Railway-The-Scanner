@@ -43,6 +43,16 @@ HIGH_CREDIBILITY_DOMAINS = {
     # Finnish institutional
     "hankintailmoitukset.fi", "prh.fi", "vtt.fi", "aalto.fi",
     "theseus.fi",
+    # Finnish institutional — extended coverage
+    "greatplacetowork.fi",  # Great Place to Work Finland — employee trust surveys
+    "etla.fi",              # ETLA — Research Institute of the Finnish Economy
+    "finder.fi",            # Finder.fi — official Finnish company financial data
+    "openprocurement.fi",   # Finnish public procurement transparency data
+    "tutkihankintoja.fi",   # Tutki Hankintoja — public procurement spending data
+    "espacenet.com",        # European Patent Office — patent database
+    "stat.fi",              # Statistics Finland — national statistics authority
+    "oikotie.fi",           # Oikotie — major Finnish job/services platform (Sanoma)
+    "avoimuusrekisteri.fi",  # Finnish Transparency Register — lobbying disclosures
     # Strategic foresight organizations
     "millennium-project.org",   # Global Futures Intelligence System, Delphi methodology
     "iftf.org",                 # Institute for the Future — ex-RAND, 50+ year track record

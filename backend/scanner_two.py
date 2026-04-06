@@ -39,6 +39,173 @@ def get_clean_domain(url):
         return ""
 
 
+# --- PRH OPEN DATA PRE-FETCH ---
+
+def _fetch_prh_company_data(company_name: str, timeout: int = 8) -> dict | None:
+    """
+    Fetch official company data from PRH Open Data API (Finnish Trade Register).
+    Returns structured data: business_id, registration date, business lines, status.
+    Returns None on failure (non-blocking).
+    """
+    try:
+        # Clean name for API search
+        search = clean_company_name_for_search(company_name)
+        url = f"https://avoindata.prh.fi/opendata-ytj-api/v3/companies?name={search}&maxResults=3"
+        resp = http_requests.get(url, timeout=timeout, headers={
+            "User-Agent": "AdaptabilityScanner/1.0",
+            "Accept": "application/json",
+        })
+        if resp.status_code != 200:
+            return None
+
+        data = resp.json()
+        companies = data.get("companies", [])
+        if not companies:
+            return None
+
+        # Find best match (prefer exact or closest match)
+        best = companies[0]
+        for c in companies:
+            names = c.get("names", [])
+            for n in names:
+                if n.get("name", "").lower().strip() == company_name.lower().strip():
+                    best = c
+                    break
+
+        # Extract useful fields
+        business_id = best.get("businessId", "")
+        reg_date = best.get("registrationDate", "")
+        status = best.get("status", "")
+        company_form = best.get("companyForm", "")
+
+        # Business lines
+        lines = best.get("businessLines", [])
+        active_lines = [bl.get("name", "") for bl in lines if bl.get("name")]
+
+        # Registered offices
+        addresses = best.get("registeredOffices", [])
+        city = addresses[0].get("city", "") if addresses else ""
+
+        return {
+            "business_id": business_id,
+            "registration_date": reg_date,
+            "status": status,
+            "company_form": company_form,
+            "business_lines": active_lines[:3],
+            "city": city,
+        }
+    except Exception as e:
+        print(f"   [PRH] Pre-fetch failed (non-blocking): {e}")
+        return None
+
+
+# --- LIGHTWEIGHT TECH STACK DETECTION ---
+
+# Known technology signatures in HTTP headers, HTML meta tags, and script sources
+_TECH_SIGNATURES = {
+    # CMS / Frameworks
+    "WordPress": [("meta", "generator", "wordpress"), ("script", "wp-content"), ("script", "wp-includes")],
+    "Drupal": [("meta", "generator", "drupal"), ("script", "drupal.js")],
+    "Contentful": [("script", "contentful")],
+    "Sitecore": [("meta", "generator", "sitecore"), ("script", "sitecore")],
+    "HubSpot CMS": [("script", "js.hs-scripts.com"), ("script", "hubs.ly")],
+    "Episerver/Optimizely": [("meta", "generator", "episerver"), ("script", "episerver"), ("script", "optimizely")],
+    # Frontend frameworks
+    "React": [("script", "react"), ("attr", "data-reactroot", "")],
+    "Next.js": [("script", "_next/"), ("attr", "id", "__next")],
+    "Vue.js": [("script", "vue."), ("attr", "data-v-", "")],
+    "Angular": [("script", "angular"), ("attr", "ng-app", ""), ("attr", "ng-version", "")],
+    # Analytics
+    "Google Analytics 4": [("script", "gtag"), ("script", "googletagmanager")],
+    "Hotjar": [("script", "hotjar.com")],
+    "Cookiebot": [("script", "cookiebot.com"), ("script", "consentmanager")],
+    # CDN / Hosting
+    "Cloudflare": [("header", "server", "cloudflare"), ("header", "cf-ray", "")],
+    "AWS CloudFront": [("header", "x-amz-cf-id", ""), ("header", "x-amz-cf-pop", "")],
+    "Akamai": [("header", "x-akamai", ""), ("header", "server", "akamai")],
+    "Azure": [("header", "x-azure", ""), ("header", "x-ms-", "")],
+    "Vercel": [("header", "x-vercel", ""), ("header", "server", "vercel")],
+    "Netlify": [("header", "server", "netlify"), ("header", "x-nf-", "")],
+    # E-commerce
+    "Shopify": [("script", "shopify"), ("meta", "generator", "shopify")],
+    "WooCommerce": [("script", "woocommerce")],
+}
+
+
+def _detect_tech_stack(company_url: str, timeout: int = 6) -> dict | None:
+    """
+    Lightweight tech stack detection via HTTP headers and HTML inspection.
+    No external API needed — just reads the company website's response.
+    Returns dict with detected technologies and modernity assessment.
+    """
+    if not company_url:
+        return None
+
+    url = company_url if company_url.startswith("http") else f"https://{company_url}"
+
+    try:
+        resp = http_requests.get(url, timeout=timeout, headers={
+            "User-Agent": "Mozilla/5.0 (compatible; AdaptabilityScanner/1.0)"
+        }, allow_redirects=True)
+        if resp.status_code >= 400:
+            return None
+
+        headers = {k.lower(): v.lower() for k, v in resp.headers.items()}
+        html = resp.text[:80_000].lower()
+
+        detected = []
+        for tech, signatures in _TECH_SIGNATURES.items():
+            for sig_type, sig_key, *sig_val in signatures:
+                val = sig_val[0] if sig_val else ""
+                matched = False
+                if sig_type == "header":
+                    header_val = headers.get(sig_key, "")
+                    matched = val in header_val if val else sig_key in headers
+                elif sig_type == "meta":
+                    matched = f'name="{sig_key}"' in html and val in html
+                elif sig_type == "script":
+                    matched = sig_key in html
+                elif sig_type == "attr":
+                    matched = sig_key in html
+
+                if matched:
+                    detected.append(tech)
+                    break
+
+        # Deduplicate
+        detected = list(dict.fromkeys(detected))
+
+        # Assess modernity
+        modern_signals = {"React", "Next.js", "Vue.js", "Angular", "Contentful",
+                          "Cloudflare", "AWS CloudFront", "Vercel", "Netlify", "Google Analytics 4"}
+        legacy_signals = {"WordPress", "Drupal", "Sitecore", "Episerver/Optimizely"}
+
+        modern_count = sum(1 for t in detected if t in modern_signals)
+        legacy_count = sum(1 for t in detected if t in legacy_signals)
+
+        if modern_count >= 2:
+            assessment = "modern"
+        elif legacy_count >= 1 and modern_count == 0:
+            assessment = "legacy"
+        else:
+            assessment = "mixed"
+
+        # Check HTTPS and HTTP/2 support
+        uses_https = resp.url.startswith("https://")
+        uses_http2 = "h2" in headers.get("alt-svc", "")
+
+        return {
+            "technologies": detected,
+            "assessment": assessment,
+            "modern_count": modern_count,
+            "legacy_count": legacy_count,
+            "uses_https": uses_https,
+        }
+    except Exception as e:
+        print(f"   [TechStack] Detection failed (non-blocking): {e}")
+        return None
+
+
 # --- STAKEHOLDER NAME VALIDATION ---
 # Placeholder names that indicate no real person was found
 _PLACEHOLDER_NAMES = {"unknown", "unnamed", "n/a", "tbd", "none", "not found",
@@ -1443,6 +1610,45 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         print("   [Scanner 2] CRITICAL: No GEMINI_API_KEY found. Using simulation fallback.")
         return { "score": 60, "checklist": [], "links": [], "key_people": [], "is_simulated": True, "confidence_score": 0, "washing_flag": False }
 
+    # --- TIER 2: PRE-FETCH VERIFIED DATA (parallel, non-blocking) ---
+    prh_data = None
+    tech_stack = None
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as prefetch_pool:
+        prh_future = prefetch_pool.submit(_fetch_prh_company_data, company_name)
+        tech_future = prefetch_pool.submit(_detect_tech_stack, company_url)
+        try:
+            prh_data = prh_future.result(timeout=10)
+        except Exception:
+            pass
+        try:
+            tech_stack = tech_future.result(timeout=8)
+        except Exception:
+            pass
+
+    pre_verified_block = ""
+    if prh_data or tech_stack:
+        parts = ["\n    PRE-VERIFIED DATA (fetched from official sources BEFORE your search — use as ground truth):"]
+        if prh_data:
+            print(f"   [Scanner 2] PRH data loaded: {prh_data.get('business_id', '?')}, registered {prh_data.get('registration_date', '?')}")
+            parts.append(f"    Finnish Trade Register (PRH): Business ID {prh_data['business_id']}, "
+                         f"registered {prh_data.get('registration_date', 'N/A')}, "
+                         f"status: {prh_data.get('status', 'N/A')}, "
+                         f"form: {prh_data.get('company_form', 'N/A')}, "
+                         f"city: {prh_data.get('city', 'N/A')}")
+            if prh_data.get("business_lines"):
+                parts.append(f"    Registered business lines: {', '.join(prh_data['business_lines'])}")
+        if tech_stack:
+            techs = tech_stack.get("technologies", [])
+            assessment = tech_stack.get("assessment", "unknown")
+            print(f"   [Scanner 2] Tech stack detected: {', '.join(techs[:5]) if techs else 'none'} ({assessment})")
+            if techs:
+                parts.append(f"    Website tech stack (auto-detected from {domain_hint}): {', '.join(techs)}")
+                parts.append(f"    Tech modernity assessment: {assessment.upper()} "
+                             f"({tech_stack.get('modern_count', 0)} modern, {tech_stack.get('legacy_count', 0)} legacy signals)")
+                parts.append(f"    HTTPS: {'Yes' if tech_stack.get('uses_https') else 'No'}")
+                parts.append("    NOTE: This is what the website ACTUALLY runs — compare against their marketing claims.")
+        pre_verified_block = "\n".join(parts) + "\n"
+
     # Build optional history context (empty string if first scan)
     history_block = _build_previous_context_block(previous_context)
     # Build evidence anchors for URL/keyword re-verification (empty on first scan)
@@ -1512,6 +1718,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     {history_block}
     {evidence_anchors}
     {subsidiary_block}
+    {pre_verified_block}
     SEARCH STRATEGY:
     Do NOT read the company's own marketing pages (About Us, Front Page).
     EXCEPTION: Careers pages and Service Portfolio pages ARE allowed — they contain operational
@@ -1530,6 +1737,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
        - Job Ads Tech Stack (CRITICAL): `site:linkedin.com/jobs "{search_name}" OR site:duunitori.fi "{search_name}" OR site:indeed.fi "{search_name}"`
          ANALYZE what technologies/tools/methodologies appear in their job postings.
          Job ads reveal the REAL tech stack, not marketing claims.
+       - Oikotie Job Ads (Finnish): `site:oikotie.fi "{search_name}" "developer" OR "kehittäjä" OR "architect" OR "arkkitehti" OR "engineer"`
+         Oikotie is Finland's second-largest job platform. Check for tech stack, team structure, and methodology mentions.
        - Job Descriptions Detail: `"{search_name}" job description "engineer" OR "developer" OR "kehittäjä" OR "arkkitehti"`
 
     2. THE STRATEGIC JURY (Business Model & Procurement)
@@ -1538,6 +1747,11 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
        - Modern Tech Investments: `site:crunchbase.com "{search_name}" "Acquisitions" OR "Yrityskaupat"`
        - Leadership Thought Leadership: `site:medium.com "{search_name}" OR site:substack.com "{search_name}"`
        - Finnish Business News: `site:kauppalehti.fi "{search_name}" OR site:talouselama.fi "{search_name}" "strategia" OR "digitalisaatio"`
+       - Finnish Company Financials: `site:finder.fi "{search_name}"` — verify revenue trend, profit margin, employee count from official register data.
+       - Industry Research (ETLA): `site:etla.fi "{search_name}" OR site:etla.fi "{domain_hint}" "digitalisaatio" OR "tuottavuus" OR "kilpailukyky"`
+         ETLA is Finland's research institute for the economy. Their industry reports reveal whether this company's sector is growing, digitalizing, or facing structural challenges.
+       - Sitra Innovation Insights: `site:sitra.fi "{search_name}" OR site:sitra.fi "data economy" OR "kiertotalous" OR "circular economy"`
+         If the company appears in Sitra case studies, this is a strong innovation signal. Sitra is Finland's national innovation fund.
 
     3. THE CULTURAL JURY (Talent & Psychological Safety)
        - Boomerang Employees (High Trust): `site:linkedin.com "{search_name}" AND ("returned to" OR "rejoined" OR "palasi takaisin")`
@@ -1545,6 +1759,14 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
        - Community Hosting: `site:meetup.com "{search_name}" AND ("Host" OR "Sponsor" OR "kumppani")`
        - Employee Voice: `site:glassdoor.com "{search_name}" OR site:teamblind.com "{search_name}"` (NO REDDIT)
        - Finnish Employee Discussion: `"{search_name}" "työntekijäkokemus" OR "työpaikka-arvio" OR "työkulttuuri"`
+       - Great Place to Work: `site:greatplacetowork.fi "{search_name}"`
+         Check if the company appears on Finland's Best Workplaces list. Presence means independently verified
+         high employee trust (survey-based methodology covering credibility, respect, fairness, pride, camaraderie).
+         Note the year and size category if found. This is a HIGH-TRUST culture signal.
+       - CSRD Sustainability Report (Social Metrics): `site:{domain_hint} "sustainability report" OR "vastuullisuusraportti" OR "CSRD" OR "ESRS"`
+         Large Finnish companies (250+ employees) must now publish ESRS-compliant reports. Look for S1 (own workforce)
+         metrics: employee turnover, training hours, diversity statistics, work-life balance policies, collective
+         bargaining coverage. These are AUDITED numbers — more reliable than marketing claims about culture.
        - Careers Page Culture Signals (CRITICAL): `site:{domain_hint} "careers" OR "ura" OR "avoimet työpaikat" OR "open positions"`
          ANALYZE the careers page for: team structure, benefits, work models (remote/hybrid),
          values in action, hiring process transparency. These reveal real culture, not marketing.
@@ -1555,6 +1777,13 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
        - Cloud Case Studies: `site:aws.amazon.com "Case Studies" "{search_name}" OR site:customers.microsoft.com "{search_name}"`
        - Deep Academic Audits: `site:theseus.fi "{search_name}" OR site:research.aalto.fi "{search_name}"`
        - Finnish Tech Research: `site:vtt.fi "{search_name}" OR site:tuni.fi "{search_name}" OR site:aalto.fi "{search_name}"`
+       - Patent & R&D Activity: `site:espacenet.com "{search_name}" OR "worldwide.espacenet.com" "{search_name}"`
+         Patent filings are CONCRETE evidence of R&D investment — harder to fake than marketing claims.
+         Look for: number of recent patents (last 3 years), technology focus areas (AI, ML, data processing,
+         IoT). Even 1-2 patents in relevant tech domains suggest genuine technical capability.
+       - Sitra AI & Data Economy: `site:sitra.fi "{search_name}" "tekoäly" OR "artificial intelligence" OR "datatalous" OR "data economy"`
+         Sitra is Finland's national innovation fund. If the company appears in their AI/data research, this is
+         a strong signal of actual AI/data maturity at national level.
 
     5. THE SERVICE PORTFOLIO JURY (Delivery Reality — NEW)
        - Service Pages: `site:{domain_hint} "services" OR "palvelut" OR "solutions" OR "ratkaisut"`
@@ -1563,6 +1792,11 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
        - Client References: `site:{domain_hint} "case study" OR "reference" OR "asiakastarina" OR "referenssi"`
        - External Reviews: `"{search_name}" review OR "arvostelu" service quality OR "palvelun laatu"`
        - Analyst Reports: `"{search_name}" Gartner OR Forrester OR ISG OR "Magic Quadrant"`
+       - Public Procurement Track Record: `site:openprocurement.fi "{search_name}" OR site:tutkihankintoja.fi "{search_name}"`
+         Finnish public procurement data shows VERIFIED delivery — the company won competitive tenders and
+         delivered services to government. Look for: number of contracts, total value, which agencies they serve,
+         service categories (IT, consulting, infrastructure), and whether activity is recent. This is the STRONGEST
+         possible evidence of real service delivery capability.
 
     IDENTIFY KEY MODERNIZATION STAKEHOLDERS (include in JSON output):
     Search for real, VERIFIED names of current executives/leaders relevant to modernization.
