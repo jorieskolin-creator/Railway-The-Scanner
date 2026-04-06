@@ -493,7 +493,7 @@ const CompanySummary = ({ data, faviData, observatoryData = null }) => {
                             <div className="text-right">
                                 <span className="text-[10px] text-slate-500 block">{seg.description}</span>
                                 <div className="flex items-center justify-end gap-2 mt-1">
-                                    <span className="text-[10px] text-slate-500">FAVI</span>
+                                    <span className="text-[10px] text-slate-500">Foresight Vulnerability</span>
                                     <span className={`text-sm font-mono font-bold ${seg.color}`}>{faviData.favi_score}</span>
                                 </div>
                             </div>

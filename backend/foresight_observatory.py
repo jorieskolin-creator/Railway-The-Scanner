@@ -472,7 +472,7 @@ Market Health by Domain:
 Archetype Distribution by Domain:
 {arch_summary}
 
-FAVI Segment Distribution (across all companies):
+Foresight-Adjusted Vulnerability Index segment distribution (across all companies):
 {favi_summary}
 
 Gap Patterns (Intent vs Reality per KB Dimension):
@@ -974,7 +974,7 @@ def generate_observatory(progress_callback=None):
     stakeholder_data = _aggregate_stakeholder_dynamics(data["company_details"], mi.get("gap_patterns", []))
     print(f"   [Observatory] Stakeholders: {stakeholder_data['stakeholder_count']} total, {stakeholder_data['enriched_count']} enriched, {len(stakeholder_data['alignment_conflicts'])} conflicts detected")
     finland_prompt = _build_finland_prompt(global_text, mi, stakeholder_data, kb_agg)
-    finland_source = f"Companies: {mi.get('company_count', 0)}, Domains: {len(mi.get('market_health', []))}, FAVI segments: {json.dumps(mi.get('favi_segments', {}))}"
+    finland_source = f"Companies: {mi.get('company_count', 0)}, Domains: {len(mi.get('market_health', []))}, Foresight Vulnerability segments: {json.dumps(mi.get('favi_segments', {}))}"
     finland_text, finland_verify = _generate_with_verification(finland_prompt, finland_source, "Finnish Economy Force Map", signal_evidence=signal_evidence)
 
     # Extract top adaptability gaps

@@ -422,7 +422,7 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any) => {
           <td>${segBadge(c.segment)}</td>
         </tr>`;
       }).join('');
-      content += `<div class="section"><h2>FAVI Company Rankings</h2><div style="overflow-x:auto"><table><thead><tr><th>#</th><th>Company</th><th>Domain</th><th>FAVI</th><th>Pressure</th><th>Gap</th><th>Adapt.</th><th>Megatrend</th><th>Vuln.</th><th>Segment</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+      content += `<div class="section"><h2>Foresight-Adjusted Vulnerability Index — Company Rankings</h2><div style="overflow-x:auto"><table><thead><tr><th>#</th><th>Company</th><th>Domain</th><th>Vulnerability</th><th>Pressure</th><th>Gap</th><th>Adapt.</th><th>Megatrend</th><th>Vuln.</th><th>Segment</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
     }
   }
 
@@ -635,7 +635,7 @@ const ExecutiveSummaryTab = ({ data, observatoryData = null }: { data: any; obse
       {data.favi_segments && (
         <div className="bg-black/20 border border-white/10 rounded-lg p-4">
           <h4 className="text-[10px] font-bold text-violet-300 uppercase tracking-wide mb-1 flex items-center gap-2">
-            <Eye size={12} /> Foresight Vulnerability Segments (FAVI)
+            <Eye size={12} /> Foresight-Adjusted Vulnerability Index
           </h4>
           <div className="text-[8px] text-slate-500 mb-3 leading-relaxed">Companies segmented by current vulnerability (today's gaps) vs. foresight pressure (future forces). This 2×2 matrix reveals who needs help now, who will need it soon, and where the highest-value opportunities lie.</div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -1088,7 +1088,7 @@ const SalesPrioritiesTab = ({ data, onCompanyClick }: { data: any; onCompanyClic
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// TAB 5: FORESIGHT VULNERABILITY (FAVI)
+// TAB 5: FORESIGHT-ADJUSTED VULNERABILITY INDEX
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onCompanyClick: (company: any) => void }) => {
@@ -1119,7 +1119,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
 
   const handleExportCSV = () => {
     if (sorted.length === 0) return;
-    const headers = ['Rank', 'Company', 'Domain', 'FAVI Score', 'Foresight Pressure', 'Readiness Gap', 'Adaptation Capacity', 'Current Vuln.', 'Segment', 'Formula'];
+    const headers = ['Rank', 'Company', 'Domain', 'Foresight Vulnerability', 'Foresight Pressure', 'Readiness Gap', 'Adaptation Capacity', 'Current Vuln.', 'Segment', 'Formula'];
     const rows = sorted.map((v: any, i: number) => [
       i + 1, v.name, v.domain, v.favi_score, v.fps, v.readiness_gap, v.fac, v.current_vulnerability, v.segment, v.formula
     ]);
@@ -1155,7 +1155,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
               <div className={`text-sm font-bold ${SEGMENT_CONFIG["Critical"].color}`}>Critical</div>
               <div className="text-2xl font-bold text-rose-400">{segments["Critical"] || 0}</div>
             </div>
-            <div className="text-[9px] text-slate-400 mb-1">High Current Vulnerability + High FAVI</div>
+            <div className="text-[9px] text-slate-400 mb-1">High Current Vulnerability + High Foresight Vulnerability</div>
             <div className="text-[9px] text-rose-300/70">{SEGMENT_CONFIG["Critical"].description}</div>
             <div className="mt-2 h-1 rounded-full bg-white/5 overflow-hidden">
               <div className="h-full bg-rose-500 rounded-full" style={{ width: `${((segments["Critical"] || 0) / totalCompanies) * 100}%` }} />
@@ -1167,7 +1167,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
               <div className={`text-sm font-bold ${SEGMENT_CONFIG["Wounded but Sheltered"].color}`}>Wounded but Sheltered</div>
               <div className="text-2xl font-bold text-blue-400">{segments["Wounded but Sheltered"] || 0}</div>
             </div>
-            <div className="text-[9px] text-slate-400 mb-1">High Current Vulnerability + Low FAVI</div>
+            <div className="text-[9px] text-slate-400 mb-1">High Current Vulnerability + Low Foresight Vulnerability</div>
             <div className="text-[9px] text-blue-300/70">{SEGMENT_CONFIG["Wounded but Sheltered"].description}</div>
             <div className="mt-2 h-1 rounded-full bg-white/5 overflow-hidden">
               <div className="h-full bg-blue-500 rounded-full" style={{ width: `${((segments["Wounded but Sheltered"] || 0) / totalCompanies) * 100}%` }} />
@@ -1179,7 +1179,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
               <div className={`text-sm font-bold ${SEGMENT_CONFIG["Sleepwalking"].color}`}>Sleepwalking</div>
               <div className="text-2xl font-bold text-amber-400">{segments["Sleepwalking"] || 0}</div>
             </div>
-            <div className="text-[9px] text-slate-400 mb-1">Low Current Vulnerability + High FAVI</div>
+            <div className="text-[9px] text-slate-400 mb-1">Low Current Vulnerability + High Foresight Vulnerability</div>
             <div className="text-[9px] text-amber-300/70">{SEGMENT_CONFIG["Sleepwalking"].description}</div>
             <div className="mt-2 h-1 rounded-full bg-white/5 overflow-hidden">
               <div className="h-full bg-amber-500 rounded-full" style={{ width: `${((segments["Sleepwalking"] || 0) / totalCompanies) * 100}%` }} />
@@ -1191,7 +1191,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
               <div className={`text-sm font-bold ${SEGMENT_CONFIG["Safe Harbor"].color}`}>Safe Harbor</div>
               <div className="text-2xl font-bold text-emerald-400">{segments["Safe Harbor"] || 0}</div>
             </div>
-            <div className="text-[9px] text-slate-400 mb-1">Low Current Vulnerability + Low FAVI</div>
+            <div className="text-[9px] text-slate-400 mb-1">Low Current Vulnerability + Low Foresight Vulnerability</div>
             <div className="text-[9px] text-emerald-300/70">{SEGMENT_CONFIG["Safe Harbor"].description}</div>
             <div className="mt-2 h-1 rounded-full bg-white/5 overflow-hidden">
               <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${((segments["Safe Harbor"] || 0) / totalCompanies) * 100}%` }} />
@@ -1207,7 +1207,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
           </div>
           <div className="flex items-center gap-1">
             <span className="inline-block w-8 h-px bg-slate-600" />
-            Foresight Vulnerability / FAVI (y-axis)
+            Foresight-Adjusted Vulnerability Index (y-axis)
             <span className="inline-block w-8 h-px bg-slate-600" />
           </div>
         </div>
@@ -1238,17 +1238,17 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
           )}
         </div>
 
-        {/* FAVI vs Current Vulnerability Scatter */}
+        {/* Foresight Vulnerability vs Current Vulnerability Scatter */}
         {sorted.length > 0 && ScatterChart ? (
           <div className="bg-black/20 border border-white/10 rounded-lg p-4">
-            <h4 className="text-[10px] font-bold text-rose-300 uppercase tracking-wide mb-3">FAVI vs Current Vulnerability</h4>
+            <h4 className="text-[10px] font-bold text-rose-300 uppercase tracking-wide mb-3">Foresight-Adjusted Vulnerability vs Current Vulnerability</h4>
             <ResponsiveContainer width="100%" height={250}>
               <ScatterChart margin={{ left: 10, right: 20, top: 10, bottom: 25 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
                 <XAxis type="number" dataKey="current_vulnerability" name="Current Vuln." tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[0, 100]}
                   label={{ value: 'Current Vulnerability', fill: '#64748b', fontSize: 9, position: 'bottom', offset: 10 }} />
-                <YAxis type="number" dataKey="favi_score" name="FAVI" tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[0, 100]}
-                  label={{ value: 'FAVI Score', fill: '#64748b', fontSize: 9, angle: -90, position: 'insideLeft' }} />
+                <YAxis type="number" dataKey="favi_score" name="Foresight Vulnerability" tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[0, 100]}
+                  label={{ value: 'Foresight Vulnerability', fill: '#64748b', fontSize: 9, angle: -90, position: 'insideLeft' }} />
                 <Tooltip cursor={{ strokeDasharray: '3 3' }}
                   contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }}
                   content={({ active, payload }: any) => {
@@ -1258,7 +1258,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
                       <div className="bg-[#0f172a] border border-white/20 rounded-lg p-2 text-[10px]">
                         <div className="font-bold text-white">{d?.name}</div>
                         <div className="text-slate-400">{d?.domain}</div>
-                        <div className="mt-1 text-rose-300">FAVI: {d?.favi_score}</div>
+                        <div className="mt-1 text-rose-300">Foresight Vulnerability: {d?.favi_score}</div>
                         <div className="text-amber-300">Current Vuln: {d?.current_vulnerability}</div>
                         <div className={`mt-1 font-bold ${SEGMENT_CONFIG[d?.segment]?.color || 'text-slate-300'}`}>{d?.segment}</div>
                       </div>
@@ -1266,7 +1266,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
                   }} />
                 {/* Quadrant reference lines at segment thresholds */}
                 {ReferenceLine && <ReferenceLine x={40} stroke="#475569" strokeDasharray="6 4" label={{ value: 'Vuln=40', fill: '#475569', fontSize: 8, position: 'top' }} />}
-                {ReferenceLine && <ReferenceLine y={25} stroke="#475569" strokeDasharray="6 4" label={{ value: 'FAVI=25', fill: '#475569', fontSize: 8, position: 'right' }} />}
+                {ReferenceLine && <ReferenceLine y={25} stroke="#475569" strokeDasharray="6 4" label={{ value: 'Vuln.=25', fill: '#475569', fontSize: 8, position: 'right' }} />}
                 <Scatter data={sorted.filter((v: any) => v.favi_score > 0 || v.current_vulnerability > 0)} name="Companies">
                   {sorted.filter((v: any) => v.favi_score > 0 || v.current_vulnerability > 0).map((v: any, i: number) => {
                     const segColor = v.segment === 'Critical' ? '#f43f5e' :
@@ -1285,7 +1285,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
       <div className="bg-black/20 border border-white/10 rounded-lg p-4">
         <div className="flex justify-between items-center mb-3">
           <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide flex items-center gap-2">
-            <AlertTriangle size={12} /> Foresight-Adjusted Vulnerability Index (FAVI)
+            <AlertTriangle size={12} /> Foresight-Adjusted Vulnerability Index
           </h4>
           <button onClick={handleExportCSV} className="flex items-center gap-1 px-2 py-1 text-[10px] bg-white/5 hover:bg-white/10 border border-white/10 rounded text-slate-300">
             <Download size={10} /> CSV
@@ -1300,7 +1300,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
                   <th className="p-2 text-left">#</th>
                   <th className="p-2 text-left">Company</th>
                   <th className="p-2 text-left">Domain</th>
-                  <SortHeader label="FAVI" dataKey="favi_score" />
+                  <SortHeader label="Vulnerability" dataKey="favi_score" />
                   <SortHeader label="Pressure" dataKey="fps" />
                   <SortHeader label="Gap" dataKey="readiness_gap" />
                   <SortHeader label="Adapt." dataKey="fac" />
@@ -1404,7 +1404,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
             </table>
           </div>
         ) : (
-          <div className="text-slate-500 text-xs py-8 text-center">No FAVI data available — companies need foresight links for forward-looking vulnerability analysis</div>
+          <div className="text-slate-500 text-xs py-8 text-center">No foresight vulnerability data available — companies need foresight links for forward-looking vulnerability analysis</div>
         )}
       </div>
     </div>
