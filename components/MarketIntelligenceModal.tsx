@@ -257,6 +257,70 @@ const buildSvgStackedBar = (items: {label: string; segments: {value: number; col
   return `<svg viewBox="0 0 ${width} ${chartH}" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:${width}px;height:auto;display:block">${bars}\n${legendItems}</svg>`;
 };
 
+const buildSvgDemandBars = (demandData: {dimension: string; avg_gap: number}[], width = 700, barH = 20): string => {
+  if (!demandData?.length) return '';
+  const mL = 120, mR = 50, mT = 10, gap = 6;
+  const plotW = width - mL - mR;
+  const chartH = mT + demandData.length * (barH + gap) + 10;
+  const maxAbs = Math.max(...demandData.map(d => Math.abs(d.avg_gap)), 1);
+  const centerX = mL + plotW / 2;
+
+  const bars = demandData.map((item, i) => {
+    const y = mT + i * (barH + gap);
+    const bw = (Math.abs(item.avg_gap) / maxAbs) * (plotW / 2);
+    const color = item.avg_gap >= 0 ? '#10b981' : '#f43f5e';
+    const x = item.avg_gap >= 0 ? centerX : centerX - bw;
+    return `<text x="${mL - 8}" y="${y + barH / 2 + 4}" text-anchor="end" fill="#cbd5e1" font-size="10" font-family="sans-serif">${item.dimension}</text>` +
+      `<rect x="${x}" y="${y}" width="${bw}" height="${barH}" rx="3" fill="${color}" opacity="0.8"/>` +
+      `<text x="${item.avg_gap >= 0 ? x + bw + 6 : x - 6}" y="${y + barH / 2 + 4}" text-anchor="${item.avg_gap >= 0 ? 'start' : 'end'}" fill="#94a3b8" font-size="10" font-family="monospace">${item.avg_gap.toFixed(1)}</text>`;
+  }).join('\n');
+
+  const centerLine = `<line x1="${centerX}" y1="${mT - 5}" x2="${centerX}" y2="${mT + demandData.length * (barH + gap)}" stroke="#475569" stroke-dasharray="3,3"/>`;
+  return `<svg viewBox="0 0 ${width} ${chartH}" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:${width}px;height:auto;display:block">${centerLine}\n${bars}</svg>`;
+};
+
+const buildSvgHealthGauges = (healthData: any[]): string => {
+  if (!healthData?.length) return '';
+  const gaugeW = 140, gaugeH = 100, cols = Math.min(healthData.length, 5);
+  const rows = Math.ceil(healthData.length / cols);
+  const svgW = cols * gaugeW, svgH = rows * gaugeH;
+
+  const gauges = healthData.map((h, i) => {
+    const col = i % cols, row = Math.floor(i / cols);
+    const ox = col * gaugeW + gaugeW / 2, oy = row * gaugeH + 50;
+    const r = 35, score = h.score || 0;
+    const color = HEALTH_COLOR(score);
+    const angle = (score / 100) * 180;
+    const rad = (angle * Math.PI) / 180;
+    const x = ox - r * Math.cos(rad), y = oy - r * Math.sin(rad);
+    const largeArc = angle > 180 ? 1 : 0;
+    const bgArc = `<path d="M ${ox - r} ${oy} A ${r} ${r} 0 0 1 ${ox + r} ${oy}" fill="none" stroke="#334155" stroke-width="5"/>`;
+    const fgArc = score > 0 ? `<path d="M ${ox - r} ${oy} A ${r} ${r} 0 ${largeArc} 1 ${x} ${y}" fill="none" stroke="${color}" stroke-width="5" stroke-linecap="round"/>` : '';
+    return `${bgArc}${fgArc}` +
+      `<text x="${ox}" y="${oy - 6}" text-anchor="middle" fill="${color}" font-size="13" font-weight="bold" font-family="sans-serif">${Math.round(score)}</text>` +
+      `<text x="${ox}" y="${oy + 7}" text-anchor="middle" fill="#94a3b8" font-size="6" font-family="sans-serif">/100</text>` +
+      `<text x="${ox}" y="${oy + 22}" text-anchor="middle" fill="#cbd5e1" font-size="9" font-weight="bold" font-family="sans-serif">${h.domain}</text>` +
+      `<text x="${ox}" y="${oy + 33}" text-anchor="middle" fill="#64748b" font-size="7" font-family="sans-serif">${h.company_count} companies</text>`;
+  }).join('\n');
+
+  return `<svg viewBox="0 0 ${svgW} ${svgH}" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:${svgW}px;height:auto;display:block;margin:0 auto">${gauges}</svg>`;
+};
+
+const buildSvgCoverageRing = (coverage: any): string => {
+  if (!coverage) return '';
+  const pct = coverage.pct || 0;
+  const r = 36, cx = 50, cy = 50;
+  const circumference = 2 * Math.PI * r;
+  const offset = circumference - (pct / 100) * circumference;
+  const color = pct >= 70 ? "#10b981" : pct >= 40 ? "#f59e0b" : "#f43f5e";
+  return `<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" style="width:120px;height:120px;display:block;margin:0 auto">` +
+    `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#334155" stroke-width="5"/>` +
+    `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${color}" stroke-width="5" stroke-linecap="round" stroke-dasharray="${circumference}" stroke-dashoffset="${offset}" transform="rotate(-90 ${cx} ${cy})"/>` +
+    `<text x="${cx}" y="${cy - 4}" text-anchor="middle" fill="white" font-size="14" font-weight="bold" font-family="sans-serif">${coverage.covered}</text>` +
+    `<text x="${cx}" y="${cy + 10}" text-anchor="middle" fill="#94a3b8" font-size="8" font-family="sans-serif">/${coverage.total}</text>` +
+    `</svg>`;
+};
+
 const buildCrossImpactHtml = (crossImpact: any[]): string => {
   if (!crossImpact?.length) return '';
   const themes = [...new Set(crossImpact.map((c: any) => c.theme))] as string[];
@@ -277,6 +341,72 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any) => {
   if (!data) return;
   const date = new Date().toLocaleDateString('en-FI', { day: 'numeric', month: 'long', year: 'numeric' });
   let content = '';
+
+  if (tabName === 'executive') {
+    // Market Health Gauges (SVG)
+    if (data.market_health?.length) {
+      content += `<div class="section"><h2>Market Health by Domain</h2><p style="font-size:10px;color:#64748b;margin-bottom:16px">Composite health score per industry domain based on average reality scores, intent-reality gaps, and archetype distribution.</p>${buildSvgHealthGauges(data.market_health)}</div>`;
+    }
+
+    // Foresight Coverage Ring + Demand Intensity side by side
+    const coverageSvg = data.foresight_coverage ? buildSvgCoverageRing(data.foresight_coverage) : '';
+    const demandSvg = data.demand_intensity?.length ? buildSvgDemandBars(data.demand_intensity) : '';
+    if (coverageSvg || demandSvg) {
+      content += `<div class="section" style="display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap">`;
+      if (coverageSvg) {
+        const cov = data.foresight_coverage;
+        content += `<div style="text-align:center;min-width:160px"><h3 style="color:#22d3ee;font-size:12px;text-transform:uppercase;margin-bottom:12px">Foresight Coverage</h3>${coverageSvg}<div style="font-size:10px;color:#94a3b8;margin-top:8px">themes with 3+ signals</div></div>`;
+      }
+      if (demandSvg) {
+        content += `<div style="flex:1;min-width:300px"><h3 style="color:#fbbf24;font-size:12px;text-transform:uppercase;margin-bottom:12px">Demand Intensity (avg gap per dimension)</h3>${demandSvg}<div style="font-size:9px;color:#64748b;margin-top:8px">Negative values = market-wide gap where companies underperform their ambitions</div></div>`;
+      }
+      content += `</div>`;
+    }
+
+    // Quick stats
+    content += `<div class="section"><h2>Key Metrics</h2><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;text-align:center">` +
+      `<div><div style="font-size:28px;font-weight:bold;color:white">${data.company_count}</div><div style="font-size:10px;color:#94a3b8;text-transform:uppercase">Total Companies</div></div>` +
+      `<div><div style="font-size:28px;font-weight:bold;color:#22d3ee">${data.detailed_count}</div><div style="font-size:10px;color:#94a3b8;text-transform:uppercase">With Full Data</div></div>` +
+      `<div><div style="font-size:28px;font-weight:bold;color:#34d399">${(data.top_foresights || []).length}</div><div style="font-size:10px;color:#94a3b8;text-transform:uppercase">Top Foresight Themes</div></div>` +
+      `<div><div style="font-size:28px;font-weight:bold;color:#fb7185">${(data.vulnerable_companies || []).length}</div><div style="font-size:10px;color:#94a3b8;text-transform:uppercase">Vulnerable Companies</div></div>` +
+      `</div></div>`;
+
+    // FAVI Segment Summary
+    if (data.favi_segments) {
+      const segs = [
+        { key: 'Critical', color: '#f43f5e', bg: 'rgba(244,63,94,0.1)', border: 'rgba(244,63,94,0.3)', desc: 'Struggling now AND blind to what\'s coming' },
+        { key: 'Sleepwalking', color: '#f59e0b', bg: 'rgba(245,158,11,0.1)', border: 'rgba(245,158,11,0.3)', desc: 'Looks fine today but forces are building' },
+        { key: 'Wounded but Sheltered', color: '#3b82f6', bg: 'rgba(59,130,246,0.1)', border: 'rgba(59,130,246,0.3)', desc: 'Problems are real but future isn\'t adding pressure' },
+        { key: 'Safe Harbor', color: '#10b981', bg: 'rgba(16,185,129,0.1)', border: 'rgba(16,185,129,0.3)', desc: 'Healthy and future-ready' },
+      ];
+      const cards = segs.map(s => {
+        const count = data.favi_segments[s.key] || 0;
+        return `<div class="segment-card" style="background:${s.bg};border:1px solid ${s.border}"><h4 style="color:${s.color}">${s.key}</h4><div class="count" style="color:${s.color}">${count}</div><div class="desc">${s.desc}</div></div>`;
+      }).join('');
+      content += `<div class="section"><h2>Foresight-Adjusted Vulnerability Index</h2><div class="segment-grid">${cards}</div></div>`;
+    }
+
+    // Observatory Layer 2 Section 1 — Finnish Force Map
+    if (observatoryData?.finland_analysis?.text) {
+      const fullText = observatoryData.finland_analysis.text;
+      const s1Match = fullText.match(/##\s*Section\s*1[^\n]*\n([\s\S]*?)(?=##\s*Section\s*2|$)/i);
+      if (s1Match) {
+        const section1 = s1Match[1].trim().replace(/^-{3,}\s*/gm, '').trim();
+        if (section1) {
+          const mdToHtml = (t: string) => t.split(/\n\n+/).map((b: string) => {
+            const s = b.trim(); if (!s) return '';
+            if (/^-{3,}$/.test(s)) return '<hr style="border:none;border-top:1px solid #334155;margin:24px 0">';
+            if (s.startsWith('### ')) return `<h3 style="font-size:14px;margin:20px 0 8px;color:#c4b5fd">${s.slice(4).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</h3>`;
+            if (s.startsWith('## ')) return `<h2>${s.slice(3).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</h2>`;
+            let h = s.replace(/\n/g, ' ').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+            if (!h.includes('<strong>')) h = h.replace(/^([^.]+\.)(\s|$)/, '<strong>$1</strong>$2');
+            return `<p style="font-size:13px;line-height:1.8;margin-bottom:16px">${h}</p>`;
+          }).join('\n');
+          content += `<div class="section" style="border-color:rgba(167,139,250,0.3)"><h2 style="color:#a78bfa">The Finnish Force Map: Strategic Asymmetries</h2><p style="font-size:10px;color:#64748b;margin-bottom:16px">Strategic Foresight Observatory — How global forces reshape Finnish business</p>${mdToHtml(section1)}</div>`;
+        }
+      }
+    }
+  }
 
   if (tabName === 'future') {
     // Pareto chart
@@ -427,6 +557,7 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any) => {
   }
 
   const titles: Record<string, string> = {
+    executive: 'Executive Summary',
     future: 'Future Demand Analysis',
     current: 'Current Demand Analysis',
     favi: 'Foresight Vulnerability Analysis',
@@ -653,6 +784,44 @@ const ExecutiveSummaryTab = ({ data, observatoryData = null }: { data: any; obse
           </div>
         </div>
       )}
+
+      {/* Observatory Layer 2 — Section 1: The Finnish Force Map */}
+      {(() => {
+        if (!observatoryData?.finland_analysis?.text) return null;
+        const fullText = observatoryData.finland_analysis.text;
+        const s1Match = fullText.match(/##\s*Section\s*1[^\n]*\n([\s\S]*?)(?=##\s*Section\s*2|$)/i);
+        if (!s1Match) return null;
+        const section1 = s1Match[1].trim().replace(/^-{3,}\s*/gm, '').trim();
+        if (!section1) return null;
+        return (
+          <div className="bg-black/20 border border-violet-500/20 rounded-lg p-5">
+            <h4 className="text-[10px] font-bold text-violet-300 uppercase tracking-wide mb-1 flex items-center gap-2">
+              <Globe size={12} /> The Finnish Force Map: Strategic Asymmetries
+            </h4>
+            <div className="text-[8px] text-slate-500 mb-4 leading-relaxed">From Strategic Foresight Observatory — How global forces reshape Finnish business</div>
+            <div className="space-y-3">
+              {section1.split(/\n\n+/).map((block: string, bi: number) => {
+                const trimmed = block.trim();
+                if (!trimmed) return null;
+                if (/^-{3,}$/.test(trimmed)) return null;
+                if (trimmed.startsWith('### ')) return <h5 key={bi} className="text-xs font-bold text-violet-200/80 mt-3 mb-1">{trimmed.replace(/^###\s*/, '')}</h5>;
+                if (trimmed.startsWith('## ')) return <h5 key={bi} className="text-sm font-bold text-violet-200 mt-3 mb-1">{trimmed.replace(/^##\s*/, '')}</h5>;
+                const parts = trimmed.replace(/\n/g, ' ').split(/(\*\*[^*]+\*\*)/);
+                return (
+                  <p key={bi} className="text-[11px] text-slate-300 leading-relaxed">
+                    {parts.map((seg: string, j: number) => {
+                      if (seg.startsWith('**') && seg.endsWith('**')) {
+                        return <strong key={j} className="text-slate-100 font-semibold">{seg.slice(2, -2)}</strong>;
+                      }
+                      return <span key={j}>{seg}</span>;
+                    })}
+                  </p>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };
@@ -1448,7 +1617,7 @@ const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, on
             {data && <span className="text-[10px] text-slate-500 font-normal ml-2">{data.company_count} companies analyzed</span>}
           </h3>
           <div className="flex items-center gap-2">
-            {data && ['future', 'current', 'favi'].includes(activeTab) && (
+            {data && ['executive', 'future', 'current', 'favi'].includes(activeTab) && (
               <button
                 onClick={() => exportMiTabHtml(activeTab, data, observatoryData)}
                 className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 border border-white/10 transition-colors text-[9px] font-mono text-slate-400 hover:text-slate-200"
