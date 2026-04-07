@@ -360,28 +360,33 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
             if attempt == 1:
                 continue
 
-    # Attempt 3: Mistral Large backup (independent provider — survives Google outages)
-    mistral_key = os.environ.get("MISTRAL_API_KEY")
-    if mistral_key:
-        try:
-            from mistralai import Mistral
-            print(f"   [General Summary] Primary model failed — trying backup mistral-large-latest")
-            t0 = time.time()
-            mistral_client = Mistral(api_key=mistral_key)
-            mistral_resp = mistral_client.chat.complete(
-                model="mistral-large-latest",
-                temperature=0.1,
-                max_tokens=4000,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            text = _strip_links((mistral_resp.choices[0].message.content or "").strip())
-            wc = _word_count(text)
-            elapsed = int((time.time() - t0) * 1000)
-            print(f"   [General Summary] mistral-large-latest backup: {wc} words ({elapsed}ms)")
-            if text:
-                return text, "mistral-large-latest"
-        except Exception as e:
-            print(f"   ❌ [General Summary] mistral-large-latest backup failed: {e}")
+    # Attempt 3: Gemini 2.5 Pro backup (different model — survives primary model outages/quota)
+    try:
+        BACKUP_MODEL = "gemini-2.5-pro"
+        print(f"   [General Summary] Primary model failed — trying backup {BACKUP_MODEL}")
+        t0 = time.time()
+        backup_config = genai_types.GenerateContentConfig(
+            temperature=0.1,
+            max_output_tokens=4000,
+        )
+        backup_resp = call_with_503_backoff(
+            lambda: client.models.generate_content(
+                model=BACKUP_MODEL,
+                contents=prompt,
+                config=backup_config,
+            ),
+            label=f"General Summary backup {BACKUP_MODEL}",
+            model=BACKUP_MODEL,
+            timeout=90,
+        )
+        text = _strip_links((backup_resp.text or "").strip())
+        wc = _word_count(text)
+        elapsed = int((time.time() - t0) * 1000)
+        print(f"   [General Summary] {BACKUP_MODEL} backup: {wc} words ({elapsed}ms)")
+        if text:
+            return text, BACKUP_MODEL
+    except Exception as e:
+        print(f"   ❌ [General Summary] {BACKUP_MODEL} backup failed: {e}")
 
     return "", ""
 
@@ -447,7 +452,7 @@ def fact_check_general_summary(
     """
     Verify the General Summary against its own input payload.
 
-    Stage 1: Gemini 2.5 Pro detects unsupported claims (backup: Mistral Large).
+    Stage 1: Gemini 2.5 Pro detects unsupported claims.
     Stage 2: If false claims found, re-generates with Gemini 3.1 Pro.
 
     Returns:
