@@ -1435,6 +1435,101 @@ def _generate_foresight_from_kb(
             print(f"   ❌ [KB Synthesis] {model_name} failed ({elapsed}ms): {e}")
             continue
 
+    # Attempt 3: Claude Sonnet 4.6 backup (independent provider — survives Google quota)
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if anthropic_key:
+        try:
+            SONNET_MODEL = "claude-sonnet-4-6"
+            print(f"   📚 [KB Synthesis] Gemini models exhausted — trying backup {SONNET_MODEL} for {company_name}...")
+            t0 = time.time()
+            claude_client = anthropic.Anthropic(api_key=anthropic_key)
+            response = claude_client.messages.create(
+                model=SONNET_MODEL,
+                max_tokens=8000,
+                thinking={
+                    "type": "enabled",
+                    "budget_tokens": 3000,
+                },
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text_parts = []
+            for block in response.content:
+                if block.type == "text":
+                    text_parts.append(block.text)
+            text = "\n".join(text_parts).strip()
+            elapsed = int((time.time() - t0) * 1000)
+
+            if not text or len(text) < 100:
+                print(f"   ⚠️ [KB Synthesis] {SONNET_MODEL} returned insufficient data ({len(text) if text else 0} chars, {elapsed}ms)")
+            else:
+                json_str = _extract_json_from_text(text)
+                if not json_str:
+                    print(f"   ⚠️ [KB Synthesis] Could not extract JSON from {SONNET_MODEL} response ({elapsed}ms)")
+                else:
+                    data = json.loads(json_str, strict=False)
+                    if not data.get("dimension_forces") or not data.get("scenarios"):
+                        print(f"   ⚠️ [KB Synthesis] {SONNET_MODEL} returned incomplete structure ({elapsed}ms)")
+                    else:
+                        # Re-verify KB source URLs
+                        _kb_urls_to_check = set()
+                        for force in data["dimension_forces"]:
+                            _url = (force.get("source_url") or "").strip()
+                            if _url and _url.startswith("http"):
+                                _kb_urls_to_check.add(_url)
+                        for sig in kb_signals:
+                            for ss in sig.get("supporting_sources", []):
+                                _ss_url = (ss.get("url") or "").strip()
+                                if _ss_url and _ss_url.startswith("http"):
+                                    _kb_urls_to_check.add(_ss_url)
+
+                        _kb_url_status = {}
+                        if _kb_urls_to_check:
+                            print(f"   🔍 [KB Re-verify] Checking {len(_kb_urls_to_check)} KB URLs for {company_name}...")
+                            _rv_t0 = time.time()
+                            with concurrent.futures.ThreadPoolExecutor(max_workers=6) as _rv_pool:
+                                _rv_futures = {
+                                    _rv_pool.submit(_verify_foresight_url, u, 6): u
+                                    for u in _kb_urls_to_check
+                                }
+                                for fut in concurrent.futures.as_completed(_rv_futures):
+                                    _u = _rv_futures[fut]
+                                    try:
+                                        _kb_url_status[_u] = fut.result()
+                                    except Exception:
+                                        _kb_url_status[_u] = False
+                            _alive = sum(1 for v in _kb_url_status.values() if v)
+                            _dead = len(_kb_url_status) - _alive
+                            print(f"   🔍 [KB Re-verify] {_alive} alive, {_dead} dead ({int((time.time()-_rv_t0)*1000)}ms)")
+
+                        # Enrich forces with KB data and apply real verification status
+                        for force in data["dimension_forces"]:
+                            force["_from_kb"] = True
+                            _f_url = (force.get("source_url") or "").strip()
+                            if _f_url in _kb_url_status:
+                                force["url_verified"] = _kb_url_status[_f_url]
+
+                        # Drop forces whose primary URL is confirmed dead
+                        orig_count = len(data["dimension_forces"])
+                        data["dimension_forces"] = [
+                            f for f in data["dimension_forces"]
+                            if f.get("url_verified", True) is not False
+                        ]
+                        _dropped = orig_count - len(data["dimension_forces"])
+                        if _dropped:
+                            print(f"   🗑️ [KB Synthesis] Dropped {_dropped} forces with dead primary URLs")
+
+                        n_forces = len(data["dimension_forces"])
+                        n_scenarios = len(data.get("scenarios", []))
+                        print(f"   📚 [KB Synthesis] {SONNET_MODEL} succeeded: {n_forces} forces from {len(kb_signals)} KB signals "
+                              f"+ {n_scenarios} scenarios ({elapsed}ms)")
+                        return data
+        except json.JSONDecodeError as je:
+            elapsed = int((time.time() - t0) * 1000)
+            print(f"   ⚠️ [KB Synthesis] {SONNET_MODEL} JSON parse failed ({elapsed}ms): {je}")
+        except Exception as e:
+            elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
+            print(f"   ❌ [KB Synthesis] {SONNET_MODEL} failed ({elapsed}ms): {e}")
+
     return None
 
 
