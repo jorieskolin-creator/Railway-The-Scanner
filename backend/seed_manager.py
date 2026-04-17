@@ -503,7 +503,7 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
             except Exception as foresight_err:
                 print(f"   [{company_name}] ⚠️ [Foresight] Failed (non-fatal): {foresight_err}")
 
-            # 4. SYNTHESIS (Claude Opus 4.6)
+            # 4. SYNTHESIS (Claude Opus 4.7)
             summary_text = "Automated Analysis Complete."
             pitch_text = "Pitch unavailable."
             why_proposals = []
@@ -719,14 +719,14 @@ Respond with valid JSON only. Six fields required:
 Note: the summary value must contain \\n\\n between paragraphs (3-4 paragraphs total). The pitch value must also contain \\n\\n between its 3 paragraphs.
 Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2."""
 
-                    # --- Synthesis with fallback chain: Opus 4.6 → Gemini 3.1 Pro → Gemini 3 Pro → Sonnet 4.6 ---
+                    # --- Synthesis with fallback chain: Opus 4.7 → Gemini 3.1 Pro → Gemini 3 Pro → Sonnet 4.6 ---
                     # Opus uses Extended Thinking to reason through evidence before synthesis.
                     response_text = ""
                     try:
-                        print(f"   [{company_name}] 🔄 [Synthesis] Attempting claude-opus-4-6 with Extended Thinking...")
+                        print(f"   [{company_name}] 🔄 [Synthesis] Attempting claude-opus-4-7 with Extended Thinking...")
                         synth_start = time.time()
                         resp = claude_client.messages.create(
-                            model="claude-opus-4-6",
+                            model="claude-opus-4-7",
                             max_tokens=16000,
                             thinking={
                                 "type": "enabled",
@@ -741,9 +741,9 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                                 if getattr(block, 'type', None) == 'text':
                                     response_text = block.text
                                     break
-                        print(f"   [{company_name}] ✅ [Synthesis] claude-opus-4-6 + Extended Thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
+                        print(f"   [{company_name}] ✅ [Synthesis] claude-opus-4-7 + Extended Thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
                     except Exception as opus_err:
-                        print(f"   [{company_name}] ❌ [Synthesis] Opus 4.6 failed: {opus_err}")
+                        print(f"   [{company_name}] ❌ [Synthesis] Opus 4.7 failed: {opus_err}")
 
                         # Fallback 1: Gemini 3.1 Pro Preview (strongest Google model, MEDIUM thinking)
                         try:

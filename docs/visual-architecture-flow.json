@@ -11,7 +11,7 @@
     "total_phases": 9,
     "ai_models_used": [
       "Claude Sonnet 4.6 (Extended Thinking + Brave Web Search) — Primary reality scanner (Scanner 2)",
-      "Claude Opus 4.6 (Extended Thinking, 10K budget) — Primary synthesis engine & final judge",
+      "Claude Opus 4.7 (Extended Thinking, 10K budget) — Primary synthesis engine & final judge",
       "Gemini 3.1 Pro Preview (Google Search grounding + Thinking) — Forensic search, foresight generation, fact-checker",
       "Gemini 3-Flash Preview (Google Search grounding) — URL auto-discovery",
       "Gemini 2.5 Pro (Google Search grounding) — Financial analysis, general summary generation",
@@ -459,7 +459,7 @@
       "color": "#a855f7",
       "category": "synthesis",
       "short_description": "Senior AI model reads ALL evidence blindly, scores independently, then cross-verifies against Scanner scores",
-      "what_happens": "This is the 'wisdom layer'. A senior AI model (Claude Opus 4.6) reads ALL collected evidence WITHOUT seeing any Scanner scores. It independently evaluates Reality and Intent. Its blind scores are then compared to Scanner scores, and disagreements are resolved through a blending protocol.",
+      "what_happens": "This is the 'wisdom layer'. A senior AI model (Claude Opus 4.7) reads ALL collected evidence WITHOUT seeing any Scanner scores. It independently evaluates Reality and Intent. Its blind scores are then compared to Scanner scores, and disagreements are resolved through a blending protocol.",
       "question_it_answers": "Do independent AI eyes validate the automated scanners? What is the diagnosis and strategic pitch?",
       "thinking_process": [
         {
@@ -494,9 +494,9 @@
           "constraint": "Proposals MUST be grounded in the company's actual weaknesses, not generic advice"
         }
       ],
-      "ai_model_used": "Claude Opus 4.6 with Extended Thinking (primary, 10K thinking budget)",
+      "ai_model_used": "Claude Opus 4.7 with Extended Thinking (primary, 10K thinking budget)",
       "fallback_chain": [
-        "Claude Opus 4.6 with Extended Thinking (primary)",
+        "Claude Opus 4.7 with Extended Thinking (primary)",
         "Gemini 3.1 Pro (fallback 1)",
         "Gemini 3 Pro (fallback 2)",
         "Gemini 2.5 Pro (fallback 3)"
@@ -773,7 +773,7 @@
     "storage": "Vercel Blob Storage (JSON persistence, versioned — keeps 3 recent versions per company)",
     "hosting": "Railway (containerized Python backend + static React frontend)",
     "ai_providers": [
-      "Anthropic (Claude Opus 4.6, Claude Sonnet 4.6)",
+      "Anthropic (Claude Opus 4.7, Claude Sonnet 4.6)",
       "Google (Gemini 3.1 Pro Preview, Gemini 3-Flash Preview, Gemini 2.5 Pro, Gemini 3 Pro)",
       "Mistral (Mistral Large — synthesis fallback)",
       "GLM-5 (optional alternative web search grounding)"
@@ -792,7 +792,7 @@
     "description": "Complete mapping of which AI model does what, with reasoning and grounding capabilities",
     "models": [
       {
-        "model": "Claude Opus 4.6",
+        "model": "Claude Opus 4.7",
         "role": "Final judge — synthesizes intent + reality into diagnosis",
         "phases": ["PHASE_6 (Synthesis)"],
         "extended_thinking": true,
@@ -987,7 +987,7 @@
       },
       {
         "phase": "PHASE_6 — Synthesis",
-        "what_happens": "Opus 4.6 reads ALL evidence blindly. Independently scores Reality: 41, Intent: 68. Delta vs Scanner: Reality off by 3 (agreement — keep Scanner score). Generates 200-word diagnosis + 100-word pitch + 2 WHY + 2 WHAT proposals."
+        "what_happens": "Opus 4.7 reads ALL evidence blindly. Independently scores Reality: 41, Intent: 68. Delta vs Scanner: Reality off by 3 (agreement — keep Scanner score). Generates 200-word diagnosis + 100-word pitch + 2 WHY + 2 WHAT proposals."
       },
       {
         "phase": "PHASE_7 — Fact-Check",

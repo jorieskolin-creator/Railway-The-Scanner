@@ -117,7 +117,7 @@ Mechanically derived from two scores:
 ### Step 9: Final Synthesis (The Judge)
 **File:** `backend/main.py` (lines 2189-2500+)
 
-- **Claude Opus 4.6** with Extended Thinking (10,000 token budget) receives ALL outputs from previous steps:
+- **Claude Opus 4.7** with Extended Thinking (10,000 token budget) receives ALL outputs from previous steps:
   - Intent Score + Reality Score + Financial Index + all sub-scores
   - All jury findings, verified evidence links, key people
   - Washing flags, foresight data, previous scan context
@@ -191,7 +191,7 @@ Company Website/Docs
   [Step 8: Foresight]  ──> Strategic Forces + Scenarios
         |
         v
-  [Step 9: Synthesis]  ──> Summary + Pitch + Proposals (by Opus 4.6)
+  [Step 9: Synthesis]  ──> Summary + Pitch + Proposals (by Opus 4.7)
         |
         v
   [Step 10: Fact-Check]  ──> Verified Output + Hallucination Score

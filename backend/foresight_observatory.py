@@ -778,7 +778,7 @@ def _generate_sonnet(prompt: str, max_tokens: int = 5000) -> tuple[str, int]:
 
 
 def _generate_opus(prompt: str, max_tokens: int = 16000) -> tuple[str, int]:
-    """Generate text via Opus 4.6. Returns (text, word_count).
+    """Generate text via Opus 4.7. Returns (text, word_count).
     Used for Domain Dossiers (Layer 3) where analytical depth matters most."""
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not anthropic_key:
@@ -788,7 +788,7 @@ def _generate_opus(prompt: str, max_tokens: int = 16000) -> tuple[str, int]:
     t0 = time.time()
 
     response = client.messages.create(
-        model="claude-opus-4-6",
+        model="claude-opus-4-7",
         max_tokens=max_tokens,
         thinking={"type": "enabled", "budget_tokens": 8000},
         messages=[{"role": "user", "content": prompt}],
@@ -805,7 +805,7 @@ def _generate_opus(prompt: str, max_tokens: int = 16000) -> tuple[str, int]:
 
     wc = len(text.split())
     elapsed = int((time.time() - t0) * 1000)
-    print(f"   [Observatory] Opus 4.6: {wc} words ({elapsed}ms)")
+    print(f"   [Observatory] Opus 4.7: {wc} words ({elapsed}ms)")
     return text, wc
 
 
@@ -889,7 +889,7 @@ RESPOND IN JSON FORMAT ONLY:
 
 def _generate_with_verification(prompt: str, source_summary: str, output_type: str, use_opus: bool = False, signal_evidence: str = "") -> tuple[str, dict]:
     """Generate via Claude, then verify via Gemini. Returns (text, verification).
-    use_opus=True uses Opus 4.6 for deeper analytical reasoning (Layer 3).
+    use_opus=True uses Opus 4.7 for deeper analytical reasoning (Layer 3).
     signal_evidence: when provided, enables claim-level cross-validation against KB signals."""
     generate_fn = _generate_opus if use_opus else _generate_sonnet
     text, wc = generate_fn(prompt)
@@ -1091,7 +1091,7 @@ def generate_observatory(progress_callback=None):
     # --- Assemble final result ---
     result = {
         "generated_at": datetime.utcnow().isoformat(),
-        "model": "claude-sonnet-4-6 (L1-L2) + claude-opus-4-6 (L3)",
+        "model": "claude-sonnet-4-6 (L1-L2) + claude-opus-4-7 (L3)",
         "verification_model": "gemini-3.1-pro-preview",
         "company_count": len(data["dashboard_data"]),
         "domain_count": len(active_domains),

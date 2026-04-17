@@ -263,7 +263,7 @@
         }
       },
       "fallback_chain": [
-        "Claude Opus 4.6 with Extended Thinking (primary, 10K thinking budget)",
+        "Claude Opus 4.7 with Extended Thinking (primary, 10K thinking budget)",
         "Gemini 3.1 Pro (fallback 1)",
         "Gemini 3 Pro (fallback 2)",
         "Gemini 2.5 Pro (fallback 3)"

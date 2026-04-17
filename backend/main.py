@@ -2029,7 +2029,7 @@ def run_scan(
         SCAN_TOTAL_BUDGET = 540
         print(f"🚀 --- LIVE SCAN INITIATED FOR: {companyName} (budget: {SCAN_TOTAL_BUDGET}s) ---")
 
-        # Model pipeline: Sonnet 4.6 + Web Search (forensic) | Gemini 2.5 Pro (financial) | Opus 4.6 (synthesis)
+        # Model pipeline: Sonnet 4.6 + Web Search (forensic) | Gemini 2.5 Pro (financial) | Opus 4.7 (synthesis)
         # Forensic fallback: Gemini 3.1 Pro. Synthesis fallback: Gemini 3.1 Pro → Gemini 3 Pro
         search_model = "gemini-3.1-pro-preview"  # Used as forensic fallback if Sonnet fails
 
@@ -2620,7 +2620,7 @@ Respond with valid JSON only. Six fields required:
 Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs total). The pitch value must also contain \n\n between its 3 paragraphs.
 Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2."""
 
-                # --- Synthesis with fallback chain: Opus 4.6 → Gemini 3.1 Pro → Mistral Large ---
+                # --- Synthesis with fallback chain: Opus 4.7 → Gemini 3.1 Pro → Mistral Large ---
                 # Opus is the judge — it does ONE thing: synthesize. Fallbacks degrade gracefully.
                 # Opus uses Extended Thinking to reason through conflicting intent vs. reality
                 # evidence before generating the synthesis — exactly what a "judge" model should do.
@@ -2632,7 +2632,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
 
                 def _synth_opus():
                     return claude_client.messages.create(
-                        model="claude-opus-4-6",
+                        model="claude-opus-4-7",
                         max_tokens=16000,
                         thinking={
                             "type": "enabled",
@@ -2642,7 +2642,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                     )
 
                 try:
-                    print(f"   🔄 [Synthesis] Attempting claude-opus-4-6 with Extended Thinking (timeout: {SYNTH_TIMEOUT}s)...")
+                    print(f"   🔄 [Synthesis] Attempting claude-opus-4-7 with Extended Thinking (timeout: {SYNTH_TIMEOUT}s)...")
                     synth_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
                     synth_future = synth_pool.submit(_synth_opus)
                     try:
@@ -2655,14 +2655,14 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                                 if getattr(block, 'type', None) == 'text':
                                     response_text = block.text
                                     break
-                        print(f"   ✅ [Synthesis] claude-opus-4-6 + Extended Thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
+                        print(f"   ✅ [Synthesis] claude-opus-4-7 + Extended Thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
                     except concurrent.futures.TimeoutError:
                         synth_pool.shutdown(wait=False)
-                        print(f"   ⏰ [Synthesis] claude-opus-4-6 timed out after {SYNTH_TIMEOUT}s")
+                        print(f"   ⏰ [Synthesis] claude-opus-4-7 timed out after {SYNTH_TIMEOUT}s")
                         raise Exception(f"Opus timeout after {SYNTH_TIMEOUT}s")
                     synth_pool.shutdown(wait=False)
                 except Exception as opus_err:
-                    print(f"   ❌ [Synthesis] Opus 4.6 failed: {opus_err}")
+                    print(f"   ❌ [Synthesis] Opus 4.7 failed: {opus_err}")
 
                     # Fallback 1: Gemini 3.1 Pro Preview (thinking_budget=3000 ≈ MEDIUM; 2000-3500 range)
                     gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
