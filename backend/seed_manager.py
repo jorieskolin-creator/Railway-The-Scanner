@@ -788,7 +788,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                     if response_text:
                         payload = extract_json_from_text(response_text)
                         if payload:
-                             json_data = json.loads(payload)
+                             json_data = json.loads(payload, strict=False)
                              summary_text = json_data.get("summary", summary_text)
                              pitch_text = json_data.get("pitch", pitch_text) or pitch_text
                              why_proposals = json_data.get("why_proposals", why_proposals) or why_proposals
@@ -1216,7 +1216,7 @@ re-introduce any of the false claims listed above."""
                     if resynth_text:
                         resynth_payload = extract_json_from_text(resynth_text)
                         if resynth_payload:
-                            resynth_json = json.loads(resynth_payload)
+                            resynth_json = json.loads(resynth_payload, strict=False)
                             new_summary = resynth_json.get("summary", "")
                             new_pitch = resynth_json.get("pitch", "")
 

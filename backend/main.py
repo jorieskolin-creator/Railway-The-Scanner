@@ -968,7 +968,7 @@ Respond with valid JSON only:
     if not payload:
         return {"company": company_name, "status": "failed", "reason": "Could not parse JSON from model response."}
 
-    result_json = json.loads(payload)
+    result_json = json.loads(payload, strict=False)
     new_why = result_json.get("why_proposals", [])
     new_what = result_json.get("what_proposals", [])
 
@@ -1456,7 +1456,7 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
     if resynth_text:
         resynth_payload = extract_json_from_text(resynth_text)
         if resynth_payload:
-            resynth_json = json.loads(resynth_payload)
+            resynth_json = json.loads(resynth_payload, strict=False)
             new_summary = resynth_json.get("summary", "")
             new_pitch = resynth_json.get("pitch", "")
 
@@ -2738,7 +2738,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                 if response_text:
                     payload = extract_json_from_text(response_text)
                     if payload:
-                         json_data = json.loads(payload)
+                         json_data = json.loads(payload, strict=False)
                          summary = json_data.get("summary", summary)
                          pitch = json_data.get("pitch", pitch) or pitch
                          why_proposals = json_data.get("why_proposals", why_proposals) or why_proposals
@@ -3143,7 +3143,7 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                 if resynth_text:
                     resynth_payload = extract_json_from_text(resynth_text)
                     if resynth_payload:
-                        resynth_json = json.loads(resynth_payload)
+                        resynth_json = json.loads(resynth_payload, strict=False)
                         new_summary = resynth_json.get("summary", "")
                         new_pitch = resynth_json.get("pitch", "")
 
