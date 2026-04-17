@@ -1429,28 +1429,28 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
     # gemini-3-pro-preview fallback removed: shares 3.x rate limits with 3.1-pro
     # and is being deprecated by Google.
 
-    # Fallback 1: Mistral Large (independent provider — survives Anthropic + Google outages)
-    mistral_key = os.environ.get("MISTRAL_API_KEY")
-    if not resynth_text and mistral_key:
+    # Fallback: Claude Sonnet 4.6 (independent provider — survives Google outages)
+    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not resynth_text and anthropic_key:
         try:
-            from mistralai import Mistral
-            print(f"   🔄 [Clean Re-Synthesis] Falling back to Mistral Large...")
+            print(f"   🔄 [Clean Re-Synthesis] Falling back to Claude Sonnet 4.6...")
             m_start = time.time()
-            mistral_client = Mistral(api_key=mistral_key)
-            mistral_resp = mistral_client.chat.complete(
-                model="mistral-large-latest",
-                temperature=0.1,
-                response_format={"type": "json_object"},
+            sonnet_client = anthropic.Anthropic(api_key=anthropic_key)
+            sonnet_resp = sonnet_client.messages.create(
+                model="claude-sonnet-4-6",
                 max_tokens=4000,
                 messages=[{"role": "user", "content": synthesis_prompt}],
             )
-            resynth_text = mistral_resp.choices[0].message.content or ""
-            resynth_model_used = "mistral-large-latest"
+            for block in sonnet_resp.content:
+                if getattr(block, 'type', None) == 'text':
+                    resynth_text = block.text
+                    break
+            resynth_model_used = "claude-sonnet-4-6"
             resynth_ms = int((time.time() - m_start) * 1000)
-            print(f"   ✅ [Clean Re-Synthesis] Mistral Large complete ({resynth_ms}ms)")
-        except Exception as mistral_err:
+            print(f"   ✅ [Clean Re-Synthesis] Claude Sonnet 4.6 complete ({resynth_ms}ms)")
+        except Exception as sonnet_err:
             resynth_ms = int((time.time() - resynth_start) * 1000)
-            print(f"   ❌ [Clean Re-Synthesis] All re-synthesis models failed. Last error: {mistral_err} ({resynth_ms}ms)")
+            print(f"   ❌ [Clean Re-Synthesis] All re-synthesis models failed. Last error: {sonnet_err} ({resynth_ms}ms)")
 
     # Step 4: Parse re-synthesis result and apply
     if resynth_text:
@@ -2620,7 +2620,7 @@ Respond with valid JSON only. Six fields required:
 Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs total). The pitch value must also contain \n\n between its 3 paragraphs.
 Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2."""
 
-                # --- Synthesis with fallback chain: Opus 4.7 → Gemini 3.1 Pro → Mistral Large ---
+                # --- Synthesis with fallback chain: Opus 4.7 → Gemini 3.1 Pro → Sonnet 4.6 ---
                 # Opus is the judge — it does ONE thing: synthesize. Fallbacks degrade gracefully.
                 # Opus uses Extended Thinking to reason through conflicting intent vs. reality
                 # evidence before generating the synthesis — exactly what a "judge" model should do.
@@ -2697,16 +2697,13 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                     # gemini-3-pro-preview fallback removed: shares 3.x rate limits with 3.1-pro
                     # and is being deprecated by Google.
 
-                    # Fallback 2: Mistral Large (independent provider — survives Anthropic + Google outages)
-                    mistral_key = os.environ.get("MISTRAL_API_KEY")
-                    if not response_text and mistral_key and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 30:
+                    # Fallback 2: Claude Sonnet 4.6 (independent provider — survives Google outages)
+                    if not response_text and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 30:
                         try:
-                            from mistralai import Mistral
-                            print(f"   🔄 [Synthesis] Falling back to Mistral Large (timeout: {SYNTH_TIMEOUT}s)...")
+                            print(f"   🔄 [Synthesis] Falling back to Claude Sonnet 4.6 (timeout: {SYNTH_TIMEOUT}s)...")
                             m_start = time.time()
-                            mistral_client = Mistral(api_key=mistral_key)
 
-                            _mistral_system = (
+                            _sonnet_system = (
                                 "CRITICAL: You are a CONSERVATIVE analyst. When in doubt, say 'insufficient evidence.' "
                                 "Do NOT extrapolate. Do NOT infer organizational problems. Do NOT sound deeper than "
                                 "your evidence supports. A boring, accurate summary beats an impressive, fabricated one. "
@@ -2714,30 +2711,29 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                                 "from minor details like tool names in job ads."
                             )
 
-                            def _synth_mistral():
-                                return mistral_client.chat.complete(
-                                    model="mistral-large-latest",
-                                    temperature=0.1,
-                                    response_format={"type": "json_object"},
+                            def _synth_sonnet():
+                                return claude_client.messages.create(
+                                    model="claude-sonnet-4-6",
                                     max_tokens=4000,
-                                    messages=[
-                                        {"role": "system", "content": _mistral_system},
-                                        {"role": "user", "content": synthesis_prompt},
-                                    ],
+                                    system=_sonnet_system,
+                                    messages=[{"role": "user", "content": synthesis_prompt}],
                                 )
 
                             m_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                            m_future = m_pool.submit(_synth_mistral)
+                            m_future = m_pool.submit(_synth_sonnet)
                             try:
-                                mistral_resp = m_future.result(timeout=SYNTH_TIMEOUT)
-                                response_text = mistral_resp.choices[0].message.content or ""
-                                print(f"   ✅ [Synthesis] Mistral Large succeeded in {int((time.time() - m_start) * 1000)}ms")
+                                sonnet_resp = m_future.result(timeout=SYNTH_TIMEOUT)
+                                for block in sonnet_resp.content:
+                                    if getattr(block, 'type', None) == 'text':
+                                        response_text = block.text
+                                        break
+                                print(f"   ✅ [Synthesis] Claude Sonnet 4.6 succeeded in {int((time.time() - m_start) * 1000)}ms")
                             except concurrent.futures.TimeoutError:
                                 m_pool.shutdown(wait=False)
-                                print(f"   ⏰ [Synthesis] Mistral Large timed out after {SYNTH_TIMEOUT}s")
+                                print(f"   ⏰ [Synthesis] Claude Sonnet 4.6 timed out after {SYNTH_TIMEOUT}s")
                             m_pool.shutdown(wait=False)
-                        except Exception as mistral_err:
-                            print(f"   ❌ [Synthesis] All models failed. Last error: {mistral_err}")
+                        except Exception as sonnet_err:
+                            print(f"   ❌ [Synthesis] All models failed. Last error: {sonnet_err}")
 
                 if response_text:
                     payload = extract_json_from_text(response_text)
@@ -3123,28 +3119,26 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                 # gemini-3-pro-preview fallback removed: shares 3.x rate limits with 3.1-pro
                 # and is being deprecated by Google.
 
-                # Fallback: Mistral Large (independent provider — survives Anthropic + Google outages)
-                mistral_key = os.environ.get("MISTRAL_API_KEY")
-                if not resynth_text and mistral_key:
+                # Fallback: Claude Sonnet 4.6 (independent provider — survives Google outages)
+                if not resynth_text:
                     try:
-                        from mistralai import Mistral
-                        print(f"   🔄 [Re-Synthesis] Falling back to Mistral Large...")
+                        print(f"   🔄 [Re-Synthesis] Falling back to Claude Sonnet 4.6...")
                         m_start = time.time()
-                        mistral_client = Mistral(api_key=mistral_key)
-                        mistral_resp = mistral_client.chat.complete(
-                            model="mistral-large-latest",
-                            temperature=0.1,
-                            response_format={"type": "json_object"},
+                        sonnet_resp = claude_client.messages.create(
+                            model="claude-sonnet-4-6",
                             max_tokens=4000,
                             messages=[{"role": "user", "content": resynth_prompt}],
                         )
-                        resynth_text = mistral_resp.choices[0].message.content or ""
-                        resynth_model_used = "mistral-large-latest"
+                        for block in sonnet_resp.content:
+                            if getattr(block, 'type', None) == 'text':
+                                resynth_text = block.text
+                                break
+                        resynth_model_used = "claude-sonnet-4-6"
                         resynth_ms = int((time.time() - m_start) * 1000)
-                        print(f"   ✅ [Re-Synthesis] Mistral Large re-synthesis complete ({resynth_ms}ms)")
-                    except Exception as mistral_err:
+                        print(f"   ✅ [Re-Synthesis] Claude Sonnet 4.6 re-synthesis complete ({resynth_ms}ms)")
+                    except Exception as sonnet_err:
                         resynth_ms = int((time.time() - resynth_start) * 1000)
-                        print(f"   ❌ [Re-Synthesis] All re-synthesis models failed. Last error: {mistral_err} ({resynth_ms}ms)")
+                        print(f"   ❌ [Re-Synthesis] All re-synthesis models failed. Last error: {sonnet_err} ({resynth_ms}ms)")
 
                 if resynth_text:
                     resynth_payload = extract_json_from_text(resynth_text)

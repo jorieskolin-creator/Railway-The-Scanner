@@ -4,8 +4,8 @@ Reality Check — Hallucination Detection for AI-Generated Summaries
 Two layers:
 1. Heuristic pattern matching (zero API cost) — catches obvious fakes
 2. AI-powered fact-check (Gemini 2.5 Pro / 3.1 Pro + web search grounding,
-   Mistral Large fallback without web search)
-   — verifies synthesis claims against live web data (or LLM knowledge if Mistral)
+   Claude Sonnet 4.6 fallback without web search)
+   — verifies synthesis claims against live web data (or LLM knowledge if Sonnet)
    — if false claims found, also produces corrected summary in a follow-up call
 
 Returns a hallucination risk level: "low", "medium", "high"
@@ -420,8 +420,8 @@ def validate_pitch(pitch_text, company_name):
 
 # --- AI-POWERED FACT-CHECK (Layer 2) ---
 # Two-stage verification: Gemini 2.5 Pro / 3.1 Pro with Google Search grounding,
-# Mistral Large as non-Google fallback (no web search, uses LLM knowledge).
-# Gemini searches the web independently; Mistral relies on training data.
+# Claude Sonnet 4.6 as non-Google fallback (no web search, uses LLM knowledge).
+# Gemini searches the web independently; Sonnet relies on training data.
 # This catches both evidence-sourced errors AND fabricated claims with no basis.
 #
 # Architecture rationale (replaces old two-phase Haiku contradiction + Flash fresh search):
@@ -786,31 +786,33 @@ Each false_claims object must have:
                 print(f"   ❌ [Fact-Check S1] {model_name} failed: {e}")
                 continue
 
-    # ── Mistral fallback for Stage 1 — independent provider (no Google Search) ──
+    # ── Sonnet 4.6 fallback for Stage 1 — independent provider (no web search) ──
     if stage1_false_claims is None:
-        mistral_key = os.environ.get("MISTRAL_API_KEY")
-        if mistral_key:
+        anthropic_key = _get_anthropic_key()
+        if anthropic_key:
             try:
-                from mistralai import Mistral
-                print(f"   🔄 [Fact-Check S1] All Gemini models failed — trying Mistral Large fallback (no web search)...")
+                import anthropic
+                print(f"   🔄 [Fact-Check S1] All Gemini models failed — trying Claude Sonnet 4.6 fallback (no web search)...")
                 m_start = time.time()
-                mistral_client = Mistral(api_key=mistral_key)
-                mistral_resp = mistral_client.chat.complete(
-                    model="mistral-large-latest",
-                    temperature=0.1,
-                    response_format={"type": "json_object"},
+                sonnet_client = anthropic.Anthropic(api_key=anthropic_key)
+                sonnet_resp = sonnet_client.messages.create(
+                    model="claude-sonnet-4-6",
                     max_tokens=8000,
                     messages=[{"role": "user", "content": stage1_prompt}],
                 )
-                m_text = (mistral_resp.choices[0].message.content or "").strip()
+                m_text = ""
+                for block in sonnet_resp.content:
+                    if getattr(block, 'type', None) == 'text':
+                        m_text = block.text.strip()
+                        break
                 m_elapsed = int((time.time() - m_start) * 1000)
 
                 if m_text and len(m_text) >= 30:
                     m_result = _robust_parse_json(m_text)
                     if m_result and "false_claims" in m_result:
                         if m_result.get("summary_accurate") is True and m_result.get("false_claims"):
-                            print(f"   ✅ [Fact-Check S1] mistral-large-latest explicitly said summary_accurate=true ({m_elapsed}ms)")
-                            return {"false_claims": [], "corrected_summary": "", "corrected_pitch": "", "model": "mistral-large-latest", "time_ms": m_elapsed}
+                            print(f"   ✅ [Fact-Check S1] claude-sonnet-4-6 explicitly said summary_accurate=true ({m_elapsed}ms)")
+                            return {"false_claims": [], "corrected_summary": "", "corrected_pitch": "", "model": "claude-sonnet-4-6", "time_ms": m_elapsed}
 
                         raw_claims = m_result.get("false_claims") or []
                         false_claims = []
@@ -846,20 +848,20 @@ Each false_claims object must have:
                                     "source_urls": source_urls,
                                 })
 
-                        print(f"   {'⚠️' if false_claims else '✅'} [Fact-Check S1] mistral-large-latest: {len(false_claims)} false claim(s) ({m_elapsed}ms, no web search)")
+                        print(f"   {'⚠️' if false_claims else '✅'} [Fact-Check S1] claude-sonnet-4-6: {len(false_claims)} false claim(s) ({m_elapsed}ms, no web search)")
                         stage1_false_claims = false_claims
-                        stage1_model_name = "mistral-large-latest"
+                        stage1_model_name = "claude-sonnet-4-6"
                         stage1_time_ms = m_elapsed
                     else:
-                        print(f"   ⚠️ [Fact-Check S1] Could not parse Mistral response: {m_text[:500]}")
+                        print(f"   ⚠️ [Fact-Check S1] Could not parse Sonnet response: {m_text[:500]}")
                 else:
-                    print(f"   ⚠️ [Fact-Check S1] Mistral response too short ({len(m_text) if m_text else 0} chars)")
+                    print(f"   ⚠️ [Fact-Check S1] Sonnet response too short ({len(m_text) if m_text else 0} chars)")
 
             except Exception as e:
-                print(f"   ❌ [Fact-Check S1] mistral-large-latest failed: {e}")
+                print(f"   ❌ [Fact-Check S1] claude-sonnet-4-6 failed: {e}")
 
     if stage1_false_claims is None:
-        print(f"   ❌ [Fact-Check] All Stage 1 models failed (including Mistral fallback) — skipping fact-check")
+        print(f"   ❌ [Fact-Check] All Stage 1 models failed (including Sonnet fallback) — skipping fact-check")
         return {"false_claims": [], "corrected_summary": "", "corrected_pitch": "", "model": "all_models_failed", "time_ms": 0, "fact_check_skipped": True}
 
     # No false claims → done, Stage 2 not needed
@@ -951,23 +953,25 @@ OUTPUT FORMAT — valid JSON only:
         except Exception as e:
             print(f"   ❌ [Fact-Check S2] gemini-3.1-pro-preview failed: {e}")
 
-    # ── Mistral fallback for Stage 2 correction ──────────────────────────────
+    # ── Sonnet 4.6 fallback for Stage 2 correction ──────────────────────────────
     if not corrected_summary:
-        mistral_key = os.environ.get("MISTRAL_API_KEY")
-        if mistral_key:
+        anthropic_key = _get_anthropic_key()
+        if anthropic_key:
             try:
-                from mistralai import Mistral
-                print(f"   🔄 [Fact-Check S2] Gemini correction failed — trying Mistral Large fallback...")
+                import anthropic
+                print(f"   🔄 [Fact-Check S2] Gemini correction failed — trying Claude Sonnet 4.6 fallback...")
                 m2_start = time.time()
-                mistral_client = Mistral(api_key=mistral_key)
-                mistral_resp = mistral_client.chat.complete(
-                    model="mistral-large-latest",
-                    temperature=0.2,
-                    response_format={"type": "json_object"},
+                sonnet_client = anthropic.Anthropic(api_key=anthropic_key)
+                sonnet_resp = sonnet_client.messages.create(
+                    model="claude-sonnet-4-6",
                     max_tokens=10000,
                     messages=[{"role": "user", "content": stage2_prompt}],
                 )
-                m2_text = (mistral_resp.choices[0].message.content or "").strip()
+                m2_text = ""
+                for block in sonnet_resp.content:
+                    if getattr(block, 'type', None) == 'text':
+                        m2_text = block.text.strip()
+                        break
                 m2_elapsed = int((time.time() - m2_start) * 1000)
 
                 if m2_text:
@@ -976,18 +980,18 @@ OUTPUT FORMAT — valid JSON only:
                         corrected_summary = m2_result.get("corrected_summary", "")
                         corrected_pitch = m2_result.get("corrected_pitch", "")
                         if corrected_summary:
-                            print(f"   ✏️ [Fact-Check S2] Mistral correction produced ({len(corrected_summary.split())} words, {m2_elapsed}ms)")
-                            s2_model_name = "mistral-large"
+                            print(f"   ✏️ [Fact-Check S2] Sonnet correction produced ({len(corrected_summary.split())} words, {m2_elapsed}ms)")
+                            s2_model_name = "claude-sonnet-4-6"
                             elapsed2 = m2_elapsed
                         else:
-                            print(f"   ⚠️ [Fact-Check S2] Mistral parsed but no corrected_summary")
+                            print(f"   ⚠️ [Fact-Check S2] Sonnet parsed but no corrected_summary")
                     else:
-                        print(f"   ⚠️ [Fact-Check S2] Could not parse Mistral Stage 2 response: {m2_text[:500]}")
+                        print(f"   ⚠️ [Fact-Check S2] Could not parse Sonnet Stage 2 response: {m2_text[:500]}")
                 else:
-                    print(f"   ⚠️ [Fact-Check S2] Mistral returned empty Stage 2 response")
+                    print(f"   ⚠️ [Fact-Check S2] Sonnet returned empty Stage 2 response")
 
             except Exception as e2:
-                print(f"   ❌ [Fact-Check S2] mistral-large-latest fallback failed: {e2} — returning claims without correction")
+                print(f"   ❌ [Fact-Check S2] claude-sonnet-4-6 fallback failed: {e2} — returning claims without correction")
 
     return {
         "false_claims": stage1_false_claims,
@@ -1001,8 +1005,8 @@ OUTPUT FORMAT — valid JSON only:
 def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text=None):
     """
     AI-powered fact-check — two-stage pipeline:
-      Stage 1: Gemini 2.5 Pro → 3.1 Pro → Mistral Large fallback — detects false claims.
-      Stage 2: Gemini 3.1 Pro → Mistral Large fallback — surgically corrects false claims.
+      Stage 1: Gemini 2.5 Pro → 3.1 Pro → Claude Sonnet 4.6 fallback — detects false claims.
+      Stage 2: Gemini 3.1 Pro → Claude Sonnet 4.6 fallback — surgically corrects false claims.
 
     The fact-checker independently verifies the synthesis claims against live
     web data. This catches both evidence-sourced errors (contaminated evidence)
@@ -1300,30 +1304,32 @@ def _clean_with_gemini(prompt):
         if response_text:
             return response_text, elapsed_ms, "gemini-2.5-pro"
 
-    # --- Fallback: Mistral Large (independent provider — survives Google outages) ---
-    mistral_key = os.environ.get("MISTRAL_API_KEY")
-    if mistral_key:
+    # --- Fallback: Claude Sonnet 4.6 (independent provider — survives Google outages) ---
+    anthropic_key = _get_anthropic_key()
+    if anthropic_key:
         try:
-            from mistralai import Mistral
-            print(f"   🔄 [Clean] All Gemini models failed — falling back to Mistral Large...")
+            import anthropic
+            print(f"   🔄 [Clean] All Gemini models failed — falling back to Claude Sonnet 4.6...")
             m_start = time.time()
-            mistral_client = Mistral(api_key=mistral_key)
-            mistral_resp = mistral_client.chat.complete(
-                model="mistral-large-latest",
-                temperature=0.1,
-                response_format={"type": "json_object"},
+            sonnet_client = anthropic.Anthropic(api_key=anthropic_key)
+            sonnet_resp = sonnet_client.messages.create(
+                model="claude-sonnet-4-6",
                 max_tokens=6000,
                 messages=[{"role": "user", "content": prompt}],
             )
-            m_text = (mistral_resp.choices[0].message.content or "").strip()
+            m_text = ""
+            for block in sonnet_resp.content:
+                if getattr(block, 'type', None) == 'text':
+                    m_text = block.text.strip()
+                    break
             m_elapsed = int((time.time() - m_start) * 1000)
             if m_text:
-                return m_text, m_elapsed, "mistral-large-latest"
-            print(f"   ⚠️ [Clean] Mistral Large returned empty response")
-        except Exception as mistral_err:
-            print(f"   ❌ [Clean] Mistral Large fallback failed: {mistral_err}")
+                return m_text, m_elapsed, "claude-sonnet-4-6"
+            print(f"   ⚠️ [Clean] Sonnet returned empty response")
+        except Exception as sonnet_err:
+            print(f"   ❌ [Clean] Claude Sonnet 4.6 fallback failed: {sonnet_err}")
 
-    raise ValueError("All models failed (Gemini 3.1 Pro, 2.5 Pro, Mistral Large)")
+    raise ValueError("All models failed (Gemini 3.1 Pro, 2.5 Pro, Claude Sonnet 4.6)")
 
 
 def _validate_clean_result(result, summary_text, pitch_text, model_name, elapsed_ms):
