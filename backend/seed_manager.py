@@ -728,10 +728,8 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                         resp = claude_client.messages.create(
                             model="claude-opus-4-7",
                             max_tokens=16000,
-                            thinking={
-                                "type": "enabled",
-                                "budget_tokens": 10000
-                            },
+                            thinking={"type": "adaptive"},
+                            extra_body={"output_config": {"effort": "xhigh"}},
                             messages=[{"role": "user", "content": synthesis_prompt}]
                         )
                         # Extended thinking response: extract text block (skip thinking blocks)

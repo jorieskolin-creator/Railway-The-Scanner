@@ -790,7 +790,8 @@ def _generate_opus(prompt: str, max_tokens: int = 16000) -> tuple[str, int]:
     response = client.messages.create(
         model="claude-opus-4-7",
         max_tokens=max_tokens,
-        thinking={"type": "enabled", "budget_tokens": 8000},
+        thinking={"type": "adaptive"},
+        extra_body={"output_config": {"effort": "xhigh"}},
         messages=[{"role": "user", "content": prompt}],
     )
 
