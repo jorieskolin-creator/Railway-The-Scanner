@@ -881,13 +881,13 @@ const App = () => {
   });
 
   return (
-    <div className="min-h-screen flex flex-col font-sans relative overflow-x-hidden text-slate-100">
-      <div className="fixed inset-0 z-0 bg-[#1e1b4b] overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-b from-[#2e1065] via-[#1e1b4b] to-[#0f172a] opacity-80"></div>
+    <div className="min-h-screen flex flex-col font-sans relative overflow-x-hidden text-slate-900">
+      <div className="fixed inset-0 z-0 bg-[#f1f5f9] overflow-hidden">
+        <div className="absolute inset-0 bg-gradient-to-b from-[#f8fafc] via-[#e0f2fe] to-[#f1f5f9]"></div>
         <div className="absolute inset-0 opacity-[0.05] pointer-events-none"></div>
       </div>
 
-      <header className="sticky top-0 z-40 w-full border-b border-white/10 bg-[#1e1b4b]/50 backdrop-blur-xl">
+      <header className="sticky top-0 z-40 w-full border-b border-white/10 bg-[#1e1b4b] backdrop-blur-xl">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 bg-gradient-to-br from-cyan-500 to-violet-600 rounded-lg flex items-center justify-center">
@@ -991,16 +991,16 @@ const App = () => {
       <main className="flex-grow py-8 px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full space-y-8 z-10 relative">
         <section className="space-y-4">
           <div className="flex justify-between items-center">
-            <h2 className="text-xl font-bold text-white flex items-center gap-2">
-              <Sparkles className="text-cyan-300 w-4 h-4" /> Market Landscape
+            <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+              <Sparkles className="text-cyan-600 w-4 h-4" /> Market Landscape
             </h2>
           </div>
           {loading && data.length === 0 ? (
-             <div className="h-[400px] w-full bg-[#0f172a]/60 rounded-2xl flex items-center justify-center">
+             <div className="h-[400px] w-full bg-[#0f172a]/95 rounded-2xl flex items-center justify-center">
                 <Loader2 className="animate-spin text-cyan-400" size={32} />
              </div>
           ) : data.length === 0 ? (
-             <div className="h-[400px] w-full bg-[#0f172a]/60 rounded-2xl flex flex-col items-center justify-center border border-white/5 text-slate-400 gap-4">
+             <div className="h-[400px] w-full bg-[#0f172a]/95 rounded-2xl flex flex-col items-center justify-center border border-white/5 text-slate-400 gap-4">
                 {systemStatus.storage ? (
                     <Database size={48} className="text-cyan-500/50" />
                 ) : (
@@ -1016,7 +1016,7 @@ const App = () => {
                 </div>
              </div>
           ) : (
-             <div className="bg-[#0f172a]/60 border border-white/10 rounded-2xl p-1 shadow-2xl backdrop-blur-xl">
+             <div className="bg-[#0f172a]/95 border border-white/10 rounded-2xl p-1 shadow-2xl backdrop-blur-xl">
                 <TruthMatrix data={filteredData} onSelectCompany={handleCompanyClick} />
              </div>
           )}
@@ -1030,8 +1030,8 @@ const App = () => {
                   onClick={() => setSelectedDomain(domain)}
                   className={`px-3 py-1 rounded-full text-[10px] font-mono font-semibold uppercase tracking-wide transition-all border ${
                     selectedDomain === domain
-                      ? 'bg-cyan-500/20 text-cyan-200 border-cyan-500/50 shadow-[0_0_8px_rgba(34,211,238,0.15)]'
-                      : 'bg-white/5 text-slate-400 border-white/10 hover:bg-white/10 hover:text-slate-200'
+                      ? 'bg-cyan-600 text-white border-cyan-700 shadow-[0_0_8px_rgba(34,211,238,0.25)]'
+                      : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-100 hover:text-slate-900'
                   }`}
                 >
                   {domain}
@@ -1043,28 +1043,28 @@ const App = () => {
           {/* --- DOMAIN GAUGE CARDS --- */}
           {domainStats && data.length > 0 && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-2">
-              <div className="bg-[#0f172a]/70 border border-white/10 rounded-xl p-4">
+              <div className="bg-[#0f172a]/95 border border-white/10 rounded-xl p-4">
                 <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono mb-2">Avg Reality</div>
                 <div className="text-2xl font-bold text-cyan-300">{domainStats.avgReality}</div>
                 <div className="w-full h-1.5 bg-slate-800 rounded-full mt-2 overflow-hidden">
                   <div className="h-full bg-cyan-500 rounded-full transition-all" style={{ width: `${domainStats.avgReality}%` }}></div>
                 </div>
               </div>
-              <div className="bg-[#0f172a]/70 border border-white/10 rounded-xl p-4">
+              <div className="bg-[#0f172a]/95 border border-white/10 rounded-xl p-4">
                 <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono mb-2">Avg Financial</div>
                 <div className="text-2xl font-bold text-emerald-300">{domainStats.avgFinancial ?? '—'}</div>
                 <div className="w-full h-1.5 bg-slate-800 rounded-full mt-2 overflow-hidden">
                   <div className="h-full bg-emerald-500 rounded-full transition-all" style={{ width: `${domainStats.avgFinancial ?? 0}%` }}></div>
                 </div>
               </div>
-              <div className="bg-[#0f172a]/70 border border-white/10 rounded-xl p-4">
+              <div className="bg-[#0f172a]/95 border border-white/10 rounded-xl p-4">
                 <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono mb-2">Companies</div>
                 <div className="text-2xl font-bold text-white">{domainStats.count}</div>
                 <div className="text-[10px] text-slate-500 mt-2 font-mono">
                   {selectedDomain === 'All' ? 'All domains' : selectedDomain}
                 </div>
               </div>
-              <div className="bg-[#0f172a]/70 border border-white/10 rounded-xl p-4">
+              <div className="bg-[#0f172a]/95 border border-white/10 rounded-xl p-4">
                 <div className="text-[9px] text-slate-500 uppercase tracking-wider font-mono mb-2">Archetype Split</div>
                 <div className="flex gap-1 mt-1">
                   {Object.entries(domainStats.archetypes).map(([arch, count]) => {
@@ -1093,15 +1093,15 @@ const App = () => {
 
         <section className="space-y-4">
           <div className="flex flex-col md:flex-row justify-between md:items-center gap-2">
-            <h2 className="text-lg font-bold text-white">Forensic Index</h2>
-            <div className="flex gap-3 text-[10px] font-mono text-slate-500">
-              <span><span className="text-slate-300 font-bold">S</span> &lt;100M</span>
-              <span><span className="text-slate-300 font-bold">M</span> 100-499M</span>
-              <span><span className="text-slate-300 font-bold">L</span> 500M-2B</span>
-              <span><span className="text-slate-300 font-bold">XL</span> &gt;2B revenue (EUR)</span>
+            <h2 className="text-lg font-bold text-slate-900">Forensic Index</h2>
+            <div className="flex gap-3 text-[10px] font-mono text-slate-600">
+              <span><span className="text-slate-800 font-bold">S</span> &lt;100M</span>
+              <span><span className="text-slate-800 font-bold">M</span> 100-499M</span>
+              <span><span className="text-slate-800 font-bold">L</span> 500M-2B</span>
+              <span><span className="text-slate-800 font-bold">XL</span> &gt;2B revenue (EUR)</span>
             </div>
           </div>
-          <div className="bg-[#0f172a]/70 border border-white/10 rounded-2xl overflow-hidden min-h-[200px]">
+          <div className="bg-[#0f172a]/95 border border-white/10 rounded-2xl overflow-hidden min-h-[200px]">
               <table className="w-full text-sm text-left">
                 <thead className="text-[10px] text-indigo-200 uppercase bg-black/30 border-b border-white/5">
                   <tr>
