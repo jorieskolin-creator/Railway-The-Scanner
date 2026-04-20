@@ -386,23 +386,31 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any) => {
       content += `<div class="section"><h2>Foresight-Adjusted Vulnerability Index</h2><div class="segment-grid">${cards}</div></div>`;
     }
 
-    // Observatory Layer 2 Section 1 — Finnish Force Map
+    // Observatory Layer 2 Sections 3 & 4 — Three Horizons + Contrarian Signal
     if (observatoryData?.finland_analysis?.text) {
       const fullText = observatoryData.finland_analysis.text;
-      const s1Match = fullText.match(/##\s*Section\s*1[^\n]*\n([\s\S]*?)(?=##\s*Section\s*2|$)/i);
-      if (s1Match) {
-        const section1 = s1Match[1].trim().replace(/^-{3,}\s*/gm, '').trim();
-        if (section1) {
-          const mdToHtml = (t: string) => t.split(/\n\n+/).map((b: string) => {
-            const s = b.trim(); if (!s) return '';
-            if (/^-{3,}$/.test(s)) return '<hr style="border:none;border-top:1px solid #334155;margin:24px 0">';
-            if (s.startsWith('### ')) return `<h3 style="font-size:14px;margin:20px 0 8px;color:#c4b5fd">${s.slice(4).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</h3>`;
-            if (s.startsWith('## ')) return `<h2>${s.slice(3).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</h2>`;
-            let h = s.replace(/\n/g, ' ').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-            if (!h.includes('<strong>')) h = h.replace(/^([^.]+\.)(\s|$)/, '<strong>$1</strong>$2');
-            return `<p style="font-size:13px;line-height:1.8;margin-bottom:16px">${h}</p>`;
-          }).join('\n');
-          content += `<div class="section" style="border-color:rgba(167,139,250,0.3)"><h2 style="color:#a78bfa">The Finnish Force Map: Strategic Asymmetries</h2><p style="font-size:10px;color:#64748b;margin-bottom:16px">Strategic Foresight Observatory — How global forces reshape Finnish business</p>${mdToHtml(section1)}</div>`;
+      const mdToHtml = (t: string) => t.split(/\n\n+/).map((b: string) => {
+        const s = b.trim(); if (!s) return '';
+        if (/^-{3,}$/.test(s)) return '<hr style="border:none;border-top:1px solid #334155;margin:24px 0">';
+        if (s.startsWith('### ')) return `<h3 style="font-size:14px;margin:20px 0 8px;color:#c4b5fd">${s.slice(4).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</h3>`;
+        if (s.startsWith('## ')) return `<h2>${s.slice(3).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</h2>`;
+        let h = s.replace(/\n/g, ' ').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+        if (!h.includes('<strong>')) h = h.replace(/^([^.]+\.)(\s|$)/, '<strong>$1</strong>$2');
+        return `<p style="font-size:13px;line-height:1.8;margin-bottom:16px">${h}</p>`;
+      }).join('\n');
+
+      const s3Match = fullText.match(/##\s*Section\s*3[^\n]*\n([\s\S]*?)(?=##\s*Section\s*4|$)/i);
+      if (s3Match) {
+        const section3 = s3Match[1].trim().replace(/^-{3,}\s*/gm, '').trim();
+        if (section3) {
+          content += `<div class="section" style="border-color:rgba(167,139,250,0.3)"><h2 style="color:#a78bfa">Three Horizons for Finland</h2><p style="font-size:10px;color:#64748b;margin-bottom:16px">Strategic Foresight Observatory — Where Finland is heading across three timeframes</p>${mdToHtml(section3)}</div>`;
+        }
+      }
+      const s4Match = fullText.match(/##\s*Section\s*4[^\n]*\n([\s\S]*?)(?=##\s*Section\s*5|$)/i);
+      if (s4Match) {
+        const section4 = s4Match[1].trim().replace(/^-{3,}\s*/gm, '').trim();
+        if (section4) {
+          content += `<div class="section" style="border-color:rgba(244,63,94,0.3)"><h2 style="color:#fb7185">The Contrarian Signal: Finland's Dangerous Assumption</h2><p style="font-size:10px;color:#64748b;margin-bottom:16px">Strategic Foresight Observatory — The uncomfortable truth the data reveals</p>${mdToHtml(section4)}</div>`;
         }
       }
     }
@@ -785,39 +793,79 @@ const ExecutiveSummaryTab = ({ data, observatoryData = null }: { data: any; obse
         </div>
       )}
 
-      {/* Observatory Layer 2 — Section 1: The Finnish Force Map */}
+      {/* Observatory Layer 2 — Section 3: Three Horizons for Finland */}
       {(() => {
         if (!observatoryData?.finland_analysis?.text) return null;
         const fullText = observatoryData.finland_analysis.text;
-        const s1Match = fullText.match(/##\s*Section\s*1[^\n]*\n([\s\S]*?)(?=##\s*Section\s*2|$)/i);
-        if (!s1Match) return null;
-        const section1 = s1Match[1].trim().replace(/^-{3,}\s*/gm, '').trim();
-        if (!section1) return null;
+        const s3Match = fullText.match(/##\s*Section\s*3[^\n]*\n([\s\S]*?)(?=##\s*Section\s*4|$)/i);
+        if (!s3Match) return null;
+        const section3 = s3Match[1].trim().replace(/^-{3,}\s*/gm, '').trim();
+        if (!section3) return null;
+        const renderBlocks = (text: string) => text.split(/\n\n+/).map((block: string, bi: number) => {
+          const trimmed = block.trim();
+          if (!trimmed) return null;
+          if (/^-{3,}$/.test(trimmed)) return null;
+          if (trimmed.startsWith('### ')) return <h5 key={bi} className="text-xs font-bold text-violet-200/80 mt-3 mb-1">{trimmed.replace(/^###\s*/, '')}</h5>;
+          if (trimmed.startsWith('## ')) return <h5 key={bi} className="text-sm font-bold text-violet-200 mt-3 mb-1">{trimmed.replace(/^##\s*/, '')}</h5>;
+          const parts = trimmed.replace(/\n/g, ' ').split(/(\*\*[^*]+\*\*)/);
+          return (
+            <p key={bi} className="text-[11px] text-slate-300 leading-relaxed">
+              {parts.map((seg: string, j: number) => {
+                if (seg.startsWith('**') && seg.endsWith('**')) {
+                  return <strong key={j} className="text-slate-100 font-semibold">{seg.slice(2, -2)}</strong>;
+                }
+                return <span key={j}>{seg}</span>;
+              })}
+            </p>
+          );
+        });
         return (
           <div className="bg-black/20 border border-violet-500/20 rounded-lg p-5">
             <h4 className="text-[10px] font-bold text-violet-300 uppercase tracking-wide mb-1 flex items-center gap-2">
-              <Globe size={12} /> The Finnish Force Map: Strategic Asymmetries
+              <Globe size={12} /> Three Horizons for Finland
             </h4>
-            <div className="text-[8px] text-slate-500 mb-4 leading-relaxed">From Strategic Foresight Observatory — How global forces reshape Finnish business</div>
+            <div className="text-[8px] text-slate-500 mb-4 leading-relaxed">From Strategic Foresight Observatory — Where Finland is heading across three timeframes</div>
             <div className="space-y-3">
-              {section1.split(/\n\n+/).map((block: string, bi: number) => {
-                const trimmed = block.trim();
-                if (!trimmed) return null;
-                if (/^-{3,}$/.test(trimmed)) return null;
-                if (trimmed.startsWith('### ')) return <h5 key={bi} className="text-xs font-bold text-violet-200/80 mt-3 mb-1">{trimmed.replace(/^###\s*/, '')}</h5>;
-                if (trimmed.startsWith('## ')) return <h5 key={bi} className="text-sm font-bold text-violet-200 mt-3 mb-1">{trimmed.replace(/^##\s*/, '')}</h5>;
-                const parts = trimmed.replace(/\n/g, ' ').split(/(\*\*[^*]+\*\*)/);
-                return (
-                  <p key={bi} className="text-[11px] text-slate-300 leading-relaxed">
-                    {parts.map((seg: string, j: number) => {
-                      if (seg.startsWith('**') && seg.endsWith('**')) {
-                        return <strong key={j} className="text-slate-100 font-semibold">{seg.slice(2, -2)}</strong>;
-                      }
-                      return <span key={j}>{seg}</span>;
-                    })}
-                  </p>
-                );
+              {renderBlocks(section3)}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Observatory Layer 2 — Section 4: The Contrarian Signal */}
+      {(() => {
+        if (!observatoryData?.finland_analysis?.text) return null;
+        const fullText = observatoryData.finland_analysis.text;
+        const s4Match = fullText.match(/##\s*Section\s*4[^\n]*\n([\s\S]*?)(?=##\s*Section\s*5|$)/i);
+        if (!s4Match) return null;
+        const section4 = s4Match[1].trim().replace(/^-{3,}\s*/gm, '').trim();
+        if (!section4) return null;
+        const renderBlocks = (text: string) => text.split(/\n\n+/).map((block: string, bi: number) => {
+          const trimmed = block.trim();
+          if (!trimmed) return null;
+          if (/^-{3,}$/.test(trimmed)) return null;
+          if (trimmed.startsWith('### ')) return <h5 key={bi} className="text-xs font-bold text-rose-200/80 mt-3 mb-1">{trimmed.replace(/^###\s*/, '')}</h5>;
+          if (trimmed.startsWith('## ')) return <h5 key={bi} className="text-sm font-bold text-rose-200 mt-3 mb-1">{trimmed.replace(/^##\s*/, '')}</h5>;
+          const parts = trimmed.replace(/\n/g, ' ').split(/(\*\*[^*]+\*\*)/);
+          return (
+            <p key={bi} className="text-[11px] text-slate-300 leading-relaxed">
+              {parts.map((seg: string, j: number) => {
+                if (seg.startsWith('**') && seg.endsWith('**')) {
+                  return <strong key={j} className="text-rose-100 font-semibold">{seg.slice(2, -2)}</strong>;
+                }
+                return <span key={j}>{seg}</span>;
               })}
+            </p>
+          );
+        });
+        return (
+          <div className="bg-black/20 border border-rose-500/20 rounded-lg p-5">
+            <h4 className="text-[10px] font-bold text-rose-300 uppercase tracking-wide mb-1 flex items-center gap-2">
+              <AlertTriangle size={12} /> The Contrarian Signal: Finland's Dangerous Assumption
+            </h4>
+            <div className="text-[8px] text-slate-500 mb-4 leading-relaxed">From Strategic Foresight Observatory — The uncomfortable truth the data reveals</div>
+            <div className="space-y-3">
+              {renderBlocks(section4)}
             </div>
           </div>
         );
