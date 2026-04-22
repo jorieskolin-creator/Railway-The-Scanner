@@ -388,6 +388,31 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
     except Exception as e:
         print(f"   ❌ [General Summary] {BACKUP_MODEL} backup failed: {e}")
 
+    # Attempt 4: Sonnet 4.6 (survives total Gemini outages)
+    try:
+        import anthropic
+        anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not anthropic_key:
+            print("   ⚠️ [General Summary] No ANTHROPIC_API_KEY — skipping Sonnet backup")
+        else:
+            SONNET_MODEL = "claude-sonnet-4-6"
+            print(f"   [General Summary] Gemini models exhausted — trying {SONNET_MODEL}")
+            t0 = time.time()
+            claude_client = anthropic.Anthropic(api_key=anthropic_key)
+            claude_resp = claude_client.messages.create(
+                model=SONNET_MODEL,
+                max_tokens=4000,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = _strip_links((claude_resp.content[0].text or "").strip())
+            wc = _word_count(text)
+            elapsed = int((time.time() - t0) * 1000)
+            print(f"   [General Summary] {SONNET_MODEL} backup: {wc} words ({elapsed}ms)")
+            if text:
+                return text, SONNET_MODEL
+    except Exception as e:
+        print(f"   ❌ [General Summary] Sonnet backup failed: {e}")
+
     return "", ""
 
 
