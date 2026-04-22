@@ -1741,7 +1741,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
          Oikotie is Finland's second-largest job platform. Check for tech stack, team structure, and methodology mentions.
        - Job Descriptions Detail: `"{search_name}" job description "engineer" OR "developer" OR "kehittäjä" OR "arkkitehti"`
 
-    2. THE STRATEGIC JURY (Business Model & Procurement)
+    2. THE STRATEGIC JURY (Business Model, Procurement & Customer Experience)
        - Cloud Sourcing (Finland): `site:hankintailmoitukset.fi "{search_name}" AND ("Cloud" OR "Pilvi" OR "SaaS" OR "pilvipalvelu")`
        - Recurring Revenue Evidence: `site:{domain_hint} filetype:pdf "Recurring Revenue" OR "ARR" OR "Jatkuva laskutus" OR "vuosiliikevaihto"`
        - Modern Tech Investments: `site:crunchbase.com "{search_name}" "Acquisitions" OR "Yrityskaupat"`
@@ -1752,6 +1752,12 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
          ETLA is Finland's research institute for the economy. Their industry reports reveal whether this company's sector is growing, digitalizing, or facing structural challenges.
        - Sitra Innovation Insights: `site:sitra.fi "{search_name}" OR site:sitra.fi "data economy" OR "kiertotalous" OR "circular economy"`
          If the company appears in Sitra case studies, this is a strong innovation signal. Sitra is Finland's national innovation fund.
+       - Customer Experience (INDEPENDENT sources only): `site:trustpilot.com "{search_name}" OR site:trustpilot.com "{domain_hint}"`
+       - CX Metrics & Recognition: `"{search_name}" "NPS" OR "Net Promoter" OR "customer satisfaction" OR "asiakastyytyväisyys" OR EPSI OR CXPA`
+       - App/Service Reviews: `site:apps.apple.com "{search_name}" OR site:play.google.com "{search_name}"`
+         IMPORTANT: For CX evidence, ONLY accept metrics from INDEPENDENT sources (Trustpilot,
+         EPSI, app store ratings, analyst reports). Company-published NPS/CSAT scores on their
+         own website are INTENT, not reality — do NOT count them as verified CX evidence.
 
     3. THE CULTURAL JURY (Talent & Psychological Safety)
        - Boomerang Employees (High Trust): `site:linkedin.com "{search_name}" AND ("returned to" OR "rejoined" OR "palasi takaisin")`

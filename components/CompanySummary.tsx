@@ -13,7 +13,8 @@ const HighlightText = ({ text }) => {
     "Legacy", "Cash Cow", "At Risk", "Surveillance", "Turf Wars", "Water-scrum-fall",
     "Ticket-based", "Output-driven", "Gatekeeping", "Compliance-driven", "Blame Culture",
     "Risk-averse", "Siloed", "Waterfall", "Consulting-heavy", "Vendor Lock-in", "Burnout",
-    "Change Control Board", "HiPPO", "Modernization Washing", "AI Washing", "Agile Washing"
+    "Change Control Board", "HiPPO", "Modernization Washing", "AI Washing", "Agile Washing",
+    "Customer complaints", "Poor reviews", "Service failures", "Customer churn"
   ];
 
   const positiveTerms = [
@@ -23,7 +24,9 @@ const HighlightText = ({ text }) => {
     "Stream-aligned", "Zero Distance", "Customer Intimacy", "Continuous Delivery",
     "DevOps", "Data Mesh", "Empowerment", "Learning Organization", "Servant Leadership",
     "Cloud-native", "Ecosystem", "Open Source", "Self-organization", "Cross-functional",
-    "Adaptive Strategy", "Generative AI", "AI-Augmented"
+    "Adaptive Strategy", "Generative AI", "AI-Augmented",
+    "Customer Experience", "Customer Journey", "Voice of Customer", "Net Promoter",
+    "Omnichannel", "Personalization", "Customer-first"
   ];
 
   const sortTerms = (a, b) => b.length - a.length;

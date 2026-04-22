@@ -67,14 +67,19 @@ const Scanner2Category = Globals.Scanner2Category || Scanner1Category;
       "Vision", "Mission", "Customer-centric", "Agile Strategy", "Innovation",
       "Ecosystem", "Data-driven", "Future-proof", "Resilience", "Differentiation",
       "Outcome-based", "Sustainability", "Disruption", "Blue Ocean", "Pivot",
-      "Horizon 1/2/3", "Focus", "Alignment", "Execution", "Emergent"
+      "Horizon 1/2/3", "Focus", "Alignment", "Execution", "Emergent",
+      "Customer Experience", "Customer Journey", "Voice of Customer", "Net Promoter",
+      "Customer Lifetime Value", "Omnichannel", "Personalization", "Self-service",
+      "Customer-first", "NPS"
     ],
     bad: [
       "Cost-cutting", "Defensive", "Short-term", "Static", "Reactive",
       "Generic", "Status Quo", "Siloed", "Unclear", "Budget-driven",
       "Top-down", "Rigid", "Risk-averse", "Legacy-focused", "Competitor-obsessed",
       "Shareholder-only", "Volume-based", "Efficiency-only", "Drifting", "Fragmented",
-      "Bureaucratic", "Complacent", "Opaque", "Incremental", "Project-based"
+      "Bureaucratic", "Complacent", "Opaque", "Incremental", "Project-based",
+      "Customer complaints", "Poor reviews", "Service failures", "Customer churn",
+      "One-size-fits-all", "No feedback loop"
     ]
   },
   [Scanner1Category.BusinessModel]: {
