@@ -321,6 +321,14 @@ const buildSvgCoverageRing = (coverage: any): string => {
     `</svg>`;
 };
 
+const _DIMENSION_DESCRIPTIONS_HTML: Record<string, string> = {
+  "Operating Model": "How the organization is structured, how teams work, governance, agility, and process design.",
+  "Service Portfolio": "What the organization sells: products, services, platforms, monetization, offering mix.",
+  "Values": "Culture, ethics, sustainability posture, inclusion, and the principles guiding decisions.",
+  "Strategy": "Direction, market positioning, competitive thesis, growth ambition, transformation agenda.",
+  "AI Readiness": "Capability to absorb AI-driven change: data foundations, talent, automation, technology stack.",
+};
+
 const buildCrossImpactHtml = (crossImpact: any[]): string => {
   if (!crossImpact?.length) return '';
   const themes = [...new Set(crossImpact.map((c: any) => c.theme))] as string[];
@@ -328,16 +336,222 @@ const buildCrossImpactHtml = (crossImpact: any[]): string => {
   const matrix: Record<string, Record<string, number>> = {};
   for (const item of crossImpact) { if (!matrix[item.theme]) matrix[item.theme] = {}; matrix[item.theme][item.dimension] = item.count; }
   const maxVal = Math.max(...crossImpact.map((c: any) => c.count), 1);
-  return `<table class="matrix"><thead><tr><th style="text-align:left">Theme</th>${dims.map(d => `<th>${d}</th>`).join('')}</tr></thead><tbody>${themes.map(theme =>
-    `<tr><td style="text-align:left;color:#cbd5e1">${theme}</td>${dims.map(dim => {
+
+  // Top-3 rankings — same logic as the in-app render so the export matches 1:1.
+  const themeTotals: Record<string, number> = {};
+  for (const t of themes) themeTotals[t] = dims.reduce((s, d) => s + (matrix[t]?.[d] || 0), 0);
+  const dimTotals: Record<string, number> = {};
+  for (const d of dims) dimTotals[d] = themes.reduce((s, t) => s + (matrix[t]?.[d] || 0), 0);
+  const matrixTotal = themes.reduce((s, t) => s + themeTotals[t], 0) || 1;
+
+  const topThemes = [...themes].sort((a, b) => themeTotals[b] - themeTotals[a]).slice(0, 3);
+  const topThemeRank: Record<string, number> = {};
+  topThemes.forEach((t, i) => { topThemeRank[t] = i + 1; });
+  const topDims = [...dims].sort((a, b) => dimTotals[b] - dimTotals[a]).slice(0, 3);
+  const topDimRank: Record<string, number> = {};
+  topDims.forEach((d, i) => { topDimRank[d] = i + 1; });
+  const topCells = [...crossImpact].sort((a: any, b: any) => b.count - a.count).slice(0, 3);
+  const topCellSet = new Set(topCells.map((c: any) => `${c.theme}|||${c.dimension}`));
+
+  const subtitle = `<p style="font-size:11px;color:#94a3b8;margin:4px 0 12px;line-height:1.6">
+    <strong style="color:#fbbf24">#1-#3 next to a theme</strong> = the three themes generating the most foresight pressure across all five dimensions.
+    <strong style="color:#34d399"> #1-#3 next to a dimension</strong> = the three dimensions absorbing the most foresight pressure across all themes.
+    Outlined cells = the three strongest individual theme x dimension intersections.
+  </p>`;
+
+  const tableHtml = `<table class="matrix"><thead><tr><th style="text-align:left">Theme</th>${dims.map(d => {
+    const rank = topDimRank[d];
+    const rankBadge = rank ? `<span style="margin-left:6px;padding:1px 4px;border:1px solid rgba(52,211,153,0.4);background:rgba(52,211,153,0.12);color:#34d399;font-size:9px;border-radius:3px;font-family:ui-monospace,monospace">#${rank}</span>` : '';
+    const headerColor = rank ? '#34d399' : '#94a3b8';
+    const headerWeight = rank ? '700' : '500';
+    const titleAttr = `${d} — ${_DIMENSION_DESCRIPTIONS_HTML[d] || ''}${rank ? ` (#${rank} dimension absorbing the most foresight pressure across all themes; column total ${dimTotals[d]})` : ''}`;
+    return `<th title="${titleAttr.replace(/"/g, '&quot;')}" style="color:${headerColor};font-weight:${headerWeight}">${d}${rankBadge}</th>`;
+  }).join('')}</tr></thead><tbody>${themes.map(theme => {
+    const tRank = topThemeRank[theme];
+    const tRankBadge = tRank ? `<span style="margin-right:6px;padding:1px 4px;border:1px solid rgba(245,158,11,0.4);background:rgba(245,158,11,0.12);color:#fbbf24;font-size:9px;border-radius:3px;font-family:ui-monospace,monospace">#${tRank}</span>` : '';
+    const themeColor = tRank ? '#fde68a' : '#cbd5e1';
+    const themeWeight = tRank ? '700' : '400';
+    const themeBorder = tRank ? 'border-left:2px solid rgba(251,191,36,0.6);padding-left:6px' : '';
+    const themeBg = tRank ? 'background:rgba(245,158,11,0.04)' : '';
+    return `<tr style="${themeBg}"><td style="text-align:left;color:${themeColor};font-weight:${themeWeight};${themeBorder}">${tRankBadge}${theme}</td>${dims.map(dim => {
       const val = matrix[theme]?.[dim] || 0;
+      const isTopCell = topCellSet.has(`${theme}|||${dim}`);
+      const ringStyle = isTopCell ? 'outline:1px solid rgba(251,191,36,0.7);outline-offset:-2px;font-weight:700;color:#fde68a;' : '';
+      const titleAttr = val > 0
+        ? `${theme} x ${dim}: ${val} foresight signal${val !== 1 ? 's' : ''} across scanned companies link the ${theme} megatrend to the ${dim} dimension.${isTopCell ? ' Top-3 highest-density cell in the matrix.' : ''}`
+        : `${theme} x ${dim}: no signals link these in the scanned portfolio.`;
       const op = val > 0 ? (0.2 + (val / maxVal) * 0.6) : 0;
-      return `<td style="background:rgba(99,102,241,${op})">${val > 0 ? val : '–'}</td>`;
-    }).join('')}</tr>`
-  ).join('')}</tbody></table>`;
+      return `<td title="${titleAttr.replace(/"/g, '&quot;')}" style="background:rgba(99,102,241,${op});${ringStyle}">${val > 0 ? val : '–'}</td>`;
+    }).join('')}</tr>`;
+  }).join('')}</tbody></table>`;
+
+  // Legend strip + dimension descriptions footer (mirrors the in-app block).
+  const legend = `<div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:14px;font-size:10px;color:#94a3b8">
+    <span><span style="display:inline-block;width:8px;height:8px;background:rgba(245,158,11,0.5);border:1px solid rgba(251,191,36,0.6);border-radius:2px;margin-right:5px;vertical-align:middle"></span>Top-3 themes — most pressure generated (row total)</span>
+    <span><span style="display:inline-block;width:8px;height:8px;background:rgba(52,211,153,0.4);border:1px solid rgba(52,211,153,0.6);border-radius:2px;margin-right:5px;vertical-align:middle"></span>Top-3 dimensions — most pressure absorbed (column total)</span>
+    <span><span style="display:inline-block;width:8px;height:8px;border-radius:2px;outline:1px solid rgba(251,191,36,0.7);outline-offset:-1px;margin-right:5px;vertical-align:middle"></span>Top-3 highest-density cells</span>
+  </div>`;
+  const dimDescriptions = `<div style="margin-top:14px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.05);font-size:10px;color:#94a3b8;line-height:1.7">
+    <div style="font-weight:600;color:#cbd5e1;margin-bottom:4px">Dimension definitions</div>
+    ${dims.map(d => `<div style="margin:2px 0"><span style="color:#34d399;font-weight:600">${d}:</span> ${_DIMENSION_DESCRIPTIONS_HTML[d] || ''}</div>`).join('')}
+  </div>`;
+
+  return subtitle + tableHtml + legend + dimDescriptions;
 };
 
-const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any) => {
+// Parse and render the Cross-Impact Matrix Interpretation for HTML export.
+// Mirrors the in-app rendering 1:1: section markers, theme chips with totals + %,
+// per-theme distribution bars, cell chips with density + % of row, prose paragraphs.
+const buildCrossImpactInterpretationHtml = (interpretation: any, crossImpact: any[]): string => {
+  if (!interpretation?.text) return '';
+  const dims = ["Operating Model", "Service Portfolio", "Values", "Strategy", "AI Readiness"];
+  const matrix: Record<string, Record<string, number>> = {};
+  for (const item of crossImpact || []) {
+    if (!matrix[item.theme]) matrix[item.theme] = {};
+    matrix[item.theme][item.dimension] = item.count;
+  }
+  const themeTotals: Record<string, number> = {};
+  for (const t of Object.keys(matrix)) themeTotals[t] = dims.reduce((s, d) => s + (matrix[t]?.[d] || 0), 0);
+  const matrixTotal = Object.values(themeTotals).reduce((s, v) => s + v, 0) || 1;
+  const segColors: Record<string, string> = {
+    "Operating Model": "#6366f1",
+    "Service Portfolio": "#10b981",
+    "Values": "#f59e0b",
+    "Strategy": "#06b6d4",
+    "AI Readiness": "#a855f7",
+  };
+
+  const lines = interpretation.text.split(/\n+/);
+  const blocks: string[] = [];
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    const sectionMatch = line.match(/^\[\s*SECTION\s*:\s*(.+?)\s*\]$/i);
+    if (sectionMatch) {
+      blocks.push(`<h3 style="color:#c4b5fd;font-size:13px;font-weight:700;margin:20px 0 10px;padding-bottom:6px;border-bottom:1px solid rgba(167,139,250,0.15)">${sectionMatch[1]}</h3>`);
+      continue;
+    }
+    if (/^\[\s*THEME\s*:/i.test(line)) {
+      const theme = line.match(/\[\s*THEME\s*:\s*([^\]]+?)\s*\]/i)?.[1] || '';
+      const total = line.match(/\[\s*TOTAL\s*:\s*([^\]]+?)\s*\]/i)?.[1];
+      const shape = line.match(/\[\s*SHAPE\s*:\s*([^\]]+?)\s*\]/i)?.[1];
+      const totalNum = total ? Number(total) : NaN;
+      const totalPct = Number.isFinite(totalNum) && matrixTotal > 0 ? Math.round((totalNum / matrixTotal) * 1000) / 10 : null;
+      const totalChip = total
+        ? `<span title="${totalPct !== null ? `${totalPct}% of total matrix density (${matrixTotal})` : ''}" style="margin-left:8px;padding:2px 8px;border-radius:4px;background:rgba(15,23,42,0.6);border:1px solid rgba(51,65,85,0.6);color:#cbd5e1;font-family:ui-monospace,monospace;font-size:11px">total ${total}${totalPct !== null ? ` <span style="color:#64748b">(${totalPct}%)</span>` : ''}</span>`
+        : '';
+      const shapeChip = shape
+        ? `<span style="margin-left:8px;padding:2px 8px;border-radius:4px;background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.3);color:#c4b5fd;font-family:ui-monospace,monospace;font-size:9px;text-transform:uppercase;letter-spacing:0.05em">${shape}</span>`
+        : '';
+      const themeRow = matrix[theme];
+      const rowTotal = themeTotals[theme] || 0;
+      let bar = '';
+      if (themeRow && rowTotal > 0) {
+        const segments = dims.map(d => {
+          const v = themeRow[d] || 0;
+          const w = (v / rowTotal) * 100;
+          if (w <= 0) return '';
+          const pct = Math.round(w * 10) / 10;
+          return `<div title="${d}: density ${v} (${pct}% of row)" style="width:${w}%;background:${segColors[d]};height:100%"></div>`;
+        }).join('');
+        const legend = dims.map(d => {
+          const v = themeRow[d] || 0;
+          if (v <= 0) return '';
+          const pct = Math.round((v / rowTotal) * 1000) / 10;
+          return `<span style="margin-right:14px;font-size:9px;color:#94a3b8"><span style="display:inline-block;width:6px;height:6px;background:${segColors[d]};border-radius:1px;margin-right:4px;vertical-align:middle"></span>${d} ${pct}%</span>`;
+        }).join('');
+        bar = `<div style="margin-top:6px;max-width:480px"><div style="height:8px;display:flex;background:rgba(15,23,42,0.6);border:1px solid rgba(51,65,85,0.6);border-radius:3px;overflow:hidden">${segments}</div><div style="margin-top:4px">${legend}</div></div>`;
+      }
+      blocks.push(`<div style="margin:14px 0 6px"><div><strong style="color:#e0e7ff;font-size:12px">${theme}</strong>${totalChip}${shapeChip}</div>${bar}</div>`);
+      continue;
+    }
+    if (/^\[\s*CELL\s*:/i.test(line)) {
+      const cellRaw = line.match(/\[\s*CELL\s*:\s*([^\]]+?)\s*\]/i)?.[1] || '';
+      const density = line.match(/\[\s*DENSITY\s*:\s*([^\]]+?)\s*\]/i)?.[1];
+      const rank = line.match(/\[\s*RANK\s*:\s*([^\]]+?)\s*\]/i)?.[1];
+      const [theme, dimension] = cellRaw.split(/\s+[x×]\s+/i);
+      const densityNum = density ? Number(density) : NaN;
+      const rowTotal = theme ? (themeTotals[theme] || 0) : 0;
+      const rowPct = Number.isFinite(densityNum) && rowTotal > 0 ? Math.round((densityNum / rowTotal) * 1000) / 10 : null;
+      const rankChip = rank ? `<span style="margin-right:8px;padding:1px 6px;border-radius:3px;background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.3);color:#fde68a;font-family:ui-monospace,monospace;font-size:9px">#${rank}</span>` : '';
+      const densityChip = density ? `<span title="${rowPct !== null ? `${rowPct}% of ${theme} row total (${rowTotal})` : ''}" style="margin-left:8px;padding:2px 8px;border-radius:4px;background:rgba(15,23,42,0.6);border:1px solid rgba(51,65,85,0.6);color:#cbd5e1;font-family:ui-monospace,monospace;font-size:11px">density ${density}${rowPct !== null ? ` <span style="color:#64748b">(${rowPct}% of row)</span>` : ''}</span>` : '';
+      blocks.push(`<div style="margin:14px 0 6px;font-size:12px">${rankChip}<strong style="color:#e0e7ff">${theme || cellRaw}</strong>${dimension ? ` <span style="color:#64748b">x</span> <strong style="color:#6ee7b7">${dimension}</strong>` : ''}${densityChip}</div>`);
+      continue;
+    }
+    blocks.push(`<p style="font-size:12px;line-height:1.7;color:rgba(203,213,225,0.9);margin:8px 0">${line}</p>`);
+  }
+
+  const meta = (interpretation.sources_used?.length || interpretation.model)
+    ? `<div style="margin-top:14px;padding-top:10px;border-top:1px solid rgba(167,139,250,0.15);font-size:9px;color:#64748b;display:flex;flex-wrap:wrap;gap:14px">
+        ${interpretation.sources_used?.length > 0 ? `<span>Sources: ${interpretation.sources_used.join(' · ')}</span>` : ''}
+        ${interpretation.numeric_check ? `<span>Numeric check: ${interpretation.numeric_check.passed ? 'passed' : `${(interpretation.numeric_check.fabricated || []).length} flagged`}</span>` : ''}
+        ${interpretation.model ? `<span>Model: ${interpretation.model}</span>` : ''}
+      </div>` : '';
+  return blocks.join('') + meta;
+};
+
+// C1 — Concentration vs Volume table for HTML export. Static replacement for the
+// in-app Recharts scatter; same data, same per-theme shape classification.
+const buildC1ConcentrationHtml = (crossImpact: any[]): string => {
+  if (!crossImpact?.length) return '';
+  const dims = ["Operating Model", "Service Portfolio", "Values", "Strategy", "AI Readiness"];
+  const themes = [...new Set(crossImpact.map((c: any) => c.theme))] as string[];
+  const matrix: Record<string, Record<string, number>> = {};
+  for (const item of crossImpact) { if (!matrix[item.theme]) matrix[item.theme] = {}; matrix[item.theme][item.dimension] = item.count; }
+  const SHAPE_COLORS: Record<string, string> = { CONCENTRATED: '#6366f1', BIMODAL: '#06b6d4', DIFFUSE: '#f59e0b', MIXED: '#64748b', SMALL_N: '#475569' };
+  const rows = themes.map(theme => {
+    const vals = dims.map(d => matrix[theme]?.[d] || 0);
+    const total = vals.reduce((s, v) => s + v, 0);
+    const sorted = [...vals].sort((a, b) => b - a);
+    const topShare = total > 0 ? sorted[0] / total : 0;
+    const top2Share = total > 0 ? (sorted[0] + sorted[1]) / total : 0;
+    const dimCount = vals.filter(v => v > 0).length;
+    const topDimIdx = vals.indexOf(sorted[0]);
+    const topDim = dims[topDimIdx] || '';
+    let shape = 'MIXED';
+    if (total < 8) shape = 'SMALL_N';
+    else if (topShare >= 0.35 && top2Share >= 0.60) shape = 'CONCENTRATED';
+    else if (top2Share >= 0.60) shape = 'BIMODAL';
+    else if (topShare < 0.30 && top2Share < 0.55) shape = 'DIFFUSE';
+    return { theme, total, topShare: Math.round(topShare * 1000) / 10, dimCount, topDim, shape };
+  }).sort((a, b) => b.total - a.total);
+  const tableRows = rows.map(r => {
+    const color = SHAPE_COLORS[r.shape];
+    return `<tr><td style="text-align:left;color:#cbd5e1">${r.theme}</td><td style="text-align:right;font-family:ui-monospace,monospace">${r.total}</td><td style="text-align:right;font-family:ui-monospace,monospace">${r.topShare}%</td><td style="text-align:left;color:#6ee7b7">${r.topDim}</td><td style="text-align:right;font-family:ui-monospace,monospace">${r.dimCount} of 5</td><td style="text-align:center"><span style="padding:1px 8px;border-radius:3px;background:${color}33;border:1px solid ${color}66;color:${color};font-family:ui-monospace,monospace;font-size:10px">${r.shape}</span></td></tr>`;
+  }).join('');
+  return `<p style="font-size:10px;color:#64748b;margin-bottom:10px">X = total density (volume of pressure). Top-share % = share absorbed by the top dimension (concentration). Dimensions touched = number of dimensions with non-zero density. Shape labels follow the same thresholds the interpretation uses (CONCENTRATED if top dim ≥ 35% and top two ≥ 60%; BIMODAL if top two ≥ 60% but top single < 35%; DIFFUSE if top dim < 30% and top two < 55%; SMALL_N when total density < 8).</p>
+  <table><thead><tr><th style="text-align:left">Theme</th><th style="text-align:right">Total</th><th style="text-align:right">Top-dim share</th><th style="text-align:left">Top dim</th><th style="text-align:right">Dimensions touched</th><th style="text-align:center">Shape</th></tr></thead><tbody>${tableRows}</tbody></table>`;
+};
+
+// C3 — Theme Momentum bars (reads observatoryData.theme_momentum).
+const buildThemeMomentumHtml = (themeMomentum: any[]): string => {
+  if (!themeMomentum?.length) return '';
+  const top = themeMomentum.slice(0, 10);
+  const rows = top.map((row: any) => {
+    const tot = row.total || 1;
+    const aPct = ((row.accelerating || 0) / tot) * 100;
+    const sPct = ((row.stable || 0) / tot) * 100;
+    const dPct = ((row.decelerating || 0) / tot) * 100;
+    return `<tr>
+      <td style="text-align:left;color:#cbd5e1;font-size:11px;width:180px">${row.theme}</td>
+      <td><div style="height:12px;display:flex;background:rgba(15,23,42,0.6);border:1px solid rgba(51,65,85,0.6);border-radius:3px;overflow:hidden">
+        ${aPct > 0 ? `<div title="Accelerating: ${row.accelerating}" style="width:${aPct}%;background:#10b981"></div>` : ''}
+        ${sPct > 0 ? `<div title="Stable: ${row.stable}" style="width:${sPct}%;background:#64748b"></div>` : ''}
+        ${dPct > 0 ? `<div title="Decelerating: ${row.decelerating}" style="width:${dPct}%;background:#f43f5e"></div>` : ''}
+      </div></td>
+      <td style="text-align:right;font-family:ui-monospace,monospace;color:#64748b;width:60px">${row.total}</td>
+    </tr>`;
+  }).join('');
+  return `<p style="font-size:10px;color:#64748b;margin-bottom:10px">Accelerating vs. stable vs. decelerating signals per theme, drawn from the Foresight Knowledge Base.</p>
+  <table style="width:100%"><tbody>${rows}</tbody></table>
+  <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:14px;font-size:10px;color:#94a3b8">
+    <span><span style="display:inline-block;width:8px;height:8px;background:#10b981;border-radius:2px;margin-right:5px;vertical-align:middle"></span>Accelerating</span>
+    <span><span style="display:inline-block;width:8px;height:8px;background:#64748b;border-radius:2px;margin-right:5px;vertical-align:middle"></span>Stable</span>
+    <span><span style="display:inline-block;width:8px;height:8px;background:#f43f5e;border-radius:2px;margin-right:5px;vertical-align:middle"></span>Decelerating</span>
+  </div>`;
+};
+
+const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, crossImpactInterpretationData?: any) => {
   if (!data) return;
   const date = new Date().toLocaleDateString('en-FI', { day: 'numeric', month: 'long', year: 'numeric' });
   let content = '';
@@ -417,10 +631,10 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any) => {
   }
 
   if (tabName === 'future') {
-    // Pareto chart
+    // 1. Pareto chart
     content += `<div class="section"><h2>Top ${(data.top_foresights || []).length} Foresight Themes (Pareto)</h2>${buildSvgPareto(data.top_foresights || [])}</div>`;
 
-    // Theme descriptions
+    // 2. Theme descriptions
     if (data.top_foresights?.length) {
       const descs = data.top_foresights.map((f: any) => {
         const col = CATEGORY_COLORS[f.category] || '#6366f1';
@@ -430,25 +644,38 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any) => {
       content += `<div class="section"><h2>Theme Descriptions</h2>${descs}</div>`;
     }
 
-    // Cross-impact matrix
+    // 3. Cross-Impact Matrix (with subtitle, rank chips, legend, dim descriptions)
     if (data.cross_impact?.length) {
       content += `<div class="section"><h2>Theme × Dimension Cross-Impact Matrix</h2>${buildCrossImpactHtml(data.cross_impact)}</div>`;
     }
 
-    // Industry radar as table (radar charts too complex for SVG)
-    if (data.industry_radar?.length) {
-      const cats = Object.keys(CATEGORY_SHORT);
-      const radarTable = `<table><thead><tr><th>Domain</th>${cats.map(c => `<th style="font-size:10px">${CATEGORY_SHORT[c]}</th>`).join('')}<th>Signals</th></tr></thead><tbody>${
-        data.industry_radar.slice(0, 8).map((ir: any) => `<tr><td style="color:#cbd5e1;font-weight:600">${ir.domain}</td>${cats.map(c => {
-          const v = ir.normalized_scores?.[c] || 0;
-          const op = v > 0 ? (0.15 + (v / 100) * 0.6) : 0;
-          return `<td style="text-align:center;font-family:monospace;font-size:11px;background:rgba(6,182,212,${op})">${v > 0 ? v : '–'}</td>`;
-        }).join('')}<td style="text-align:center;font-family:monospace;font-size:11px">${ir.total_signals}</td></tr>`
-      ).join('')}</tbody></table>`;
-      content += `<div class="section"><h2>Industry Foresight Radar</h2>${radarTable}</div>`;
+    // 4. Cross-Impact Matrix Interpretation — placed directly under the matrix
+    //    so the export mirrors the new in-app order.
+    if (crossImpactInterpretationData?.text && data.cross_impact?.length) {
+      const generatedAt = crossImpactInterpretationData.generated_at
+        ? new Date(crossImpactInterpretationData.generated_at).toLocaleDateString('en-FI', { day: 'numeric', month: 'short', year: 'numeric' })
+        : '';
+      content += `<div class="section" style="border-color:rgba(99,102,241,0.3)">
+        <h2 style="color:#a5b4fc">Cross-Impact Matrix Interpretation</h2>
+        <p style="font-size:10px;color:#64748b;margin-bottom:14px">Where structural pressure consolidates across the Theme x Dimension matrix${generatedAt ? ` — ${generatedAt}` : ''}</p>
+        ${buildCrossImpactInterpretationHtml(crossImpactInterpretationData, data.cross_impact)}
+      </div>`;
     }
 
-    // Finnish Economy Force Map essay
+    // 5. C1 — Concentration vs Volume table (replaces the in-app scatter)
+    if (data.cross_impact?.length) {
+      content += `<div class="section"><h2 style="color:#a5b4fc">Concentration vs Volume — Top 15 Themes</h2>${buildC1ConcentrationHtml(data.cross_impact)}</div>`;
+    }
+
+    // 6. C2 (Domain x Dimension) is intentionally hidden in the app — also
+    //    omitted from the export to keep them in sync.
+
+    // 7. C3 — Theme Momentum bars (only present when Observatory has been generated)
+    if (observatoryData?.theme_momentum?.length) {
+      content += `<div class="section"><h2 style="color:#67e8f9">Theme Momentum — Top 10 themes by signal volume</h2>${buildThemeMomentumHtml(observatoryData.theme_momentum)}</div>`;
+    }
+
+    // 8. Finnish Economy Force Map (last)
     if (observatoryData?.finland_analysis?.text) {
       const mdToHtml = (t: string) => t.split(/\n\n+/).map(b => {
         const s = b.trim(); if (!s) return '';
@@ -1152,245 +1379,9 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
         </div>
       )}
 
-      {/* C1 — Concentration vs Volume scatter (top-15 themes) */}
-      {(ciThemes as string[]).length > 0 && ScatterChart && (() => {
-        const SHAPE_COLORS: Record<string, string> = {
-          CONCENTRATED: '#6366f1',
-          BIMODAL: '#06b6d4',
-          DIFFUSE: '#f59e0b',
-          MIXED: '#64748b',
-          SMALL_N: '#475569',
-        };
-        const points = (ciThemes as string[]).map((theme: string) => {
-          const dims = ciDimensions.map(d => ciMatrix[theme]?.[d] || 0);
-          const total = ciThemeTotals[theme] || 0;
-          const sortedDesc = [...dims].sort((a, b) => b - a);
-          const topShare = total > 0 ? sortedDesc[0] / total : 0;
-          const top2Share = total > 0 ? (sortedDesc[0] + sortedDesc[1]) / total : 0;
-          const dimCount = dims.filter(v => v > 0).length;
-          const topDimIdx = dims.indexOf(sortedDesc[0]);
-          const topDim = ciDimensions[topDimIdx] || '';
-          let shape = 'MIXED';
-          if (total < 8) shape = 'SMALL_N';
-          else if (topShare >= 0.35 && top2Share >= 0.60) shape = 'CONCENTRATED';
-          else if (top2Share >= 0.60) shape = 'BIMODAL';
-          else if (topShare < 0.30 && top2Share < 0.55) shape = 'DIFFUSE';
-          return {
-            theme, total,
-            topSharePct: Math.round(topShare * 1000) / 10,
-            dimCount, topDim, shape,
-          };
-        });
-        const grouped: Record<string, any[]> = {};
-        for (const p of points) {
-          (grouped[p.shape] ||= []).push(p);
-        }
-        return (
-          <div className="bg-black/20 border border-white/10 rounded-lg p-4">
-            <h4 className="text-[10px] font-bold text-indigo-300 uppercase tracking-wide mb-1">Concentration vs Volume — Top 15 Themes</h4>
-            <p className="text-[10px] text-slate-500 mb-3">X = total density (volume of pressure). Y = share absorbed by the top dimension (concentration). Bubble size = number of dimensions touched.</p>
-            <ResponsiveContainer width="100%" height={300}>
-              <ScatterChart margin={{ top: 10, right: 20, bottom: 30, left: 10 }}>
-                <CartesianGrid stroke="#334155" strokeDasharray="3 3" />
-                <XAxis type="number" dataKey="total" name="total density" tick={{ fill: '#94a3b8', fontSize: 10 }} label={{ value: 'Total density', position: 'insideBottom', offset: -10, fill: '#94a3b8', fontSize: 10 }} />
-                <YAxis type="number" dataKey="topSharePct" name="top-dim share %" domain={[0, 100]} tick={{ fill: '#94a3b8', fontSize: 10 }} unit="%" label={{ value: 'Top-dimension share', angle: -90, position: 'insideLeft', fill: '#94a3b8', fontSize: 10 }} />
-                {ZAxis && <ZAxis type="number" dataKey="dimCount" range={[40, 220]} name="dimensions touched" />}
-                <Tooltip
-                  cursor={{ strokeDasharray: '3 3', stroke: '#475569' }}
-                  contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11, color: '#e2e8f0' }} labelStyle={{ color: '#f1f5f9', fontWeight: 600 }} itemStyle={{ color: '#e2e8f0' }}
-                  content={({ active, payload }: any) => {
-                    if (!active || !payload?.[0]) return null;
-                    const p = payload[0].payload;
-                    return (
-                      <div className="bg-slate-900 border border-slate-600 rounded-lg p-2.5 text-[10px] text-slate-300 leading-relaxed">
-                        <div className="font-bold text-indigo-200">{p.theme}</div>
-                        <div>total density <span className="text-white font-mono">{p.total}</span></div>
-                        <div>top dim: <span className="text-emerald-300">{p.topDim}</span> ({p.topSharePct}%)</div>
-                        <div>dimensions touched: <span className="text-white font-mono">{p.dimCount}</span> of 5</div>
-                        <div className="mt-1 inline-block px-1.5 py-0.5 rounded font-mono text-[9px]" style={{ backgroundColor: SHAPE_COLORS[p.shape] + '33', border: `1px solid ${SHAPE_COLORS[p.shape]}66`, color: SHAPE_COLORS[p.shape] }}>
-                          {p.shape}
-                        </div>
-                      </div>
-                    );
-                  }}
-                />
-                {Object.entries(grouped).map(([shape, data]) => (
-                  <Scatter key={shape} name={shape} data={data} fill={SHAPE_COLORS[shape] || '#64748b'} fillOpacity={0.75} stroke={SHAPE_COLORS[shape] || '#64748b'} />
-                ))}
-                <Legend wrapperStyle={{ fontSize: 9, color: '#94a3b8', paddingTop: 8 }} />
-              </ScatterChart>
-            </ResponsiveContainer>
-          </div>
-        );
-      })()}
-
-      {/* C2 — Domain x Dimension heatmap */}
-      {(data.domain_dimension_matrix?.length || 0) > 0 && (() => {
-        const ddRaw = data.domain_dimension_matrix as Array<{ domain: string; dimension: string; count: number }>;
-        const ddDomains = [...new Set(ddRaw.map(c => c.domain))] as string[];
-        const ddMatrix: Record<string, Record<string, number>> = {};
-        for (const c of ddRaw) {
-          if (!ddMatrix[c.domain]) ddMatrix[c.domain] = {};
-          ddMatrix[c.domain][c.dimension] = c.count;
-        }
-        const ddMax = Math.max(...ddRaw.map(c => c.count), 1);
-        const ddDomainTotals: Record<string, number> = {};
-        for (const dom of ddDomains) {
-          ddDomainTotals[dom] = ciDimensions.reduce((s, d) => s + (ddMatrix[dom]?.[d] || 0), 0);
-        }
-        return (
-          <div className="bg-black/20 border border-white/10 rounded-lg p-4 overflow-visible">
-            <h4 className="text-[10px] font-bold text-emerald-300 uppercase tracking-wide mb-1">Domain x Dimension — Where pressure lands by industry</h4>
-            <p className="text-[10px] text-slate-500 mb-3">Same evidence base as the Theme x Dimension matrix above, grouped by industry domain instead of foresight theme.</p>
-            <table className="w-full text-[10px]">
-              <thead>
-                <tr>
-                  <th className="text-left text-slate-400 p-1 font-medium">Domain</th>
-                  {ciDimensions.map(d => (
-                    <th key={d} className="text-center text-slate-400 p-1 font-medium whitespace-nowrap">{d}</th>
-                  ))}
-                  <th className="text-center text-slate-500 p-1 font-medium">total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ddDomains.map(dom => (
-                  <tr key={dom} className="border-t border-white/5">
-                    <td className="p-1 text-slate-300 whitespace-nowrap">{dom}</td>
-                    {ciDimensions.map(d => {
-                      const v = ddMatrix[dom]?.[d] || 0;
-                      const intensity = v / ddMax;
-                      const bg = v > 0 ? `rgba(16, 185, 129, ${0.15 + intensity * 0.6})` : 'transparent';
-                      return (
-                        <td
-                          key={d}
-                          className="p-1 text-center font-mono text-slate-200"
-                          style={{ backgroundColor: bg }}
-                          title={v > 0 ? `${dom} x ${d}: density ${v}` : undefined}
-                        >
-                          {v > 0 ? v : '-'}
-                        </td>
-                      );
-                    })}
-                    <td className="p-1 text-center font-mono text-slate-500">{ddDomainTotals[dom]}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        );
-      })()}
-
-      {/* C3 — Theme Momentum bars */}
-      {(observatoryData?.theme_momentum?.length || 0) > 0 && (() => {
-        const tm = observatoryData.theme_momentum as Array<{ theme: string; accelerating: number; stable: number; decelerating: number; total: number }>;
-        const top = tm.slice(0, 10);
-        return (
-          <div className="bg-black/20 border border-white/10 rounded-lg p-4">
-            <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-1">Theme Momentum — Top 10 themes by signal volume</h4>
-            <p className="text-[10px] text-slate-500 mb-3">Accelerating vs. stable vs. decelerating signals per theme, drawn from the Foresight Knowledge Base.</p>
-            <div className="space-y-2">
-              {top.map(row => {
-                const tot = row.total || 1;
-                const aPct = (row.accelerating / tot) * 100;
-                const sPct = (row.stable / tot) * 100;
-                const dPct = (row.decelerating / tot) * 100;
-                return (
-                  <div key={row.theme} className="grid grid-cols-[160px_1fr_64px] items-center gap-3 text-[10px]">
-                    <div className="text-slate-300 truncate" title={row.theme}>{row.theme}</div>
-                    <div className="h-3 flex rounded overflow-hidden bg-slate-800/60 border border-slate-700">
-                      {aPct > 0 && <div style={{ width: `${aPct}%`, backgroundColor: '#10b981' }} title={`Accelerating: ${row.accelerating}`} />}
-                      {sPct > 0 && <div style={{ width: `${sPct}%`, backgroundColor: '#64748b' }} title={`Stable: ${row.stable}`} />}
-                      {dPct > 0 && <div style={{ width: `${dPct}%`, backgroundColor: '#f43f5e' }} title={`Decelerating: ${row.decelerating}`} />}
-                    </div>
-                    <div className="text-right font-mono text-slate-500">{row.total}</div>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="mt-3 flex flex-wrap items-center gap-3 text-[9px] text-slate-500">
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-2 h-2 rounded" style={{ backgroundColor: '#10b981' }}></span> Accelerating
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-2 h-2 rounded" style={{ backgroundColor: '#64748b' }}></span> Stable
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-2 h-2 rounded" style={{ backgroundColor: '#f43f5e' }}></span> Decelerating
-              </span>
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* FINNISH ECONOMY FORCE MAP — from Observatory */}
-      {observatoryData?.finland_analysis?.text && (
-        <div className="mt-6 bg-gradient-to-br from-violet-950/30 to-slate-900/50 rounded-xl border border-violet-500/20 overflow-hidden">
-          <div className="px-5 py-4 border-b border-violet-500/10 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-violet-500/20 flex items-center justify-center">
-                <Globe size={16} className="text-violet-400" />
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-violet-200">Finnish Economy Force Map</h3>
-                <p className="text-[10px] text-slate-500 mt-0.5">Strategic Foresight Observatory — How global forces reshape Finnish business</p>
-              </div>
-            </div>
-            {observatoryData.generated_at && (
-              <span className="text-[9px] font-mono text-slate-600">
-                {new Date(observatoryData.generated_at).toLocaleDateString('en-FI', { day: 'numeric', month: 'short', year: 'numeric' })}
-              </span>
-            )}
-          </div>
-          <div className="px-5 py-4">
-            {observatoryData.finland_analysis.text.split(/\n+/).map((part: string, i: number) => {
-              const trimmed = part.trim();
-              if (!trimmed) return null;
-              if (trimmed === '---') return <hr key={i} className="border-violet-500/10 my-4" />;
-              if (trimmed.startsWith("## ")) {
-                return <h4 key={i} className="text-sm font-bold text-violet-200 mt-6 mb-3 border-b border-violet-500/10 pb-1.5">{trimmed.replace(/^##\s*/, "")}</h4>;
-              }
-              if (trimmed.startsWith("# ")) {
-                return <h3 key={i} className="text-base font-bold text-violet-100 mt-6 mb-3">{trimmed.replace(/^#\s*/, "")}</h3>;
-              }
-              // Process markdown bold markers and auto-bold first sentence
-              const processBold = (text: string) => {
-                return text.split(/(\*\*[^*]+\*\*)/).map((seg: string, j: number) => {
-                  if (seg.startsWith("**") && seg.endsWith("**")) {
-                    return <strong key={j} className="text-violet-200 font-semibold">{seg.slice(2, -2)}</strong>;
-                  }
-                  return <span key={j}>{seg}</span>;
-                });
-              };
-              // Auto-bold first sentence if no markdown bold exists
-              const hasBold = /\*\*[^*]+\*\*/.test(trimmed);
-              if (!hasBold) {
-                const dotIdx = trimmed.indexOf('. ');
-                if (dotIdx > 10 && dotIdx < 150) {
-                  return (
-                    <p key={i} className="text-[12px] text-slate-300/90 leading-relaxed mb-4">
-                      <strong className="text-violet-200 font-semibold">{trimmed.slice(0, dotIdx + 1)}</strong>{' '}
-                      {trimmed.slice(dotIdx + 2)}
-                    </p>
-                  );
-                }
-              }
-              return <p key={i} className="text-[12px] text-slate-300/90 leading-relaxed mb-4">{processBold(trimmed)}</p>;
-            })}
-          </div>
-          {/* Metadata footer */}
-          <div className="px-5 py-2.5 border-t border-violet-500/10 flex items-center gap-4 text-[9px] text-slate-600">
-            {observatoryData.finland_analysis.domains_analyzed && (
-              <span>{observatoryData.finland_analysis.domains_analyzed} domains analyzed</span>
-            )}
-            {observatoryData.finland_analysis.favi_distribution && (
-              <span>FAVI: {Object.entries(observatoryData.finland_analysis.favi_distribution).map(([k, v]: [string, any]) => `${k}: ${v}`).join(' · ')}</span>
-            )}
-            {observatoryData.model && <span>Model: {observatoryData.model}</span>}
-          </div>
-        </div>
-      )}
-
-      {/* CROSS-IMPACT MATRIX INTERPRETATION — appears below Finnish Economy Force Map */}
+      {/* CROSS-IMPACT MATRIX INTERPRETATION — placed directly under the matrix
+          since it interprets the matrix above. Empty-state appears for admins
+          when no interpretation has been generated yet. */}
       {!crossImpactInterpretationData?.text && onRefreshCrossImpactInterpretation && (
         <div className="mt-6 bg-black/20 border border-indigo-500/20 rounded-xl px-5 py-4 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -1579,6 +1570,247 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
           </div>
         );
       })()}
+
+      {/* C1 — Concentration vs Volume scatter (top-15 themes) */}
+      {(ciThemes as string[]).length > 0 && ScatterChart && (() => {
+        const SHAPE_COLORS: Record<string, string> = {
+          CONCENTRATED: '#6366f1',
+          BIMODAL: '#06b6d4',
+          DIFFUSE: '#f59e0b',
+          MIXED: '#64748b',
+          SMALL_N: '#475569',
+        };
+        const points = (ciThemes as string[]).map((theme: string) => {
+          const dims = ciDimensions.map(d => ciMatrix[theme]?.[d] || 0);
+          const total = ciThemeTotals[theme] || 0;
+          const sortedDesc = [...dims].sort((a, b) => b - a);
+          const topShare = total > 0 ? sortedDesc[0] / total : 0;
+          const top2Share = total > 0 ? (sortedDesc[0] + sortedDesc[1]) / total : 0;
+          const dimCount = dims.filter(v => v > 0).length;
+          const topDimIdx = dims.indexOf(sortedDesc[0]);
+          const topDim = ciDimensions[topDimIdx] || '';
+          let shape = 'MIXED';
+          if (total < 8) shape = 'SMALL_N';
+          else if (topShare >= 0.35 && top2Share >= 0.60) shape = 'CONCENTRATED';
+          else if (top2Share >= 0.60) shape = 'BIMODAL';
+          else if (topShare < 0.30 && top2Share < 0.55) shape = 'DIFFUSE';
+          return {
+            theme, total,
+            topSharePct: Math.round(topShare * 1000) / 10,
+            dimCount, topDim, shape,
+          };
+        });
+        const grouped: Record<string, any[]> = {};
+        for (const p of points) {
+          (grouped[p.shape] ||= []).push(p);
+        }
+        return (
+          <div className="bg-black/20 border border-white/10 rounded-lg p-4">
+            <h4 className="text-[10px] font-bold text-indigo-300 uppercase tracking-wide mb-1">Concentration vs Volume — Top 15 Themes</h4>
+            <p className="text-[10px] text-slate-500 mb-3">X = total density (volume of pressure). Y = share absorbed by the top dimension (concentration). Bubble size = number of dimensions touched.</p>
+            <ResponsiveContainer width="100%" height={300}>
+              <ScatterChart margin={{ top: 10, right: 20, bottom: 30, left: 10 }}>
+                <CartesianGrid stroke="#334155" strokeDasharray="3 3" />
+                <XAxis type="number" dataKey="total" name="total density" tick={{ fill: '#94a3b8', fontSize: 10 }} label={{ value: 'Total density', position: 'insideBottom', offset: -10, fill: '#94a3b8', fontSize: 10 }} />
+                <YAxis type="number" dataKey="topSharePct" name="top-dim share %" domain={[0, 100]} tick={{ fill: '#94a3b8', fontSize: 10 }} unit="%" label={{ value: 'Top-dimension share', angle: -90, position: 'insideLeft', fill: '#94a3b8', fontSize: 10 }} />
+                {ZAxis && <ZAxis type="number" dataKey="dimCount" range={[40, 220]} name="dimensions touched" />}
+                <Tooltip
+                  cursor={{ strokeDasharray: '3 3', stroke: '#475569' }}
+                  contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11, color: '#e2e8f0' }} labelStyle={{ color: '#f1f5f9', fontWeight: 600 }} itemStyle={{ color: '#e2e8f0' }}
+                  content={({ active, payload }: any) => {
+                    if (!active || !payload?.[0]) return null;
+                    const p = payload[0].payload;
+                    return (
+                      <div className="bg-slate-900 border border-slate-600 rounded-lg p-2.5 text-[10px] text-slate-300 leading-relaxed">
+                        <div className="font-bold text-indigo-200">{p.theme}</div>
+                        <div>total density <span className="text-white font-mono">{p.total}</span></div>
+                        <div>top dim: <span className="text-emerald-300">{p.topDim}</span> ({p.topSharePct}%)</div>
+                        <div>dimensions touched: <span className="text-white font-mono">{p.dimCount}</span> of 5</div>
+                        <div className="mt-1 inline-block px-1.5 py-0.5 rounded font-mono text-[9px]" style={{ backgroundColor: SHAPE_COLORS[p.shape] + '33', border: `1px solid ${SHAPE_COLORS[p.shape]}66`, color: SHAPE_COLORS[p.shape] }}>
+                          {p.shape}
+                        </div>
+                      </div>
+                    );
+                  }}
+                />
+                {Object.entries(grouped).map(([shape, data]) => (
+                  <Scatter key={shape} name={shape} data={data} fill={SHAPE_COLORS[shape] || '#64748b'} fillOpacity={0.75} stroke={SHAPE_COLORS[shape] || '#64748b'} />
+                ))}
+                <Legend wrapperStyle={{ fontSize: 9, color: '#94a3b8', paddingTop: 8 }} />
+              </ScatterChart>
+            </ResponsiveContainer>
+          </div>
+        );
+      })()}
+
+      {/* C2 — Domain x Dimension heatmap. Currently hidden: the Theme x Dimension
+          matrix above offers stronger signal, and a domain-level lens is on hold
+          until we revisit it. Code retained so we can re-enable without refactor. */}
+      {false && (data.domain_dimension_matrix?.length || 0) > 0 && (() => {
+        const ddRaw = data.domain_dimension_matrix as Array<{ domain: string; dimension: string; count: number }>;
+        const ddDomains = [...new Set(ddRaw.map(c => c.domain))] as string[];
+        const ddMatrix: Record<string, Record<string, number>> = {};
+        for (const c of ddRaw) {
+          if (!ddMatrix[c.domain]) ddMatrix[c.domain] = {};
+          ddMatrix[c.domain][c.dimension] = c.count;
+        }
+        const ddMax = Math.max(...ddRaw.map(c => c.count), 1);
+        const ddDomainTotals: Record<string, number> = {};
+        for (const dom of ddDomains) {
+          ddDomainTotals[dom] = ciDimensions.reduce((s, d) => s + (ddMatrix[dom]?.[d] || 0), 0);
+        }
+        return (
+          <div className="bg-black/20 border border-white/10 rounded-lg p-4 overflow-visible">
+            <h4 className="text-[10px] font-bold text-emerald-300 uppercase tracking-wide mb-1">Domain x Dimension — Where pressure lands by industry</h4>
+            <p className="text-[10px] text-slate-500 mb-3">Same evidence base as the Theme x Dimension matrix above, grouped by industry domain instead of foresight theme.</p>
+            <table className="w-full text-[10px]">
+              <thead>
+                <tr>
+                  <th className="text-left text-slate-400 p-1 font-medium">Domain</th>
+                  {ciDimensions.map(d => (
+                    <th key={d} className="text-center text-slate-400 p-1 font-medium whitespace-nowrap">{d}</th>
+                  ))}
+                  <th className="text-center text-slate-500 p-1 font-medium">total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ddDomains.map(dom => (
+                  <tr key={dom} className="border-t border-white/5">
+                    <td className="p-1 text-slate-300 whitespace-nowrap">{dom}</td>
+                    {ciDimensions.map(d => {
+                      const v = ddMatrix[dom]?.[d] || 0;
+                      const intensity = v / ddMax;
+                      const bg = v > 0 ? `rgba(16, 185, 129, ${0.15 + intensity * 0.6})` : 'transparent';
+                      return (
+                        <td
+                          key={d}
+                          className="p-1 text-center font-mono text-slate-200"
+                          style={{ backgroundColor: bg }}
+                          title={v > 0 ? `${dom} x ${d}: density ${v}` : undefined}
+                        >
+                          {v > 0 ? v : '-'}
+                        </td>
+                      );
+                    })}
+                    <td className="p-1 text-center font-mono text-slate-500">{ddDomainTotals[dom]}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      })()}
+
+      {/* C3 — Theme Momentum bars */}
+      {(observatoryData?.theme_momentum?.length || 0) > 0 && (() => {
+        const tm = observatoryData.theme_momentum as Array<{ theme: string; accelerating: number; stable: number; decelerating: number; total: number }>;
+        const top = tm.slice(0, 10);
+        return (
+          <div className="bg-black/20 border border-white/10 rounded-lg p-4">
+            <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-1">Theme Momentum — Top 10 themes by signal volume</h4>
+            <p className="text-[10px] text-slate-500 mb-3">Accelerating vs. stable vs. decelerating signals per theme, drawn from the Foresight Knowledge Base.</p>
+            <div className="space-y-2">
+              {top.map(row => {
+                const tot = row.total || 1;
+                const aPct = (row.accelerating / tot) * 100;
+                const sPct = (row.stable / tot) * 100;
+                const dPct = (row.decelerating / tot) * 100;
+                return (
+                  <div key={row.theme} className="grid grid-cols-[160px_1fr_64px] items-center gap-3 text-[10px]">
+                    <div className="text-slate-300 truncate" title={row.theme}>{row.theme}</div>
+                    <div className="h-3 flex rounded overflow-hidden bg-slate-800/60 border border-slate-700">
+                      {aPct > 0 && <div style={{ width: `${aPct}%`, backgroundColor: '#10b981' }} title={`Accelerating: ${row.accelerating}`} />}
+                      {sPct > 0 && <div style={{ width: `${sPct}%`, backgroundColor: '#64748b' }} title={`Stable: ${row.stable}`} />}
+                      {dPct > 0 && <div style={{ width: `${dPct}%`, backgroundColor: '#f43f5e' }} title={`Decelerating: ${row.decelerating}`} />}
+                    </div>
+                    <div className="text-right font-mono text-slate-500">{row.total}</div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-3 text-[9px] text-slate-500">
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-2 h-2 rounded" style={{ backgroundColor: '#10b981' }}></span> Accelerating
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-2 h-2 rounded" style={{ backgroundColor: '#64748b' }}></span> Stable
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-2 h-2 rounded" style={{ backgroundColor: '#f43f5e' }}></span> Decelerating
+              </span>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* FINNISH ECONOMY FORCE MAP — from Observatory */}
+      {observatoryData?.finland_analysis?.text && (
+        <div className="mt-6 bg-gradient-to-br from-violet-950/30 to-slate-900/50 rounded-xl border border-violet-500/20 overflow-hidden">
+          <div className="px-5 py-4 border-b border-violet-500/10 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-violet-500/20 flex items-center justify-center">
+                <Globe size={16} className="text-violet-400" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-violet-200">Finnish Economy Force Map</h3>
+                <p className="text-[10px] text-slate-500 mt-0.5">Strategic Foresight Observatory — How global forces reshape Finnish business</p>
+              </div>
+            </div>
+            {observatoryData.generated_at && (
+              <span className="text-[9px] font-mono text-slate-600">
+                {new Date(observatoryData.generated_at).toLocaleDateString('en-FI', { day: 'numeric', month: 'short', year: 'numeric' })}
+              </span>
+            )}
+          </div>
+          <div className="px-5 py-4">
+            {observatoryData.finland_analysis.text.split(/\n+/).map((part: string, i: number) => {
+              const trimmed = part.trim();
+              if (!trimmed) return null;
+              if (trimmed === '---') return <hr key={i} className="border-violet-500/10 my-4" />;
+              if (trimmed.startsWith("## ")) {
+                return <h4 key={i} className="text-sm font-bold text-violet-200 mt-6 mb-3 border-b border-violet-500/10 pb-1.5">{trimmed.replace(/^##\s*/, "")}</h4>;
+              }
+              if (trimmed.startsWith("# ")) {
+                return <h3 key={i} className="text-base font-bold text-violet-100 mt-6 mb-3">{trimmed.replace(/^#\s*/, "")}</h3>;
+              }
+              // Process markdown bold markers and auto-bold first sentence
+              const processBold = (text: string) => {
+                return text.split(/(\*\*[^*]+\*\*)/).map((seg: string, j: number) => {
+                  if (seg.startsWith("**") && seg.endsWith("**")) {
+                    return <strong key={j} className="text-violet-200 font-semibold">{seg.slice(2, -2)}</strong>;
+                  }
+                  return <span key={j}>{seg}</span>;
+                });
+              };
+              // Auto-bold first sentence if no markdown bold exists
+              const hasBold = /\*\*[^*]+\*\*/.test(trimmed);
+              if (!hasBold) {
+                const dotIdx = trimmed.indexOf('. ');
+                if (dotIdx > 10 && dotIdx < 150) {
+                  return (
+                    <p key={i} className="text-[12px] text-slate-300/90 leading-relaxed mb-4">
+                      <strong className="text-violet-200 font-semibold">{trimmed.slice(0, dotIdx + 1)}</strong>{' '}
+                      {trimmed.slice(dotIdx + 2)}
+                    </p>
+                  );
+                }
+              }
+              return <p key={i} className="text-[12px] text-slate-300/90 leading-relaxed mb-4">{processBold(trimmed)}</p>;
+            })}
+          </div>
+          {/* Metadata footer */}
+          <div className="px-5 py-2.5 border-t border-violet-500/10 flex items-center gap-4 text-[9px] text-slate-600">
+            {observatoryData.finland_analysis.domains_analyzed && (
+              <span>{observatoryData.finland_analysis.domains_analyzed} domains analyzed</span>
+            )}
+            {observatoryData.finland_analysis.favi_distribution && (
+              <span>FAVI: {Object.entries(observatoryData.finland_analysis.favi_distribution).map(([k, v]: [string, any]) => `${k}: ${v}`).join(' · ')}</span>
+            )}
+            {observatoryData.model && <span>Model: {observatoryData.model}</span>}
+          </div>
+        </div>
+      )}
+
     </div>
   );
 };
@@ -2156,7 +2388,7 @@ const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, on
           <div className="flex items-center gap-2">
             {data && ['executive', 'future', 'current', 'favi'].includes(activeTab) && (
               <button
-                onClick={() => exportMiTabHtml(activeTab, data, observatoryData)}
+                onClick={() => exportMiTabHtml(activeTab, data, observatoryData, crossImpactInterpretationData)}
                 className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 border border-white/10 transition-colors text-[9px] font-mono text-slate-400 hover:text-slate-200"
                 title="Download as HTML"
               >
