@@ -293,6 +293,51 @@ def compute_cross_impact(company_details):
     return result
 
 
+def shape_cross_impact_for_prompt(cross_impact, min_total_for_label: int = 8):
+    """Reshape the flat cross-impact cell list into a per-theme structure for the
+    Cross-Impact Matrix Interpretation prompt.
+
+    Input:  [{theme, dimension, count}, ...]  (the output of compute_cross_impact)
+    Output: [
+      {
+        theme: str,
+        total_density: int,
+        dimensions: {<each KB_DIMENSIONS key>: int},  # zero-filled
+        apply_shape_label: bool,
+      },
+      ...
+    ] sorted by total_density descending, top 15.
+
+    Notes:
+    - The model receives a "density" vocabulary; the underlying field stays "count"
+      in the rest of the codebase, but this adapter renames it at the boundary.
+    - apply_shape_label is False when total_density < min_total_for_label, which
+      tells the prompt to describe the distribution numerically without applying
+      the CONCENTRATED/BIMODAL/DIFFUSE classifier (small-N guard).
+    """
+    by_theme = defaultdict(lambda: {dim: 0 for dim in KB_DIMENSIONS})
+    totals = defaultdict(int)
+    for cell in cross_impact or []:
+        theme = cell.get("theme")
+        dim = cell.get("dimension")
+        density = cell.get("count", 0)
+        if not theme or not dim or dim not in KB_DIMENSIONS:
+            continue
+        by_theme[theme][dim] += density
+        totals[theme] += density
+
+    ranked = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)[:15]
+    return [
+        {
+            "theme": theme,
+            "total_density": total,
+            "dimensions": by_theme[theme],
+            "apply_shape_label": total >= min_total_for_label,
+        }
+        for theme, total in ranked
+    ]
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # 6. INDUSTRY FORESIGHT RADAR
 # ═══════════════════════════════════════════════════════════════════════════════

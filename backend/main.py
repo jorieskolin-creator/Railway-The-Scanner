@@ -2001,6 +2001,115 @@ async def get_observatory(response: Response):
     return data
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# CROSS-IMPACT MATRIX INTERPRETATION
+# Generates a structured prose summary of the Theme x Dimension Cross-Impact
+# Matrix. Stored in its own blob; independent of the Observatory regen path.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_cross_impact_state = {
+    "is_running": False,
+    "started_at": None,
+    "completed_at": None,
+    "current_step": None,
+    "result": None,
+}
+_cross_impact_lock = threading.Lock()
+
+
+def _run_cross_impact_generation():
+    """Background worker for cross-impact interpretation generation."""
+    try:
+        with _cross_impact_lock:
+            _cross_impact_state["current_step"] = "Loading data"
+
+        dashboard_data = storage.retrieve_latest_data("index/summary_list") or []
+        company_details = []
+        for item in dashboard_data:
+            name = item.get("companyName")
+            if not name:
+                continue
+            detail = storage.get_company_data(name)
+            if detail:
+                company_details.append(detail)
+
+        if not company_details:
+            raise ValueError("No company data available — generate market intelligence first")
+
+        from cross_impact_interpretation import generate_cross_impact_interpretation
+        from market_intelligence import THEME_CATEGORIES
+        theme_descriptions = {
+            theme: f"Foresight signals related to {theme} ({category})."
+            for theme, category in THEME_CATEGORIES.items()
+        }
+
+        with _cross_impact_lock:
+            _cross_impact_state["current_step"] = "Generating interpretation"
+
+        payload = generate_cross_impact_interpretation(
+            company_details=company_details,
+            dashboard_data=dashboard_data,
+            theme_descriptions=theme_descriptions,
+        )
+
+        with _cross_impact_lock:
+            _cross_impact_state["current_step"] = "Saving"
+
+        storage.save_cross_impact_interpretation(payload)
+
+        with _cross_impact_lock:
+            _cross_impact_state["result"] = {"status": "completed"}
+            _cross_impact_state["completed_at"] = datetime.utcnow().isoformat()
+            _cross_impact_state["is_running"] = False
+            _cross_impact_state["current_step"] = None
+    except Exception as e:
+        print(f"   [CrossImpact] Generation failed: {e}")
+        import traceback
+        traceback.print_exc()
+        with _cross_impact_lock:
+            _cross_impact_state["is_running"] = False
+            _cross_impact_state["result"] = {"error": str(e)}
+            _cross_impact_state["completed_at"] = datetime.utcnow().isoformat()
+            _cross_impact_state["current_step"] = None
+
+
+@app.post("/admin/generate-cross-impact-interpretation")
+def generate_cross_impact_endpoint(request: Request):
+    """Starts Cross-Impact Matrix Interpretation generation in a background thread.
+    Poll /admin/cross-impact-interpretation-status for progress."""
+    verify_admin(request)
+
+    with _cross_impact_lock:
+        if _cross_impact_state["is_running"]:
+            return {"status": "already_running"}
+        _cross_impact_state["is_running"] = True
+        _cross_impact_state["current_step"] = "Initializing..."
+        _cross_impact_state["started_at"] = datetime.utcnow().isoformat()
+        _cross_impact_state["completed_at"] = None
+        _cross_impact_state["result"] = None
+
+    thread = threading.Thread(target=_run_cross_impact_generation, daemon=True)
+    thread.start()
+    return {"status": "started"}
+
+
+@app.get("/admin/cross-impact-interpretation-status")
+def cross_impact_status():
+    """Polls the cross-impact generation status."""
+    with _cross_impact_lock:
+        return dict(_cross_impact_state)
+
+
+@app.get("/api/cross-impact-interpretation")
+async def get_cross_impact_interpretation(response: Response):
+    """Returns the cached Cross-Impact Matrix Interpretation. Read-only."""
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    data = storage.get_cross_impact_interpretation()
+    if not data:
+        raise HTTPException(status_code=404, detail="No cross-impact interpretation found. Generate one first.")
+    return data
+
+
 # --- MAIN SCAN ENDPOINT (MULTIPART) ---
 @app.post("/scan")
 def run_scan(

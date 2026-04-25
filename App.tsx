@@ -66,6 +66,10 @@ const App = () => {
   const [observatoryData, setObservatoryData] = useState(null);
   const [observatoryLoading, setObservatoryLoading] = useState(false);
 
+  // CROSS-IMPACT MATRIX INTERPRETATION STATE
+  const [crossImpactInterpretationData, setCrossImpactInterpretationData] = useState<any>(null);
+  const [crossImpactInterpretationLoading, setCrossImpactInterpretationLoading] = useState(false);
+
   // THEME EXPLORER STATE
   const [isThemeExplorerOpen, setIsThemeExplorerOpen] = useState(false);
 
@@ -393,6 +397,65 @@ const App = () => {
     // Lazy-load Observatory data for Finnish Economy Force Map in Future Demand tab
     if (!observatoryData && !observatoryLoading) {
       fetchObservatoryData();
+    }
+    // Lazy-load Cross-Impact Matrix Interpretation for Future Demand tab
+    if (!crossImpactInterpretationData && !crossImpactInterpretationLoading) {
+      fetchCrossImpactInterpretation();
+    }
+  };
+
+  const fetchCrossImpactInterpretation = async () => {
+    setCrossImpactInterpretationLoading(true);
+    try {
+      const res = await fetch(`/api/cross-impact-interpretation?t=${Date.now()}`);
+      if (res.ok) {
+        const result = await res.json();
+        setCrossImpactInterpretationData(result);
+      } else if (res.status === 404) {
+        setCrossImpactInterpretationData(null);
+      }
+    } catch (e) {
+      console.error('Cross-impact interpretation fetch failed:', e);
+    } finally {
+      setCrossImpactInterpretationLoading(false);
+    }
+  };
+
+  const handleRefreshCrossImpactInterpretation = async () => {
+    if (!isAdmin) return;
+    setCrossImpactInterpretationLoading(true);
+    try {
+      const res = await fetch('/admin/generate-cross-impact-interpretation', {
+        method: 'POST',
+        headers: { ...authHeaders() },
+      });
+      if (!res.ok) {
+        console.error('Cross-impact regeneration request failed:', res.status);
+        setCrossImpactInterpretationLoading(false);
+        return;
+      }
+      // Poll status until completion
+      const pollUntilDone = async () => {
+        for (let i = 0; i < 120; i++) {
+          await new Promise(r => setTimeout(r, 2000));
+          try {
+            const s = await fetch('/admin/cross-impact-interpretation-status', { headers: { ...authHeaders() } });
+            if (!s.ok) continue;
+            const state = await s.json();
+            if (!state.is_running) {
+              await fetchCrossImpactInterpretation();
+              return;
+            }
+          } catch {}
+        }
+        // Timeout — still try to refetch in case the blob landed.
+        await fetchCrossImpactInterpretation();
+      };
+      await pollUntilDone();
+    } catch (e) {
+      console.error('Cross-impact regeneration failed:', e);
+    } finally {
+      setCrossImpactInterpretationLoading(false);
     }
   };
 
@@ -2055,6 +2118,9 @@ const App = () => {
         onRefresh={isAdmin ? fetchMarketIntelData : undefined}
         onCompanyClick={(company) => { setIsMarketIntelOpen(false); handleCompanyClick(company); }}
         observatoryData={observatoryData}
+        crossImpactInterpretationData={crossImpactInterpretationData}
+        onRefreshCrossImpactInterpretation={isAdmin ? handleRefreshCrossImpactInterpretation : undefined}
+        crossImpactInterpretationLoading={crossImpactInterpretationLoading}
       />
 
       <ObservatoryModal

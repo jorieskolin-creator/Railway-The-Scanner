@@ -590,6 +590,24 @@ class BlobStorage:
         blobs.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
         return self._get(blobs[0].get("url"))
 
+    def save_cross_impact_interpretation(self, data: dict):
+        """Saves the Cross-Impact Matrix Interpretation. Independent of observatory blob."""
+        prefix = "market_intelligence/cross_impact_interpretation"
+        filename = f"{prefix}.json"
+        new_url = self._put(filename, data)
+        if new_url:
+            self._prune_old_versions(prefix, keep=2)
+        return new_url
+
+    def get_cross_impact_interpretation(self):
+        """Retrieves the latest Cross-Impact Matrix Interpretation, or None."""
+        prefix = "market_intelligence/cross_impact_interpretation"
+        blobs = self._list(prefix=prefix, limit=5)
+        if not blobs:
+            return None
+        blobs.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
+        return self._get(blobs[0].get("url"))
+
     def nuke_everything(self):
         """
         DANGEROUS: Deletes ALL files in the blob storage.

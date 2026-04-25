@@ -878,7 +878,53 @@ const ExecutiveSummaryTab = ({ data, observatoryData = null }: { data: any; obse
 // TAB 2: FUTURE DEMAND
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const FutureDemandTab = ({ data, observatoryData = null }: { data: any; observatoryData?: any }) => {
+// Parse Cross-Impact Matrix Interpretation section markers into structured blocks
+// Markers: [SECTION: ...], [THEME: ...] [TOTAL: ...] [SHAPE: ...], [CELL: ...] [DENSITY: ...] [RANK: ...]
+type CIBlock =
+  | { kind: 'section'; title: string }
+  | { kind: 'theme'; name: string; total?: string; shape?: string }
+  | { kind: 'cell'; theme: string; dimension: string; density?: string; rank?: string }
+  | { kind: 'paragraph'; text: string };
+
+const parseCrossImpactInterpretation = (text: string): CIBlock[] => {
+  const blocks: CIBlock[] = [];
+  if (!text) return blocks;
+  const lines = text.split(/\n+/);
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    const sectionMatch = line.match(/^\[\s*SECTION\s*:\s*(.+?)\s*\]$/i);
+    if (sectionMatch) {
+      blocks.push({ kind: 'section', title: sectionMatch[1] });
+      continue;
+    }
+
+    // [THEME: name] [TOTAL: n] [SHAPE: shape] — all on one line per the prompt
+    if (/^\[\s*THEME\s*:/i.test(line)) {
+      const theme = line.match(/\[\s*THEME\s*:\s*([^\]]+?)\s*\]/i)?.[1] || '';
+      const total = line.match(/\[\s*TOTAL\s*:\s*([^\]]+?)\s*\]/i)?.[1];
+      const shape = line.match(/\[\s*SHAPE\s*:\s*([^\]]+?)\s*\]/i)?.[1];
+      blocks.push({ kind: 'theme', name: theme, total, shape });
+      continue;
+    }
+
+    // [CELL: theme x dimension] [DENSITY: n] [RANK: 1|2|3]
+    if (/^\[\s*CELL\s*:/i.test(line)) {
+      const cellRaw = line.match(/\[\s*CELL\s*:\s*([^\]]+?)\s*\]/i)?.[1] || '';
+      const density = line.match(/\[\s*DENSITY\s*:\s*([^\]]+?)\s*\]/i)?.[1];
+      const rank = line.match(/\[\s*RANK\s*:\s*([^\]]+?)\s*\]/i)?.[1];
+      const [theme, dimension] = cellRaw.split(/\s+[x×]\s+/i);
+      blocks.push({ kind: 'cell', theme: theme || cellRaw, dimension: dimension || '', density, rank });
+      continue;
+    }
+
+    blocks.push({ kind: 'paragraph', text: line });
+  }
+  return blocks;
+};
+
+const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretationData = null, onRefreshCrossImpactInterpretation, crossImpactInterpretationLoading = false }: { data: any; observatoryData?: any; crossImpactInterpretationData?: any; onRefreshCrossImpactInterpretation?: () => void; crossImpactInterpretationLoading?: boolean }) => {
   const foresights = data.top_foresights || [];
   const crossImpact = data.cross_impact || [];
   const industryRadar = data.industry_radar || [];
@@ -1093,6 +1139,113 @@ const FutureDemandTab = ({ data, observatoryData = null }: { data: any; observat
           </div>
         </div>
       )}
+
+      {/* CROSS-IMPACT MATRIX INTERPRETATION — appears below Finnish Economy Force Map */}
+      {crossImpactInterpretationData?.text && (() => {
+        const blocks = parseCrossImpactInterpretation(crossImpactInterpretationData.text);
+        return (
+          <div className="mt-6 bg-gradient-to-br from-indigo-950/30 to-slate-900/50 rounded-xl border border-indigo-500/20 overflow-hidden">
+            <div className="px-5 py-4 border-b border-indigo-500/10 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-indigo-500/20 flex items-center justify-center">
+                  <BarChart3 size={16} className="text-indigo-400" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-indigo-200">Cross-Impact Matrix Interpretation</h3>
+                  <p className="text-[10px] text-slate-500 mt-0.5">Where structural pressure consolidates across the Theme x Dimension matrix</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                {crossImpactInterpretationData.generated_at && (
+                  <span className="text-[9px] font-mono text-slate-600">
+                    {new Date(crossImpactInterpretationData.generated_at).toLocaleDateString('en-FI', { day: 'numeric', month: 'short', year: 'numeric' })}
+                  </span>
+                )}
+                {onRefreshCrossImpactInterpretation && (
+                  <button
+                    onClick={onRefreshCrossImpactInterpretation}
+                    disabled={crossImpactInterpretationLoading}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 transition-colors text-[9px] font-mono text-indigo-300 hover:text-indigo-100 disabled:opacity-40"
+                    title="Regenerate the Cross-Impact Matrix Interpretation"
+                  >
+                    <RefreshCw size={11} className={crossImpactInterpretationLoading ? 'animate-spin' : ''} />
+                    Refresh the Matrix Interpretation
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="px-5 py-4">
+              {blocks.map((b, i) => {
+                if (b.kind === 'section') {
+                  return (
+                    <h4 key={i} className="text-sm font-bold text-indigo-200 mt-6 mb-3 border-b border-indigo-500/10 pb-1.5 first:mt-0">
+                      {b.title}
+                    </h4>
+                  );
+                }
+                if (b.kind === 'theme') {
+                  return (
+                    <div key={i} className="mt-4 mb-2 flex flex-wrap items-center gap-2 text-[11px]">
+                      <span className="font-bold text-indigo-100">{b.name}</span>
+                      {b.total && (
+                        <span className="px-2 py-0.5 rounded bg-slate-800/60 border border-slate-700 text-slate-300 font-mono">
+                          total {b.total}
+                        </span>
+                      )}
+                      {b.shape && (
+                        <span className="px-2 py-0.5 rounded bg-indigo-500/15 border border-indigo-500/30 text-indigo-200 font-mono uppercase tracking-wide text-[9px]">
+                          {b.shape}
+                        </span>
+                      )}
+                    </div>
+                  );
+                }
+                if (b.kind === 'cell') {
+                  return (
+                    <div key={i} className="mt-4 mb-2 flex flex-wrap items-center gap-2 text-[11px]">
+                      {b.rank && (
+                        <span className="px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-200 font-mono text-[9px]">
+                          #{b.rank}
+                        </span>
+                      )}
+                      <span className="font-bold text-indigo-100">{b.theme}</span>
+                      {b.dimension && (
+                        <>
+                          <span className="text-slate-500">x</span>
+                          <span className="font-bold text-emerald-200">{b.dimension}</span>
+                        </>
+                      )}
+                      {b.density && (
+                        <span className="px-2 py-0.5 rounded bg-slate-800/60 border border-slate-700 text-slate-300 font-mono">
+                          density {b.density}
+                        </span>
+                      )}
+                    </div>
+                  );
+                }
+                return (
+                  <p key={i} className="text-[12px] text-slate-300/90 leading-relaxed mb-3">
+                    {b.text}
+                  </p>
+                );
+              })}
+            </div>
+            {(crossImpactInterpretationData.sources_used?.length || crossImpactInterpretationData.model) && (
+              <div className="px-5 py-2.5 border-t border-indigo-500/10 flex flex-wrap items-center gap-4 text-[9px] text-slate-600">
+                {crossImpactInterpretationData.sources_used?.length > 0 && (
+                  <span>Sources: {crossImpactInterpretationData.sources_used.join(' · ')}</span>
+                )}
+                {crossImpactInterpretationData.numeric_check && (
+                  <span>
+                    Numeric check: {crossImpactInterpretationData.numeric_check.passed ? 'passed' : `${(crossImpactInterpretationData.numeric_check.fabricated || []).length} flagged`}
+                  </span>
+                )}
+                {crossImpactInterpretationData.model && <span>Model: {crossImpactInterpretationData.model}</span>}
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 };
@@ -1640,7 +1793,7 @@ const TABS = [
   { id: 'favi', label: 'Foresight Vulnerability', icon: Eye },
 ];
 
-const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, onCompanyClick, observatoryData = null }: {
+const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, onCompanyClick, observatoryData = null, crossImpactInterpretationData = null, onRefreshCrossImpactInterpretation, crossImpactInterpretationLoading = false }: {
   isOpen: boolean;
   data: any;
   loading: boolean;
@@ -1648,6 +1801,9 @@ const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, on
   onRefresh?: () => void;
   onCompanyClick: (company: any) => void;
   observatoryData?: any;
+  crossImpactInterpretationData?: any;
+  onRefreshCrossImpactInterpretation?: () => void;
+  crossImpactInterpretationLoading?: boolean;
 }) => {
   const [activeTab, setActiveTab] = useState('executive');
 
@@ -1722,7 +1878,7 @@ const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, on
           ) : (
             <>
               {activeTab === 'executive' && <ExecutiveSummaryTab data={data} observatoryData={observatoryData} />}
-              {activeTab === 'future' && <FutureDemandTab data={data} observatoryData={observatoryData} />}
+              {activeTab === 'future' && <FutureDemandTab data={data} observatoryData={observatoryData} crossImpactInterpretationData={crossImpactInterpretationData} onRefreshCrossImpactInterpretation={onRefreshCrossImpactInterpretation} crossImpactInterpretationLoading={crossImpactInterpretationLoading} />}
               {activeTab === 'current' && <CurrentDemandTab data={data} />}
               {activeTab === 'sales' && <SalesPrioritiesTab data={data} onCompanyClick={onCompanyClick} />}
               {activeTab === 'favi' && <ForesightVulnerabilityTab data={data} onCompanyClick={onCompanyClick} />}
