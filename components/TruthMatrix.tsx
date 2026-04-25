@@ -244,7 +244,7 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
       )}
 
       <ResponsiveContainer width="100%" height="100%">
-        <ScatterChart margin={{ top: 20, right: 20, bottom: 40, left: 0 }}>
+        <ScatterChart margin={{ top: 20, right: 20, bottom: 40, left: 50 }}>
           <defs>
             <linearGradient id="greenZone" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#10b981" stopOpacity={0.15}/>
@@ -290,7 +290,7 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
             tickLine={false}
             axisLine={{ stroke: '#334155', opacity: 0.5 }}
             tick={{ fontSize: 10, fill: '#64748b' }}
-            label={{ value: 'OPERATIONAL REALITY (Evidence)', angle: -90, position: 'left', fill: '#475569', fontSize: 10, dx: -20, letterSpacing: '0.1em' }}
+            label={{ value: 'OPERATIONAL REALITY (Evidence)', angle: -90, position: 'insideLeft', fill: '#475569', fontSize: 10, dx: -10, dy: 80, letterSpacing: '0.1em' }}
           />
 
           <Tooltip
@@ -312,18 +312,7 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
           <ReferenceLine x={75} stroke="#64748b" strokeDasharray="4 4" strokeOpacity={0.7} strokeWidth={1.5} />
           <ReferenceLine x={50} stroke="#ffffff" strokeDasharray="4 4" strokeOpacity={0.5} strokeWidth={2} />
 
-          <ReferenceArea x1={80} x2={98} y1={92} y2={98} stroke="none" fill="none">
-             <Label value="THRIVING" position="insideTopRight" fill="#34d399" fontSize={10} fontWeight={900} opacity={0.8} letterSpacing="0.05em" />
-          </ReferenceArea>
-          <ReferenceArea x1={2} x2={20} y1={92} y2={98} stroke="none" fill="none">
-             <Label value="MODERNIZING" position="insideTopLeft" fill="#22d3ee" fontSize={10} fontWeight={700} opacity={0.7} letterSpacing="0.05em" />
-          </ReferenceArea>
-          <ReferenceArea x1={80} x2={98} y1={2} y2={8} stroke="none" fill="none">
-             <Label value="CASH COW" position="insideBottomRight" fill="#fbbf24" fontSize={10} fontWeight={700} opacity={0.7} letterSpacing="0.05em" />
-          </ReferenceArea>
-          <ReferenceArea x1={2} x2={20} y1={2} y2={8} stroke="none" fill="none">
-             <Label value="AT RISK" position="insideBottomLeft" fill="#fb7185" fontSize={10} fontWeight={900} opacity={0.8} letterSpacing="0.05em" />
-          </ReferenceArea>
+          {/* Archetype labels are rendered as HTML overlays below for hover support. */}
 
           <Scatter
             name="Companies"
@@ -370,6 +359,67 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
           )}
         </ScatterChart>
       </ResponsiveContainer>
+
+      {/* Archetype quadrant labels — HTML overlays so they support hover explanations.
+          Positions are relative to the chart container's plot area (left margin 50,
+          top 20, right 20, bottom 40 in the ScatterChart). */}
+      {[
+        {
+          key: 'THRIVING',
+          color: '#34d399',
+          opacity: 0.85,
+          weight: 900,
+          pos: 'top-3 right-5',
+          tooltipPos: 'top-full mt-1 right-0',
+          desc: 'High Reality + Strong Financials. Modern operations AND healthy business.',
+        },
+        {
+          key: 'MODERNIZING',
+          color: '#22d3ee',
+          opacity: 0.75,
+          weight: 700,
+          pos: 'top-3 left-[60px]',
+          tooltipPos: 'top-full mt-1 left-0',
+          desc: 'High Reality + Weak Financials. Strong operations but financial pressure.',
+        },
+        {
+          key: 'CASH COW',
+          color: '#fbbf24',
+          opacity: 0.75,
+          weight: 700,
+          pos: 'bottom-12 right-5',
+          tooltipPos: 'bottom-full mb-1 right-0',
+          desc: 'Low Reality + Strong Financials. Profitable but operationally outdated.',
+        },
+        {
+          key: 'AT RISK',
+          color: '#fb7185',
+          opacity: 0.85,
+          weight: 900,
+          pos: 'bottom-12 left-[60px]',
+          tooltipPos: 'bottom-full mb-1 left-0',
+          desc: 'Low Reality + Weak Financials. Both operations and finances under pressure.',
+        },
+      ].map(label => (
+        <div
+          key={label.key}
+          className={`absolute ${label.pos} z-[40] group cursor-help select-none`}
+          style={{ pointerEvents: 'auto' }}
+        >
+          <span
+            className="text-[10px] font-mono uppercase tracking-wider"
+            style={{ color: label.color, opacity: label.opacity, fontWeight: label.weight, letterSpacing: '0.05em' }}
+          >
+            {label.key}
+          </span>
+          <div
+            className={`absolute ${label.tooltipPos} hidden group-hover:block bg-slate-900/95 border border-slate-600 rounded-lg px-3 py-2 text-[10px] text-slate-200 font-normal w-[240px] shadow-xl leading-relaxed whitespace-normal pointer-events-none z-[60]`}
+          >
+            <div className="font-bold mb-1" style={{ color: label.color }}>{label.key}</div>
+            {label.desc}
+          </div>
+        </div>
+      ))}
 
       {/* HTML overlay for MARKET AVG label — renders above all SVG/chart layers */}
       {avgHovered && avgDotPos && (
