@@ -775,7 +775,17 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
         const pct = totalCo > 0 ? Math.round((count / totalCo) * 100) : 0;
         return `<div class="segment-card" style="background:${s.bg};border:1px solid ${s.border}"><h4 style="color:${s.color}">${s.key}</h4><div class="count" style="color:${s.color}">${count}</div><div style="font-size:10px;color:#64748b">${pct}% of companies</div><div class="desc">${s.desc}</div></div>`;
       }).join('');
-      content += `<div class="section"><h2>Strategic Vulnerability Segments</h2><div class="segment-grid">${cards}</div></div>`;
+      // Cutoffs note — surfaces what split produced these counts so the
+      // download is self-explanatory without needing the live page.
+      let cutoffsHtml = '';
+      if (data.favi_cutoffs) {
+        const src: string = data.favi_cutoffs.source || '';
+        const sourceLabel = src.startsWith('percentile')
+          ? src.replace('percentile:', '').replace(/p(\d+(\.\d+)?)/g, '$1th percentile').replace(/,/g, ', ').replace('favi=', 'FAVI ').replace('current=', 'Current ')
+          : 'fixed fallback';
+        cutoffsHtml = `<p style="font-size:11px;color:#94a3b8;margin-top:8px">Cutoffs (${sourceLabel}): FAVI &ge; <span style="font-family:ui-monospace,monospace;color:#cbd5e1">${data.favi_cutoffs.favi}</span> &middot; Current Vulnerability &ge; <span style="font-family:ui-monospace,monospace;color:#cbd5e1">${data.favi_cutoffs.current_vulnerability}</span></p>`;
+      }
+      content += `<div class="section"><h2>Strategic Vulnerability Segments</h2><div class="segment-grid">${cards}</div>${cutoffsHtml}</div>`;
     }
 
     // Domain pressure horizontal bar
@@ -2205,6 +2215,18 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
             </div>
           </div>
         </div>
+        {/* Cutoffs surfaced from the backend so the user knows what split
+            produced the four segment counts. Degrades silently when missing. */}
+        {data.favi_cutoffs && (
+          <div className="mt-3 text-[10px] text-slate-500 leading-relaxed">
+            Cutoffs (
+            {data.favi_cutoffs.source?.startsWith('percentile')
+              ? data.favi_cutoffs.source.replace('percentile:', '').replace(/p(\d+(\.\d+)?)/g, '$1th percentile').replace(/,/g, ', ').replace('favi=', 'FAVI ').replace('current=', 'Current ')
+              : 'fixed fallback'}
+            ): FAVI &ge; <span className="font-mono text-slate-300">{data.favi_cutoffs.favi}</span>
+            {' '}&middot; Current Vulnerability &ge; <span className="font-mono text-slate-300">{data.favi_cutoffs.current_vulnerability}</span>
+          </div>
+        )}
         {/* Matrix axis labels */}
         <div className="flex justify-between mt-3 text-[8px] text-slate-500 uppercase tracking-wider">
           <div className="flex items-center gap-1">
