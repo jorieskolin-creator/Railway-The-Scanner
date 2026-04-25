@@ -929,12 +929,16 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
   const crossImpact = data.cross_impact || [];
   const industryRadar = data.industry_radar || [];
 
-  // Build cumulative % for Pareto
+  // Build cumulative % for Pareto, plus each bar's share of the grand total.
   const totalCount = foresights.reduce((s: number, f: any) => s + f.count, 0) || 1;
   let cumulative = 0;
   const paretoData = foresights.map((f: any) => {
     cumulative += f.count;
-    return { ...f, cumPct: Math.round((cumulative / totalCount) * 100) };
+    return {
+      ...f,
+      cumPct: Math.round((cumulative / totalCount) * 100),
+      pct: Math.round((f.count / totalCount) * 1000) / 10,
+    };
   });
 
   // Build cross-impact matrix data
@@ -1004,7 +1008,16 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
               <YAxis yAxisId="count" tick={{ fill: '#94a3b8', fontSize: 10 }} />
               <YAxis yAxisId="pct" orientation="right" tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[0, 100]} unit="%" />
               <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11, color: '#e2e8f0' }} labelStyle={{ color: '#f1f5f9', fontWeight: 600 }} itemStyle={{ color: '#e2e8f0' }}
-                formatter={(value: any, name: string) => [value, name === 'cumPct' ? 'Cumulative %' : 'Signals']} />
+                formatter={(value: any, name: string, props: any) => {
+                  if (name === 'Signals') {
+                    const pct = props?.payload?.pct;
+                    return [pct !== undefined ? `${value} (${pct}% of all signals)` : value, 'Signals'];
+                  }
+                  if (name === 'Cumulative %') {
+                    return [`${value}%`, 'Cumulative'];
+                  }
+                  return [value, name];
+                }} />
               <Bar yAxisId="count" dataKey="count" name="Signals" radius={[4, 4, 0, 0]}>
                 {paretoData.map((entry: any, i: number) => (
                   <Cell key={i} fill={CATEGORY_COLORS[entry.category] || '#6366f1'} />
