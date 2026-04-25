@@ -1046,7 +1046,12 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
       {/* Cross-Impact Matrix */}
       {ciThemes.length > 0 && (
         <div className="bg-black/20 border border-white/10 rounded-lg p-4 overflow-visible">
-          <h4 className="text-[10px] font-bold text-violet-300 uppercase tracking-wide mb-3">Theme x Dimension Cross-Impact Matrix</h4>
+          <h4 className="text-[10px] font-bold text-violet-300 uppercase tracking-wide mb-1">Theme x Dimension Cross-Impact Matrix</h4>
+          <p className="text-[10px] text-slate-500 mb-3">
+            <span className="text-amber-300 font-semibold">#1-#3 next to a theme</span> = the three themes generating the most foresight pressure across all five dimensions.
+            <span className="text-emerald-300 font-semibold"> #1-#3 next to a dimension</span> = the three dimensions absorbing the most foresight pressure across all themes.
+            Ringed cells = the three strongest individual theme x dimension intersections.
+          </p>
           <table className="w-full text-[10px]">
             <thead>
               <tr>
@@ -1070,7 +1075,7 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
                           <div className="font-bold text-cyan-300 mb-1">
                             {d}
                             {isTopDim && (
-                              <span className="ml-2 text-emerald-300 font-normal">#{dimRank} by column total ({ciDimensionTotals[d]})</span>
+                              <span className="ml-2 text-emerald-300 font-normal">#{dimRank} dimension absorbing the most foresight pressure across all themes (column total {ciDimensionTotals[d]})</span>
                             )}
                           </div>
                           {DIMENSION_DESCRIPTIONS[d]}
@@ -1133,11 +1138,11 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
           <div className="mt-3 flex flex-wrap items-center gap-3 text-[9px] text-slate-500">
             <span className="flex items-center gap-1">
               <span className="inline-block w-2 h-2 rounded bg-amber-500/50 border border-amber-400/60"></span>
-              Top-3 themes by total density
+              Top-3 themes — most pressure generated (row total)
             </span>
             <span className="flex items-center gap-1">
               <span className="inline-block w-2 h-2 rounded bg-emerald-500/40 border border-emerald-400/60"></span>
-              Top-3 dimensions by column total
+              Top-3 dimensions — most pressure absorbed (column total)
             </span>
             <span className="flex items-center gap-1">
               <span className="inline-block w-2 h-2 rounded ring-1 ring-amber-400/70"></span>
