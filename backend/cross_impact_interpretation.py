@@ -401,13 +401,14 @@ def generate_cross_impact_interpretation(
         prompt,
         source_summary,
         "Cross-Impact Matrix Interpretation",
+        use_opus=True,
     )
 
     # 3. Post-hoc numeric check. If a fabricated density slipped through,
     #    regenerate once with a correction prompt.
     numeric_check = verify_numeric_claims(text, matrix_data)
     if not numeric_check["passed"]:
-        from foresight_observatory import _generate_sonnet, _verify_gemini
+        from foresight_observatory import _generate_opus, _verify_gemini
         correction = (
             "\n\nCRITICAL CORRECTION: Your previous attempt cited density values "
             f"that do not appear in the matrix payload: {numeric_check['fabricated']}. "
@@ -415,7 +416,7 @@ def generate_cross_impact_interpretation(
             "matrix data above. Rewrite the interpretation using only numbers that "
             "appear in the matrix."
         )
-        text, _wc = _generate_sonnet(prompt + correction)
+        text, _wc = _generate_opus(prompt + correction)
         verification = _verify_gemini(text, source_summary, "Cross-Impact Matrix Interpretation")
         numeric_check = verify_numeric_claims(text, matrix_data)
 
@@ -426,5 +427,5 @@ def generate_cross_impact_interpretation(
         "sources_used": available_sources,
         "matrix_snapshot": matrix_data,
         "generated_at": datetime.utcnow().isoformat() + "Z",
-        "model": "claude-sonnet-4-6 + gemini-3.1-pro verification",
+        "model": "claude-opus-4-7 + gemini-3.1-pro verification",
     }
