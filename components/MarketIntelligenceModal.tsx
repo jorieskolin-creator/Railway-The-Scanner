@@ -947,6 +947,15 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
   }
   const maxCICount = Math.max(...crossImpact.map((c: any) => c.count), 1);
 
+  // Per-row totals (theme density) and per-column totals (dimension density),
+  // and the matrix-wide grand total. Used as denominators for the percentages
+  // shown next to the [TOTAL: N] and [DENSITY: N] chips in the interpretation.
+  const ciThemeTotals: Record<string, number> = {};
+  for (const theme of ciThemes as string[]) {
+    ciThemeTotals[theme] = ciDimensions.reduce((s, d) => s + (ciMatrix[theme]?.[d] || 0), 0);
+  }
+  const ciMatrixTotal = (ciThemes as string[]).reduce((s, t) => s + (ciThemeTotals[t] || 0), 0) || 1;
+
   // Radar data: transform for Recharts
   const categories = Object.keys(CATEGORY_SHORT);
   const radarData = categories.map(cat => {
@@ -1207,12 +1216,19 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
                   );
                 }
                 if (b.kind === 'theme') {
+                  const totalNum = b.total ? Number(b.total) : NaN;
+                  const totalPct = Number.isFinite(totalNum) && ciMatrixTotal > 0
+                    ? Math.round((totalNum / ciMatrixTotal) * 1000) / 10
+                    : null;
                   return (
                     <div key={i} className="mt-4 mb-2 flex flex-wrap items-center gap-2 text-[11px]">
                       <span className="font-bold text-indigo-100">{b.name}</span>
                       {b.total && (
-                        <span className="px-2 py-0.5 rounded bg-slate-800/60 border border-slate-700 text-slate-300 font-mono">
-                          total {b.total}
+                        <span
+                          className="px-2 py-0.5 rounded bg-slate-800/60 border border-slate-700 text-slate-300 font-mono"
+                          title={totalPct !== null ? `${totalPct}% of total matrix density (${ciMatrixTotal})` : undefined}
+                        >
+                          total {b.total}{totalPct !== null && <span className="text-slate-500"> ({totalPct}%)</span>}
                         </span>
                       )}
                       {b.shape && (
@@ -1224,6 +1240,11 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
                   );
                 }
                 if (b.kind === 'cell') {
+                  const densityNum = b.density ? Number(b.density) : NaN;
+                  const rowTotal = b.theme ? ciThemeTotals[b.theme] : 0;
+                  const rowPct = Number.isFinite(densityNum) && rowTotal > 0
+                    ? Math.round((densityNum / rowTotal) * 1000) / 10
+                    : null;
                   return (
                     <div key={i} className="mt-4 mb-2 flex flex-wrap items-center gap-2 text-[11px]">
                       {b.rank && (
@@ -1239,8 +1260,11 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
                         </>
                       )}
                       {b.density && (
-                        <span className="px-2 py-0.5 rounded bg-slate-800/60 border border-slate-700 text-slate-300 font-mono">
-                          density {b.density}
+                        <span
+                          className="px-2 py-0.5 rounded bg-slate-800/60 border border-slate-700 text-slate-300 font-mono"
+                          title={rowPct !== null ? `${rowPct}% of ${b.theme} row total (${rowTotal})` : undefined}
+                        >
+                          density {b.density}{rowPct !== null && <span className="text-slate-500"> ({rowPct}% of row)</span>}
                         </span>
                       )}
                     </div>
