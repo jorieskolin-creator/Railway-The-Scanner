@@ -229,7 +229,7 @@ const CompanySummary = ({ data, faviData, observatoryData = null }) => {
                 var cls = 'text-slate-200 leading-relaxed text-sm font-light' + (pi > 0 ? ' mt-4' : '');
                 return '<p class="' + cls + '">' + escaped + '</p>';
             }).join('\n');
-            detailedReportHTML = '<div class="mt-8 space-y-8"><div class="bg-gradient-to-r from-violet-900/30 to-indigo-900/30 p-8 rounded-2xl border-l-4 border-violet-500 backdrop-blur-sm">'
+            detailedReportHTML = '<div class="mt-8 space-y-8"><div class="bg-black/20 p-8 rounded-2xl border-l-4 border-violet-500 backdrop-blur-sm">'
                 + '<h3 class="text-xl font-bold text-white mb-2 flex items-center gap-2">'
                 + '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>'
                 + ' Detailed Forensic Report</h3>'
@@ -257,7 +257,7 @@ const CompanySummary = ({ data, faviData, observatoryData = null }) => {
                 var cls = 'text-slate-200 leading-relaxed text-sm font-light' + (pi > 0 ? ' mt-4' : '');
                 return '<p class="' + cls + '">' + escaped + '</p>';
             }).join('\n');
-            foresightHTML = '<div class="mt-8 space-y-8"><div class="bg-gradient-to-r from-teal-900/30 to-cyan-900/30 p-8 rounded-2xl border-l-4 border-teal-500 backdrop-blur-sm">'
+            foresightHTML = '<div class="mt-8 space-y-8"><div class="bg-black/20 p-8 rounded-2xl border-l-4 border-teal-500 backdrop-blur-sm">'
                 + '<h3 class="text-xl font-bold text-white mb-2 flex items-center gap-2">'
                 + '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2dd4bf" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>'
                 + ' Future Insight</h3>'
@@ -1259,7 +1259,7 @@ const CompanySummary = ({ data, faviData, observatoryData = null }) => {
 
         {data.foresight_summary && (
             <div className="report-only-section" style={{ display: 'none' }}>
-                <div className="bg-gradient-to-r from-teal-900/30 to-cyan-900/30 p-8 rounded-2xl border-l-4 border-teal-500 backdrop-blur-sm">
+                <div className="bg-black/20 p-8 rounded-2xl border-l-4 border-teal-500 backdrop-blur-sm">
                     <h3 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
                         <TrendingUp className="text-teal-400" size={22} />
                         Future Insight
@@ -1290,7 +1290,7 @@ const CompanySummary = ({ data, faviData, observatoryData = null }) => {
 
         {data.detailed_report && (
             <div className="report-only-section" style={{ display: 'none' }}>
-                <div className="bg-gradient-to-r from-violet-900/30 to-indigo-900/30 p-8 rounded-2xl border-l-4 border-violet-500 backdrop-blur-sm">
+                <div className="bg-black/20 p-8 rounded-2xl border-l-4 border-violet-500 backdrop-blur-sm">
                     <h3 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
                         <ShieldCheck className="text-violet-400" size={22} />
                         Detailed Forensic Report

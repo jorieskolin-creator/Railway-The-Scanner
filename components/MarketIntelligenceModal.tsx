@@ -1464,7 +1464,7 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
         const blocks = parseCrossImpactInterpretation(crossImpactInterpretationData.text);
         const emphasisIdx = computeEmphasisParagraphs(blocks);
         return (
-          <div className="mt-6 bg-gradient-to-br from-indigo-950/30 to-slate-900/50 rounded-xl border border-indigo-500/20 overflow-hidden">
+          <div className="mt-6 bg-black/20 rounded-xl border border-indigo-500/20 overflow-hidden">
             <div className="px-5 py-4 border-b border-indigo-500/10 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="w-8 h-8 rounded-lg bg-indigo-500/20 flex items-center justify-center">
@@ -1817,7 +1817,7 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
 
       {/* FINNISH ECONOMY FORCE MAP — from Observatory */}
       {observatoryData?.finland_analysis?.text && (
-        <div className="mt-6 bg-gradient-to-br from-violet-950/30 to-slate-900/50 rounded-xl border border-violet-500/20 overflow-hidden">
+        <div className="mt-6 bg-black/20 rounded-xl border border-violet-500/20 overflow-hidden">
           <div className="px-5 py-4 border-b border-violet-500/10 flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 rounded-lg bg-violet-500/20 flex items-center justify-center">
