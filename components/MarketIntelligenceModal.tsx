@@ -1141,6 +1141,29 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
       )}
 
       {/* CROSS-IMPACT MATRIX INTERPRETATION — appears below Finnish Economy Force Map */}
+      {!crossImpactInterpretationData?.text && onRefreshCrossImpactInterpretation && (
+        <div className="mt-6 bg-black/20 border border-indigo-500/20 rounded-xl px-5 py-4 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-indigo-500/20 flex items-center justify-center shrink-0">
+              <BarChart3 size={16} className="text-indigo-400" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-indigo-200">Cross-Impact Matrix Interpretation</h3>
+              <p className="text-[10px] text-slate-500 mt-0.5">No interpretation generated yet. Run the analysis to produce a structured prose summary of the matrix.</p>
+            </div>
+          </div>
+          <button
+            onClick={onRefreshCrossImpactInterpretation}
+            disabled={crossImpactInterpretationLoading}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 transition-colors text-[10px] font-mono text-indigo-200 hover:text-indigo-100 disabled:opacity-40 whitespace-nowrap"
+            title="Generate the Cross-Impact Matrix Interpretation"
+          >
+            <RefreshCw size={12} className={crossImpactInterpretationLoading ? 'animate-spin' : ''} />
+            {crossImpactInterpretationLoading ? 'Generating…' : 'Generate the Matrix Interpretation'}
+          </button>
+        </div>
+      )}
+
       {crossImpactInterpretationData?.text && (() => {
         const blocks = parseCrossImpactInterpretation(crossImpactInterpretationData.text);
         return (
