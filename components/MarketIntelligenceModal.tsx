@@ -423,12 +423,27 @@ const buildCrossImpactInterpretationHtml = (interpretation: any, crossImpact: an
 
   const lines = interpretation.text.split(/\n+/);
   const blocks: string[] = [];
+  // Mirror the in-app rendering: meta sections (HOW TO USE, SOURCES) get a
+  // muted style; the second paragraph after each [THEME:]/[CELL:] inside the
+  // VERTICAL/HORIZONTAL sections is bolded as the interpretive payoff.
+  let currentSection = '';
+  let inAnalyticalSection = false;
+  let inSubblock = false;
+  let paraSinceSubblock = 0;
   for (const raw of lines) {
     const line = raw.trim();
     if (!line) continue;
     const sectionMatch = line.match(/^\[\s*SECTION\s*:\s*(.+?)\s*\]$/i);
     if (sectionMatch) {
-      blocks.push(`<h3 style="color:#c4b5fd;font-size:13px;font-weight:700;margin:20px 0 10px;padding-bottom:6px;border-bottom:1px solid rgba(167,139,250,0.15)">${sectionMatch[1]}</h3>`);
+      currentSection = sectionMatch[1];
+      inAnalyticalSection = /VERTICAL|HORIZONTAL/i.test(currentSection);
+      inSubblock = false;
+      paraSinceSubblock = 0;
+      const isMeta = /^\s*(how\s+to\s+use|sources)\b/i.test(currentSection);
+      const headerStyle = isMeta
+        ? 'color:#94a3b8;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid rgba(148,163,184,0.18)'
+        : 'color:#c4b5fd;font-size:13px;font-weight:700;margin:20px 0 10px;padding-bottom:6px;border-bottom:1px solid rgba(167,139,250,0.15)';
+      blocks.push(`<h3 style="${headerStyle}">${currentSection}</h3>`);
       continue;
     }
     if (/^\[\s*THEME\s*:/i.test(line)) {
@@ -463,6 +478,8 @@ const buildCrossImpactInterpretationHtml = (interpretation: any, crossImpact: an
         bar = `<div style="margin-top:6px;max-width:480px"><div style="height:8px;display:flex;background:rgba(15,23,42,0.6);border:1px solid rgba(51,65,85,0.6);border-radius:3px;overflow:hidden">${segments}</div><div style="margin-top:4px">${legend}</div></div>`;
       }
       blocks.push(`<div style="margin:14px 0 6px"><div><strong style="color:#e0e7ff;font-size:12px">${theme}</strong>${totalChip}${shapeChip}</div>${bar}</div>`);
+      inSubblock = inAnalyticalSection;
+      paraSinceSubblock = 0;
       continue;
     }
     if (/^\[\s*CELL\s*:/i.test(line)) {
@@ -476,9 +493,16 @@ const buildCrossImpactInterpretationHtml = (interpretation: any, crossImpact: an
       const rankChip = rank ? `<span style="margin-right:8px;padding:1px 6px;border-radius:3px;background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.3);color:#fde68a;font-family:ui-monospace,monospace;font-size:9px">#${rank}</span>` : '';
       const densityChip = density ? `<span title="${rowPct !== null ? `${rowPct}% of ${theme} row total (${rowTotal})` : ''}" style="margin-left:8px;padding:2px 8px;border-radius:4px;background:rgba(15,23,42,0.6);border:1px solid rgba(51,65,85,0.6);color:#cbd5e1;font-family:ui-monospace,monospace;font-size:11px">density ${density}${rowPct !== null ? ` <span style="color:#64748b">(${rowPct}% of row)</span>` : ''}</span>` : '';
       blocks.push(`<div style="margin:14px 0 6px;font-size:12px">${rankChip}<strong style="color:#e0e7ff">${theme || cellRaw}</strong>${dimension ? ` <span style="color:#64748b">x</span> <strong style="color:#6ee7b7">${dimension}</strong>` : ''}${densityChip}</div>`);
+      inSubblock = inAnalyticalSection;
+      paraSinceSubblock = 0;
       continue;
     }
-    blocks.push(`<p style="font-size:12px;line-height:1.7;color:rgba(203,213,225,0.9);margin:8px 0">${line}</p>`);
+    if (inSubblock) paraSinceSubblock += 1;
+    const emphasise = inSubblock && paraSinceSubblock === 2;
+    const paraStyle = emphasise
+      ? 'font-size:12px;line-height:1.7;color:#e0e7ff;font-weight:600;margin:8px 0'
+      : 'font-size:12px;line-height:1.7;color:rgba(203,213,225,0.9);margin:8px 0';
+    blocks.push(`<p style="${paraStyle}">${line}</p>`);
   }
 
   const meta = (interpretation.sources_used?.length || interpretation.model)
@@ -1113,6 +1137,37 @@ type CIBlock =
   | { kind: 'cell'; theme: string; dimension: string; density?: string; rank?: string }
   | { kind: 'paragraph'; text: string };
 
+// Section titles that are meta/instructional rather than analytical. Rendered
+// in a muted style so the analytical sections stand out.
+const isMetaSection = (title: string) =>
+  /^\s*(how\s+to\s+use|sources)\b/i.test(title || '');
+
+// Within VERTICAL / HORIZONTAL sections, the second paragraph that follows
+// each [THEME:] or [CELL:] subsection carries the interpretive payoff and is
+// rendered bold to make the key takeaway scannable.
+const computeEmphasisParagraphs = (blocks: CIBlock[]): Set<number> => {
+  const out = new Set<number>();
+  let inAnalyticalSection = false;
+  let paraSinceSubblock = 0;
+  let inSubblock = false;
+  blocks.forEach((b, i) => {
+    if (b.kind === 'section') {
+      inAnalyticalSection = /VERTICAL|HORIZONTAL/i.test(b.title || '');
+      paraSinceSubblock = 0;
+      inSubblock = false;
+    } else if (b.kind === 'theme' || b.kind === 'cell') {
+      paraSinceSubblock = 0;
+      inSubblock = inAnalyticalSection;
+    } else if (b.kind === 'paragraph') {
+      if (inSubblock) {
+        paraSinceSubblock += 1;
+        if (paraSinceSubblock === 2) out.add(i);
+      }
+    }
+  });
+  return out;
+};
+
 const parseCrossImpactInterpretation = (text: string): CIBlock[] => {
   const blocks: CIBlock[] = [];
   if (!text) return blocks;
@@ -1407,6 +1462,7 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
 
       {crossImpactInterpretationData?.text && (() => {
         const blocks = parseCrossImpactInterpretation(crossImpactInterpretationData.text);
+        const emphasisIdx = computeEmphasisParagraphs(blocks);
         return (
           <div className="mt-6 bg-gradient-to-br from-indigo-950/30 to-slate-900/50 rounded-xl border border-indigo-500/20 overflow-hidden">
             <div className="px-5 py-4 border-b border-indigo-500/10 flex items-center justify-between">
@@ -1441,8 +1497,16 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
             <div className="px-5 py-4">
               {blocks.map((b, i) => {
                 if (b.kind === 'section') {
+                  const meta = isMetaSection(b.title);
                   return (
-                    <h4 key={i} className="text-sm font-bold text-indigo-200 mt-6 mb-3 border-b border-indigo-500/10 pb-1.5 first:mt-0">
+                    <h4
+                      key={i}
+                      className={
+                        meta
+                          ? 'text-[11px] font-bold uppercase tracking-wider text-slate-400 mt-8 mb-3 border-b border-slate-700/40 pb-1.5'
+                          : 'text-sm font-bold text-indigo-200 mt-6 mb-3 border-b border-indigo-500/10 pb-1.5 first:mt-0'
+                      }
+                    >
                       {b.title}
                     </h4>
                   );
@@ -1547,8 +1611,16 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
                     </div>
                   );
                 }
+                const isEmphasis = emphasisIdx.has(i);
                 return (
-                  <p key={i} className="text-[12px] text-slate-300/90 leading-relaxed mb-3">
+                  <p
+                    key={i}
+                    className={
+                      isEmphasis
+                        ? 'text-[12px] text-indigo-100 font-semibold leading-relaxed mb-3'
+                        : 'text-[12px] text-slate-300/90 leading-relaxed mb-3'
+                    }
+                  >
                     {b.text}
                   </p>
                 );
