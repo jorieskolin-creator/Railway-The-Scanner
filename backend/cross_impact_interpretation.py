@@ -204,26 +204,39 @@ exact format:
 [THEME: <name>] [TOTAL: <total_density>] [SHAPE: <CONCENTRATED|BIMODAL|DIFFUSE|SMALL_N>]
 Two paragraphs. Paragraph 1: state the theme's total_density, its full
 distribution, and characterize its shape (or note SMALL_N if applicable).
-Use specific numbers. Paragraph 2: explain what the shape means — where the
-pressure lands, or why diffuseness/small-N is itself the finding. Reference
-the theme description so the reader knows what kinds of signals are inside
-the theme.
+Use specific numbers.
+Paragraph 2 carries the interpretive payoff. Name the underlying force the
+routing reveals (for example a positioning challenge versus a capability-
+readiness challenge), the trade-off the routing creates (what the theme is
+NOT asking the organization to do), and what kind of decision this routing
+puts in front of leadership. Reference the theme description so the reader
+knows what kinds of signals are inside the theme. Add 30-40 words of
+interpretive depth beyond the numerical description; do not restate the
+densities.
 
 [SECTION: HORIZONTAL — CONVERGENCE POINTS]
 One opening sentence framing what the horizontal view answers.
 Then, for each of the top 3 highest-density cells, produce in this exact format:
 [CELL: <theme> x <dimension>] [DENSITY: <value>] [RANK: 1|2|3]
 Two paragraphs. Paragraph 1: what the cell tells us — name the theme, the
-dimension, and the convergence specifically. Paragraph 2: why this matters —
-what kind of organizational response the convergence implies.
+dimension, and the convergence specifically.
+Paragraph 2 carries the interpretive payoff. Name the kind of organizational
+response the convergence implies and where the response should originate
+(governance, leadership attention, technology stack, culture, capability
+investment). Surface the practical decision the cell forces on the
+organization. Add 30-40 words of interpretive depth; do not restate the
+density value.
 
 [SECTION: FOCUSED — STRUCTURAL PATTERN]
 Three to four paragraphs. No sub-headers in this section.
 Paragraph 1: Compare the distribution shapes of the top Pareto themes. Use
 specific numbers.
 Paragraph 2: Explain the conspicuous absences flagged in Step 4.
-Paragraph 3: State the structural finding — the one or two sentences that
-summarize what the three views together reveal.
+Paragraph 3: State the structural finding — one or two sentences that
+summarize what the three views together reveal — then add a 30-40 word coda
+that names the second-order implication of the pattern: not what the data
+says, but what the pattern means about the portfolio's coherence, strategic
+clarity, or adaptive capacity. This is the line a reader should remember.
 Paragraph 4 (only if any optional cross-reference data was provided): Connect
 the matrix pattern to the intent-reality gap, stakeholder attention, or
 archetype distribution. Cite specific numbers from the cross-reference data.
@@ -260,8 +273,11 @@ HARD CONSTRAINTS
 5. Maintain a calm, formal tone throughout. Do not use sales language, do not
    use exclamations, and do not address the reader as "you" except in the
    closing "How to Use" section.
-6. Length budget: 700-1100 words total across all sections. The Focused section
-   should be the longest; Sources should be one short sentence plus the list.
+6. Length budget: 900-1300 words total across all sections. The interpretive
+   payoff paragraphs (paragraph 2 of each theme in VERTICAL, paragraph 2 of
+   each cell in HORIZONTAL, and the structural-finding coda in FOCUSED) carry
+   the analytical weight. The Focused section should be the longest; Sources
+   should be one short sentence plus the list.
 7. Do not output any preamble or postscript outside the [SECTION: ...] markers.
    The first character of the output is the first section marker; the last
    character is the end of the Sources section.
