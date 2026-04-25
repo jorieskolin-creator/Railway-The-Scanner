@@ -731,7 +731,7 @@ const ExecutiveSummaryTab = ({ data, observatoryData = null }: { data: any; obse
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
                 <XAxis type="number" tick={{ fill: '#94a3b8', fontSize: 10 }} />
                 <YAxis type="category" dataKey="dimension" tick={{ fill: '#cbd5e1', fontSize: 10 }} width={75} />
-                <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }} />
+                <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11, color: '#e2e8f0' }} labelStyle={{ color: '#f1f5f9', fontWeight: 600 }} itemStyle={{ color: '#e2e8f0' }} />
                 <Bar dataKey="avg_gap" radius={[0, 4, 4, 0]} name="Avg Gap">
                   {(data.demand_intensity || []).map((entry: any, idx: number) => (
                     <Cell key={idx} fill={entry.avg_gap >= 0 ? '#10b981' : '#f43f5e'} />
@@ -1003,7 +1003,7 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
               <XAxis dataKey="theme" tick={{ fill: '#94a3b8', fontSize: 8 }} angle={-35} textAnchor="end" interval={0} height={80} />
               <YAxis yAxisId="count" tick={{ fill: '#94a3b8', fontSize: 10 }} />
               <YAxis yAxisId="pct" orientation="right" tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[0, 100]} unit="%" />
-              <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }}
+              <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11, color: '#e2e8f0' }} labelStyle={{ color: '#f1f5f9', fontWeight: 600 }} itemStyle={{ color: '#e2e8f0' }}
                 formatter={(value: any, name: string) => [value, name === 'cumPct' ? 'Cumulative %' : 'Signals']} />
               <Bar yAxisId="count" dataKey="count" name="Signals" radius={[4, 4, 0, 0]}>
                 {paretoData.map((entry: any, i: number) => (
@@ -1179,7 +1179,7 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
                 {ZAxis && <ZAxis type="number" dataKey="dimCount" range={[40, 220]} name="dimensions touched" />}
                 <Tooltip
                   cursor={{ strokeDasharray: '3 3', stroke: '#475569' }}
-                  contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }}
+                  contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11, color: '#e2e8f0' }} labelStyle={{ color: '#f1f5f9', fontWeight: 600 }} itemStyle={{ color: '#e2e8f0' }}
                   content={({ active, payload }: any) => {
                     if (!active || !payload?.[0]) return null;
                     const p = payload[0].payload;
@@ -1633,7 +1633,7 @@ const CurrentDemandTab = ({ data }: { data: any }) => {
               <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
               <XAxis dataKey="domain" tick={{ fill: '#94a3b8', fontSize: 8 }} angle={-30} textAnchor="end" interval={0} height={80} />
               <YAxis tick={{ fill: '#94a3b8', fontSize: 10 }} />
-              <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }} />
+              <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11, color: '#e2e8f0' }} labelStyle={{ color: '#f1f5f9', fontWeight: 600 }} itemStyle={{ color: '#e2e8f0' }} />
               <Legend wrapperStyle={{ fontSize: 10 }} />
               <Bar dataKey="thriving" stackId="a" fill={ARCHETYPE_COLORS.thriving} name="Thriving" />
               <Bar dataKey="modernizing" stackId="a" fill={ARCHETYPE_COLORS.modernizing} name="Modernizing" />
@@ -1909,7 +1909,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
                 <XAxis type="number" tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[0, 100]} />
                 <YAxis type="category" dataKey="domain" tick={{ fill: '#cbd5e1', fontSize: 9 }} width={85} />
-                <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }}
+                <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11, color: '#e2e8f0' }} labelStyle={{ color: '#f1f5f9', fontWeight: 600 }} itemStyle={{ color: '#e2e8f0' }}
                   formatter={(value: any, name: string) => [typeof value === 'number' ? value.toFixed(1) : value, name === 'avg_pressure' ? 'Avg Pressure' : 'Max Pressure']} />
                 <Bar dataKey="avg_pressure" name="Avg Pressure" radius={[0, 4, 4, 0]}>
                   {domainPressure.map((entry: any, idx: number) => (
@@ -1935,7 +1935,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
                 <YAxis type="number" dataKey="favi_score" name="Foresight Vulnerability" tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[0, 100]}
                   label={{ value: 'Foresight Vulnerability', fill: '#64748b', fontSize: 9, angle: -90, position: 'insideLeft' }} />
                 <Tooltip cursor={{ strokeDasharray: '3 3' }}
-                  contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }}
+                  contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11, color: '#e2e8f0' }} labelStyle={{ color: '#f1f5f9', fontWeight: 600 }} itemStyle={{ color: '#e2e8f0' }}
                   content={({ active, payload }: any) => {
                     if (!active || !payload?.length) return null;
                     const d = payload[0]?.payload;
