@@ -401,19 +401,23 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
           desc: 'Low Reality + Weak Financials. Both operations and finances under pressure.',
         },
       ].map(label => (
+        // Wrapper is pointer-events:none so the chart underneath stays
+        // interactive everywhere except over the actual label text.
+        // The <span> uses peer/peer-hover so the popover only appears when
+        // the cursor is on the visible label letters, not on the empty
+        // bounding box of the wrapper.
         <div
           key={label.key}
-          className={`absolute ${label.pos} z-[40] group cursor-help select-none`}
-          style={{ pointerEvents: 'auto' }}
+          className={`absolute ${label.pos} z-[40] select-none pointer-events-none`}
         >
           <span
-            className="text-[10px] font-mono uppercase tracking-wider"
+            className="peer inline-block text-[10px] font-mono uppercase tracking-wider cursor-help pointer-events-auto"
             style={{ color: label.color, opacity: label.opacity, fontWeight: label.weight, letterSpacing: '0.05em' }}
           >
             {label.key}
           </span>
           <div
-            className={`absolute ${label.tooltipPos} hidden group-hover:block bg-slate-900/95 border border-slate-600 rounded-lg px-3 py-2 text-[10px] text-slate-200 font-normal w-[240px] shadow-xl leading-relaxed whitespace-normal pointer-events-none z-[60]`}
+            className={`absolute ${label.tooltipPos} hidden peer-hover:block bg-slate-900/95 border border-slate-600 rounded-lg px-3 py-2 text-[10px] text-slate-200 font-normal w-[240px] shadow-xl leading-relaxed whitespace-normal pointer-events-none z-[60]`}
           >
             <div className="font-bold mb-1" style={{ color: label.color }}>{label.key}</div>
             {label.desc}
