@@ -338,6 +338,47 @@ def shape_cross_impact_for_prompt(cross_impact, min_total_for_label: int = 8):
     ]
 
 
+def compute_domain_dimension_matrix(company_details, dashboard_data):
+    """Build a Domain x KB-Dimension density matrix from foresight_links.
+
+    Complement to compute_cross_impact: same evidence base, but rows are
+    industry domains instead of foresight themes. Used as a heatmap to show
+    where foresight pressure lands across the portfolio's industry split.
+
+    Returns a flat list [{domain, dimension, count}, ...] for the top 8 domains
+    by total density, mirroring compute_cross_impact's shape.
+    """
+    company_domains = {}
+    for c in dashboard_data:
+        name = c.get("companyName", "")
+        domain = c.get("domain") or "Unknown"
+        company_domains[name.lower()] = domain
+
+    matrix = defaultdict(lambda: defaultdict(int))
+    domain_totals = Counter()
+
+    for company in company_details:
+        name = company.get("companyName", "?")
+        domain = company_domains.get(name.lower(), "Unknown")
+        for link in (company.get("foresight_links") or []):
+            dimension = link.get("kb_dimension", "").strip()
+            if dimension and dimension in KB_DIMENSIONS:
+                matrix[domain][dimension] += 1
+                domain_totals[domain] += 1
+
+    result = []
+    for domain, _total in domain_totals.most_common(8):
+        for dim in KB_DIMENSIONS:
+            cell_count = matrix[domain].get(dim, 0)
+            if cell_count > 0:
+                result.append({
+                    "domain": domain,
+                    "dimension": dim,
+                    "count": cell_count,
+                })
+    return result
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # 6. INDUSTRY FORESIGHT RADAR
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -649,6 +690,10 @@ def compute_market_intelligence(dashboard_data, company_details, analysis_result
     # 5. Cross-Impact Matrix
     result["cross_impact"] = compute_cross_impact(company_details)
     print(f"   [Market Intel] Cross-impact matrix: {len(result['cross_impact'])} cells populated")
+
+    # 5b. Domain x Dimension matrix (complement to cross_impact)
+    result["domain_dimension_matrix"] = compute_domain_dimension_matrix(company_details, dashboard_data)
+    print(f"   [Market Intel] Domain x Dimension matrix: {len(result['domain_dimension_matrix'])} cells populated")
 
     # 6. Industry Foresight Radar
     result["industry_radar"] = compute_industry_radar(company_details, dashboard_data)

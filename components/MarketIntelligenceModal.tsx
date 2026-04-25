@@ -949,12 +949,37 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
 
   // Per-row totals (theme density) and per-column totals (dimension density),
   // and the matrix-wide grand total. Used as denominators for the percentages
-  // shown next to the [TOTAL: N] and [DENSITY: N] chips in the interpretation.
+  // shown next to the [TOTAL: N] and [DENSITY: N] chips in the interpretation,
+  // and as the basis for highlighting the top-3 rows / cols / cells in the matrix.
   const ciThemeTotals: Record<string, number> = {};
   for (const theme of ciThemes as string[]) {
     ciThemeTotals[theme] = ciDimensions.reduce((s, d) => s + (ciMatrix[theme]?.[d] || 0), 0);
   }
+  const ciDimensionTotals: Record<string, number> = {};
+  for (const dim of ciDimensions) {
+    ciDimensionTotals[dim] = (ciThemes as string[]).reduce((s, t) => s + (ciMatrix[t]?.[dim] || 0), 0);
+  }
   const ciMatrixTotal = (ciThemes as string[]).reduce((s, t) => s + (ciThemeTotals[t] || 0), 0) || 1;
+
+  // Top-3 rankings for visual emphasis in the matrix table.
+  const ciTopThemes = (ciThemes as string[])
+    .slice() // already ordered by row total in ciThemes
+    .sort((a, b) => (ciThemeTotals[b] || 0) - (ciThemeTotals[a] || 0))
+    .slice(0, 3);
+  const ciTopThemeRank: Record<string, number> = {};
+  ciTopThemes.forEach((t, i) => { ciTopThemeRank[t] = i + 1; });
+
+  const ciTopDimensions = ciDimensions
+    .slice()
+    .sort((a, b) => (ciDimensionTotals[b] || 0) - (ciDimensionTotals[a] || 0))
+    .slice(0, 3);
+  const ciTopDimensionRank: Record<string, number> = {};
+  ciTopDimensions.forEach((d, i) => { ciTopDimensionRank[d] = i + 1; });
+
+  const ciTopCells: Array<{ theme: string; dimension: string; count: number }> = [...crossImpact]
+    .sort((a: any, b: any) => b.count - a.count)
+    .slice(0, 3);
+  const ciTopCellSet = new Set(ciTopCells.map(c => `${c.theme}|||${c.dimension}`));
 
   // Radar data: transform for Recharts
   const categories = Object.keys(CATEGORY_SHORT);
@@ -1013,73 +1038,271 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
             <thead>
               <tr>
                 <th className="text-left text-slate-400 p-1 font-medium">Theme</th>
-                {ciDimensions.map(d => (
-                  <th key={d} className="text-center text-slate-400 p-1 font-medium whitespace-nowrap relative group cursor-help">
-                    <span className="border-b border-dashed border-slate-500">{d}</span>
-                    {DIMENSION_DESCRIPTIONS[d] && (
-                      <div className="absolute z-[100] hidden group-hover:block bg-slate-900 border border-slate-600 rounded-lg p-3 text-left text-[10px] text-slate-300 font-normal w-[280px] -translate-x-1/2 left-1/2 top-full mt-1 shadow-xl leading-relaxed whitespace-normal pointer-events-none">
-                        <div className="font-bold text-cyan-300 mb-1">{d}</div>
-                        {DIMENSION_DESCRIPTIONS[d]}
-                      </div>
-                    )}
-                  </th>
-                ))}
+                {ciDimensions.map(d => {
+                  const dimRank = ciTopDimensionRank[d];
+                  const isTopDim = !!dimRank;
+                  return (
+                    <th
+                      key={d}
+                      className={`text-center p-1 whitespace-nowrap relative group cursor-help ${isTopDim ? 'text-emerald-200 font-bold' : 'text-slate-400 font-medium'}`}
+                    >
+                      <span className={`border-b border-dashed ${isTopDim ? 'border-emerald-400/60' : 'border-slate-500'}`}>{d}</span>
+                      {isTopDim && (
+                        <span className="ml-1 align-middle inline-block px-1 py-0 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-200 font-mono text-[8px]">
+                          #{dimRank}
+                        </span>
+                      )}
+                      {DIMENSION_DESCRIPTIONS[d] && (
+                        <div className="absolute z-[100] hidden group-hover:block bg-slate-900 border border-slate-600 rounded-lg p-3 text-left text-[10px] text-slate-300 font-normal w-[280px] -translate-x-1/2 left-1/2 top-full mt-1 shadow-xl leading-relaxed whitespace-normal pointer-events-none">
+                          <div className="font-bold text-cyan-300 mb-1">
+                            {d}
+                            {isTopDim && (
+                              <span className="ml-2 text-emerald-300 font-normal">#{dimRank} by column total ({ciDimensionTotals[d]})</span>
+                            )}
+                          </div>
+                          {DIMENSION_DESCRIPTIONS[d]}
+                        </div>
+                      )}
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
-              {(ciThemes as string[]).map((theme: string, themeIdx: number) => (
-                <tr key={theme} className="border-t border-white/5">
-                  <td className="p-1 text-slate-300 whitespace-nowrap">{theme}</td>
-                  {ciDimensions.map(dim => {
-                    const val = ciMatrix[theme]?.[dim] || 0;
-                    const intensity = val / maxCICount;
-                    const bg = val > 0
-                      ? `rgba(99, 102, 241, ${0.15 + intensity * 0.6})`
-                      : 'transparent';
-                    const showBelow = themeIdx < 3;
-                    return (
-                      <td key={dim} className="p-1 text-center font-mono text-slate-200 relative group cursor-help" style={{ backgroundColor: bg }}>
-                        {val > 0 ? val : '-'}
-                        {val > 0 && (
-                          <div className={`absolute z-[100] hidden group-hover:block bg-slate-900 border border-slate-600 rounded-lg p-3 text-left text-[10px] text-slate-300 font-normal w-[260px] -translate-x-1/2 left-1/2 shadow-xl leading-relaxed whitespace-normal pointer-events-none ${showBelow ? 'top-full mt-1' : 'bottom-full mb-1'}`}>
-                            <div className="font-bold text-cyan-300 mb-1">{theme} &times; {dim}</div>
-                            <div className="text-slate-400">
-                              <span className="text-white font-bold">{val}</span> foresight signal{val !== 1 ? 's' : ''} across scanned companies link the <span className="text-violet-300">{theme}</span> megatrend to the <span className="text-emerald-300">{dim}</span> dimension.
+              {(ciThemes as string[]).map((theme: string, themeIdx: number) => {
+                const themeRank = ciTopThemeRank[theme];
+                const isTopTheme = !!themeRank;
+                return (
+                  <tr key={theme} className={`border-t border-white/5 ${isTopTheme ? 'bg-amber-500/5' : ''}`}>
+                    <td className={`p-1 whitespace-nowrap ${isTopTheme ? 'text-amber-100 font-bold border-l-2 border-amber-400/60 pl-2' : 'text-slate-300'}`}>
+                      {isTopTheme && (
+                        <span className="mr-1.5 inline-block px-1 py-0 rounded bg-amber-500/15 border border-amber-500/30 text-amber-200 font-mono text-[8px] align-middle">
+                          #{themeRank}
+                        </span>
+                      )}
+                      {theme}
+                    </td>
+                    {ciDimensions.map(dim => {
+                      const val = ciMatrix[theme]?.[dim] || 0;
+                      const intensity = val / maxCICount;
+                      const bg = val > 0
+                        ? `rgba(99, 102, 241, ${0.15 + intensity * 0.6})`
+                        : 'transparent';
+                      const showBelow = themeIdx < 3;
+                      const isTopCell = ciTopCellSet.has(`${theme}|||${dim}`);
+                      return (
+                        <td
+                          key={dim}
+                          className={`p-1 text-center font-mono text-slate-200 relative group cursor-help ${isTopCell ? 'ring-1 ring-amber-400/70 ring-inset font-bold text-amber-100' : ''}`}
+                          style={{ backgroundColor: bg }}
+                        >
+                          {val > 0 ? val : '-'}
+                          {val > 0 && (
+                            <div className={`absolute z-[100] hidden group-hover:block bg-slate-900 border border-slate-600 rounded-lg p-3 text-left text-[10px] text-slate-300 font-normal w-[260px] -translate-x-1/2 left-1/2 shadow-xl leading-relaxed whitespace-normal pointer-events-none ${showBelow ? 'top-full mt-1' : 'bottom-full mb-1'}`}>
+                              <div className="font-bold text-cyan-300 mb-1">{theme} &times; {dim}</div>
+                              <div className="text-slate-400">
+                                <span className="text-white font-bold">{val}</span> foresight signal{val !== 1 ? 's' : ''} across scanned companies link the <span className="text-violet-300">{theme}</span> megatrend to the <span className="text-emerald-300">{dim}</span> dimension.
+                              </div>
+                              {isTopCell && (
+                                <div className="mt-1.5 text-amber-300 text-[9px]">Top-3 highest-density cell in the matrix.</div>
+                              )}
+                              <div className="mt-1.5 text-slate-500 text-[9px]">Higher count = stronger cross-impact between this theme and dimension</div>
                             </div>
-                            <div className="mt-1.5 text-slate-500 text-[9px]">Higher count = stronger cross-impact between this theme and dimension</div>
-                          </div>
-                        )}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
-        </div>
-      )}
-
-      {/* Industry Foresight Radar */}
-      {industryRadar.length > 0 && RechartsRadar && (
-        <div className="bg-black/20 border border-white/10 rounded-lg p-4">
-          <h4 className="text-[10px] font-bold text-emerald-300 uppercase tracking-wide mb-3">Industry Foresight Radar (top domains)</h4>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {industryRadar.slice(0, 4).map((ir: any, idx: number) => (
-              <div key={ir.domain} className="bg-black/30 rounded-lg p-2">
-                <div className="text-[10px] font-bold text-slate-200 text-center mb-1">{ir.domain} <span className="text-slate-500">({ir.total_signals} signals)</span></div>
-                <ResponsiveContainer width="100%" height={200}>
-                  <RadarChart data={radarData} cx="50%" cy="50%">
-                    <PolarGrid stroke="#334155" />
-                    <PolarAngleAxis dataKey="category" tick={{ fill: '#94a3b8', fontSize: 8 }} />
-                    <PolarRadiusAxis tick={false} domain={[0, 100]} />
-                    <RechartsRadar dataKey={ir.domain} stroke={RADAR_COLORS[idx]} fill={RADAR_COLORS[idx]} fillOpacity={0.25} strokeWidth={2} />
-                  </RadarChart>
-                </ResponsiveContainer>
-              </div>
-            ))}
+          <div className="mt-3 flex flex-wrap items-center gap-3 text-[9px] text-slate-500">
+            <span className="flex items-center gap-1">
+              <span className="inline-block w-2 h-2 rounded bg-amber-500/50 border border-amber-400/60"></span>
+              Top-3 themes by total density
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="inline-block w-2 h-2 rounded bg-emerald-500/40 border border-emerald-400/60"></span>
+              Top-3 dimensions by column total
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="inline-block w-2 h-2 rounded ring-1 ring-amber-400/70"></span>
+              Top-3 highest-density cells
+            </span>
           </div>
         </div>
       )}
+
+      {/* C1 — Concentration vs Volume scatter (top-15 themes) */}
+      {(ciThemes as string[]).length > 0 && ScatterChart && (() => {
+        const SHAPE_COLORS: Record<string, string> = {
+          CONCENTRATED: '#6366f1',
+          BIMODAL: '#06b6d4',
+          DIFFUSE: '#f59e0b',
+          MIXED: '#64748b',
+          SMALL_N: '#475569',
+        };
+        const points = (ciThemes as string[]).map((theme: string) => {
+          const dims = ciDimensions.map(d => ciMatrix[theme]?.[d] || 0);
+          const total = ciThemeTotals[theme] || 0;
+          const sortedDesc = [...dims].sort((a, b) => b - a);
+          const topShare = total > 0 ? sortedDesc[0] / total : 0;
+          const top2Share = total > 0 ? (sortedDesc[0] + sortedDesc[1]) / total : 0;
+          const dimCount = dims.filter(v => v > 0).length;
+          const topDimIdx = dims.indexOf(sortedDesc[0]);
+          const topDim = ciDimensions[topDimIdx] || '';
+          let shape = 'MIXED';
+          if (total < 8) shape = 'SMALL_N';
+          else if (topShare >= 0.35 && top2Share >= 0.60) shape = 'CONCENTRATED';
+          else if (top2Share >= 0.60) shape = 'BIMODAL';
+          else if (topShare < 0.30 && top2Share < 0.55) shape = 'DIFFUSE';
+          return {
+            theme, total,
+            topSharePct: Math.round(topShare * 1000) / 10,
+            dimCount, topDim, shape,
+          };
+        });
+        const grouped: Record<string, any[]> = {};
+        for (const p of points) {
+          (grouped[p.shape] ||= []).push(p);
+        }
+        return (
+          <div className="bg-black/20 border border-white/10 rounded-lg p-4">
+            <h4 className="text-[10px] font-bold text-indigo-300 uppercase tracking-wide mb-1">Concentration vs Volume — Top 15 Themes</h4>
+            <p className="text-[10px] text-slate-500 mb-3">X = total density (volume of pressure). Y = share absorbed by the top dimension (concentration). Bubble size = number of dimensions touched.</p>
+            <ResponsiveContainer width="100%" height={300}>
+              <ScatterChart margin={{ top: 10, right: 20, bottom: 30, left: 10 }}>
+                <CartesianGrid stroke="#334155" strokeDasharray="3 3" />
+                <XAxis type="number" dataKey="total" name="total density" tick={{ fill: '#94a3b8', fontSize: 10 }} label={{ value: 'Total density', position: 'insideBottom', offset: -10, fill: '#94a3b8', fontSize: 10 }} />
+                <YAxis type="number" dataKey="topSharePct" name="top-dim share %" domain={[0, 100]} tick={{ fill: '#94a3b8', fontSize: 10 }} unit="%" label={{ value: 'Top-dimension share', angle: -90, position: 'insideLeft', fill: '#94a3b8', fontSize: 10 }} />
+                {ZAxis && <ZAxis type="number" dataKey="dimCount" range={[40, 220]} name="dimensions touched" />}
+                <Tooltip
+                  cursor={{ strokeDasharray: '3 3', stroke: '#475569' }}
+                  contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }}
+                  content={({ active, payload }: any) => {
+                    if (!active || !payload?.[0]) return null;
+                    const p = payload[0].payload;
+                    return (
+                      <div className="bg-slate-900 border border-slate-600 rounded-lg p-2.5 text-[10px] text-slate-300 leading-relaxed">
+                        <div className="font-bold text-indigo-200">{p.theme}</div>
+                        <div>total density <span className="text-white font-mono">{p.total}</span></div>
+                        <div>top dim: <span className="text-emerald-300">{p.topDim}</span> ({p.topSharePct}%)</div>
+                        <div>dimensions touched: <span className="text-white font-mono">{p.dimCount}</span> of 5</div>
+                        <div className="mt-1 inline-block px-1.5 py-0.5 rounded font-mono text-[9px]" style={{ backgroundColor: SHAPE_COLORS[p.shape] + '33', border: `1px solid ${SHAPE_COLORS[p.shape]}66`, color: SHAPE_COLORS[p.shape] }}>
+                          {p.shape}
+                        </div>
+                      </div>
+                    );
+                  }}
+                />
+                {Object.entries(grouped).map(([shape, data]) => (
+                  <Scatter key={shape} name={shape} data={data} fill={SHAPE_COLORS[shape] || '#64748b'} fillOpacity={0.75} stroke={SHAPE_COLORS[shape] || '#64748b'} />
+                ))}
+                <Legend wrapperStyle={{ fontSize: 9, color: '#94a3b8', paddingTop: 8 }} />
+              </ScatterChart>
+            </ResponsiveContainer>
+          </div>
+        );
+      })()}
+
+      {/* C2 — Domain x Dimension heatmap */}
+      {(data.domain_dimension_matrix?.length || 0) > 0 && (() => {
+        const ddRaw = data.domain_dimension_matrix as Array<{ domain: string; dimension: string; count: number }>;
+        const ddDomains = [...new Set(ddRaw.map(c => c.domain))] as string[];
+        const ddMatrix: Record<string, Record<string, number>> = {};
+        for (const c of ddRaw) {
+          if (!ddMatrix[c.domain]) ddMatrix[c.domain] = {};
+          ddMatrix[c.domain][c.dimension] = c.count;
+        }
+        const ddMax = Math.max(...ddRaw.map(c => c.count), 1);
+        const ddDomainTotals: Record<string, number> = {};
+        for (const dom of ddDomains) {
+          ddDomainTotals[dom] = ciDimensions.reduce((s, d) => s + (ddMatrix[dom]?.[d] || 0), 0);
+        }
+        return (
+          <div className="bg-black/20 border border-white/10 rounded-lg p-4 overflow-visible">
+            <h4 className="text-[10px] font-bold text-emerald-300 uppercase tracking-wide mb-1">Domain x Dimension — Where pressure lands by industry</h4>
+            <p className="text-[10px] text-slate-500 mb-3">Same evidence base as the Theme x Dimension matrix above, grouped by industry domain instead of foresight theme.</p>
+            <table className="w-full text-[10px]">
+              <thead>
+                <tr>
+                  <th className="text-left text-slate-400 p-1 font-medium">Domain</th>
+                  {ciDimensions.map(d => (
+                    <th key={d} className="text-center text-slate-400 p-1 font-medium whitespace-nowrap">{d}</th>
+                  ))}
+                  <th className="text-center text-slate-500 p-1 font-medium">total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ddDomains.map(dom => (
+                  <tr key={dom} className="border-t border-white/5">
+                    <td className="p-1 text-slate-300 whitespace-nowrap">{dom}</td>
+                    {ciDimensions.map(d => {
+                      const v = ddMatrix[dom]?.[d] || 0;
+                      const intensity = v / ddMax;
+                      const bg = v > 0 ? `rgba(16, 185, 129, ${0.15 + intensity * 0.6})` : 'transparent';
+                      return (
+                        <td
+                          key={d}
+                          className="p-1 text-center font-mono text-slate-200"
+                          style={{ backgroundColor: bg }}
+                          title={v > 0 ? `${dom} x ${d}: density ${v}` : undefined}
+                        >
+                          {v > 0 ? v : '-'}
+                        </td>
+                      );
+                    })}
+                    <td className="p-1 text-center font-mono text-slate-500">{ddDomainTotals[dom]}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+      })()}
+
+      {/* C3 — Theme Momentum bars */}
+      {(observatoryData?.theme_momentum?.length || 0) > 0 && (() => {
+        const tm = observatoryData.theme_momentum as Array<{ theme: string; accelerating: number; stable: number; decelerating: number; total: number }>;
+        const top = tm.slice(0, 10);
+        return (
+          <div className="bg-black/20 border border-white/10 rounded-lg p-4">
+            <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-1">Theme Momentum — Top 10 themes by signal volume</h4>
+            <p className="text-[10px] text-slate-500 mb-3">Accelerating vs. stable vs. decelerating signals per theme, drawn from the Foresight Knowledge Base.</p>
+            <div className="space-y-2">
+              {top.map(row => {
+                const tot = row.total || 1;
+                const aPct = (row.accelerating / tot) * 100;
+                const sPct = (row.stable / tot) * 100;
+                const dPct = (row.decelerating / tot) * 100;
+                return (
+                  <div key={row.theme} className="grid grid-cols-[160px_1fr_64px] items-center gap-3 text-[10px]">
+                    <div className="text-slate-300 truncate" title={row.theme}>{row.theme}</div>
+                    <div className="h-3 flex rounded overflow-hidden bg-slate-800/60 border border-slate-700">
+                      {aPct > 0 && <div style={{ width: `${aPct}%`, backgroundColor: '#10b981' }} title={`Accelerating: ${row.accelerating}`} />}
+                      {sPct > 0 && <div style={{ width: `${sPct}%`, backgroundColor: '#64748b' }} title={`Stable: ${row.stable}`} />}
+                      {dPct > 0 && <div style={{ width: `${dPct}%`, backgroundColor: '#f43f5e' }} title={`Decelerating: ${row.decelerating}`} />}
+                    </div>
+                    <div className="text-right font-mono text-slate-500">{row.total}</div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-3 text-[9px] text-slate-500">
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-2 h-2 rounded" style={{ backgroundColor: '#10b981' }}></span> Accelerating
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-2 h-2 rounded" style={{ backgroundColor: '#64748b' }}></span> Stable
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-2 h-2 rounded" style={{ backgroundColor: '#f43f5e' }}></span> Decelerating
+              </span>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* FINNISH ECONOMY FORCE MAP — from Observatory */}
       {observatoryData?.finland_analysis?.text && (
@@ -1220,21 +1443,66 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
                   const totalPct = Number.isFinite(totalNum) && ciMatrixTotal > 0
                     ? Math.round((totalNum / ciMatrixTotal) * 1000) / 10
                     : null;
+                  // 5-segment distribution bar driven by the matrix data the model saw.
+                  const themeRow = ciMatrix[b.name];
+                  const rowTotal = ciThemeTotals[b.name] || 0;
+                  const segmentColors: Record<string, string> = {
+                    "Operating Model": "#6366f1",   // indigo
+                    "Service Portfolio": "#10b981", // emerald
+                    "Values": "#f59e0b",             // amber
+                    "Strategy": "#06b6d4",           // cyan
+                    "AI Readiness": "#a855f7",       // violet
+                  };
                   return (
-                    <div key={i} className="mt-4 mb-2 flex flex-wrap items-center gap-2 text-[11px]">
-                      <span className="font-bold text-indigo-100">{b.name}</span>
-                      {b.total && (
-                        <span
-                          className="px-2 py-0.5 rounded bg-slate-800/60 border border-slate-700 text-slate-300 font-mono"
-                          title={totalPct !== null ? `${totalPct}% of total matrix density (${ciMatrixTotal})` : undefined}
-                        >
-                          total {b.total}{totalPct !== null && <span className="text-slate-500"> ({totalPct}%)</span>}
-                        </span>
-                      )}
-                      {b.shape && (
-                        <span className="px-2 py-0.5 rounded bg-indigo-500/15 border border-indigo-500/30 text-indigo-200 font-mono uppercase tracking-wide text-[9px]">
-                          {b.shape}
-                        </span>
+                    <div key={i} className="mt-4 mb-2">
+                      <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                        <span className="font-bold text-indigo-100">{b.name}</span>
+                        {b.total && (
+                          <span
+                            className="px-2 py-0.5 rounded bg-slate-800/60 border border-slate-700 text-slate-300 font-mono"
+                            title={totalPct !== null ? `${totalPct}% of total matrix density (${ciMatrixTotal})` : undefined}
+                          >
+                            total {b.total}{totalPct !== null && <span className="text-slate-500"> ({totalPct}%)</span>}
+                          </span>
+                        )}
+                        {b.shape && (
+                          <span className="px-2 py-0.5 rounded bg-indigo-500/15 border border-indigo-500/30 text-indigo-200 font-mono uppercase tracking-wide text-[9px]">
+                            {b.shape}
+                          </span>
+                        )}
+                      </div>
+                      {themeRow && rowTotal > 0 && (
+                        <div className="mt-2 max-w-md">
+                          <div className="h-2 flex rounded overflow-hidden bg-slate-800/60 border border-slate-700">
+                            {ciDimensions.map(dim => {
+                              const v = themeRow[dim] || 0;
+                              const w = (v / rowTotal) * 100;
+                              if (w <= 0) return null;
+                              const pct = Math.round(w * 10) / 10;
+                              return (
+                                <div
+                                  key={dim}
+                                  className="h-full"
+                                  style={{ width: `${w}%`, backgroundColor: segmentColors[dim] || '#64748b' }}
+                                  title={`${dim}: density ${v} (${pct}% of row)`}
+                                />
+                              );
+                            })}
+                          </div>
+                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[9px] text-slate-500">
+                            {ciDimensions.map(dim => {
+                              const v = themeRow[dim] || 0;
+                              if (v <= 0) return null;
+                              const pct = Math.round((v / rowTotal) * 1000) / 10;
+                              return (
+                                <span key={dim} className="flex items-center gap-1">
+                                  <span className="inline-block w-1.5 h-1.5 rounded-sm" style={{ backgroundColor: segmentColors[dim] || '#64748b' }} />
+                                  {dim} {pct}%
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </div>
                       )}
                     </div>
                   );

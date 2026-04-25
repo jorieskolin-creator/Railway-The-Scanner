@@ -65,6 +65,7 @@ def _aggregate_kb_signals(all_kb: dict) -> dict:
     by_lifecycle = defaultdict(int)
     by_momentum = defaultdict(int)
     by_credibility = defaultdict(int)
+    by_theme_momentum = defaultdict(lambda: {"accelerating": 0, "stable": 0, "decelerating": 0, "total": 0})
     total = 0
 
     for theme_slug, theme_data in all_kb.items():
@@ -91,13 +92,34 @@ def _aggregate_kb_signals(all_kb: dict) -> dict:
             by_timeframe[sig.get("timeframe", "unknown")] += 1
             by_force_type[sig.get("force_type", "unknown")] += 1
             by_lifecycle[sig.get("lifecycle_stage", "unknown")] += 1
-            by_momentum[sig.get("trend_momentum", "unknown")] += 1
+            momentum = sig.get("trend_momentum", "unknown")
+            by_momentum[momentum] += 1
             by_credibility[sig.get("source_credibility", "unknown")] += 1
             total += 1
+
+            # Per-theme momentum split (for the Theme Momentum chart in Future Demand).
+            if fp_theme:
+                if momentum == "accelerating":
+                    by_theme_momentum[fp_theme]["accelerating"] += 1
+                elif momentum == "decelerating":
+                    by_theme_momentum[fp_theme]["decelerating"] += 1
+                elif momentum == "stable":
+                    by_theme_momentum[fp_theme]["stable"] += 1
+                by_theme_momentum[fp_theme]["total"] += 1
 
     # Count accelerating vs decelerating
     accelerating = by_force_type.get("Probable/Emerging", 0) + by_force_type.get("Plausible/Maturing", 0)
     decelerating = by_force_type.get("Weakening/Legacy", 0) + by_force_type.get("Weakening/Declining", 0)
+
+    # Top-15 themes by total signal count, with momentum breakdown.
+    theme_momentum_list = sorted(
+        (
+            {"theme": theme, **counts}
+            for theme, counts in by_theme_momentum.items()
+        ),
+        key=lambda x: x["total"],
+        reverse=True,
+    )[:15]
 
     return {
         "total_signals": total,
@@ -107,6 +129,8 @@ def _aggregate_kb_signals(all_kb: dict) -> dict:
         "by_lifecycle": dict(by_lifecycle),
         "by_momentum": dict(by_momentum),
         "by_credibility": dict(by_credibility),
+        "by_theme_momentum": {t: dict(c) for t, c in by_theme_momentum.items()},
+        "theme_momentum_top": theme_momentum_list,
         "accelerating": accelerating,
         "decelerating": decelerating,
         "theme_count": len(all_kb),
@@ -1099,6 +1123,9 @@ def generate_observatory(progress_callback=None):
         "global_analysis": global_analysis,
         "finland_analysis": finland_analysis,
         "domain_dossiers": domain_dossiers,
+        # Top-15 themes with momentum breakdown — drives the Theme Momentum chart
+        # in Market Intelligence > Future Demand. Additive; safe for old clients.
+        "theme_momentum": kb_agg.get("theme_momentum_top", []),
     }
 
     # Save to storage
