@@ -179,6 +179,78 @@ const downloadHtml = (html: string, filename: string) => {
   URL.revokeObjectURL(url);
 };
 
+// Adaptability x Future Vulnerability scatter for the static HTML export.
+// Mirrors the in-app Recharts version: dots colored by segment, dashed
+// reference lines at the calibrated FAVI cutoff and the FAC median, four
+// quadrant labels, and a small caption listing what each quadrant means.
+const buildSvgAdaptabilityScatter = (
+  faviCompanies: any[],
+  faviCutoff: number,
+  facCutoff: number,
+): string => {
+  if (!faviCompanies?.length) return '';
+  const chartW = 720, chartH = 360, mL = 56, mR = 36, mT = 28, mB = 50;
+  const plotW = chartW - mL - mR, plotH = chartH - mT - mB;
+  const xToPx = (x: number) => mL + (Math.max(0, Math.min(100, x)) / 100) * plotW;
+  const yToPx = (y: number) => mT + plotH - (Math.max(0, Math.min(100, y)) / 100) * plotH;
+  const segColor = (seg: string) =>
+    seg === 'Critical' ? '#f43f5e' :
+    seg === 'Sleepwalking' ? '#f59e0b' :
+    seg === 'Wounded but Sheltered' ? '#3b82f6' : '#10b981';
+
+  // Gridlines + tick labels at 0/25/50/75/100 on each axis.
+  const ticks = [0, 25, 50, 75, 100];
+  const grid = ticks.map(t => {
+    const x = xToPx(t), y = yToPx(t);
+    return (
+      `<line x1="${x}" y1="${mT}" x2="${x}" y2="${mT + plotH}" stroke="#1e293b" stroke-dasharray="3,3"/>` +
+      `<line x1="${mL}" y1="${y}" x2="${mL + plotW}" y2="${y}" stroke="#1e293b" stroke-dasharray="3,3"/>` +
+      `<text x="${x}" y="${mT + plotH + 14}" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="sans-serif">${t}</text>` +
+      `<text x="${mL - 8}" y="${y + 3}" text-anchor="end" fill="#94a3b8" font-size="9" font-family="sans-serif">${t}</text>`
+    );
+  }).join('\n');
+
+  // Reference lines: vertical at FAC median, horizontal at FAVI cutoff.
+  const xRef = xToPx(facCutoff), yRef = yToPx(faviCutoff);
+  const refs = [
+    `<line x1="${xRef}" y1="${mT}" x2="${xRef}" y2="${mT + plotH}" stroke="#475569" stroke-dasharray="6,4"/>`,
+    `<line x1="${mL}" y1="${yRef}" x2="${mL + plotW}" y2="${yRef}" stroke="#475569" stroke-dasharray="6,4"/>`,
+    `<text x="${xRef + 4}" y="${mT + 10}" fill="#475569" font-size="9" font-family="sans-serif">FAC=${facCutoff.toFixed(0)}</text>`,
+    `<text x="${mL + plotW - 4}" y="${yRef - 4}" text-anchor="end" fill="#475569" font-size="9" font-family="sans-serif">FAVI=${faviCutoff}</text>`,
+  ].join('\n');
+
+  // Quadrant labels in the four corners.
+  const labels = [
+    `<text x="${mL + 8}" y="${mT + 16}" fill="#fb7185" font-size="10" font-weight="700" font-family="sans-serif">TRAPPED</text>`,
+    `<text x="${mL + plotW - 8}" y="${mT + 16}" text-anchor="end" fill="#fbbf24" font-size="10" font-weight="700" font-family="sans-serif">WEALTHY UNDER PRESSURE</text>`,
+    `<text x="${mL + 8}" y="${mT + plotH - 8}" fill="#60a5fa" font-size="10" font-weight="700" font-family="sans-serif">MATURE &amp; STABLE</text>`,
+    `<text x="${mL + plotW - 8}" y="${mT + plotH - 8}" text-anchor="end" fill="#34d399" font-size="10" font-weight="700" font-family="sans-serif">FUTURE-READY</text>`,
+  ].join('\n');
+
+  // Dots, one per company that has any signal on either axis.
+  const dots = faviCompanies
+    .filter((c: any) => (c.favi_score || 0) > 0 || (c.fac || 0) > 0)
+    .map((c: any) => {
+      const cx = xToPx(c.fac || 0), cy = yToPx(c.favi_score || 0);
+      const fill = segColor(c.segment);
+      const safeName = String(c.name || '').replace(/[<>&"']/g, ch => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' } as any)[ch] || ch);
+      return `<circle cx="${cx}" cy="${cy}" r="4.5" fill="${fill}" fill-opacity="0.78" stroke="${fill}" stroke-opacity="0.95"><title>${safeName} (${c.domain || ''}) — FAC=${c.fac || 0}, FAVI=${c.favi_score || 0}, ${c.segment || ''}</title></circle>`;
+    }).join('\n');
+
+  // Axis titles.
+  const xTitle = `<text x="${mL + plotW / 2}" y="${chartH - 8}" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">Financial Adaptation Capacity (FAC)</text>`;
+  const yTitle = `<text x="${14}" y="${mT + plotH / 2}" text-anchor="middle" transform="rotate(-90 14 ${mT + plotH / 2})" fill="#64748b" font-size="9" font-family="sans-serif">Foresight Vulnerability (FAVI)</text>`;
+
+  const caption = `<div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-size:10px;color:#94a3b8">
+    <div><span style="color:#fb7185;font-weight:700">TRAPPED</span> <span style="color:#64748b">(top-left)</span> — low cushion, future bad</div>
+    <div><span style="color:#fbbf24;font-weight:700">WEALTHY UNDER PRESSURE</span> <span style="color:#64748b">(top-right)</span> — must invest</div>
+    <div><span style="color:#60a5fa;font-weight:700">MATURE &amp; STABLE</span> <span style="color:#64748b">(bottom-left)</span> — financially fine, no future pressure</div>
+    <div><span style="color:#34d399;font-weight:700">FUTURE-READY</span> <span style="color:#64748b">(bottom-right)</span> — best position</div>
+  </div>`;
+
+  return `<svg viewBox="0 0 ${chartW} ${chartH}" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:${chartW}px;height:auto;display:block;margin:0 auto">${grid}\n${refs}\n${labels}\n${dots}\n${xTitle}\n${yTitle}</svg>${caption}`;
+};
+
 const buildSvgPareto = (foresights: any[]): string => {
   if (!foresights?.length) return '';
   const total = foresights.reduce((s: number, x: any) => s + x.count, 0) || 1;
@@ -788,15 +860,18 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
       content += `<div class="section"><h2>Strategic Vulnerability Segments</h2><div class="segment-grid">${cards}</div>${cutoffsHtml}</div>`;
     }
 
-    // Domain pressure horizontal bar
-    if (data.favi_domain_pressure?.length) {
-      const items = data.favi_domain_pressure.map((d: any) => ({
-        label: d.domain,
-        value: d.avg_pressure,
-        color: FAVI_COLOR(d.avg_pressure),
-      }));
-      const maxP = Math.max(...items.map((i: any) => i.value), 100);
-      content += `<div class="section"><h2>Domain Foresight Pressure</h2>${buildSvgHorizBar(items, maxP)}</div>`;
+    // Adaptability x Future Vulnerability scatter — replaces the old Domain
+    // Foresight Pressure bar in the static export, mirroring the in-app view.
+    if (data.favi_companies?.length) {
+      const facValues = data.favi_companies.map((c: any) => c.fac || 0).filter((x: number) => x >= 0);
+      let facMedian = 50;
+      if (facValues.length) {
+        const sortedFac = [...facValues].sort((a: number, b: number) => a - b);
+        const mid = Math.floor(sortedFac.length / 2);
+        facMedian = sortedFac.length % 2 === 0 ? (sortedFac[mid - 1] + sortedFac[mid]) / 2 : sortedFac[mid];
+      }
+      const faviCutoff = data.favi_cutoffs?.favi ?? 25;
+      content += `<div class="section"><h2>Adaptability × Future Vulnerability</h2><p style="font-size:10px;color:#64748b;margin-bottom:10px">X = financial capacity to absorb change (FAC). Y = foresight-driven future pressure (FAVI). Reference lines at the calibrated FAVI cutoff (Y) and the portfolio's median FAC (X).</p>${buildSvgAdaptabilityScatter(data.favi_companies, faviCutoff, facMedian)}</div>`;
     }
 
     // FAVI company table
@@ -2244,7 +2319,9 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
 
       {/* Domain Foresight Pressure + FAVI vs Current Vuln Scatter side by side */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Domain Foresight Pressure */}
+        {/* Domain Foresight Pressure — hidden in favor of the Adaptability x FAVI
+            scatter below. Code retained so we can flip the flag back if needed. */}
+        {false && (
         <div className="bg-black/20 border border-white/10 rounded-lg p-4">
           <h4 className="text-[10px] font-bold text-violet-300 uppercase tracking-wide mb-3">Domain Foresight Pressure</h4>
           {domainPressure.length > 0 && BarChart ? (
@@ -2266,6 +2343,71 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
             <div className="text-slate-500 text-xs py-8 text-center">No foresight pressure data</div>
           )}
         </div>
+        )}
+
+        {/* Adaptability x Future Vulnerability — replaces the old Domain
+            Foresight Pressure bar. X = Financial Adaptation Capacity (FAC).
+            Y = Foresight Vulnerability (FAVI). Quadrants are anchored on the
+            calibrated FAVI cutoff and the median FAC of this portfolio. */}
+        {sorted.length > 0 && ScatterChart ? (() => {
+          const facValues = sorted.map((v: any) => v.fac || 0).filter((x: number) => x >= 0);
+          const facMedian = facValues.length
+            ? (() => {
+                const s = [...facValues].sort((a, b) => a - b);
+                const mid = Math.floor(s.length / 2);
+                return s.length % 2 === 0 ? (s[mid - 1] + s[mid]) / 2 : s[mid];
+              })()
+            : 50;
+          const faviCutoff = data.favi_cutoffs?.favi ?? 25;
+          return (
+            <div className="bg-black/20 border border-white/10 rounded-lg p-4">
+              <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-1">Adaptability x Future Vulnerability</h4>
+              <p className="text-[10px] text-slate-500 mb-3">X = financial capacity to absorb change. Y = foresight-driven future pressure. Top-left = trapped; bottom-right = future-ready.</p>
+              <ResponsiveContainer width="100%" height={250}>
+                <ScatterChart margin={{ left: 10, right: 20, top: 10, bottom: 25 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                  <XAxis type="number" dataKey="fac" name="FAC" tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[0, 100]}
+                    label={{ value: 'Financial Adaptation Capacity', fill: '#64748b', fontSize: 9, position: 'bottom', offset: 10 }} />
+                  <YAxis type="number" dataKey="favi_score" name="FAVI" tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[0, 100]}
+                    label={{ value: 'Foresight Vulnerability', fill: '#64748b', fontSize: 9, angle: -90, position: 'insideLeft' }} />
+                  <Tooltip cursor={{ strokeDasharray: '3 3' }}
+                    contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11, color: '#e2e8f0' }} labelStyle={{ color: '#f1f5f9', fontWeight: 600 }} itemStyle={{ color: '#e2e8f0' }}
+                    content={({ active, payload }: any) => {
+                      if (!active || !payload?.length) return null;
+                      const d = payload[0]?.payload;
+                      return (
+                        <div className="bg-[#0f172a] border border-white/20 rounded-lg p-2 text-[10px]">
+                          <div className="font-bold text-white">{d?.name}</div>
+                          <div className="text-slate-400">{d?.domain}</div>
+                          <div className="mt-1 text-cyan-300">Adaptability (FAC): {d?.fac}</div>
+                          <div className="text-rose-300">Foresight Vulnerability: {d?.favi_score}</div>
+                          <div className={`mt-1 font-bold ${SEGMENT_CONFIG[d?.segment]?.color || 'text-slate-300'}`}>{d?.segment}</div>
+                        </div>
+                      );
+                    }} />
+                  {/* Quadrant reference lines: vertical at FAC median, horizontal at calibrated FAVI cutoff */}
+                  {ReferenceLine && <ReferenceLine x={facMedian} stroke="#475569" strokeDasharray="6 4" label={{ value: `FAC=${facMedian.toFixed(0)}`, fill: '#475569', fontSize: 8, position: 'top' }} />}
+                  {ReferenceLine && <ReferenceLine y={faviCutoff} stroke="#475569" strokeDasharray="6 4" label={{ value: `FAVI=${faviCutoff}`, fill: '#475569', fontSize: 8, position: 'right' }} />}
+                  <Scatter data={sorted.filter((v: any) => v.favi_score > 0 || v.fac > 0)} name="Companies">
+                    {sorted.filter((v: any) => v.favi_score > 0 || v.fac > 0).map((v: any, i: number) => {
+                      const segColor = v.segment === 'Critical' ? '#f43f5e' :
+                        v.segment === 'Sleepwalking' ? '#f59e0b' :
+                        v.segment === 'Wounded but Sheltered' ? '#3b82f6' : '#10b981';
+                      return <Cell key={i} fill={segColor} fillOpacity={0.75} />;
+                    })}
+                  </Scatter>
+                </ScatterChart>
+              </ResponsiveContainer>
+              {/* Quadrant labels overlaid as a small legend strip */}
+              <div className="grid grid-cols-2 gap-2 mt-2 text-[9px] text-slate-400">
+                <div><span className="text-rose-300 font-bold">TRAPPED</span> <span className="text-slate-500">(top-left)</span> — low cushion, future bad</div>
+                <div><span className="text-amber-300 font-bold">WEALTHY UNDER PRESSURE</span> <span className="text-slate-500">(top-right)</span> — must invest</div>
+                <div><span className="text-blue-300 font-bold">MATURE &amp; STABLE</span> <span className="text-slate-500">(bottom-left)</span> — financially fine, no future pressure</div>
+                <div><span className="text-emerald-300 font-bold">FUTURE-READY</span> <span className="text-slate-500">(bottom-right)</span> — best position</div>
+              </div>
+            </div>
+          );
+        })() : null}
 
         {/* Foresight Vulnerability vs Current Vulnerability Scatter */}
         {sorted.length > 0 && ScatterChart ? (
@@ -2293,9 +2435,11 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
                       </div>
                     );
                   }} />
-                {/* Quadrant reference lines at segment thresholds */}
-                {ReferenceLine && <ReferenceLine x={40} stroke="#475569" strokeDasharray="6 4" label={{ value: 'Vuln=40', fill: '#475569', fontSize: 8, position: 'top' }} />}
-                {ReferenceLine && <ReferenceLine y={25} stroke="#475569" strokeDasharray="6 4" label={{ value: 'Vuln.=25', fill: '#475569', fontSize: 8, position: 'right' }} />}
+                {/* Quadrant reference lines at calibrated segment cutoffs.
+                    Falls back to the legacy fixed thresholds if the cutoffs
+                    are absent on the API payload. */}
+                {ReferenceLine && <ReferenceLine x={data.favi_cutoffs?.current_vulnerability ?? 40} stroke="#475569" strokeDasharray="6 4" label={{ value: `Vuln=${data.favi_cutoffs?.current_vulnerability ?? 40}`, fill: '#475569', fontSize: 8, position: 'top' }} />}
+                {ReferenceLine && <ReferenceLine y={data.favi_cutoffs?.favi ?? 25} stroke="#475569" strokeDasharray="6 4" label={{ value: `FAVI=${data.favi_cutoffs?.favi ?? 25}`, fill: '#475569', fontSize: 8, position: 'right' }} />}
                 <Scatter data={sorted.filter((v: any) => v.favi_score > 0 || v.current_vulnerability > 0)} name="Companies">
                   {sorted.filter((v: any) => v.favi_score > 0 || v.current_vulnerability > 0).map((v: any, i: number) => {
                     const segColor = v.segment === 'Critical' ? '#f43f5e' :
