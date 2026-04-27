@@ -2439,7 +2439,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
                     Falls back to the legacy fixed thresholds if the cutoffs
                     are absent on the API payload. */}
                 {ReferenceLine && <ReferenceLine x={data.favi_cutoffs?.current_vulnerability ?? 40} stroke="#475569" strokeDasharray="6 4" label={{ value: `Vuln=${data.favi_cutoffs?.current_vulnerability ?? 40}`, fill: '#475569', fontSize: 8, position: 'top' }} />}
-                {ReferenceLine && <ReferenceLine y={data.favi_cutoffs?.favi ?? 25} stroke="#475569" strokeDasharray="6 4" label={{ value: `FAVI=${data.favi_cutoffs?.favi ?? 25}`, fill: '#475569', fontSize: 8, position: 'right' }} />}
+                {ReferenceLine && <ReferenceLine y={data.favi_cutoffs?.favi ?? 48} stroke="#475569" strokeDasharray="6 4" label={{ value: `FAVI=${data.favi_cutoffs?.favi ?? 48}`, fill: '#475569', fontSize: 8, position: 'right' }} />}
                 <Scatter data={sorted.filter((v: any) => v.favi_score > 0 || v.current_vulnerability > 0)} name="Companies">
                   {sorted.filter((v: any) => v.favi_score > 0 || v.current_vulnerability > 0).map((v: any, i: number) => {
                     const segColor = v.segment === 'Critical' ? '#f43f5e' :
