@@ -870,7 +870,7 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
         const mid = Math.floor(sortedFac.length / 2);
         facMedian = sortedFac.length % 2 === 0 ? (sortedFac[mid - 1] + sortedFac[mid]) / 2 : sortedFac[mid];
       }
-      const faviCutoff = data.favi_cutoffs?.favi ?? 25;
+      const faviCutoff = data.favi_cutoffs?.favi ?? 48;
       content += `<div class="section"><h2>Adaptability × Future Vulnerability</h2><p style="font-size:10px;color:#64748b;margin-bottom:10px">X = financial capacity to absorb change (FAC). Y = foresight-driven future pressure (FAVI). Reference lines at the calibrated FAVI cutoff (Y) and the portfolio's median FAC (X).</p>${buildSvgAdaptabilityScatter(data.favi_companies, faviCutoff, facMedian)}</div>`;
     }
 
