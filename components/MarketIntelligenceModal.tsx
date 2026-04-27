@@ -2361,7 +2361,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
           const faviCutoff = data.favi_cutoffs?.favi ?? 48;
           return (
             <div className="bg-black/20 border border-white/10 rounded-lg p-4">
-              <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-1">Adaptability x Future Vulnerability</h4>
+              <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-1">Adaptation Capacity x Future Vulnerability</h4>
               <p className="text-[10px] text-slate-500 mb-3">X = financial capacity to absorb change. Y = foresight-driven future pressure. Top-left = trapped; bottom-right = future-ready.</p>
               <ResponsiveContainer width="100%" height={250}>
                 <ScatterChart margin={{ left: 10, right: 20, top: 10, bottom: 25 }}>
