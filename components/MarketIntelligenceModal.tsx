@@ -2247,7 +2247,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
               <div className={`text-sm font-bold ${SEGMENT_CONFIG["Critical"].color}`}>Critical</div>
               <div className="text-2xl font-bold text-rose-400">{segments["Critical"] || 0}</div>
             </div>
-            <div className="text-[9px] text-slate-400 mb-1">High Current Vulnerability + High Foresight Vulnerability</div>
+            <div className="text-[9px] text-slate-400 mb-1">Scaled Current Vulnerability + High Foresight Vulnerability</div>
             <div className="text-[9px] text-rose-300/70">{SEGMENT_CONFIG["Critical"].description}</div>
             <div className="mt-2 h-1 rounded-full bg-white/5 overflow-hidden">
               <div className="h-full bg-rose-500 rounded-full" style={{ width: `${((segments["Critical"] || 0) / totalCompanies) * 100}%` }} />
@@ -2259,7 +2259,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
               <div className={`text-sm font-bold ${SEGMENT_CONFIG["Wounded but Sheltered"].color}`}>Wounded but Sheltered</div>
               <div className="text-2xl font-bold text-blue-400">{segments["Wounded but Sheltered"] || 0}</div>
             </div>
-            <div className="text-[9px] text-slate-400 mb-1">High Current Vulnerability + Low Foresight Vulnerability</div>
+            <div className="text-[9px] text-slate-400 mb-1">Scaled Current Vulnerability + Foresight Vulnerability</div>
             <div className="text-[9px] text-blue-300/70">{SEGMENT_CONFIG["Wounded but Sheltered"].description}</div>
             <div className="mt-2 h-1 rounded-full bg-white/5 overflow-hidden">
               <div className="h-full bg-blue-500 rounded-full" style={{ width: `${((segments["Wounded but Sheltered"] || 0) / totalCompanies) * 100}%` }} />
@@ -2271,7 +2271,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
               <div className={`text-sm font-bold ${SEGMENT_CONFIG["Sleepwalking"].color}`}>Sleepwalking</div>
               <div className="text-2xl font-bold text-amber-400">{segments["Sleepwalking"] || 0}</div>
             </div>
-            <div className="text-[9px] text-slate-400 mb-1">Low Current Vulnerability + High Foresight Vulnerability</div>
+            <div className="text-[9px] text-slate-400 mb-1">Scaled Current Vulnerability + High Foresight Vulnerability</div>
             <div className="text-[9px] text-amber-300/70">{SEGMENT_CONFIG["Sleepwalking"].description}</div>
             <div className="mt-2 h-1 rounded-full bg-white/5 overflow-hidden">
               <div className="h-full bg-amber-500 rounded-full" style={{ width: `${((segments["Sleepwalking"] || 0) / totalCompanies) * 100}%` }} />
@@ -2283,7 +2283,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
               <div className={`text-sm font-bold ${SEGMENT_CONFIG["Safe Harbor"].color}`}>Safe Harbor</div>
               <div className="text-2xl font-bold text-emerald-400">{segments["Safe Harbor"] || 0}</div>
             </div>
-            <div className="text-[9px] text-slate-400 mb-1">Low Current Vulnerability + Low Foresight Vulnerability</div>
+            <div className="text-[9px] text-slate-400 mb-1">Scaled Current Vulnerability + Low Foresight Vulnerability</div>
             <div className="text-[9px] text-emerald-300/70">{SEGMENT_CONFIG["Safe Harbor"].description}</div>
             <div className="mt-2 h-1 rounded-full bg-white/5 overflow-hidden">
               <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${((segments["Safe Harbor"] || 0) / totalCompanies) * 100}%` }} />
