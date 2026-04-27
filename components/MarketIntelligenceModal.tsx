@@ -2345,7 +2345,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
         </div>
         )}
 
-        {/* Adaptability x Future Vulnerability — replaces the old Domain
+        {/* Adaptation Capacity x Future Vulnerability — replaces the old Domain
             Foresight Pressure bar. X = Financial Adaptation Capacity (FAC).
             Y = Foresight Vulnerability (FAVI). Quadrants are anchored on the
             calibrated FAVI cutoff and the median FAC of this portfolio. */}
