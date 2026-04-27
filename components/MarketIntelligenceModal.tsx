@@ -2358,7 +2358,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
                 return s.length % 2 === 0 ? (s[mid - 1] + s[mid]) / 2 : s[mid];
               })()
             : 50;
-          const faviCutoff = data.favi_cutoffs?.favi ?? 25;
+          const faviCutoff = data.favi_cutoffs?.favi ?? 50;
           return (
             <div className="bg-black/20 border border-white/10 rounded-lg p-4">
               <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-1">Adaptability x Future Vulnerability</h4>
