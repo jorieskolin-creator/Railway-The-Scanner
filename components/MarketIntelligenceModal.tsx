@@ -179,7 +179,7 @@ const downloadHtml = (html: string, filename: string) => {
   URL.revokeObjectURL(url);
 };
 
-// Adaptability x Future Vulnerability scatter for the static HTML export.
+// Adaptation Capacity x Future Vulnerability scatter for the static HTML export.
 // Mirrors the in-app Recharts version: dots colored by segment, dashed
 // reference lines at the calibrated FAVI cutoff and the FAC median, four
 // quadrant labels, and a small caption listing what each quadrant means.
@@ -860,7 +860,7 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
       content += `<div class="section"><h2>Strategic Vulnerability Segments</h2><div class="segment-grid">${cards}</div>${cutoffsHtml}</div>`;
     }
 
-    // Adaptability x Future Vulnerability scatter — replaces the old Domain
+    // Adaptation Capacity x Future Vulnerability scatter — replaces the old Domain
     // Foresight Pressure bar in the static export, mirroring the in-app view.
     if (data.favi_companies?.length) {
       const facValues = data.favi_companies.map((c: any) => c.fac || 0).filter((x: number) => x >= 0);
