@@ -2358,7 +2358,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
                 return s.length % 2 === 0 ? (s[mid - 1] + s[mid]) / 2 : s[mid];
               })()
             : 50;
-          const faviCutoff = data.favi_cutoffs?.favi ?? 50;
+          const faviCutoff = data.favi_cutoffs?.favi ?? 48;
           return (
             <div className="bg-black/20 border border-white/10 rounded-lg p-4">
               <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-1">Adaptability x Future Vulnerability</h4>
@@ -2414,7 +2414,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
           <div className="bg-black/20 border border-white/10 rounded-lg p-4">
             <h4 className="text-[10px] font-bold text-rose-300 uppercase tracking-wide mb-3">Foresight-Adjusted Vulnerability vs Current Vulnerability</h4>
             <ResponsiveContainer width="100%" height={250}>
-              <ScatterChart margin={{ left: 10, right: 20, top: 10, bottom: 25 }}>
+              <ScatterChart margin={{ left: 10, right: 20, top: 10, bottom: 48 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
                 <XAxis type="number" dataKey="current_vulnerability" name="Current Vuln." tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[0, 100]}
                   label={{ value: 'Current Vulnerability', fill: '#64748b', fontSize: 9, position: 'bottom', offset: 10 }} />
