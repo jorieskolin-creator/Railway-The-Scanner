@@ -210,8 +210,9 @@ const buildSvgAdaptabilityScatter = (
     );
   }).join('\n');
 
-  // Reference lines: vertical at FAC median, horizontal at FAVI cutoff.
-  const xRef = xToPx(facCutoff), yRef = yToPx(faviCutoff);
+  // Reference lines: vertical at FAC median, horizontal at FAVI cutoff
+  // visually nudged down by 2 (label still reflects the actual cutoff value).
+  const xRef = xToPx(facCutoff), yRef = yToPx(Math.max(0, faviCutoff - 2));
   const refs = [
     `<line x1="${xRef}" y1="${mT}" x2="${xRef}" y2="${mT + plotH}" stroke="#475569" stroke-dasharray="6,4"/>`,
     `<line x1="${mL}" y1="${yRef}" x2="${mL + plotW}" y2="${yRef}" stroke="#475569" stroke-dasharray="6,4"/>`,
@@ -246,6 +247,76 @@ const buildSvgAdaptabilityScatter = (
     <div><span style="color:#fbbf24;font-weight:700">WEALTHY UNDER PRESSURE</span> <span style="color:#64748b">(top-right)</span> — must invest</div>
     <div><span style="color:#60a5fa;font-weight:700">MATURE &amp; STABLE</span> <span style="color:#64748b">(bottom-left)</span> — financially fine, no future pressure</div>
     <div><span style="color:#34d399;font-weight:700">FUTURE-READY</span> <span style="color:#64748b">(bottom-right)</span> — best position</div>
+  </div>`;
+
+  return `<svg viewBox="0 0 ${chartW} ${chartH}" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:${chartW}px;height:auto;display:block;margin:0 auto">${grid}\n${refs}\n${labels}\n${dots}\n${xTitle}\n${yTitle}</svg>${caption}`;
+};
+
+// FAVI vs Current Vulnerability scatter for the static HTML export.
+// Mirrors the in-app Recharts version: dots colored by segment, dashed
+// reference lines at the calibrated current-vulnerability and FAVI
+// cutoffs, four quadrant labels named after the segments themselves
+// (Sleepwalking / Critical / Safe Harbor / Wounded but Sheltered),
+// and a small caption.
+const buildSvgFaviCurrentScatter = (
+  faviCompanies: any[],
+  faviCutoff: number,
+  currentCutoff: number,
+): string => {
+  if (!faviCompanies?.length) return '';
+  const chartW = 720, chartH = 360, mL = 56, mR = 36, mT = 28, mB = 50;
+  const plotW = chartW - mL - mR, plotH = chartH - mT - mB;
+  const xToPx = (x: number) => mL + (Math.max(0, Math.min(100, x)) / 100) * plotW;
+  const yToPx = (y: number) => mT + plotH - (Math.max(0, Math.min(100, y)) / 100) * plotH;
+  const segColor = (seg: string) =>
+    seg === 'Critical' ? '#f43f5e' :
+    seg === 'Sleepwalking' ? '#f59e0b' :
+    seg === 'Wounded but Sheltered' ? '#3b82f6' : '#10b981';
+
+  const ticks = [0, 25, 50, 75, 100];
+  const grid = ticks.map(t => {
+    const x = xToPx(t), y = yToPx(t);
+    return (
+      `<line x1="${x}" y1="${mT}" x2="${x}" y2="${mT + plotH}" stroke="#1e293b" stroke-dasharray="3,3"/>` +
+      `<line x1="${mL}" y1="${y}" x2="${mL + plotW}" y2="${y}" stroke="#1e293b" stroke-dasharray="3,3"/>` +
+      `<text x="${x}" y="${mT + plotH + 14}" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="sans-serif">${t}</text>` +
+      `<text x="${mL - 8}" y="${y + 3}" text-anchor="end" fill="#94a3b8" font-size="9" font-family="sans-serif">${t}</text>`
+    );
+  }).join('\n');
+
+  const xRef = xToPx(currentCutoff), yRef = yToPx(faviCutoff);
+  const refs = [
+    `<line x1="${xRef}" y1="${mT}" x2="${xRef}" y2="${mT + plotH}" stroke="#475569" stroke-dasharray="6,4"/>`,
+    `<line x1="${mL}" y1="${yRef}" x2="${mL + plotW}" y2="${yRef}" stroke="#475569" stroke-dasharray="6,4"/>`,
+    `<text x="${xRef + 4}" y="${mT + 10}" fill="#475569" font-size="9" font-family="sans-serif">Vuln=${currentCutoff}</text>`,
+    `<text x="${mL + plotW - 4}" y="${yRef - 4}" text-anchor="end" fill="#475569" font-size="9" font-family="sans-serif">FAVI=${faviCutoff}</text>`,
+  ].join('\n');
+
+  // Quadrants named after the segments they classify.
+  const labels = [
+    `<text x="${mL + 8}" y="${mT + 16}" fill="#fbbf24" font-size="10" font-weight="700" font-family="sans-serif">SLEEPWALKING</text>`,
+    `<text x="${mL + plotW - 8}" y="${mT + 16}" text-anchor="end" fill="#fb7185" font-size="10" font-weight="700" font-family="sans-serif">CRITICAL</text>`,
+    `<text x="${mL + 8}" y="${mT + plotH - 8}" fill="#34d399" font-size="10" font-weight="700" font-family="sans-serif">SAFE HARBOR</text>`,
+    `<text x="${mL + plotW - 8}" y="${mT + plotH - 8}" text-anchor="end" fill="#60a5fa" font-size="10" font-weight="700" font-family="sans-serif">WOUNDED BUT SHELTERED</text>`,
+  ].join('\n');
+
+  const dots = faviCompanies
+    .filter((c: any) => (c.favi_score || 0) > 0 || (c.current_vulnerability || 0) > 0)
+    .map((c: any) => {
+      const cx = xToPx(c.current_vulnerability || 0), cy = yToPx(c.favi_score || 0);
+      const fill = segColor(c.segment);
+      const safeName = String(c.name || '').replace(/[<>&"']/g, ch => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' } as any)[ch] || ch);
+      return `<circle cx="${cx}" cy="${cy}" r="4.5" fill="${fill}" fill-opacity="0.78" stroke="${fill}" stroke-opacity="0.95"><title>${safeName} (${c.domain || ''}) — Current=${c.current_vulnerability || 0}, FAVI=${c.favi_score || 0}, ${c.segment || ''}</title></circle>`;
+    }).join('\n');
+
+  const xTitle = `<text x="${mL + plotW / 2}" y="${chartH - 8}" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">Current Vulnerability</text>`;
+  const yTitle = `<text x="${14}" y="${mT + plotH / 2}" text-anchor="middle" transform="rotate(-90 14 ${mT + plotH / 2})" fill="#64748b" font-size="9" font-family="sans-serif">Foresight Vulnerability (FAVI)</text>`;
+
+  const caption = `<div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-size:10px;color:#94a3b8">
+    <div><span style="color:#fbbf24;font-weight:700">SLEEPWALKING</span> <span style="color:#64748b">(top-left)</span> — looks fine today, future is building</div>
+    <div><span style="color:#fb7185;font-weight:700">CRITICAL</span> <span style="color:#64748b">(top-right)</span> — struggling now AND blind to what is coming</div>
+    <div><span style="color:#34d399;font-weight:700">SAFE HARBOR</span> <span style="color:#64748b">(bottom-left)</span> — healthy and future-ready</div>
+    <div><span style="color:#60a5fa;font-weight:700">WOUNDED BUT SHELTERED</span> <span style="color:#64748b">(bottom-right)</span> — problems are real but future is not adding pressure</div>
   </div>`;
 
   return `<svg viewBox="0 0 ${chartW} ${chartH}" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:${chartW}px;height:auto;display:block;margin:0 auto">${grid}\n${refs}\n${labels}\n${dots}\n${xTitle}\n${yTitle}</svg>${caption}`;
@@ -833,31 +904,56 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
   }
 
   if (tabName === 'favi') {
-    // Segment matrix
+    // Strategic Foresight Vulnerability Matrix — mirrors the in-app 2x2 layout:
+    // Top-left = Critical, Top-right = Wounded but Sheltered,
+    // Bottom-left = Sleepwalking, Bottom-right = Safe Harbor.
     if (data.favi_segments) {
-      const segs = [
-        { key: 'Critical', color: '#f43f5e', bg: 'rgba(244,63,94,0.1)', border: 'rgba(244,63,94,0.3)', desc: 'Struggling now AND blind to what\'s coming' },
-        { key: 'Sleepwalking', color: '#f59e0b', bg: 'rgba(245,158,11,0.1)', border: 'rgba(245,158,11,0.3)', desc: 'Looks fine today but forces are building' },
-        { key: 'Wounded but Sheltered', color: '#3b82f6', bg: 'rgba(59,130,246,0.1)', border: 'rgba(59,130,246,0.3)', desc: 'Problems are real but future isn\'t adding pressure' },
-        { key: 'Safe Harbor', color: '#10b981', bg: 'rgba(16,185,129,0.1)', border: 'rgba(16,185,129,0.3)', desc: 'Healthy and future-ready' },
+      // Each entry carries the same per-card text the modal renders so the
+      // download reads identically to what the user sees on screen.
+      const matrixCards = [
+        { key: 'Critical',              color: '#fb7185', bg: 'rgba(244,63,94,0.08)',  border: 'rgba(244,63,94,0.25)', desc: "Struggling now AND blind to what's coming",            condition: 'Scaled Current Vulnerability + High Foresight Vulnerability' },
+        { key: 'Wounded but Sheltered', color: '#60a5fa', bg: 'rgba(59,130,246,0.08)', border: 'rgba(59,130,246,0.25)', desc: "Problems are real but future isn't adding pressure",  condition: 'Scaled Current Vulnerability + Foresight Vulnerability' },
+        { key: 'Sleepwalking',          color: '#fbbf24', bg: 'rgba(245,158,11,0.08)', border: 'rgba(245,158,11,0.25)', desc: 'Looks fine today but forces are building',             condition: 'Scaled Current Vulnerability + High Foresight Vulnerability' },
+        { key: 'Safe Harbor',           color: '#34d399', bg: 'rgba(16,185,129,0.08)', border: 'rgba(16,185,129,0.25)', desc: 'Healthy and future-ready',                             condition: 'Scaled Current Vulnerability + Low Foresight Vulnerability' },
       ];
       const totalCo = Object.values(data.favi_segments).reduce((a: number, b: any) => a + (b || 0), 0) as number;
-      const cards = segs.map(s => {
+      const renderCard = (s: any) => {
         const count = data.favi_segments[s.key] || 0;
-        const pct = totalCo > 0 ? Math.round((count / totalCo) * 100) : 0;
-        return `<div class="segment-card" style="background:${s.bg};border:1px solid ${s.border}"><h4 style="color:${s.color}">${s.key}</h4><div class="count" style="color:${s.color}">${count}</div><div style="font-size:10px;color:#64748b">${pct}% of companies</div><div class="desc">${s.desc}</div></div>`;
-      }).join('');
-      // Cutoffs note — surfaces what split produced these counts so the
-      // download is self-explanatory without needing the live page.
+        const pctBar = totalCo > 0 ? (count / totalCo) * 100 : 0;
+        return `<div style="background:${s.bg};border:1px solid ${s.border};padding:16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <div style="color:${s.color};font-weight:700;font-size:13px">${s.key}</div>
+            <div style="color:${s.color};font-size:24px;font-weight:700">${count}</div>
+          </div>
+          <div style="font-size:9px;color:#94a3b8;margin-bottom:4px">${s.condition}</div>
+          <div style="font-size:9px;color:${s.color};opacity:0.75">${s.desc}</div>
+          <div style="margin-top:8px;height:4px;background:rgba(255,255,255,0.05);border-radius:9999px;overflow:hidden">
+            <div style="height:100%;width:${pctBar}%;background:${s.color};border-radius:9999px"></div>
+          </div>
+        </div>`;
+      };
+      const matrixGrid = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:1px;background:rgba(255,255,255,0.08);border-radius:8px;overflow:hidden">
+        ${renderCard(matrixCards[0])}${renderCard(matrixCards[1])}
+        ${renderCard(matrixCards[2])}${renderCard(matrixCards[3])}
+      </div>`;
+
+      // Cutoffs note — same line that appears below the matrix in the modal.
       let cutoffsHtml = '';
       if (data.favi_cutoffs) {
         const src: string = data.favi_cutoffs.source || '';
         const sourceLabel = src.startsWith('percentile')
           ? src.replace('percentile:', '').replace(/p(\d+(\.\d+)?)/g, '$1th percentile').replace(/,/g, ', ').replace('favi=', 'FAVI ').replace('current=', 'Current ')
           : 'fixed fallback';
-        cutoffsHtml = `<p style="font-size:11px;color:#94a3b8;margin-top:8px">Cutoffs (${sourceLabel}): FAVI &ge; <span style="font-family:ui-monospace,monospace;color:#cbd5e1">${data.favi_cutoffs.favi}</span> &middot; Current Vulnerability &ge; <span style="font-family:ui-monospace,monospace;color:#cbd5e1">${data.favi_cutoffs.current_vulnerability}</span></p>`;
+        cutoffsHtml = `<p style="font-size:11px;color:#94a3b8;margin-top:12px">Cutoffs (${sourceLabel}): FAVI &ge; <span style="font-family:ui-monospace,monospace;color:#cbd5e1">${data.favi_cutoffs.favi}</span> &middot; Current Vulnerability &ge; <span style="font-family:ui-monospace,monospace;color:#cbd5e1">${data.favi_cutoffs.current_vulnerability}</span></p>`;
       }
-      content += `<div class="section"><h2>Strategic Vulnerability Segments</h2><div class="segment-grid">${cards}</div>${cutoffsHtml}</div>`;
+
+      // Matrix axis labels — same pair of labels rendered below the matrix in the modal.
+      const axisLabels = `<div style="display:flex;justify-content:space-between;margin-top:10px;font-size:8px;color:#64748b;text-transform:uppercase;letter-spacing:0.08em">
+        <div style="display:flex;align-items:center;gap:6px"><span style="display:inline-block;width:24px;height:1px;background:#475569"></span>Current Vulnerability (x-axis)<span style="display:inline-block;width:24px;height:1px;background:#475569"></span></div>
+        <div style="display:flex;align-items:center;gap:6px"><span style="display:inline-block;width:24px;height:1px;background:#475569"></span>Foresight-Adjusted Vulnerability Index (y-axis)<span style="display:inline-block;width:24px;height:1px;background:#475569"></span></div>
+      </div>`;
+
+      content += `<div class="section"><h2>Strategic Foresight Vulnerability Matrix (Current x Future)</h2>${matrixGrid}${cutoffsHtml}${axisLabels}</div>`;
     }
 
     // Adaptation Capacity x Future Vulnerability scatter — replaces the old Domain
@@ -871,7 +967,9 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
         facMedian = sortedFac.length % 2 === 0 ? (sortedFac[mid - 1] + sortedFac[mid]) / 2 : sortedFac[mid];
       }
       const faviCutoff = data.favi_cutoffs?.favi ?? 48;
-      content += `<div class="section"><h2>Adaptability × Future Vulnerability</h2><p style="font-size:10px;color:#64748b;margin-bottom:10px">X = financial capacity to absorb change (FAC). Y = foresight-driven future pressure (FAVI). Reference lines at the calibrated FAVI cutoff (Y) and the portfolio's median FAC (X).</p>${buildSvgAdaptabilityScatter(data.favi_companies, faviCutoff, facMedian)}</div>`;
+      const currentCutoff = data.favi_cutoffs?.current_vulnerability ?? 40;
+      content += `<div class="section"><h2>Adaptation Capacity x Future Vulnerability</h2><p style="font-size:10px;color:#64748b;margin-bottom:10px">X = financial capacity to absorb change. Y = foresight-driven future pressure. Top-left = trapped; bottom-right = future-ready.</p>${buildSvgAdaptabilityScatter(data.favi_companies, faviCutoff, facMedian)}</div>`;
+      content += `<div class="section"><h2>Foresight-Adjusted Vulnerability vs Current Vulnerability</h2><p style="font-size:10px;color:#64748b;margin-bottom:10px">X = how vulnerable today. Y = how vulnerable tomorrow. The reference lines split the plane into the four strategic segments (Critical / Sleepwalking / Wounded / Safe Harbor).</p>${buildSvgFaviCurrentScatter(data.favi_companies, faviCutoff, currentCutoff)}</div>`;
     }
 
     // FAVI company table
@@ -2385,9 +2483,12 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
                         </div>
                       );
                     }} />
-                  {/* Quadrant reference lines: vertical at FAC median, horizontal at calibrated FAVI cutoff */}
+                  {/* Quadrant reference lines: vertical at FAC median; horizontal
+                      at the calibrated FAVI cutoff visually nudged down by 2 so
+                      points right on the boundary read clearly. The label keeps
+                      the actual cutoff value since that is what classifies. */}
                   {ReferenceLine && <ReferenceLine x={facMedian} stroke="#475569" strokeDasharray="6 4" label={{ value: `FAC=${facMedian.toFixed(0)}`, fill: '#475569', fontSize: 8, position: 'top' }} />}
-                  {ReferenceLine && <ReferenceLine y={faviCutoff} stroke="#475569" strokeDasharray="6 4" label={{ value: `FAVI=${faviCutoff}`, fill: '#475569', fontSize: 8, position: 'right' }} />}
+                  {ReferenceLine && <ReferenceLine y={Math.max(0, faviCutoff - 2)} stroke="#475569" strokeDasharray="6 4" label={{ value: `FAVI=${faviCutoff}`, fill: '#475569', fontSize: 8, position: 'right' }} />}
                   <Scatter data={sorted.filter((v: any) => v.favi_score > 0 || v.fac > 0)} name="Companies">
                     {sorted.filter((v: any) => v.favi_score > 0 || v.fac > 0).map((v: any, i: number) => {
                       const segColor = v.segment === 'Critical' ? '#f43f5e' :
@@ -2412,7 +2513,8 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
         {/* Foresight Vulnerability vs Current Vulnerability Scatter */}
         {sorted.length > 0 && ScatterChart ? (
           <div className="bg-black/20 border border-white/10 rounded-lg p-4">
-            <h4 className="text-[10px] font-bold text-rose-300 uppercase tracking-wide mb-3">Foresight-Adjusted Vulnerability vs Current Vulnerability</h4>
+            <h4 className="text-[10px] font-bold text-rose-300 uppercase tracking-wide mb-1">Foresight-Adjusted Vulnerability vs Current Vulnerability</h4>
+            <p className="text-[10px] text-slate-500 mb-3">X = how vulnerable today. Y = how vulnerable tomorrow. The reference lines split the plane into the four strategic segments (Critical / Sleepwalking / Wounded / Safe Harbor).</p>
             <ResponsiveContainer width="100%" height={250}>
               <ScatterChart margin={{ left: 10, right: 20, top: 10, bottom: 48 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -2450,6 +2552,13 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
                 </Scatter>
               </ScatterChart>
             </ResponsiveContainer>
+            {/* Quadrant -> segment legend, mirroring the Adaptability chart. */}
+            <div className="grid grid-cols-2 gap-2 mt-2 text-[9px] text-slate-400">
+              <div><span className="text-amber-300 font-bold">SLEEPWALKING</span> <span className="text-slate-500">(top-left)</span> — looks fine today, future is building</div>
+              <div><span className="text-rose-300 font-bold">CRITICAL</span> <span className="text-slate-500">(top-right)</span> — struggling now AND blind to what is coming</div>
+              <div><span className="text-emerald-300 font-bold">SAFE HARBOR</span> <span className="text-slate-500">(bottom-left)</span> — healthy and future-ready</div>
+              <div><span className="text-blue-300 font-bold">WOUNDED BUT SHELTERED</span> <span className="text-slate-500">(bottom-right)</span> — problems are real but future is not adding pressure</div>
+            </div>
           </div>
         ) : null}
       </div>
