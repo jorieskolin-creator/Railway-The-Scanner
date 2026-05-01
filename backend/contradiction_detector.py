@@ -135,7 +135,8 @@ def detect_contradictions(evidence_items: list, company_name: str = "") -> list:
                 model=_MODEL,
                 contents=prompt,
             ),
-            max_retries=2,
+            label="Contradictions",
+            delays=(3, 8),  # Replaced max_retries=2 with delays=(3, 8) to match the backoff signature
         )
     except Exception as e:
         print(f"   [Contradictions] Detection call failed: {e}")
