@@ -531,7 +531,10 @@ The company's OWN website, blog posts, marketing pages, press releases, and soci
 
 4. Press releases and partnership announcements authored or co-authored by the company are promotional material, not independent verification. A company announcing a "strategic partnership" does not independently verify execution maturity or governance quality.
 
-5. If the ONLY sources contradicting an analytical claim are the company's own website and marketing materials, you MUST NOT flag that claim as false. Instead, recognize that the analysis correctly identified a gap between marketing and independently verifiable evidence.
+5. MARKETING VS. CONCRETE METRICS: There is a critical difference between vague marketing fluff ("We are an AI-first company") and concrete operational metrics ("We have 2,000 weekly active users on our internal AI tool" or "Our platform reduced downtime by 30%"). 
+   - If the company's self-reported source provides CONCRETE, SPECIFIC operational metrics that contradict the summary, you MUST acknowledge the company's metrics.
+   - If the summary relies entirely on a "narrow" independent source (like an HR survey) to declare a company-wide failure, while ignoring concrete self-reported company-wide metrics, flag this as a [Contradiction]. 
+   - Your correction MUST force the summary to acknowledge BOTH the self-reported metric AND the independent narrow observation (e.g., "While Wärtsilä reports 2,000 active users, an independent HR survey found..."). Do not allow the fact-checker to silence a company's specific, stated operational data just because it is self-reported.
 
 FLAG A CLAIM AS FALSE IF IT MEETS ANY OF THESE CRITERIA:
 
