@@ -21,6 +21,7 @@ from google import genai
 from gemini_client import get_gemini_client
 from google.genai import types as genai_types
 from gemini_backoff import call_with_503_backoff
+from source_quality import assess_source_scope
 
 
 def _extract_json(text: str) -> dict | None:
@@ -141,26 +142,40 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
         if remaining_slots > 0 and _older:
             _all_evidence.extend(_older[:remaining_slots])
 
+    # Each evidence item carries a "scope" flag derived from the source URL,
+    # title, and snippet. "narrow" means the source describes a limited
+    # population (master's thesis, single-department survey, pilot study). The
+    # prompt's SCOPE QUALIFICATION rule keys off this flag so the model adds
+    # qualifiers like "in a survey of HR personnel" instead of presenting
+    # departmental findings as company-wide truths.
     verified_links = []
     for i, l in enumerate(_all_evidence):
         snippet_limit = 500 if i < 8 else 350
+        title = (l.get("title", "Source") or "Source")[:80]
+        snippet = (l.get("snippet") or "")[:snippet_limit]
         verified_links.append({
-            "title": (l.get("title", "Source") or "Source")[:80],
-            "snippet": (l.get("snippet") or "")[:snippet_limit],
+            "title": title,
+            "snippet": snippet,
             "is_recent": l.get("is_recent", False),
+            "scope": assess_source_scope(l.get("url", ""), title, snippet),
         })
 
     # Add validated foresight sources to the evidence pool (max 3, validated only)
     # Foresight sources always get deep snippets (500 chars) — forward-looking signals.
-    foresight_sources = [
-        {
-            "title": (l.get("title", "Foresight") or "Foresight")[:80],
-            "snippet": (l.get("snippet") or "")[:500],
+    foresight_sources = []
+    for l in full_data.get("foresight_links", []):
+        if not (l.get("verified") is True and l.get("validated") is True):
+            continue
+        title = (l.get("title", "Foresight") or "Foresight")[:80]
+        snippet = (l.get("snippet") or "")[:500]
+        foresight_sources.append({
+            "title": title,
+            "snippet": snippet,
             "is_recent": True,
-        }
-        for l in full_data.get("foresight_links", [])
-        if l.get("verified") is True and l.get("validated") is True
-    ][:3]
+            "scope": assess_source_scope(l.get("url", ""), title, snippet),
+        })
+        if len(foresight_sources) >= 3:
+            break
     verified_links = verified_links + foresight_sources
 
     # Key jury findings — descriptions only, no URLs, no legal pages.
@@ -270,13 +285,18 @@ MANDATORY RULES:
 
 7. COVERAGE: Address at least 3 distinct dimensions if the evidence supports them — for example: financial health, operational or technology signals, people and leadership. Do not write the entire summary about a single event. If the evidence does not support a dimension, omit it rather than filling the gap with unsupported claims.
 
-8. RISK REPORTING: If the evidence documents negative trends or concrete vulnerabilities, report them factually. If the data reflects standard business practices (e.g., strategic outsourcing, white-labeling), do not manufacture artificial crises. Do not speculate about consequences — state the documented fact and let the reader draw conclusions.
+8. SCOPE QUALIFICATION — CRITICAL: Each item in evidence_links carries a "scope" field with two possible values: "broad" (default — applies to the company at large) and "narrow" (the source describes a limited population: a master's thesis, a single-department survey, a regional pilot, a study of N participants).
+   - When citing a number or finding from a "narrow" source, you MUST include a scope qualifier in the same sentence: "in a survey of HR personnel", "in a 100-respondent study", "in a Vaasa-based pilot", "according to a master's thesis". Never present a narrow-scope statistic as a company-wide truth.
+   - If two evidence items make conflicting quantitative claims about the same topic (one "narrow", one "broad"), cite both with their scope side by side and let the reader weigh them — never silently pick one. Do not let a single narrow-scope finding define the company's stance on a topic when broader-scope evidence exists in the same payload.
+   - This rule overrides the temptation to lead with the most striking number. A narrow-scope finding is interesting context, not a portfolio-level conclusion.
 
-9. PLAIN BUSINESS ENGLISH: No superlatives. No marketing language. No hedging phrases like "it appears that" or "it seems". State findings directly.
+9. RISK REPORTING: If the evidence documents negative trends or concrete vulnerabilities, report them factually. If the data reflects standard business practices (e.g., strategic outsourcing, white-labeling), do not manufacture artificial crises. Do not speculate about consequences — state the documented fact and let the reader draw conclusions.
 
-10. PARAGRAPHS: Structure the output as exactly 3-4 paragraphs, each covering a distinct dimension. Separate paragraphs with a blank line. This is required for readability.
+10. PLAIN BUSINESS ENGLISH: No superlatives. No marketing language. No hedging phrases like "it appears that" or "it seems". State findings directly.
 
-11. FORMAT: Plain prose only. No headers, no bullet points, no markdown, no links, no citations. Blank lines between paragraphs only.
+11. PARAGRAPHS: Structure the output as exactly 3-4 paragraphs, each covering a distinct dimension. Separate paragraphs with a blank line. This is required for readability.
+
+12. FORMAT: Plain prose only. No headers, no bullet points, no markdown, no links, no citations. Blank lines between paragraphs only.
 
 Output only the prose text. Nothing else."""
 

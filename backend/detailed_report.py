@@ -17,6 +17,7 @@ from google import genai
 from google.genai import types as genai_types
 from gemini_backoff import call_with_503_backoff
 from gemini_client import get_gemini_client
+from source_quality import assess_source_scope
 
 
 _FORBIDDEN_TERMS = [
@@ -74,27 +75,43 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
             delta = {"previous_scan_date": prev_date, "changes": parts}
 
     # Evidence — richer than general_summary (20 sources, 300-char snippets)
-    # Includes both forensic evidence_links and validated foresight_links
-    verified_links = [
-        {
-            "title": (l.get("title", "Source") or "Source")[:80],
-            "snippet": (l.get("snippet") or "")[:300],
-        }
-        for l in full_data.get("evidence_links", [])
-        if l.get("verified") is True and l.get("url") and not _is_legal_page(l.get("url", ""))
-    ][:20]
+    # Includes both forensic evidence_links and validated foresight_links.
+    # Each item carries a "scope" flag derived from the URL/title/snippet.
+    # "narrow" means the source describes a limited population (master's
+    # thesis, single-department survey, regional pilot). The prompt's SCOPE
+    # QUALIFICATION rule keys off this so the model adds qualifiers like "in
+    # a survey of HR personnel" rather than presenting departmental findings
+    # as company-wide truths.
+    verified_links = []
+    for l in full_data.get("evidence_links", []):
+        if not (l.get("verified") is True and l.get("url") and not _is_legal_page(l.get("url", ""))):
+            continue
+        title = (l.get("title", "Source") or "Source")[:80]
+        snippet = (l.get("snippet") or "")[:300]
+        verified_links.append({
+            "title": title,
+            "snippet": snippet,
+            "scope": assess_source_scope(l.get("url", ""), title, snippet),
+        })
+        if len(verified_links) >= 20:
+            break
 
     # Add validated foresight sources (enriches the evidence pool with forward-looking sources)
-    foresight_links = [
-        {
-            "title": (l.get("title", "Foresight Source") or "Foresight Source")[:80],
-            "snippet": (l.get("snippet") or "")[:300],
+    foresight_links = []
+    for l in full_data.get("foresight_links", []):
+        if not (l.get("verified") is True and l.get("validated") is True):
+            continue
+        title = (l.get("title", "Foresight Source") or "Foresight Source")[:80]
+        snippet = (l.get("snippet") or "")[:300]
+        foresight_links.append({
+            "title": title,
+            "snippet": snippet,
             "origin": "foresight",
             "source_type": l.get("source_type", ""),
-        }
-        for l in full_data.get("foresight_links", [])
-        if l.get("verified") is True and l.get("validated") is True
-    ][:5]
+            "scope": assess_source_scope(l.get("url", ""), title, snippet),
+        })
+        if len(foresight_links) >= 5:
+            break
 
     # Key findings — more detail (12 items)
     key_findings = [
@@ -267,8 +284,12 @@ MANDATORY RULES:
 4. NO SCORES: Do not mention score names, score numbers, or internal metrics in prose.
 5. SOURCE REFERENCES: When citing evidence, use source titles naturally in text. Do NOT include URLs — those display separately.
 6. FORBIDDEN ACTIONS: Do not fabricate findings, invent people problems, assume leadership gaps, or extrapolate small signals into sweeping assessments.
-7. PARAGRAPHS: Separate with \\n\\n. Required for rendering.
-8. FORMAT: Prose with section headings only. Each section starts with "## Heading" on its own line followed by \\n\\n then the paragraph body. No bullet points, no other markdown, no links.
+7. SCOPE QUALIFICATION — CRITICAL: Each item in evidence_links carries a "scope" field with two possible values: "broad" (default — applies to the company at large) and "narrow" (the source describes a limited population: a master's thesis, a single-department survey, a regional pilot, a study of N participants).
+   - When citing a number or finding from a "narrow" source, you MUST include a scope qualifier in the same sentence: "in a survey of HR personnel", "in a 100-respondent study", "in a Vaasa-based pilot", "according to a master's thesis". Never present a narrow-scope statistic as a company-wide truth.
+   - If two evidence items make conflicting quantitative claims about the same topic (one "narrow", one "broad"), cite both with their scope side by side and let the reader weigh them — never silently pick one. Do not let a single narrow-scope finding define the company's stance on a topic when broader-scope evidence exists in the same payload.
+   - This rule overrides the temptation to lead with the most striking number. A narrow-scope finding is interesting context, not a portfolio-level conclusion.
+8. PARAGRAPHS: Separate with \\n\\n. Required for rendering.
+9. FORMAT: Prose with section headings only. Each section starts with "## Heading" on its own line followed by \\n\\n then the paragraph body. No bullet points, no other markdown, no links.
 9. TEMPORAL PRECISION: Use the most recent annual figures, not quarterly snapshots presented as annual results.
 10. ORGANIZATIONAL CLAIMS: NEVER claim leadership gaps, unfilled roles, or organizational problems unless the evidence explicitly states them.
 

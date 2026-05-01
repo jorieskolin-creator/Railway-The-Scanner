@@ -320,6 +320,99 @@ def assess_source_credibility(url: str, source_type: str = "", company_domain: s
     return "medium"
 
 
+# === SCOPE CLASSIFICATION ===
+# A source can be perfectly credible AND describe only a narrow population.
+# A master's thesis surveying 100 HR personnel is "high credibility, narrow scope".
+# Treating it as a company-wide statistic — like the Wärtsilä case where a
+# trepo.tuni.fi thesis was elevated to a portfolio-wide claim — is the bias
+# this classifier is meant to flag. The LLM uses the resulting "scope": "narrow"
+# field to apply scope qualifiers in the generated prose.
+
+# Thesis / dissertation repositories — anything published here is, by definition,
+# a single student's research with a constrained sample. Mostly Nordic, but the
+# pattern generalises (DiVA, ProQuest, dspace, etc.).
+THESIS_REPO_DOMAINS = {
+    "trepo.tuni.fi",
+    "aaltodoc.aalto.fi",
+    "helda.helsinki.fi",
+    "osuva.uwasa.fi",
+    "theseus.fi",
+    "jyx.jyu.fi",
+    "lutpub.lut.fi",
+    "uta.fi",
+    "lauda.ulapland.fi",
+    "diva-portal.org",
+    "etda.libraries.psu.edu",
+    "dspace.mit.edu",
+    "escholarship.org",
+    "proquest.com",
+    "digitalcommons.usu.edu",
+}
+
+# Tokens in the URL path that indicate a thesis/dissertation regardless of host.
+_THESIS_URL_TOKENS = (
+    "thesis", "theses", "dissertation", "dissertations",
+    "gradu", "pro_gradu", "pro-gradu",
+    "bachelor", "masters", "master-s", "licentiate",
+    "studentthesis", "student-thesis",
+)
+
+# Tokens in title/snippet that indicate a narrow-scope study (a sample, a pilot,
+# a single department). Matched word-boundary on lowercase text.
+_NARROW_SCOPE_PHRASES = (
+    "master's thesis", "masters thesis", "doctoral thesis", "phd thesis",
+    "doctoral dissertation", "case study of", "pilot study",
+    "survey of", "survey conducted", "respondents", "interviewees",
+    "participants", "questionnaire", "focus group",
+    "(n=", "(n =", "n =", "sample of",
+)
+
+
+def _matches_url_token(url_lc: str, tokens) -> bool:
+    """Return True when one of the tokens appears in the URL path/query."""
+    for t in tokens:
+        if t in url_lc:
+            return True
+    return False
+
+
+def assess_source_scope(url: str = "", title: str = "", snippet: str = "") -> str:
+    """Classify how broadly a source's claim applies.
+
+    Returns:
+        "narrow" — thesis, dissertation, pilot, single-department survey, or
+                   any source whose population is explicitly limited.
+        "broad"  — everything else (the safe default; we under-flag rather
+                   than over-flag).
+
+    Used by the General Summary and Detailed Forensic Report payload builders
+    to attach a `"scope": "narrow"` flag to evidence items so the LLM can
+    apply scope qualifiers in the prose ("In a study of HR personnel...",
+    "In a 100-respondent survey...") instead of presenting departmental
+    findings as company-wide truths.
+    """
+    url_lc = (url or "").lower()
+    title_lc = (title or "").lower()
+    snippet_lc = (snippet or "").lower()
+
+    # 1. Known thesis-repository host → narrow.
+    domain = _get_domain(url_lc)
+    if domain and _domain_matches_set(domain, THESIS_REPO_DOMAINS):
+        return "narrow"
+
+    # 2. Thesis-style token in the URL path → narrow.
+    if _matches_url_token(url_lc, _THESIS_URL_TOKENS):
+        return "narrow"
+
+    # 3. Narrow-scope phrasing in the title or snippet → narrow.
+    haystack = title_lc + " " + snippet_lc
+    for phrase in _NARROW_SCOPE_PHRASES:
+        if phrase in haystack:
+            return "narrow"
+
+    return "broad"
+
+
 def assess_evidence_quality(links: list, company_domain: str = "") -> tuple:
     """
     Assess quality of an entire evidence set. Adds 'source_credibility' field
