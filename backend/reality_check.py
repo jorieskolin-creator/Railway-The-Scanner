@@ -905,8 +905,9 @@ CORRECTION RULES:
 - For each false claim, apply the VERIFIED CORRECTION provided. Use the exact corrected value — do not round, approximate, hedge, or keep the original value.
 - For numeric/qualifier errors (e.g. "A" vs "A-", "97%" vs "~90%", "61.1%" vs "60.8%"), you MUST replace the incorrect number/qualifier with the exact verified value. Do NOT soften it with hedging words like "reportedly", "approximately", or "may have".
 - For temporal errors (e.g. "delivered in August 2024" when it was only announced), replace with the verified timeline from the correction.
-- For fabrications with no verified correction (empty correction field), DELETE the entire sentence containing the fabrication.
+- For fabrications with no verified correction (empty correction field), DELETE the entire sentence containing the fabrication. CRITICAL: You MUST also delete the trailing period and any surrounding whitespace. Do not leave orphaned punctuation marks (like a stray ".") behind.
 - Preserve the original text word-for-word for ALL sentences not affected by false claims.
+- FORMATTING: Do NOT use HTML tags (like <br>). Use standard newline characters (\n) for paragraph breaks.
 - Do NOT add new information, analysis, or claims of your own.
 - Do NOT change the archetype classification or Knowledge Base terminology.
 - After removing or correcting a sentence, fix only the immediately adjacent transitions so the text reads naturally.
