@@ -295,22 +295,25 @@ MANDATORY RULES:
 
 7. COVERAGE: Address at least 3 distinct dimensions if the evidence supports them — for example: financial health, operational or technology signals, people and leadership. Do not write the entire summary about a single event. If the evidence does not support a dimension, omit it rather than filling the gap with unsupported claims.
 
-8. SCOPE QUALIFICATION — CRITICAL: Each item in evidence_links carries a "scope" field with two possible values: "broad" (default — applies to the company at large) and "narrow" (the source describes a limited population: a master's thesis, a single-department survey, a regional pilot, a study of N participants).
-   - When citing a number or finding from a "narrow" source, you MUST include a scope qualifier in the same sentence: "in a survey of HR personnel", "in a 100-respondent study", "in a Vaasa-based pilot", "according to a master's thesis". Never present a narrow-scope statistic as a company-wide truth.
-   - If a top-level "contradictions" array is present in the payload, EACH listed contradiction MUST be addressed in the prose — cite both sides with their respective scope ("broad"/"narrow") and source titles, in the same sentence or adjacent sentences. The contradictions array exists precisely because two evidence items disagreed quantitatively on the same topic; silently picking one side is a violation of this rule.
-   - Even when the contradictions array is empty, if you notice that two evidence_links items make conflicting quantitative claims about the same topic, cite both with their scope side by side and let the reader weigh them. Do not let a single narrow-scope finding define the company's stance on a topic when broader-scope evidence exists in the same payload.
-   - This rule overrides the temptation to lead with the most striking number. A narrow-scope finding is interesting context, not a portfolio-level conclusion.
+8. SCOPE & SOURCE QUALIFICATION — CRITICAL: 
+   - NARROW SCOPE: Each item in evidence_links carries a "scope" field with two possible values: "broad" (default) and "narrow" (e.g., a master's thesis, a single-department survey). When citing a finding from a "narrow" source, you MUST include a scope qualifier in the same sentence (e.g., "in a survey of HR personnel", "according to a localized pilot"). Never present a narrow-scope statistic as a company-wide truth.
+   - SELF-REPORTED DATA: If evidence comes from the company's own representatives, interviews, or domain (e.g., the company's AI lead stating "we have 2,000 users"), you MUST ingest and report these concrete metrics, but qualify them as corporate claims (e.g., "The company reports...", "Internal figures claim..."). Do not treat them as verified independent facts, but DO NOT omit them.
 
-9. RISK REPORTING: If the evidence documents negative trends or concrete vulnerabilities, report them factually. If the data reflects standard business practices (e.g., strategic outsourcing, white-labeling), do not manufacture artificial crises. Do not speculate about consequences — state the documented fact and let the reader draw conclusions.
+9. BALANCING CONTRADICTIONS — CRITICAL: 
+   - If a narrow-scope independent source (e.g., an academic thesis) contradicts a broad self-reported metric (e.g., company PR claiming thousands of users), you MUST present BOTH side-by-side to illustrate the tension between stated corporate metrics and localized independent reality. 
+   - Example format: "While the company reports [X] company-wide, an independent survey of [Y] department found [Z]."
+   - If a top-level "contradictions" array is present in the payload, EACH listed contradiction MUST be addressed in the prose by citing both sides.
+   - Do not let a narrow independent source completely erase the company's stated metrics, and do not let company PR erase independent findings. Address both.
 
-10. PLAIN BUSINESS ENGLISH: No superlatives. No marketing language. No hedging phrases like "it appears that" or "it seems". State findings directly.
+10. RISK REPORTING: If the evidence documents negative trends or concrete vulnerabilities, report them factually. If the data reflects standard business practices (e.g., strategic outsourcing, white-labeling), do not manufacture artificial crises. Do not speculate about consequences — state the documented fact and let the reader draw conclusions.
 
-11. PARAGRAPHS: Structure the output as exactly 3-4 paragraphs, each covering a distinct dimension. Separate paragraphs with a blank line. This is required for readability.
+11. PLAIN BUSINESS ENGLISH: No superlatives. No marketing language. No hedging phrases like "it appears that" or "it seems". State findings directly.
 
-12. FORMAT: Plain prose only. No headers, no bullet points, no markdown, no links, no citations. Blank lines between paragraphs only.
+12. PARAGRAPHS: Structure the output as exactly 3-4 paragraphs, each covering a distinct dimension. Separate paragraphs with a blank line. This is required for readability.
+
+13. FORMAT: Plain prose only. No headers, no bullet points, no markdown, no links, no citations. Blank lines between paragraphs only.
 
 Output only the prose text. Nothing else."""
-
 
 def _word_count(text: str) -> int:
     return len(text.split())
