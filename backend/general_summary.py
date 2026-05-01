@@ -308,11 +308,12 @@ MANDATORY RULES:
 
 11. PLAIN BUSINESS ENGLISH: No superlatives. No marketing language. No hedging phrases like "it appears that" or "it seems". State findings directly.
 
-12. PARAGRAPHS: Structure the output as exactly 3-4 paragraphs, each covering a distinct dimension. Separate paragraphs with a blank line. This is required for readability.
+12. PARAGRAPHS: Structure the output as exactly 3-4 paragraphs, each covering a distinct dimension. Separate paragraphs using standard newline characters (\\n\\n). This is required for readability.
 
-13. FORMAT: Plain prose only. No headers, no bullet points, no markdown, no links, no citations. Blank lines between paragraphs only.
+13. FORMAT: Plain prose only. No headers, no bullet points, no markdown, no links, no citations. CRITICAL: Do NOT use HTML tags like <br> to format line breaks.
 
 Output only the prose text. Nothing else."""
+
 
 def _word_count(text: str) -> int:
     return len(text.split())
