@@ -296,14 +296,13 @@ MANDATORY RULES:
 7. COVERAGE: Address at least 3 distinct dimensions if the evidence supports them — for example: financial health, operational or technology signals, people and leadership. Do not write the entire summary about a single event. If the evidence does not support a dimension, omit it rather than filling the gap with unsupported claims.
 
 8. SCOPE & SOURCE QUALIFICATION — CRITICAL: 
-   - NARROW SCOPE: Each item in evidence_links carries a "scope" field with two possible values: "broad" (default) and "narrow" (e.g., a master's thesis, a single-department survey). When citing a finding from a "narrow" source, you MUST include a scope qualifier in the same sentence (e.g., "in a survey of HR personnel", "according to a localized pilot"). Never present a narrow-scope statistic as a company-wide truth.
-   - SELF-REPORTED DATA: If evidence comes from the company's own representatives, interviews, or domain (e.g., the company's AI lead stating "we have 2,000 users"), you MUST ingest and report these concrete metrics, but qualify them as corporate claims (e.g., "The company reports...", "Internal figures claim..."). Do not treat them as verified independent facts, but DO NOT omit them.
+   - NARROW SCOPE: Each item in evidence_links carries a "scope" field. When citing a finding from a "narrow" source, you MUST include a scope qualifier (e.g., "in a survey of HR personnel"). 
+   - ANTI-EXTRAPOLATION: NEVER extrapolate a narrow-scope finding into a macro-trend. For example, if a survey only covers the HR department, you are forbidden from writing sweeping claims like "enterprise adoption lags," "the company struggles with AI," or "internal usage is low." State the narrow fact exactly as it is, without macro-commentary.
+   - SELF-REPORTED DATA: If evidence comes from the company's own representatives, you must ingest and report these concrete metrics, but qualify them (e.g., "The company reports..."). Do not treat them as verified independent facts, but DO NOT omit them.
 
-9. BALANCING CONTRADICTIONS — CRITICAL: 
-   - If a narrow-scope independent source (e.g., an academic thesis) contradicts a broad self-reported metric (e.g., company PR claiming thousands of users), you MUST present BOTH side-by-side to illustrate the tension between stated corporate metrics and localized independent reality. 
-   - Example format: "While the company reports [X] company-wide, an independent survey of [Y] department found [Z]."
-   - If a top-level "contradictions" array is present in the payload, EACH listed contradiction MUST be addressed in the prose by citing both sides.
-   - Do not let a narrow independent source completely erase the company's stated metrics, and do not let company PR erase independent findings. Address both.
+9. BALANCING CONTRADICTIONS & PROPORTIONALITY — CRITICAL: 
+   - If a narrow-scope independent source contradicts a broad self-reported metric, briefly state both side-by-side (e.g., "Wärtsilä reports [X] company-wide users, though a departmental survey of HR found [Y]").
+   - PROPORTIONALITY: You are summarizing a multi-billion euro enterprise. Keep narrow departmental statistics extremely brief. Do not let a single departmental survey dominate the technology or operational narrative of a global firm. Address the contradiction in a single, strictly factual sentence and move on.
 
 10. RISK REPORTING: If the evidence documents negative trends or concrete vulnerabilities, report them factually. If the data reflects standard business practices (e.g., strategic outsourcing, white-labeling), do not manufacture artificial crises. Do not speculate about consequences — state the documented fact and let the reader draw conclusions.
 
