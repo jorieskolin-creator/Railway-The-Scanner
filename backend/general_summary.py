@@ -22,6 +22,7 @@ from gemini_client import get_gemini_client
 from google.genai import types as genai_types
 from gemini_backoff import call_with_503_backoff
 from source_quality import assess_source_scope
+from contradiction_detector import detect_contradictions
 
 
 def _extract_json(text: str) -> dict | None:
@@ -226,6 +227,13 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
     # financial_index is kept (single number) as context for financial findings.
     # reality_score is kept only when delta is present so the trend sentence
     # has a concrete number to anchor to.
+    # Detect quantitative disagreements between evidence items (e.g. one
+    # source says "9% of HR personnel use Tool X", another says "thousands
+    # of weekly users"). When present, the prompt instructs the model to
+    # cite both sides with their scope rather than silently picking one.
+    # Failure-safe: returns [] if Gemini is unavailable.
+    contradictions = detect_contradictions(verified_links, company_name)
+
     result: dict = {
         "company_name": company_name,
         "delta": delta,
@@ -235,6 +243,8 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
         "financial_findings": fin_findings,
         "key_people": people,
     }
+    if contradictions:
+        result["contradictions"] = contradictions
     if delta:
         result["reality_score"] = full_data.get("reality_score", 0)
     return result
@@ -287,7 +297,8 @@ MANDATORY RULES:
 
 8. SCOPE QUALIFICATION — CRITICAL: Each item in evidence_links carries a "scope" field with two possible values: "broad" (default — applies to the company at large) and "narrow" (the source describes a limited population: a master's thesis, a single-department survey, a regional pilot, a study of N participants).
    - When citing a number or finding from a "narrow" source, you MUST include a scope qualifier in the same sentence: "in a survey of HR personnel", "in a 100-respondent study", "in a Vaasa-based pilot", "according to a master's thesis". Never present a narrow-scope statistic as a company-wide truth.
-   - If two evidence items make conflicting quantitative claims about the same topic (one "narrow", one "broad"), cite both with their scope side by side and let the reader weigh them — never silently pick one. Do not let a single narrow-scope finding define the company's stance on a topic when broader-scope evidence exists in the same payload.
+   - If a top-level "contradictions" array is present in the payload, EACH listed contradiction MUST be addressed in the prose — cite both sides with their respective scope ("broad"/"narrow") and source titles, in the same sentence or adjacent sentences. The contradictions array exists precisely because two evidence items disagreed quantitatively on the same topic; silently picking one side is a violation of this rule.
+   - Even when the contradictions array is empty, if you notice that two evidence_links items make conflicting quantitative claims about the same topic, cite both with their scope side by side and let the reader weigh them. Do not let a single narrow-scope finding define the company's stance on a topic when broader-scope evidence exists in the same payload.
    - This rule overrides the temptation to lead with the most striking number. A narrow-scope finding is interesting context, not a portfolio-level conclusion.
 
 9. RISK REPORTING: If the evidence documents negative trends or concrete vulnerabilities, report them factually. If the data reflects standard business practices (e.g., strategic outsourcing, white-labeling), do not manufacture artificial crises. Do not speculate about consequences — state the documented fact and let the reader draw conclusions.
@@ -443,7 +454,7 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
 # hallucination or training-data leakage.
 
 def _build_fact_check_prompt(summary_text: str, payload: dict, company_name: str) -> str:
-    return f"""You are a precision fact-checker. Your job is to verify that EVERY factual claim in the General Summary below is directly supported by the provided evidence payload. The Summary should contain ONLY information from the payload — nothing else.
+    return f"""You are a precision fact-checker. Your job is to verify that EVERY factual claim in the General Summary below is directly supported by the provided evidence payload AND that narrow-scope findings are not silently elevated into company-wide claims. The Summary should contain ONLY information from the payload — nothing else.
 
 COMPANY: {company_name}
 
@@ -460,10 +471,14 @@ INSTRUCTIONS:
    A. It states a specific fact (metric, event, figure, statistic) that does NOT appear anywhere in the payload.
    B. It significantly exaggerates or distorts something from the payload.
    C. It introduces market statistics, industry benchmarks, or regulatory details not present in the payload — these are likely hallucinated from the model's training data.
-4. Do NOT flag:
+4. SCOPE INFLATION CHECK — Each evidence_links item has a "scope" field ("broad" or "narrow"). For each numeric or scale claim in the summary, identify which evidence item it traces back to. Flag the claim as UNSUPPORTED if:
+   D. The claim is derived from a "narrow"-scope source AND is presented as a company-wide fact without a scope qualifier in the same sentence (qualifier examples: "in a survey of HR personnel", "in a 100-respondent study", "in a Vaasa-based pilot", "according to a master's thesis"). For example, "9% of personnel use Tool X" lifted from a narrow HR-only thesis without saying "in HR" is scope inflation.
+   E. The payload has a top-level "contradictions" array, the summary cites one side but does NOT acknowledge the other side at all. Both sides of a listed contradiction must appear in the prose.
+5. Do NOT flag:
    - Reasonable connecting language between evidence points (e.g., "meanwhile," "in parallel")
    - Direct restatements of payload data, even if paraphrased
    - The opening trend sentence if it accurately reflects the delta data
+   - Claims from narrow-scope sources THAT ARE properly qualified in the same sentence
 
 OUTPUT FORMAT — valid JSON only:
 
@@ -471,7 +486,7 @@ If all claims are supported:
 {{"unsupported_claims": [], "verified": true}}
 
 If unsupported claims found:
-{{"unsupported_claims": [{{"claim": "The exact quote or close paraphrase from the summary", "reason": "Brief explanation of why this is not in the payload"}}], "verified": false}}"""
+{{"unsupported_claims": [{{"claim": "The exact quote or close paraphrase from the summary", "reason": "Brief explanation of why this is not in the payload OR which scope-inflation rule (4D / 4E) it violates"}}], "verified": false}}"""
 
 
 def _build_regen_prompt(payload: dict, company_name: str, original_text: str, false_claims: list) -> str:

@@ -18,6 +18,7 @@ from google.genai import types as genai_types
 from gemini_backoff import call_with_503_backoff
 from gemini_client import get_gemini_client
 from source_quality import assess_source_scope
+from contradiction_detector import detect_contradictions
 
 
 _FORBIDDEN_TERMS = [
@@ -163,6 +164,14 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
         "washing": washing,
     }
 
+    # Surface quantitative contradictions across the evidence pool so the
+    # prompt can force the model to address both sides instead of silently
+    # picking the more dramatic narrow-scope finding. Failure-safe: returns
+    # [] if Gemini is unavailable.
+    contradictions = detect_contradictions(verified_links + foresight_links, company_name)
+    if contradictions:
+        result["contradictions"] = contradictions
+
     if delta:
         result["reality_score"] = full_data.get("reality_score", 0)
 
@@ -286,7 +295,8 @@ MANDATORY RULES:
 6. FORBIDDEN ACTIONS: Do not fabricate findings, invent people problems, assume leadership gaps, or extrapolate small signals into sweeping assessments.
 7. SCOPE QUALIFICATION — CRITICAL: Each item in evidence_links carries a "scope" field with two possible values: "broad" (default — applies to the company at large) and "narrow" (the source describes a limited population: a master's thesis, a single-department survey, a regional pilot, a study of N participants).
    - When citing a number or finding from a "narrow" source, you MUST include a scope qualifier in the same sentence: "in a survey of HR personnel", "in a 100-respondent study", "in a Vaasa-based pilot", "according to a master's thesis". Never present a narrow-scope statistic as a company-wide truth.
-   - If two evidence items make conflicting quantitative claims about the same topic (one "narrow", one "broad"), cite both with their scope side by side and let the reader weigh them — never silently pick one. Do not let a single narrow-scope finding define the company's stance on a topic when broader-scope evidence exists in the same payload.
+   - If a top-level "contradictions" array is present in the payload, EACH listed contradiction MUST be addressed in the prose — cite both sides with their respective scope ("broad"/"narrow") and source titles, in the same sentence or adjacent sentences. The contradictions array exists precisely because two evidence items disagreed quantitatively on the same topic; silently picking one side is a violation of this rule.
+   - Even when the contradictions array is empty, if you notice that two evidence_links items make conflicting quantitative claims about the same topic, cite both with their scope side by side and let the reader weigh them. Do not let a single narrow-scope finding define the company's stance on a topic when broader-scope evidence exists in the same payload.
    - This rule overrides the temptation to lead with the most striking number. A narrow-scope finding is interesting context, not a portfolio-level conclusion.
 8. PARAGRAPHS: Separate with \\n\\n. Required for rendering.
 9. FORMAT: Prose with section headings only. Each section starts with "## Heading" on its own line followed by \\n\\n then the paragraph body. No bullet points, no other markdown, no links.
