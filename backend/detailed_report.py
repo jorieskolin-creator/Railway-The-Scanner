@@ -293,15 +293,18 @@ MANDATORY RULES:
 4. NO SCORES: Do not mention score names, score numbers, or internal metrics in prose.
 5. SOURCE REFERENCES: When citing evidence, use source titles naturally in text. Do NOT include URLs — those display separately.
 6. FORBIDDEN ACTIONS: Do not fabricate findings, invent people problems, assume leadership gaps, or extrapolate small signals into sweeping assessments.
-7. SCOPE QUALIFICATION — CRITICAL: Each item in evidence_links carries a "scope" field with two possible values: "broad" (default — applies to the company at large) and "narrow" (the source describes a limited population: a master's thesis, a single-department survey, a regional pilot, a study of N participants).
-   - When citing a number or finding from a "narrow" source, you MUST include a scope qualifier in the same sentence: "in a survey of HR personnel", "in a 100-respondent study", "in a Vaasa-based pilot", "according to a master's thesis". Never present a narrow-scope statistic as a company-wide truth.
-   - If a top-level "contradictions" array is present in the payload, EACH listed contradiction MUST be addressed in the prose — cite both sides with their respective scope ("broad"/"narrow") and source titles, in the same sentence or adjacent sentences. The contradictions array exists precisely because two evidence items disagreed quantitatively on the same topic; silently picking one side is a violation of this rule.
-   - Even when the contradictions array is empty, if you notice that two evidence_links items make conflicting quantitative claims about the same topic, cite both with their scope side by side and let the reader weigh them. Do not let a single narrow-scope finding define the company's stance on a topic when broader-scope evidence exists in the same payload.
-   - This rule overrides the temptation to lead with the most striking number. A narrow-scope finding is interesting context, not a portfolio-level conclusion.
-8. PARAGRAPHS: Separate with \\n\\n. Required for rendering.
-9. FORMAT: Prose with section headings only. Each section starts with "## Heading" on its own line followed by \\n\\n then the paragraph body. No bullet points, no other markdown, no links.
-9. TEMPORAL PRECISION: Use the most recent annual figures, not quarterly snapshots presented as annual results.
-10. ORGANIZATIONAL CLAIMS: NEVER claim leadership gaps, unfilled roles, or organizational problems unless the evidence explicitly states them.
+7. SCOPE & SOURCE QUALIFICATION — CRITICAL:
+   - NARROW SCOPE: Each item in evidence_links carries a "scope" field. When citing a finding from a "narrow" source (master's thesis, single-department survey, regional pilot, study of N participants), you MUST include a scope qualifier in the same sentence (e.g., "in a survey of HR personnel", "in a 100-respondent study", "according to a master's thesis"). Never present a narrow-scope statistic as a company-wide truth.
+   - ANTI-EXTRAPOLATION: NEVER extrapolate a narrow-scope finding into a macro-trend or section-level diagnosis. If a survey only covers the HR department, you are forbidden from writing sweeping claims like "enterprise adoption lags," "the company struggles with AI," "fragmented experimentation across the organization," or "Pilot Purgatory across the firm." State the narrow fact exactly as it is, scoped to its actual population, without macro-commentary.
+   - SELF-REPORTED DATA: If evidence comes from the company's own representatives or publications and provides CONCRETE operational metrics (e.g., "thousands of weekly users," "30% downtime reduction"), you must ingest and report these metrics, but qualify the source ("The company reports..."). Do not treat them as independently verified, but DO NOT omit them. Marketing fluff without concrete numbers ("AI-first company") may be skipped.
+8. BALANCING CONTRADICTIONS & PROPORTIONALITY — CRITICAL:
+   - If a top-level "contradictions" array is present in the payload, EACH listed contradiction MUST be addressed in the prose — cite both sides with their respective scope ("broad"/"narrow") and source titles, in the same sentence or adjacent sentences. Silently picking one side is a violation of this rule.
+   - If a narrow-scope independent source contradicts a broad self-reported metric, briefly state both side-by-side (e.g., "Wärtsilä reports [X] company-wide users, though a departmental survey of HR found [Y]").
+   - PROPORTIONALITY: You are diagnosing a multi-billion euro enterprise. Keep narrow departmental statistics confined to a single contextualised sentence within the relevant section. Do not let a single departmental survey dominate the technology, AI Readiness, or operational narrative of a global firm. Address the contradiction factually, weight it against company-wide evidence, and move on.
+9. PARAGRAPHS: Separate with \\n\\n. Required for rendering.
+10. FORMAT: Prose with section headings only. Each section starts with "## Heading" on its own line followed by \\n\\n then the paragraph body. No bullet points, no other markdown, no links.
+11. TEMPORAL PRECISION: Use the most recent annual figures, not quarterly snapshots presented as annual results.
+12. ORGANIZATIONAL CLAIMS: NEVER claim leadership gaps, unfilled roles, or organizational problems unless the evidence explicitly states them.
 
 Output only the prose text. Nothing else."""
 
