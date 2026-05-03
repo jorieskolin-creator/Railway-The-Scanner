@@ -19,6 +19,7 @@ from storage import BlobStorage
 from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, purge_false_evidence
 from general_summary import generate_general_summary, fact_check_general_summary
 from source_quality import manage_evidence_sources
+from prompts import PROMPT_VERSION, build_shared_guardrails
 from google import genai
 from google.genai import types
 import anthropic
@@ -33,6 +34,11 @@ def _strip_tac_codes(text: str) -> str:
     text = re.sub(r'\b(?:TAC|DIM)-\d{3,4}\b', '', text)
     text = re.sub(r'\s*\(\s*\)', '', text)
     return text.strip()
+
+
+def _shared_prompt_guardrails(include_diagnostic: bool = True, include_foresight: bool = True) -> str:
+    """Shared evidence/diagnosis/foresight guardrails injected into seed_manager prompts."""
+    return build_shared_guardrails(include_diagnostic=include_diagnostic, include_foresight=include_foresight)
 
 # --- CONFIGURATION ---
 def clean_env_var(value):
@@ -87,10 +93,16 @@ def scrape_strategic_content(base_url: str, company_name: str = "Unknown", subsi
         print(f"   [Scanner 1] 🔄 Initiating AI Context Retrieval (Fallback) for '{company_name}'...")
         
         api_key = clean_env_var(os.environ.get("API_KEY") or os.environ.get("GEMINI_API_KEY"))
+        fallback_guardrails = _shared_prompt_guardrails(include_diagnostic=False, include_foresight=False)
         fallback_prompt = f"""
-                Write a detailed, factual summary of the corporate strategy, operating model, and core values for '{company_name}' (Domain: {base_url}).
+                Write a cautious, clearly labelled fallback context summary for '{company_name}' (Domain: {base_url}).
 
-                Simulate the content typically found on an 'About Us', 'Strategy', or 'Investor Relations' page.
+                IMPORTANT: This is fallback context because scraping failed. Do not invent facts. Use only generally phrased, non-specific context unless you are certain. Clearly avoid presenting simulated content as verified evidence.
+
+                SHARED FACT-DISCIPLINE GUARDRAILS:
+                {fallback_guardrails}
+
+                Cover the types of information typically found on an 'About Us', 'Strategy', or 'Investor Relations' page, but avoid unsupported specifics.
                 Include specific details on:
                 1. Strategic Vision & Mission
                 2. Organizational Structure (e.g. Teams, Hierarchies, Agile models)
@@ -105,7 +117,7 @@ def scrape_strategic_content(base_url: str, company_name: str = "Unknown", subsi
                 resp = client.models.generate_content(model='gemini-3-flash-preview', contents=fallback_prompt)
                 if resp.text:
                     print(f"   [Scanner 1] ✅ AI Successfully retrieved strategic context for {company_name}.")
-                    return f"--- AI GENERATED CONTEXT FOR {company_name} (SCRAPE FALLBACK) ---\n{resp.text}"
+                    return f"--- AI GENERATED CONTEXT FOR {company_name} (SCRAPE FALLBACK — NOT VERIFIED EVIDENCE) ---\n{resp.text}"
              except Exception as e:
                 print(f"   [Scanner 1] ⚠️ Gemini fallback failed: {e}. Trying Sonnet 4.6...")
 
@@ -592,9 +604,13 @@ Include the trend trajectory in the summary. Note persistent patterns or turning
                         from strategic_foresight import format_foresight_for_synthesis
                         foresight_context = format_foresight_for_synthesis(foresight_data, company_name, company_domain)
 
+                    seed_synthesis_guardrails = _shared_prompt_guardrails(include_diagnostic=True, include_foresight=True)
                     synthesis_prompt = f"""You are a senior organizational analyst conducting a forensic modernization assessment.
 You are conservative and evidence-bound. You would rather say "insufficient evidence" than risk a wrong claim. Your credibility depends on never overstating.
 Your task: synthesize scanner evidence into a precise, evidence-grounded diagnosis using the Knowledge Base framework below.
+
+### SHARED EVIDENCE / DIAGNOSIS / FORESIGHT GUARDRAILS
+{seed_synthesis_guardrails}
 
 METHODOLOGY: Read ALL evidence first. Score ONLY what evidence supports. Write ONLY what scores justify.
 If evidence is thin, say so — a short honest analysis beats a long fabricated one.
@@ -1086,8 +1102,12 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                         ) if fc_findings else 'No specific findings'
                         fc_financial_context = f"FINANCIAL HEALTH CONTEXT (do NOT cite numeric scores — the index is displayed separately): {fc_findings_text}. You may reference financial health qualitatively but never mention specific index numbers."
 
+                    clean_seed_synthesis_guardrails = _shared_prompt_guardrails(include_diagnostic=True, include_foresight=True)
                     resynth_prompt = f"""You are a senior organizational analyst conducting a forensic modernization assessment.
 Your task: synthesize scanner evidence into a precise, evidence-grounded diagnosis using the Knowledge Base framework below.
+
+### SHARED EVIDENCE / DIAGNOSIS / FORESIGHT GUARDRAILS
+{clean_seed_synthesis_guardrails}
 
 METHODOLOGY: Read ALL evidence first. Score ONLY what evidence supports. Write ONLY what scores justify.
 If evidence is thin, say so — a short honest analysis beats a long fabricated one.
