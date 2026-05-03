@@ -4,7 +4,7 @@ contradiction_detector.py — Surface contradicting claims across evidence items
 The General Summary and Detailed Forensic Report receive a list of evidence
 snippets and decide which to weight. When two snippets disagree quantitatively
 on the same topic — for example, a master's thesis reporting "9% of HR
-personnel use WärtsiläGPT regularly" versus a company interview citing
+personnel use company wide GPT regularly" versus a company interview citing
 "thousands of weekly users" — the model has historically silently picked one
 side, usually the more dramatic narrow-scope finding.
 
@@ -93,7 +93,7 @@ Return at most {_MAX_CONTRADICTIONS} contradictions, ranked by importance (the o
 OUTPUT SCHEMA:
 {{"contradictions": [
   {{
-    "topic": "Short topic label (e.g. 'WärtsiläGPT adoption')",
+    "topic": "Short topic label (e.g. 'Company wide GPT adoption')",
     "claim_a": "First side (one sentence)",
     "source_a_title": "Source title for claim A",
     "scope_a": "narrow" | "broad",
