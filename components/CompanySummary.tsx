@@ -73,6 +73,24 @@ const CompanySummary = ({ data, faviData, observatoryData = null }) => {
   const [pitchCopied, setPitchCopied] = useState(false);
   const [whyWhatCopied, setWhyWhatCopied] = useState(false);
 
+  const isForesightContext = (link) => {
+    const claimType = String(link?.claim_type || '').toLowerCase();
+    const sourceType = String(link?.source_type || '').toLowerCase();
+    const origin = String(link?.origin || '').toLowerCase();
+    const scope = String(link?.scope || '').toLowerCase();
+    const allowed = (link?.allowed_claim_types || []).map(x => String(x).toLowerCase());
+    return origin === 'foresight'
+      || scope === 'external-trend'
+      || claimType === 'foresight_context'
+      || claimType === 'regulatory_context'
+      || allowed.includes('foresight_context')
+      || allowed.includes('regulatory_context')
+      || ['foresight', 'foresight_report', 'trend_report', 'regulation', 'regulatory_context', 'analyst'].includes(sourceType);
+  };
+
+  const getSourceSays = (link) => link?.source_says || link?.snippet || link?.description || '';
+  const getPossibleRelevance = (link) => link?.possible_relevance || '';
+
   // ARCHETYPE LOGIC (Reality vs Financial — unified with dashboard)
   // Prefer the stored archetype from the backend (single source of truth).
   // Fall back to score-based computation for backward compatibility with old data.
@@ -261,7 +279,8 @@ const CompanySummary = ({ data, faviData, observatoryData = null }) => {
                 + '<h3 class="text-xl font-bold text-white mb-2 flex items-center gap-2">'
                 + '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2dd4bf" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>'
                 + ' Future Insight</h3>'
-                + '<p class="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">Forward-looking narrative based on strategic foresight analysis</p>'
+                + '<p class="text-[10px] text-slate-500 mb-2 uppercase tracking-wider font-mono">Forward-looking narrative based on strategic foresight analysis</p>'
+                + '<p class="text-[10px] text-teal-300/70 mb-4 font-mono">External trend context — not proof of current company deployment or deterministic obligation.</p>'
                 + '<div>' + fsParagraphs + '</div>'
                 + '</div></div>';
             console.log('[HTML Export v6] foresightHTML built:', foresightHTML.length, 'chars');
@@ -801,7 +820,20 @@ const CompanySummary = ({ data, faviData, observatoryData = null }) => {
                                     <h4 className="font-medium text-slate-200 group-hover:text-emerald-400 transition-colors text-sm line-clamp-1">
                                         <HighlightText text={link.title || extractDomain(link.url)} />
                                     </h4>
-                                    {link.snippet && (
+                                    {isForesightContext(link) ? (
+                                        <div className="mt-1 space-y-1">
+                                            {getSourceSays(link) && (
+                                                <p className="text-[11px] text-slate-400 line-clamp-2 leading-relaxed">
+                                                    <span className="text-teal-300/80 font-semibold">Source says:</span> {getSourceSays(link)}
+                                                </p>
+                                            )}
+                                            {getPossibleRelevance(link) && (
+                                                <p className="text-[11px] text-slate-500 line-clamp-2 leading-relaxed">
+                                                    <span className="text-violet-300/80 font-semibold">Possible relevance:</span> {getPossibleRelevance(link)}
+                                                </p>
+                                            )}
+                                        </div>
+                                    ) : link.snippet && (
                                         <p className="text-[11px] text-slate-400 mt-1 line-clamp-2 leading-relaxed">{link.snippet}</p>
                                     )}
                                     <div className="flex items-center gap-2 mt-1">
@@ -809,6 +841,11 @@ const CompanySummary = ({ data, faviData, observatoryData = null }) => {
                                         {link._scan === 'foresight' && (
                                             <span className="text-[9px] bg-teal-500/20 text-teal-400 px-1.5 py-0.5 rounded font-mono shrink-0">
                                                 foresight
+                                            </span>
+                                        )}
+                                        {isForesightContext(link) && (
+                                            <span className="text-[9px] bg-violet-500/15 text-violet-300 px-1.5 py-0.5 rounded font-mono shrink-0" title="External trend/regulatory context — not proof of current company deployment">
+                                                context-only
                                             </span>
                                         )}
                                         {link._scan !== 'current' && link._scan !== 'foresight' && (
