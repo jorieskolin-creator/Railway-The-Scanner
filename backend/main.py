@@ -142,6 +142,22 @@ def _sanitize_company_foresight_fields(data: dict, domain: str = "") -> dict:
     return sanitize_report_foresight_fields(data or {}, domain=domain)
 
 
+
+def _safe_dict_list(items, label: str = "items") -> list:
+    """Return only dict items from a list-like value before downstream .get() access."""
+    if not isinstance(items, list):
+        return []
+    clean = []
+    dropped = 0
+    for item in items:
+        if isinstance(item, dict):
+            clean.append(item)
+        else:
+            dropped += 1
+    if dropped:
+        print(f"   ⚠️ [Source Hygiene] Dropped {dropped} non-dict item(s) from {label}")
+    return clean
+
 def clean_env_var(value):
     if not value: return ""
     if "=" in value:
@@ -2533,7 +2549,14 @@ def run_scan(
                 top_findings=reality_results.get("checklist", [])[:8],
             )
             foresight_ms = int((time.time() - foresight_start) * 1000)
+            if callable(foresight_data):
+                print("   ⚠️ [Foresight] generate_foresight returned callable/function; suppressing foresight for this scan")
+                foresight_data = None
+            if foresight_data and not isinstance(foresight_data, dict):
+                print(f"   ⚠️ [Foresight] Expected dict, got {type(foresight_data).__name__}; suppressing foresight for this scan")
+                foresight_data = None
             if foresight_data:
+                foresight_data["dimension_forces"] = _safe_dict_list(foresight_data.get("dimension_forces", []), "foresight_data.dimension_forces")
                 n_forces = len(foresight_data.get('dimension_forces', []))
                 is_kb_first = foresight_data.get("kb_first", False)
                 path_label = "KB-first" if is_kb_first else "search"
@@ -2546,6 +2569,7 @@ def run_scan(
                     foresight_data["insufficient_evidence"] = False
                     foresight_data = reality_check_foresight(foresight_data, company_name=companyName)
                     foresight_links = extract_foresight_links(foresight_data, company_name=companyName, domain=company_domain)
+                    foresight_links = _safe_dict_list(foresight_links, "foresight_links")
                     passes_gate = True
                     print(f"   📚 [Foresight KB-First] Skipped URL verify + source retry (pre-validated)")
                 else:
@@ -2573,6 +2597,7 @@ def run_scan(
 
                     # Extract validated sources into foresight_links
                     foresight_links = extract_foresight_links(foresight_data, company_name=companyName, domain=company_domain)
+                    foresight_links = _safe_dict_list(foresight_links, "foresight_links")
 
                 if not passes_gate:
                     print(f"   ⚠️ [Foresight] Insufficient evidence — foresight flagged as low-trust")
@@ -2584,9 +2609,10 @@ def run_scan(
         # --- STEP 2.7.5: MERGE DB FORESIGHT LINKS ---
         # Reuse validated/verified links from previous scans stored in the database.
         # New sources are added; existing validated ones are preserved (de-duped by URL).
+        foresight_links = _safe_dict_list(foresight_links, "foresight_links before DB merge")
         if existing_data and existing_data.get("foresight_links"):
-            existing_fl = existing_data["foresight_links"]
-            new_urls = {l.get("url") for l in foresight_links if l.get("url")}
+            existing_fl = _safe_dict_list(existing_data.get("foresight_links", []), "existing_data.foresight_links")
+            new_urls = {l.get("url") for l in foresight_links if isinstance(l, dict) and l.get("url")}
             merged_count = 0
             for efl in existing_fl:
                 if (efl.get("url")

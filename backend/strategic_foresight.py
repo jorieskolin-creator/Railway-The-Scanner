@@ -2023,7 +2023,7 @@ def validate_foresight_urls(foresight_data, max_workers=6):
 
     # Also collect supporting source URLs
     for force in forces:
-        for ss in force.get("supporting_sources", []):
+        for ss in _dict_items_only(force.get("supporting_sources", []), "supporting_sources"):
             ss_url = (ss.get("url") or "").strip()
             if ss_url and ss_url.startswith("http") and ss_url not in url_map:
                 url_map[ss_url] = None
@@ -2059,7 +2059,7 @@ def validate_foresight_urls(foresight_data, max_workers=6):
 
         # Apply results to supporting sources
         verified_supporting = []
-        for ss in force.get("supporting_sources", []):
+        for ss in _dict_items_only(force.get("supporting_sources", []), "supporting_sources"):
             ss_url = (ss.get("url") or "").strip()
             if ss_url and ss_url in url_map:
                 ss["url_verified"] = url_map[ss_url]
@@ -2261,7 +2261,7 @@ def retry_failed_sources(foresight_data, domain, max_retries=1):
 
         # Also verify supporting sources
         verified_supporting = []
-        for ss in force.get("supporting_sources", []):
+        for ss in _dict_items_only(force.get("supporting_sources", []), "supporting_sources"):
             ss_url = (ss.get("url") or "").strip()
             if ss_url in new_urls:
                 ss["url_verified"] = new_urls[ss_url]
@@ -2309,10 +2309,10 @@ def enforce_source_quality_gate(foresight_data):
     # Count total verified URLs (primary + supporting)
     total_verified_urls = verified_primary
     for force in forces:
-        for ss in force.get("supporting_sources", []):
+        for ss in _dict_items_only(force.get("supporting_sources", []), "supporting_sources"):
             if ss.get("url_verified", False):
                 total_verified_urls += 1
-        for ss in force.get("verified_supporting_sources", []):
+        for ss in _dict_items_only(force.get("verified_supporting_sources", []), "verified_supporting_sources"):
             total_verified_urls += 1  # These are pre-filtered as verified
 
     # Check thresholds
@@ -2501,6 +2501,22 @@ def reality_check_foresight(foresight_data, company_name=""):
     return _sanitize_foresight_data(foresight_data, domain=domain, company_name=company_name)
 
 
+
+def _dict_items_only(items, label: str = "items") -> list:
+    """Filter generated/legacy lists to dict records only before .get() access."""
+    if not isinstance(items, list):
+        return []
+    out = []
+    dropped = 0
+    for item in items:
+        if isinstance(item, dict):
+            out.append(item)
+        else:
+            dropped += 1
+    if dropped:
+        print(f"   ⚠️ [Foresight Hygiene] Dropped {dropped} non-dict item(s) from {label}")
+    return out
+
 def extract_foresight_links(foresight_data, company_name="", domain=""):
     """
     Extract validated foresight sources into a foresight_links array
@@ -2523,7 +2539,10 @@ def extract_foresight_links(foresight_data, company_name="", domain=""):
 
     Returns list of foresight_link dicts, sorted by credibility (high first).
     """
-    if not foresight_data or not foresight_data.get("dimension_forces"):
+    if callable(foresight_data) or not isinstance(foresight_data, dict):
+        return []
+    foresight_data["dimension_forces"] = _dict_items_only(foresight_data.get("dimension_forces", []), "dimension_forces")
+    if not foresight_data.get("dimension_forces"):
         return []
 
     # Resolve core dimensions for this domain (the original 3 that feed into FAVI/FPS/RG)
@@ -2532,7 +2551,7 @@ def extract_foresight_links(foresight_data, company_name="", domain=""):
 
     links = []
     seen_urls = set()
-    for force in foresight_data["dimension_forces"]:
+    for force in _dict_items_only(foresight_data.get("dimension_forces", []), "dimension_forces"):
         source_url = (force.get("source_url") or "").strip()
         if source_url and source_url.startswith("http") and source_url not in seen_urls:
             seen_urls.add(source_url)

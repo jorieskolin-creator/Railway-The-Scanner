@@ -440,6 +440,9 @@ def sanitize_foresight_record(
     domain: str = "",
     company_name: str = "",
 ) -> dict:
+    if callable(record):
+        print("   ⚠️ [Foresight Hygiene] sanitize_foresight_record received callable; skipping")
+        return {}
     if not isinstance(record, dict):
         return record
     rec = deepcopy(record)
@@ -549,13 +552,22 @@ def sanitize_foresight_collection(
     domain: str = "",
     company_name: str = "",
 ) -> list:
-    return [
-        sanitize_foresight_record(
-            item, report_date=report_date, domain=domain, company_name=company_name
-        )
-        for item in (items or [])
-        if isinstance(item, dict)
-    ]
+    if not isinstance(items, list):
+        return []
+    out = []
+    dropped = 0
+    for item in items:
+        if isinstance(item, dict):
+            cleaned = sanitize_foresight_record(
+                item, report_date=report_date, domain=domain, company_name=company_name
+            )
+            if isinstance(cleaned, dict):
+                out.append(cleaned)
+        else:
+            dropped += 1
+    if dropped:
+        print(f"   ⚠️ [Foresight Hygiene] Dropped {dropped} non-dict item(s) during collection sanitation")
+    return out
 
 
 def sanitize_report_foresight_fields(
@@ -565,6 +577,9 @@ def sanitize_report_foresight_fields(
     domain: str = "",
     company_name: str = "",
 ) -> dict:
+    if callable(data):
+        print("   ⚠️ [Foresight Hygiene] sanitize_report_foresight_fields received callable; skipping")
+        return {}
     if not isinstance(data, dict):
         return data
     out = deepcopy(data)
