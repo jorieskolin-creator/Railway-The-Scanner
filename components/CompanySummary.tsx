@@ -92,6 +92,18 @@ const CompanySummary = ({ data, faviData, observatoryData = null }) => {
   // record and genericized it. Shows a badge so admins know the rewrite happened.
   const wasSourceSaysGenericized = (link) => link?.source_says_was_genericized === true;
 
+
+  const normalizedCompanyNames = [data?.company_name, data?.companyName, data?.name]
+    .filter(Boolean)
+    .flatMap((n) => {
+      const base = String(n).replace(/\b(Oyj|Abp|Plc|Ltd|Inc|Corp|Corporation|Group)\b/gi, '').trim();
+      return [String(n), base].filter(Boolean);
+    });
+  const needsSourceRelevanceSplit = (link) => {
+    if (!isForesightContext(link) || link?.company_specific === true) return false;
+    const ss = String(link?.source_says || '');
+    return normalizedCompanyNames.some((n) => n && ss.toLowerCase().includes(String(n).toLowerCase()));
+  };
   const getSourceSays = (link) => link?.source_says || link?.snippet || link?.description || '';
   const getPossibleRelevance = (link) => link?.possible_relevance || '';
 
@@ -853,6 +865,11 @@ const CompanySummary = ({ data, faviData, observatoryData = null }) => {
                                         {isForesightContext(link) && (
                                             <span className="text-[9px] bg-violet-500/15 text-violet-300 px-1.5 py-0.5 rounded font-mono shrink-0" title="External trend/regulatory context — not proof of current company deployment">
                                                 context-only
+                                            </span>
+                                        )}
+                                        {needsSourceRelevanceSplit(link) && (
+                                            <span className="text-[9px] bg-amber-500/15 text-amber-300 px-1.5 py-0.5 rounded font-mono shrink-0" title="Context-only source_says contains company-specific interpretation; backend should split this into possible_relevance">
+                                                needs split
                                             </span>
                                         )}
                                         {wasSourceSaysGenericized(link) && (
