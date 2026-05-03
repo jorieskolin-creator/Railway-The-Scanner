@@ -1,34 +1,23 @@
 """
 contradiction_detector.py — Surface contradicting claims across evidence items.
 
-The General Summary and Detailed Forensic Report receive a list of evidence
-snippets and decide which to weight. When two snippets disagree quantitatively
-on the same topic — for example, a master's thesis reporting "9% of HR
-personnel use company wide GPT regularly" versus a company interview citing
-"thousands of weekly users" — the model has historically silently picked one
-side, usually the more dramatic narrow-scope finding.
-
-This module runs a small Gemini Flash pass over the evidence list and returns
-a structured list of contradictions. The summary builders then pass this list
-into the prompt under a "contradictions" field; the SCOPE QUALIFICATION rule
-already requires the model to address both sides explicitly when listed.
-
-Failure-safe: any error in the Flash call returns an empty list so summary
-generation is never blocked by a missing contradiction pass.
+Phase 2 update: returns richer contradiction objects with resolution_rule,
+preferred_wording, confidence and severity. It also includes a deterministic
+fallback for narrow-vs-broad scale conflicts so the most dangerous
+scope-inflation risks are caught even when the Gemini API is unavailable.
 """
+
+from __future__ import annotations
 
 import json
 import os
 import re
+from typing import Any
 
 from gemini_backoff import call_with_503_backoff
 from gemini_client import get_gemini_client
 
-
-# Gemini Flash is plenty for this short, structured task. Stays cheap.
 _MODEL = "gemini-2.5-flash"
-
-# Hard caps to keep the prompt small and the latency low.
 _MAX_EVIDENCE_ITEMS = 25
 _MAX_SNIPPET_CHARS = 350
 _MAX_CONTRADICTIONS = 6
@@ -38,12 +27,10 @@ def _extract_json(text: str) -> dict | None:
     """Pull the first valid JSON object out of a model response."""
     if not text:
         return None
-    # Direct parse first.
     try:
         return json.loads(text)
     except (json.JSONDecodeError, TypeError):
         pass
-    # Fall back to greedy outer-braces match.
     match = re.search(r"\{[\s\S]*\}", text)
     if not match:
         return None
@@ -53,53 +40,174 @@ def _extract_json(text: str) -> dict | None:
         return None
 
 
-def _build_prompt(evidence_items: list, company_name: str) -> str:
-    """Compact prompt that asks Gemini to surface quantitative disagreements.
+def _normalize_scope(scope: str | None) -> str:
+    scope = (scope or "broad").strip().lower()
+    return "narrow" if scope in {"narrow", "department", "project", "pilot", "region", "team"} else "broad"
 
-    The output schema is intentionally narrow: topic + the two competing
-    claims + their source titles + their scope flags. The summary writer
-    consumes this verbatim, so we don't ask the model for prose.
-    """
-    # Trim each snippet so the prompt stays small. Preserve scope so the
-    # detector knows when one side is narrow and the other is broad.
+
+def _safe_title(ev: dict) -> str:
+    return (ev.get("title") or ev.get("source_title") or ev.get("url") or "Unknown source")[:120]
+
+
+def _text_for_matching(ev: dict) -> str:
+    return f"{ev.get('title','')} {ev.get('snippet','')} {ev.get('evidence_snippet','')}".lower()
+
+
+def _looks_like_scale_claim(text: str) -> bool:
+    return bool(re.search(
+        r"\b(\d+\s*%|\d+[,.]?\d*\s*(?:users|employees|factories|sites|countries|locations)|company[-\s]?wide|enterprise[-\s]?wide|broad deployment|all factories|pilot|one team|department|hr personnel|weekly users|thousands)\b",
+        text,
+        re.I,
+    ))
+
+
+def _topic_keywords(text: str) -> set[str]:
+    topics = {
+        "gen_ai_adoption": ["generative ai", "genai", "gpt", "copilot", "ai adoption", "ai readiness", "weekly users"],
+        "multi_agent_deployment": ["multi-agent", "agentic", "autonomous agents", "agent systems", "supply chain workflow"],
+        "advanced_computing_scope": ["lumi", "supercomputer", "openfoam", "cfd", "thermofluids", "simulation"],
+        "operating_model": ["safe", "agile", "silo", "operating model", "scrum", "waterfall"],
+        "financial_scale": ["net sales", "order book", "order intake", "operating result", "margin", "gearing"],
+    }
+    return {topic for topic, words in topics.items() if any(w in text for w in words)}
+
+
+def _preferred_wording(topic: str, a: dict, b: dict) -> str:
+    title_a = _safe_title(a)
+    title_b = _safe_title(b)
+    scope_a = _normalize_scope(a.get("scope"))
+    scope_b = _normalize_scope(b.get("scope"))
+    topic_label = topic.replace("_", " ")
+    if {scope_a, scope_b} == {"narrow", "broad"}:
+        return (
+            f"Evidence on {topic_label} should be stated with scope: {title_a} is {scope_a}-scope, "
+            f"while {title_b} is {scope_b}-scope. Do not turn the narrow finding into a company-wide conclusion; state both sides explicitly."
+        )
+    return (
+        f"Evidence on {topic_label} contains competing scale claims from {title_a} and {title_b}. "
+        "State both claims with dates and source scope instead of choosing only one side."
+    )
+
+
+def _normalize_contradiction(item: dict) -> dict | None:
+    """Backwards-compatible enrichment of LLM or deterministic contradiction objects."""
+    if not isinstance(item, dict):
+        return None
+    topic = str(item.get("topic") or "Unspecified contradiction")[:120]
+    scope_a = _normalize_scope(item.get("scope_a"))
+    scope_b = _normalize_scope(item.get("scope_b"))
+    return {
+        "topic": topic,
+        "claim_a": str(item.get("claim_a") or "")[:350],
+        "source_a_title": str(item.get("source_a_title") or "Unknown source")[:160],
+        "scope_a": scope_a,
+        "claim_b": str(item.get("claim_b") or "")[:350],
+        "source_b_title": str(item.get("source_b_title") or "Unknown source")[:160],
+        "scope_b": scope_b,
+        "resolution_rule": item.get("resolution_rule") or "state_both_with_scope",
+        "preferred_wording": item.get("preferred_wording") or "State both sides with source scope; do not generalize narrow evidence.",
+        "confidence": item.get("confidence") or ("high" if scope_a != scope_b else "medium"),
+        "severity": item.get("severity") or ("high" if scope_a != scope_b else "medium"),
+    }
+
+
+def _detect_scope_tensions_deterministic(evidence_items: list) -> list[dict]:
+    """Cheap deterministic fallback for narrow-vs-broad scale conflicts."""
+    candidates: list[dict] = []
+    items = evidence_items[:_MAX_EVIDENCE_ITEMS]
+    for i, a in enumerate(items):
+        if not isinstance(a, dict):
+            continue
+        ta = _text_for_matching(a)
+        topics_a = _topic_keywords(ta)
+        if not topics_a or not _looks_like_scale_claim(ta):
+            continue
+        for b in items[i + 1:]:
+            if not isinstance(b, dict):
+                continue
+            tb = _text_for_matching(b)
+            topics = topics_a & _topic_keywords(tb)
+            if not topics or not _looks_like_scale_claim(tb):
+                continue
+            scope_a = _normalize_scope(a.get("scope"))
+            scope_b = _normalize_scope(b.get("scope"))
+            narrow_broad = scope_a != scope_b
+            scale_words_conflict = (
+                (re.search(r"\b(pilot|one team|department|hr personnel|survey|case study)\b", ta) and re.search(r"\b(company[-\s]?wide|enterprise[-\s]?wide|broad deployment|all factories|thousands)\b", tb))
+                or (re.search(r"\b(pilot|one team|department|hr personnel|survey|case study)\b", tb) and re.search(r"\b(company[-\s]?wide|enterprise[-\s]?wide|broad deployment|all factories|thousands)\b", ta))
+            )
+            if not (narrow_broad or scale_words_conflict):
+                continue
+            topic = sorted(topics)[0]
+            candidates.append({
+                "topic": topic,
+                "claim_a": (a.get("snippet") or a.get("evidence_snippet") or a.get("title") or "")[:260],
+                "source_a_title": _safe_title(a),
+                "scope_a": scope_a,
+                "claim_b": (b.get("snippet") or b.get("evidence_snippet") or b.get("title") or "")[:260],
+                "source_b_title": _safe_title(b),
+                "scope_b": scope_b,
+                "resolution_rule": "state_both_with_scope",
+                "preferred_wording": _preferred_wording(topic, a, b),
+                "confidence": "medium",
+                "severity": "high" if narrow_broad else "medium",
+            })
+            if len(candidates) >= _MAX_CONTRADICTIONS:
+                return candidates
+    return candidates
+
+
+def _build_prompt(evidence_items: list, company_name: str) -> str:
+    """Compact prompt that asks Gemini to surface quantitative disagreements."""
     compact = []
     for i, ev in enumerate(evidence_items[:_MAX_EVIDENCE_ITEMS]):
+        if not isinstance(ev, dict):
+            continue
         compact.append({
             "id": i,
-            "title": (ev.get("title") or "")[:80],
-            "snippet": (ev.get("snippet") or "")[:_MAX_SNIPPET_CHARS],
-            "scope": ev.get("scope", "broad"),
+            "title": _safe_title(ev)[:80],
+            "snippet": (ev.get("snippet") or ev.get("evidence_snippet") or "")[:_MAX_SNIPPET_CHARS],
+            "scope": _normalize_scope(ev.get("scope")),
+            "source_type": ev.get("source_type", "unknown"),
+            "time_validity": ev.get("time_validity", "unknown"),
+            "allowed_claim_types": ev.get("allowed_claim_types", []),
         })
 
-    return f"""You are scanning a list of evidence snippets about {company_name} for QUANTITATIVE CONTRADICTIONS — pairs of claims about the same topic that report different numbers, percentages, adoption rates, scale, or extent.
+    return f"""You are scanning a list of evidence snippets about {company_name} for QUANTITATIVE OR SCALE CONTRADICTIONS — pairs of claims about the same topic that report different numbers, percentages, adoption rates, scale, or extent.
 
 EVIDENCE ITEMS:
 {json.dumps(compact, ensure_ascii=False, indent=2)}
 
-Find pairs (or small groups) where two evidence items make conflicting numeric / scale claims about the SAME underlying topic. Examples of a contradiction worth flagging:
+Find pairs or small groups where two evidence items make conflicting numeric / scale claims about the SAME underlying topic.
+
+Examples worth flagging:
 - One source says "9% of HR personnel use Tool X regularly", another says "Tool X has thousands of weekly users company-wide"
 - One source says "pilot at one site", another says "deployed across all factories"
-- One source says "5% revenue from segment Y", another says "segment Y is 30% of revenue"
+- One source says "specific R&D team tested supercomputing", another says "enterprise-wide advanced computing deployment"
 
 Do NOT flag:
 - Claims about different topics that merely sound similar
-- Updates over time where the older one is clearly superseded (treat as evolution, not contradiction)
-- Differences in framing or sentiment without a numeric or scale disagreement
+- Updates over time where the older one is clearly superseded
+- Differences in sentiment without a numeric or scale disagreement
 
-For each real contradiction, output the topic, the two competing claims (paraphrased into one short sentence each), the title of each source, and the scope flag of each source ("narrow" or "broad").
+For narrow-vs-broad conflicts, resolution_rule MUST be "state_both_with_scope" and preferred_wording MUST warn not to generalize the narrow evidence company-wide.
 
-Return at most {_MAX_CONTRADICTIONS} contradictions, ranked by importance (the ones a reader would most need to know about). Output VALID JSON only, no markdown, no commentary.
+Return at most {_MAX_CONTRADICTIONS} contradictions, ranked by importance. Output VALID JSON only.
 
 OUTPUT SCHEMA:
 {{"contradictions": [
   {{
-    "topic": "Short topic label (e.g. 'Company wide GPT adoption')",
-    "claim_a": "First side (one sentence)",
+    "topic": "Short topic label",
+    "claim_a": "First side",
     "source_a_title": "Source title for claim A",
     "scope_a": "narrow" | "broad",
-    "claim_b": "Second side (one sentence)",
+    "claim_b": "Second side",
     "source_b_title": "Source title for claim B",
-    "scope_b": "narrow" | "broad"
+    "scope_b": "narrow" | "broad",
+    "resolution_rule": "state_both_with_scope",
+    "preferred_wording": "One sentence telling the summary writer how to state both sides without overgeneralising.",
+    "confidence": "low" | "medium" | "high",
+    "severity": "low" | "medium" | "high"
   }}
 ]}}
 
@@ -107,69 +215,51 @@ If no real contradictions exist, output: {{"contradictions": []}}"""
 
 
 def detect_contradictions(evidence_items: list, company_name: str = "") -> list:
-    """Return a list of contradiction objects, or [] when none / on failure.
-
-    Each contradiction has the schema documented in _build_prompt(). The
-    summary builders pass this list into their LLM prompt; the SCOPE
-    QUALIFICATION rule already instructs the model to address both sides.
-
-    Always safe to call: any failure (no API key, bad response, network)
-    returns an empty list and lets summary generation proceed.
-    """
+    """Return a list of contradiction objects, or [] when none / on failure."""
     if not evidence_items:
         return []
+
+    deterministic = _detect_scope_tensions_deterministic(evidence_items)
     if not (os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")):
-        return []
+        return [_normalize_contradiction(c) for c in deterministic if _normalize_contradiction(c)][:_MAX_CONTRADICTIONS]
 
     try:
         client = get_gemini_client()
     except Exception as e:
         print(f"   [Contradictions] Gemini client unavailable: {e}")
-        return []
-
-    prompt = _build_prompt(evidence_items, company_name or "the company")
+        return [_normalize_contradiction(c) for c in deterministic if _normalize_contradiction(c)][:_MAX_CONTRADICTIONS]
 
     try:
-        response = call_with_503_backoff(
-            lambda: client.models.generate_content(
-                model=_MODEL,
-                contents=prompt,
-            ),
-            label="Contradictions",
-            delays=(3, 8),  # Replaced max_retries=2 with delays=(3, 8) to match the backoff signature
-        )
+        prompt = _build_prompt(evidence_items, company_name or "the company")
+
+        def _call():
+            return client.models.generate_content(model=_MODEL, contents=prompt)
+
+        response = call_with_503_backoff(_call)
+        text = getattr(response, "text", "") or ""
+        parsed = _extract_json(text)
+        contradictions = parsed.get("contradictions") if isinstance(parsed, dict) else []
+        if not isinstance(contradictions, list):
+            contradictions = []
+
+        clean: list[dict[str, Any]] = []
+        seen = set()
+        for item in list(contradictions) + list(deterministic):
+            normalized = _normalize_contradiction(item)
+            if not normalized:
+                continue
+            key = (
+                normalized["topic"].lower(),
+                normalized["source_a_title"].lower(),
+                normalized["source_b_title"].lower(),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            clean.append(normalized)
+            if len(clean) >= _MAX_CONTRADICTIONS:
+                break
+        return clean
     except Exception as e:
-        print(f"   [Contradictions] Detection call failed: {e}")
-        return []
-
-    text = (getattr(response, "text", None) or "").strip()
-    parsed = _extract_json(text)
-    if not parsed or not isinstance(parsed, dict):
-        return []
-
-    items = parsed.get("contradictions") or []
-    if not isinstance(items, list):
-        return []
-
-    # Defensive shape-cleaning — only keep entries with all required fields,
-    # so the prompt template can rely on them.
-    cleaned = []
-    for it in items[:_MAX_CONTRADICTIONS]:
-        if not isinstance(it, dict):
-            continue
-        required = ("topic", "claim_a", "source_a_title", "claim_b", "source_b_title")
-        if not all(it.get(k) for k in required):
-            continue
-        cleaned.append({
-            "topic": str(it["topic"])[:120],
-            "claim_a": str(it["claim_a"])[:280],
-            "source_a_title": str(it["source_a_title"])[:120],
-            "scope_a": "narrow" if str(it.get("scope_a", "")).lower() == "narrow" else "broad",
-            "claim_b": str(it["claim_b"])[:280],
-            "source_b_title": str(it["source_b_title"])[:120],
-            "scope_b": "narrow" if str(it.get("scope_b", "")).lower() == "narrow" else "broad",
-        })
-
-    if cleaned:
-        print(f"   [Contradictions] Surfaced {len(cleaned)} contradiction(s) for {company_name or 'the company'}")
-    return cleaned
+        print(f"   [Contradictions] Detection failed: {e}")
+        return [_normalize_contradiction(c) for c in deterministic if _normalize_contradiction(c)][:_MAX_CONTRADICTIONS]
