@@ -244,7 +244,7 @@ const buildSvgAdaptabilityScatter = (
 
   const caption = `<div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-size:10px;color:#94a3b8">
     <div><span style="color:#fb7185;font-weight:700">TRAPPED</span> <span style="color:#64748b">(top-left)</span> — low cushion, future bad</div>
-    <div><span style="color:#fbbf24;font-weight:700">WEALTHY UNDER PRESSURE</span> <span style="color:#64748b">(top-right)</span> — must invest</div>
+    <div><span style="color:#fbbf24;font-weight:700">WEALTHY UNDER PRESSURE</span> <span style="color:#64748b">(top-right)</span> — should evaluate investment priorities</div>
     <div><span style="color:#60a5fa;font-weight:700">MATURE &amp; STABLE</span> <span style="color:#64748b">(bottom-left)</span> — financially fine, no future pressure</div>
     <div><span style="color:#34d399;font-weight:700">FUTURE-READY</span> <span style="color:#64748b">(bottom-right)</span> — best position</div>
   </div>`;
@@ -2502,7 +2502,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
               {/* Quadrant labels overlaid as a small legend strip */}
               <div className="grid grid-cols-2 gap-2 mt-2 text-[9px] text-slate-400">
                 <div><span className="text-rose-300 font-bold">TRAPPED</span> <span className="text-slate-500">(top-left)</span> — low cushion, future bad</div>
-                <div><span className="text-amber-300 font-bold">WEALTHY UNDER PRESSURE</span> <span className="text-slate-500">(top-right)</span> — must invest</div>
+                <div><span className="text-amber-300 font-bold">WEALTHY UNDER PRESSURE</span> <span className="text-slate-500">(top-right)</span> — should evaluate investment priorities</div>
                 <div><span className="text-blue-300 font-bold">MATURE &amp; STABLE</span> <span className="text-slate-500">(bottom-left)</span> — financially fine, no future pressure</div>
                 <div><span className="text-emerald-300 font-bold">FUTURE-READY</span> <span className="text-slate-500">(bottom-right)</span> — best position</div>
               </div>

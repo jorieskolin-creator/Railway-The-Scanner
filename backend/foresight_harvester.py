@@ -642,11 +642,31 @@ def get_kb_signals_for_themes(theme_names: list[str]) -> list[dict]:
     return all_signals
 
 
+def _ensure_kb_signal_neutral(sig: dict) -> dict:
+    """
+    Enforce KB signal invariant: signals must be company-neutral.
+    Sets claim_type, company_specific, not_evidence_of_deployment.
+    possible_relevance from KB is intentionally NOT emitted in prompts — the LLM
+    generates fresh company-specific relevance at scan time using modal language.
+    """
+    sig = dict(sig)
+    sig["claim_type"] = "foresight_context"
+    sig["company_specific"] = False
+    sig["not_evidence_of_deployment"] = True
+    sig["requires_company_specific_corroboration"] = True
+    sig["modal_language_required"] = True
+    return sig
+
+
 def format_kb_signals_for_prompt(signals: list[dict], max_signals: int = 8) -> str:
     """
-    Format KB signals into a context block that can be injected into the
-    company-specific foresight prompt. This gives Gemini pre-validated evidence
-    to synthesize against, rather than searching from scratch.
+    Format KB signals into a context block injected into the company-specific
+    foresight prompt. Gives the model pre-validated evidence to synthesize against
+    rather than searching from scratch.
+
+    KB invariant: each signal is emitted as company-neutral context only.
+    The model generates its own company-specific possible_relevance using modal
+    language ("may", "could", "should evaluate", "if in scope").
     """
     if not signals:
         return ""
@@ -656,19 +676,26 @@ def format_kb_signals_for_prompt(signals: list[dict], max_signals: int = 8) -> s
         "PRE-VALIDATED MEGATREND SIGNALS (from Foresight Knowledge Base):",
         "The following signals have been independently verified with 2+ authoritative sources.",
         "Use these as GROUNDING CONTEXT — synthesize their impact on this specific company.",
-        "Do NOT search for additional sources — these signals are pre-validated and sufficient.\n",
+        "IMPORTANT: These are foresight_context signals (company_specific=False).",
+        "  - source_says is a company-NEUTRAL summary of what the source/trend says.",
+        "  - Generate your own possible_relevance using modal language only",
+        "    (may / could / should evaluate / if in scope / if not already completed).",
+        "  - Do NOT treat these as proof of current company deployment or obligation.\n",
     ]
 
     for i, sig in enumerate(selected, 1):
+        sig = _ensure_kb_signal_neutral(sig)
         theme = sig.get("_kb_theme", sig.get("fp_theme", ""))
-        lines.append(f"Signal {i}: {sig['title']}")
+        lines.append(f"Signal {i}: {sig.get('title', 'Unknown signal')}")
         lines.append(f"  Theme: {theme}")
         lines.append(f"  Type: {sig.get('signal_type', 'N/A')} | Timeframe: {sig.get('timeframe', 'N/A')}")
-        lines.append(f"  Source says: {sig.get('source_says') or sig.get('description', '')}")
-        if sig.get("possible_relevance"):
-            lines.append(f"  Possible relevance: {sig.get('possible_relevance')}")
+        lines.append(f"  Source says (company-neutral): {sig.get('source_says') or sig.get('description', '')}")
+        # KB-stored possible_relevance is NOT emitted — LLM generates fresh relevance at scan time.
         lines.append("  Claim type: foresight_context | Company-specific: False | Use modal language only")
-        lines.append(f"  Primary source: {sig.get('source_url', 'N/A')} ({sig.get('source_credibility', 'N/A')} credibility)")
+        lines.append(
+            f"  Primary source: {sig.get('source_url', 'N/A')} "
+            f"({sig.get('source_credibility', 'N/A')} credibility)"
+        )
         n_supporting = len(sig.get("supporting_sources", []))
         lines.append(f"  Corroborating sources: {n_supporting}")
         if sig.get("industries_affected"):

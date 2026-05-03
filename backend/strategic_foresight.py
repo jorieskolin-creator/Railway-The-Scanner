@@ -2523,10 +2523,22 @@ def extract_foresight_links(foresight_data, company_name="", domain=""):
         source_url = (force.get("source_url") or "").strip()
         if source_url and source_url.startswith("http") and source_url not in seen_urls:
             seen_urls.add(source_url)
+            # source_says = company-neutral trend description (NOT impact_on_company).
+            # possible_relevance = company-specific hypothesis (impact_on_company).
+            # Invariant: source_says is generic; only possible_relevance carries
+            # company-specific interpretation.
+            _neutral_desc = (
+                force.get("description")
+                or force.get("trend_description")
+                or force.get("trend", "Unknown Force")
+            )
+            _impact = (force.get("impact_on_company") or "")[:300]
             link = {
                 "title": force.get("trend", "Unknown Force"),
                 "url": source_url,
-                "snippet": (force.get("impact_on_company") or "")[:300],
+                "snippet": _neutral_desc[:300],
+                "source_says": _neutral_desc[:300],
+                "possible_relevance": _impact,
                 "source_type": force.get("source_type", "unknown"),
                 "verified": force.get("url_verified", False),
                 "source_credibility": force.get("source_credibility", "unknown"),
@@ -2540,19 +2552,25 @@ def extract_foresight_links(foresight_data, company_name="", domain=""):
                 "action_timing": force.get("action_timing", ""),
                 "origin": "foresight",
                 "is_primary": True,
+                "not_evidence_of_deployment": True,
                 "is_priority_dimension": force.get("kb_dimension", "") in core_dims,
             }
-            links.append(annotate_foresight_link(link, domain=domain))
+            links.append(annotate_foresight_link(link, domain=domain, company_name=company_name))
 
         # Also include verified supporting sources
         for ss in force.get("verified_supporting_sources", []):
             ss_url = (ss.get("url") or "").strip()
             if ss_url and ss_url.startswith("http") and ss_url not in seen_urls:
                 seen_urls.add(ss_url)
+                _ss_neutral = (
+                    ss.get("description") or ss.get("title") or force.get("trend", "Unknown Force")
+                )
                 link = {
                     "title": ss.get("title", force.get("trend", "Unknown Force")),
                     "url": ss_url,
-                    "snippet": (force.get("impact_on_company") or "")[:300],
+                    "snippet": _ss_neutral[:300],
+                    "source_says": _ss_neutral[:300],
+                    "possible_relevance": (force.get("impact_on_company") or "")[:300],
                     "source_type": ss.get("source_type", "unknown"),
                     "verified": True,
                     "source_credibility": "medium",
@@ -2563,9 +2581,10 @@ def extract_foresight_links(foresight_data, company_name="", domain=""):
                     "force_type": force.get("type", ""),
                     "origin": "foresight",
                     "is_primary": False,
+                    "not_evidence_of_deployment": True,
                     "is_priority_dimension": force.get("kb_dimension", "") in core_dims,
                 }
-                links.append(annotate_foresight_link(link, domain=domain))
+                links.append(annotate_foresight_link(link, domain=domain, company_name=company_name))
 
     # Sort: validated first, then by credibility
     credibility_order = {"high": 0, "medium": 1, "low": 2, "unknown": 3}

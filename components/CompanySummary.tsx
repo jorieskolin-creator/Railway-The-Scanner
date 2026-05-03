@@ -88,6 +88,10 @@ const CompanySummary = ({ data, faviData, observatoryData = null }) => {
       || ['foresight', 'foresight_report', 'trend_report', 'regulation', 'regulatory_context', 'analyst'].includes(sourceType);
   };
 
+  // True when the backend detected a company name in source_says for a non-company-specific
+  // record and genericized it. Shows a badge so admins know the rewrite happened.
+  const wasSourceSaysGenericized = (link) => link?.source_says_was_genericized === true;
+
   const getSourceSays = (link) => link?.source_says || link?.snippet || link?.description || '';
   const getPossibleRelevance = (link) => link?.possible_relevance || '';
 
@@ -822,6 +826,9 @@ const CompanySummary = ({ data, faviData, observatoryData = null }) => {
                                     </h4>
                                     {isForesightContext(link) ? (
                                         <div className="mt-1 space-y-1">
+                                            <p className="text-[10px] text-slate-600 italic leading-relaxed">
+                                                External trend/regulatory context — not proof of current company deployment.
+                                            </p>
                                             {getSourceSays(link) && (
                                                 <p className="text-[11px] text-slate-400 line-clamp-2 leading-relaxed">
                                                     <span className="text-teal-300/80 font-semibold">Source says:</span> {getSourceSays(link)}
@@ -846,6 +853,11 @@ const CompanySummary = ({ data, faviData, observatoryData = null }) => {
                                         {isForesightContext(link) && (
                                             <span className="text-[9px] bg-violet-500/15 text-violet-300 px-1.5 py-0.5 rounded font-mono shrink-0" title="External trend/regulatory context — not proof of current company deployment">
                                                 context-only
+                                            </span>
+                                        )}
+                                        {wasSourceSaysGenericized(link) && (
+                                            <span className="text-[9px] bg-amber-500/15 text-amber-300 px-1.5 py-0.5 rounded font-mono shrink-0" title="Company name detected in source_says — text was genericized; company-specific interpretation moved to Possible relevance">
+                                                relevance split
                                             </span>
                                         )}
                                         {link._scan !== 'current' && link._scan !== 'foresight' && (
