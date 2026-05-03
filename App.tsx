@@ -152,6 +152,9 @@ const App = () => {
   const [foresightKbLoading, setForesightKbLoading] = useState(false);
   const [foresightKbStatus, setForesightKbStatus] = useState(null);
   const [kbCleanupLoading, setKbCleanupLoading] = useState(false);
+ const [foresightSanitizerLoading, setForesightSanitizerLoading] = useState(false);
+ const [foresightSanitizerResults, setForesightSanitizerResults] = useState(null);
+ const [sanitizingForesightCompany, setSanitizingForesightCompany] = useState(null);
 
   // MANUAL EDIT STATE
   const [editingCompany, setEditingCompany] = useState(null);  // company name being edited
@@ -798,7 +801,82 @@ const App = () => {
     } catch (e) { console.error(e); alert("KB cleanup failed."); setKbCleanupLoading(false); }
   };
 
-  // MANUAL EDIT HANDLERS
+  const formatSanitizerSummary = (report) => {
+ if (!report) return 'No sanitizer report returned.';
+ const totals = (report.results || []).reduce((acc, r) => {
+ acc.changedFields += r.changed_string_fields || 0;
+ acc.deterministic += r.deterministic_language_issues_found || 0;
+ acc.deadlines += r.past_deadline_issues_found || 0;
+ return acc;
+ }, { changedFields: 0, deterministic: 0, deadlines: 0 });
+ const sample = (report.results || []).flatMap(r => (r.sample_changes || []).slice(0, 2).map(ch => `• ${r.company}:\n  BEFORE: ${ch.before}\n  AFTER: ${ch.after}`)).slice(0, 5).join('\n\n');
+ return `Companies checked: ${report.companies_checked ?? 0}\nCompanies changed: ${report.companies_changed ?? 0}\nChanged text fields: ${totals.changedFields}\nDeterministic language issues: ${totals.deterministic}\nPast deadline issues: ${totals.deadlines}${sample ? `\n\nSample changes:\n${sample}` : ''}`;
+ };
+
+ const runForesightSanitizer = async ({ company = null, write = false, postClean = false } = {}) => {
+ const params = new URLSearchParams();
+ params.set('dry_run', write ? 'false' : 'true');
+ params.set('write', write ? 'true' : 'false');
+ params.set('post_clean', postClean ? 'true' : 'false');
+ params.set('report_date', new Date().toISOString().slice(0, 10));
+ if (company) params.set('company', company);
+ const res = await fetch(`/admin/sanitize-foresight-records?${params.toString()}`, {
+ method: 'POST',
+ headers: authHeaders()
+ });
+ if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return null; }
+ if (!res.ok) throw new Error(await res.text());
+ return await res.json();
+ };
+
+ const handleSanitizeForesightAll = async () => {
+ if (!isAdmin) return;
+ setForesightSanitizerLoading(true);
+ setForesightSanitizerResults(null);
+ try {
+ const dryRun = await runForesightSanitizer({ write: false });
+ setForesightSanitizerResults(dryRun);
+ const summary = formatSanitizerSummary(dryRun);
+ const shouldApply = confirm(`Foresight Sanitizer dry-run complete.\n\n${summary}\n\nApply these changes now?\n\nTip: choose OK only after the sample changes look safe.`);
+ if (!shouldApply) return;
+ const postClean = confirm('Use post-clean mode?\n\nOK = save cleaned records and prune older versions.\nCancel = save cleaned records without pruning old versions.');
+ const writeReport = await runForesightSanitizer({ write: true, postClean });
+ setForesightSanitizerResults(writeReport);
+ alert(`Foresight Sanitizer applied.\n\n${formatSanitizerSummary(writeReport)}`);
+ const reviewRes = await fetch('/admin/review-data', { headers: authHeaders() });
+ if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
+ fetchSummaryData(true);
+ } catch (e) {
+ console.error(e);
+ alert('Foresight Sanitizer failed: ' + (e?.message || e));
+ } finally {
+ setForesightSanitizerLoading(false);
+ }
+ };
+
+ const handleSanitizeForesightSingle = async (companyName) => {
+ if (!isAdmin) return;
+ setSanitizingForesightCompany(companyName);
+ try {
+ const dryRun = await runForesightSanitizer({ company: companyName, write: false });
+ const summary = formatSanitizerSummary(dryRun);
+ const shouldApply = confirm(`Foresight Sanitizer dry-run for "${companyName}" complete.\n\n${summary}\n\nApply these changes to this company now?`);
+ if (!shouldApply) return;
+ const postClean = confirm('Use post-clean mode for this company?\n\nOK = save cleaned record and prune older versions.\nCancel = save cleaned record without pruning old versions.');
+ const writeReport = await runForesightSanitizer({ company: companyName, write: true, postClean });
+ alert(`Foresight Sanitizer applied to "${companyName}".\n\n${formatSanitizerSummary(writeReport)}`);
+ const reviewRes = await fetch('/admin/review-data', { headers: authHeaders() });
+ if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
+ fetchSummaryData(true);
+ } catch (e) {
+ console.error(e);
+ alert('Foresight Sanitizer failed: ' + (e?.message || e));
+ } finally {
+ setSanitizingForesightCompany(null);
+ }
+ };
+
+ // MANUAL EDIT HANDLERS
   const handleOpenEdit = async (companyName) => {
     if (!isAdmin) return;
     setEditLoading(true);
@@ -1728,6 +1806,15 @@ const App = () => {
                   {foresightKbLoading && foresightKbStatus?.harvest ? `KB ${foresightKbStatus.harvest.current}/${foresightKbStatus.harvest.total}` : 'REFRESH FORESIGHT KB'}
                 </button>
                 <button
+                  onClick={handleSanitizeForesightAll}
+                  disabled={foresightSanitizerLoading}
+                  className="flex items-center gap-1.5 px-3 py-1 bg-violet-900/40 hover:bg-violet-800/60 border border-violet-600/50 text-violet-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
+                  title="Dry-run first, then optionally sanitize stored foresight/source-card snippets and past deadlines"
+                >
+                  {foresightSanitizerLoading ? <Loader2 size={12} className="animate-spin" /> : <Shield size={12} />}
+                  {foresightSanitizerLoading ? 'SANITIZING...' : 'SANITIZE FORESIGHT'}
+                </button>
+                <button
                   onClick={handleCleanupForesightKb}
                   disabled={kbCleanupLoading || foresightKbLoading}
                   className="flex items-center gap-1.5 px-3 py-1 bg-teal-900/40 hover:bg-teal-800/60 border border-teal-600/50 text-teal-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
@@ -1905,6 +1992,42 @@ const App = () => {
                       )}
                     </div>
                   )}
+                {/* FORESIGHT SANITIZER RESULTS BANNER */}
+                {foresightSanitizerResults && (
+                  <div className="rounded-xl p-4 border bg-violet-500/5 border-violet-500/20">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <Shield size={16} className="text-violet-400" />
+                        <span className="font-bold text-white text-sm">
+                          Foresight Sanitizer: {foresightSanitizerResults.companies_changed} changed out of {foresightSanitizerResults.companies_checked} checked
+                        </span>
+                      </div>
+                      <button onClick={() => setForesightSanitizerResults(null)} className="text-slate-500 hover:text-white"><X size={14} /></button>
+                    </div>
+                    <div className="text-[10px] text-violet-300/80 font-mono mb-2">
+                      Dry-run: {String(foresightSanitizerResults.dry_run)} · Write: {String(foresightSanitizerResults.write)} · Post-clean: {String(foresightSanitizerResults.post_clean)} · Report date: {foresightSanitizerResults.report_date}
+                    </div>
+                    <div className="space-y-1 max-h-60 overflow-y-auto">
+                      {(foresightSanitizerResults.results || []).filter(r => r.changed).slice(0, 25).map((r, idx) => (
+                        <div key={idx} className="bg-black/30 rounded-lg px-3 py-2 border border-violet-500/10">
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-white text-xs font-medium truncate">{r.company}</span>
+                            <span className="text-[10px] font-mono text-violet-300">
+                              {r.status} · fields:{r.changed_string_fields || 0} · deterministic:{r.deterministic_language_issues_found || 0} · deadlines:{r.past_deadline_issues_found || 0}
+                            </span>
+                          </div>
+                          {(r.sample_changes || []).slice(0, 2).map((ch, ci) => (
+                            <div key={ci} className="mt-1 text-[9px] font-mono text-slate-500 border-t border-white/5 pt-1">
+                              <div className="text-rose-300/70">Before: {ch.before}</div>
+                              <div className="text-emerald-300/70">After: {ch.after}</div>
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
 
                   {/* STORED COMPANIES LIST */}
                   <div className="text-[10px] text-slate-500 font-mono uppercase tracking-wider">
@@ -1981,6 +2104,18 @@ const App = () => {
                               </button>
                               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block z-50 pointer-events-none">
                                 <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 whitespace-nowrap shadow-xl">Refresh WHY/WHAT<br/><span className="text-slate-500">Regenerate strategic proposals</span></div>
+                              </div>
+                            </div>
+                            <div className="relative group/tip">
+                              <button
+                                onClick={() => handleSanitizeForesightSingle(item.companyName)}
+                                disabled={sanitizingForesightCompany === item.companyName}
+                                className="text-slate-500 hover:text-violet-400 p-1.5 rounded hover:bg-violet-500/10 transition-all disabled:opacity-50"
+                              >
+                                {sanitizingForesightCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <Shield size={14} />}
+                              </button>
+                              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block z-50 pointer-events-none">
+                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 whitespace-nowrap shadow-xl">Sanitize Foresight<br/><span className="text-slate-500">Dry-run and clean stored foresight/source-card snippets</span></div>
                               </div>
                             </div>
                             <div className="relative group/tip">
