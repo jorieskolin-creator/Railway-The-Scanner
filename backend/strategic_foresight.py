@@ -29,6 +29,7 @@ from google.genai import types as genai_types
 from gemini_backoff import call_with_503_backoff
 from gemini_client import get_gemini_client
 from source_quality import HIGH_CREDIBILITY_DOMAINS, LOW_CREDIBILITY_DOMAINS, assess_source_credibility
+from foresight_guardrails import build_foresight_guardrails, annotate_foresight_signal, annotate_foresight_link, validate_foresight_text, sanitize_foresight_text
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1643,10 +1644,10 @@ Key scenario — Status Quo: {scenarios.get('status_quo', 'N/A')}
 Key scenario — Disruption: {scenarios.get('disruption', 'N/A')}
 {climate_line}
 
-INSTRUCTION: Weave 1-2 forward-looking insights into the summary's final paragraph.
-The pitch MUST reference at least one external force to create urgency.
-WHY/WHAT proposals should be future-aware — frame the weakest KB dimension against
-its incoming external force.
+INSTRUCTION: You may weave 1-2 forward-looking insights into the summary's final paragraph, but only as external context.
+The pitch should reference an external force only when the evidence supports relevance; do not state it as current company deployment.
+WHY/WHAT proposals should be future-aware and validation-first — frame the weakest KB dimension against
+its potentially relevant external force.
 Example: Instead of "Your AI maturity needs improvement" →
 "With agentic AI reshaping {domain} in 12-18 months, your current state creates
 an urgent modernization window."
@@ -2526,7 +2527,7 @@ def extract_foresight_links(foresight_data, company_name="", domain=""):
                 "is_primary": True,
                 "is_priority_dimension": force.get("kb_dimension", "") in core_dims,
             }
-            links.append(link)
+            links.append(annotate_foresight_link(link, domain=domain))
 
         # Also include verified supporting sources
         for ss in force.get("verified_supporting_sources", []):
@@ -2549,7 +2550,7 @@ def extract_foresight_links(foresight_data, company_name="", domain=""):
                     "is_primary": False,
                     "is_priority_dimension": force.get("kb_dimension", "") in core_dims,
                 }
-                links.append(link)
+                links.append(annotate_foresight_link(link, domain=domain))
 
     # Sort: validated first, then by credibility
     credibility_order = {"high": 0, "medium": 1, "low": 2, "unknown": 3}

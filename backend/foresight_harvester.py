@@ -29,6 +29,7 @@ from google.genai import types as genai_types
 from gemini_backoff import call_with_503_backoff
 from gemini_client import get_gemini_client
 from source_quality import HIGH_CREDIBILITY_DOMAINS, assess_source_credibility
+from foresight_guardrails import build_foresight_guardrails, annotate_foresight_signal
 from source_claim_validator import _fetch_page_text, _check_relevance
 from strategic_foresight import (
     FP_THEMES_30, FP_THEME_SOURCES, THEME_FALLBACK_MAP,
@@ -363,6 +364,9 @@ def _validate_harvest_signals(data: dict) -> dict:
 
         sig["validated"] = sig["url_verified"] and sig["source_count"] >= 2
 
+    # Mark all harvested signals as external foresight context. They are not company-specific facts.
+    data["signals"] = [annotate_foresight_signal(s, theme=data.get("theme", "")) for s in data["signals"]]
+
     # Remove signals with no verified primary URL
     data["signals"] = [s for s in data["signals"] if s.get("url_verified")]
 
@@ -661,6 +665,7 @@ def format_kb_signals_for_prompt(signals: list[dict], max_signals: int = 8) -> s
         lines.append(f"  Theme: {theme}")
         lines.append(f"  Type: {sig.get('signal_type', 'N/A')} | Timeframe: {sig.get('timeframe', 'N/A')}")
         lines.append(f"  Description: {sig.get('description', '')}")
+        lines.append("  Claim type: foresight_context | Company-specific: False | Use modal language only")
         lines.append(f"  Primary source: {sig.get('source_url', 'N/A')} ({sig.get('source_credibility', 'N/A')} credibility)")
         n_supporting = len(sig.get("supporting_sources", []))
         lines.append(f"  Corroborating sources: {n_supporting}")

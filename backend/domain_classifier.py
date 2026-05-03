@@ -60,12 +60,106 @@ _DOMAIN_ALIASES = {
     "transport": "Transport & Logistics",
     "logistics": "Transport & Logistics",
     "shipping": "Transport & Logistics",
+    "maritime": "Transport & Logistics",
+    "marine": "Transport & Logistics",
+    "ports": "Transport & Logistics",
     "media": "Media & Publishing",
     "publishing": "Media & Publishing",
     "industrial &": "Industrial & Manufacturing",
     "industrial and manufacturing": "Industrial & Manufacturing",
     "industrial & mfg": "Industrial & Manufacturing",
 }
+
+
+# Regulatory / foresight applicability by domain. This is deliberately conservative:
+# applicability means "relevant context", not proof that a specific company is
+# obligated, non-compliant, or using a technology.
+DOMAIN_REGULATORY_APPLICABILITY = {
+    "Technology & Software": {
+        "relevant_frameworks": ["EU AI Act", "GDPR", "Cyber Resilience Act"],
+        "conditional_frameworks": ["Digital Product Passport"],
+        "notes": ["AI and data regulation are often relevant; DPP needs product-specific evidence."],
+    },
+    "IT Services & Consulting": {
+        "relevant_frameworks": ["EU AI Act", "GDPR", "NIS2"],
+        "conditional_frameworks": ["Digital Product Passport"],
+        "notes": ["Regulation usually applies through services, customer sectors and systems deployed."],
+    },
+    "Industrial & Manufacturing": {
+        "relevant_frameworks": ["Digital Product Passport", "EU AI Act", "Net-Zero Industry Act"],
+        "conditional_frameworks": ["CBAM", "Batteries Regulation"],
+        "notes": ["DPP/NZIA relevance depends on product categories and procurement context."],
+    },
+    "Energy & Utilities": {
+        "relevant_frameworks": ["Net-Zero Industry Act", "EU AI Act", "NIS2"],
+        "conditional_frameworks": ["Digital Product Passport", "CBAM"],
+        "notes": ["NZIA may affect clean-tech and auction/procurement contexts; company-specific obligations require product/context evidence."],
+    },
+    "Transport & Logistics": {
+        "relevant_frameworks": ["EU AI Act", "Fit for 55", "FuelEU Maritime"],
+        "conditional_frameworks": ["Net-Zero Industry Act", "Digital Product Passport"],
+        "notes": ["Maritime/logistics rules can be relevant, but product-manufacturing rules need company-specific mapping."],
+    },
+    "Financial Services": {
+        "relevant_frameworks": ["EU AI Act", "DORA", "GDPR"],
+        "conditional_frameworks": [],
+        "notes": ["AI/risk and operational resilience are likely more relevant than industrial product regulation."],
+    },
+    "Insurance & Pensions": {
+        "relevant_frameworks": ["EU AI Act", "DORA", "GDPR"],
+        "conditional_frameworks": [],
+        "notes": ["High-risk AI relevance depends on underwriting, claims or HR use cases."],
+    },
+    "Retail & Consumer": {
+        "relevant_frameworks": ["Digital Product Passport", "GDPR", "EU AI Act"],
+        "conditional_frameworks": ["Ecodesign for Sustainable Products Regulation"],
+        "notes": ["DPP relevance depends on product categories and supply-chain role."],
+    },
+    "Healthcare": {
+        "relevant_frameworks": ["EU AI Act", "Medical Device Regulation", "GDPR"],
+        "conditional_frameworks": ["Digital Product Passport"],
+        "notes": ["AI obligations depend on clinical, HR or administrative use cases."],
+    },
+    "Forest & Paper": {
+        "relevant_frameworks": ["Digital Product Passport", "CBAM", "EU Deforestation Regulation"],
+        "conditional_frameworks": ["Net-Zero Industry Act", "EU AI Act"],
+        "notes": ["Applicability depends on products, materials and market role."],
+    },
+    "Telecommunications": {
+        "relevant_frameworks": ["NIS2", "EU AI Act", "GDPR"],
+        "conditional_frameworks": ["Digital Product Passport"],
+        "notes": ["Cyber/data obligations are usually stronger than product DPP unless hardware is in scope."],
+    },
+    "Construction & Real Estate": {
+        "relevant_frameworks": ["Energy Performance of Buildings", "Digital Product Passport"],
+        "conditional_frameworks": ["EU AI Act", "Net-Zero Industry Act"],
+        "notes": ["DPP relevance often enters through materials/products, not all real-estate operations."],
+    },
+    "Media & Publishing": {
+        "relevant_frameworks": ["EU AI Act", "Digital Services Act", "Copyright"],
+        "conditional_frameworks": [],
+        "notes": ["AI transparency may matter for generated content; industrial rules usually do not."],
+    },
+    "Other": {
+        "relevant_frameworks": ["EU AI Act"],
+        "conditional_frameworks": ["Digital Product Passport", "Net-Zero Industry Act"],
+        "notes": ["Use company-specific evidence before asserting regulation-specific obligations."],
+    },
+}
+
+
+def get_domain_regulatory_applicability(domain: str) -> dict:
+    """Return conservative regulatory/foresight applicability metadata for a domain."""
+    canonical = normalize_domain(domain)
+    data = DOMAIN_REGULATORY_APPLICABILITY.get(canonical, DOMAIN_REGULATORY_APPLICABILITY["Other"]).copy()
+    data["domain"] = canonical
+    data["applicability_is_context_not_obligation"] = True
+    return data
+
+
+def should_assert_company_specific_obligation(domain: str, framework: str, company_specific_evidence: bool = False) -> bool:
+    """Only allow deterministic obligation language with company-specific evidence."""
+    return bool(company_specific_evidence)
 
 
 def normalize_domain(raw: str) -> str:
