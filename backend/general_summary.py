@@ -23,6 +23,12 @@ from google.genai import types as genai_types
 from gemini_backoff import call_with_503_backoff
 from source_quality import assess_source_scope
 from contradiction_detector import detect_contradictions
+from prompts import PROMPT_VERSION, build_shared_guardrails
+
+
+def _general_summary_guardrails() -> str:
+    """Shared fact-discipline guardrails for the plain General Summary mode."""
+    return build_shared_guardrails(include_diagnostic=False, include_foresight=True)
 
 
 def _extract_json(text: str) -> dict | None:
@@ -252,9 +258,13 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
 
 def _build_prompt(payload: dict, company_name: str) -> str:
     forbidden = ", ".join(_FORBIDDEN_TERMS)
+    summary_guardrails = _general_summary_guardrails()
     return f"""You are writing the General Summary section of a forensic B2B intelligence report about {company_name}. Your role in this section is evidence reporter — not analyst, not advisor. You synthesise verified facts into readable prose, but you do not speculate, project, or editorialize.
 
 This section differs from the AI Diagnosis section: the Diagnosis interprets and projects; this Summary strictly reports what the evidence shows.
+
+SHARED FACT-DISCIPLINE / FORESIGHT GUARDRAILS:
+{summary_guardrails}
 
 EVIDENCE — the ONLY material you may reference. Every sentence you write must trace back to a specific item below. Do not supplement with outside knowledge, training data, or general industry assumptions:
 {json.dumps(payload, ensure_ascii=False, indent=2)}
@@ -457,7 +467,11 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
 # hallucination or training-data leakage.
 
 def _build_fact_check_prompt(summary_text: str, payload: dict, company_name: str) -> str:
+    fact_check_guardrails = _general_summary_guardrails()
     return f"""You are a precision fact-checker. Your job is to verify that EVERY factual claim in the General Summary below is directly supported by the provided evidence payload AND that narrow-scope findings are not silently elevated into company-wide claims. The Summary should contain ONLY information from the payload — nothing else.
+
+SHARED FACT-DISCIPLINE / FORESIGHT GUARDRAILS:
+{fact_check_guardrails}
 
 COMPANY: {company_name}
 
@@ -494,12 +508,16 @@ If unsupported claims found:
 
 def _build_regen_prompt(payload: dict, company_name: str, original_text: str, false_claims: list) -> str:
     """Build a re-generation prompt that incorporates the false claims as explicit warnings."""
+    regen_guardrails = _general_summary_guardrails()
     claims_list = "\n".join(f"- {fc['claim']}: {fc['reason']}" for fc in false_claims)
     base_prompt = _build_prompt(payload, company_name)
     return f"""{base_prompt}
 
 CRITICAL CORRECTION — THE PREVIOUS ATTEMPT CONTAINED THESE UNSUPPORTED CLAIMS:
 {claims_list}
+
+SHARED FACT-DISCIPLINE / FORESIGHT GUARDRAILS:
+{regen_guardrails}
 
 The previous attempt:
 {original_text}
