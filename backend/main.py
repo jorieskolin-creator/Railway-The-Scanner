@@ -34,6 +34,7 @@ from reality_check import validate_summary, validate_pitch, ai_fact_check_summar
 from general_summary import generate_general_summary, fact_check_general_summary
 from source_quality import manage_evidence_sources, assess_source_scope
 from contradiction_detector import detect_contradictions
+from prompts import PROMPT_VERSION, build_shared_guardrails
 from domain_classifier import infer_domain
 from gemini_backoff import call_with_503_backoff
 
@@ -127,6 +128,11 @@ def _build_contradictions_block(verified_links: list, company_name: str) -> str:
             f"   - [{c.get('scope_b', 'broad')}] {c.get('source_b_title', '')}: {c.get('claim_b', '')}"
         )
     return "\n".join(lines) + "\n"
+
+
+def _shared_prompt_guardrails(include_diagnostic: bool = True, include_foresight: bool = True) -> str:
+    """Shared evidence/diagnosis/foresight guardrails injected into main.py prompts."""
+    return build_shared_guardrails(include_diagnostic=include_diagnostic, include_foresight=include_foresight)
 
 
 def clean_env_var(value):
@@ -891,6 +897,7 @@ def _refresh_proposals_for_company(company_name: str, data: dict) -> dict:
     reality_score = data.get("reality_score", 0)
     evidence_links = data.get("evidence_links", [])
     evidence_list = ', '.join([f"{l.get('title', 'Unknown')}: {l.get('snippet', '')}" for l in evidence_links[:20]])
+    proposal_guardrails = _shared_prompt_guardrails(include_diagnostic=True, include_foresight=True)
 
     # Build the weakest dimensions from reality checklist
     negative_findings = [item for item in reality_checklist if item.get("sentiment") == "negative"]
@@ -900,6 +907,9 @@ def _refresh_proposals_for_company(company_name: str, data: dict) -> dict:
 
 ### KNOWLEDGE BASE (KB)
 {knowledge_context}
+
+### SHARED EVIDENCE / DIAGNOSIS GUARDRAILS
+{proposal_guardrails}
 
 ### EXISTING ANALYSIS CONTEXT
 Company: {company_name}
@@ -942,6 +952,8 @@ Rules:
   - Draw ONLY from the weakest KB dimensions visible in the analysis.
   - Never generic — each must reference something specific from the evidence or diagnosis.
   - These are proposals, not promises — frame as "potential impact" and "potential effect".
+  - When evidence confidence is low or narrow, frame as "validate whether..." rather than "fix...".
+  - Do not use strong KB labels unless the evidence threshold in the shared guardrails is met.
 
 ### GUARDRAILS
 - NEVER fabricate evidence, people, events, partnerships, or metrics not present in the analysis above.
@@ -1319,9 +1331,13 @@ def _clean_company_data(company_name: str, data: dict) -> dict:
     _false_claims_text = chr(10).join(_claims_lines)
 
     # Same synthesis prompt as Deep Scanning (main.py scan pipeline)
+    synthesis_guardrails = _shared_prompt_guardrails(include_diagnostic=True, include_foresight=True)
     synthesis_prompt = f"""You are a senior organizational analyst conducting a forensic modernization assessment.
 You are conservative and evidence-bound. You would rather say "insufficient evidence" than risk a wrong claim. Your credibility depends on never overstating.
 Your task: synthesize scanner evidence into a precise, evidence-grounded diagnosis using the Knowledge Base framework below.
+
+### SHARED EVIDENCE / DIAGNOSIS / FORESIGHT GUARDRAILS
+{synthesis_guardrails}
 
 METHODOLOGY: Read ALL evidence first. Score ONLY what evidence supports. Write ONLY what scores justify.
 If evidence is thin, say so — a short honest analysis beats a long fabricated one.
@@ -2667,9 +2683,13 @@ If new evidence shows improvement, highlight the positive trajectory."""
                     from strategic_foresight import format_foresight_for_synthesis
                     foresight_context = format_foresight_for_synthesis(foresight_data, companyName, company_domain)
 
+                scan_synthesis_guardrails = _shared_prompt_guardrails(include_diagnostic=True, include_foresight=True)
                 synthesis_prompt = f"""You are a senior organizational analyst conducting a forensic modernization assessment.
 You are conservative and evidence-bound. You would rather say "insufficient evidence" than risk a wrong claim. Your credibility depends on never overstating.
 Your task: synthesize scanner evidence into a precise, evidence-grounded diagnosis using the Knowledge Base framework below.
+
+### SHARED EVIDENCE / DIAGNOSIS / FORESIGHT GUARDRAILS
+{scan_synthesis_guardrails}
 
 METHODOLOGY: Read ALL evidence first. Score ONLY what evidence supports. Write ONLY what scores justify.
 If evidence is thin, say so — a short honest analysis beats a long fabricated one.
@@ -3246,12 +3266,16 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                 # Strip the old (contaminated) "Evidence Found:" line from the original
                 # synthesis_prompt so the LLM only sees the cleaned evidence list below.
                 import re as _re
+                clean_resynthesis_guardrails = _shared_prompt_guardrails(include_diagnostic=True, include_foresight=True)
                 clean_synthesis_prompt = _re.sub(
                     r'Evidence Found: .+', 'Evidence Found: [see CLEANED evidence below]',
                     synthesis_prompt, count=1
                 )
 
                 resynth_prompt = f"""{clean_synthesis_prompt}
+
+### SHARED EVIDENCE / DIAGNOSIS / FORESIGHT GUARDRAILS
+{clean_resynthesis_guardrails}
 
 CRITICAL CONTEXT — FACT-CHECK CORRECTIONS:
 The previous synthesis contained false claims that were detected by an independent fact-checker
