@@ -1576,7 +1576,7 @@ Return STRICT JSON:
         return None
 
 
-def x_ray_search(company_name: str, company_url: str = None, model_id: str = None, intent_score: int = 0, previous_context: dict = None, max_research_loops: int = 2, subsidiaries: list = None, time_budget: int = 350, employees: int = None):
+def x_ray_search(company_name: str, company_url: str = None, model_id: str = None, intent_score: int = 0, previous_context: dict = None, max_research_loops: int = 2, subsidiaries: list = None, time_budget: int = 350, employees: int = None, batch_mode: bool = False):
     """
     SCANNER 2: THE REALITY CHECK (External Evidence)
 
@@ -2539,15 +2539,18 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 if elapsed_total > _guard_delta_verify:
                     print(f"   ⏰ [Delta Verification] Skipping — elapsed {int(elapsed_total)}s exceeds {_guard_delta_verify}s guard. Keeping score {final_score}.")
                 else:
-                    print(f"   [Delta Verification] Large score change detected: {prev_reality} → {final_score} (delta {delta}). Running verification re-scan with Sonnet (same methodology)...")
-                    # Use the SAME model (Sonnet) for verification.
-                    # Old scores were often from Gemini — verifying with Gemini
-                    # just reproduces the old bias. Same-model consistency is
-                    # the correct test: if Sonnet says 85 twice, the delta is real.
-                    verify_data = execute_with_anthropic(prompt)
-                    if not verify_data:
-                        # Sonnet unavailable — fall back to Gemini as last resort
+                    print(f"   [Delta Verification] Large score change detected: {prev_reality} → {final_score} (delta {delta}). Running verification re-scan (same methodology)...")
+                    if batch_mode:
                         verify_data = execute_with_model(primary_model)
+                    else:
+                        # Use the SAME model (Sonnet) for verification.
+                        # Old scores were often from Gemini — verifying with Gemini
+                        # just reproduces the old bias. Same-model consistency is
+                        # the correct test: if Sonnet says 85 twice, the delta is real.
+                        verify_data = execute_with_anthropic(prompt)
+                        if not verify_data:
+                            # Sonnet unavailable — fall back to Gemini as last resort
+                            verify_data = execute_with_model(primary_model)
 
                     if verify_data:
                         verify_adjustment = verify_data.get("reality_score_adjustment", 0)
@@ -2656,13 +2659,16 @@ RETURN STRICT JSON:
     "washing_type": null
 }}"""
 
-            # Use the SAME model (Sonnet) that did the original scan for recovery.
-            # Same-model consistency: if Sonnet's URLs are dead, Sonnet's web search
-            # is the best tool to find real replacements (live Brave Search grounding).
-            recovery_data = execute_with_anthropic(recovery_prompt)
-            if not recovery_data:
-                # Sonnet unavailable — fall back to Gemini as last resort
+            if batch_mode:
                 recovery_data = execute_with_model(primary_model, custom_prompt=recovery_prompt)
+            else:
+                # Use the SAME model (Sonnet) that did the original scan for recovery.
+                # Same-model consistency: if Sonnet's URLs are dead, Sonnet's web search
+                # is the best tool to find real replacements (live Brave Search grounding).
+                recovery_data = execute_with_anthropic(recovery_prompt)
+                if not recovery_data:
+                    # Sonnet unavailable — fall back to Gemini as last resort
+                    recovery_data = execute_with_model(primary_model, custom_prompt=recovery_prompt)
 
             if recovery_data:
                 new_findings = recovery_data.get("findings", [])
@@ -2888,7 +2894,7 @@ def financial_health_search(company_name: str, company_url: str = None, model_id
     Returns a 0-100 composite score with 4 sub-dimensions (0-25 each).
     """
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-    primary_model = model_id or "gemini-2.5-pro"
+    primary_model = model_id or "gemini-3-flash-preview"
 
     # Dynamic year window — always search for the two most recent calendar years
     # so results stay current without manual updates each January.

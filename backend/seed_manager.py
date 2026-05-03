@@ -327,7 +327,8 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
                     previous_context=previous_context, max_research_loops=2,
                     subsidiaries=company.get("subsidiaries"),
                     time_budget=340,
-                    employees=company.get("employees")
+                    employees=company.get("employees"),
+                    batch_mode=True
                 )
                 financial_future = sub_executor.submit(
                     financial_health_search, company_name, company["url"]
@@ -735,72 +736,71 @@ Respond with valid JSON only. Six fields required:
 Note: the summary value must contain \\n\\n between paragraphs (3-4 paragraphs total). The pitch value must also contain \\n\\n between its 3 paragraphs.
 Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2."""
 
-                    # --- Synthesis with fallback chain: Opus 4.7 → Gemini 3.1 Pro → Sonnet 4.6 ---
-                    # Opus uses Extended Thinking to reason through evidence before synthesis.
+                    # --- Synthesis with fallback chain: Gemini 3.1 Pro → Opus 4.7 → Sonnet 4.6 ---
+                    # Gemini 3.1 Pro is primary for batch refresh (fast, cost-effective at scale).
+                    # Opus 4.7 with Extended Thinking is fallback (used for individual scans).
                     response_text = ""
+
+                    # Primary: Gemini 3.1 Pro Preview
                     try:
-                        print(f"   [{company_name}] 🔄 [Synthesis] Attempting claude-opus-4-7 with Extended Thinking...")
-                        synth_start = time.time()
-                        resp = claude_client.messages.create(
-                            model="claude-opus-4-7",
-                            max_tokens=16000,
-                            thinking={"type": "adaptive"},
-                            extra_body={"output_config": {"effort": "xhigh"}},
-                            messages=[{"role": "user", "content": synthesis_prompt}]
-                        )
-                        # Extended thinking response: extract text block (skip thinking blocks)
-                        response_text = ""
-                        if resp.content:
-                            for block in resp.content:
-                                if getattr(block, 'type', None) == 'text':
-                                    response_text = block.text
-                                    break
-                        print(f"   [{company_name}] ✅ [Synthesis] claude-opus-4-7 + Extended Thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
-                    except Exception as opus_err:
-                        print(f"   [{company_name}] ❌ [Synthesis] Opus 4.7 failed: {opus_err}")
-
-                        # Fallback 1: Gemini 3.1 Pro Preview (strongest Google model, MEDIUM thinking)
-                        try:
-                            gemini_client = get_gemini_client()
-                            print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Gemini 3.1 Pro Preview...")
-                            g_start = time.time()
-                            gemini_resp = call_with_503_backoff(
-                                lambda: gemini_client.models.generate_content(
-                                    model="gemini-3.1-pro-preview",
-                                    contents=synthesis_prompt,
-                                    config=types.GenerateContentConfig(
-                                        temperature=0.5,
-                                        thinking_config=types.ThinkingConfig(thinking_budget=3000),  # MEDIUM = 2000-3500 tokens; explicit cap
-                                        max_output_tokens=4000
-                                    )
-                                ),
-                                label=f"Seed Synthesis gemini-3.1-pro-preview [{company_name}]",
-                            )
-                            response_text = gemini_resp.text or ""
-                            print(f"   [{company_name}] ✅ [Synthesis] Gemini 3.1 Pro Preview succeeded in {int((time.time() - g_start) * 1000)}ms")
-                        except Exception as gemini31_err:
-                            print(f"   [{company_name}] ❌ [Synthesis] Gemini 3.1 Pro Preview failed: {gemini31_err}")
-
-                        # gemini-3-pro-preview fallback removed: shares 3.x rate limits with 3.1-pro
-                        # and is being deprecated by Google.
-
-                        # Fallback 2: Claude Sonnet 4.6 (independent provider — survives Google outages)
-                        if not response_text:
-                            try:
-                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Claude Sonnet 4.6...")
-                                m_start = time.time()
-                                sonnet_resp = claude_client.messages.create(
-                                    model="claude-sonnet-4-6",
-                                    max_tokens=4000,
-                                    messages=[{"role": "user", "content": synthesis_prompt}],
+                        gemini_client = get_gemini_client()
+                        print(f"   [{company_name}] 🔄 [Synthesis] Attempting Gemini 3.1 Pro Preview...")
+                        g_start = time.time()
+                        gemini_resp = call_with_503_backoff(
+                            lambda: gemini_client.models.generate_content(
+                                model="gemini-3.1-pro-preview",
+                                contents=synthesis_prompt,
+                                config=types.GenerateContentConfig(
+                                    temperature=0.5,
+                                    thinking_config=types.ThinkingConfig(thinking_budget=3000),  # MEDIUM = 2000-3500 tokens; explicit cap
+                                    max_output_tokens=4000
                                 )
-                                for block in sonnet_resp.content:
+                            ),
+                            label=f"Seed Synthesis gemini-3.1-pro-preview [{company_name}]",
+                        )
+                        response_text = gemini_resp.text or ""
+                        print(f"   [{company_name}] ✅ [Synthesis] Gemini 3.1 Pro Preview succeeded in {int((time.time() - g_start) * 1000)}ms")
+                    except Exception as gemini31_err:
+                        print(f"   [{company_name}] ❌ [Synthesis] Gemini 3.1 Pro Preview failed: {gemini31_err}")
+
+                    # Fallback 1: Opus 4.7 with Extended Thinking
+                    if not response_text:
+                        try:
+                            print(f"   [{company_name}] 🔄 [Synthesis] Falling back to claude-opus-4-7 with Extended Thinking...")
+                            synth_start = time.time()
+                            resp = claude_client.messages.create(
+                                model="claude-opus-4-7",
+                                max_tokens=16000,
+                                thinking={"type": "adaptive"},
+                                extra_body={"output_config": {"effort": "xhigh"}},
+                                messages=[{"role": "user", "content": synthesis_prompt}]
+                            )
+                            if resp.content:
+                                for block in resp.content:
                                     if getattr(block, 'type', None) == 'text':
                                         response_text = block.text
                                         break
-                                print(f"   [{company_name}] ✅ [Synthesis] Claude Sonnet 4.6 succeeded in {int((time.time() - m_start) * 1000)}ms")
-                            except Exception as sonnet_err:
-                                print(f"   [{company_name}] ❌ [Synthesis] All models failed. Last error: {sonnet_err}")
+                            print(f"   [{company_name}] ✅ [Synthesis] claude-opus-4-7 + Extended Thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
+                        except Exception as opus_err:
+                            print(f"   [{company_name}] ❌ [Synthesis] Opus 4.7 failed: {opus_err}")
+
+                    # Fallback 2: Claude Sonnet 4.6 (independent provider — survives Google outages)
+                    if not response_text:
+                        try:
+                            print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Claude Sonnet 4.6...")
+                            m_start = time.time()
+                            sonnet_resp = claude_client.messages.create(
+                                model="claude-sonnet-4-6",
+                                max_tokens=4000,
+                                messages=[{"role": "user", "content": synthesis_prompt}],
+                            )
+                            for block in sonnet_resp.content:
+                                if getattr(block, 'type', None) == 'text':
+                                    response_text = block.text
+                                    break
+                            print(f"   [{company_name}] ✅ [Synthesis] Claude Sonnet 4.6 succeeded in {int((time.time() - m_start) * 1000)}ms")
+                        except Exception as sonnet_err:
+                            print(f"   [{company_name}] ❌ [Synthesis] All models failed. Last error: {sonnet_err}")
                     if response_text:
                         payload = extract_json_from_text(response_text)
                         if payload:
