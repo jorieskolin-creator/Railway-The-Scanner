@@ -14,7 +14,7 @@ import io
 import time
 import threading
 import concurrent.futures
-from datetime import datetime
+from datetime import datetime, date
 from bs4 import BeautifulSoup
 from pypdf import PdfReader
 from google import genai
@@ -35,6 +35,7 @@ from general_summary import generate_general_summary, fact_check_general_summary
 from source_quality import manage_evidence_sources, assess_source_scope
 from contradiction_detector import detect_contradictions
 from prompts import PROMPT_VERSION, build_shared_guardrails
+from database_sanitizer import sanitize_database
 from foresight_guardrails import sanitize_foresight_collection, sanitize_report_foresight_fields
 from domain_classifier import infer_domain
 from gemini_backoff import call_with_503_backoff
@@ -571,6 +572,37 @@ async def review_data(request: Request):
     verify_admin(request)
     companies = storage.get_all_companies_summary()
     return {"companies": companies, "total": len(companies)}
+
+@app.post("/admin/sanitize-foresight-records")
+async def sanitize_foresight_records(
+    request: Request,
+    dry_run: bool = True,
+    write: bool = False,
+    post_clean: bool = False,
+    company: str | None = None,
+    report_date: str | None = None,
+):
+    """Dry-run or apply foresight/source-card sanitation for stored company records.
+
+    This endpoint is intentionally dry-run-first. The frontend calls it first with
+    dry_run=true/write=false to return an audit report. Only when the admin confirms
+    should it be called with dry_run=false/write=true.
+    """
+    verify_admin(request)
+
+    try:
+        parsed_report_date = date.fromisoformat(report_date) if report_date else date.today()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="report_date must use YYYY-MM-DD format")
+
+    report = sanitize_database(
+        company=company,
+        dry_run=dry_run or not write,
+        write=write,
+        post_clean=post_clean,
+        report_date=parsed_report_date,
+    )
+    return report
 
 def _recheck_company_data(company_name: str, data: dict) -> dict:
     """
