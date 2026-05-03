@@ -18,6 +18,44 @@ from datetime import date, datetime
 from typing import Dict, Iterable, List, Tuple
 
 
+# -----------------------------------------------------------------------------
+# Source context classification constants
+# -----------------------------------------------------------------------------
+# These constants must be defined near the top of the module because scan-time
+# helpers may call is_company_specific_evidence() / is_context_only_source()
+# early in the pipeline. Keep names stable; scanner_two.py and
+# strategic_foresight.py may import helpers that rely on these globals.
+COMPANY_SPECIFIC_SOURCE_TYPES = {
+    "company_report",
+    "annual_report",
+    "financial_report",
+    "quarterly_report",
+    "company_press_release",
+    "investor_report",
+    "company_website",
+    "case_study",
+    "company_blog",
+    "company_news",
+    "company_filing",
+    "official_company_source",
+}
+
+CONTEXT_ONLY_SOURCE_TYPES = {
+    "foresight",
+    "foresight_report",
+    "trend_report",
+    "regulation",
+    "regulatory_context",
+    "analyst",
+    "analyst_report",
+    "market_report",
+    "industry_report",
+    "research_report",
+    "think_tank",
+    "policy_report",
+}
+
+
 # === DOMAIN AUTHORITY TIERS ===
 
 # Tier 1: Authoritative sources — research institutions, major analysts, gov agencies
@@ -971,3 +1009,141 @@ def classify_generation_context(link: dict) -> dict:
         link.setdefault("excluded_from_company_fact_generation", True)
         link.setdefault("scope", "external-trend")
     return link
+
+
+def is_company_specific_evidence(link: dict) -> bool:
+    """Return True when a source can support company-specific factual claims.
+
+    This helper is intentionally defensive: it uses fallback source-type sets so a
+    missing global constant cannot break Scanner 2 / Foresight generation at
+    runtime. Do not classify a source as context-only merely because it mentions
+    AI, analytics, simulation, governance, DPP, lifecycle, or regulation; those
+    topics can appear in direct company evidence too.
+    """
+    if not isinstance(link, dict):
+        return False
+
+    company_specific_types = globals().get("COMPANY_SPECIFIC_SOURCE_TYPES", {
+        "company_report", "annual_report", "financial_report", "quarterly_report",
+        "company_press_release", "investor_report", "company_website", "case_study",
+        "company_blog", "company_news", "company_filing", "official_company_source",
+    })
+    context_only_types = globals().get("CONTEXT_ONLY_SOURCE_TYPES", {
+        "foresight", "foresight_report", "trend_report", "regulation",
+        "regulatory_context", "analyst", "analyst_report", "market_report",
+        "industry_report", "research_report", "think_tank", "policy_report",
+    })
+
+    if link.get("company_specific") is True:
+        return True
+
+    source_type = str(link.get("source_type") or "").lower()
+
+    if source_type in company_specific_types:
+        return True
+
+    if str(link.get("entity_match") or "").lower() == "exact" and link.get("company_mentioned") is True:
+        return True
+
+    if link.get("company_mentioned") is True and link.get("verified") is True and source_type not in context_only_types:
+        return True
+
+    return False
+
+
+
+def is_context_only_source(link: dict) -> bool:
+    """Return True for generic foresight/regulatory/trend context sources.
+
+    Direct company evidence always wins over generic context classification.
+    """
+    if not isinstance(link, dict):
+        return False
+
+    if is_company_specific_evidence(link):
+        return False
+
+    context_only_types = globals().get("CONTEXT_ONLY_SOURCE_TYPES", {
+        "foresight", "foresight_report", "trend_report", "regulation",
+        "regulatory_context", "analyst", "analyst_report", "market_report",
+        "industry_report", "research_report", "think_tank", "policy_report",
+    })
+
+    source_type = str(link.get("source_type") or "").lower()
+    claim_type = str(link.get("claim_type") or "").lower()
+    scope = str(link.get("scope") or "").lower()
+    origin = str(link.get("origin") or "").lower()
+    allowed = [str(x).lower() for x in (link.get("allowed_claim_types") or [])]
+
+    return (
+        source_type in context_only_types
+        or claim_type in {"foresight_context", "regulatory_context"}
+        or scope == "external-trend"
+        or origin == "foresight"
+        or "foresight_context" in allowed
+        or "regulatory_context" in allowed
+    )
+
+
+
+def classify_generation_context(link: dict) -> dict:
+    """Apply generation-time metadata without overwriting direct company evidence.
+
+    This function is used by scan-time and foresight-generation flows so newly
+    refreshed company records are clean before they are saved. The Sanitizer
+    remains only a legacy cleanup/audit tool.
+    """
+    if not isinstance(link, dict):
+        return link
+
+    if is_company_specific_evidence(link):
+        link["company_specific"] = True
+        link.setdefault("generation_eligible", True)
+        link.setdefault("claim_type", "company_fact")
+        link.setdefault("scope", "company-specific")
+        # Remove context-only flags if an earlier pass over-stamped the record.
+        for key in [
+            "excluded_from_company_fact_generation",
+            "not_evidence_of_deployment",
+            "forbidden_as_current_company_fact",
+        ]:
+            link.pop(key, None)
+        if link.get("origin") == "foresight":
+            link.pop("origin", None)
+        return link
+
+    if is_context_only_source(link):
+        link.setdefault("generation_eligible", True)
+        link.setdefault("claim_type", "foresight_context")
+        link.setdefault("company_specific", False)
+        link.setdefault("requires_company_specific_corroboration", True)
+        link.setdefault("not_evidence_of_deployment", True)
+        link.setdefault("excluded_from_company_fact_generation", True)
+        link.setdefault("scope", "external-trend")
+
+    return link
+
+
+
+def apply_language_metadata(link: dict) -> dict:
+    """Annotate source records with language constraints for downstream rendering.
+
+    Direct company evidence remains company evidence even when the topic is AI,
+    governance, simulation, lifecycle traceability, DPP, or regulation. Only
+    generic foresight/regulatory/trend sources are marked as context-only.
+    """
+    if not isinstance(link, dict):
+        return link
+
+    link = classify_generation_context(link)
+
+    if is_context_only_source(link):
+        link.setdefault("allowed_language", FORESIGHT_ALLOWED_LANGUAGE)
+        link.setdefault("forbidden_language", FORESIGHT_FORBIDDEN_LANGUAGE)
+        link.setdefault("company_specific", False)
+        link.setdefault("requires_company_specific_corroboration", True)
+        link.setdefault("not_evidence_of_deployment", True)
+        link.setdefault("excluded_from_company_fact_generation", True)
+
+    return link
+
