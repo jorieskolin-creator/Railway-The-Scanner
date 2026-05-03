@@ -2894,7 +2894,7 @@ def financial_health_search(company_name: str, company_url: str = None, model_id
     Returns a 0-100 composite score with 4 sub-dimensions (0-25 each).
     """
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-    primary_model = model_id or "gemini-3-flash-preview"
+    primary_model = model_id or "gemini-3.1-pro-preview"
 
     # Dynamic year window — always search for the two most recent calendar years
     # so results stay current without manual updates each January.

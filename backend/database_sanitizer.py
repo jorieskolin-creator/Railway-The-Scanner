@@ -147,6 +147,23 @@ except Exception:
         out = re.sub(r"\b(?:by|before|until|in)\s+(Q[1-4]\s+20\d{2})\b", repl_q, text or "", flags=re.I)
         return re.sub(r"\b(?:by|before|until|in)\s+(20\d{2})\b", repl_y, out, flags=re.I)
 
+    _DEPLOYMENT_REPL = [
+        (r"\bwill\s+fall\s+behind\b", "may face a disadvantage if the trend becomes material"),
+        (r"\bhas\s+deployed\b",
+         "is not proven by this foresight evidence alone to have deployed"),
+        (r"\bis\s+deploying\b", "may be evaluating or could evaluate"),
+        (r"\bcurrently\s+uses\b", "may need to evaluate use of"),
+        (r"\bbroad\s+deployment\b", "potential broad relevance"),
+    ]
+
+    def sanitize_source_description(text: str, report_date: date | None = None) -> str:
+        out = text or ""
+        for pat, repl in _DEPLOYMENT_REPL:
+            out = re.sub(pat, repl, out, flags=re.I)
+        out = _collapse_repeated_modals(out)
+        out = _rewrite_past_deadlines(out, report_date)
+        return re.sub(r"\s{2,}", " ", out).strip()
+
     def sanitize_foresight_text(text: str, report_date: date | None = None) -> str:
         out = text or ""
         for pat, repl in _REPL:
@@ -200,10 +217,14 @@ except Exception:
                         item.get("description") or item.get("snippet") or item.get("summary") or ""
                     )
                     if description and not item.get("source_says"):
-                        item["source_says"] = sanitize_foresight_text(description, report_date)
+                        item["source_says"] = sanitize_source_description(description, report_date)
+                    _desc_keys = {"description", "snippet", "summary", "source_says", "assessment", "evidence_snippet"}
                     for key in text_keys:
                         if isinstance(item.get(key), str):
-                            item[key] = sanitize_foresight_text(item[key], report_date)
+                            if key in _desc_keys:
+                                item[key] = sanitize_source_description(item[key], report_date)
+                            else:
+                                item[key] = sanitize_foresight_text(item[key], report_date)
         for field in ["future_insight", "future_insights_text", "domain_force_dossier", "climate_exposure"]:
             if isinstance(out.get(field), str):
                 out[field] = sanitize_foresight_text(out[field], report_date)

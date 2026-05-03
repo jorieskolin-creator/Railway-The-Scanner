@@ -31,6 +31,7 @@ if _BACKEND not in sys.path:
 from foresight_guardrails import (
     collapse_repeated_modals,
     sanitize_foresight_text,
+    sanitize_source_description,
     sanitize_foresight_record,
     sanitize_foresight_modality,
     validate_foresight_text,
@@ -476,6 +477,76 @@ class TestReportLevelChecks:
 
 
 # ---------------------------------------------------------------------------
+# 10. Modal dilution scoping — regulatory language preserved in source_says
+# ---------------------------------------------------------------------------
+
+class TestModalDilutionScoping:
+    """source_says and description fields must preserve "requires" / "must" when they
+    describe what a regulation says.  Only deployment-state patterns are applied there.
+    Impact/relevance fields (possible_relevance, impact) still get full modal softening."""
+
+    def test_gdpr_requires_preserved_in_source_says(self):
+        """'GDPR requires organizations to appoint a DPO' in source_says must NOT become
+        'GDPR may require' — that would misrepresent a binding legal obligation as speculative."""
+        text = "GDPR requires organizations processing EU personal data to appoint a DPO."
+        result = sanitize_source_description(text, REPORT_DATE)
+        assert "requires" in result.lower(), (
+            f"'requires' was incorrectly softened in source description: '{result}'"
+        )
+        assert "may require" not in result.lower(), (
+            f"Obligation language was diluted in source description: '{result}'"
+        )
+
+    def test_regulation_requires_preserved_in_record_source_says(self):
+        """When the foresight record source_says describes regulatory content, 'requires'
+        must survive sanitize_foresight_record (scoped to source_says field)."""
+        record = {
+            "source_says": "EU AI Act requires high-risk AI providers to conduct conformity assessments.",
+            "possible_relevance": "This may require the company to review its AI product pipeline.",
+            "origin": "foresight",
+            "claim_type": "foresight_context",
+            "company_specific": False,
+        }
+        result = sanitize_foresight_record(record, report_date=REPORT_DATE)
+        assert "requires" in (result.get("source_says") or "").lower(), (
+            f"'requires' incorrectly removed from source_says: '{result.get('source_says')}'"
+        )
+
+    def test_must_still_softened_in_possible_relevance(self):
+        """'must' in possible_relevance (company-impact field) must still be softened."""
+        record = {
+            "source_says": "The AI Act establishes risk categories.",
+            "possible_relevance": f"{COMPANY} must review its AI governance practices.",
+            "origin": "foresight",
+            "claim_type": "foresight_context",
+            "company_specific": False,
+        }
+        result = sanitize_foresight_record(record, report_date=REPORT_DATE)
+        pr = result.get("possible_relevance") or ""
+        assert not re.search(r"\bmust\b", pr, re.I), (
+            f"'must' not softened in possible_relevance: '{pr}'"
+        )
+
+    def test_has_deployed_still_softened_in_source_says(self):
+        """Deployment-state patterns (has deployed, is deploying) must still be softened
+        even in source_says — they claim a company's current state, never appropriate."""
+        text = f"{COMPANY} has deployed an AI governance framework across all business units."
+        result = sanitize_source_description(text, REPORT_DATE)
+        assert "has deployed" not in result.lower(), (
+            f"'has deployed' not softened in source description: '{result}'"
+        )
+
+    def test_sanitize_source_description_is_idempotent(self):
+        """sanitize_source_description must be idempotent — second call changes nothing."""
+        text = "EU AI Act requires providers to conduct assessments. The sector is deploying new tools."
+        once = sanitize_source_description(text, REPORT_DATE)
+        twice = sanitize_source_description(once, REPORT_DATE)
+        assert once == twice, (
+            f"sanitize_source_description not idempotent.\n  After 1st: '{once}'\n  After 2nd: '{twice}'"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -491,6 +562,7 @@ def _run_all() -> None:
         TestCompanySpecificEvidencePreservation,
         TestRepeatedModalCleanup,
         TestReportLevelChecks,
+        TestModalDilutionScoping,
     ]
     passed = failed = 0
     for Suite in suites:

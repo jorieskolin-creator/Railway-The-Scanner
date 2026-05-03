@@ -83,6 +83,31 @@ MODAL_REPLACEMENTS = [
     (r"\bmust\b", "should evaluate whether it needs to"),
 ]
 
+# Deployment/outcome-state patterns — safe to apply to ANY field including source_says and
+# neutral descriptions.  These claim a company's current deployment state or competitive
+# outcome, which is never appropriate in foresight context regardless of which field they
+# appear in.
+#
+# OBLIGATION patterns (requires/must/forces etc.) are intentionally excluded here — when
+# those words appear in source_says or description fields they accurately describe what a
+# regulation or source says (e.g. "GDPR requires organizations to…").  Softening them there
+# produces a factually misleading hedge.  Obligation patterns are only applied to company-
+# impact fields (possible_relevance, impact, insight, recommended_action) via the full
+# MODAL_REPLACEMENTS list.
+DEPLOYMENT_REPLACEMENTS = [
+    (r"\bwill\s+fall\s+behind\b", "may face a disadvantage if the trend becomes material"),
+    (r"\bwill\s+lose\b", "could risk losing"),
+    (r"\bhas\s+deployed\b",
+     "is not proven by this foresight evidence alone to have deployed"),
+    (r"\bhave\s+deployed\b",
+     "are not proven by this foresight evidence alone to have deployed"),
+    (r"\bis\s+deploying\b", "may be evaluating or could evaluate"),
+    (r"\bare\s+deploying\b", "may be evaluating or could evaluate"),
+    (r"\bcurrently\s+uses\b", "may need to evaluate use of"),
+    (r"\buses\s+multi-agent\b", "could evaluate multi-agent"),
+    (r"\bbroad\s+deployment\b", "potential broad relevance"),
+]
+
 FORESIGHT_LANGUAGE_GUARDRAILS = """
 FORESIGHT-MODALITY RULES — STRICT:
 - Treat all foresight, trend, analyst, scenario and regulatory sources as context, not proof of current company deployment.
@@ -252,6 +277,26 @@ def sanitize_foresight_text(text: str, report_date: date | None = None) -> str:
     return rewrite_past_deadlines(sanitize_foresight_modality(text), report_date)
 
 
+def sanitize_source_description(text: str, report_date: date | None = None) -> str:
+    """Sanitize a source/description field using deployment patterns only.
+
+    Use for source_says, description, snippet, summary — fields that describe
+    what an external source or regulation says.  Obligation-language patterns
+    (requires, must, forces…) are intentionally NOT applied here because words
+    like "requires" in "GDPR requires organizations to…" are factually correct
+    descriptions of the source's content.  Only deployment/state patterns and
+    past-deadline rewrites are applied.
+    """
+    if not text:
+        return text
+    out = text
+    for pat, repl in DEPLOYMENT_REPLACEMENTS:
+        out = re.sub(pat, repl, out, flags=re.I)
+    out = collapse_repeated_modals(out)
+    out = rewrite_past_deadlines(out, report_date)
+    return re.sub(r"\s{2,}", " ", out).strip()
+
+
 def sanitize_future_insight(
     text: str, report_date: date | None = None
 ) -> tuple[str, list[dict[str, Any]]]:
@@ -369,18 +414,29 @@ def sanitize_foresight_record(
     description = rec.get("description") or rec.get("snippet") or rec.get("summary") or ""
     if description and not rec.get("source_says"):
         source_says, possible_relevance = _split_source_and_relevance(description)
-        rec["source_says"] = sanitize_foresight_text(source_says, report_date)
+        # source_says describes what the external source says — preserve regulatory language
+        # like "GDPR requires…" by using deployment-only sanitization.
+        rec["source_says"] = sanitize_source_description(source_says, report_date)
         if possible_relevance:
+            # possible_relevance is a company-impact hypothesis — full modal softening applies.
             rec["possible_relevance"] = sanitize_foresight_text(possible_relevance, report_date)
     elif rec.get("source_says"):
-        rec["source_says"] = sanitize_foresight_text(str(rec["source_says"]), report_date)
+        rec["source_says"] = sanitize_source_description(str(rec["source_says"]), report_date)
 
     if rec.get("possible_relevance"):
         rec["possible_relevance"] = sanitize_foresight_text(
             str(rec["possible_relevance"]), report_date
         )
 
-    for key in ("description", "snippet", "summary", "insight", "impact", "recommended_action"):
+    # Source/evidence description fields — preserve factual "requires" / "must" language
+    # that describes what a regulation or trend source says.
+    for key in ("description", "snippet", "summary"):
+        if isinstance(rec.get(key), str):
+            rec[key] = sanitize_source_description(rec[key], report_date)
+
+    # Company-impact fields — full modal softening: "requires this company to" becomes
+    # "may require this company to", "must invest" becomes "should evaluate whether…".
+    for key in ("insight", "impact", "recommended_action"):
         if isinstance(rec.get(key), str):
             rec[key] = sanitize_foresight_text(rec[key], report_date)
 

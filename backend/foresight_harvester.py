@@ -678,8 +678,10 @@ def format_kb_signals_for_prompt(signals: list[dict], max_signals: int = 8) -> s
         "Use these as GROUNDING CONTEXT — synthesize their impact on this specific company.",
         "IMPORTANT: These are foresight_context signals (company_specific=False).",
         "  - source_says is a company-NEUTRAL summary of what the source/trend says.",
-        "  - Generate your own possible_relevance using modal language only",
-        "    (may / could / should evaluate / if in scope / if not already completed).",
+        "  - Where shown, 'Example hypothesis' is a starting-point hypothesis from the KB.",
+        "    Build upon it, challenge it, or replace it — but generate your own assessment",
+        "    using modal language (may / could / should evaluate / if in scope / if not",
+        "    already completed).  Do NOT copy it verbatim.",
         "  - Do NOT treat these as proof of current company deployment or obligation.\n",
     ]
 
@@ -690,7 +692,12 @@ def format_kb_signals_for_prompt(signals: list[dict], max_signals: int = 8) -> s
         lines.append(f"  Theme: {theme}")
         lines.append(f"  Type: {sig.get('signal_type', 'N/A')} | Timeframe: {sig.get('timeframe', 'N/A')}")
         lines.append(f"  Source says (company-neutral): {sig.get('source_says') or sig.get('description', '')}")
-        # KB-stored possible_relevance is NOT emitted — LLM generates fresh relevance at scan time.
+        # Include KB possible_relevance as a starting-point hypothesis only — clearly labeled
+        # so the LLM treats it as an example to build upon, challenge, or refine rather than
+        # recycling it verbatim.  Modal language is still required in the LLM's own output.
+        kb_pr = (sig.get("possible_relevance") or "").strip()
+        if kb_pr:
+            lines.append(f"  Example hypothesis (challenge, refine, or build upon — use modal language): {kb_pr[:200]}")
         lines.append("  Claim type: foresight_context | Company-specific: False | Use modal language only")
         lines.append(
             f"  Primary source: {sig.get('source_url', 'N/A')} "
