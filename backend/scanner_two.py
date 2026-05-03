@@ -741,6 +741,21 @@ def _validate_evidence_urls(links, checklist, max_workers=6, company_name=None):
     return links, checklist, verified_count, dead_count
 
 
+def _apply_scan_time_source_classification(data: dict) -> dict:
+    """Ensure newly scanned records are clean-by-construction before save.
+
+    The Sanitizer is only a legacy cleanup/audit tool. New scan outputs should
+    already preserve company-specific evidence and mark generic foresight/regulatory
+    sources as context-only.
+    """
+    if not isinstance(data, dict):
+        return data
+    for field in ["evidence_links", "foresight_links", "foresight_evidence", "deep_dive_findings", "source_cards"]:
+        if isinstance(data.get(field), list):
+            data[field] = [classify_generation_context(x) if isinstance(x, dict) else x for x in data[field]]
+    return data
+
+
 def _repair_json_with_sonnet(raw_text, company_name, is_structuring=False, citations=None):
     """
     JSON Structuring / Repair Gate.

@@ -28,8 +28,8 @@ from google import genai
 from google.genai import types as genai_types
 from gemini_backoff import call_with_503_backoff
 from gemini_client import get_gemini_client
-from source_quality import HIGH_CREDIBILITY_DOMAINS, LOW_CREDIBILITY_DOMAINS, assess_source_credibility
-from foresight_guardrails import build_foresight_guardrails, annotate_foresight_signal, annotate_foresight_link, validate_foresight_text, sanitize_foresight_text, sanitize_future_insight, sanitize_foresight_record, sanitize_foresight_collection
+from source_quality import HIGH_CREDIBILITY_DOMAINS, LOW_CREDIBILITY_DOMAINS, assess_source_credibility, classify_generation_context
+from foresight_guardrails import build_foresight_guardrails, annotate_foresight_signal, annotate_foresight_link, validate_foresight_text, sanitize_foresight_text, sanitize_future_insight, sanitize_foresight_record, sanitize_foresight_collection, sanitize_report_foresight_fields
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1534,18 +1534,31 @@ def _generate_foresight_from_kb(
     return None
 
 
-def _sanitize_foresight_data(foresight_data: dict, domain: str = "") -> dict:
-    """Sanitize generated foresight data before report rendering/storage."""
+def _sanitize_foresight_data(foresight_data: dict, domain: str = "", company_name: str = "") -> dict:
+    """Sanitize generated foresight data before report rendering/storage.
+
+    New scans and refreshes must be clean-by-construction. This function is part
+    of the normal generation path, not the legacy database Sanitizer.
+    """
     if not isinstance(foresight_data, dict):
-        return _sanitize_foresight_data(foresight_data, domain=domain)
+        return foresight_data
     cleaned = dict(foresight_data)
-    if isinstance(cleaned.get("dimension_forces"), list):
-        cleaned["dimension_forces"] = sanitize_foresight_collection(cleaned["dimension_forces"], domain=domain)
-    if isinstance(cleaned.get("future_insight"), str):
-        cleaned["future_insight"], _issues = sanitize_future_insight(cleaned["future_insight"])
-    if isinstance(cleaned.get("future_insights"), list):
-        cleaned["future_insights"] = sanitize_foresight_collection(cleaned["future_insights"], domain=domain)
+
+    # Classify and sanitize source-card-like lists.
+    for field in ["dimension_forces", "future_insights", "foresight_links", "foresight_evidence", "source_cards"]:
+        if isinstance(cleaned.get(field), list):
+            cleaned[field] = [classify_generation_context(x) if isinstance(x, dict) else x for x in cleaned[field]]
+            cleaned[field] = sanitize_foresight_collection(cleaned[field], domain=domain, company_name=company_name)
+
+    # Future Insight and narrative foresight fields must be modal/conditional.
+    for field in ["future_insight", "future_insights_text", "climate_exposure", "cross_impact_chain"]:
+        if isinstance(cleaned.get(field), str):
+            cleaned[field], _issues = sanitize_future_insight(cleaned[field])
+
+    # Whole-record pass to catch nested source_says/possible_relevance and deadline issues.
+    cleaned = sanitize_report_foresight_fields(cleaned, domain=domain, company_name=company_name)
     cleaned["foresight_sanitized"] = True
+    cleaned["clean_by_construction"] = True
     return cleaned
 
 
@@ -1996,7 +2009,7 @@ def validate_foresight_urls(foresight_data, max_workers=6):
     Returns (foresight_data, verified_count, dead_count).
     """
     if not foresight_data or not foresight_data.get("dimension_forces"):
-        return _sanitize_foresight_data(foresight_data, domain=domain), 0, 0
+        return _sanitize_foresight_data(foresight_data, domain=domain, company_name=company_name), 0, 0
 
     start = time.time()
     forces = foresight_data["dimension_forces"]
@@ -2018,7 +2031,7 @@ def validate_foresight_urls(foresight_data, max_workers=6):
     if not url_map:
         for force in forces:
             force["url_verified"] = False
-        return _sanitize_foresight_data(foresight_data, domain=domain), 0, 0
+        return _sanitize_foresight_data(foresight_data, domain=domain, company_name=company_name), 0, 0
 
     # Verify in parallel
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -2062,7 +2075,7 @@ def validate_foresight_urls(foresight_data, max_workers=6):
     print(f"   🔗 [Foresight URL Validation] {verified_count}/{total} primary URLs verified, "
           f"{total_supporting} supporting URLs verified, {dead_count} dead/unreachable ({elapsed}ms)")
 
-    return _sanitize_foresight_data(foresight_data, domain=domain), verified_count, dead_count
+    return _sanitize_foresight_data(foresight_data, domain=domain, company_name=company_name), verified_count, dead_count
 
 
 def _build_source_retry_prompt(failed_forces, domain):
@@ -2120,19 +2133,19 @@ def retry_failed_sources(foresight_data, domain, max_retries=1):
     Returns (foresight_data, newly_verified_count).
     """
     if not foresight_data or not foresight_data.get("dimension_forces"):
-        return _sanitize_foresight_data(foresight_data, domain=domain), 0
+        return _sanitize_foresight_data(foresight_data, domain=domain, company_name=company_name), 0
 
     forces = foresight_data["dimension_forces"]
     failed_forces = [f for f in forces if not f.get("url_verified", False)]
 
     if not failed_forces:
         print("   [Source Retry] All sources already verified — no retry needed")
-        return _sanitize_foresight_data(foresight_data, domain=domain), 0
+        return _sanitize_foresight_data(foresight_data, domain=domain, company_name=company_name), 0
 
     try:
         client = get_gemini_client()
     except ValueError:
-        return _sanitize_foresight_data(foresight_data, domain=domain), 0
+        return _sanitize_foresight_data(foresight_data, domain=domain, company_name=company_name), 0
 
     print(f"   🔄 [Source Retry] {len(failed_forces)}/{len(forces)} forces have unverified sources — attempting re-search...")
     _safety = [
@@ -2192,7 +2205,7 @@ def retry_failed_sources(foresight_data, domain, max_retries=1):
 
     if not retry_data or not retry_data.get("retry_results"):
         print("   ⚠️ [Source Retry] No retry results obtained")
-        return _sanitize_foresight_data(foresight_data, domain=domain), 0
+        return _sanitize_foresight_data(foresight_data, domain=domain, company_name=company_name), 0
 
     # Build lookup: trend name → retry result
     retry_lookup = {}
@@ -2223,7 +2236,7 @@ def retry_failed_sources(foresight_data, domain, max_retries=1):
 
     if not new_urls:
         print("   ⚠️ [Source Retry] No new URLs found in retry results")
-        return _sanitize_foresight_data(foresight_data, domain=domain), 0
+        return _sanitize_foresight_data(foresight_data, domain=domain, company_name=company_name), 0
 
     # Verify the new URLs in parallel
     print(f"   🔗 [Source Retry] Verifying {len(new_urls)} new URLs...")
@@ -2259,7 +2272,7 @@ def retry_failed_sources(foresight_data, domain, max_retries=1):
         force["verified_supporting_sources"] = verified_supporting
 
     print(f"   🔄 [Source Retry] Re-search complete: {newly_verified}/{len(updated_forces)} forces now have verified sources")
-    return _sanitize_foresight_data(foresight_data, domain=domain), newly_verified
+    return _sanitize_foresight_data(foresight_data, domain=domain, company_name=company_name), newly_verified
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2285,7 +2298,7 @@ def enforce_source_quality_gate(foresight_data):
     Returns (foresight_data, passes_gate: bool).
     """
     if not foresight_data or not foresight_data.get("dimension_forces"):
-        return _sanitize_foresight_data(foresight_data, domain=domain), False
+        return _sanitize_foresight_data(foresight_data, domain=domain, company_name=company_name), False
 
     forces = foresight_data["dimension_forces"]
     total_forces = len(forces)
@@ -2325,7 +2338,7 @@ def enforce_source_quality_gate(foresight_data):
         print(f"   ✅ [Quality Gate] PASSED — {verified_primary}/{total_forces} primary verified, "
               f"{total_verified_urls} total verified URLs")
 
-    return _sanitize_foresight_data(foresight_data, domain=domain), passes_gate
+    return _sanitize_foresight_data(foresight_data, domain=domain, company_name=company_name), passes_gate
 
 
 def reality_check_foresight(foresight_data, company_name=""):
@@ -2347,7 +2360,7 @@ def reality_check_foresight(foresight_data, company_name=""):
     - 'validation_summary': dict with counts and overall quality assessment
     """
     if not foresight_data or not foresight_data.get("dimension_forces"):
-        return _sanitize_foresight_data(foresight_data, domain=domain)
+        return _sanitize_foresight_data(foresight_data, domain=domain, company_name=company_name)
 
     forces = foresight_data["dimension_forces"]
     total_validated = 0
@@ -2485,7 +2498,7 @@ def reality_check_foresight(foresight_data, company_name=""):
     print(f"   🔍 [Foresight Reality Check] {total_validated}/{total_forces} forces validated, "
           f"{total_verified_urls} total verified URLs, quality={quality}, {len(all_flags)} flags")
 
-    return _sanitize_foresight_data(foresight_data, domain=domain)
+    return _sanitize_foresight_data(foresight_data, domain=domain, company_name=company_name)
 
 
 def extract_foresight_links(foresight_data, company_name="", domain=""):
@@ -2596,4 +2609,4 @@ def extract_foresight_links(foresight_data, company_name="", domain=""):
     if links:
         validated_count = sum(1 for l in links if l["validated"])
         print(f"   📎 [Foresight Links] Extracted {len(links)} source links ({validated_count} validated)")
-    return sanitize_foresight_collection(links, domain=domain)
+    return sanitize_foresight_collection, sanitize_report_foresight_fields(links, domain=domain)

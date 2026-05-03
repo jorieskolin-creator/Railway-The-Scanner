@@ -586,3 +586,23 @@ def sanitize_report_foresight_fields(
     out["foresight_sanitizer_version"] = FORESIGHT_SANITIZER_VERSION
     out["foresight_sanitized"] = True
     return out
+
+
+def validate_clean_by_construction(data: dict, *, company_name: str = "", report_date: date | None = None) -> list[str]:
+    """Validate that newly generated source cards and Future Insight are clean before save."""
+    issues: list[str] = []
+    if not isinstance(data, dict):
+        return ["Generated foresight payload is not a dict"]
+    report_date = report_date or date.today()
+    for field in ["future_insight", "future_insights_text", "climate_exposure", "domain_force_dossier"]:
+        if isinstance(data.get(field), str):
+            issues.extend([f"{field}: {w}" for w in validate_foresight_text(data[field], report_date)])
+    variants = _company_name_variants(company_name) if company_name else []
+    for list_field in ["foresight_links", "foresight_evidence", "source_cards", "dimension_forces", "future_insights"]:
+        for idx, rec in enumerate(data.get(list_field) or []):
+            if not isinstance(rec, dict):
+                continue
+            if rec.get("company_specific") is False and rec.get("source_says"):
+                if any(re.search(re.escape(v), rec["source_says"], re.I) for v in variants):
+                    issues.append(f"{list_field}[{idx}]: source_says contains company name in context-only record")
+    return issues
