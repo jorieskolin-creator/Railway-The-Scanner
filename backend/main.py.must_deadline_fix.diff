@@ -1,0 +1,31 @@
+--- main.py.before
++++ main.py.after
+@@ -35,6 +35,7 @@
+ from source_quality import manage_evidence_sources, assess_source_scope
+ from contradiction_detector import detect_contradictions
+ from prompts import PROMPT_VERSION, build_shared_guardrails
++from foresight_guardrails import sanitize_foresight_collection, sanitize_report_foresight_fields
+ from domain_classifier import infer_domain
+ from gemini_backoff import call_with_503_backoff
+ 
+@@ -133,6 +134,11 @@
+ def _shared_prompt_guardrails(include_diagnostic: bool = True, include_foresight: bool = True) -> str:
+     """Shared evidence/diagnosis/foresight guardrails injected into main.py prompts."""
+     return build_shared_guardrails(include_diagnostic=include_diagnostic, include_foresight=include_foresight)
++
++
++def _sanitize_company_foresight_fields(data: dict, domain: str = "") -> dict:
++    """Sanitize stored/generated foresight fields before saving or re-rendering."""
++    return sanitize_report_foresight_fields(data or {}, domain=domain)
+ 
+ 
+ def clean_env_var(value):
+@@ -2560,6 +2566,8 @@
+                     merged_count += 1
+             if merged_count:
+                 print(f"   📎 [Foresight Links] Merged {merged_count} validated links from previous scan")
++
++        foresight_links = sanitize_foresight_collection(foresight_links, domain=company_domain)  # final foresight card sanitation
+ 
+         # --- STEP 3: SYNTHESIS ---
+         summary = "AI Summary Unavailable"

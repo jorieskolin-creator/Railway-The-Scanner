@@ -29,7 +29,7 @@ from google.genai import types as genai_types
 from gemini_backoff import call_with_503_backoff
 from gemini_client import get_gemini_client
 from source_quality import HIGH_CREDIBILITY_DOMAINS, LOW_CREDIBILITY_DOMAINS, assess_source_credibility
-from foresight_guardrails import build_foresight_guardrails, annotate_foresight_signal, annotate_foresight_link, validate_foresight_text, sanitize_foresight_text
+from foresight_guardrails import build_foresight_guardrails, annotate_foresight_signal, annotate_foresight_link, validate_foresight_text, sanitize_foresight_text, sanitize_future_insight, sanitize_foresight_record, sanitize_foresight_collection
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1006,7 +1006,7 @@ Per force, provide:
 - "kb_dimension": Which priority dimension this impacts most
 - "fp_theme": Which Strategic Foresight theme this maps to
 - "impact_on_company": 1-2 sentences on how this specifically affects {company_name} given their archetype ({archetype}) and current state
-- "proposal_angle": 1 sentence on how to use this in a consulting proposal to {company_name}. Frame as what must happen by when.
+- "proposal_angle": 1 sentence on how to use this in a consulting proposal to {company_name}. Frame as what the company should evaluate, using only future-valid timing; avoid deterministic obligation language.
 - "source_url": Use the primary source URL from the signal above (already verified)
 - "supporting_sources": Use the supporting sources from the signal above
 - "source_type": Use the source_type from the signal
@@ -1163,7 +1163,7 @@ Per force, provide:
 - "kb_dimension": Which priority dimension this impacts most
 - "fp_theme": Which Strategic Foresight theme this maps to
 - "impact_on_company": 1-2 sentences on how this specifically affects {company_name} given their archetype ({archetype}) and current state
-- "proposal_angle": 1 sentence on how to use this in a consulting proposal to {company_name}. Frame as what must happen by when to either capture or defend against this force (e.g., "Must pilot X by Q2 {datetime.now().year + 1} or risk Y").
+- "proposal_angle": 1 sentence on how to use this in a consulting proposal to {company_name}. Frame as what must happen by when to either capture or defend against this force (e.g., "Could evaluate a pilot for X by Q2 {datetime.now().year + 1} or risk Y").
 - "source_url": PRIMARY URL from your web search results (ORIGINAL source only — must be a real, reachable URL)
 - "supporting_sources": Array of 2-3 ADDITIONAL URLs that corroborate this force from DIFFERENT publications/organizations. Each entry: {{"url": "https://...", "source_type": "...", "title": "Brief title of the source"}}. CRITICAL: These must be REAL URLs you found via web search, not fabricated. If you cannot find 2+ corroborating sources, set confidence to "low".
 - "source_type": "academic" | "think_tank" | "industry_analyst" | "government" | "news"
@@ -1534,6 +1534,21 @@ def _generate_foresight_from_kb(
     return None
 
 
+def _sanitize_foresight_data(foresight_data: dict, domain: str = "") -> dict:
+    """Sanitize generated foresight data before report rendering/storage."""
+    if not isinstance(foresight_data, dict):
+        return _sanitize_foresight_data(foresight_data, domain=domain)
+    cleaned = dict(foresight_data)
+    if isinstance(cleaned.get("dimension_forces"), list):
+        cleaned["dimension_forces"] = sanitize_foresight_collection(cleaned["dimension_forces"], domain=domain)
+    if isinstance(cleaned.get("future_insight"), str):
+        cleaned["future_insight"], _issues = sanitize_future_insight(cleaned["future_insight"])
+    if isinstance(cleaned.get("future_insights"), list):
+        cleaned["future_insights"] = sanitize_foresight_collection(cleaned["future_insights"], domain=domain)
+    cleaned["foresight_sanitized"] = True
+    return cleaned
+
+
 def generate_foresight(
     company_name: str,
     domain: str,
@@ -1753,7 +1768,7 @@ RULES:
 - Second paragraph: What this specifically means for THIS company given
   their current weaknesses. Connect the dots between external forces and internal gaps.
   Explain the cross-impact chain — how one force triggers cascading effects across multiple areas.
-- Third paragraph: What the company must do to prepare — concrete strategic imperatives
+- Third paragraph: What the company should evaluate or prepare for, if the force is relevant and in scope — concrete strategic imperatives
   tied to the identified forces. Be specific about timelines and capabilities needed.
 {climate_instruction}
 - Tone: Strategic, forward-looking, grounded in evidence. Like a foresight
@@ -1981,7 +1996,7 @@ def validate_foresight_urls(foresight_data, max_workers=6):
     Returns (foresight_data, verified_count, dead_count).
     """
     if not foresight_data or not foresight_data.get("dimension_forces"):
-        return foresight_data, 0, 0
+        return _sanitize_foresight_data(foresight_data, domain=domain), 0, 0
 
     start = time.time()
     forces = foresight_data["dimension_forces"]
@@ -2003,7 +2018,7 @@ def validate_foresight_urls(foresight_data, max_workers=6):
     if not url_map:
         for force in forces:
             force["url_verified"] = False
-        return foresight_data, 0, 0
+        return _sanitize_foresight_data(foresight_data, domain=domain), 0, 0
 
     # Verify in parallel
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -2047,7 +2062,7 @@ def validate_foresight_urls(foresight_data, max_workers=6):
     print(f"   🔗 [Foresight URL Validation] {verified_count}/{total} primary URLs verified, "
           f"{total_supporting} supporting URLs verified, {dead_count} dead/unreachable ({elapsed}ms)")
 
-    return foresight_data, verified_count, dead_count
+    return _sanitize_foresight_data(foresight_data, domain=domain), verified_count, dead_count
 
 
 def _build_source_retry_prompt(failed_forces, domain):
@@ -2105,19 +2120,19 @@ def retry_failed_sources(foresight_data, domain, max_retries=1):
     Returns (foresight_data, newly_verified_count).
     """
     if not foresight_data or not foresight_data.get("dimension_forces"):
-        return foresight_data, 0
+        return _sanitize_foresight_data(foresight_data, domain=domain), 0
 
     forces = foresight_data["dimension_forces"]
     failed_forces = [f for f in forces if not f.get("url_verified", False)]
 
     if not failed_forces:
         print("   [Source Retry] All sources already verified — no retry needed")
-        return foresight_data, 0
+        return _sanitize_foresight_data(foresight_data, domain=domain), 0
 
     try:
         client = get_gemini_client()
     except ValueError:
-        return foresight_data, 0
+        return _sanitize_foresight_data(foresight_data, domain=domain), 0
 
     print(f"   🔄 [Source Retry] {len(failed_forces)}/{len(forces)} forces have unverified sources — attempting re-search...")
     _safety = [
@@ -2177,7 +2192,7 @@ def retry_failed_sources(foresight_data, domain, max_retries=1):
 
     if not retry_data or not retry_data.get("retry_results"):
         print("   ⚠️ [Source Retry] No retry results obtained")
-        return foresight_data, 0
+        return _sanitize_foresight_data(foresight_data, domain=domain), 0
 
     # Build lookup: trend name → retry result
     retry_lookup = {}
@@ -2208,7 +2223,7 @@ def retry_failed_sources(foresight_data, domain, max_retries=1):
 
     if not new_urls:
         print("   ⚠️ [Source Retry] No new URLs found in retry results")
-        return foresight_data, 0
+        return _sanitize_foresight_data(foresight_data, domain=domain), 0
 
     # Verify the new URLs in parallel
     print(f"   🔗 [Source Retry] Verifying {len(new_urls)} new URLs...")
@@ -2244,7 +2259,7 @@ def retry_failed_sources(foresight_data, domain, max_retries=1):
         force["verified_supporting_sources"] = verified_supporting
 
     print(f"   🔄 [Source Retry] Re-search complete: {newly_verified}/{len(updated_forces)} forces now have verified sources")
-    return foresight_data, newly_verified
+    return _sanitize_foresight_data(foresight_data, domain=domain), newly_verified
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2270,7 +2285,7 @@ def enforce_source_quality_gate(foresight_data):
     Returns (foresight_data, passes_gate: bool).
     """
     if not foresight_data or not foresight_data.get("dimension_forces"):
-        return foresight_data, False
+        return _sanitize_foresight_data(foresight_data, domain=domain), False
 
     forces = foresight_data["dimension_forces"]
     total_forces = len(forces)
@@ -2310,7 +2325,7 @@ def enforce_source_quality_gate(foresight_data):
         print(f"   ✅ [Quality Gate] PASSED — {verified_primary}/{total_forces} primary verified, "
               f"{total_verified_urls} total verified URLs")
 
-    return foresight_data, passes_gate
+    return _sanitize_foresight_data(foresight_data, domain=domain), passes_gate
 
 
 def reality_check_foresight(foresight_data, company_name=""):
@@ -2332,7 +2347,7 @@ def reality_check_foresight(foresight_data, company_name=""):
     - 'validation_summary': dict with counts and overall quality assessment
     """
     if not foresight_data or not foresight_data.get("dimension_forces"):
-        return foresight_data
+        return _sanitize_foresight_data(foresight_data, domain=domain)
 
     forces = foresight_data["dimension_forces"]
     total_validated = 0
@@ -2470,7 +2485,7 @@ def reality_check_foresight(foresight_data, company_name=""):
     print(f"   🔍 [Foresight Reality Check] {total_validated}/{total_forces} forces validated, "
           f"{total_verified_urls} total verified URLs, quality={quality}, {len(all_flags)} flags")
 
-    return foresight_data
+    return _sanitize_foresight_data(foresight_data, domain=domain)
 
 
 def extract_foresight_links(foresight_data, company_name="", domain=""):
@@ -2562,5 +2577,4 @@ def extract_foresight_links(foresight_data, company_name="", domain=""):
     if links:
         validated_count = sum(1 for l in links if l["validated"])
         print(f"   📎 [Foresight Links] Extracted {len(links)} source links ({validated_count} validated)")
-
-    return links
+    return sanitize_foresight_collection(links, domain=domain)

@@ -26,7 +26,7 @@ from google.genai import types as genai_types
 
 from gemini_client import get_gemini_client
 from gemini_backoff import call_with_503_backoff
-from foresight_guardrails import build_foresight_guardrails, sanitize_foresight_text, validate_foresight_text
+from foresight_guardrails import build_foresight_guardrails, sanitize_foresight_text, validate_foresight_text, sanitize_future_insight
 from storage import BlobStorage
 from market_intelligence import (
     compute_market_intelligence, THEME_CATEGORIES, ALL_CATEGORIES, KB_DIMENSIONS,
@@ -1134,3 +1134,6 @@ def generate_observatory(progress_callback=None):
     print(f"   [Observatory] Saved observatory to storage: {url}")
 
     return result
+
+
+# FORESIGHT_OBSERVATORY_DEADLINE_GUARDRAIL: generated observatory text is passed through sanitize_foresight_text; prompts should avoid deterministic must/requires/forces wording and past deadlines.

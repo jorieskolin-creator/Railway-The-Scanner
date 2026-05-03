@@ -1,0 +1,57 @@
+{
+  "status": "PASS",
+  "syntax": {
+    "foresight_guardrails.py": "OK",
+    "strategic_foresight.py": "OK",
+    "reality_check.py": "OK",
+    "foresight_harvester.py": "OK",
+    "foresight_observatory.py": "OK",
+    "main.py": "OK",
+    "source_quality.py": "OK",
+    "domain_classifier.py": "OK"
+  },
+  "test_outputs": {
+    "must_softened": "Wärtsilä should evaluate whether it needs to implement DPP-ready product data infrastructure.",
+    "past_deadline": "Wärtsilä should launch a DPP pilot if not already completed, in the next planning cycle.",
+    "reg_overclaim": "The NZIA may require Wärtsilä to realign bidding processes.",
+    "deployment_claim": "Agentic AI trends show that Wärtsilä is not proven by this foresight evidence alone to are not proven by this foresight evidence alone to have deployed multi-agent systems across supply-chain workflows.",
+    "record": {
+      "description": "Wärtsilä should evaluate whether it needs to launch an AI inventory if not already completed, in the next planning cycle.",
+      "url": "x",
+      "origin": "foresight",
+      "claim_type": "foresight_context",
+      "allowed_claim_types": [
+        "foresight_context"
+      ],
+      "company_specific": false,
+      "requires_company_specific_corroboration": true,
+      "modal_language_required": true,
+      "forbidden_as_current_company_fact": true,
+      "scope": "external-trend",
+      "foresight_sanitizer_version": "2026-05-03-v2-must-deadline-guardrails",
+      "source_says": "Wärtsilä should evaluate whether it needs to launch an AI inventory if not already completed, in the next planning cycle.",
+      "foresight_language_warnings": [
+        "Forbidden deterministic foresight wording matched: \\bneeds\\s+to\\b"
+      ],
+      "foresight_sanitized": true
+    }
+  },
+  "checks": {
+    "must_removed": true,
+    "past_q_removed": true,
+    "requires_removed": true,
+    "has_deployed_removed": true,
+    "warnings_find_past_deadline": true,
+    "record_sanitized": true
+  },
+  "readback_checks": {
+    "foresight_guardrails.py": true,
+    "reality_check.py": true,
+    "main.py": true,
+    "foresight_harvester.py": true,
+    "strategic_foresight.py": true,
+    "source_quality.py": true,
+    "foresight_observatory.py": true,
+    "domain_classifier.py": true
+  }
+}
