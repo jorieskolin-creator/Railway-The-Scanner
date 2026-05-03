@@ -18,6 +18,12 @@ import os
 import time
 from gemini_backoff import call_with_503_backoff
 
+try:
+    from source_quality import annotate_evidence_links, filter_admissible_sources
+except Exception:  # Keep reality_check import-safe in minimal deployments.
+    annotate_evidence_links = None
+    filter_admissible_sources = None
+
 # Regex for detecting scan history references in fact-check claims.
 # These come from internal DB records (scan_history), not external web sources,
 # so the fact-checker will always label them "Fabrication" with source_indices=[].
@@ -239,6 +245,94 @@ TEMPORAL_HALLUCINATION_PATTERNS = [
 ]
 
 
+# --- CLAIM-SAFETY VALIDATORS (Phase 1) ---
+_COMPANY_WIDE_TERMS_RE = re.compile(
+    r"\b(company-wide|enterprise|organisation|organization|across\s+the\s+(?:company|firm|enterprise)|the\s+company\s+(?:has|is|uses|lacks|struggles|deploys))\b",
+    re.IGNORECASE,
+)
+_SCOPE_QUALIFIER_RE = re.compile(
+    r"\b(in\s+HR|HR\s+personnel|survey\s+of|study\s+of|case\s+study|pilot|one\s+team|specific\s+team|department|respondents|sample)\b",
+    re.IGNORECASE,
+)
+_FORESIGHT_FACT_RE = re.compile(
+    r"\b(has\s+deployed|have\s+deployed|is\s+deploying|are\s+deploying|uses\s+multi-agent|broad\s+deployment|currently\s+uses|must\s+realign|requires\s+.+\bto\b|is\s+forced\s+to)\b",
+    re.IGNORECASE,
+)
+_FORESIGHT_CONTEXT_RE = re.compile(
+    r"\b(foresight|trend|forecast|scenario|by\s+20\d{2}|expected\s+to|could|may|net-zero\s+industry\s+act|digital\s+product\s+passport|agentic\s+AI|multi-agent)\b",
+    re.IGNORECASE,
+)
+
+
+def _split_sentences_for_validation(text):
+    if not text:
+        return []
+    return [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()]
+
+
+def validate_scope_inflation(summary_text, evidence_links=None):
+    """Flag company-wide language when the available evidence is narrow-only."""
+    flags = []
+    if not evidence_links:
+        return flags
+    narrow_markers = []
+    for link in evidence_links:
+        if not isinstance(link, dict):
+            continue
+        scope = (link.get("scope") or "").lower()
+        stype = (link.get("source_type") or "").lower()
+        text = f"{link.get('title','')} {link.get('snippet','')} {link.get('url','')}".lower()
+        if scope == "narrow" or stype in {"academic_thesis", "thesis", "survey", "employee_review", "job_posting", "github"} or any(t in text for t in ["master's thesis", "respondents", "survey of", "case study", "pilot"]):
+            narrow_markers.append(link)
+    if not narrow_markers:
+        return flags
+    for sent in _split_sentences_for_validation(summary_text):
+        if _COMPANY_WIDE_TERMS_RE.search(sent) and not _SCOPE_QUALIFIER_RE.search(sent):
+            low = sent.lower()
+            if any(term in low for term in ["ai readiness", "adoption", "proficiency", "silo", "operating model", "maturity", "lags", "fragmented"]):
+                flags.append(f"Possible scope inflation from narrow evidence: '{sent[:180]}'")
+    return flags[:5]
+
+
+def validate_foresight_presented_as_fact(summary_text, evidence_links=None):
+    """Flag trend/regulatory language stated as current company fact or deterministic obligation."""
+    flags = []
+    foresight_available = False
+    for link in evidence_links or []:
+        if not isinstance(link, dict):
+            continue
+        stype = (link.get("source_type") or "").lower()
+        claim_types = link.get("allowed_claim_types") or []
+        if stype in {"foresight", "foresight_report", "trend_report", "regulation", "regulatory_context"} or "foresight_context" in claim_types or "regulatory_context" in claim_types:
+            foresight_available = True
+            break
+    # Even if evidence metadata is absent, obvious foresight terms + present-tense deployment verbs are risky.
+    for sent in _split_sentences_for_validation(summary_text):
+        if _FORESIGHT_CONTEXT_RE.search(sent) and _FORESIGHT_FACT_RE.search(sent):
+            if foresight_available or any(t in sent.lower() for t in ["agentic", "multi-agent", "net-zero", "digital product passport", "nzia"]):
+                flags.append(f"Possible foresight/regulatory context presented as fact: '{sent[:180]}'")
+    return flags[:5]
+
+
+def validate_evidence_admissibility(evidence_links=None):
+    """Flag excluded evidence still present in the payload."""
+    flags = []
+    if not evidence_links or not annotate_evidence_links:
+        return flags
+    try:
+        annotated = annotate_evidence_links(evidence_links, "")
+        excluded = [l for l in annotated if l.get("admissible") is False]
+        if excluded:
+            reasons = {}
+            for l in excluded:
+                reason = l.get("exclusion_reason") or "excluded"
+                reasons[reason] = reasons.get(reason, 0) + 1
+            flags.append(f"Evidence payload contains inadmissible sources: {reasons}")
+    except Exception as e:
+        flags.append(f"Evidence admissibility validation failed: {e}")
+    return flags
+
+
 def validate_summary(summary_text, company_name, key_people=None, evidence_links=None, confidence_score=None):
     """
     Validates an AI-generated summary for hallucination indicators.
@@ -364,6 +458,18 @@ def validate_summary(summary_text, company_name, key_people=None, evidence_links
         if duplicates >= 2:
             flags.append(f"Repetitive content detected ({duplicates} duplicate sentences)")
             score += 15
+
+    # --- CHECK 9: Evidence governance checks ---
+    # These catch the failure modes seen in company summaries: narrow-source
+    # extrapolation, wrong-entity evidence leakage, and foresight/regulation
+    # being written as current company fact.
+    governance_flags = []
+    governance_flags.extend(validate_evidence_admissibility(evidence_links))
+    governance_flags.extend(validate_scope_inflation(summary_text, evidence_links))
+    governance_flags.extend(validate_foresight_presented_as_fact(summary_text, evidence_links))
+    if governance_flags:
+        flags.extend(governance_flags)
+        score += min(35, 10 + 5 * len(governance_flags))
 
     # --- CALCULATE RISK LEVEL ---
     score = min(score, 100)

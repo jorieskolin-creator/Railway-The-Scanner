@@ -13,7 +13,7 @@ from google.genai import types
 from gemini_client import get_gemini_client
 import anthropic
 from knowledge_base import get_evolving_framework
-from source_quality import assess_evidence_quality, confidence_quality_penalty
+from source_quality import assess_evidence_quality, confidence_quality_penalty, annotate_evidence_links, filter_admissible_sources, evidence_sufficiency_score
 
 # --- HELPER: IMPROVE SEARCH RECALL ---
 def clean_company_name_for_search(name):
@@ -2585,6 +2585,26 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         # Penalizes confidence when many URLs are dead (hallucinated evidence).
         raw_findings, checklist, url_verified, url_dead = _validate_evidence_urls(raw_findings, checklist, company_name=company_name)
 
+        # --- SOURCE ADMISSIBILITY GATE (Phase 1) ---
+        # URL liveness is not enough: wrong-entity and dead-link evidence must not
+        # feed factual generation. Narrow/foresight sources remain admissible, but
+        # are annotated so downstream prompts/validators can restrict their use.
+        company_domain = get_clean_domain(company_url) if company_url else ""
+        raw_findings = annotate_evidence_links(raw_findings, company_domain)
+        checklist = annotate_evidence_links(checklist, company_domain)
+        raw_findings, excluded_evidence = filter_admissible_sources(raw_findings, company_domain)
+        checklist, excluded_checklist = filter_admissible_sources(checklist, company_domain)
+        excluded_total = len(excluded_evidence) + len(excluded_checklist)
+        if excluded_total:
+            reasons = {}
+            for _src in excluded_evidence + excluded_checklist:
+                reason = _src.get("exclusion_reason") or "excluded"
+                reasons[reason] = reasons.get(reason, 0) + 1
+            penalty = min(20, excluded_total * 4)
+            old_conf = int(confidence)
+            confidence = max(10, confidence - penalty)
+            print(f"   🧹 [Source Gate] Excluded {excluded_total} sources {reasons} → confidence penalty -{penalty} ({old_conf} → {int(confidence)})")
+
         # --- URL-TRIGGERED RE-SCAN ---
         # If >20% of URLs are dead, the evidence base is unreliable.
         # Run ONE targeted re-search to try to find real, verifiable evidence.
@@ -2667,8 +2687,9 @@ RETURN STRICT JSON:
                     # Only keep verified recovery links, dedup against existing URLs
                     existing_urls = {(f.get("url") or "").rstrip("/").lower() for f in raw_findings}
                     added = 0
+                    recovery_links = annotate_evidence_links(recovery_links, company_domain)
                     for link in recovery_links:
-                        if link.get("verified") and link.get("url"):
+                        if link.get("verified") and link.get("url") and link.get("admissible") is not False:
                             url_key = link["url"].rstrip("/").lower()
                             if url_key not in existing_urls:
                                 raw_findings.append(link)
@@ -2725,7 +2746,6 @@ RETURN STRICT JSON:
         # Evaluate credibility of each source domain (not just URL liveness).
         # Adds 'source_credibility' field to each evidence link.
         # Penalizes confidence when evidence comes from low-quality sources.
-        company_domain = get_clean_domain(company_url) if company_url else ""
         high_q, med_q, low_q, quality_score = assess_evidence_quality(raw_findings, company_domain)
         total_q = high_q + med_q + low_q
         if total_q > 0:
@@ -2740,7 +2760,9 @@ RETURN STRICT JSON:
             "is_simulated": False,
             "confidence_score": int(confidence),
             "washing_flag": washing_flag,
-            "washing_type": washing_type
+            "washing_type": washing_type,
+            "excluded_evidence": excluded_evidence if 'excluded_evidence' in locals() else [],
+            "evidence_sufficiency": evidence_sufficiency_score(raw_findings, company_domain)
         }
     
     # --- FALLBACK: All models failed — return empty result, never fabricate evidence ---

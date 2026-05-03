@@ -14,6 +14,8 @@ Source Management (manage_evidence_sources):
 """
 
 from urllib.parse import urlparse
+from datetime import date, datetime
+from typing import Dict, Iterable, List, Tuple
 
 
 # === DOMAIN AUTHORITY TIERS ===
@@ -413,6 +415,202 @@ def assess_source_scope(url: str = "", title: str = "", snippet: str = "") -> st
     return "broad"
 
 
+# === PHASE 1: SOURCE ADMISSIBILITY / CLAIM-GOVERNANCE HELPERS ===
+# These helpers are intentionally deterministic and conservative.  They do not
+# decide whether a source is interesting; they decide how safely a generated
+# summary may use the source.
+
+SELF_REPORTED_SOURCE_TYPES = {
+    "company", "company_website", "company_press_release", "press_release",
+    "annual_report", "financial_report", "investor_relations", "self_reported",
+}
+
+FORESIGHT_SOURCE_TYPES = {
+    "foresight", "foresight_report", "trend_report", "analyst_trend",
+    "regulatory_context", "regulation", "law", "policy",
+}
+
+NARROW_SOURCE_TYPES = {
+    "academic_thesis", "thesis", "dissertation", "case_study", "pilot",
+    "survey", "employee_review", "job_posting", "github",
+}
+
+SOURCE_TYPE_ALLOWED_USES = {
+    "company_financial_report": {"financial_fact", "company_event", "self_reported_capability"},
+    "financial_report": {"financial_fact", "company_event", "self_reported_capability"},
+    "annual_report": {"financial_fact", "company_event", "self_reported_capability"},
+    "company_press_release": {"company_event", "self_reported_capability"},
+    "press_release": {"company_event", "self_reported_capability"},
+    "company_website": {"self_reported_capability", "company_event"},
+    "academic_thesis": {"narrow_survey_result", "narrow_research_result"},
+    "thesis": {"narrow_survey_result", "narrow_research_result"},
+    "dissertation": {"narrow_research_result"},
+    "employee_review": {"anecdotal_signal"},
+    "job_posting": {"hiring_signal"},
+    "github": {"technical_artifact"},
+    "regulation": {"regulatory_context"},
+    "regulatory_context": {"regulatory_context"},
+    "foresight_report": {"foresight_context"},
+    "foresight": {"foresight_context"},
+    "trend_report": {"foresight_context"},
+    "media": {"company_event", "third_party_observation"},
+    "news": {"company_event", "third_party_observation"},
+    "analyst": {"third_party_observation", "foresight_context"},
+}
+
+
+def infer_source_type(url: str = "", title: str = "", snippet: str = "", existing_type: str = "") -> str:
+    """Infer a coarse source_type used by downstream admissibility rules."""
+    explicit = (existing_type or "").strip().lower().replace(" ", "_")
+    if explicit and explicit not in {"current", "general", "unknown", "other"}:
+        return explicit
+
+    domain = _get_domain(url or "")
+    text = f"{title or ''} {snippet or ''} {url or ''}".lower()
+
+    if domain and _domain_matches_set(domain, THESIS_REPO_DOMAINS):
+        return "academic_thesis"
+    if _matches_url_token((url or "").lower(), _THESIS_URL_TOKENS):
+        return "academic_thesis"
+    if any(tok in text for tok in ["annual report", "financial statements", "interim report", "quarterly report", "investor relations"]):
+        return "company_financial_report"
+    if any(tok in text for tok in ["press release", "/media/news/", "/news/", "stock exchange release"]):
+        return "company_press_release"
+    if "github.com" in domain:
+        return "github"
+    if any(tok in domain for tok in ["glassdoor", "indeed", "kununu"]):
+        return "employee_review"
+    if any(tok in domain for tok in ["linkedin.com", "oikotie.fi"]):
+        return "job_posting" if any(t in text for t in ["job", "career", "hiring", "rekry"]) else "media"
+    if domain.endswith("europa.eu") or domain in {"eur-lex.europa.eu", "ec.europa.eu"}:
+        return "regulation"
+    if any(tok in text for tok in ["foresight", "megatrend", "trend report", "future of", "scenario"]):
+        return "foresight_report"
+    if domain:
+        cred = assess_source_credibility(url, explicit)
+        if cred == "high":
+            return "analyst" if any(d in domain for d in ["gartner", "forrester", "idc", "mckinsey", "deloitte", "pwc", "accenture"]) else "news"
+    return explicit or "unknown"
+
+
+def infer_time_validity(link: dict) -> str:
+    """Classify time validity from extracted_date/is_recent/future markers."""
+    if not isinstance(link, dict):
+        return "unknown"
+    text = f"{link.get('title','')} {link.get('snippet','')}".lower()
+    if any(w in text for w in ["will", "expected", "by 2030", "by 2027", "forecast", "scenario"]):
+        # future-ish text does not automatically make the whole source future,
+        # but it prevents treating it as a current deployment claim.
+        return "future_or_foresight"
+    if link.get("is_recent") is True:
+        return "current"
+    if link.get("is_recent") is False:
+        return "historical"
+    return "unknown"
+
+
+def normalize_evidence_link(link: dict, company_domain: str = "") -> dict:
+    """Return the same dict enriched with deterministic governance metadata."""
+    if not isinstance(link, dict):
+        return link
+    url = (link.get("url") or link.get("source_url") or "").strip()
+    title = link.get("title") or link.get("source_title") or ""
+    snippet = link.get("snippet") or link.get("evidence_snippet") or ""
+
+    source_type = infer_source_type(url, title, snippet, link.get("source_type") or link.get("category") or "")
+    link["source_type"] = source_type
+    link["source_credibility"] = link.get("source_credibility") or assess_source_credibility(url, source_type, company_domain)
+    link["scope"] = link.get("scope") or assess_source_scope(url, title, snippet)
+    link["time_validity"] = link.get("time_validity") or infer_time_validity(link)
+
+    # Entity match is separate from URL liveness.  wrong_entity always dominates.
+    if link.get("wrong_entity") is True:
+        link["entity_match"] = "wrong"
+    elif link.get("company_mentioned") is False:
+        link["entity_match"] = "weak"
+    else:
+        link["entity_match"] = link.get("entity_match") or "unknown"
+
+    link["independence"] = link.get("independence") or (
+        "company-reported" if source_type in SELF_REPORTED_SOURCE_TYPES else "third-party-or-independent"
+    )
+    link["allowed_claim_types"] = sorted(SOURCE_TYPE_ALLOWED_USES.get(source_type, {"third_party_observation"}))
+    return link
+
+
+def is_admissible_source(link: dict, company_domain: str = "", *, allow_unverified_without_url: bool = True) -> Tuple[bool, str]:
+    """Hard gate for sources allowed to feed factual generation.
+
+    This intentionally treats `wrong_entity=True` as fatal unless a human/manual
+    override is present.  It also excludes dead URLs.  It does NOT exclude narrow
+    or foresight sources; those are admissible but restricted by `allowed_claim_types`
+    and must be scoped by downstream prompts/validators.
+    """
+    if not isinstance(link, dict):
+        return False, "not_a_dict"
+    link = normalize_evidence_link(link, company_domain)
+    if link.get("manual_override") is True:
+        return True, "manual_override"
+    if link.get("wrong_entity") is True or link.get("entity_match") == "wrong":
+        return False, "wrong_entity_true"
+    url = (link.get("url") or link.get("source_url") or "").strip()
+    if url and link.get("verified") is False:
+        return False, "url_not_verified"
+    if not url and not allow_unverified_without_url:
+        return False, "missing_url"
+    if link.get("source_credibility") == "low" and link.get("verified") is not True:
+        return False, "low_credibility_unverified"
+    return True, "admissible"
+
+
+def annotate_evidence_links(links: list, company_domain: str = "") -> list:
+    """Normalize links in-place and annotate admissibility fields."""
+    annotated = []
+    for link in links or []:
+        if not isinstance(link, dict):
+            continue
+        normalize_evidence_link(link, company_domain)
+        ok, reason = is_admissible_source(link, company_domain)
+        link["admissible"] = ok
+        link["exclusion_reason"] = "" if ok else reason
+        annotated.append(link)
+    return annotated
+
+
+def filter_admissible_sources(links: list, company_domain: str = "") -> Tuple[List[dict], List[dict]]:
+    """Return (admissible, excluded) after deterministic source gating."""
+    admissible, excluded = [], []
+    for link in annotate_evidence_links(links or [], company_domain):
+        if link.get("admissible"):
+            admissible.append(link)
+        else:
+            excluded.append(link)
+    return admissible, excluded
+
+
+def evidence_sufficiency_score(links: list, company_domain: str = "") -> dict:
+    """Small 0-5 evidence sufficiency score for diagnosis confidence."""
+    usable, excluded = filter_admissible_sources(links or [], company_domain)
+    if not usable:
+        return {"score": 0, "label": "none", "usable": 0, "excluded": len(excluded)}
+    broad = sum(1 for l in usable if l.get("scope") == "broad")
+    high = sum(1 for l in usable if l.get("source_credibility") == "high")
+    independent = sum(1 for l in usable if l.get("independence") != "company-reported")
+    current = sum(1 for l in usable if l.get("time_validity") == "current" or l.get("is_recent") is True)
+    score = 1
+    if len(usable) >= 3 and independent >= 1:
+        score = 2
+    if len(usable) >= 5 and broad >= 2 and independent >= 2:
+        score = 3
+    if len(usable) >= 8 and high >= 2 and broad >= 3 and current >= 2:
+        score = 4
+    if len(usable) >= 10 and high >= 4 and broad >= 5 and independent >= 4:
+        score = 5
+    labels = {1: "very_low", 2: "limited", 3: "moderate", 4: "strong", 5: "very_strong"}
+    return {"score": score, "label": labels[score], "usable": len(usable), "excluded": len(excluded)}
+
+
+
 def assess_evidence_quality(links: list, company_domain: str = "") -> tuple:
     """
     Assess quality of an entire evidence set. Adds 'source_credibility' field
@@ -426,10 +624,10 @@ def assess_evidence_quality(links: list, company_domain: str = "") -> tuple:
     low_count = 0
 
     for link in links:
-        url = (link.get("url") or link.get("source_url") or "").strip()
-        source_type = (link.get("source_type") or link.get("category") or "").strip()
-        credibility = assess_source_credibility(url, source_type, company_domain)
-        link["source_credibility"] = credibility
+        if not isinstance(link, dict):
+            continue
+        normalize_evidence_link(link, company_domain)
+        credibility = link.get("source_credibility") or "medium"
 
         if credibility == "high":
             high_count += 1
@@ -496,6 +694,10 @@ _EVICTION_RANK = {
 
 def _eviction_rank(link: dict) -> int:
     """Return eviction priority for a source. Lower = evicted first."""
+    if not isinstance(link, dict):
+        return -2
+    if link.get("admissible") is False or link.get("wrong_entity") is True:
+        return -1
     cred = link.get("source_credibility", "medium")
     verified = link.get("verified", False)
     return _EVICTION_RANK.get((cred, bool(verified)), 2)
@@ -530,12 +732,13 @@ def manage_evidence_sources(
         "stats": {"high": n, "medium": n, "low": n}
     }
     """
-    # Ensure all sources have credibility assessed
-    for link in existing_links + new_links:
-        url = (link.get("url") or link.get("source_url") or "").strip()
-        source_type = (link.get("source_type") or link.get("category") or "").strip()
-        if "source_credibility" not in link:
-            link["source_credibility"] = assess_source_credibility(url, source_type, company_domain)
+    # Ensure all sources have credibility, scope, source_type and admissibility assessed.
+    # Bad evidence is not allowed to compete with good evidence in the eviction pool.
+    existing_links = annotate_evidence_links(existing_links or [], company_domain)
+    new_links = annotate_evidence_links(new_links or [], company_domain)
+    excluded_links = [l for l in existing_links + new_links if l.get("admissible") is False]
+    existing_links = [l for l in existing_links if l.get("admissible") is not False]
+    new_links = [l for l in new_links if l.get("admissible") is not False]
 
     # Dedup existing by URL
     seen_urls = set()
@@ -568,6 +771,7 @@ def manage_evidence_sources(
                 "evicted": 0,
                 "rejected": 0,
                 "stats": {"high": high, "medium": medium, "low": low},
+                "excluded": excluded_links,
             }
 
     # --- Merge new sources ---
@@ -666,4 +870,5 @@ def manage_evidence_sources(
         "evicted": evicted,
         "rejected": rejected,
         "stats": {"high": high, "medium": medium, "low": low},
+        "excluded": excluded_links,
     }
