@@ -1,21 +1,9 @@
 """
 database_sanitizer.py — Dry-run-first sanitation for stored foresight/source-card text.
 
-This script cleans existing company records without deleting useful source-registry
-/checklist memory. It rewrites deterministic foresight wording ("must", "requires",
-"has deployed", etc.) and past deadlines (e.g. "by Q2 2025" in a 2026 report),
-while preserving sources as registry/checklist items.
-
-Recommended flow:
-    1) python database_sanitizer.py --dry-run --company "Wärtsilä Oyj"
-    2) Review database_sanitizer_report.json
-    3) python database_sanitizer.py --write --company "Wärtsilä Oyj" --post-clean
-
-All-company dry-run:
-    python database_sanitizer.py --dry-run
-
-All-company write:
-    python database_sanitizer.py --write --post-clean
+This script preserves source-registry/checklist memory while cleaning stored
+foresight/context snippets and future-facing text. It is intentionally dry-run
+first and returns debug information if no company records are selected.
 """
 
 from __future__ import annotations
@@ -24,16 +12,15 @@ import argparse
 import copy
 import json
 import re
+import unicodedata
 from datetime import date, datetime, timezone
 from typing import Any
 
 try:
     from storage import BlobStorage
-except Exception:  # Allows unit testing sanitize_company_record without storage env vars.
+except Exception:
     BlobStorage = None
 
-# Prefer central guardrails when present, but keep this script self-contained so
-# it can be copied independently and still run safely.
 try:
     from foresight_guardrails import (  # type: ignore
         FORESIGHT_SANITIZER_VERSION,
@@ -247,6 +234,38 @@ def _is_company_specific_evidence(item: dict) -> bool:
     return False
 
 
+def _norm_company_name(value: str) -> str:
+    value = value or ""
+    value = unicodedata.normalize("NFKD", value)
+    value = "".join(ch for ch in value if not unicodedata.combining(ch))
+    value = value.lower()
+    value = re.sub(r"\b(oyj|abp|plc|ltd|inc|corp|corporation|group)\b", "", value)
+    value = re.sub(r"[^a-z0-9]+", " ", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _company_matches_filter(company_filter: str | None, name: str) -> bool:
+    if not company_filter:
+        return True
+    wanted = _norm_company_name(company_filter)
+    actual = _norm_company_name(name)
+    if not wanted:
+        return True
+    return wanted in actual or actual in wanted
+
+
+def _company_name_from_summary(summary: Any) -> str:
+    if isinstance(summary, str):
+        return summary.strip()
+    if not isinstance(summary, dict):
+        return ""
+    for key in ["companyName", "company_name", "company", "name", "displayName", "display_name", "title", "id", "key"]:
+        value = summary.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
 def _is_probably_foresight_record(item: dict) -> bool:
     if not isinstance(item, dict):
         return False
@@ -421,14 +440,22 @@ def sanitize_company_record(
     return cleaned, audit
 
 
-def _company_name_from_summary(summary: dict) -> str:
-    return (
-        summary.get("name")
-        or summary.get("company_name")
-        or summary.get("company")
-        or summary.get("key")
-        or ""
-    )
+def _build_summary_debug(summaries: Any, selected: list[str], company: str | None) -> dict[str, Any]:
+    sample = None
+    sample_keys: list[str] = []
+    if isinstance(summaries, list) and summaries:
+        sample = summaries[0]
+        if isinstance(sample, dict):
+            sample_keys = list(sample.keys())
+    return {
+        "company_filter": company,
+        "normalized_company_filter": _norm_company_name(company or ""),
+        "summary_type": type(summaries).__name__,
+        "summary_count": len(summaries) if isinstance(summaries, list) else 0,
+        "sample_summary_keys": sample_keys,
+        "sample_summary": sample,
+        "selected_companies_preview": selected[:20],
+    }
 
 
 def sanitize_database(
@@ -446,14 +473,18 @@ def sanitize_database(
     storage = BlobStorage()
     report_date = report_date or date.today()
     summaries = storage.get_all_companies_summary()
-    selected = []
-    for s in summaries:
-        name = _company_name_from_summary(s)
-        if company and company.lower() not in name.lower():
-            continue
-        if name:
+
+    selected: list[str] = []
+    if isinstance(summaries, list):
+        for summary in summaries:
+            name = _company_name_from_summary(summary)
+            if not name:
+                continue
+            if not _company_matches_filter(company, name):
+                continue
             selected.append(name)
 
+    summary_debug = _build_summary_debug(summaries, selected, company)
     results = []
     for name in selected:
         record = storage.get_company_data(name)
@@ -476,6 +507,8 @@ def sanitize_database(
         "report_date": report_date.isoformat(),
         "companies_checked": len(selected),
         "companies_changed": sum(1 for r in results if r.get("changed")),
+        "storage_summary_debug": summary_debug,
+        "selected_companies": selected[:50],
         "results": results,
     }
 
@@ -502,6 +535,7 @@ def main() -> None:
         "--out", default="database_sanitizer_report.json", help="Output audit JSON path"
     )
     args = parser.parse_args()
+
     rd = date.fromisoformat(args.report_date) if args.report_date else date.today()
     dry_run = args.dry_run or not args.write
     report = sanitize_database(
@@ -519,6 +553,8 @@ def main() -> None:
             indent=2,
         )
     )
+    if report.get("companies_checked") == 0:
+        print("WARNING: No company records were selected. Inspect storage_summary_debug in the audit JSON.")
     print(f"Audit written to {args.out}")
 
 
