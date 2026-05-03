@@ -32,7 +32,8 @@ from market_intelligence import compute_market_intelligence
 from knowledge_base import get_evolving_framework
 from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, clean_summary, purge_false_evidence
 from general_summary import generate_general_summary, fact_check_general_summary
-from source_quality import manage_evidence_sources
+from source_quality import manage_evidence_sources, assess_source_scope
+from contradiction_detector import detect_contradictions
 from domain_classifier import infer_domain
 from gemini_backoff import call_with_503_backoff
 
@@ -80,6 +81,53 @@ def _apply_deterministic_corrections(text: str, detailed_claims: list) -> str:
     if replacements_made:
         print(f"   🔧 [Deterministic Fix] Applied {len(replacements_made)} numeric replacement(s): {', '.join(replacements_made)}")
     return text
+
+
+def _build_contradictions_block(verified_links: list, company_name: str) -> str:
+    """Run contradiction detection on the verified-evidence pool feeding the
+    AI Diagnosis synthesis prompt and return a prompt-ready block.
+
+    Returns an empty string when no quantitative disagreements are found OR
+    when the detector fails (it is failure-safe internally). On a hit, the
+    return value is a plain-text section starting with
+    "### CONTRADICTIONS DETECTED" that the synthesis prompt's SCOPE &
+    PROPORTIONALITY rules then force the model to address both sides of.
+    """
+    if not verified_links:
+        return ""
+    # The detector wants {title, snippet, scope}. Enrich each verified link
+    # with the scope flag derived from URL/title/snippet — same heuristic
+    # used elsewhere so the narrow/broad classification stays consistent.
+    enriched = []
+    for l in verified_links[:25]:
+        title = (l.get("title") or "")[:80]
+        snippet = (l.get("snippet") or "")[:350]
+        enriched.append({
+            "title": title,
+            "snippet": snippet,
+            "scope": assess_source_scope(l.get("url", ""), title, snippet),
+        })
+    try:
+        contradictions = detect_contradictions(enriched, company_name or "the company")
+    except Exception as e:
+        # The detector should be failure-safe but defend in depth — synthesis
+        # must never fail because of an optional pre-pass.
+        print(f"   ⚠️ [Contradictions] Pre-synthesis pass failed: {e}")
+        return ""
+    if not contradictions:
+        return ""
+
+    lines = ["### CONTRADICTIONS DETECTED",
+             "Quantitative disagreements between evidence items on the same topic.",
+             "You MUST address EACH item below in the prose: cite both sides with their respective scope (narrow/broad) and source titles. Silently picking one side is a rule violation."]
+    for idx, c in enumerate(contradictions, 1):
+        lines.append(
+            f"{idx}. Topic: {c.get('topic', '')}\n"
+            f"   - [{c.get('scope_a', 'broad')}] {c.get('source_a_title', '')}: {c.get('claim_a', '')}\n"
+            f"   - [{c.get('scope_b', 'broad')}] {c.get('source_b_title', '')}: {c.get('claim_b', '')}"
+        )
+    return "\n".join(lines) + "\n"
+
 
 def clean_env_var(value):
     if not value: return ""
@@ -1227,6 +1275,11 @@ def _clean_company_data(company_name: str, data: dict) -> dict:
     clean_evidence_links = data.get("evidence_links", [])
     clean_verified = [l for l in clean_evidence_links if l.get('verified') is True]
     evidence_list = ', '.join([f"{l.get('title', 'Unknown')}: {l.get('snippet', '')}" for l in clean_verified[:20]])
+    # Run contradiction detection on the same evidence the synthesizer will see.
+    # If quantitative disagreements exist (e.g. narrow HR thesis vs broad
+    # company interview), surface them as a structured block so the prompt's
+    # SCOPE & PROPORTIONALITY rules force the model to address both sides.
+    contradictions_block = _build_contradictions_block(clean_verified, company_name)
 
     confidence = data.get("confidence_score", 50)
     fin_score = data.get("financial_index")
@@ -1306,6 +1359,7 @@ Intent Data: {intent_narrative}
 {washing_context}
 {financial_context}
 
+{contradictions_block}
 ### ANALYSIS PROTOCOL
 
 STEP 1 — REALITY SCORE (evaluate before writing anything):
@@ -2505,6 +2559,10 @@ def run_scan(
                 intent_narrative = json.dumps(intent_results["breakdown"])
                 verified_links = [l for l in reality_results['links'] if l.get('verified') is True]
                 evidence_list = ', '.join([f"{l.get('title', 'Unknown')}: {l.get('snippet', '')}" for l in verified_links[:20]])
+                # Run contradiction detection on the same evidence pool. Block
+                # is empty when no quantitative disagreements are found, so the
+                # injected slot stays harmless on clean cases.
+                contradictions_block = _build_contradictions_block(verified_links, companyName)
                 knowledge_context = get_evolving_framework()
 
                 doc_context = ""
@@ -2652,6 +2710,7 @@ Intent Data: {intent_narrative}
 {foresight_context}
 {prev_synthesis_block}
 
+{contradictions_block}
 ### ANALYSIS PROTOCOL
 
 STEP 1 — REALITY SCORE (evaluate before writing anything):
