@@ -27,7 +27,7 @@ from prompts import PROMPT_VERSION, build_shared_guardrails
 
 
 def _general_summary_guardrails() -> str:
-    """Shared fact-discipline guardrails for the plain General Summary mode."""
+    """Shared fact-discipline guardrails for plain General Summary mode."""
     return build_shared_guardrails(include_diagnostic=False, include_foresight=True)
 
 
@@ -242,6 +242,7 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
 
     result: dict = {
         "company_name": company_name,
+        "prompt_guardrails_version": PROMPT_VERSION,
         "delta": delta,
         "financial_index": full_data.get("financial_index"),
         "key_findings": key_findings,

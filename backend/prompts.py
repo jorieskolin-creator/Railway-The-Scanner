@@ -1,10 +1,8 @@
 """
 prompts.py — Shared prompt guardrails for forensic company summaries.
 
-This module is intentionally lightweight. It gives main.py, seed_manager.py,
-general_summary.py and future summary builders one shared place for evidence
-rules. It can be adopted incrementally; importing it is optional until the
-calling modules are refactored.
+This module centralizes evidence discipline used by main.py, seed_manager.py,
+general_summary.py and future generation paths.
 """
 
 PROMPT_VERSION = "2026-05-03-phase2-label-governance"
