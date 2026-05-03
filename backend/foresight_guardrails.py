@@ -324,12 +324,41 @@ def _normalize_company_name(name: str) -> str:
     return unicodedata.normalize("NFD", name).encode("ascii", "ignore").decode("ascii")
 
 
+# Regex that strips trailing legal suffixes from a company name.
+# E.g. "Wärtsilä Oyj" → "Wärtsilä", "Acme Corp." → "Acme"
+_LEGAL_SUFFIX_RE = re.compile(
+    r"\s+\b(?:oyj|abp|plc|ltd|limited|inc|incorporated|corp|corporation|group|"
+    r"holdings?|a[./]?s|se|ag|sa|b\.?v|n\.?v|gmbh|co\.?|llc|llp)\b\.?\s*$",
+    re.I,
+)
+
+
+def _company_name_variants(name: str) -> list[str]:
+    """Return all name forms to match in source_says:
+    full name, legal-suffix-stripped short name, and ASCII-normalized variants of each.
+
+    E.g. "Wärtsilä Oyj" → ["Wärtsilä Oyj", "Wartsila Oyj", "Wärtsilä", "Wartsila"]
+    """
+    if not name:
+        return []
+    variants: set[str] = set()
+    full = name.strip()
+    variants.add(full)
+    variants.add(_normalize_company_name(full))
+    short = _LEGAL_SUFFIX_RE.sub("", full).strip()
+    if short and short.lower() != full.lower():
+        variants.add(short)
+        variants.add(_normalize_company_name(short))
+    return [v for v in variants if v]
+
+
 def _genericize_source_says(text: str, company_name: str) -> str:
-    """Replace company name occurrences in source_says with neutral organization language."""
+    """Replace all company-name variants in text with "this organization"."""
     if not text or not company_name:
         return text
-    for pat in (re.escape(company_name), re.escape(_normalize_company_name(company_name))):
-        text = re.sub(pat, "this organization", text, flags=re.I)
+    # Replace longest variants first to avoid partial matches (e.g. "Wärtsilä" inside "Wärtsilä Oyj")
+    for v in sorted(_company_name_variants(company_name), key=len, reverse=True):
+        text = re.sub(re.escape(v), "this organization", text, flags=re.I)
     return re.sub(r"\s{2,}", " ", text).strip()
 
 
@@ -342,11 +371,15 @@ def _enforce_source_says_neutrality(
     """
     Invariant: source_says must be company-neutral when company_specific == False.
 
-    If company name appears in source_says for a non-company-specific record:
-    1. Preserve company-specific interpretation in possible_relevance.
-    2. Rewrite source_says with company name replaced by "this organization".
-    3. Set not_evidence_of_deployment = True.
-    4. Set source_says_was_genericized = True (used by frontend badge).
+    Checks all company-name variants (full legal name, short name without Oyj/Plc/etc.,
+    ASCII-normalized forms) so "Wärtsilä" is caught when company_name is "Wärtsilä Oyj".
+
+    If any variant appears in source_says for a non-company-specific record:
+    1. Preserve company-specific interpretation (modality-sanitized) in possible_relevance.
+    2. Replace all name variants with "this organization" in source_says.
+    3. Apply full modal softening to the genericized text (company name removed, so
+       "this organization must upgrade" → "this organization should evaluate whether…").
+    4. Set not_evidence_of_deployment = True, source_says_was_genericized = True.
     """
     if not company_name or record.get("company_specific") is True:
         return record
@@ -354,13 +387,9 @@ def _enforce_source_says_neutrality(
     if not source_says:
         return record
 
-    norm = _normalize_company_name(company_name)
-    company_in_source = bool(
-        re.search(re.escape(company_name), source_says, re.I)
-        or (
-            norm.lower() != company_name.lower()
-            and re.search(re.escape(norm), source_says, re.I)
-        )
+    variants = _company_name_variants(company_name)
+    company_in_source = any(
+        re.search(re.escape(v), source_says, re.I) for v in variants
     )
     if not company_in_source:
         return record
@@ -373,15 +402,35 @@ def _enforce_source_says_neutrality(
             (existing_pr + " " + sanitized_original).strip() if existing_pr else sanitized_original
         )
 
-    # Genericize source_says — remove company name
+    # Genericize: replace all name variants, then apply full modal softening.
+    # Full MODAL_REPLACEMENTS are correct here because the company name has been removed —
+    # "this organization must upgrade" is now generic and should be softened.
     generic = _genericize_source_says(source_says, company_name)
-    if norm.lower() != company_name.lower():
-        generic = _genericize_source_says(generic, norm)
-    record["source_says"] = sanitize_foresight_modality(generic)
+    record["source_says"] = sanitize_foresight_text(generic, report_date)
     record["not_evidence_of_deployment"] = True
     record["requires_company_specific_corroboration"] = True
     record["source_says_was_genericized"] = True
     return record
+
+
+# Source types that identify direct company evidence — must never be re-classified as
+# generic foresight/trend context.  Mirrors the set in database_sanitizer.py.
+_COMPANY_SPECIFIC_SOURCE_TYPES = frozenset({
+    "company_report", "annual_report", "company_press_release", "press_release",
+    "investor_report", "case_study", "company_website", "company_filing",
+    "earnings_report", "sustainability_report",
+})
+
+
+def _is_company_specific_record(rec: dict) -> bool:
+    """Return True for records that are proven company evidence, not foresight/trend context."""
+    if rec.get("company_specific") is True:
+        return True
+    if str(rec.get("source_type") or "").lower() in _COMPANY_SPECIFIC_SOURCE_TYPES:
+        return True
+    if str(rec.get("entity_match") or "").lower() == "exact" and rec.get("company_mentioned") is True:
+        return True
+    return False
 
 
 def sanitize_foresight_record(
@@ -396,16 +445,35 @@ def sanitize_foresight_record(
     rec = deepcopy(record)
     report_date = report_date or date.today()
 
-    # Apply default foresight metadata
-    rec.setdefault("origin", "foresight")
-    rec.setdefault("claim_type", FORESIGHT_CLAIM_TYPE)
-    rec.setdefault("allowed_claim_types", [FORESIGHT_CLAIM_TYPE])
-    rec.setdefault("company_specific", False)
-    rec.setdefault("requires_company_specific_corroboration", True)
-    rec.setdefault("modal_language_required", True)
-    rec.setdefault("forbidden_as_current_company_fact", True)
-    rec.setdefault("not_evidence_of_deployment", True)
-    rec.setdefault("scope", "external-trend")
+    is_company_evidence = _is_company_specific_record(rec)
+
+    if not is_company_evidence:
+        # Generic foresight/regulatory/trend context — stamp foresight metadata defaults.
+        rec.setdefault("origin", "foresight")
+        rec.setdefault("claim_type", FORESIGHT_CLAIM_TYPE)
+        rec.setdefault("allowed_claim_types", [FORESIGHT_CLAIM_TYPE])
+        rec.setdefault("company_specific", False)
+        rec.setdefault("requires_company_specific_corroboration", True)
+        rec.setdefault("modal_language_required", True)
+        rec.setdefault("forbidden_as_current_company_fact", True)
+        rec.setdefault("not_evidence_of_deployment", True)
+        rec.setdefault("scope", "external-trend")
+    else:
+        # Company-specific evidence: preserve/restore company-fact metadata.
+        # Text sanitization still runs below, but foresight-only flags must NOT be stamped.
+        rec["company_specific"] = True
+        rec["generation_eligible"] = True
+        # Correct claim_type if a previous (buggy) sanitizer pass wrongly set foresight_context.
+        if rec.get("claim_type") in (FORESIGHT_CLAIM_TYPE, REGULATORY_CLAIM_TYPE, None, ""):
+            rec["claim_type"] = rec.get("original_claim_type") or "company_fact"
+        # Correct scope if wrongly set to external-trend.
+        if rec.get("scope") in ("external-trend", None, ""):
+            rec["scope"] = "company-specific"
+        # Remove foresight-only flags that are inappropriate for proven company evidence.
+        rec.pop("not_evidence_of_deployment", None)
+        rec.pop("forbidden_as_current_company_fact", None)
+        rec.pop("modal_language_required", None)
+
     rec["foresight_sanitizer_version"] = FORESIGHT_SANITIZER_VERSION
     if domain:
         rec.setdefault("domain_context", domain)

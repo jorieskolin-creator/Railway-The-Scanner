@@ -37,6 +37,8 @@ from foresight_guardrails import (
     validate_foresight_text,
     _enforce_source_says_neutrality,
     _normalize_company_name,
+    _company_name_variants,
+    _is_company_specific_record,
     FORESIGHT_SANITIZER_VERSION,
 )
 from database_sanitizer import (
@@ -547,6 +549,170 @@ class TestModalDilutionScoping:
 
 
 # ---------------------------------------------------------------------------
+# 11. Company-name variant matching — short name / legal-suffix stripping
+# ---------------------------------------------------------------------------
+
+class TestCompanyNameVariants:
+    """When company_name is 'Wärtsilä Oyj' and source_says contains only 'Wärtsilä',
+    neutralization must still fire (short name without Oyj is a valid variant)."""
+
+    def test_variants_include_short_name(self):
+        variants = _company_name_variants("Wärtsilä Oyj")
+        short_forms = [v for v in variants if "oyj" not in v.lower()]
+        assert short_forms, "Variants must include name without legal suffix"
+        assert any("rtsilä" in v or "rtsila" in v for v in short_forms), (
+            f"Short-name variant of 'Wärtsilä Oyj' not found in {variants}"
+        )
+
+    def test_variants_include_ascii_short_name(self):
+        variants = _company_name_variants("Wärtsilä Oyj")
+        ascii_short = [v for v in variants if "oyj" not in v.lower() and "ä" not in v.lower()]
+        assert ascii_short, (
+            f"ASCII-normalized short-name variant missing from {variants}"
+        )
+
+    def test_short_name_in_source_says_triggers_neutralization(self):
+        """company_name='Wärtsilä Oyj', source_says contains only 'Wärtsilä' (no Oyj).
+        Neutralization must fire and remove the short name."""
+        record = {
+            "source_says": "Wärtsilä must upgrade its AI governance framework.",
+            "possible_relevance": "",
+            "origin": "foresight",
+            "claim_type": "foresight_context",
+            "company_specific": False,
+        }
+        result = _enforce_source_says_neutrality(record, "Wärtsilä Oyj", report_date=REPORT_DATE)
+        ss = result.get("source_says") or ""
+        assert "wärtsilä" not in ss.lower() and "wartsila" not in ss.lower(), (
+            f"Company short name still present in source_says after neutralization: '{ss}'"
+        )
+        assert result.get("source_says_was_genericized") is True
+
+    def test_ascii_short_name_in_source_says_triggers_neutralization(self):
+        """source_says contains ASCII 'Wartsila' when company_name is 'Wärtsilä Oyj'."""
+        record = {
+            "source_says": "Wartsila should consider AI compliance frameworks.",
+            "company_specific": False,
+        }
+        result = _enforce_source_says_neutrality(record, "Wärtsilä Oyj", report_date=REPORT_DATE)
+        ss = result.get("source_says") or ""
+        assert "wartsila" not in ss.lower(), (
+            f"ASCII short name still present in source_says: '{ss}'"
+        )
+
+    def test_must_company_name_genericized_and_softened(self):
+        """'Wärtsilä must upgrade' → company name replaced AND 'must' softened in result."""
+        record = {
+            "source_says": f"Wärtsilä must upgrade its AI governance.",
+            "company_specific": False,
+        }
+        result = _enforce_source_says_neutrality(record, "Wärtsilä Oyj", report_date=REPORT_DATE)
+        ss = result.get("source_says") or ""
+        assert "wärtsilä" not in ss.lower(), f"Company name not removed: '{ss}'"
+        assert not re.search(r"\bmust\b", ss, re.I), (
+            f"'must' not softened after genericization: '{ss}'"
+        )
+
+    def test_record_level_short_name_neutralized(self):
+        """sanitize_foresight_record with company_name='Wärtsilä Oyj' neutralizes
+        source_says that contains only 'Wärtsilä'."""
+        record = {
+            "source_says": "Wärtsilä requires enhanced AI governance.",
+            "possible_relevance": "",
+            "origin": "foresight",
+            "claim_type": "foresight_context",
+            "company_specific": False,
+        }
+        result = sanitize_foresight_record(record, report_date=REPORT_DATE, company_name="Wärtsilä Oyj")
+        ss = result.get("source_says") or ""
+        assert "wärtsilä" not in ss.lower() and "wartsila" not in ss.lower(), (
+            f"Short name not removed from source_says: '{ss}'"
+        )
+        assert result.get("source_says_was_genericized") is True
+
+
+# ---------------------------------------------------------------------------
+# 12. Company-specific evidence protection in sanitize_foresight_record
+# ---------------------------------------------------------------------------
+
+class TestCompanySpecificRecordProtection:
+    """Records that are proven company evidence (source_type=case_study, company_specific=True,
+    entity_match=exact) must not receive foresight-only metadata stamps."""
+
+    def _make_case_study(self) -> dict:
+        return {
+            "title": "AI Governance Case Study",
+            "source_says": "The company implemented AI governance practices.",
+            "source_type": "case_study",
+            "company_specific": True,
+            "company_mentioned": True,
+            "entity_match": "exact",
+            "claim_type": "company_fact",
+            "scope": "company-specific",
+            "generation_eligible": True,
+        }
+
+    def test_case_study_not_foresight_context(self):
+        record = self._make_case_study()
+        result = sanitize_foresight_record(record, report_date=REPORT_DATE, company_name=COMPANY)
+        assert result.get("claim_type") != "foresight_context", (
+            f"case_study got claim_type=foresight_context: {result.get('claim_type')}"
+        )
+
+    def test_case_study_not_external_trend_scope(self):
+        record = self._make_case_study()
+        result = sanitize_foresight_record(record, report_date=REPORT_DATE, company_name=COMPANY)
+        assert result.get("scope") != "external-trend", (
+            f"case_study got scope=external-trend: {result.get('scope')}"
+        )
+
+    def test_case_study_company_specific_preserved(self):
+        record = self._make_case_study()
+        result = sanitize_foresight_record(record, report_date=REPORT_DATE, company_name=COMPANY)
+        assert result.get("company_specific") is True
+
+    def test_case_study_not_evidence_of_deployment_not_set(self):
+        """not_evidence_of_deployment must NOT be set on a proven case study."""
+        record = self._make_case_study()
+        result = sanitize_foresight_record(record, report_date=REPORT_DATE, company_name=COMPANY)
+        # Either not present or explicitly False — must not be True
+        assert result.get("not_evidence_of_deployment") is not True, (
+            "not_evidence_of_deployment=True wrongly stamped on company case_study"
+        )
+
+    def test_case_study_generation_eligible(self):
+        record = self._make_case_study()
+        result = sanitize_foresight_record(record, report_date=REPORT_DATE, company_name=COMPANY)
+        assert result.get("generation_eligible") is True
+
+    def test_is_company_specific_record_detects_case_study(self):
+        record = self._make_case_study()
+        assert _is_company_specific_record(record) is True
+
+    def test_is_company_specific_record_detects_annual_report(self):
+        record = {"source_type": "annual_report", "company_specific": False}
+        assert _is_company_specific_record(record) is True
+
+    def test_is_company_specific_record_false_for_trend_report(self):
+        record = {"source_type": "trend_report", "claim_type": "foresight_context"}
+        assert _is_company_specific_record(record) is False
+
+    def test_sanitizer_idempotent_on_company_specific_evidence(self):
+        """Second sanitizer run on a company-specific record changes 0 string fields."""
+        record = self._make_case_study()
+        record["name"] = COMPANY
+        record["foresight_links"] = []
+        record["evidence_links"] = [self._make_case_study()]
+
+        cleaned_once, audit_1 = sanitize_company_record(record, report_date=REPORT_DATE)
+        cleaned_twice, audit_2 = sanitize_company_record(cleaned_once, report_date=REPORT_DATE)
+        assert audit_2["changed_string_fields"] == 0, (
+            f"Second pass changed {audit_2['changed_string_fields']} field(s) on company evidence. "
+            f"Sample: {audit_2.get('sample_changes', [])}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -563,6 +729,8 @@ def _run_all() -> None:
         TestRepeatedModalCleanup,
         TestReportLevelChecks,
         TestModalDilutionScoping,
+        TestCompanyNameVariants,
+        TestCompanySpecificRecordProtection,
     ]
     passed = failed = 0
     for Suite in suites:
