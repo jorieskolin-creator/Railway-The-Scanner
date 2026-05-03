@@ -928,14 +928,14 @@ WHY (Desired Impact) — the strategic reason to act:
   - Each WHY must connect a specific weakness from the analysis to a business-level consequence the C-suite cares about.
   - Frame as: "What happens if this stays unfixed?" → strategic risk or missed opportunity.
   - Tone: Executive-level, outcome-oriented. Not technical jargon.
-  - Length: 1-2 sentences each.
+  - Length: 2-3 sentences each.
 
 WHAT (Desired Effect) — the measurable business outcome:
   - Each WHAT must propose a concrete, observable change that would prove progress on the corresponding WHY.
   - Frame as: "What would be different in 12 months if we succeed?"
   - Must be specific enough to verify, but not a made-up KPI number.
   - Tone: Tangible, verifiable, grounded in this company's context.
-  - Length: 1-2 sentences each.
+  - Length: 2-3 sentences each.
 
 Rules:
   - WHY1 pairs with WHAT1 (same theme). WHY2 pairs with WHAT2 (different theme).
