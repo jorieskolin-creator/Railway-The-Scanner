@@ -96,6 +96,8 @@ def compute_top_foresights(company_details):
         name = company.get("companyName", "?")
         foresight_links = company.get("foresight_links") or []
         for link in foresight_links:
+            if not isinstance(link, dict):
+                continue
             theme = link.get("fp_theme", "").strip()
             if theme and theme in THEME_CATEGORIES:
                 theme_counts[theme] += 1
@@ -272,6 +274,8 @@ def compute_cross_impact(company_details):
 
     for company in company_details:
         for link in (company.get("foresight_links") or []):
+            if not isinstance(link, dict):
+                continue
             theme = link.get("fp_theme", "").strip()
             dimension = link.get("kb_dimension", "").strip()
             if theme and dimension and theme in THEME_CATEGORIES:
@@ -361,6 +365,8 @@ def compute_domain_dimension_matrix(company_details, dashboard_data):
         name = company.get("companyName", "?")
         domain = company_domains.get(name.lower(), "Unknown")
         for link in (company.get("foresight_links") or []):
+            if not isinstance(link, dict):
+                continue
             dimension = link.get("kb_dimension", "").strip()
             if dimension and dimension in KB_DIMENSIONS:
                 matrix[domain][dimension] += 1
@@ -399,6 +405,8 @@ def compute_industry_radar(company_details, dashboard_data):
         name = company.get("companyName", "?")
         domain = company_domains.get(name.lower(), "Unknown")
         for link in (company.get("foresight_links") or []):
+            if not isinstance(link, dict):
+                continue
             theme = link.get("fp_theme", "").strip()
             cat = THEME_CATEGORIES.get(theme)
             if cat:
@@ -489,6 +497,8 @@ def compute_foresight_coverage(company_details):
     for company in company_details:
         name = company.get("companyName", "?")
         for link in (company.get("foresight_links") or []):
+            if not isinstance(link, dict):
+                continue
             theme = link.get("fp_theme", "").strip()
             if theme and theme in THEME_CATEGORIES:
                 theme_company_count[theme].add(name)

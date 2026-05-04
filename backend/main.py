@@ -183,6 +183,8 @@ def _strip_callables_and_filter_source_lists(data, label: str = "company_data"):
         cleaned = {}
         for key, value in data.items():
             child = _strip_callables_and_filter_source_lists(value, f"{label}.{key}")
+            if child is None and callable(value):
+                continue  # dropped callable — skip key
             if key in SOURCE_LIST_FIELDS:
                 if isinstance(child, list):
                     before = len(child)
@@ -192,15 +194,16 @@ def _strip_callables_and_filter_source_lists(data, label: str = "company_data"):
                         print(f"   ⚠️ [Data Hygiene] Dropped {dropped} non-dict item(s) from {label}.{key}")
                 else:
                     child = []
-            if child is not None:
-                cleaned[key] = child
+            cleaned[key] = child  # preserve legitimate None values
         return cleaned
     if isinstance(data, list):
         cleaned = []
         for idx, item in enumerate(data):
+            if callable(item):
+                print(f"   ⚠️ [Data Hygiene] Dropped callable/function at {label}[{idx}]")
+                continue
             child = _strip_callables_and_filter_source_lists(item, f"{label}[{idx}]")
-            if child is not None:
-                cleaned.append(child)
+            cleaned.append(child)
         return cleaned
     return data
 
@@ -222,23 +225,29 @@ def _find_callables(obj, path="root", found=None):
     return found
 
 
+_JSON_SAFE_DROPPED = object()  # sentinel: callable was removed, distinct from legitimate None
+
 def _make_json_safe_payload(obj, path="root"):
-    """Drop callables and stringify non-serializable objects before save."""
+    """Drop callables and stringify non-serializable objects before save.
+
+    Uses _JSON_SAFE_DROPPED sentinel so dict keys / list items whose legitimate
+    value is None are preserved rather than silently deleted.
+    """
     if callable(obj):
         print(f"   ⚠️ [JSON Safe] Dropped callable/function at {path}")
-        return None
+        return _JSON_SAFE_DROPPED
     if isinstance(obj, dict):
         out = {}
         for key, value in obj.items():
             safe = _make_json_safe_payload(value, f"{path}.{key}")
-            if safe is not None:
+            if safe is not _JSON_SAFE_DROPPED:
                 out[key] = safe
         return out
     if isinstance(obj, list):
         out = []
         for idx, value in enumerate(obj):
             safe = _make_json_safe_payload(value, f"{path}[{idx}]")
-            if safe is not None:
+            if safe is not _JSON_SAFE_DROPPED:
                 out.append(safe)
         return out
     try:
