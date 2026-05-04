@@ -2654,4 +2654,4 @@ def extract_foresight_links(foresight_data, company_name="", domain=""):
     if links:
         validated_count = sum(1 for l in links if l["validated"])
         print(f"   📎 [Foresight Links] Extracted {len(links)} source links ({validated_count} validated)")
-    return sanitize_foresight_collection, sanitize_report_foresight_fields(links, domain=domain)
+    return sanitize_foresight_collection(links, domain=domain)
