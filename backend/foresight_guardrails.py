@@ -621,3 +621,181 @@ def validate_clean_by_construction(data: dict, *, company_name: str = "", report
                 if any(re.search(re.escape(v), rec["source_says"], re.I) for v in variants):
                     issues.append(f"{list_field}[{idx}]: source_says contains company name in context-only record")
     return issues
+
+
+# --- FINAL CLEAN-BY-CONSTRUCTION HARDENING OVERRIDES -------------------------
+# These overrides are intentionally placed at the end of the module so they are
+# the active definitions imported by scanner_two.py / strategic_foresight.py.
+# Goal: new scans and Refresh Database outputs are clean before save; Sanitizer
+# remains a legacy cleanup/audit tool.
+
+_COMPANY_FACT_SOURCE_TYPES_FINAL = frozenset({
+    "company_report", "annual_report", "financial_report", "quarterly_report",
+    "company_press_release", "press_release", "investor_report", "case_study",
+    "company_website", "company_filing", "earnings_report", "sustainability_report",
+    "company_news", "official_company_source", "company_blog",
+})
+_CONTEXT_ONLY_SOURCE_TYPES_FINAL = frozenset({
+    "foresight", "foresight_report", "trend_report", "regulation", "regulatory_context",
+    "analyst", "analyst_report", "market_report", "industry_report", "research_report",
+    "think_tank", "policy_report", "government", "standards_body",
+})
+
+_PREVIOUS_SANITIZE_FORESIGHT_TEXT = sanitize_foresight_text
+_PREVIOUS_REWRITE_PAST_DEADLINES = rewrite_past_deadlines
+
+
+def is_company_specific_evidence_record(record: dict) -> bool:
+    if not isinstance(record, dict):
+        return False
+    if record.get("company_specific") is True:
+        return True
+    claim_type = str(record.get("claim_type") or "").lower()
+    scope = str(record.get("scope") or "").lower()
+    source_type = str(record.get("source_type") or "").lower()
+    if claim_type == "company_fact" or scope == "company-specific":
+        return True
+    if source_type in _COMPANY_FACT_SOURCE_TYPES_FINAL:
+        return True
+    if str(record.get("entity_match") or "").lower() == "exact" and record.get("company_mentioned") is True:
+        return True
+    if record.get("company_mentioned") is True and record.get("verified") is True and source_type not in _CONTEXT_ONLY_SOURCE_TYPES_FINAL:
+        return True
+    return False
+
+
+def _mark_company_fact(record: dict) -> dict:
+    record["company_specific"] = True
+    record.setdefault("generation_eligible", True)
+    record["claim_type"] = "company_fact"
+    record["scope"] = "company-specific"
+    for key in ["excluded_from_company_fact_generation", "not_evidence_of_deployment", "forbidden_as_current_company_fact"]:
+        record.pop(key, None)
+    if record.get("origin") == "foresight":
+        record.pop("origin", None)
+    return record
+
+
+def sanitize_future_insight(text: str, report_date: date | None = None) -> tuple[str, list[dict[str, Any]]]:
+    """Modal, validation-first Future Insight rewrite.
+
+    Avoid deterministic obligation language in newly generated Future Insight.
+    """
+    report_date = report_date or date.today()
+    issues = validate_future_deadlines(text or "", report_date)
+    out = text or ""
+    replacements = [
+        (r"\bmust\s+act\s+now\b", "should evaluate whether near-term action is warranted"),
+        (r"\bmust\s+urgently\b", "should evaluate whether it needs to"),
+        (r"\bmust\b", "should evaluate whether it needs to"),
+        (r"\bnot\s+optional\b", "should be evaluated as a potential priority"),
+        (r"\bexistential\s+requirements?\b", "potentially material requirements if in scope"),
+        (r"\blast[-\s]?chance\s+window\b", "near-term evaluation window"),
+        (r"\bwill\s+force\b", "may increase pressure to evaluate"),
+        (r"\bforces?\s+(the\s+company|the\s+firm|[A-Z][A-Za-zÀ-ÿ\-]+)\b", r"may increase pressure on \1"),
+        (r"\brequires?\s+(the\s+company|the\s+firm|[A-Z][A-Za-zÀ-ÿ\-]+)\s+to\b", r"may require \1 to assess whether it needs to"),
+        (r"\bwill\s+need\s+to\b", "may need to"),
+        (r"\bwill\s+directly\s+impact\b", "could affect"),
+        (r"\bdemands?\s+rapid\b", "may increase pressure to evaluate timely"),
+    ]
+    for pat, repl in replacements:
+        out = re.sub(pat, repl, out, flags=re.I)
+    out = _PREVIOUS_SANITIZE_FORESIGHT_TEXT(out, report_date)
+    out = collapse_repeated_modals(out)
+    return re.sub(r"\s{2,}", " ", out).strip(), issues
+
+
+def sanitize_foresight_record(record: dict, *, report_date: date | None = None, domain: str = "", company_name: str = "") -> dict:
+    if callable(record):
+        print("   ⚠️ [Foresight Hygiene] sanitize_foresight_record received callable; skipping")
+        return {}
+    if not isinstance(record, dict):
+        return record
+    rec = deepcopy(record)
+    report_date = report_date or date.today()
+
+    # Direct company evidence must never be reclassified as context-only.
+    if is_company_specific_evidence_record(rec):
+        rec = _mark_company_fact(rec)
+        for key in ["snippet", "description", "source_says", "summary"]:
+            if isinstance(rec.get(key), str):
+                rec[key] = sanitize_source_description(rec[key], report_date)
+        return rec
+
+    # Generic foresight/regulatory/trend context.
+    rec.setdefault("claim_type", FORESIGHT_CLAIM_TYPE)
+    rec.setdefault("company_specific", False)
+    rec.setdefault("requires_company_specific_corroboration", True)
+    rec.setdefault("not_evidence_of_deployment", True)
+    rec.setdefault("excluded_from_company_fact_generation", True)
+    rec.setdefault("scope", "external-trend")
+
+    source_says, relevance = _split_source_and_relevance(rec.get("snippet") or rec.get("description") or rec.get("summary") or "")
+    if not rec.get("source_says") and source_says:
+        rec["source_says"] = source_says
+    if not rec.get("possible_relevance") and relevance:
+        rec["possible_relevance"] = relevance
+
+    # Source says for context-only cards must be company-neutral.
+    rec = _enforce_source_says_neutrality(rec, company_name, report_date=report_date)
+
+    source_fields = ["source_says", "description", "summary", "snippet"]
+    relevance_fields = ["possible_relevance", "impact", "impact_on_company", "insight", "recommended_action", "proposal_angle", "assessment"]
+    for key in source_fields:
+        if isinstance(rec.get(key), str):
+            rec[key] = sanitize_source_description(rec[key], report_date)
+    for key in relevance_fields:
+        if isinstance(rec.get(key), str):
+            rec[key], _ = sanitize_future_insight(rec[key], report_date)
+    rec["foresight_sanitized"] = True
+    rec["foresight_sanitizer_version"] = FORESIGHT_SANITIZER_VERSION
+    return rec
+
+
+def sanitize_foresight_collection(items: list, *, report_date: date | None = None, domain: str = "", company_name: str = "") -> list:
+    if not isinstance(items, list):
+        return []
+    out = []
+    for item in items:
+        if isinstance(item, dict):
+            cleaned = sanitize_foresight_record(item, report_date=report_date, domain=domain, company_name=company_name)
+            if isinstance(cleaned, dict):
+                out.append(cleaned)
+    return out
+
+
+def sanitize_report_foresight_fields(data: dict, *, report_date: date | None = None, domain: str = "", company_name: str = "") -> dict:
+    if callable(data):
+        print("   ⚠️ [Foresight Hygiene] sanitize_report_foresight_fields received callable; skipping")
+        return {}
+    if not isinstance(data, dict):
+        return data
+    out = deepcopy(data)
+    report_date = report_date or date.today()
+    for field in ["foresight_links", "foresight_evidence", "source_cards", "dimension_forces", "future_insights"]:
+        if isinstance(out.get(field), list):
+            out[field] = sanitize_foresight_collection(out[field], report_date=report_date, domain=domain, company_name=company_name)
+    for field in ["future_insight", "future_insights_text", "foresight_summary", "climate_exposure", "cross_impact_chain"]:
+        if isinstance(out.get(field), str):
+            out[field], _ = sanitize_future_insight(out[field], report_date)
+    out["clean_by_construction"] = True
+    return out
+
+
+def validate_clean_by_construction(data: dict, *, company_name: str = "", report_date: date | None = None) -> list[str]:
+    issues: list[str] = []
+    if not isinstance(data, dict):
+        return ["Generated foresight payload is not a dict"]
+    report_date = report_date or date.today()
+    for field in ["future_insight", "future_insights_text", "foresight_summary", "climate_exposure"]:
+        if isinstance(data.get(field), str):
+            issues.extend([f"{field}: {w}" for w in validate_foresight_text(data[field], report_date)])
+    variants = _company_name_variants(company_name) if company_name else []
+    for list_field in ["foresight_links", "foresight_evidence", "source_cards", "dimension_forces", "future_insights"]:
+        for idx, rec in enumerate(data.get(list_field) or []):
+            if not isinstance(rec, dict) or rec.get("company_specific") is True:
+                continue
+            ss = rec.get("source_says")
+            if isinstance(ss, str) and any(re.search(re.escape(v), ss, re.I) for v in variants):
+                issues.append(f"{list_field}[{idx}]: source_says contains company name in context-only record")
+    return issues

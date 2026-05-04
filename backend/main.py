@@ -36,7 +36,7 @@ from source_quality import manage_evidence_sources, assess_source_scope
 from contradiction_detector import detect_contradictions
 from prompts import PROMPT_VERSION, build_shared_guardrails
 from database_sanitizer import sanitize_database
-from foresight_guardrails import sanitize_foresight_collection, sanitize_report_foresight_fields
+from foresight_guardrails import sanitize_foresight_collection, sanitize_report_foresight_fields, validate_clean_by_construction
 from domain_classifier import infer_domain
 from gemini_backoff import call_with_503_backoff
 
@@ -139,7 +139,7 @@ def _shared_prompt_guardrails(include_diagnostic: bool = True, include_foresight
 
 def _sanitize_company_foresight_fields(data: dict, domain: str = "") -> dict:
     """Sanitize stored/generated foresight fields before saving or re-rendering."""
-    return sanitize_report_foresight_fields(data or {}, domain=domain)
+    return sanitize_report_foresight_fields(data or {}, domain=domain, company_name=company_name)
 
 
 
