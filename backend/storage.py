@@ -8,6 +8,9 @@ import threading
 from datetime import datetime
 import urllib.parse
 
+_DROPPED = object()  # sentinel: callable was dropped, distinct from legitimate None
+
+
 class BlobStorage:
     _index_lock = threading.Lock()
 
@@ -87,22 +90,26 @@ class BlobStorage:
 
 
     def _make_json_safe(self, obj, path="root"):
-        """Return a JSON-serializable copy of obj; drop callables/functions."""
+        """Return a JSON-serializable copy of obj; drop callables/functions.
+
+        Returns _DROPPED sentinel (not None) when a callable is removed, so that
+        callers can distinguish "was a callable" from "legitimate None value".
+        """
         if callable(obj):
             print(f" [Storage JSON-Safe] Dropped callable/function at {path}")
-            return None
+            return _DROPPED
         if isinstance(obj, dict):
             cleaned = {}
             for key, value in obj.items():
                 safe_value = self._make_json_safe(value, f"{path}.{key}")
-                if safe_value is not None:
+                if safe_value is not _DROPPED:
                     cleaned[key] = safe_value
             return cleaned
         if isinstance(obj, list):
             cleaned = []
             for idx, value in enumerate(obj):
                 safe_value = self._make_json_safe(value, f"{path}[{idx}]")
-                if safe_value is not None:
+                if safe_value is not _DROPPED:
                     cleaned.append(safe_value)
             return cleaned
         try:

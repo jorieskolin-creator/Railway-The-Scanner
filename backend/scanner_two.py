@@ -2820,9 +2820,8 @@ def _execute_financial_search(api_key, model_name, prompt, company_name):
     try:
         print(f"   [Financial Health] Attempting {model_name} for {company_name}...")
         start = time.time()
-        client = get_gemini_client()
         response = call_with_503_backoff(
-            lambda: client.models.generate_content(
+            lambda: get_gemini_client().models.generate_content(
                 model=model_name,
                 contents=prompt,
                 config={

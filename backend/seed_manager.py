@@ -743,11 +743,10 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
 
                     # Primary: Gemini 3.1 Pro Preview
                     try:
-                        gemini_client = get_gemini_client()
                         print(f"   [{company_name}] 🔄 [Synthesis] Attempting Gemini 3.1 Pro Preview...")
                         g_start = time.time()
                         gemini_resp = call_with_503_backoff(
-                            lambda: gemini_client.models.generate_content(
+                            lambda: get_gemini_client().models.generate_content(
                                 model="gemini-3.1-pro-preview",
                                 contents=synthesis_prompt,
                                 config=types.GenerateContentConfig(
@@ -1189,10 +1188,9 @@ re-introduce any of the false claims listed above."""
 
                     # Primary: Gemini 3.1 Pro Preview
                     try:
-                        gemini_resynth_client = get_gemini_client()
                         print(f"   [{company_name}] 🔄 [Re-Synthesis] Attempting gemini-3.1-pro-preview...")
                         resynth_response = call_with_503_backoff(
-                            lambda: gemini_resynth_client.models.generate_content(
+                            lambda: get_gemini_client().models.generate_content(
                                 model="gemini-3.1-pro-preview",
                                 contents=resynth_prompt,
                                 config=types.GenerateContentConfig(
