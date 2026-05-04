@@ -158,6 +158,52 @@ def _safe_dict_list(items, label: str = "items") -> list:
         print(f"   ⚠️ [Source Hygiene] Dropped {dropped} non-dict item(s) from {label}")
     return clean
 
+
+def _strip_callables_and_filter_source_lists(data, label: str = "company_data"):
+    """Recursively remove callable/function objects and filter source-card lists.
+
+    Prevents Refresh Database / General Summary from failing with:
+        'function' object has no attribute 'get'
+    when malformed generated or legacy source-card lists contain non-dict objects.
+    """
+    SOURCE_LIST_FIELDS = {
+        "evidence_links",
+        "foresight_links",
+        "foresight_evidence",
+        "deep_dive_findings",
+        "source_cards",
+        "dimension_forces",
+        "future_insights",
+        "history",
+    }
+    if callable(data):
+        print(f"   ⚠️ [Data Hygiene] Dropped callable/function at {label}")
+        return None
+    if isinstance(data, dict):
+        cleaned = {}
+        for key, value in data.items():
+            child = _strip_callables_and_filter_source_lists(value, f"{label}.{key}")
+            if key in SOURCE_LIST_FIELDS:
+                if isinstance(child, list):
+                    before = len(child)
+                    child = [x for x in child if isinstance(x, dict)]
+                    dropped = before - len(child)
+                    if dropped:
+                        print(f"   ⚠️ [Data Hygiene] Dropped {dropped} non-dict item(s) from {label}.{key}")
+                else:
+                    child = []
+            if child is not None:
+                cleaned[key] = child
+        return cleaned
+    if isinstance(data, list):
+        cleaned = []
+        for idx, item in enumerate(data):
+            child = _strip_callables_and_filter_source_lists(item, f"{label}[{idx}]")
+            if child is not None:
+                cleaned.append(child)
+        return cleaned
+    return data
+
 def clean_env_var(value):
     if not value: return ""
     if "=" in value:
@@ -717,12 +763,14 @@ def _recheck_company_data(company_name: str, data: dict) -> dict:
     # Step 5: Regenerate General Summary (runs after any cleaning so evidence is purged/verified)
     try:
         gs_start = time.time()
+        data = _strip_callables_and_filter_source_lists(data, f"{company_name}.pre_general_summary")
         gs_text, gs_model = generate_general_summary(data, company_name)
         if gs_text:
             wc = len(gs_text.split())
             print(f"   ✅ [General Summary] {wc} words, model={gs_model} ({int((time.time()-gs_start)*1000)}ms)")
 
             # Fact-check General Summary against its own input payload
+            data = _strip_callables_and_filter_source_lists(data, f"{company_name}.pre_general_summary_factcheck")
             gs_check = fact_check_general_summary(gs_text, data, company_name)
             if gs_check.get("corrected_summary"):
                 gs_text = gs_check["corrected_summary"]
@@ -738,7 +786,9 @@ def _recheck_company_data(company_name: str, data: dict) -> dict:
         else:
             print(f"   ⚠️ [General Summary] Generation returned empty — skipping field")
     except Exception as gs_err:
+        import traceback
         print(f"   ⚠️ [General Summary] Failed: {gs_err} — skipping, recheck continues")
+        print(traceback.format_exc())
 
     # Save updated data with General Summary
     storage.save_company_data(company_name, data)
@@ -1674,12 +1724,14 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
             # Regenerate General Summary from cleaned data
             try:
                 gs_start = time.time()
+                data = _strip_callables_and_filter_source_lists(data, f"{company_name}.pre_general_summary")
                 gs_text, gs_model = generate_general_summary(data, company_name)
                 if gs_text:
                     wc = len(gs_text.split())
                     print(f"   ✅ [General Summary] {wc} words, model={gs_model} ({int((time.time()-gs_start)*1000)}ms)")
 
                     # Fact-check General Summary against its own input payload
+                    data = _strip_callables_and_filter_source_lists(data, f"{company_name}.pre_general_summary_factcheck")
                     gs_check = fact_check_general_summary(gs_text, data, company_name)
                     if gs_check.get("corrected_summary"):
                         gs_text = gs_check["corrected_summary"]
@@ -1695,7 +1747,9 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                 else:
                     print(f"   ⚠️ [General Summary] Generation returned empty — skipping field")
             except Exception as gs_err:
+                import traceback
                 print(f"   ⚠️ [General Summary] Failed: {gs_err} — skipping, clean continues")
+                print(traceback.format_exc())
 
             saved_url = storage.save_company_data(company_name, data, post_clean=True)
             storage.update_global_index_fields(company_name, {
@@ -2604,7 +2658,9 @@ def run_scan(
             else:
                 print(f"   ⚠️ [Foresight] Returned no data ({foresight_ms}ms)")
         except Exception as foresight_err:
+            import traceback
             print(f"   ⚠️ [Foresight] Failed (non-fatal): {foresight_err}")
+            print(traceback.format_exc())
 
         # --- STEP 2.7.5: MERGE DB FORESIGHT LINKS ---
         # Reuse validated/verified links from previous scans stored in the database.
