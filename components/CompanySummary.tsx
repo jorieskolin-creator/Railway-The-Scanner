@@ -73,7 +73,14 @@ const CompanySummary = ({ data, faviData, observatoryData = null }) => {
   const [pitchCopied, setPitchCopied] = useState(false);
   const [whyWhatCopied, setWhyWhatCopied] = useState(false);
 
-  const isForesightContext = (link) => {
+  
+  const isCompanySpecificEvidence = (link) => {
+    const claimType = String(link?.claim_type || '').toLowerCase();
+    const scope = String(link?.scope || '').toLowerCase();
+    return link?.company_specific === true || claimType === 'company_fact' || scope === 'company-specific';
+  };
+const isForesightContext = (link) => {
+    if (link?.company_specific === true || String(link?.scope || '').toLowerCase() === 'company-specific' || String(link?.claim_type || '').toLowerCase() === 'company_fact') return false;
     const claimType = String(link?.claim_type || '').toLowerCase();
     const sourceType = String(link?.source_type || '').toLowerCase();
     const origin = String(link?.origin || '').toLowerCase();
@@ -865,6 +872,11 @@ const CompanySummary = ({ data, faviData, observatoryData = null }) => {
                                         {isForesightContext(link) && (
                                             <span className="text-[9px] bg-violet-500/15 text-violet-300 px-1.5 py-0.5 rounded font-mono shrink-0" title="External trend/regulatory context — not proof of current company deployment">
                                                 context-only
+                                            </span>
+                                        )}
+                                        {isCompanySpecificEvidence(link) && (
+                                            <span className="text-[9px] bg-emerald-500/15 text-emerald-300 px-1.5 py-0.5 rounded font-mono shrink-0" title="Direct company-specific evidence">
+                                                company-fact
                                             </span>
                                         )}
                                         {needsSourceRelevanceSplit(link) && (
