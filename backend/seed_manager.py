@@ -706,7 +706,7 @@ WHY (Desired Impact) — the strategic reason to act:
   - Each WHY must connect a specific weakness found in Step 1 to a business-level consequence the C-suite cares about.
   - Frame as: "What happens if this stays unfixed?" → strategic risk or missed opportunity.
   - Tone: Executive-level, outcome-oriented. Not technical jargon.
-  - Length: 1-2 sentences each.
+  - Length: 2-3 sentences each.
   - Example: "Reduce time-to-market for digital services from months to weeks by dissolving project-based handoffs that currently bottleneck every release."
 
 WHAT (Desired Effect) — the measurable business outcome:
@@ -714,7 +714,7 @@ WHAT (Desired Effect) — the measurable business outcome:
   - Frame as: "What would be different in 12 months if we succeed?"
   - Must be specific enough to verify, but not a made-up KPI number.
   - Tone: Tangible, verifiable, grounded in this company's context.
-  - Length: 1-2 sentences each.
+  - Length: 2-3 sentences each.
   - Example: "Cross-functional teams own services end-to-end, eliminating the current approval chain that delays every deployment."
 
 Rules:
