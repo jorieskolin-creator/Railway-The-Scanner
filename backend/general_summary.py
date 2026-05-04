@@ -31,6 +31,51 @@ def _general_summary_guardrails() -> str:
     return build_shared_guardrails(include_diagnostic=False, include_foresight=True)
 
 
+
+
+def _dict_items_only(items, label: str = "items") -> list:
+    """Return only dict items before General Summary code calls .get()."""
+    if not isinstance(items, list):
+        return []
+    clean = []
+    dropped = 0
+    for item in items:
+        if isinstance(item, dict):
+            clean.append(item)
+        else:
+            dropped += 1
+    if dropped:
+        print(f"   ⚠️ [General Summary Hygiene] Dropped {dropped} non-dict item(s) from {label}")
+    return clean
+
+
+def _sanitize_general_summary_input(obj, label: str = "full_data"):
+    """Remove callable/function objects before building/fact-checking payloads."""
+    SOURCE_LIST_FIELDS = {
+        "evidence_links", "foresight_links", "foresight_evidence", "source_cards",
+        "deep_dive_findings", "dimension_forces", "future_insights", "history",
+    }
+    if callable(obj):
+        print(f"   ⚠️ [General Summary Hygiene] Dropped callable/function at {label}")
+        return None
+    if isinstance(obj, dict):
+        out = {}
+        for key, value in obj.items():
+            child = _sanitize_general_summary_input(value, f"{label}.{key}")
+            if key in SOURCE_LIST_FIELDS:
+                child = _dict_items_only(child, f"{label}.{key}") if isinstance(child, list) else []
+            if child is not None:
+                out[key] = child
+        return out
+    if isinstance(obj, list):
+        out = []
+        for idx, item in enumerate(obj):
+            child = _sanitize_general_summary_input(item, f"{label}[{idx}]")
+            if child is not None:
+                out.append(child)
+        return out
+    return obj
+
 def _extract_json(text: str) -> dict | None:
     """Extract the first valid JSON object from text, ignoring surrounding content.
 
@@ -85,9 +130,10 @@ _WORD_MAX = 275
 
 def _build_input_payload(full_data: dict, company_name: str) -> dict:
     """Extract only the structured fields the model is allowed to reference."""
+    full_data = _sanitize_general_summary_input(full_data or {}, f"{company_name}.general_summary_input")
 
     # Delta from history
-    history = full_data.get("history") or []
+    history = _dict_items_only(full_data.get("history") or [], "history")
     delta = None
     if history:
         prev = history[-1]
@@ -136,7 +182,7 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
     # Tiered snippet depth: top 8 sources get 500 chars (deep context for key
     # evidence), remaining get 350 chars (sufficient context without dilution).
     _all_verified = [
-        l for l in full_data.get("evidence_links", [])
+        l for l in _dict_items_only(full_data.get("evidence_links", []), "evidence_links")
         if l.get("verified") is True and l.get("url") and not _is_legal_page(l.get("url", ""))
         and not l.get("wrong_entity")  # Exclude sources about a different company with same name
     ]
@@ -349,6 +395,7 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
         print("   ⚠️ [General Summary] No GEMINI_API_KEY — skipping")
         return "", ""
 
+    full_data = _sanitize_general_summary_input(full_data or {}, f"{company_name}.general_summary_factcheck_input")
     payload = _build_input_payload(full_data, company_name)
     prompt = _build_prompt(payload, company_name)
 

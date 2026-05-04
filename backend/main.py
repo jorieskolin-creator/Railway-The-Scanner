@@ -204,6 +204,50 @@ def _strip_callables_and_filter_source_lists(data, label: str = "company_data"):
         return cleaned
     return data
 
+
+
+def _find_callables(obj, path="root", found=None):
+    """Return paths to callable/function objects inside a nested payload."""
+    if found is None:
+        found = []
+    if callable(obj):
+        found.append(path)
+        return found
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            _find_callables(value, f"{path}.{key}", found)
+    elif isinstance(obj, list):
+        for idx, value in enumerate(obj):
+            _find_callables(value, f"{path}[{idx}]", found)
+    return found
+
+
+def _make_json_safe_payload(obj, path="root"):
+    """Drop callables and stringify non-serializable objects before save."""
+    if callable(obj):
+        print(f"   ⚠️ [JSON Safe] Dropped callable/function at {path}")
+        return None
+    if isinstance(obj, dict):
+        out = {}
+        for key, value in obj.items():
+            safe = _make_json_safe_payload(value, f"{path}.{key}")
+            if safe is not None:
+                out[key] = safe
+        return out
+    if isinstance(obj, list):
+        out = []
+        for idx, value in enumerate(obj):
+            safe = _make_json_safe_payload(value, f"{path}[{idx}]")
+            if safe is not None:
+                out.append(safe)
+        return out
+    try:
+        json.dumps(obj)
+        return obj
+    except TypeError:
+        print(f"   ⚠️ [JSON Safe] Converted non-serializable object at {path}: {type(obj).__name__}")
+        return str(obj)
+
 def clean_env_var(value):
     if not value: return ""
     if "=" in value:
@@ -706,6 +750,10 @@ def _recheck_company_data(company_name: str, data: dict) -> dict:
     }
     if ai_result.get("fact_check_skipped"):
         print(f"   ⚠️ [Admin Recheck] All fact-check models failed — summary stored as UNVERIFIED")
+    callable_paths = _find_callables(data, f"{company_name}.pre_save")
+    if callable_paths:
+        print(f"   ⚠️ [Data Hygiene] Callable objects before save: {callable_paths[:30]}")
+    data = _make_json_safe_payload(data, f"{company_name}.pre_save")
     storage.save_company_data(company_name, data)
     storage.update_global_index_field(company_name, "ai_verified", ai_result["verified"])
 
@@ -752,6 +800,14 @@ def _recheck_company_data(company_name: str, data: dict) -> dict:
             else:
                 print(f"   ✅ [Admin Recheck] key_people preserved: {_kp_after_rc} stakeholder(s) — Key Modernization Stakeholders section OK")
 
+            callable_paths = _find_callables(data, f"{company_name}.pre_save")
+
+            if callable_paths:
+
+                print(f"   ⚠️ [Data Hygiene] Callable objects before save: {callable_paths[:30]}")
+
+            data = _make_json_safe_payload(data, f"{company_name}.pre_save")
+
             storage.save_company_data(company_name, data, post_clean=True)
             storage.update_global_index_field(company_name, "ai_verified", True)
             clean_result = {"action": "cleaned", "claims_removed": len(ai_result["false_claims"]), "re_verified": True, "remaining_issues": []}
@@ -791,6 +847,10 @@ def _recheck_company_data(company_name: str, data: dict) -> dict:
         print(traceback.format_exc())
 
     # Save updated data with General Summary
+    callable_paths = _find_callables(data, f"{company_name}.pre_save")
+    if callable_paths:
+        print(f"   ⚠️ [Data Hygiene] Callable objects before save: {callable_paths[:30]}")
+    data = _make_json_safe_payload(data, f"{company_name}.pre_save")
     storage.save_company_data(company_name, data)
 
     # Step 6: Determine recommendation
@@ -878,6 +938,10 @@ async def save_company_edit(company_name: str, request: Request):
 
     # Save to storage and update detailsUrl in global index so the
     # company modal fetches the edited version (not the stale old blob).
+    callable_paths = _find_callables(data, f"{company_name}.pre_save")
+    if callable_paths:
+        print(f"   ⚠️ [Data Hygiene] Callable objects before save: {callable_paths[:30]}")
+    data = _make_json_safe_payload(data, f"{company_name}.pre_save")
     new_url = storage.save_company_data(company_name, data)
     if new_url:
         storage.update_global_index_fields(company_name, {"detailsUrl": new_url})
@@ -942,6 +1006,10 @@ async def recalculate_financial_index(request: Request):
         # Update company file if it differs
         if new_index != old_index_in_file:
             data["financial_index"] = new_index
+            callable_paths = _find_callables(data, f"{name}.pre_save")
+            if callable_paths:
+                print(f"   ⚠️ [Data Hygiene] Callable objects before save: {callable_paths[:30]}")
+            data = _make_json_safe_payload(data, f"{name}.pre_save")
             storage.save_company_data(name, data)
 
         # Compare against LANDING PAGE value — this is what matters
@@ -1142,6 +1210,10 @@ Respond with valid JSON only:
     # Save updated proposals
     data["why_proposals"] = new_why
     data["what_proposals"] = new_what
+    callable_paths = _find_callables(data, f"{company_name}.pre_save")
+    if callable_paths:
+        print(f"   ⚠️ [Data Hygiene] Callable objects before save: {callable_paths[:30]}")
+    data = _make_json_safe_payload(data, f"{company_name}.pre_save")
     storage.save_company_data(company_name, data)
 
     ms = int((_time.time() - start) * 1000)
@@ -1226,6 +1298,10 @@ async def enrich_stakeholders_single(company_name: str, request: Request):
         enriched = [p for p in enriched if p.get("linkedin_insights", {}).get("still_at_company") is not False]
 
     data["key_people"] = enriched
+    callable_paths = _find_callables(data, f"{company_name}.pre_save")
+    if callable_paths:
+        print(f"   ⚠️ [Data Hygiene] Callable objects before save: {callable_paths[:30]}")
+    data = _make_json_safe_payload(data, f"{company_name}.pre_save")
     storage.save_company_data(company_name, data)
 
     found_count = sum(1 for p in enriched if p.get("linkedin_insights", {}).get("found"))
@@ -1282,6 +1358,10 @@ async def enrich_stakeholders_all(request: Request):
                 enriched = [p for p in enriched if p.get("linkedin_insights", {}).get("still_at_company") is not False]
 
             data["key_people"] = enriched
+            callable_paths = _find_callables(data, f"{name}.pre_save")
+            if callable_paths:
+                print(f"   ⚠️ [Data Hygiene] Callable objects before save: {callable_paths[:30]}")
+            data = _make_json_safe_payload(data, f"{name}.pre_save")
             storage.save_company_data(name, data)
 
             found = sum(1 for p in enriched if p.get("linkedin_insights", {}).get("found"))
@@ -1751,6 +1831,14 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                 print(f"   ⚠️ [General Summary] Failed: {gs_err} — skipping, clean continues")
                 print(traceback.format_exc())
 
+            callable_paths = _find_callables(data, f"{company_name}.pre_save")
+
+            if callable_paths:
+
+                print(f"   ⚠️ [Data Hygiene] Callable objects before save: {callable_paths[:30]}")
+
+            data = _make_json_safe_payload(data, f"{company_name}.pre_save")
+
             saved_url = storage.save_company_data(company_name, data, post_clean=True)
             storage.update_global_index_fields(company_name, {
                 "ai_verified": re_verify["verified"],
@@ -1785,6 +1873,10 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
         "clean_time_ms": resynth_ms,
         "reason": "Re-synthesis failed — all Gemini models unavailable",
     }
+    callable_paths = _find_callables(data, f"{company_name}.pre_save")
+    if callable_paths:
+        print(f"   ⚠️ [Data Hygiene] Callable objects before save: {callable_paths[:30]}")
+    data = _make_json_safe_payload(data, f"{company_name}.pre_save")
     storage.save_company_data(company_name, data)
 
     return {
@@ -3666,6 +3758,10 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
             # If data was cleaned via re-synthesis, use strict pruning (keep=1)
             # to ensure false data versions are truly gone from the database
             was_cleaned = full_data.get("re_synthesis", {}).get("was_resynthesized", False)
+            callable_paths = _find_callables(full_data, f"{companyName}.pre_save")
+            if callable_paths:
+                print(f"   ⚠️ [Data Hygiene] Callable objects before save: {callable_paths[:30]}")
+            full_data = _make_json_safe_payload(full_data, f"{companyName}.pre_save")
             saved_url = storage.save_company_data(companyName, full_data, post_clean=was_cleaned)
             print(f"   ✅ [Storage] Saved in {int((time.time() - save_start) * 1000)}ms → {saved_url}")
 

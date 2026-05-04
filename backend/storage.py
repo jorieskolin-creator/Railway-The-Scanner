@@ -85,12 +85,40 @@ class BlobStorage:
 
     # --- LOW LEVEL API WRAPPERS ---
 
+
+    def _make_json_safe(self, obj, path="root"):
+        """Return a JSON-serializable copy of obj; drop callables/functions."""
+        if callable(obj):
+            print(f" [Storage JSON-Safe] Dropped callable/function at {path}")
+            return None
+        if isinstance(obj, dict):
+            cleaned = {}
+            for key, value in obj.items():
+                safe_value = self._make_json_safe(value, f"{path}.{key}")
+                if safe_value is not None:
+                    cleaned[key] = safe_value
+            return cleaned
+        if isinstance(obj, list):
+            cleaned = []
+            for idx, value in enumerate(obj):
+                safe_value = self._make_json_safe(value, f"{path}[{idx}]")
+                if safe_value is not None:
+                    cleaned.append(safe_value)
+            return cleaned
+        try:
+            json.dumps(obj)
+            return obj
+        except TypeError:
+            print(f" [Storage JSON-Safe] Converted non-serializable object at {path}: {type(obj).__name__}")
+            return str(obj)
+
     def _put(self, pathname, data):
         try:
+            safe_data = self._make_json_safe(data, pathname)
             response = requests.put(
                 f"{self.api_url}/{pathname}",
                 headers=self._get_headers(),
-                data=json.dumps(data),
+                data=json.dumps(safe_data),
             )
             if response.status_code == 200:
                 # SUCCESS: Return the public URL
