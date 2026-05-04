@@ -1284,3 +1284,131 @@ def apply_language_metadata(link: dict) -> dict:
 
     return link
 
+
+
+# --- FINAL SOURCE CLASSIFICATION OVERRIDES -----------------------------------
+# Keep these definitions at the end of the module. The file has accumulated older
+# helper definitions during iterative hardening; Python uses the last definition.
+# These final overrides are the scan-time authority for source-card classification.
+
+COMPANY_SPECIFIC_SOURCE_TYPES = globals().get("COMPANY_SPECIFIC_SOURCE_TYPES", {
+    "company_report", "annual_report", "financial_report", "quarterly_report",
+    "company_press_release", "press_release", "investor_report", "company_website",
+    "case_study", "company_blog", "company_news", "company_filing",
+    "official_company_source", "earnings_report", "sustainability_report",
+    "company_financial_report", "investor_relations",
+})
+
+CONTEXT_ONLY_SOURCE_TYPES = globals().get("CONTEXT_ONLY_SOURCE_TYPES", {
+    "foresight", "foresight_report", "trend_report", "regulation",
+    "regulatory_context", "analyst", "analyst_report", "market_report",
+    "industry_report", "research_report", "think_tank", "policy_report",
+    "government", "standards_body",
+})
+
+
+def is_company_specific_evidence(link: dict) -> bool:
+    """Return True when a source can support company-specific factual claims.
+
+    Company-specific evidence wins over context-only classification. A direct
+    company case study, annual report, press release, implementation story,
+    acquisition article, or exact entity match must remain company evidence even
+    if the topic is AI, cloud, data, DPP, regulation, governance, or foresight.
+    """
+    if not isinstance(link, dict):
+        return False
+
+    source_type = str(link.get("source_type") or "").lower().replace(" ", "_")
+    claim_type = str(link.get("claim_type") or "").lower()
+    scope = str(link.get("scope") or "").lower()
+
+    if link.get("company_specific") is True:
+        return True
+    if claim_type == "company_fact" or scope == "company-specific":
+        return True
+    if source_type in COMPANY_SPECIFIC_SOURCE_TYPES:
+        return True
+    if str(link.get("entity_match") or "").lower() == "exact" and link.get("company_mentioned") is True:
+        return True
+    if link.get("company_mentioned") is True and link.get("verified") is True and source_type not in CONTEXT_ONLY_SOURCE_TYPES:
+        return True
+
+    # Heuristic fallback: source/title/snippet clearly describes the target entity.
+    text = f"{link.get('title','')} {link.get('snippet','')} {link.get('source_says','')}".lower()
+    if link.get("company_mentioned") is True and any(t in text for t in ["case study", "annual report", "business review", "press release", "appointment", "acquisition"]):
+        return True
+
+    return False
+
+
+def is_context_only_source(link: dict) -> bool:
+    """Return True for generic foresight/regulatory/trend context sources."""
+    if not isinstance(link, dict):
+        return False
+    if is_company_specific_evidence(link):
+        return False
+
+    source_type = str(link.get("source_type") or "").lower().replace(" ", "_")
+    claim_type = str(link.get("claim_type") or "").lower()
+    scope = str(link.get("scope") or "").lower()
+    origin = str(link.get("origin") or "").lower()
+    allowed = [str(x).lower() for x in (link.get("allowed_claim_types") or [])]
+
+    return (
+        source_type in CONTEXT_ONLY_SOURCE_TYPES
+        or claim_type in {"foresight_context", "regulatory_context"}
+        or scope == "external-trend"
+        or origin == "foresight"
+        or "foresight_context" in allowed
+        or "regulatory_context" in allowed
+    )
+
+
+def classify_generation_context(link: dict) -> dict:
+    """Apply generation-time metadata without overwriting direct company evidence."""
+    if not isinstance(link, dict):
+        return link
+
+    if is_company_specific_evidence(link):
+        link["company_specific"] = True
+        link.setdefault("generation_eligible", True)
+        link["claim_type"] = "company_fact"
+        link["scope"] = "company-specific"
+        for key in [
+            "excluded_from_company_fact_generation",
+            "not_evidence_of_deployment",
+            "forbidden_as_current_company_fact",
+        ]:
+            link.pop(key, None)
+        if link.get("origin") == "foresight":
+            link.pop("origin", None)
+        return link
+
+    if is_context_only_source(link):
+        link.setdefault("generation_eligible", True)
+        link["claim_type"] = link.get("claim_type") or "foresight_context"
+        link["company_specific"] = False
+        link.setdefault("requires_company_specific_corroboration", True)
+        link.setdefault("not_evidence_of_deployment", True)
+        link.setdefault("excluded_from_company_fact_generation", True)
+        link.setdefault("scope", "external-trend")
+
+    return link
+
+
+def apply_language_metadata(link: dict) -> dict:
+    """Annotate source records with language constraints for downstream rendering."""
+    if not isinstance(link, dict):
+        return link
+
+    link = classify_generation_context(link)
+
+    if is_context_only_source(link):
+        link.setdefault("allowed_language", FORESIGHT_ALLOWED_LANGUAGE)
+        link.setdefault("forbidden_language", FORESIGHT_FORBIDDEN_LANGUAGE)
+        link.setdefault("company_specific", False)
+        link.setdefault("requires_company_specific_corroboration", True)
+        link.setdefault("not_evidence_of_deployment", True)
+        link.setdefault("excluded_from_company_fact_generation", True)
+
+    return link

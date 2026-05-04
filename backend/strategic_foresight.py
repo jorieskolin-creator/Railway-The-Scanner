@@ -1013,7 +1013,7 @@ Per force, provide:
 - "confidence": Use the confidence from the signal
 - "lifecycle_stage": Use the lifecycle_stage from the KB signal if available, otherwise assess based on evidence. One of: "weak_signal" | "strong_signal" | "hype_cycle" | "valley_of_death" | "go_to_market" | "market_breakout" | "established_trend" | "market_saturation" | "weakening_trend" | "fading_signal"
 - "trend_momentum": Use the trend_momentum from the KB signal if available, otherwise assess: "accelerating" | "stable" | "decelerating"
-- "action_timing": Derive from lifecycle_stage and company archetype: "monitor" (weak_signal/strong_signal — track but don't invest yet) | "prepare" (hype_cycle/valley_of_death — build capabilities, run pilots) | "act_now" (go_to_market/market_breakout — invest and execute) | "last_chance" (established_trend — adopt or fall behind competitors) | "optimize" (market_saturation/weakening_trend/fading_signal — extract value, prepare for next wave)
+- "action_timing": Derive from lifecycle_stage and company archetype: "monitor" (weak_signal/strong_signal — track but don't invest yet) | "prepare" (hype_cycle/valley_of_death — build capabilities, run pilots) | "act_now" (go_to_market/market_breakout — evaluate near-term action and capability readiness) | "last_chance" (established_trend — priority review; assess whether delay creates disadvantage) | "optimize" (market_saturation/weakening_trend/fading_signal — extract value, prepare for next wave)
 - "osint_validation": "Pre-validated via Foresight Knowledge Base with [N] corroborating source(s)" — use correct grammar: "1 corroborating source" or "2 corroborating sources"
 
 TASK 2 — CROSS-IMPACT CHAIN:
@@ -1163,7 +1163,7 @@ Per force, provide:
 - "kb_dimension": Which priority dimension this impacts most
 - "fp_theme": Which Strategic Foresight theme this maps to
 - "impact_on_company": 1-2 sentences on how this specifically affects {company_name} given their archetype ({archetype}) and current state
-- "proposal_angle": 1 sentence on how to use this in a consulting proposal to {company_name}. Frame as what must happen by when to either capture or defend against this force (e.g., "Could evaluate a pilot for X by Q2 {datetime.now().year + 1} or risk Y").
+- "proposal_angle": 1 sentence on how to use this in a consulting proposal to {company_name}. Frame as what the company should evaluate, validate, or prepare for if the force becomes material and in scope. Use modal language (may/could/should evaluate) and avoid deterministic obligation language.
 - "source_url": PRIMARY URL from your web search results (ORIGINAL source only — must be a real, reachable URL)
 - "supporting_sources": Array of 2-3 ADDITIONAL URLs that corroborate this force from DIFFERENT publications/organizations. Each entry: {{"url": "https://...", "source_type": "...", "title": "Brief title of the source"}}. CRITICAL: These must be REAL URLs you found via web search, not fabricated. If you cannot find 2+ corroborating sources, set confidence to "low".
 - "source_type": "academic" | "think_tank" | "industry_analyst" | "government" | "news"
@@ -1534,6 +1534,27 @@ def _generate_foresight_from_kb(
     return None
 
 
+
+
+def _soften_generated_foresight_language(text: str) -> str:
+    """Downgrade deterministic foresight wording in generated force-card fields."""
+    if not isinstance(text, str):
+        return text
+    replacements = [
+        (r"\bmust\s+act\s+now\b", "should evaluate whether near-term action is warranted"),
+        (r"\bmust\b", "should evaluate whether it needs to"),
+        (r"\bwill\s+need\s+to\b", "may need to"),
+        (r"\bwill\s+force\b", "may increase pressure to evaluate"),
+        (r"\bforces?\b", "may increase pressure on"),
+        (r"\brequires?\s+([^\.]{0,80})\s+to\b", r"may require \1 to assess whether it needs to"),
+        (r"\bnot\s+optional\b", "should be evaluated as a potential priority"),
+        (r"\bexistential\s+requirements?\b", "potentially material requirements if in scope"),
+        (r"\blast[-\s]?chance\s+window\b", "near-term evaluation window"),
+    ]
+    out = text
+    for pat, repl in replacements:
+        out = re.sub(pat, repl, out, flags=re.I)
+    return re.sub(r"\s{2,}", " ", out).strip()
 def _sanitize_foresight_data(foresight_data: dict, domain: str = "", company_name: str = "") -> dict:
     """Sanitize generated foresight data before report rendering/storage.
 
@@ -1549,6 +1570,11 @@ def _sanitize_foresight_data(foresight_data: dict, domain: str = "", company_nam
         if isinstance(cleaned.get(field), list):
             cleaned[field] = [classify_generation_context(x) if isinstance(x, dict) else x for x in cleaned[field]]
             cleaned[field] = sanitize_foresight_collection(cleaned[field], domain=domain, company_name=company_name)
+            for item in cleaned[field]:
+                if isinstance(item, dict):
+                    for key in ["impact_on_company", "proposal_angle", "possible_relevance", "insight", "recommended_action", "assessment"]:
+                        if isinstance(item.get(key), str):
+                            item[key] = _soften_generated_foresight_language(item[key])
 
     # Future Insight and narrative foresight fields must be modal/conditional.
     for field in ["future_insight", "future_insights_text", "climate_exposure", "cross_impact_chain"]:
@@ -1781,7 +1807,7 @@ RULES:
 - Second paragraph: What this specifically means for THIS company given
   their current weaknesses. Connect the dots between external forces and internal gaps.
   Explain the cross-impact chain — how one force triggers cascading effects across multiple areas.
-- Third paragraph: What the company should evaluate or prepare for, if the force is relevant and in scope — concrete strategic imperatives
+- Third paragraph: What the company should evaluate or prepare for, if the force is relevant and in scope — concrete validation priorities
   tied to the identified forces. Be specific about timelines and capabilities needed.
 {climate_instruction}
 - Tone: Strategic, forward-looking, grounded in evidence. Like a foresight
@@ -1792,9 +1818,9 @@ RULES:
 - If confidence is low on a force, use hedging language ("emerging signals suggest...")
 - LIFECYCLE TIMING: When each force has lifecycle_stage and action_timing data, explicitly reference WHERE
   each force sits on its adoption lifecycle and what this means for timing. Use phrases like "still in its
-  hype cycle — prepare but don't over-invest", "at market breakout — act now", or "approaching
-  saturation — optimize existing position". The timing dimension is what makes this actionable.
-  Forces with action_timing "act_now" or "last_chance" should be emphasized as urgent.
+  hype cycle — prepare but don't over-invest", "at market breakout — evaluate near-term action", or "approaching
+  saturation — optimize existing position". The timing dimension is what makes this actionable while still requiring company-specific validation.
+  Forces with action_timing "act_now" or "last_chance" should be framed as near-term evaluation priorities, not deterministic obligations.
 - KEY FORCE HIGHLIGHTING: When naming a key external force for the first time,
   wrap it in **double asterisks** (e.g., "**generative AI disruption**").
   Do this for the 2-4 most important forces only. Do not overuse.

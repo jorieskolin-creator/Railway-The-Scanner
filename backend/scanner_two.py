@@ -13,7 +13,7 @@ from google.genai import types
 from gemini_client import get_gemini_client
 import anthropic
 from knowledge_base import get_evolving_framework
-from source_quality import assess_evidence_quality, confidence_quality_penalty, annotate_evidence_links, filter_admissible_sources, evidence_sufficiency_score
+from source_quality import assess_evidence_quality, confidence_quality_penalty, annotate_evidence_links, filter_admissible_sources, evidence_sufficiency_score, classify_generation_context, apply_language_metadata
 
 # --- HELPER: IMPROVE SEARCH RECALL ---
 def clean_company_name_for_search(name):
@@ -746,13 +746,33 @@ def _apply_scan_time_source_classification(data: dict) -> dict:
 
     The Sanitizer is only a legacy cleanup/audit tool. New scan outputs should
     already preserve company-specific evidence and mark generic foresight/regulatory
-    sources as context-only.
+    sources as context-only. Non-dict/callable items are removed before later
+    summary/rendering code calls `.get()`.
     """
     if not isinstance(data, dict):
         return data
-    for field in ["evidence_links", "foresight_links", "foresight_evidence", "deep_dive_findings", "source_cards"]:
+
+    source_fields = [
+        "evidence_links",
+        "foresight_links",
+        "foresight_evidence",
+        "deep_dive_findings",
+        "source_cards",
+    ]
+    for field in source_fields:
         if isinstance(data.get(field), list):
-            data[field] = [classify_generation_context(x) if isinstance(x, dict) else x for x in data[field]]
+            cleaned = []
+            dropped = 0
+            for item in data[field]:
+                if not isinstance(item, dict):
+                    dropped += 1
+                    continue
+                item = classify_generation_context(item)
+                item = apply_language_metadata(item)
+                cleaned.append(item)
+            if dropped:
+                print(f"   ⚠️ [Source Hygiene] Dropped {dropped} non-dict item(s) from {field}")
+            data[field] = cleaned
     return data
 
 
