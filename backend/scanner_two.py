@@ -2732,15 +2732,17 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         # URL liveness is not enough: wrong-entity and dead-link evidence must not
         # feed factual generation. Narrow/foresight sources remain admissible, but
         # are annotated so downstream prompts/validators can restrict their use.
+        # NOTE: checklist items are Scanner 2's own analysis findings — they are NOT
+        # external sources and must not be filtered by source admissibility rules.
+        # Annotating them for metadata is fine; filtering them out is not.
         company_domain = get_clean_domain(company_url) if company_url else ""
         raw_findings = annotate_evidence_links(raw_findings, company_domain)
         checklist = annotate_evidence_links(checklist, company_domain)
         raw_findings, excluded_evidence = filter_admissible_sources(raw_findings, company_domain)
-        checklist, excluded_checklist = filter_admissible_sources(checklist, company_domain)
-        excluded_total = len(excluded_evidence) + len(excluded_checklist)
+        excluded_total = len(excluded_evidence)
         if excluded_total:
             reasons = {}
-            for _src in excluded_evidence + excluded_checklist:
+            for _src in excluded_evidence:
                 reason = _src.get("exclusion_reason") or "excluded"
                 reasons[reason] = reasons.get(reason, 0) + 1
             penalty = min(20, excluded_total * 4)

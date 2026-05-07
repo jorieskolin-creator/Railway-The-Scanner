@@ -618,10 +618,12 @@ def fact_check_general_summary(
     t0 = time.time()
 
     # Stage 1: Detect unsupported claims
-    # Primary: Gemini 2.5 Pro | Backup 1: Gemini 3.1 Pro | Backup 2: Sonnet 4.6
+    # Primary: Gemini 3.1 Pro | Backup 1: Gemini 2.5 Pro (thinking disabled) | Backup 2: Sonnet 4.6
+    # Gemini 2.5 Pro is NOT used as primary for fact-checking: without thinking_budget=0,
+    # it outputs only reasoning content with empty text, causing 0-char failures.
     CHECK_MODELS = [
-        ("gemini-2.5-pro", "gemini"),
         ("gemini-3.1-pro-preview", "gemini"),
+        ("gemini-2.5-pro", "gemini"),
         ("claude-sonnet-4-6", "anthropic"),
     ]
     false_claims = []
@@ -635,13 +637,20 @@ def fact_check_general_summary(
             print(f"   🔍 [GS Fact-Check] {model_id} checking claims against payload...")
 
             if provider == "gemini":
+                # For thinking models (gemini-2.5-pro), disable thinking so the model
+                # outputs text rather than spending its budget on internal reasoning.
+                # Fact-checking is a structured JSON task — deep thinking is wasteful here.
+                thinking_cfg = None
+                if "2.5" in model_id:
+                    thinking_cfg = genai_types.ThinkingConfig(thinking_budget=0)
                 resp = call_with_503_backoff(
-                    lambda m=model_id: client.models.generate_content(
+                    lambda m=model_id, tc=thinking_cfg: client.models.generate_content(
                         model=m,
                         contents=check_prompt,
                         config=genai_types.GenerateContentConfig(
                             temperature=0.0,
                             max_output_tokens=2000,
+                            thinking_config=tc,
                         ),
                     ),
                     label="GS Fact-Check",
