@@ -516,6 +516,13 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
             except Exception as foresight_err:
                 print(f"   [{company_name}] ⚠️ [Foresight] Failed (non-fatal): {foresight_err}")
 
+            # Defensive guard: ensure foresight_links is always a plain list of dicts
+            # (handles legacy corrupt strings, tuples, or partial merge failures)
+            if not isinstance(foresight_links, list):
+                foresight_links = []
+            else:
+                foresight_links = [l for l in foresight_links if isinstance(l, dict)]
+
             # 4. SYNTHESIS (Claude Opus 4.7)
             summary_text = "Automated Analysis Complete."
             pitch_text = "Pitch unavailable."

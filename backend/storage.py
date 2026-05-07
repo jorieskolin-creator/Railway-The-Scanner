@@ -105,7 +105,8 @@ class BlobStorage:
                 if safe_value is not _DROPPED:
                     cleaned[key] = safe_value
             return cleaned
-        if isinstance(obj, list):
+        if isinstance(obj, (list, tuple)):
+            # Tuples are converted to lists — they serialize identically in JSON
             cleaned = []
             for idx, value in enumerate(obj):
                 safe_value = self._make_json_safe(value, f"{path}[{idx}]")

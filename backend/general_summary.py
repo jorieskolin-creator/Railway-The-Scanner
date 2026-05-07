@@ -49,6 +49,8 @@ def _dict_items_only(items, label: str = "items") -> list:
     return clean
 
 
+_GS_DROPPED = object()  # sentinel: callable was removed, distinct from legitimate None
+
 def _sanitize_general_summary_input(obj, label: str = "full_data"):
     """Remove callable/function objects before building/fact-checking payloads."""
     SOURCE_LIST_FIELDS = {
@@ -57,21 +59,22 @@ def _sanitize_general_summary_input(obj, label: str = "full_data"):
     }
     if callable(obj):
         print(f"   ⚠️ [General Summary Hygiene] Dropped callable/function at {label}")
-        return None
+        return _GS_DROPPED
     if isinstance(obj, dict):
         out = {}
         for key, value in obj.items():
             child = _sanitize_general_summary_input(value, f"{label}.{key}")
+            if child is _GS_DROPPED:
+                continue  # skip callable values only
             if key in SOURCE_LIST_FIELDS:
                 child = _dict_items_only(child, f"{label}.{key}") if isinstance(child, list) else []
-            if child is not None:
-                out[key] = child
+            out[key] = child  # preserve legitimate None values
         return out
-    if isinstance(obj, list):
+    if isinstance(obj, (list, tuple)):
         out = []
         for idx, item in enumerate(obj):
             child = _sanitize_general_summary_input(item, f"{label}[{idx}]")
-            if child is not None:
+            if child is not _GS_DROPPED:
                 out.append(child)
         return out
     return obj

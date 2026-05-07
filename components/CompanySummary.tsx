@@ -1021,7 +1021,7 @@ const isForesightContext = (link) => {
                 </div>
                 <p className="text-[10px] text-slate-500 mt-3 flex items-center gap-1.5 opacity-70">
                      <Info size={12} />
-                     Generated based on detected constraints: {data.reality_checklist ? data.reality_checklist.filter(i => i.sentiment === 'negative').slice(0, 3).map(i => i.query).join(", ") : "General constraints"}
+                     Generated based on detected constraints: {(() => { const neg = (data.reality_checklist || []).filter((i: any) => i.sentiment === 'negative').slice(0, 3); return neg.length > 0 ? neg.map((i: any) => i.query).join(", ") : "General constraints"; })()}
                 </p>
             </div>
         )}
