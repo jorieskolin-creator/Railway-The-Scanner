@@ -372,6 +372,11 @@ MANDATORY RULES:
 
 13. FORMAT: Plain prose only. No headers, no bullet points, no markdown, no links, no citations. CRITICAL: Do NOT use HTML tags like <br> to format line breaks.
 
+14. ENTITY NAMING CONSISTENCY — CRITICAL:
+   - Always refer to the target company by its PRIMARY BRAND NAME ({company_name}) throughout the summary. Do not surface individual country-specific legal entity registrations (e.g., "{company_name} Oy", "{company_name} Ltd", "{company_name} Limited", "{company_name} GmbH", "{company_name} s.r.o.", "{company_name} AB", "{company_name} AS", etc.) as if they were separate, noteworthy organisations.
+   - Evidence sources may come from company registries (Companies House, Finnish Trade Register, etc.) that use formal legal names in ALL CAPS or with full legal suffixes. These are data sources only — do NOT reproduce the formal registered name in the summary prose.
+   - If the company's corporate structure is genuinely relevant (e.g., a parent/subsidiary relationship with a DIFFERENT brand name), you may note it once briefly. But legal entity variants of the SAME brand name must never be named as separate entities.
+
 Output only the prose text. Nothing else."""
 
 
@@ -539,6 +544,7 @@ INSTRUCTIONS:
    A. It states a specific fact (metric, event, figure, statistic) that does NOT appear anywhere in the payload.
    B. It significantly exaggerates or distorts something from the payload.
    C. It introduces market statistics, industry benchmarks, or regulatory details not present in the payload — these are likely hallucinated from the model's training data.
+   F. It refers to {company_name} using a country-specific legal entity suffix (e.g., "{company_name} Limited", "{company_name} Oy", "{company_name} GmbH", "{company_name} Ltd", "{company_name} s.r.o.", "{company_name} AB", "{company_name} AS") as if it were a distinct, separately noteworthy organisation. The summary must use the primary brand name "{company_name}" consistently.
 4. SCOPE INFLATION CHECK — Each evidence_links item has a "scope" field ("broad" or "narrow"). For each numeric or scale claim in the summary, identify which evidence item it traces back to. Flag the claim as UNSUPPORTED if:
    D. The claim is derived from a "narrow"-scope source AND is presented as a company-wide fact without a scope qualifier in the same sentence (qualifier examples: "in a survey of HR personnel", "in a 100-respondent study", "in a Vaasa-based pilot", "according to a master's thesis"). For example, "9% of personnel use Tool X" lifted from a narrow HR-only thesis without saying "in HR" is scope inflation.
    E. The payload has a top-level "contradictions" array, the summary cites one side but does NOT acknowledge the other side at all. Both sides of a listed contradiction must appear in the prose.
