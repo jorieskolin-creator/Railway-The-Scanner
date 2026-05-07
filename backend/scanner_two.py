@@ -268,7 +268,7 @@ def _is_valid_full_name(name: str) -> bool:
 
 
 _SENIORITY_TIERS = [
-    (1, re.compile(r'\b(CEO|COO|President|Chairman|Toimitusjohtaja|Maajohtaja|Managing\s+Director|Country\s+Manager|Group\s+Executive|Pääjohtaja|Hallituksen\s+puheenjohtaja)\b', re.I)),
+    (1, re.compile(r'\b(CEO|COO|President|Chairman|Founder|Co-Founder|Toimitusjohtaja|Maajohtaja|Managing\s+Director|Country\s+Manager|Group\s+Executive|General\s+Manager|Pääjohtaja|Hallituksen\s+puheenjohtaja)\b', re.I)),
     (2, re.compile(r'\b(CTO|CIO|CDO|CPO|CFO|CHRO|CMO|Chief\s+\w+\s+Officer|Executive\s+Vice\s+President|EVP)\b', re.I)),
     (3, re.compile(r'\b(SVP|Senior\s+Vice\s+President|VP|Vice\s+President|Board\s+Member|Hallituksen\s+jäsen)\b', re.I)),
     (4, re.compile(r'\b(Director)\b', re.I)),
@@ -363,11 +363,12 @@ def _validate_key_people(key_people: list, company_name: str, employees: int = N
 
         tier = _get_seniority_tier(role)
 
-        # Large companies (5000+): require Tier 1-3 (C-Suite / CxO / VP).
-        # Tier 6 (Manager) is hard-rejected. Tier 7 (unknown title) is also rejected
-        # because a genuinely senior title would match one of the known tier patterns.
-        if employees and employees >= 5000 and tier >= 6:
-            removed.append(f"{name} ({role}) [requires Tier 1-3 for {employees:,} employee org, got tier {tier}]")
+        # Large companies (5000+): reject known Manager/Lead tier (tier 6).
+        # Tier 7 (unrecognised pattern) is kept — it may be a legitimate senior title
+        # with an unusual or non-English phrasing. _is_valid_role() above already
+        # blocks the genuinely invalid entries (e.g. "Returning Employee (Role Unspecified)").
+        if employees and employees >= 5000 and tier == 6:
+            removed.append(f"{name} ({role}) [Manager-level role not suitable for {employees:,} employee org]")
             continue
 
         if employees and employees >= 200 and tier == 6:
@@ -1941,12 +1942,15 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     TARGET: Find 3-6 stakeholders. Search broadly across leadership levels to reach at least 3.
 
     SENIORITY TIERS — prioritize higher tiers first:
-    Tier 1 (C-Suite):       CEO, COO, Managing Director, Country Manager
-    Tier 2 (CxO Functional): CTO, CIO, CDO, CPO (Product or People), CFO
-    Tier 3 (VP/SVP):        VP Engineering, VP Product, VP Strategy, SVP Operations
+    Tier 1 (C-Suite):       CEO, COO, President, Managing Director, Country Manager, Co-Founder, Founder, General Manager
+    Tier 2 (CxO Functional): CTO, CIO, CDO, CPO (Product or People), CFO, CHRO, CMO, any Chief X Officer
+    Tier 3 (VP/SVP):        VP Engineering, VP Product, VP Strategy, SVP Operations, Board Member
     Tier 4 (Director):      Director of Technology, HR Director, Director of Strategy
     Tier 5 (Head of):       Head of Engineering, Head of Product, Head of Digital
     Tier 6 (Manager):       Senior Manager, Program Manager (ONLY for companies with < 200 employees)
+    Non-standard senior titles (e.g. "Group Technology Lead", "Chief Digital & Technology Officer",
+    "Head of AI & Platforms") are treated as Tier 2-4 equivalents — include if the person is clearly
+    a decision-maker in the relevant functional area.
 {_size_block}
     STAKEHOLDER QUALITY RULES (CRITICAL):
     1. FULL NAMES ONLY: Every name MUST include both first name AND last name. Do NOT include
@@ -1959,18 +1963,25 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
        If you have fewer than 3 after the first pass, do an additional search specifically
        for leadership names. Maximum 6. HOWEVER: if you truly cannot verify 3 names through
        search results, return only what you can verify. NEVER fabricate or guess names.
-    4. CONSTRAINT-DRIVEN ROLE TARGETING: After running the 5 hypothesis verifications, select
-       stakeholders whose roles DIRECTLY govern the confirmed challenges. Use this mapping:
-         Legacy Inertia / Technical Debt / Failed Transformation → CTO, VP Engineering, Head of Architecture
-         Silos / Bureaucracy / Fragmentation                     → CDO, COO, Head of Strategy & Transformation
-         Fake Agile / Waterfall / Zombie Scrum                  → VP Engineering, VP Product, Head of Delivery
-         Surveillance / Control Culture                         → CHRO, Head of People & Culture, COO
-         Platform Thinking gap / No public APIs                 → CTO, CPO, Head of Digital
-         AI Readiness gap / Pilot Purgatory                    → CDO, Chief AI Officer, Head of Data & Analytics
-       CEO/MD is relevant for ALL challenges — always search for them first, regardless of detected constraints.
-       If multiple constraints confirmed → include stakeholders from multiple rows (still max 6 total).
-       Do NOT include people in unrelated roles (sales reps, marketing coordinators, office managers,
-       returning employees, generic "staff", or anyone whose actual title is unknown or unspecified).
+    4. CONSTRAINT-DRIVEN ROLE TARGETING: After running the 5 hypothesis verifications, identify
+       which functional area OWNS each confirmed challenge — then find the most senior verified
+       person in that area. Use the table below as a STARTING POINT, not a rigid list. If the
+       verified person has a non-standard but clearly senior title (e.g. "Group Technology Lead",
+       "Chief Digital & Technology Officer", "Co-Founder & CTO", "Head of AI & Platforms"),
+       include them — substance over exact title match.
+
+       STARTING POINT — roles most likely to own each challenge:
+         Legacy Inertia / Technical Debt       → CTO, VP Engineering, Head of Architecture, or equivalent technology leadership
+         Silos / Bureaucracy / Fragmentation   → CDO, COO, Head of Strategy & Transformation, or equivalent operations/strategy lead
+         Fake Agile / Waterfall                → VP Engineering, VP Product, Head of Delivery, or equivalent engineering/product lead
+         Surveillance / Control Culture        → CHRO, Head of People & Culture, COO, or equivalent people/culture lead
+         Platform Thinking gap / No APIs       → CTO, CPO, Head of Digital, Head of Product, or equivalent product/tech lead
+         AI Readiness gap / Pilot Purgatory    → CDO, Chief AI Officer, Head of Data & Analytics, or equivalent AI/data lead
+
+       CEO / MD / Co-Founder / President is relevant for ALL challenges — always search for them first.
+       If multiple constraints confirmed → include stakeholders covering different challenge areas (max 6 total).
+       EXCLUDE only: sales reps, marketing coordinators, office managers, returning employees without a
+       real title, generic "staff", or anyone whose functional area has no connection to any detected challenge.
 {detected_constraints_block}
     5. CURRENT EMPLOYEES: Only include people who currently work at the company based on
        search results. If search results suggest they left, do NOT include them.
