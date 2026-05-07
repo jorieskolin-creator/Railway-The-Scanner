@@ -276,6 +276,40 @@ _SENIORITY_TIERS = [
     (6, re.compile(r'\b(Senior\s+Manager|Manager|Lead)\b', re.I)),
 ]
 
+# Role descriptions that are NOT actual job titles — always invalid as stakeholders
+_INVALID_ROLE_FRAGMENTS = {
+    "unspecified", "role not", "no role", "returning employee",
+    "not specified", "not found", "not available", "unknown role",
+    "role unknown", "position unknown", "tbd", "n/a",
+}
+
+# Maps detected constraint keywords → functional roles most responsible for that challenge.
+# Used both in the prompt (Rule #4 table) and for rescan constraint injection.
+_CONSTRAINT_ROLE_MAP = [
+    (["legacy", "technical debt", "cloud washing", "failed transformation",
+      "monolith", "mainframe", "moderniz", "it debt"],
+     ["CTO", "VP Engineering", "Head of Architecture"]),
+    (["silo", "bureaucrac", "fragmentation", "cross-functional", "handoff",
+      "coordination failure", "organizational friction"],
+     ["CDO", "COO", "Head of Strategy & Transformation"]),
+    (["agile", "waterfall", "zombie scrum", "fake agile", "delivery",
+      "project-based", "sprint"],
+     ["VP Engineering", "VP Product", "Head of Delivery"]),
+    (["surveillance", "micromanagement", "control culture", "culture",
+      "trust deficit", "employee satisfaction", "psychological safety"],
+     ["CHRO", "Head of People & Culture", "COO"]),
+    (["platform thinking", "platform gap", "no api", "no public api",
+      "composable", "design system"],
+     ["CTO", "CPO", "Head of Digital"]),
+    (["ai readiness", "ai gap", "pilot purgatory", "machine learning",
+      "data strategy", "analytics", "automation gap"],
+     ["CDO", "Chief AI Officer", "Head of Data & Analytics"]),
+    (["financial risk", "cost structure", "revenue decline", "profitab",
+      "liquidity"],
+     ["CFO", "COO"]),
+]
+
+
 def _get_seniority_tier(role: str) -> int:
     """Return seniority tier (1=highest) for a role string. 7 = unknown/unranked."""
     if not role:
@@ -284,6 +318,14 @@ def _get_seniority_tier(role: str) -> int:
         if pattern.search(role):
             return tier
     return 7
+
+
+def _is_valid_role(role: str) -> bool:
+    """Return False for placeholder / non-title role strings (e.g. 'Returning Employee (Role Unspecified)')."""
+    if not role:
+        return False
+    role_lower = role.lower()
+    return not any(fragment in role_lower for fragment in _INVALID_ROLE_FRAGMENTS)
 
 
 def _validate_key_people(key_people: list, company_name: str, employees: int = None) -> list:
@@ -312,15 +354,24 @@ def _validate_key_people(key_people: list, company_name: str, employees: int = N
             removed.append(name or "(empty)")
             continue
 
-        # Filter out too-junior roles for large companies
-        # Only reject tier 6 (known Manager/Lead); tier 7 (unrecognized) may be senior
         role = (person.get("role") or "").strip()
-        tier = _get_seniority_tier(role)
-        if employees and employees >= 5000 and tier == 6:
-            removed.append(f"{name} ({role}) [too junior for {employees:,} employee org]")
+
+        # Reject placeholder / non-title role strings regardless of company size
+        if not _is_valid_role(role):
+            removed.append(f"{name} ({role or 'no role'}) [invalid role description]")
             continue
+
+        tier = _get_seniority_tier(role)
+
+        # Large companies (5000+): require Tier 1-3 (C-Suite / CxO / VP).
+        # Tier 6 (Manager) is hard-rejected. Tier 7 (unknown title) is also rejected
+        # because a genuinely senior title would match one of the known tier patterns.
+        if employees and employees >= 5000 and tier >= 6:
+            removed.append(f"{name} ({role}) [requires Tier 1-3 for {employees:,} employee org, got tier {tier}]")
+            continue
+
         if employees and employees >= 200 and tier == 6:
-            # For mid-size: allow managers only if we'd otherwise have < 3 stakeholders
+            # Mid-size: allow managers only if we'd otherwise have < 3 stakeholders
             person["_seniority_tier"] = tier
             person["_maybe_too_junior"] = True
             validated.append(person)
@@ -1166,6 +1217,50 @@ def _build_evidence_anchors(previous_context):
     return "\n\n".join(anchors)
 
 
+def _build_detected_constraints_block(previous_context: dict) -> str:
+    """
+    For rescans: extract previously detected negative findings and map them to
+    the functional roles most responsible for each challenge. Injected directly
+    into the STAKEHOLDER IDENTIFICATION section so the model searches for the
+    right role types rather than whoever happens to be easiest to find.
+    Returns empty string on first scans (no previous context).
+    """
+    if not previous_context:
+        return ""
+    prev_findings = previous_context.get("previous_findings", [])
+    if not prev_findings:
+        return ""
+
+    negative_labels = [
+        (f.get("query") or f.get("label") or "").strip()
+        for f in prev_findings
+        if f.get("sentiment") == "negative" and (f.get("query") or f.get("label"))
+    ]
+    if not negative_labels:
+        return ""
+
+    lines = []
+    seen_roles = set()
+    for label in negative_labels[:6]:
+        label_lower = label.lower()
+        for keywords, roles in _CONSTRAINT_ROLE_MAP:
+            if any(kw in label_lower for kw in keywords):
+                new_roles = [r for r in roles if r not in seen_roles]
+                if new_roles:
+                    lines.append(f"  ● {label} → prioritize: {', '.join(new_roles)}")
+                    seen_roles.update(new_roles)
+                break
+
+    if not lines:
+        return ""
+
+    return (
+        "\n    DETECTED KEY CHALLENGES FROM PREVIOUS SCAN (drive your stakeholder search):\n"
+        + "\n".join(lines)
+        + "\n    CEO/MD is always priority #1 regardless of which challenges are detected.\n"
+    )
+
+
 # --- RE-SEARCH LOOP HELPERS ---
 
 # Maps each jury number to the category names that belong to it
@@ -1690,6 +1785,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     if previous_context:
         previous_context["company_name"] = search_name
     evidence_anchors = _build_evidence_anchors(previous_context)
+    # Build constraint→role guidance for stakeholder targeting (rescan only)
+    detected_constraints_block = _build_detected_constraints_block(previous_context)
     if history_block:
         print(f"   [Scanner 2] RESCAN MODE: Previous data from {previous_context.get('last_scanned', 'unknown')} loaded.")
         if evidence_anchors:
@@ -1862,11 +1959,19 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
        If you have fewer than 3 after the first pass, do an additional search specifically
        for leadership names. Maximum 6. HOWEVER: if you truly cannot verify 3 names through
        search results, return only what you can verify. NEVER fabricate or guess names.
-    4. RELEVANCE TO KEY CHALLENGES: Only include people in leadership/decision-making roles
-       that are directly linked to the defined and detected key challenges (e.g., if "Legacy Inertia"
-       is detected, a CTO or VP Engineering is relevant; if "Silos" is detected, a Head of Strategy
-       or CDO is relevant). Do NOT include random employees, junior staff, or people in unrelated
-       roles (e.g. sales representatives, marketing coordinators, office managers).
+    4. CONSTRAINT-DRIVEN ROLE TARGETING: After running the 5 hypothesis verifications, select
+       stakeholders whose roles DIRECTLY govern the confirmed challenges. Use this mapping:
+         Legacy Inertia / Technical Debt / Failed Transformation → CTO, VP Engineering, Head of Architecture
+         Silos / Bureaucracy / Fragmentation                     → CDO, COO, Head of Strategy & Transformation
+         Fake Agile / Waterfall / Zombie Scrum                  → VP Engineering, VP Product, Head of Delivery
+         Surveillance / Control Culture                         → CHRO, Head of People & Culture, COO
+         Platform Thinking gap / No public APIs                 → CTO, CPO, Head of Digital
+         AI Readiness gap / Pilot Purgatory                    → CDO, Chief AI Officer, Head of Data & Analytics
+       CEO/MD is relevant for ALL challenges — always search for them first, regardless of detected constraints.
+       If multiple constraints confirmed → include stakeholders from multiple rows (still max 6 total).
+       Do NOT include people in unrelated roles (sales reps, marketing coordinators, office managers,
+       returning employees, generic "staff", or anyone whose actual title is unknown or unspecified).
+{detected_constraints_block}
     5. CURRENT EMPLOYEES: Only include people who currently work at the company based on
        search results. If search results suggest they left, do NOT include them.
     6. SENIORITY PRIORITY: Always list the MOST SENIOR person first. If you find a CEO and

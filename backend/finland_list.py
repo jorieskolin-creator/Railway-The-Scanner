@@ -227,7 +227,7 @@ TOP_100_COMPANIES = [
     {"name": "Mandatum", "url": "https://mandatum.com",
      "domain": "Financial Services", "revenue_avg_3yr": 1200, "employees": 700, "ownership": "Public", "hq_country": "FI"},
     {"name": "Vivicta", "url": "https://www.vivicta.fi",
-     "domain": "IT Services & Consulting", "revenue_avg_3yr": 50, "employees": 100, "ownership": "Private", "hq_country": "FI"},
+     "domain": "IT Services & Consulting", "revenue_avg_3yr": 500, "employees": 7230, "ownership": "Private", "hq_country": "FI"},
     {"name": "Vincit Oyj", "url": "https://www.vincit.com",
      "domain": "IT Services & Consulting", "revenue_avg_3yr": 80, "employees": 500, "ownership": "Public", "hq_country": "FI"},
 
