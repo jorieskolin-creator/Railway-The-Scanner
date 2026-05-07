@@ -612,6 +612,11 @@ Include the trend trajectory in the summary. Note persistent patterns or turning
                         from strategic_foresight import format_foresight_for_synthesis
                         foresight_context = format_foresight_for_synthesis(foresight_data, company_name, company_domain)
 
+                    # Build constraint-driven context for pitch and proposals
+                    _neg_items = [item for item in reality_results.get("checklist", []) if item.get("sentiment") == "negative"]
+                    negative_summary = "\n".join([f"- {item.get('query', '')}: {item.get('snippet', 'No detail')}" for item in _neg_items[:6]])
+                    negative_findings_context = f"\nKey Negative Findings (Scanner 2):\n{negative_summary}" if negative_summary else ""
+
                     seed_synthesis_guardrails = _shared_prompt_guardrails(include_diagnostic=True, include_foresight=True)
                     synthesis_prompt = f"""You are a senior organizational analyst conducting a forensic modernization assessment.
 You are conservative and evidence-bound. You would rather say "insufficient evidence" than risk a wrong claim. Your credibility depends on never overstating.
@@ -648,6 +653,7 @@ Intent Data: {intent_narrative}
 {financial_context}
 {trend_block}
 {foresight_context}
+{negative_findings_context}
 {prev_synthesis_block}
 
 ### ANALYSIS PROTOCOL
