@@ -274,10 +274,12 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
             return
 
         company_start = time.time()
+        COMPANY_BUDGET = 660  # seconds per company (scrape + reality + financial + synthesis + GS + save)
+        company_scan_quality = "complete"
         company_name = company['name']
         if batch_progress is not None:
             batch_progress["current_name"] = company_name
-        print(f"\n🚀 [{i+1}/{total_count}] Processing: {company_name} ...")
+        print(f"\n🚀 [{i+1}/{total_count}] Processing: {company_name} (budget: {COMPANY_BUDGET}s)...")
 
         try:
             # 1. REAL SCRAPING (with subsidiary crawling if defined)
@@ -753,66 +755,76 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                     # Gemini 3.1 Pro is primary for batch refresh (fast, cost-effective at scale).
                     # Opus 4.7 with Extended Thinking is fallback (used for individual scans).
                     response_text = ""
+                    _seed_elapsed = time.time() - company_start
+                    _seed_synth_remaining = COMPANY_BUDGET - _seed_elapsed
+                    _seed_chain_budget = min(180, max(60, int(_seed_synth_remaining) - 60))
+                    _SEED_SYNTH_TIMEOUT = max(30, _seed_chain_budget // 3)
+                    print(f"   [{company_name}] [Synthesis] Elapsed: {int(_seed_elapsed)}s | chain budget: {_seed_chain_budget}s | per-attempt: {_SEED_SYNTH_TIMEOUT}s")
 
-                    # Primary: Gemini 3.1 Pro Preview
-                    try:
-                        print(f"   [{company_name}] 🔄 [Synthesis] Attempting Gemini 3.1 Pro Preview...")
-                        g_start = time.time()
-                        gemini_resp = call_with_503_backoff(
-                            lambda: get_gemini_client().models.generate_content(
-                                model="gemini-3.1-pro-preview",
-                                contents=synthesis_prompt,
-                                config=types.GenerateContentConfig(
-                                    temperature=0.5,
-                                    thinking_config=types.ThinkingConfig(thinking_budget=3000),  # MEDIUM = 2000-3500 tokens; explicit cap
-                                    max_output_tokens=4000
-                                )
-                            ),
-                            label=f"Seed Synthesis gemini-3.1-pro-preview [{company_name}]",
-                        )
-                        response_text = gemini_resp.text or ""
-                        print(f"   [{company_name}] ✅ [Synthesis] Gemini 3.1 Pro Preview succeeded in {int((time.time() - g_start) * 1000)}ms")
-                    except Exception as gemini31_err:
-                        print(f"   [{company_name}] ❌ [Synthesis] Gemini 3.1 Pro Preview failed: {gemini31_err}")
-
-                    # Fallback 1: Opus 4.7 with Extended Thinking
-                    if not response_text:
+                    if _seed_synth_remaining < 90:
+                        company_scan_quality = "partial_synthesis"
+                        print(f"   [{company_name}] ⏭ [Synthesis] Budget < 90s — skipping synthesis chain")
+                    else:
+                        # Primary: Gemini 3.1 Pro Preview
                         try:
-                            print(f"   [{company_name}] 🔄 [Synthesis] Falling back to claude-opus-4-7 with Extended Thinking...")
-                            synth_start = time.time()
-                            resp = claude_client.messages.create(
-                                model="claude-opus-4-7",
-                                max_tokens=16000,
-                                thinking={"type": "adaptive"},
-                                extra_body={"output_config": {"effort": "xhigh"}},
-                                messages=[{"role": "user", "content": synthesis_prompt}]
+                            print(f"   [{company_name}] 🔄 [Synthesis] Attempting Gemini 3.1 Pro Preview...")
+                            g_start = time.time()
+                            gemini_resp = call_with_503_backoff(
+                                lambda: get_gemini_client().models.generate_content(
+                                    model="gemini-3.1-pro-preview",
+                                    contents=synthesis_prompt,
+                                    config=types.GenerateContentConfig(
+                                        temperature=0.5,
+                                        thinking_config=types.ThinkingConfig(thinking_budget=3000),  # MEDIUM = 2000-3500 tokens; explicit cap
+                                        max_output_tokens=4000
+                                    )
+                                ),
+                                label=f"Seed Synthesis gemini-3.1-pro-preview [{company_name}]",
+                                timeout=_SEED_SYNTH_TIMEOUT,
                             )
-                            if resp.content:
-                                for block in resp.content:
+                            response_text = gemini_resp.text or ""
+                            print(f"   [{company_name}] ✅ [Synthesis] Gemini 3.1 Pro Preview succeeded in {int((time.time() - g_start) * 1000)}ms")
+                        except Exception as gemini31_err:
+                            print(f"   [{company_name}] ❌ [Synthesis] Gemini 3.1 Pro Preview failed: {gemini31_err}")
+
+                        # Fallback 1: Opus 4.7 with Extended Thinking
+                        if not response_text and (COMPANY_BUDGET - (time.time() - company_start)) > 60:
+                            try:
+                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to claude-opus-4-7 with Extended Thinking...")
+                                synth_start = time.time()
+                                resp = claude_client.messages.create(
+                                    model="claude-opus-4-7",
+                                    max_tokens=16000,
+                                    thinking={"type": "adaptive"},
+                                    extra_body={"output_config": {"effort": "xhigh"}},
+                                    messages=[{"role": "user", "content": synthesis_prompt}]
+                                )
+                                if resp.content:
+                                    for block in resp.content:
+                                        if getattr(block, 'type', None) == 'text':
+                                            response_text = block.text
+                                            break
+                                print(f"   [{company_name}] ✅ [Synthesis] claude-opus-4-7 + Extended Thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
+                            except Exception as opus_err:
+                                print(f"   [{company_name}] ❌ [Synthesis] Opus 4.7 failed: {opus_err}")
+
+                        # Fallback 2: Claude Sonnet 4.6 (independent provider — survives Google outages)
+                        if not response_text and (COMPANY_BUDGET - (time.time() - company_start)) > 60:
+                            try:
+                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Claude Sonnet 4.6...")
+                                m_start = time.time()
+                                sonnet_resp = claude_client.messages.create(
+                                    model="claude-sonnet-4-6",
+                                    max_tokens=4000,
+                                    messages=[{"role": "user", "content": synthesis_prompt}],
+                                )
+                                for block in sonnet_resp.content:
                                     if getattr(block, 'type', None) == 'text':
                                         response_text = block.text
                                         break
-                            print(f"   [{company_name}] ✅ [Synthesis] claude-opus-4-7 + Extended Thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
-                        except Exception as opus_err:
-                            print(f"   [{company_name}] ❌ [Synthesis] Opus 4.7 failed: {opus_err}")
-
-                    # Fallback 2: Claude Sonnet 4.6 (independent provider — survives Google outages)
-                    if not response_text:
-                        try:
-                            print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Claude Sonnet 4.6...")
-                            m_start = time.time()
-                            sonnet_resp = claude_client.messages.create(
-                                model="claude-sonnet-4-6",
-                                max_tokens=4000,
-                                messages=[{"role": "user", "content": synthesis_prompt}],
-                            )
-                            for block in sonnet_resp.content:
-                                if getattr(block, 'type', None) == 'text':
-                                    response_text = block.text
-                                    break
-                            print(f"   [{company_name}] ✅ [Synthesis] Claude Sonnet 4.6 succeeded in {int((time.time() - m_start) * 1000)}ms")
-                        except Exception as sonnet_err:
-                            print(f"   [{company_name}] ❌ [Synthesis] All models failed. Last error: {sonnet_err}")
+                                print(f"   [{company_name}] ✅ [Synthesis] Claude Sonnet 4.6 succeeded in {int((time.time() - m_start) * 1000)}ms")
+                            except Exception as sonnet_err:
+                                print(f"   [{company_name}] ❌ [Synthesis] All models failed. Last error: {sonnet_err}")
                     if response_text:
                         payload = extract_json_from_text(response_text)
                         if payload:
@@ -967,6 +979,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                 "financial_confidence": financial_results.get("financial_confidence", 0),
                 "strategic_foresight": foresight_data,
                 "foresight_links": foresight_links,
+                "scan_quality": company_scan_quality,
             }
 
             # --- REALITY CHECK: Hallucination Detection (diagnostic only) ---
@@ -997,16 +1010,9 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
             # Wrapped in try/except: fact-check failure must NOT crash the pipeline —
             # if it fails, the original synthesis is saved as UNVERIFIED and pipeline
             # continues to General Summary + save.
-            print(f"   [{company_name}] 🔄 [Fact-Check] Gemini 3.1 Pro fact-check against live web data...")
-            try:
-                fact_check = ai_fact_check_summary(
-                    summary_text=full_data["summary_text"],
-                    evidence_links=reality_results.get("links", []),
-                    company_name=company_name,
-                    pitch_text=full_data.get("pitch_text", ""),
-                )
-            except Exception as fc_err:
-                print(f"   [{company_name}] ❌ [Fact-Check] Exception — summary stored as UNVERIFIED: {fc_err}")
+            _seed_fc_remaining = COMPANY_BUDGET - (time.time() - company_start)
+            if _seed_fc_remaining < 60:
+                print(f"   [{company_name}] ⏭ [Fact-Check] Budget < 60s ({int(_seed_fc_remaining)}s) — skipping, stored as unverified")
                 fact_check = {
                     "verified": False,
                     "fact_check_skipped": True,
@@ -1014,9 +1020,32 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                     "false_claims_detailed": [],
                     "corrected_summary": "",
                     "corrected_pitch": "",
-                    "fact_check_model": "error",
+                    "fact_check_model": "skipped_budget",
                     "fact_check_time_ms": 0,
                 }
+                if company_scan_quality == "complete":
+                    company_scan_quality = "unverified"
+            else:
+                print(f"   [{company_name}] 🔄 [Fact-Check] Gemini 3.1 Pro fact-check against live web data ({int(_seed_fc_remaining)}s remaining)...")
+                try:
+                    fact_check = ai_fact_check_summary(
+                        summary_text=full_data["summary_text"],
+                        evidence_links=reality_results.get("links", []),
+                        company_name=company_name,
+                        pitch_text=full_data.get("pitch_text", ""),
+                    )
+                except Exception as fc_err:
+                    print(f"   [{company_name}] ❌ [Fact-Check] Exception — summary stored as UNVERIFIED: {fc_err}")
+                    fact_check = {
+                        "verified": False,
+                        "fact_check_skipped": True,
+                        "false_claims": [],
+                        "false_claims_detailed": [],
+                        "corrected_summary": "",
+                        "corrected_pitch": "",
+                        "fact_check_model": "error",
+                        "fact_check_time_ms": 0,
+                    }
 
             full_data["ai_verification"] = {
                 "verified": fact_check["verified"],
@@ -1028,7 +1057,10 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
             }
 
             if fact_check.get("fact_check_skipped"):
-                print(f"   [{company_name}] ⚠️ [Fact-Check] All models failed — summary stored as UNVERIFIED ({fact_check['fact_check_time_ms']}ms)")
+                _seed_fc_skip_reason = "budget exhausted" if fact_check.get("fact_check_model") == "skipped_budget" else "all models failed"
+                print(f"   [{company_name}] ⚠️ [Fact-Check] Skipped ({_seed_fc_skip_reason}) — summary stored as UNVERIFIED ({fact_check['fact_check_time_ms']}ms)")
+                if company_scan_quality == "complete":
+                    company_scan_quality = "unverified"
             elif fact_check["verified"]:
                 print(f"   [{company_name}] ✅ [Fact-Check] Summary verified — no false claims ({fact_check['fact_check_time_ms']}ms)")
             else:
@@ -1321,30 +1353,36 @@ re-introduce any of the false claims listed above."""
             # structured data (scores, verified links, jury findings, delta).
             # Runs after fact-check so evidence_links are already purged/verified.
             # Failure is non-fatal — old records without this field are handled gracefully.
-            try:
-                gs_start = time.time()
-                gs_text, gs_model = generate_general_summary(full_data, company_name)
-                if gs_text:
-                    wc = len(gs_text.split())
-                    print(f"   [{company_name}] ✅ [General Summary] {wc} words, model={gs_model} ({int((time.time()-gs_start)*1000)}ms)")
+            _seed_gs_remaining = COMPANY_BUDGET - (time.time() - company_start)
+            if _seed_gs_remaining < 45:
+                print(f"   [{company_name}] ⏭ [General Summary] Budget < 45s ({int(_seed_gs_remaining)}s) — skipping")
+                if company_scan_quality == "complete":
+                    company_scan_quality = "partial_summary"
+            else:
+                try:
+                    gs_start = time.time()
+                    gs_text, gs_model = generate_general_summary(full_data, company_name)
+                    if gs_text:
+                        wc = len(gs_text.split())
+                        print(f"   [{company_name}] ✅ [General Summary] {wc} words, model={gs_model} ({int((time.time()-gs_start)*1000)}ms)")
 
-                    # Fact-check General Summary against its own input payload
-                    gs_check = fact_check_general_summary(gs_text, full_data, company_name)
-                    if gs_check.get("corrected_summary"):
-                        gs_text = gs_check["corrected_summary"]
-                        gs_model = gs_check["corrected_model"] or gs_model
-                        print(f"   [{company_name}] 🔄 [GS Fact-Check] Replaced with corrected summary ({gs_check['check_time_ms']}ms)")
+                        # Fact-check General Summary against its own input payload
+                        gs_check = fact_check_general_summary(gs_text, full_data, company_name)
+                        if gs_check.get("corrected_summary"):
+                            gs_text = gs_check["corrected_summary"]
+                            gs_model = gs_check["corrected_model"] or gs_model
+                            print(f"   [{company_name}] 🔄 [GS Fact-Check] Replaced with corrected summary ({gs_check['check_time_ms']}ms)")
 
-                    full_data["general_summary"] = gs_text
-                    full_data["general_summary_model"] = gs_model
-                    full_data["general_summary_verified"] = gs_check.get("verified", True)
-                    full_data["general_summary_false_claims"] = [
-                        fc.get("claim", "") for fc in gs_check.get("false_claims", [])
-                    ]
-                else:
-                    print(f"   [{company_name}] ⚠️ [General Summary] Generation returned empty — skipping field")
-            except Exception as gs_err:
-                print(f"   [{company_name}] ⚠️ [General Summary] Failed: {gs_err} — skipping, scan continues")
+                        full_data["general_summary"] = gs_text
+                        full_data["general_summary_model"] = gs_model
+                        full_data["general_summary_verified"] = gs_check.get("verified", True)
+                        full_data["general_summary_false_claims"] = [
+                            fc.get("claim", "") for fc in gs_check.get("false_claims", [])
+                        ]
+                    else:
+                        print(f"   [{company_name}] ⚠️ [General Summary] Generation returned empty — skipping field")
+                except Exception as gs_err:
+                    print(f"   [{company_name}] ⚠️ [General Summary] Failed: {gs_err} — skipping, scan continues")
 
             # 6. SAVE INDIVIDUAL COMPANY (thread-safe — unique path per company)
             # Use timestamp conflict resolution: skip save if a manual scan happened after batch started
@@ -1368,8 +1406,12 @@ re-introduce any of the false claims listed above."""
                 "lastUpdated": timestamp,
                 "detailsUrl": saved_url,
                 "financial_index": financial_results.get("financial_index"),
-                "archetype": archetype
+                "archetype": archetype,
+                "scan_quality": company_scan_quality,
             }
+
+            # Sync final scan_quality back into full_data (may have been updated post-build)
+            full_data["scan_quality"] = company_scan_quality
 
             # 7. UPDATE SHARED INDEX (needs lock — multiple threads write here)
             with index_lock:

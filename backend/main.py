@@ -2789,6 +2789,7 @@ def run_scan(
         pitch = "Pitch Unavailable"
         why_proposals = []
         what_proposals = []
+        scan_quality = "complete"  # downgraded if phases are skipped due to time
 
         anthropic_key = clean_env_var(os.environ.get("ANTHROPIC_API_KEY"))
         has_synth_key = anthropic_key
@@ -3057,116 +3058,123 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                 # Opus is the judge — it does ONE thing: synthesize. Fallbacks degrade gracefully.
                 # Opus uses Extended Thinking to reason through conflicting intent vs. reality
                 # evidence before generating the synthesis — exactly what a "judge" model should do.
-                SYNTH_TIMEOUT = 120  # seconds per synthesis model call (extended thinking needs more time)
                 response_text = ""
                 synth_start = time.time()
                 synth_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
-                print(f"   [Synthesis] Time remaining in scan budget: {int(synth_remaining)}s")
+                # Dynamic per-attempt timeout: share remaining budget across 3 fallback attempts.
+                # Reserve 60s for post-synthesis phases (fact-check, GS, Detailed Report, save).
+                _synth_chain_budget = min(240, max(90, int(synth_remaining) - 60))
+                SYNTH_TIMEOUT = max(30, _synth_chain_budget // 3)
+                print(f"   [Synthesis] Time remaining: {int(synth_remaining)}s | chain budget: {_synth_chain_budget}s | per-attempt: {SYNTH_TIMEOUT}s")
 
-                def _synth_opus():
-                    return claude_client.messages.create(
-                        model="claude-opus-4-7",
-                        max_tokens=16000,
-                        thinking={"type": "adaptive"},
-                        extra_body={"output_config": {"effort": "xhigh"}},
-                        messages=[{"role": "user", "content": synthesis_prompt}]
-                    )
+                if synth_remaining < 90:
+                    scan_quality = "partial_synthesis"
+                    print(f"   ⏭ [Synthesis] Budget < 90s — skipping all synthesis models, scan stored as partial")
+                else:
+                    def _synth_opus():
+                        return claude_client.messages.create(
+                            model="claude-opus-4-7",
+                            max_tokens=16000,
+                            thinking={"type": "adaptive"},
+                            extra_body={"output_config": {"effort": "xhigh"}},
+                            messages=[{"role": "user", "content": synthesis_prompt}]
+                        )
 
-                try:
-                    print(f"   🔄 [Synthesis] Attempting claude-opus-4-7 with Extended Thinking (timeout: {SYNTH_TIMEOUT}s)...")
-                    synth_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                    synth_future = synth_pool.submit(_synth_opus)
                     try:
-                        response = synth_future.result(timeout=SYNTH_TIMEOUT)
-                        # Extended thinking response: [ThinkingBlock, TextBlock]
-                        # Extract the text block (skip thinking blocks)
-                        response_text = ""
-                        if response.content:
-                            for block in response.content:
-                                if getattr(block, 'type', None) == 'text':
-                                    response_text = block.text
-                                    break
-                        print(f"   ✅ [Synthesis] claude-opus-4-7 + Extended Thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
-                    except concurrent.futures.TimeoutError:
-                        synth_pool.shutdown(wait=False)
-                        print(f"   ⏰ [Synthesis] claude-opus-4-7 timed out after {SYNTH_TIMEOUT}s")
-                        raise Exception(f"Opus timeout after {SYNTH_TIMEOUT}s")
-                    synth_pool.shutdown(wait=False)
-                except Exception as opus_err:
-                    print(f"   ❌ [Synthesis] Opus 4.7 failed: {opus_err}")
-
-                    # Fallback 1: Gemini 3.1 Pro Preview (thinking_budget=3000 ≈ MEDIUM; 2000-3500 range)
-                    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-                    if not response_text and gemini_key and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 30:
+                        print(f"   🔄 [Synthesis] Attempting claude-opus-4-7 with Extended Thinking (timeout: {SYNTH_TIMEOUT}s)...")
+                        synth_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                        synth_future = synth_pool.submit(_synth_opus)
                         try:
-                            print(f"   🔄 [Synthesis] Falling back to Gemini 3.1 Pro Preview (timeout: {SYNTH_TIMEOUT}s)...")
-                            g_start = time.time()
-                            gemini_client = get_gemini_client()
-
-                            def _synth_gemini31():
-                                return gemini_client.models.generate_content(
-                                    model="gemini-3.1-pro-preview",
-                                    contents=synthesis_prompt,
-                                    config=types.GenerateContentConfig(
-                                        temperature=0.5,
-                                        thinking_config=types.ThinkingConfig(thinking_budget=3000),  # MEDIUM = 2000-3500 tokens; explicit cap
-                                        max_output_tokens=12000
-                                    )
-                                )
-
-                            g_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                            g_future = g_pool.submit(_synth_gemini31)
-                            try:
-                                gemini_resp = g_future.result(timeout=SYNTH_TIMEOUT)
-                                response_text = gemini_resp.text or ""
-                                print(f"   ✅ [Synthesis] Gemini 3.1 Pro Preview succeeded in {int((time.time() - g_start) * 1000)}ms")
-                            except concurrent.futures.TimeoutError:
-                                g_pool.shutdown(wait=False)
-                                print(f"   ⏰ [Synthesis] Gemini 3.1 Pro Preview timed out after {SYNTH_TIMEOUT}s")
-                            g_pool.shutdown(wait=False)
-                        except Exception as gemini31_err:
-                            print(f"   ❌ [Synthesis] Gemini 3.1 Pro Preview failed: {gemini31_err}")
-
-                    # gemini-3-pro-preview fallback removed: shares 3.x rate limits with 3.1-pro
-                    # and is being deprecated by Google.
-
-                    # Fallback 2: Claude Sonnet 4.6 (independent provider — survives Google outages)
-                    if not response_text and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 30:
-                        try:
-                            print(f"   🔄 [Synthesis] Falling back to Claude Sonnet 4.6 (timeout: {SYNTH_TIMEOUT}s)...")
-                            m_start = time.time()
-
-                            _sonnet_system = (
-                                "CRITICAL: You are a CONSERVATIVE analyst. When in doubt, say 'insufficient evidence.' "
-                                "Do NOT extrapolate. Do NOT infer organizational problems. Do NOT sound deeper than "
-                                "your evidence supports. A boring, accurate summary beats an impressive, fabricated one. "
-                                "NEVER invent leadership gaps, morale issues, succession problems, or strategic conclusions "
-                                "from minor details like tool names in job ads."
-                            )
-
-                            def _synth_sonnet():
-                                return claude_client.messages.create(
-                                    model="claude-sonnet-4-6",
-                                    max_tokens=4000,
-                                    system=_sonnet_system,
-                                    messages=[{"role": "user", "content": synthesis_prompt}],
-                                )
-
-                            m_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                            m_future = m_pool.submit(_synth_sonnet)
-                            try:
-                                sonnet_resp = m_future.result(timeout=SYNTH_TIMEOUT)
-                                for block in sonnet_resp.content:
+                            response = synth_future.result(timeout=SYNTH_TIMEOUT)
+                            # Extended thinking response: [ThinkingBlock, TextBlock]
+                            # Extract the text block (skip thinking blocks)
+                            response_text = ""
+                            if response.content:
+                                for block in response.content:
                                     if getattr(block, 'type', None) == 'text':
                                         response_text = block.text
                                         break
-                                print(f"   ✅ [Synthesis] Claude Sonnet 4.6 succeeded in {int((time.time() - m_start) * 1000)}ms")
-                            except concurrent.futures.TimeoutError:
+                            print(f"   ✅ [Synthesis] claude-opus-4-7 + Extended Thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
+                        except concurrent.futures.TimeoutError:
+                            synth_pool.shutdown(wait=False)
+                            print(f"   ⏰ [Synthesis] claude-opus-4-7 timed out after {SYNTH_TIMEOUT}s")
+                            raise Exception(f"Opus timeout after {SYNTH_TIMEOUT}s")
+                        synth_pool.shutdown(wait=False)
+                    except Exception as opus_err:
+                        print(f"   ❌ [Synthesis] Opus 4.7 failed: {opus_err}")
+
+                        # Fallback 1: Gemini 3.1 Pro Preview (thinking_budget=3000 ≈ MEDIUM; 2000-3500 range)
+                        gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
+                        if not response_text and gemini_key and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 60:
+                            try:
+                                print(f"   🔄 [Synthesis] Falling back to Gemini 3.1 Pro Preview (timeout: {SYNTH_TIMEOUT}s)...")
+                                g_start = time.time()
+                                gemini_client = get_gemini_client()
+
+                                def _synth_gemini31():
+                                    return gemini_client.models.generate_content(
+                                        model="gemini-3.1-pro-preview",
+                                        contents=synthesis_prompt,
+                                        config=types.GenerateContentConfig(
+                                            temperature=0.5,
+                                            thinking_config=types.ThinkingConfig(thinking_budget=3000),  # MEDIUM = 2000-3500 tokens; explicit cap
+                                            max_output_tokens=12000
+                                        )
+                                    )
+
+                                g_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                                g_future = g_pool.submit(_synth_gemini31)
+                                try:
+                                    gemini_resp = g_future.result(timeout=SYNTH_TIMEOUT)
+                                    response_text = gemini_resp.text or ""
+                                    print(f"   ✅ [Synthesis] Gemini 3.1 Pro Preview succeeded in {int((time.time() - g_start) * 1000)}ms")
+                                except concurrent.futures.TimeoutError:
+                                    g_pool.shutdown(wait=False)
+                                    print(f"   ⏰ [Synthesis] Gemini 3.1 Pro Preview timed out after {SYNTH_TIMEOUT}s")
+                                g_pool.shutdown(wait=False)
+                            except Exception as gemini31_err:
+                                print(f"   ❌ [Synthesis] Gemini 3.1 Pro Preview failed: {gemini31_err}")
+
+                        # gemini-3-pro-preview fallback removed: shares 3.x rate limits with 3.1-pro
+                        # and is being deprecated by Google.
+
+                        # Fallback 2: Claude Sonnet 4.6 (independent provider — survives Google outages)
+                        if not response_text and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 60:
+                            try:
+                                print(f"   🔄 [Synthesis] Falling back to Claude Sonnet 4.6 (timeout: {SYNTH_TIMEOUT}s)...")
+                                m_start = time.time()
+
+                                _sonnet_system = (
+                                    "CRITICAL: You are a CONSERVATIVE analyst. When in doubt, say 'insufficient evidence.' "
+                                    "Do NOT extrapolate. Do NOT infer organizational problems. Do NOT sound deeper than "
+                                    "your evidence supports. A boring, accurate summary beats an impressive, fabricated one. "
+                                    "NEVER invent leadership gaps, morale issues, succession problems, or strategic conclusions "
+                                    "from minor details like tool names in job ads."
+                                )
+
+                                def _synth_sonnet():
+                                    return claude_client.messages.create(
+                                        model="claude-sonnet-4-6",
+                                        max_tokens=4000,
+                                        system=_sonnet_system,
+                                        messages=[{"role": "user", "content": synthesis_prompt}],
+                                    )
+
+                                m_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                                m_future = m_pool.submit(_synth_sonnet)
+                                try:
+                                    sonnet_resp = m_future.result(timeout=SYNTH_TIMEOUT)
+                                    for block in sonnet_resp.content:
+                                        if getattr(block, 'type', None) == 'text':
+                                            response_text = block.text
+                                            break
+                                    print(f"   ✅ [Synthesis] Claude Sonnet 4.6 succeeded in {int((time.time() - m_start) * 1000)}ms")
+                                except concurrent.futures.TimeoutError:
+                                    m_pool.shutdown(wait=False)
+                                    print(f"   ⏰ [Synthesis] Claude Sonnet 4.6 timed out after {SYNTH_TIMEOUT}s")
                                 m_pool.shutdown(wait=False)
-                                print(f"   ⏰ [Synthesis] Claude Sonnet 4.6 timed out after {SYNTH_TIMEOUT}s")
-                            m_pool.shutdown(wait=False)
-                        except Exception as sonnet_err:
-                            print(f"   ❌ [Synthesis] All models failed. Last error: {sonnet_err}")
+                            except Exception as sonnet_err:
+                                print(f"   ❌ [Synthesis] All models failed. Last error: {sonnet_err}")
 
                 if response_text:
                     payload = extract_json_from_text(response_text)
@@ -3349,6 +3357,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
             "financial_confidence": financial_results.get("financial_confidence", 0),
             "strategic_foresight": foresight_data,
             "foresight_links": foresight_links,
+            "scan_quality": scan_quality,
         }
 
         # --- REALITY CHECK: Hallucination Detection ---
@@ -3383,13 +3392,27 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
         #   2. If false claims → Gemini 3.1 Pro produces corrected summary in same call
         #      → purge contaminated evidence → apply corrected summary → DONE
         #   No second fact-check after correction — fact-checker fixes what it finds.
-        print(f"   🔄 [Fact-Check] Gemini 3.1 Pro fact-check against live web data...")
-        fact_check = ai_fact_check_summary(
-            summary_text=full_data["summary_text"],
-            evidence_links=reality_results.get("links", []),
-            company_name=companyName,
-            pitch_text=full_data.get("pitch_text", ""),
-        )
+        _fc_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
+        if _fc_remaining < 60:
+            print(f"   ⏭ [Fact-Check] Budget < 60s remaining ({int(_fc_remaining)}s) — skipping, summary stored as unverified")
+            fact_check = {
+                "verified": False,
+                "fact_check_skipped": True,
+                "false_claims": [],
+                "false_claims_detailed": [],
+                "fact_check_model": "skipped_budget",
+                "fact_check_time_ms": 0,
+            }
+            if scan_quality == "complete":
+                scan_quality = "unverified"
+        else:
+            print(f"   🔄 [Fact-Check] Gemini 3.1 Pro fact-check against live web data ({int(_fc_remaining)}s remaining)...")
+            fact_check = ai_fact_check_summary(
+                summary_text=full_data["summary_text"],
+                evidence_links=reality_results.get("links", []),
+                company_name=companyName,
+                pitch_text=full_data.get("pitch_text", ""),
+            )
         full_data["ai_verification"] = {
             "verified": fact_check["verified"],
             "fact_check_skipped": fact_check.get("fact_check_skipped", False),
@@ -3400,8 +3423,11 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
         }
 
         if fact_check.get("fact_check_skipped"):
-            # --- SKIPPED: All fact-check models failed. Summary is unverified. ---
-            print(f"   ⚠️ [Fact-Check] All models failed — summary stored as UNVERIFIED ({fact_check['fact_check_time_ms']}ms)")
+            # --- SKIPPED: Budget exhausted or all fact-check models failed. Summary is unverified. ---
+            _fc_skip_reason = "budget exhausted" if fact_check.get("fact_check_model") == "skipped_budget" else "all models failed"
+            print(f"   ⚠️ [Fact-Check] Skipped ({_fc_skip_reason}) — summary stored as UNVERIFIED ({fact_check['fact_check_time_ms']}ms)")
+            if scan_quality == "complete":
+                scan_quality = "unverified"
         elif fact_check["verified"]:
             # --- CLEAN: No false claims found. Original synthesis stands. Done. ---
             print(f"   ✅ [Fact-Check] Summary verified — no false claims ({fact_check['fact_check_time_ms']}ms)")
@@ -3470,38 +3496,51 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
 
             else:
                 # --- Fallback: Fact-checker didn't produce corrected summary → separate re-synthesis ---
-                print(f"   ⚠️ [Fact-Check] No corrected summary from fact-checker — falling back to separate re-synthesis")
-                print(f"   🔄 [Re-Synthesis] Gemini full re-synthesis from cleaned evidence...")
-                resynth_start = time.time()
+                _resynth_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
+                if _resynth_remaining < 60:
+                    print(f"   ⏭ [Re-Synthesis] Budget < 60s ({int(_resynth_remaining)}s) — skipping re-synthesis, saving with false claims flagged")
+                    full_data["re_synthesis"] = {
+                        "was_resynthesized": False,
+                        "false_claims_found": fact_check["false_claims"],
+                        "evidence_purged": purge_result,
+                        "reason": "Budget exhausted — re-synthesis skipped",
+                    }
+                    _do_resynth = False
+                else:
+                    print(f"   ⚠️ [Fact-Check] No corrected summary from fact-checker — falling back to separate re-synthesis")
+                    print(f"   🔄 [Re-Synthesis] Gemini full re-synthesis from cleaned evidence ({int(_resynth_remaining)}s remaining)...")
+                    resynth_start = time.time()
+                    _do_resynth = True
 
-                # Rebuild evidence list from purged data
-                clean_evidence_links = full_data.get("evidence_links", [])
-                clean_verified = [l for l in clean_evidence_links if l.get('verified') is True]
-                clean_evidence_list = ', '.join([f"{l.get('title', 'Unknown')}: {l.get('snippet', '')}" for l in clean_verified[:20]])
+                if _do_resynth:
+                    # Rebuild evidence list from purged data
+                    clean_evidence_links = full_data.get("evidence_links", [])
+                    clean_verified = [l for l in clean_evidence_links if l.get('verified') is True]
+                    clean_evidence_list = ', '.join([f"{l.get('title', 'Unknown')}: {l.get('snippet', '')}" for l in clean_verified[:20]])
 
-                # Note which claims were removed (with verified corrections when available)
-                removed_claims_lines = []
-                detailed_map = {}
-                for dc in detailed_claims:
-                    detailed_map[dc.get("claim", "")] = dc.get("correction", "")
-                for c in fact_check["false_claims"]:
-                    line = f"- {c}"
-                    corr = detailed_map.get(c, "")
-                    if corr:
-                        line += f"\n  → VERIFIED CORRECTION: {corr}"
-                    removed_claims_lines.append(line)
-                removed_claims_note = "\n".join(removed_claims_lines)
+                    # Note which claims were removed (with verified corrections when available)
+                    removed_claims_lines = []
+                    detailed_map = {}
+                    for dc in detailed_claims:
+                        detailed_map[dc.get("claim", "")] = dc.get("correction", "")
+                    for c in fact_check["false_claims"]:
+                        line = f"- {c}"
+                        corr = detailed_map.get(c, "")
+                        if corr:
+                            line += f"\n  → VERIFIED CORRECTION: {corr}"
+                        removed_claims_lines.append(line)
+                    removed_claims_note = "\n".join(removed_claims_lines)
 
-                # Strip the old (contaminated) "Evidence Found:" line from the original
-                # synthesis_prompt so the LLM only sees the cleaned evidence list below.
-                import re as _re
-                clean_resynthesis_guardrails = _shared_prompt_guardrails(include_diagnostic=True, include_foresight=True)
-                clean_synthesis_prompt = _re.sub(
-                    r'Evidence Found: .+', 'Evidence Found: [see CLEANED evidence below]',
-                    synthesis_prompt, count=1
-                )
+                    # Strip the old (contaminated) "Evidence Found:" line from the original
+                    # synthesis_prompt so the LLM only sees the cleaned evidence list below.
+                    import re as _re
+                    clean_resynthesis_guardrails = _shared_prompt_guardrails(include_diagnostic=True, include_foresight=True)
+                    clean_synthesis_prompt = _re.sub(
+                        r'Evidence Found: .+', 'Evidence Found: [see CLEANED evidence below]',
+                        synthesis_prompt, count=1
+                    )
 
-                resynth_prompt = f"""{clean_synthesis_prompt}
+                    resynth_prompt = f"""{clean_synthesis_prompt}
 
 ### SHARED EVIDENCE / DIAGNOSIS / FORESIGHT GUARDRAILS
 {clean_resynthesis_guardrails}
@@ -3523,138 +3562,138 @@ verified evidence provided.
 
 CRITICAL: Do not just rephrase the false claims. You must act as if the concepts mentioned in the false claims above do not exist for this company at all — unless a VERIFIED CORRECTION is provided, in which case use that exact correction. If the cleaned evidence does not explicitly state a fact, remain silent on that topic."""
 
-                resynth_text = ""
-                resynth_model_used = ""
-                gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
+                    resynth_text = ""
+                    resynth_model_used = ""
+                    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
 
-                # Primary: Gemini 3.1 Pro Preview
-                if gemini_key:
-                    try:
-                        print(f"   🔄 [Re-Synthesis] Attempting gemini-3.1-pro-preview...")
-                        gemini_client = get_gemini_client()
-                        resynth_response = call_with_503_backoff(
-                            lambda: gemini_client.models.generate_content(
+                    # Primary: Gemini 3.1 Pro Preview
+                    if gemini_key:
+                        try:
+                            print(f"   🔄 [Re-Synthesis] Attempting gemini-3.1-pro-preview...")
+                            gemini_client = get_gemini_client()
+                            resynth_response = call_with_503_backoff(
+                                lambda: gemini_client.models.generate_content(
+                                    model="gemini-3.1-pro-preview",
+                                    contents=resynth_prompt,
+                                    config=types.GenerateContentConfig(
+                                        temperature=0.5,
+                                        thinking_config=types.ThinkingConfig(thinking_budget=3000),  # MEDIUM = 2000-3500 tokens; explicit cap
+                                        max_output_tokens=12000
+                                    )
+                                ),
+                                label="Re-Synthesis gemini-3.1-pro-preview",
                                 model="gemini-3.1-pro-preview",
-                                contents=resynth_prompt,
-                                config=types.GenerateContentConfig(
-                                    temperature=0.5,
-                                    thinking_config=types.ThinkingConfig(thinking_budget=3000),  # MEDIUM = 2000-3500 tokens; explicit cap
-                                    max_output_tokens=12000
-                                )
-                            ),
-                            label="Re-Synthesis gemini-3.1-pro-preview",
-                            model="gemini-3.1-pro-preview",
-                            timeout=120,
-                        )
-                        resynth_text = resynth_response.text or ""
-                        resynth_model_used = "gemini-3.1-pro-preview"
-                        resynth_ms = int((time.time() - resynth_start) * 1000)
-                        print(f"   ✅ [Re-Synthesis] Gemini 3.1 Pro re-synthesis complete ({resynth_ms}ms)")
-                    except Exception as g31_err:
-                        print(f"   ❌ [Re-Synthesis] Gemini 3.1 Pro failed: {g31_err}")
+                                timeout=120,
+                            )
+                            resynth_text = resynth_response.text or ""
+                            resynth_model_used = "gemini-3.1-pro-preview"
+                            resynth_ms = int((time.time() - resynth_start) * 1000)
+                            print(f"   ✅ [Re-Synthesis] Gemini 3.1 Pro re-synthesis complete ({resynth_ms}ms)")
+                        except Exception as g31_err:
+                            print(f"   ❌ [Re-Synthesis] Gemini 3.1 Pro failed: {g31_err}")
 
-                # gemini-3-pro-preview fallback removed: shares 3.x rate limits with 3.1-pro
-                # and is being deprecated by Google.
+                    # gemini-3-pro-preview fallback removed: shares 3.x rate limits with 3.1-pro
+                    # and is being deprecated by Google.
 
-                # Fallback: Claude Sonnet 4.6 (independent provider — survives Google outages)
-                if not resynth_text:
-                    try:
-                        print(f"   🔄 [Re-Synthesis] Falling back to Claude Sonnet 4.6...")
-                        m_start = time.time()
-                        sonnet_resp = claude_client.messages.create(
-                            model="claude-sonnet-4-6",
-                            max_tokens=4000,
-                            messages=[{"role": "user", "content": resynth_prompt}],
-                        )
-                        for block in sonnet_resp.content:
-                            if getattr(block, 'type', None) == 'text':
-                                resynth_text = block.text
-                                break
-                        resynth_model_used = "claude-sonnet-4-6"
-                        resynth_ms = int((time.time() - m_start) * 1000)
-                        print(f"   ✅ [Re-Synthesis] Claude Sonnet 4.6 re-synthesis complete ({resynth_ms}ms)")
-                    except Exception as sonnet_err:
-                        resynth_ms = int((time.time() - resynth_start) * 1000)
-                        print(f"   ❌ [Re-Synthesis] All re-synthesis models failed. Last error: {sonnet_err} ({resynth_ms}ms)")
+                    # Fallback: Claude Sonnet 4.6 (independent provider — survives Google outages)
+                    if not resynth_text:
+                        try:
+                            print(f"   🔄 [Re-Synthesis] Falling back to Claude Sonnet 4.6...")
+                            m_start = time.time()
+                            sonnet_resp = claude_client.messages.create(
+                                model="claude-sonnet-4-6",
+                                max_tokens=4000,
+                                messages=[{"role": "user", "content": resynth_prompt}],
+                            )
+                            for block in sonnet_resp.content:
+                                if getattr(block, 'type', None) == 'text':
+                                    resynth_text = block.text
+                                    break
+                            resynth_model_used = "claude-sonnet-4-6"
+                            resynth_ms = int((time.time() - m_start) * 1000)
+                            print(f"   ✅ [Re-Synthesis] Claude Sonnet 4.6 re-synthesis complete ({resynth_ms}ms)")
+                        except Exception as sonnet_err:
+                            resynth_ms = int((time.time() - resynth_start) * 1000)
+                            print(f"   ❌ [Re-Synthesis] All re-synthesis models failed. Last error: {sonnet_err} ({resynth_ms}ms)")
 
-                if resynth_text:
-                    resynth_payload = extract_json_from_text(resynth_text)
-                    if resynth_payload:
-                        resynth_json = json.loads(resynth_payload, strict=False)
-                        new_summary = resynth_json.get("summary", "")
-                        new_pitch = resynth_json.get("pitch", "")
+                    if resynth_text:
+                        resynth_payload = extract_json_from_text(resynth_text)
+                        if resynth_payload:
+                            resynth_json = json.loads(resynth_payload, strict=False)
+                            new_summary = resynth_json.get("summary", "")
+                            new_pitch = resynth_json.get("pitch", "")
 
-                        if new_summary:
-                            new_summary = _apply_deterministic_corrections(new_summary, detailed_claims)
-                            full_data["summary_text"] = _strip_tac_codes(new_summary)
-                        if new_pitch:
-                            new_pitch = _apply_deterministic_corrections(new_pitch, detailed_claims)
-                            full_data["pitch_text"] = new_pitch
-                        new_why = resynth_json.get("why_proposals", [])
-                        new_what = resynth_json.get("what_proposals", [])
-                        if new_why and isinstance(new_why, list):
-                            full_data["why_proposals"] = new_why
-                        if new_what and isinstance(new_what, list):
-                            full_data["what_proposals"] = new_what
+                            if new_summary:
+                                new_summary = _apply_deterministic_corrections(new_summary, detailed_claims)
+                                full_data["summary_text"] = _strip_tac_codes(new_summary)
+                            if new_pitch:
+                                new_pitch = _apply_deterministic_corrections(new_pitch, detailed_claims)
+                                full_data["pitch_text"] = new_pitch
+                            new_why = resynth_json.get("why_proposals", [])
+                            new_what = resynth_json.get("what_proposals", [])
+                            if new_why and isinstance(new_why, list):
+                                full_data["why_proposals"] = new_why
+                            if new_what and isinstance(new_what, list):
+                                full_data["what_proposals"] = new_what
 
-                        # Update reality score if Gemini re-evaluated it
-                        resynth_reality = resynth_json.get("reality_score")
-                        if resynth_reality is not None and isinstance(resynth_reality, (int, float)):
-                            resynth_reality = max(0, min(100, int(resynth_reality)))
-                            reality_results["score"] = resynth_reality
-                            full_data["reality_score"] = resynth_reality
-                            # Recalculate gap and archetype
-                            gap = intent_results["score"] - resynth_reality
-                            full_data["reality_gap"] = gap
-                            if resynth_reality >= 50:
-                                archetype = "Thriving" if fin_for_archetype >= 50 else "Modernizing"
-                            else:
-                                archetype = "Cash Cow" if fin_for_archetype >= 50 else "At Risk"
-                            full_data["archetype"] = archetype
-                            # Re-evaluate washing flag
-                            if resynth_reality >= intent_results["score"]:
-                                full_data["washing_flag"] = False
-                                full_data["washing_type"] = None
+                            # Update reality score if Gemini re-evaluated it
+                            resynth_reality = resynth_json.get("reality_score")
+                            if resynth_reality is not None and isinstance(resynth_reality, (int, float)):
+                                resynth_reality = max(0, min(100, int(resynth_reality)))
+                                reality_results["score"] = resynth_reality
+                                full_data["reality_score"] = resynth_reality
+                                # Recalculate gap and archetype
+                                gap = intent_results["score"] - resynth_reality
+                                full_data["reality_gap"] = gap
+                                if resynth_reality >= 50:
+                                    archetype = "Thriving" if fin_for_archetype >= 50 else "Modernizing"
+                                else:
+                                    archetype = "Cash Cow" if fin_for_archetype >= 50 else "At Risk"
+                                full_data["archetype"] = archetype
+                                # Re-evaluate washing flag
+                                if resynth_reality >= intent_results["score"]:
+                                    full_data["washing_flag"] = False
+                                    full_data["washing_type"] = None
 
-                        # Verify archetype from re-synthesis
-                        resynth_archetype = resynth_json.get("archetype")
-                        final_reality = full_data["reality_score"]
-                        expected_archetype = ("Thriving" if fin_for_archetype >= 50 else "Modernizing") if final_reality >= 50 else ("Cash Cow" if fin_for_archetype >= 50 else "At Risk")
-                        if resynth_archetype and resynth_archetype != expected_archetype:
-                            print(f"   ⚖️ [Re-Synthesis] Archetype '{resynth_archetype}' → corrected to '{expected_archetype}'")
-                            valid_archetypes = ["Thriving", "Modernizing", "Cash Cow", "At Risk"]
-                            for wrong_label in valid_archetypes:
-                                if wrong_label == expected_archetype:
-                                    continue
-                                full_data["summary_text"] = full_data["summary_text"].replace(wrong_label, expected_archetype)
+                            # Verify archetype from re-synthesis
+                            resynth_archetype = resynth_json.get("archetype")
+                            final_reality = full_data["reality_score"]
+                            expected_archetype = ("Thriving" if fin_for_archetype >= 50 else "Modernizing") if final_reality >= 50 else ("Cash Cow" if fin_for_archetype >= 50 else "At Risk")
+                            if resynth_archetype and resynth_archetype != expected_archetype:
+                                print(f"   ⚖️ [Re-Synthesis] Archetype '{resynth_archetype}' → corrected to '{expected_archetype}'")
+                                valid_archetypes = ["Thriving", "Modernizing", "Cash Cow", "At Risk"]
+                                for wrong_label in valid_archetypes:
+                                    if wrong_label == expected_archetype:
+                                        continue
+                                    full_data["summary_text"] = full_data["summary_text"].replace(wrong_label, expected_archetype)
 
-                        print(f"   ✅ [Re-Synthesis] Full re-synthesis applied from cleaned evidence")
+                            print(f"   ✅ [Re-Synthesis] Full re-synthesis applied from cleaned evidence")
 
-                    full_data["re_synthesis"] = {
-                        "was_resynthesized": True,
-                        "false_claims_found": fact_check["false_claims"],
-                        "evidence_purged": purge_result,
-                        "resynth_model": resynth_model_used or "gemini-3.1-pro-preview",
-                        "resynth_time_ms": resynth_ms,
-                        "method": "separate_re_synthesis_fallback",
-                    }
-                    # Mark as verified after re-synthesis — built from clean evidence.
-                    # SINGLE-PASS GUARANTEE: No second fact-check runs here.
-                    full_data["ai_verification"]["verified"] = True
-                    full_data["ai_verification"]["false_claims"] = []
-                    full_data["ai_verification"]["note"] = "Re-synthesized from cleaned evidence after fact-check (single-pass fallback)"
-                    # Clear stale washing flags
-                    full_data["washing_flag"] = False
-                    full_data["washing_type"] = None
-                    print(f"   ✅ [Re-Synthesis] Cleared washing flags (false claims removed, fresh synthesis)")
-                else:
-                    print(f"   ⚠️ [Re-Synthesis] Could not re-synthesize — saving with false claims flagged")
-                    full_data["re_synthesis"] = {
-                        "was_resynthesized": False,
-                        "false_claims_found": fact_check["false_claims"],
-                        "evidence_purged": purge_result,
-                        "reason": "Gemini re-synthesis failed",
-                    }
+                        full_data["re_synthesis"] = {
+                            "was_resynthesized": True,
+                            "false_claims_found": fact_check["false_claims"],
+                            "evidence_purged": purge_result,
+                            "resynth_model": resynth_model_used or "gemini-3.1-pro-preview",
+                            "resynth_time_ms": resynth_ms,
+                            "method": "separate_re_synthesis_fallback",
+                        }
+                        # Mark as verified after re-synthesis — built from clean evidence.
+                        # SINGLE-PASS GUARANTEE: No second fact-check runs here.
+                        full_data["ai_verification"]["verified"] = True
+                        full_data["ai_verification"]["false_claims"] = []
+                        full_data["ai_verification"]["note"] = "Re-synthesized from cleaned evidence after fact-check (single-pass fallback)"
+                        # Clear stale washing flags
+                        full_data["washing_flag"] = False
+                        full_data["washing_type"] = None
+                        print(f"   ✅ [Re-Synthesis] Cleared washing flags (false claims removed, fresh synthesis)")
+                    else:
+                        print(f"   ⚠️ [Re-Synthesis] Could not re-synthesize — saving with false claims flagged")
+                        full_data["re_synthesis"] = {
+                            "was_resynthesized": False,
+                            "false_claims_found": fact_check["false_claims"],
+                            "evidence_purged": purge_result,
+                            "reason": "Gemini re-synthesis failed",
+                        }
 
         # --- STEP 3.5 & 3.6: GENERAL SUMMARY + FUTURE INSIGHT (parallel) ---
         # General Summary: Plain-language narrative (225-275 words) from already-verified data.
@@ -3663,36 +3702,43 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
         # Failure is non-fatal — old records without these fields are handled gracefully.
         gs_text, gs_model = "", ""
         fs_text, fs_model = "", ""
-        try:
-            parallel_start = time.time()
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-                gs_future = pool.submit(generate_general_summary, full_data, companyName)
-
-                # Future Insight runs in parallel with General Summary
-                fs_future = None
-                if foresight_data and foresight_data.get("dimension_forces"):
-                    from strategic_foresight import generate_foresight_summary
-                    fs_future = pool.submit(generate_foresight_summary, foresight_data, companyName, company_domain)
-
-                try:
-                    gs_text, gs_model = gs_future.result(timeout=120)
-                except Exception as gs_err:
-                    print(f"   ⚠️ [General Summary] Failed: {gs_err} — skipping")
-
-                if fs_future:
-                    try:
-                        fs_text, fs_model = fs_future.result(timeout=120)
-                    except Exception as fs_err:
-                        print(f"   ⚠️ [Future Insight] Failed: {fs_err} — skipping")
-
-            parallel_ms = int((time.time() - parallel_start) * 1000)
-        except Exception as parallel_err:
-            print(f"   ⚠️ [Summary+Foresight] Parallel execution failed: {parallel_err}")
-            # Fallback: try general summary alone
+        _gs_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
+        parallel_ms = 0
+        if _gs_remaining < 45:
+            print(f"   ⏭ [GS+FS] Budget < 45s remaining ({int(_gs_remaining)}s) — skipping General Summary and Future Insight")
+            if scan_quality == "complete":
+                scan_quality = "partial_summary"
+        else:
             try:
-                gs_text, gs_model = generate_general_summary(full_data, companyName)
-            except Exception:
-                pass
+                parallel_start = time.time()
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                    gs_future = pool.submit(generate_general_summary, full_data, companyName)
+
+                    # Future Insight runs in parallel with General Summary
+                    fs_future = None
+                    if foresight_data and foresight_data.get("dimension_forces"):
+                        from strategic_foresight import generate_foresight_summary
+                        fs_future = pool.submit(generate_foresight_summary, foresight_data, companyName, company_domain)
+
+                    try:
+                        gs_text, gs_model = gs_future.result(timeout=120)
+                    except Exception as gs_err:
+                        print(f"   ⚠️ [General Summary] Failed: {gs_err} — skipping")
+
+                    if fs_future:
+                        try:
+                            fs_text, fs_model = fs_future.result(timeout=120)
+                        except Exception as fs_err:
+                            print(f"   ⚠️ [Future Insight] Failed: {fs_err} — skipping")
+
+                parallel_ms = int((time.time() - parallel_start) * 1000)
+            except Exception as parallel_err:
+                print(f"   ⚠️ [Summary+Foresight] Parallel execution failed: {parallel_err}")
+                # Fallback: try general summary alone
+                try:
+                    gs_text, gs_model = generate_general_summary(full_data, companyName)
+                except Exception:
+                    pass
 
         if gs_text:
             wc = len(gs_text.split())
@@ -3729,34 +3775,39 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
         # works entirely from data already in memory (General Summary, AI Diagnosis,
         # Foresight Insight, Why/What proposals, all metrics and evidence).
         dr_text, dr_model = "", ""
-        try:
-            from detailed_report import generate_detailed_report
-            dr_start = time.time()
+        dr_ms = 0
+        _dr_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
+        if _dr_remaining < 30:
+            print(f"   ⏭ [Detailed Report] Budget < 30s remaining ({int(_dr_remaining)}s) — skipping")
+        else:
+            try:
+                from detailed_report import generate_detailed_report
+                dr_start = time.time()
 
-            # Collect all prior analyses for meta-synthesis
-            prior_summaries = {}
-            if full_data.get("general_summary"):
-                prior_summaries["general_summary"] = full_data["general_summary"]
-            if full_data.get("foresight_summary"):
-                prior_summaries["foresight_summary"] = full_data["foresight_summary"]
-            if full_data.get("summary_text"):
-                prior_summaries["ai_summary"] = full_data["summary_text"]
-            why_what_parts = []
-            if full_data.get("why_proposals"):
-                why_what_parts.append("Why: " + "; ".join(full_data["why_proposals"]))
-            if full_data.get("what_proposals"):
-                why_what_parts.append("What: " + "; ".join(full_data["what_proposals"]))
-            if why_what_parts:
-                prior_summaries["why_what"] = " | ".join(why_what_parts)
+                # Collect all prior analyses for meta-synthesis
+                prior_summaries = {}
+                if full_data.get("general_summary"):
+                    prior_summaries["general_summary"] = full_data["general_summary"]
+                if full_data.get("foresight_summary"):
+                    prior_summaries["foresight_summary"] = full_data["foresight_summary"]
+                if full_data.get("summary_text"):
+                    prior_summaries["ai_summary"] = full_data["summary_text"]
+                why_what_parts = []
+                if full_data.get("why_proposals"):
+                    why_what_parts.append("Why: " + "; ".join(full_data["why_proposals"]))
+                if full_data.get("what_proposals"):
+                    why_what_parts.append("What: " + "; ".join(full_data["what_proposals"]))
+                if why_what_parts:
+                    prior_summaries["why_what"] = " | ".join(why_what_parts)
 
-            dr_text, dr_model = generate_detailed_report(
-                full_data, companyName, foresight_data,
-                prior_summaries=prior_summaries if prior_summaries else None,
-            )
-            dr_ms = int((time.time() - dr_start) * 1000)
-        except Exception as dr_err:
-            dr_ms = 0
-            print(f"   ⚠️ [Detailed Report] Failed: {dr_err} — skipping")
+                dr_text, dr_model = generate_detailed_report(
+                    full_data, companyName, foresight_data,
+                    prior_summaries=prior_summaries if prior_summaries else None,
+                )
+                dr_ms = int((time.time() - dr_start) * 1000)
+            except Exception as dr_err:
+                dr_ms = 0
+                print(f"   ⚠️ [Detailed Report] Failed: {dr_err} — skipping")
 
         if dr_text:
             full_data["detailed_report"] = dr_text
@@ -3797,14 +3848,19 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                 "has_docs": len(uploaded_doc_names) > 0,
                 "financial_index": financial_results.get("financial_index"),
                 "archetype": archetype,
-                "ai_verified": full_data.get("ai_verification", {}).get("verified", True)
+                "ai_verified": full_data.get("ai_verification", {}).get("verified", True),
+                "scan_quality": full_data.get("scan_quality", "complete"),
             }
             # Update index
             storage.update_global_index(summary_entry)
 
+        # Sync final scan_quality back into full_data (may have been updated by fact-check)
+        full_data["scan_quality"] = scan_quality
+
         total_ms = int((time.time() - scan_start) * 1000)
         total_sec = round(total_ms / 1000, 1)
-        print(f"✅ --- SCAN COMPLETE: {companyName} --- Total: {total_sec}s | Intent: {intent_results['score']}/100 | Reality: {reality_results['score']}/100 | Gap: {gap} | Archetype: {archetype} | Confidence: {confidence}/100 ---")
+        _quality_label = f" | Quality: {scan_quality}" if scan_quality != "complete" else ""
+        print(f"✅ --- SCAN COMPLETE: {companyName} --- Total: {total_sec}s | Intent: {intent_results['score']}/100 | Reality: {reality_results['score']}/100 | Gap: {gap} | Archetype: {archetype} | Confidence: {confidence}/100{_quality_label} ---")
 
         return {"success": True, "data": full_data}
 
