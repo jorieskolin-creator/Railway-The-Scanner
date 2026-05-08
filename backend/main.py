@@ -2578,6 +2578,15 @@ def run_scan(
         if financial_results.get("financial_index") is not None:
             print(f"   ✅ [Financial Health] Index: {financial_results['financial_index']}/100, Confidence: {financial_results['financial_confidence']}/100")
 
+        # --- EMPTY REALITY DETECTION ---
+        # All models failed → Scanner 2 returned score=0, confidence=0 (is_simulated placeholder).
+        # Flag for downstream degradation so synthesis doesn't treat zeros as real evidence.
+        _s2_score = reality_results.get("score", 0)
+        _s2_conf = reality_results.get("confidence_score", 0)
+        _s2_empty = (_s2_score == 0 and _s2_conf == 0)
+        if _s2_empty:
+            print(f"   ⚠️ [Scanner 2] Empty result detected (score=0, confidence=0) — will flag scan_quality='empty_reality'")
+
         # --- SCORE DRIFT DIAGNOSTIC ---
         # Detects large score swings between rescans for diagnostic purposes.
         # Does NOT dampen scores — Opus is the Final Judge and its score is authoritative.
@@ -2789,7 +2798,7 @@ def run_scan(
         pitch = "Pitch Unavailable"
         why_proposals = []
         what_proposals = []
-        scan_quality = "complete"  # downgraded if phases are skipped due to time
+        scan_quality = "empty_reality" if _s2_empty else "complete"  # downgraded if phases are skipped due to time
 
         anthropic_key = clean_env_var(os.environ.get("ANTHROPIC_API_KEY"))
         has_synth_key = anthropic_key

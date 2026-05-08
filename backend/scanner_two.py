@@ -2456,7 +2456,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
     # --- PRIMARY: Gemini 3.1 Pro Preview — two-pass mode ---
     if not data:
-        data = execute_with_model("gemini-3.1-pro-preview", None, 180)
+        _forensic_per_model = min(150, max(60, time_budget // 3))
+        data = execute_with_model("gemini-3.1-pro-preview", None, _forensic_per_model)
 
     # --- BACKUP: Gemini 2.5 Pro (separate rate limits from 3.x family; ~40-50s typical) ---
     if not data:
@@ -2933,10 +2934,10 @@ RETURN STRICT JSON:
 # FINANCIAL HEALTH INDEX — Separate from 5-jury reality check
 # ==============================================================================
 
-def _execute_financial_search(api_key, model_name, prompt, company_name):
+def _execute_financial_search(api_key, model_name, prompt, company_name, timeout=90):
     """Execute a single Gemini search for financial data. Returns parsed dict or None."""
     try:
-        print(f"   [Financial Health] Attempting {model_name} for {company_name}...")
+        print(f"   [Financial Health] Attempting {model_name} for {company_name} (timeout={timeout}s)...")
         start = time.time()
         response = call_with_503_backoff(
             lambda: get_gemini_client().models.generate_content(
@@ -2954,6 +2955,7 @@ def _execute_financial_search(api_key, model_name, prompt, company_name):
                 }
             ),
             label=f"Financial Health {model_name}",
+            timeout=timeout,
         )
         text_content = response.text if response.text else ""
         json_payload = extract_json_from_text(text_content)
@@ -3046,7 +3048,9 @@ def financial_health_search(company_name: str, company_url: str = None, model_id
     Returns a 0-100 composite score with 4 sub-dimensions (0-25 each).
     """
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-    primary_model = model_id or "gemini-3.1-pro-preview"
+    primary_model = model_id or "gemini-3-flash-preview"
+    _fh_start = time.time()
+    _FH_BUDGET = 180  # seconds — abort remaining attempts if cumulative elapsed exceeds this
 
     # Dynamic year window — always search for the two most recent calendar years
     # so results stay current without manual updates each January.
@@ -3166,19 +3170,25 @@ CONFIDENCE GUIDE:
 """
 
     # Attempt 1: Primary model with one retry
-    data = _execute_financial_search(api_key, primary_model, prompt, company_name)
+    data = _execute_financial_search(api_key, primary_model, prompt, company_name, timeout=90)
     if not data:
-        print(f"   [Financial Health] Primary model failed, retrying in 2s...")
-        time.sleep(2)
-        data = _execute_financial_search(api_key, primary_model, prompt, company_name)
+        if (time.time() - _fh_start) > _FH_BUDGET:
+            print(f"   ⏭ [Financial Health] Budget exceeded after attempt 1. Aborting.")
+        else:
+            print(f"   [Financial Health] Primary model failed, retrying in 2s...")
+            time.sleep(2)
+            data = _execute_financial_search(api_key, primary_model, prompt, company_name, timeout=90)
 
-    # Attempt 2: Fallback to Gemini 3 Flash with one retry
+    # Attempt 2: Fallback to Gemini 2.5 Pro with one retry
     if not data:
-        print(f"   [Financial Health] Primary exhausted. Falling back to flash model...")
-        data = _execute_financial_search(api_key, "gemini-3-flash-preview", prompt, company_name)
-    if not data:
+        if (time.time() - _fh_start) > _FH_BUDGET:
+            print(f"   ⏭ [Financial Health] Budget exceeded before fallback. Aborting.")
+        else:
+            print(f"   [Financial Health] Primary exhausted. Falling back to Gemini 2.5 Pro...")
+            data = _execute_financial_search(api_key, "gemini-2.5-pro", prompt, company_name, timeout=90)
+    if not data and (time.time() - _fh_start) <= _FH_BUDGET:
         time.sleep(2)
-        data = _execute_financial_search(api_key, "gemini-3-flash-preview", prompt, company_name)
+        data = _execute_financial_search(api_key, "gemini-2.5-pro", prompt, company_name, timeout=90)
 
     # Abort: all attempts exhausted — return explicit no-data result
     if not data:
