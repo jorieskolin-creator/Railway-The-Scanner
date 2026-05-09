@@ -247,6 +247,11 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
     verified_links = verified_links + foresight_sources
 
     # Key jury findings — descriptions only, no URLs, no legal pages.
+    # Checklist items are Scanner 2 analysis findings; they do NOT carry a url field
+    # (urls live on raw_findings / evidence_links, not the checklist).  Requiring
+    # item.get("url") here silently drops all Scanner findings for companies whose
+    # web evidence links failed verification.  Only exclude items whose url is a
+    # legal/privacy page — URL-less findings are fine.
     key_findings = [
         {
             "description": item.get("description") or item.get("category", ""),
@@ -254,7 +259,7 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
             "sentiment": item.get("sentiment", "neutral"),
         }
         for item in full_data.get("reality_checklist", [])
-        if item.get("found") and item.get("url") and not _is_legal_page(item.get("url", ""))
+        if item.get("found") and not (item.get("url") and _is_legal_page(item.get("url", "")))
     ][:12]
 
     # Financial findings — structured with all dimensions.

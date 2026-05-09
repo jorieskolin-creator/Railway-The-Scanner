@@ -332,7 +332,11 @@ def assess_source_credibility(url: str, source_type: str = "", company_domain: s
     """
     domain = _get_domain(url)
     if not domain:
-        return "low"
+        # "No URL" means unknown provenance (Scanner analysis, training-data knowledge),
+        # not an actively bad source.  "low" would trigger the admissibility gate and
+        # silently block all URL-less Scanner findings.  Use "medium" so these findings
+        # reach the evidence pool with an appropriate confidence penalty.
+        return "medium"
 
     # Check high-credibility domains
     if _domain_matches_set(domain, HIGH_CREDIBILITY_DOMAINS):
