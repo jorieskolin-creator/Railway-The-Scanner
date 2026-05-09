@@ -1,7 +1,7 @@
 """
 general_summary.py — Plain-language General Summary generator + payload fact-check.
 
-Assembles a 225-275 word narrative from already-computed structured scan data
+Assembles a 250-300 word narrative from already-computed structured scan data
 (jury findings, financial findings, delta). No inline links are included —
 the General Summary is plain prose only; all evidence links are already shown
 in the AI Diagnosis section of the UI.
@@ -127,8 +127,8 @@ _FORBIDDEN_TERMS = [
     "Knowledge Base", "KB dimension", "archetype",
 ]
 
-_WORD_MIN = 225
-_WORD_MAX = 275
+_WORD_MIN = 250
+_WORD_MAX = 300
 
 
 def _build_input_payload(full_data: dict, company_name: str) -> dict:
@@ -293,11 +293,11 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
         "company_name": company_name,
         "prompt_guardrails_version": PROMPT_VERSION,
         "delta": delta,
-        "financial_index": full_data.get("financial_index"),
         "key_findings": key_findings,
         "evidence_links": verified_links,
-        "financial_findings": fin_findings,
         "key_people": people,
+        "financial_findings": fin_findings,
+        "financial_index": full_data.get("financial_index"),
     }
     if contradictions:
         result["contradictions"] = contradictions
@@ -349,13 +349,23 @@ MANDATORY RULES:
    - Use precise, neutral language. Prefer concrete descriptions over characterisations. Instead of "aggressively pivoting toward AI," write "has established a dedicated AI business unit and deployed Copilot to N users."
 
 6. OPENING SENTENCE — MANDATORY:
-   - If delta data is present: open with the most significant concrete change from the delta (e.g. "Since the previous assessment in [date], [company]'s [specific metric] has [moved from X to Y]").
-   - If no delta: open with the single most significant observed fact from key_findings or evidence_links.
+   - If delta data is present: open with the most significant concrete STRATEGIC or OPERATIONAL change from the delta (e.g. "Since the previous assessment in [date], [company] has [structural event or operational change]"). If the delta shows both financial and non-financial changes, prefer the non-financial event — financial figures belong in the financial paragraph, not the opening.
+   - If no delta: open with the single most significant observed fact from key_findings or evidence_links — prioritise a strategic event, structural change, or operational signal over a financial figure.
+   - Never open with a revenue figure, profit margin, or financial ratio.
    - Never open with a number. Never open with a narrative characterisation — anchor on a specific, verifiable data point.
 
-7. COVERAGE: Address at least 3 distinct dimensions if the evidence supports them — for example: financial health, operational or technology signals, people and leadership. Do not write the entire summary about a single event. If the evidence does not support a dimension, omit it rather than filling the gap with unsupported claims.
+7. COVERAGE: Address at least 3 distinct dimensions if the evidence supports them — for example: strategic position or key structural events, operational or technology signals, financial performance, people and leadership. Do not write the entire summary about a single event or topic. If the evidence does not support a dimension, omit it rather than filling the gap with unsupported claims.
 
-8. SCOPE & SOURCE QUALIFICATION — CRITICAL:
+8. PARAGRAPH ALLOCATION — CRITICAL:
+   Financial data (revenue, profit, margins, equity ratios) may occupy AT MOST one of the 3–4 paragraphs, and only when the financial evidence is concrete and material. Do not lead with financial data.
+   Default priority order for paragraph topics:
+     1. The most significant strategic event or structural change (carve-out, acquisition, major contract win, certification, new business unit)
+     2. Operational and technology signals (delivery model, AI integration, platform, tools, certifications, partnerships)
+     3. Financial performance — only if concrete figures exist and materially change the picture
+     4. People and leadership — only if a key stakeholder change or team signal is documented
+   If only financial evidence is strong and operational evidence is thin, one paragraph on financials is acceptable — but do not pad other paragraphs with weak signals to meet the 3-paragraph minimum. Acknowledge the evidential gap instead.
+
+9. SCOPE & SOURCE QUALIFICATION — CRITICAL:
    - CLAIM TIER (INTERNAL ONLY — never write tier codes in output): Evidence items are prefixed [A]-[E] as reading aids. Use tier to choose your verb — for self-claims use "states"/"positions itself as", for weak signals use "suggests"/"may indicate", for independent verification use "reported"/"confirmed". NEVER write [A], [B], [C], [D], [E] or "tier" in the output prose.
    - NARROW SCOPE: When citing a finding from a narrow-scope source (job postings, employee reviews, single-department surveys), you MUST include a scope qualifier (e.g., "in a survey of HR personnel").
    - ANTI-EXTRAPOLATION: NEVER extrapolate a narrow-scope finding into a macro-trend. State the narrow fact exactly as it is, without macro-commentary.
@@ -394,7 +404,7 @@ def _strip_links(text: str) -> str:
 
 def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, str]:
     """
-    Generate a 225-275 word General Summary from structured scan data.
+    Generate a 250-300 word General Summary from structured scan data.
 
     Returns (summary_text, model_used).
     Returns ("", "") on failure — caller should catch exceptions separately.
