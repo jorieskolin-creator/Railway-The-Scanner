@@ -44,21 +44,25 @@ company-specific non-compliance, or that the company must change a named process
 
 CLAIM_TIER_GUARDRAILS = """
 CLAIM-TIER WORDING — MANDATORY:
-Each evidence item is tagged [A], [B], [C], [D], or [E]. Match your wording to the tier:
-  [A] Hard external verification (analyst report, news, regulatory filing) → "reported", "recorded", "confirmed by", "according to [source]"
-  [B] Filed/transactional disclosure (annual report, investor relations, M&A filing) → "announced", "disclosed", "filed", "reported in its annual report"
-  [C] Company self-claim only (website, press release, blog) → "states", "claims", "positions itself as", "describes itself as", "according to the company"
-  [D] Inferred / weak signals (job postings, employee reviews, narrow surveys, medium-credibility third-party) → "suggests", "may indicate", "signals", "available evidence points to"
-  [E] External trend or regulatory context only — NOT company-specific evidence → "could create risk/opportunity for", "is relevant context for", "emerging signals suggest", "if [trend] accelerates"
+Each evidence item in the input is prefixed [A], [B], [C], [D], or [E] as a reading aid for YOU.
+These tags are INTERNAL ONLY — NEVER write [A], [B], [C], [D], [E] or the word "tier" in your output prose.
+Match the verb/hedge you choose to the tier of the evidence you are citing:
+  [A] Hard external verification (analyst report, news) → use "reported", "recorded", "confirmed", "according to [source name]"
+  [B] Filed/transactional disclosure (annual report, investor relations) → use "announced", "disclosed", "filed", "its annual report shows"
+  [C] Company self-claim (website, press release, blog) → use "states", "positions itself as", "describes itself as", "according to the company"
+  [D] Inferred / weak signals (job postings, reviews, narrow surveys) → use "suggests", "may indicate", "signals point to", "available evidence points to"
+  [E] External trend or regulatory context only — not company-specific → use "could create risk/opportunity for", "emerging signals suggest", "if [trend] accelerates"
+
+The tiers are input metadata only. The output must read as natural, fluent prose — calibrated by source strength, but never labelled with tier codes.
 
 SELF-CLAIM RESTRICTION — ABSOLUTE:
-[C]-tier sources may ONLY support claims about: the company's own identity, brand positioning, self-described capabilities, chronology of corporate events, and explicitly quoted self-statements.
-NEVER use [C]-tier evidence to assert actual operational performance, real headcount, technology deployment, or revenue — even if the number sounds specific. Qualify it: "The company states..." not "The company has..."
+Sources tagged [C] may ONLY support claims about: the company's own identity, brand positioning, self-described capabilities, and chronology of corporate events.
+NEVER use [C] evidence to assert actual operational performance, real headcount, technology deployment, or revenue — even if the number sounds specific. Qualify it: "The company states..." not "The company has..."
 
 ENTITY SCOPE:
 When evidence is tagged [group], cite the parent/group level explicitly (e.g., "[Company] Group") — do NOT attribute group-level financials or headcount to the local entity.
 When evidence is tagged [local], cite the local/subsidiary entity explicitly.
-When a metric appears at both levels (group and local), state them separately and label each.
+When a metric appears at both levels, state them separately.
 """
 
 

@@ -356,10 +356,10 @@ MANDATORY RULES:
 7. COVERAGE: Address at least 3 distinct dimensions if the evidence supports them — for example: financial health, operational or technology signals, people and leadership. Do not write the entire summary about a single event. If the evidence does not support a dimension, omit it rather than filling the gap with unsupported claims.
 
 8. SCOPE & SOURCE QUALIFICATION — CRITICAL:
-   - CLAIM TIER: Each evidence item is prefixed [A]/[B]/[C]/[D]/[E]. Match your verb choice to the tier (see CLAIM-TIER WORDING in the guardrails above). Never use strong factual verbs ("has deployed", "operates", "achieved") for [C] or [D] tier items.
-   - NARROW SCOPE [D]: When citing a [D]-tier finding (narrow scope, job postings, employee reviews), you MUST include a scope qualifier (e.g., "in a survey of HR personnel").
-   - ANTI-EXTRAPOLATION: NEVER extrapolate a [D]-tier finding into a macro-trend. State the narrow fact exactly as it is, without macro-commentary.
-   - SELF-REPORTED DATA [C]: For any [C]-tier evidence, qualify every concrete claim ("The company states...", "According to the company..."). Do not omit specific numbers, but never present them as independently verified.
+   - CLAIM TIER (INTERNAL ONLY — never write tier codes in output): Evidence items are prefixed [A]-[E] as reading aids. Use tier to choose your verb — for self-claims use "states"/"positions itself as", for weak signals use "suggests"/"may indicate", for independent verification use "reported"/"confirmed". NEVER write [A], [B], [C], [D], [E] or "tier" in the output prose.
+   - NARROW SCOPE: When citing a finding from a narrow-scope source (job postings, employee reviews, single-department surveys), you MUST include a scope qualifier (e.g., "in a survey of HR personnel").
+   - ANTI-EXTRAPOLATION: NEVER extrapolate a narrow-scope finding into a macro-trend. State the narrow fact exactly as it is, without macro-commentary.
+   - SELF-REPORTED DATA: For company self-claims, qualify every concrete assertion ("The company states...", "According to the company..."). Do not omit specific numbers, but never present them as independently verified.
    - ENTITY SCOPE: When evidence is tagged [group], cite the parent entity explicitly (e.g., "[Company] Group"). Do not attribute group-level figures to the local entity.
 
 9. BALANCING CONTRADICTIONS & PROPORTIONALITY — CRITICAL: 

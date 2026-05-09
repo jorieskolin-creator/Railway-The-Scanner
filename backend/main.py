@@ -3019,9 +3019,7 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
     characteristic of Digital Taylorism in the Operating Model dimension").
   - Use KB terminology naturally: "Digital Taylorism", "Flow Efficiency", "Pilot Purgatory",
     "Modernization Washing" — but only where the evidence supports the pattern.
-  - CLAIM-TIER WORDING: Each evidence item is prefixed [A]/[B]/[C]/[D]/[E]. Match your verb choice
-    to the tier of the evidence you are citing (see CLAIM-TIER WORDING rules above). Do NOT use
-    strong factual verbs ("has", "operates", "deploys") for [C] or [D] tier evidence.
+  - CLAIM-TIER WORDING: Evidence items are prefixed [A]-[E] as reading aids for you. Choose verbs that match the tier — for company self-claims use "states"/"positions itself as", for weak signals use "suggests"/"may indicate", for independent verification use "reported"/"confirmed". NEVER write [A], [B], [C], [D], [E] or the word "tier" in the output text.
   - If confidence < 50, state it: "Limited public evidence constrains this assessment."
   - If washing detected, name it: "{washing_type or 'Modernization Washing'}" with the specific gap.
   - Do NOT cite numeric scores in the text — scores display separately in the UI.
