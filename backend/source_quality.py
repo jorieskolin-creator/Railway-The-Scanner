@@ -620,6 +620,46 @@ def compute_claim_tier(link: dict) -> str:
     return "D"  # safe fallback
 
 
+def describe_source(link: dict) -> str:
+    """Short human-readable label for a source, for use in LLM prompts.
+
+    Maps the existing source_type/independence metadata into a short attribution
+    phrase the GS model can use as context (e.g. "according to <source_label>").
+    Used by general_summary._build_input_payload() to wire classification metadata
+    into the evidence entries that reach the LLM, so the model knows whether a
+    source is third-party, company self-report, foresight, etc.
+    """
+    if not isinstance(link, dict):
+        return "Source"
+    st = (link.get("source_type") or "").lower()
+    if st == "financial_data_aggregator":
+        return "Third-party financial database"
+    if st in _FINANCIAL_FILING_SOURCE_TYPES:
+        return "Company filing / IR"
+    if st in {"analyst", "analyst_report", "news", "media"}:
+        return "Third-party news / analyst"
+    if st in {"regulation", "regulatory_context"}:
+        return "Regulatory source"
+    if st in {"foresight", "foresight_report", "trend_report", "analyst_trend"}:
+        return "Forward-looking foresight"
+    if st in {"company_press_release", "press_release"}:
+        return "Company press release"
+    if st in {"company_website", "case_study", "company_blog", "company_news",
+              "official_company_source", "company_report", "company_filing"}:
+        return "Company self-report"
+    if st in {"academic_thesis", "thesis", "dissertation"}:
+        return "Academic study (narrow scope)"
+    if st == "employee_review":
+        return "Workforce signal (employee reviews)"
+    if st == "job_posting":
+        return "Workforce signal (hiring activity)"
+    if st == "github":
+        return "Technical artifact (code repo)"
+    if link.get("independence") == "company-reported":
+        return "Company self-report"
+    return "Source"
+
+
 def infer_entity_scope(link: dict, company_name: str = "") -> str:
     """Infer whether evidence refers to the group/parent or the local entity.
 

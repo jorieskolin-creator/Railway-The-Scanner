@@ -21,7 +21,7 @@ from google import genai
 from gemini_client import get_gemini_client
 from google.genai import types as genai_types
 from gemini_backoff import call_with_503_backoff
-from source_quality import assess_source_scope, infer_source_type, compute_claim_tier
+from source_quality import assess_source_scope, infer_source_type, compute_claim_tier, describe_source
 from contradiction_detector import detect_contradictions
 from prompts import PROMPT_VERSION, build_shared_guardrails
 
@@ -220,6 +220,13 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
             "snippet": snippet,
             "is_recent": l.get("is_recent", False),
             "scope": assess_source_scope(l.get("url", ""), title, snippet),
+            # Path B: propagate classification metadata so the LLM knows what
+            # kind of source this is (third-party vs company self-report vs
+            # foresight) and can apply the per-tier wording rules in prompts.py
+            # CLAIM_TIER_GUARDRAILS.  Without these fields, the prompt's tier
+            # rule references metadata the model never sees.
+            "claim_tier": l.get("claim_tier") or "D",
+            "source_label": describe_source(l),
         })
 
     # Add validated foresight sources to the evidence pool (max 3, validated only)
@@ -241,6 +248,10 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
             "snippet": snippet,
             "is_recent": True,
             "scope": assess_source_scope(l.get("url", ""), title, snippet),
+            # Foresight is always tier E by definition — external trend / regulatory
+            # context, never current company practice.  See CLAIM_TIER_GUARDRAILS.
+            "claim_tier": "E",
+            "source_label": "Forward-looking foresight",
         })
         if len(foresight_sources) >= 3:
             break
@@ -257,6 +268,13 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
             "description": item.get("description") or item.get("category", ""),
             "title": ((item.get("title") or item.get("category", "")) or "")[:80],
             "sentiment": item.get("sentiment", "neutral"),
+            # Path B: classify checklist findings the same way as evidence_links.
+            # Items with a URL get their computed claim_tier and source_label.
+            # URL-less items default to tier D ("inferred / weak signal") and the
+            # generic "Scanner analysis finding" label — these are model-grounded
+            # observations without a citable source URL.
+            "claim_tier": item.get("claim_tier") or ("D" if not item.get("url") else "C"),
+            "source_label": describe_source(item) if item.get("url") else "Scanner analysis finding",
         }
         for item in full_data.get("reality_checklist", [])
         if item.get("found") and not (item.get("url") and _is_legal_page(item.get("url", "")))
