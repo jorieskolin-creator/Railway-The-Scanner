@@ -1658,65 +1658,68 @@ Return STRICT JSON:
             print("   [Self-Analysis] No GEMINI_API_KEY found. Skipping.")
             return None
 
-        print(f"   [Self-Analysis] Running via Gemini 2.5 Pro (Google Search grounding)...")
         start = time.time()
 
-        # Enforce 60s timeout — self-analysis is a lightweight diagnostic task
-        def _call_self_analysis():
-            return client.models.generate_content(
-                model="gemini-2.5-pro",
-                contents=prompt,
-                config={
-                    'tools': [{'google_search': {}}],
-                    'temperature': 0.0,
-                    'safety_settings': [
-                        {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
-                        {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
-                        {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
-                        {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
-                    ]
-                }
-            )
+        # Pro → Flash fallback: both share similar quality for this lightweight task,
+        # but Flash runs on separate infra and succeeds when Pro-tier returns 503.
+        _sa_model_chain = [("gemini-2.5-pro", 60), ("gemini-3-flash-preview", 45)]
+        for _sa_model, _sa_timeout in _sa_model_chain:
+            print(f"   [Self-Analysis] Trying {_sa_model} (Google Search grounding)...")
 
-        call_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = call_pool.submit(_call_self_analysis)
-        try:
-            response = future.result(timeout=60)
-        except concurrent.futures.TimeoutError:
+            def _call_self_analysis(m=_sa_model):
+                return client.models.generate_content(
+                    model=m,
+                    contents=prompt,
+                    config={
+                        'tools': [{'google_search': {}}],
+                        'temperature': 0.0,
+                        'safety_settings': [
+                            {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
+                            {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
+                            {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
+                            {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
+                        ]
+                    }
+                )
+
+            call_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            future = call_pool.submit(_call_self_analysis)
+            try:
+                response = future.result(timeout=_sa_timeout)
+            except concurrent.futures.TimeoutError:
+                call_pool.shutdown(wait=False)
+                elapsed = int((time.time() - start) * 1000)
+                print(f"   ⏰ [Self-Analysis] {_sa_model} timed out after {_sa_timeout}s ({elapsed}ms). Trying next model...")
+                continue
             call_pool.shutdown(wait=False)
+
+            text = response.text if response.text else ""
+            json_payload = extract_json_from_text(text)
             elapsed = int((time.time() - start) * 1000)
-            print(f"   ⏰ [Self-Analysis] Gemini 2.5 Pro timed out after 60s ({elapsed}ms). Skipping.")
-            return None
-        call_pool.shutdown(wait=False)
+            if json_payload:
+                analysis = json.loads(json_payload, strict=False)
+                analysis["company"] = company_name
+                analysis["days_between_scans"] = days_since_last
+                analysis["diagnostics"] = diagnostics
+                analysis["score_delta"] = curr_reality - prev_reality if isinstance(curr_reality, (int, float)) and isinstance(prev_reality, (int, float)) else None
 
-        text = response.text if response.text else ""
-        json_payload = extract_json_from_text(text)
-        elapsed = int((time.time() - start) * 1000)
-        if json_payload:
-            analysis = json.loads(json_payload, strict=False)
-            analysis["company"] = company_name
-            analysis["days_between_scans"] = days_since_last
-            analysis["diagnostics"] = diagnostics
-            analysis["score_delta"] = curr_reality - prev_reality if isinstance(curr_reality, (int, float)) and isinstance(prev_reality, (int, float)) else None
+                print(f"   [Self-Analysis] Cause: {analysis.get('primary_cause', 'unknown')} | Reliability: {analysis.get('reliability', '?')} ({elapsed}ms)")
+                print(f"   [Self-Analysis] {analysis.get('cause_explanation', '')}")
 
-            print(f"   [Self-Analysis] Cause: {analysis.get('primary_cause', 'unknown')} | Reliability: {analysis.get('reliability', '?')} ({elapsed}ms)")
-            print(f"   [Self-Analysis] {analysis.get('cause_explanation', '')}")
+                suggestions = analysis.get("suggestions", [])
+                if suggestions:
+                    for s in suggestions[:3]:
+                        print(f"   [Self-Analysis] Action [{s.get('type', '?')}]: {s.get('detail', '')}")
+                else:
+                    print(f"   [Self-Analysis] No actionable suggestions (diagnostics healthy).")
 
-            # Log actionable suggestions with their types
-            suggestions = analysis.get("suggestions", [])
-            if suggestions:
-                for s in suggestions[:3]:
-                    print(f"   [Self-Analysis] Action [{s.get('type', '?')}]: {s.get('detail', '')}")
-            else:
-                print(f"   [Self-Analysis] No actionable suggestions (diagnostics healthy).")
+                analysis["improvement_suggestions"] = [
+                    f"[{s.get('type', '?')}] {s.get('detail', '')}" for s in suggestions
+                ]
 
-            # Backward compat: also populate improvement_suggestions for any consumers
-            analysis["improvement_suggestions"] = [
-                f"[{s.get('type', '?')}] {s.get('detail', '')}" for s in suggestions
-            ]
+                return analysis
+            print(f"   [Self-Analysis] No parseable JSON from {_sa_model} ({elapsed}ms). Trying next model...")
 
-            return analysis
-        print(f"   [Self-Analysis] No parseable JSON from Gemini 2.5 Pro ({elapsed}ms)")
         return None
     except Exception as e:
         print(f"   [Self-Analysis] Failed: {e}")
@@ -2463,22 +2466,28 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             print(f"   ❌ [Forensic Scan] claude-sonnet-4-6 + Web Search failed in {elapsed}ms: {e}")
             return None
 
-    # --- SEQUENTIAL: Gemini 3.1 Pro Preview → Gemini 2.5 Pro ---
-    # Gemini 3.1 Pro Preview is PRIMARY: native Google Search, temp=0.5, thinking_budget=3000.
-    # Gemini 2.5 Pro is BACKUP: separate rate limits from 3.x family (~40-50s, reliable).
+    # --- SEQUENTIAL: Gemini 3.1 Pro Preview → Gemini 2.5 Pro → Gemini 3-Flash ---
+    # 3.1 Pro Preview is PRIMARY: native Google Search, temp=0.5, thinking_budget=3000.
+    # 2.5 Pro is BACKUP: same Pro-tier family but different rate-limit bucket.
+    # 3-Flash is ESCAPE HATCH: runs on different infra — succeeds when entire Pro tier is 503ing.
     data = None
 
-    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: Gemini 3.1 Pro Preview → Gemini 2.5 Pro")
+    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: 3.1 Pro → 2.5 Pro → 3-Flash")
 
     # --- PRIMARY: Gemini 3.1 Pro Preview — two-pass mode ---
     if not data:
         _forensic_per_model = min(150, max(60, time_budget // 3))
         data = execute_with_model("gemini-3.1-pro-preview", None, _forensic_per_model)
 
-    # --- BACKUP: Gemini 2.5 Pro (separate rate limits from 3.x family; ~40-50s typical) ---
+    # --- BACKUP: Gemini 2.5 Pro (separate rate-limit bucket from 3.x family) ---
     if not data:
         print(f"   ⚠️ [Forensic Scan] Gemini 3.1 Pro Preview returned no data. Falling back to Gemini 2.5 Pro...")
         data = execute_with_model("gemini-2.5-pro", call_timeout=120)
+
+    # --- ESCAPE HATCH: Gemini 3-Flash (different infra; succeeds when Pro tier is fully down) ---
+    if not data:
+        print(f"   ⚠️ [Forensic Scan] Gemini 2.5 Pro also returned no data. Trying Gemini 3-Flash escape hatch...")
+        data = execute_with_model("gemini-3-flash-preview", call_timeout=90)
 
     # --- CONFIDENCE FLOOR (two-pass structuring safety net) ---
     # When the structuring model (Pass 2) cannot determine confidence from
@@ -2536,10 +2545,12 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 if not research_prompt:
                     break
 
-                # Re-search uses Gemini models (targeted follow-up with Google Search grounding)
+                # Re-search: Pro → Flash escape hatch (same infra logic as main chain)
                 research_data = execute_with_model("gemini-3.1-pro-preview", custom_prompt=research_prompt)
                 if not research_data:
                     research_data = execute_with_model("gemini-2.5-pro", custom_prompt=research_prompt)
+                if not research_data:
+                    research_data = execute_with_model("gemini-3-flash-preview", custom_prompt=research_prompt)
 
                 if not research_data:
                     print(f"   [Re-Search] Loop {loop} returned no parseable data. Stopping.")
