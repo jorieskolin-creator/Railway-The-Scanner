@@ -700,8 +700,16 @@ def is_admissible_source(link: dict, company_domain: str = "", *, allow_unverifi
         return False, "url_not_verified"
     if not url and not allow_unverified_without_url:
         return False, "missing_url"
-    if link.get("source_credibility") == "low" and link.get("verified") is not True:
-        return False, "low_credibility_unverified"
+    # Only block sources from explicitly known-bad domains (spam, content farms,
+    # press release wires).  Company self-report (own domain) and URL-less Scanner
+    # findings are admissible — they are biased or unverifiable, not fabricated.
+    # The confidence_quality_penalty() system downgrades the overall confidence
+    # score when low-credibility sources dominate, so callers are still aware of
+    # the evidence quality without silently discarding legitimate signals.
+    if link.get("source_credibility") == "low" and url:
+        domain = _get_domain(url)
+        if domain and (_domain_matches_set(domain, LOW_CREDIBILITY_DOMAINS) or _domain_matches_patterns(domain)):
+            return False, "low_credibility_domain"
     return True, "admissible"
 
 
