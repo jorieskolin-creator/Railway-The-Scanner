@@ -684,9 +684,11 @@ def fact_check_general_summary(
     t0 = time.time()
 
     # Stage 1: Detect unsupported claims
-    # Primary: Gemini 3.1 Pro | Backup 1: Gemini 2.5 Pro (thinking disabled) | Backup 2: Sonnet 4.6
-    # Gemini 2.5 Pro is NOT used as primary for fact-checking: without thinking_budget=0,
-    # it outputs only reasoning content with empty text, causing 0-char failures.
+    # Primary: Gemini 3.1 Pro | Backup 1: Gemini 2.5 Pro (small thinking budget) | Backup 2: Sonnet 4.6
+    # Gemini 2.5 Pro REQUIRES non-zero thinking_budget (the API rejects 0 with
+    # "Budget 0 is invalid. This model only works in thinking mode."). We pass a
+    # small budget (512) and rely on the part-extraction logic below to filter
+    # out the thought parts so only text parts feed the JSON parser.
     CHECK_MODELS = [
         ("gemini-3.1-pro-preview", "gemini"),
         ("gemini-2.5-pro", "gemini"),
@@ -703,19 +705,23 @@ def fact_check_general_summary(
             print(f"   🔍 [GS Fact-Check] {model_id} checking claims against payload...")
 
             if provider == "gemini":
-                # For thinking models (gemini-2.5-pro), disable thinking so the model
-                # outputs text rather than spending its budget on internal reasoning.
-                # Fact-checking is a structured JSON task — deep thinking is wasteful here.
+                # gemini-2.5-pro requires a non-zero thinking_budget — the API rejects 0
+                # with INVALID_ARGUMENT. Use a small budget (512) so it thinks briefly;
+                # the part-extraction logic below discards thought parts and keeps text.
                 thinking_cfg = None
                 if "2.5" in model_id:
-                    thinking_cfg = genai_types.ThinkingConfig(thinking_budget=0)
+                    thinking_cfg = genai_types.ThinkingConfig(thinking_budget=512)
+                # max_output_tokens covers BOTH thinking tokens and text tokens for
+                # thinking-capable models. 2000 was too tight: thinking consumed most
+                # of it, leaving ~300 chars of text — not enough for a valid JSON
+                # response. 4096 leaves comfortable headroom for both.
                 resp = call_with_503_backoff(
                     lambda m=model_id, tc=thinking_cfg: client.models.generate_content(
                         model=m,
                         contents=check_prompt,
                         config=genai_types.GenerateContentConfig(
                             temperature=0.0,
-                            max_output_tokens=2000,
+                            max_output_tokens=4096,
                             thinking_config=tc,
                         ),
                     ),
