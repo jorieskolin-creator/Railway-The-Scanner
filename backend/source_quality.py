@@ -58,6 +58,16 @@ CONTEXT_ONLY_SOURCE_TYPES = {
 
 # === DOMAIN AUTHORITY TIERS ===
 
+# Third-party financial / business data aggregators. These are HIGH credibility but
+# they are NOT the company's own filings — financial data sourced from these domains
+# must be attributed as third-party verification, never as "the company's annual report".
+FINANCIAL_AGGREGATOR_DOMAINS = {
+    "finder.fi", "asiakastieto.fi", "profinder.fi",
+    "kauppalehti.fi", "talouselama.fi", "arvopaperi.fi",
+    "bloomberg.com", "reuters.com", "ft.com",
+    "nasdaqomxnordic.com", "marketscreener.com",
+}
+
 # Tier 1: Authoritative sources — research institutions, major analysts, gov agencies
 HIGH_CREDIBILITY_DOMAINS = {
     # Research & analyst firms
@@ -494,6 +504,7 @@ SOURCE_TYPE_ALLOWED_USES = {
     "media": {"company_event", "third_party_observation"},
     "news": {"company_event", "third_party_observation"},
     "analyst": {"third_party_observation", "foresight_context"},
+    "financial_data_aggregator": {"financial_fact", "third_party_observation"},
 }
 
 
@@ -506,6 +517,11 @@ def infer_source_type(url: str = "", title: str = "", snippet: str = "", existin
     domain = _get_domain(url or "")
     text = f"{title or ''} {snippet or ''} {url or ''}".lower()
 
+    # CRITICAL: aggregator domain check MUST come before "annual report" text heuristic.
+    # Otherwise a Finder.fi page that mentions "annual report" gets miscategorised as
+    # the company's own filing — it's actually a third-party business database.
+    if domain and _domain_matches_set(domain, FINANCIAL_AGGREGATOR_DOMAINS):
+        return "financial_data_aggregator"
     if domain and _domain_matches_set(domain, THESIS_REPO_DOMAINS):
         return "academic_thesis"
     if _matches_url_token((url or "").lower(), _THESIS_URL_TOKENS):
@@ -552,7 +568,11 @@ _FINANCIAL_FILING_SOURCE_TYPES = {
     "quarterly_report", "investor_relations",
 }
 
-_A_TIER_SOURCE_TYPES = {"analyst", "analyst_report", "news", "media", "regulation", "regulatory_context"}
+_A_TIER_SOURCE_TYPES = {
+    "analyst", "analyst_report", "news", "media",
+    "regulation", "regulatory_context",
+    "financial_data_aggregator",  # Finder, Profinder, Bloomberg etc. — third-party verifiers
+}
 _E_TIER_SOURCE_TYPES = FORESIGHT_SOURCE_TYPES | {"analyst_trend"}
 
 

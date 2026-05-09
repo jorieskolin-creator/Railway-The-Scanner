@@ -879,6 +879,14 @@ The expected JSON structure is:
 
 Extract as much data as possible from the text below. Preserve all findings, URLs, and evidence. If a field cannot be determined, use sensible defaults (0 for reality_score_adjustment, empty arrays for lists, false for booleans).
 
+CRITICAL — snippet vs title are DIFFERENT fields:
+- "title" = the source page or article title
+- "snippet" = an actual quote, data point, or substantive excerpt found IN the source
+If you cannot extract a real snippet from the source text, leave snippet as an empty string "".
+Do NOT copy the title into the snippet field. A finding with title-only and no snippet is
+acceptable — the downstream pipeline filters incomplete findings correctly only when snippet
+is honestly empty.
+
 IMPORTANT for confidence_score: Do NOT default to 0. Assess confidence based on the evidence density in the text:
 - Count findings with real URLs and specific quotes → more evidence = higher confidence
 - 0-40: Very few sources, evidence is generic or very old
@@ -960,6 +968,14 @@ The expected JSON structure is:
 }}
 
 Extract as much data as possible from the text below. Preserve all findings, URLs, and evidence. If a field cannot be determined, use sensible defaults (0 for reality_score_adjustment, empty arrays for lists, false for booleans).
+
+CRITICAL — snippet vs title are DIFFERENT fields:
+- "title" = the source page or article title
+- "snippet" = an actual quote, data point, or substantive excerpt found IN the source
+If you cannot extract a real snippet from the source text, leave snippet as an empty string "".
+Do NOT copy the title into the snippet field. A finding with title-only and no snippet is
+acceptable — the downstream pipeline filters incomplete findings correctly only when snippet
+is honestly empty.
 
 IMPORTANT for confidence_score: Do NOT default to 0. Assess confidence based on the evidence density in the text:
 - Count findings with real URLs and specific quotes → more evidence = higher confidence

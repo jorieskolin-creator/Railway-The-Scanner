@@ -21,7 +21,7 @@ from google import genai
 from gemini_client import get_gemini_client
 from google.genai import types as genai_types
 from gemini_backoff import call_with_503_backoff
-from source_quality import assess_source_scope
+from source_quality import assess_source_scope, infer_source_type, compute_claim_tier
 from contradiction_detector import detect_contradictions
 from prompts import PROMPT_VERSION, build_shared_guardrails
 
@@ -208,7 +208,13 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
     for i, l in enumerate(_all_evidence):
         snippet_limit = 500 if i < 8 else 350
         title = (l.get("title", "Source") or "Source")[:80]
-        snippet = (l.get("snippet") or "")[:snippet_limit]
+        snippet_raw = (l.get("snippet") or "").strip()
+        # Skip hollow evidence: empty snippet or snippet that just repeats the title.
+        # These produce false-claim flags downstream because the model has no real
+        # substance to cite — only a label. Honest emptiness > fabricated content.
+        if len(snippet_raw) < 50 or snippet_raw.lower() == title.strip().lower():
+            continue
+        snippet = snippet_raw[:snippet_limit]
         verified_links.append({
             "title": title,
             "snippet": snippet,
@@ -223,7 +229,13 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
         if not (l.get("verified") is True and l.get("validated") is True):
             continue
         title = (l.get("title", "Foresight") or "Foresight")[:80]
-        snippet = (l.get("snippet") or "")[:500]
+        snippet_raw = (l.get("snippet") or "").strip()
+        # Same hollow-snippet filter for foresight: KB signals sometimes have
+        # snippet == title (just the trend name repeated) which gives the
+        # summary model nothing real to cite.
+        if len(snippet_raw) < 50 or snippet_raw.lower() == title.strip().lower():
+            continue
+        snippet = snippet_raw[:500]
         foresight_sources.append({
             "title": title,
             "snippet": snippet,
@@ -254,14 +266,45 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
     fin_findings = []
     for f in raw_findings[:4]:
         if isinstance(f, dict):
+            source_url = f.get("source_url", "")
+            source_title = f.get("source_title", "")
+            evidence_snippet = f.get("evidence_snippet", "")
+            # Classify the financial source so the LLM can attribute correctly:
+            # third-party database (Finder, Bloomberg) vs company filing (annual report, IR).
+            # Without this, financial_findings reach the prompt with no provenance signal
+            # and the model defaults to "according to the company's filings" for everything.
+            if source_url:
+                stype = infer_source_type(source_url, source_title, evidence_snippet)
+                independence = (
+                    "third-party-or-independent"
+                    if stype in {"financial_data_aggregator", "analyst", "news", "media", "regulation"}
+                    else "company-reported"
+                )
+                tier = compute_claim_tier({
+                    "source_type": stype,
+                    "source_credibility": "high" if stype in {"financial_data_aggregator", "analyst", "news"} else "medium",
+                    "independence": independence,
+                    "scope": "broad",
+                })
+            else:
+                stype, tier = "unknown", "D"
+            if stype == "financial_data_aggregator":
+                source_label = "Third-party financial database"
+            elif stype in {"company_financial_report", "annual_report", "investor_relations", "quarterly_report", "financial_report"}:
+                source_label = "Company filing / investor relations"
+            elif stype in {"news", "media", "analyst"}:
+                source_label = "Independent news / analyst"
+            else:
+                source_label = "Other source"
             entry = {
                 "dimension": f.get("dimension", ""),
+                "assessment_note": "model-interpreted summary, NOT a direct source quote",
                 "assessment": f.get("assessment", ""),
+                "source_label": source_label,
+                "claim_tier": tier,
             }
-            snippet = f.get("evidence_snippet", "")
-            if snippet:
-                entry["evidence_snippet"] = snippet
-            source_title = f.get("source_title", "")
+            if evidence_snippet:
+                entry["evidence_snippet"] = evidence_snippet
             if source_title:
                 entry["source_title"] = source_title
             fin_findings.append(entry)
@@ -340,6 +383,17 @@ MANDATORY RULES:
      (d) If a snippet mentions a technology, product, or platform that was clearly from a different era (e.g., discontinued products, legacy platforms), do NOT include it regardless of is_recent value.
 
 3. DATA HANDLING / META-METRICS: Do not reference the report's internal scoring metrics (e.g., "Reality Score," "Ambition Score," "Friction Index," "Integrity Delta") by name in the generated prose. These scores should inform your overall analytical tone, but the summary itself must focus strictly on the company's real-world financial, operational, and organizational data.
+
+3a. FINANCIAL FINDINGS ATTRIBUTION — CRITICAL:
+   Each item in financial_findings carries:
+     - "source_label": one of "Third-party financial database", "Company filing / investor relations", "Independent news / analyst", or "Other source"
+     - "assessment_note": "model-interpreted summary, NOT a direct source quote" — meaning the assessment text was written by an analysis model, not lifted verbatim from the source
+     - "claim_tier": A/B/C/D for calibration (internal — never write tier codes in output)
+   When you cite a financial figure:
+     - If source_label = "Third-party financial database" → write "according to Finnish business database [source_title]" or "third-party financial data shows" — NEVER "according to the company's annual report"
+     - If source_label = "Company filing / investor relations" → write "the company's annual report shows" or "filed accounts disclose"
+     - If source_label = "Independent news / analyst" → write "[source_title] reported"
+   The "assessment" text is interpretation, not a quote. Use the underlying figure (revenue, margin, ratio) but rephrase in your own words; never present the model's interpretive language as if it were a source quote.
 
 4. FORBIDDEN TERMS: Do not use any of these: {forbidden}. Use plain descriptive language instead.
 
