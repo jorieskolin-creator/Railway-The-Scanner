@@ -36,9 +36,9 @@ def _strip_tac_codes(text: str) -> str:
     return text.strip()
 
 
-def _shared_prompt_guardrails(include_diagnostic: bool = True, include_foresight: bool = True) -> str:
+def _shared_prompt_guardrails(include_diagnostic: bool = True, include_foresight: bool = True, include_claim_tier: bool = False) -> str:
     """Shared evidence/diagnosis/foresight guardrails injected into seed_manager prompts."""
-    return build_shared_guardrails(include_diagnostic=include_diagnostic, include_foresight=include_foresight)
+    return build_shared_guardrails(include_diagnostic=include_diagnostic, include_foresight=include_foresight, include_claim_tier=include_claim_tier)
 
 # --- CONFIGURATION ---
 def clean_env_var(value):
@@ -535,7 +535,10 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
                 try:
                     intent_narrative = json.dumps(intent_results["breakdown"])
                     verified_links = [l for l in reality_results['links'] if l.get('verified', True)]
-                    evidence_list = ', '.join([f"{l.get('title', 'Unknown')}: {l.get('snippet', '')}" for l in verified_links[:20]])
+                    evidence_list = '\n'.join([
+                        f"[{l.get('claim_tier','D')}]{'['+l.get('entity_scope','')+']' if l.get('entity_scope','unknown') != 'unknown' else ''} {l.get('title','Unknown')}: {l.get('snippet','')}"
+                        for l in verified_links[:20]
+                    ])
                     knowledge_context = get_evolving_framework()
 
                     washing_context = ""
@@ -619,7 +622,7 @@ Include the trend trajectory in the summary. Note persistent patterns or turning
                     negative_summary = "\n".join([f"- {item.get('query', '')}: {item.get('snippet', 'No detail')}" for item in _neg_items[:6]])
                     negative_findings_context = f"\nKey Negative Findings (Scanner 2):\n{negative_summary}" if negative_summary else ""
 
-                    seed_synthesis_guardrails = _shared_prompt_guardrails(include_diagnostic=True, include_foresight=True)
+                    seed_synthesis_guardrails = _shared_prompt_guardrails(include_diagnostic=True, include_foresight=True, include_claim_tier=True)
                     synthesis_prompt = f"""You are a senior organizational analyst conducting a forensic modernization assessment.
 You are conservative and evidence-bound. You would rather say "insufficient evidence" than risk a wrong claim. Your credibility depends on never overstating.
 Your task: synthesize scanner evidence into a precise, evidence-grounded diagnosis using the Knowledge Base framework below.
@@ -1126,7 +1129,10 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                     knowledge_ctx = get_evolving_framework()
                     clean_evidence_links = full_data.get("evidence_links", [])
                     clean_verified = [l for l in clean_evidence_links if l.get('verified', True)]
-                    clean_evidence_list = ', '.join([f"{l.get('title', 'Unknown')}: {l.get('snippet', '')}" for l in clean_verified[:20]])
+                    clean_evidence_list = '\n'.join([
+                        f"[{l.get('claim_tier','D')}]{'['+l.get('entity_scope','')+']' if l.get('entity_scope','unknown') != 'unknown' else ''} {l.get('title','Unknown')}: {l.get('snippet','')}"
+                        for l in clean_verified[:20]
+                    ])
                     removed_claims_note = "\n".join(f"- {c}" for c in fact_check["false_claims"])
 
                     fc_confidence = full_data.get("confidence_score", 50)
@@ -1146,7 +1152,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                         ) if fc_findings else 'No specific findings'
                         fc_financial_context = f"FINANCIAL HEALTH CONTEXT (do NOT cite numeric scores — the index is displayed separately): {fc_findings_text}. You may reference financial health qualitatively but never mention specific index numbers."
 
-                    clean_seed_synthesis_guardrails = _shared_prompt_guardrails(include_diagnostic=True, include_foresight=True)
+                    clean_seed_synthesis_guardrails = _shared_prompt_guardrails(include_diagnostic=True, include_foresight=True, include_claim_tier=True)
                     resynth_prompt = f"""You are a senior organizational analyst conducting a forensic modernization assessment.
 Your task: synthesize scanner evidence into a precise, evidence-grounded diagnosis using the Knowledge Base framework below.
 

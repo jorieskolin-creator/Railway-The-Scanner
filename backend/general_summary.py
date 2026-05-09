@@ -28,7 +28,7 @@ from prompts import PROMPT_VERSION, build_shared_guardrails
 
 def _general_summary_guardrails() -> str:
     """Shared fact-discipline guardrails for plain General Summary mode."""
-    return build_shared_guardrails(include_diagnostic=False, include_foresight=True)
+    return build_shared_guardrails(include_diagnostic=False, include_foresight=True, include_claim_tier=True)
 
 
 
@@ -355,10 +355,12 @@ MANDATORY RULES:
 
 7. COVERAGE: Address at least 3 distinct dimensions if the evidence supports them — for example: financial health, operational or technology signals, people and leadership. Do not write the entire summary about a single event. If the evidence does not support a dimension, omit it rather than filling the gap with unsupported claims.
 
-8. SCOPE & SOURCE QUALIFICATION — CRITICAL: 
-   - NARROW SCOPE: Each item in evidence_links carries a "scope" field. When citing a finding from a "narrow" source, you MUST include a scope qualifier (e.g., "in a survey of HR personnel"). 
-   - ANTI-EXTRAPOLATION: NEVER extrapolate a narrow-scope finding into a macro-trend. For example, if a survey only covers the HR department, you are forbidden from writing sweeping claims like "enterprise adoption lags," "the company struggles with AI," or "internal usage is low." State the narrow fact exactly as it is, without macro-commentary.
-   - SELF-REPORTED DATA: If evidence comes from the company's own representatives, you must ingest and report these concrete metrics, but qualify them (e.g., "The company reports..."). Do not treat them as verified independent facts, but DO NOT omit them.
+8. SCOPE & SOURCE QUALIFICATION — CRITICAL:
+   - CLAIM TIER: Each evidence item is prefixed [A]/[B]/[C]/[D]/[E]. Match your verb choice to the tier (see CLAIM-TIER WORDING in the guardrails above). Never use strong factual verbs ("has deployed", "operates", "achieved") for [C] or [D] tier items.
+   - NARROW SCOPE [D]: When citing a [D]-tier finding (narrow scope, job postings, employee reviews), you MUST include a scope qualifier (e.g., "in a survey of HR personnel").
+   - ANTI-EXTRAPOLATION: NEVER extrapolate a [D]-tier finding into a macro-trend. State the narrow fact exactly as it is, without macro-commentary.
+   - SELF-REPORTED DATA [C]: For any [C]-tier evidence, qualify every concrete claim ("The company states...", "According to the company..."). Do not omit specific numbers, but never present them as independently verified.
+   - ENTITY SCOPE: When evidence is tagged [group], cite the parent entity explicitly (e.g., "[Company] Group"). Do not attribute group-level figures to the local entity.
 
 9. BALANCING CONTRADICTIONS & PROPORTIONALITY — CRITICAL: 
    - If a narrow-scope independent source contradicts a broad self-reported metric, briefly state both side-by-side (e.g., "Wärtsilä reports [X] company-wide users, though a departmental survey of HR found [Y]").

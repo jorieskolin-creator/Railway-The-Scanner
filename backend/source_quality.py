@@ -547,7 +547,80 @@ def infer_time_validity(link: dict) -> str:
     return "unknown"
 
 
-def normalize_evidence_link(link: dict, company_domain: str = "") -> dict:
+_FINANCIAL_FILING_SOURCE_TYPES = {
+    "company_financial_report", "financial_report", "annual_report",
+    "quarterly_report", "investor_relations",
+}
+
+_A_TIER_SOURCE_TYPES = {"analyst", "analyst_report", "news", "media", "regulation", "regulatory_context"}
+_E_TIER_SOURCE_TYPES = FORESIGHT_SOURCE_TYPES | {"analyst_trend"}
+
+
+def compute_claim_tier(link: dict) -> str:
+    """Collapse per-link metadata into a single A-E epistemic tier.
+
+    A — hard external verification (analyst/news, third-party, broad, high credibility)
+    B — filed/transactional disclosure (annual reports, investor relations, M&A filings)
+    C — company self-claim only (website, press release, blog)
+    D — inferred / weak signals (narrow scope, job postings, reviews, medium-credibility third-party)
+    E — external trend/regulatory context only (foresight, trend reports, regulation)
+    """
+    st = link.get("source_type", "")
+    credibility = link.get("source_credibility", "medium")
+    independence = link.get("independence", "third-party-or-independent")
+    scope = link.get("scope", "broad")
+
+    # E first — foresight/regulation is always context-only regardless of other signals
+    if st in _E_TIER_SOURCE_TYPES:
+        return "E"
+
+    # A — hard external: reputable third-party, broad, high credibility
+    if (independence == "third-party-or-independent"
+            and credibility == "high"
+            and scope == "broad"
+            and st in _A_TIER_SOURCE_TYPES):
+        return "A"
+
+    # B — filed transactional disclosure (verifiable even if self-originated)
+    if st in _FINANCIAL_FILING_SOURCE_TYPES:
+        return "B"
+
+    # C — company self-report
+    if independence == "company-reported" or st in SELF_REPORTED_SOURCE_TYPES:
+        return "C"
+
+    # D — narrow scope or medium-credibility third-party
+    if scope == "narrow" or st in NARROW_SOURCE_TYPES or credibility != "high":
+        return "D"
+
+    return "D"  # safe fallback
+
+
+def infer_entity_scope(link: dict, company_name: str = "") -> str:
+    """Infer whether evidence refers to the group/parent or the local entity.
+
+    Returns "group", "local", or "unknown".
+    """
+    text = " ".join([
+        link.get("title", ""),
+        link.get("snippet", ""),
+        link.get("url", ""),
+    ]).lower()
+
+    group_signals = {"group", "konserni", "group annual report", "group accounts",
+                     "plc group", "oyj group", "holding", "parent company", "emoyhtiö",
+                     "consolidated", "konsolidoitu"}
+    local_signals = {"finland", "suomi", "oy ", " oy,", "oy.", "finland operations",
+                     "nordic", "local entity"}
+
+    if any(sig in text for sig in group_signals):
+        return "group"
+    if any(sig in text for sig in local_signals):
+        return "local"
+    return "unknown"
+
+
+def normalize_evidence_link(link: dict, company_domain: str = "", company_name: str = "") -> dict:
     """Return the same dict enriched with deterministic governance metadata."""
     if not isinstance(link, dict):
         return link
@@ -573,6 +646,13 @@ def normalize_evidence_link(link: dict, company_domain: str = "") -> dict:
         "company-reported" if source_type in SELF_REPORTED_SOURCE_TYPES else "third-party-or-independent"
     )
     link["allowed_claim_types"] = sorted(SOURCE_TYPE_ALLOWED_USES.get(source_type, {"third_party_observation"}))
+
+    # Claim tier and entity scope — computed last so all upstream fields are set
+    if not link.get("claim_tier"):
+        link["claim_tier"] = compute_claim_tier(link)
+    if not link.get("entity_scope"):
+        link["entity_scope"] = infer_entity_scope(link, company_name)
+
     return apply_language_metadata(link)
 
 

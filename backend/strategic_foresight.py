@@ -1816,6 +1816,7 @@ RULES:
 - Do NOT use any of these terms: {forbidden}. Use plain business language.
 - Every claim must trace to a force identified in the foresight analysis.
 - If confidence is low on a force, use hedging language ("emerging signals suggest...")
+- EPISTEMIC TIER — ALL FORESIGHT IS [E]-TIER: Every force in this analysis is external context, not company-specific evidence. ALWAYS use [E]-tier wording: "could create risk/opportunity for [Company]", "if [trend] accelerates", "emerging signals suggest", "is relevant context for". NEVER write foresight context as if it proves current company deployment, current non-compliance, or a specific obligation. The company may or may not be affected — your role is to name the force and explain the potential relevance for validation.
 - LIFECYCLE TIMING: When each force has lifecycle_stage and action_timing data, explicitly reference WHERE
   each force sits on its adoption lifecycle and what this means for timing. Use phrases like "still in its
   hype cycle — prepare but don't over-invest", "at market breakout — evaluate near-term action", or "approaching

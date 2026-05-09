@@ -132,9 +132,9 @@ def _build_contradictions_block(verified_links: list, company_name: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _shared_prompt_guardrails(include_diagnostic: bool = True, include_foresight: bool = True) -> str:
+def _shared_prompt_guardrails(include_diagnostic: bool = True, include_foresight: bool = True, include_claim_tier: bool = False) -> str:
     """Shared evidence/diagnosis/foresight guardrails injected into main.py prompts."""
-    return build_shared_guardrails(include_diagnostic=include_diagnostic, include_foresight=include_foresight)
+    return build_shared_guardrails(include_diagnostic=include_diagnostic, include_foresight=include_foresight, include_claim_tier=include_claim_tier)
 
 
 def _sanitize_company_foresight_fields(data: dict, domain: str = "") -> dict:
@@ -1077,8 +1077,11 @@ def _refresh_proposals_for_company(company_name: str, data: dict) -> dict:
     archetype = data.get("archetype", "Unknown")
     reality_score = data.get("reality_score", 0)
     evidence_links = data.get("evidence_links", [])
-    evidence_list = ', '.join([f"{l.get('title', 'Unknown')}: {l.get('snippet', '')}" for l in evidence_links[:20]])
-    proposal_guardrails = _shared_prompt_guardrails(include_diagnostic=True, include_foresight=True)
+    evidence_list = '\n'.join([
+        f"[{l.get('claim_tier','D')}]{'['+l.get('entity_scope','')+']' if l.get('entity_scope','unknown') != 'unknown' else ''} {l.get('title','Unknown')}: {l.get('snippet','')}"
+        for l in evidence_links[:20]
+    ])
+    proposal_guardrails = _shared_prompt_guardrails(include_diagnostic=True, include_foresight=True, include_claim_tier=True)
 
     # Build the weakest dimensions from reality checklist
     negative_findings = [item for item in reality_checklist if item.get("sentiment") == "negative"]
@@ -1479,7 +1482,10 @@ def _clean_company_data(company_name: str, data: dict) -> dict:
     intent_narrative = json.dumps(data.get("intent_breakdown", {}))
     clean_evidence_links = data.get("evidence_links", [])
     clean_verified = [l for l in clean_evidence_links if l.get('verified') is True]
-    evidence_list = ', '.join([f"{l.get('title', 'Unknown')}: {l.get('snippet', '')}" for l in clean_verified[:20]])
+    evidence_list = '\n'.join([
+        f"[{l.get('claim_tier','D')}]{'['+l.get('entity_scope','')+']' if l.get('entity_scope','unknown') != 'unknown' else ''} {l.get('title','Unknown')}: {l.get('snippet','')}"
+        for l in clean_verified[:20]
+    ])
     # Run contradiction detection on the same evidence the synthesizer will see.
     # If quantitative disagreements exist (e.g. narrow HR thesis vs broad
     # company interview), surface them as a structured block so the prompt's
@@ -1524,7 +1530,7 @@ def _clean_company_data(company_name: str, data: dict) -> dict:
     _false_claims_text = chr(10).join(_claims_lines)
 
     # Same synthesis prompt as Deep Scanning (main.py scan pipeline)
-    synthesis_guardrails = _shared_prompt_guardrails(include_diagnostic=True, include_foresight=True)
+    synthesis_guardrails = _shared_prompt_guardrails(include_diagnostic=True, include_foresight=True, include_claim_tier=True)
     synthesis_prompt = f"""You are a senior organizational analyst conducting a forensic modernization assessment.
 You are conservative and evidence-bound. You would rather say "insufficient evidence" than risk a wrong claim. Your credibility depends on never overstating.
 Your task: synthesize scanner evidence into a precise, evidence-grounded diagnosis using the Knowledge Base framework below.
@@ -2807,7 +2813,15 @@ def run_scan(
                 claude_client = anthropic.Anthropic(api_key=anthropic_key) if anthropic_key else None
                 intent_narrative = json.dumps(intent_results["breakdown"])
                 verified_links = [l for l in reality_results['links'] if l.get('verified') is True]
-                evidence_list = ', '.join([f"{l.get('title', 'Unknown')}: {l.get('snippet', '')}" for l in verified_links[:20]])
+
+                def _fmt_evidence_link(l):
+                    tier = l.get('claim_tier', 'D')
+                    scope = l.get('entity_scope', 'unknown')
+                    scope_tag = f"[{scope}]" if scope != 'unknown' else ''
+                    prefix = f"[{tier}]{scope_tag}"
+                    return f"{prefix} {l.get('title', 'Unknown')}: {l.get('snippet', '')}"
+
+                evidence_list = '\n'.join([_fmt_evidence_link(l) for l in verified_links[:20]])
                 # Run contradiction detection on the same evidence pool. Block
                 # is empty when no quantitative disagreements are found, so the
                 # injected slot stays harmless on clean cases.
@@ -2921,7 +2935,7 @@ If new evidence shows improvement, highlight the positive trajectory."""
                 negative_summary = "\n".join([f"- {item.get('query', '')}: {item.get('snippet', 'No detail')}" for item in _neg_items[:6]])
                 negative_findings_context = f"\nKey Negative Findings (Scanner 2):\n{negative_summary}" if negative_summary else ""
 
-                scan_synthesis_guardrails = _shared_prompt_guardrails(include_diagnostic=True, include_foresight=True)
+                scan_synthesis_guardrails = _shared_prompt_guardrails(include_diagnostic=True, include_foresight=True, include_claim_tier=True)
                 synthesis_prompt = f"""You are a senior organizational analyst conducting a forensic modernization assessment.
 You are conservative and evidence-bound. You would rather say "insufficient evidence" than risk a wrong claim. Your credibility depends on never overstating.
 Your task: synthesize scanner evidence into a precise, evidence-grounded diagnosis using the Knowledge Base framework below.
@@ -3005,6 +3019,9 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
     characteristic of Digital Taylorism in the Operating Model dimension").
   - Use KB terminology naturally: "Digital Taylorism", "Flow Efficiency", "Pilot Purgatory",
     "Modernization Washing" — but only where the evidence supports the pattern.
+  - CLAIM-TIER WORDING: Each evidence item is prefixed [A]/[B]/[C]/[D]/[E]. Match your verb choice
+    to the tier of the evidence you are citing (see CLAIM-TIER WORDING rules above). Do NOT use
+    strong factual verbs ("has", "operates", "deploys") for [C] or [D] tier evidence.
   - If confidence < 50, state it: "Limited public evidence constrains this assessment."
   - If washing detected, name it: "{washing_type or 'Modernization Washing'}" with the specific gap.
   - Do NOT cite numeric scores in the text — scores display separately in the UI.
@@ -3543,7 +3560,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                     # Strip the old (contaminated) "Evidence Found:" line from the original
                     # synthesis_prompt so the LLM only sees the cleaned evidence list below.
                     import re as _re
-                    clean_resynthesis_guardrails = _shared_prompt_guardrails(include_diagnostic=True, include_foresight=True)
+                    clean_resynthesis_guardrails = _shared_prompt_guardrails(include_diagnostic=True, include_foresight=True, include_claim_tier=True)
                     clean_synthesis_prompt = _re.sub(
                         r'Evidence Found: .+', 'Evidence Found: [see CLEANED evidence below]',
                         synthesis_prompt, count=1
