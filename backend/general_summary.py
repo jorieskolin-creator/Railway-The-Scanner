@@ -21,7 +21,10 @@ from google import genai
 from gemini_client import get_gemini_client
 from google.genai import types as genai_types
 from gemini_backoff import call_with_503_backoff
-from source_quality import assess_source_scope, infer_source_type, compute_claim_tier, describe_source
+from source_quality import (
+    assess_source_scope, infer_source_type, compute_claim_tier, describe_source,
+    is_boilerplate_snippet, is_title_echo, tier_snippet_bounds,
+)
 from contradiction_detector import detect_contradictions
 from prompts import PROMPT_VERSION, build_shared_guardrails
 
@@ -206,50 +209,63 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
     # departmental findings as company-wide truths.
     verified_links = []
     for i, l in enumerate(_all_evidence):
-        snippet_limit = 500 if i < 8 else 350
         title = (l.get("title", "Source") or "Source")[:80]
         snippet_raw = (l.get("snippet") or "").strip()
-        # Skip hollow evidence: empty snippet or snippet that just repeats the title.
-        # These produce false-claim flags downstream because the model has no real
-        # substance to cite — only a label. Honest emptiness > fabricated content.
-        if len(snippet_raw) < 50 or snippet_raw.lower() == title.strip().lower():
+        tier = (l.get("claim_tier") or "D").upper()
+        min_len, max_len = tier_snippet_bounds(tier)
+        # Tighter ceiling on secondary evidence regardless of tier.
+        if i >= 8:
+            max_len = min(max_len, 350)
+        # Tier-aware minimum lets dense tier-A facts ("Revenue €500M, 7,230
+        # employees") through, while title-echo and boilerplate filters block
+        # hollow / nav-stub content.  Padded tier-C self-report bloat is
+        # trimmed by the tier-specific max_len truncation below.
+        if (len(snippet_raw) < min_len
+                or is_title_echo(snippet_raw, title)
+                or is_boilerplate_snippet(snippet_raw)):
             continue
-        snippet = snippet_raw[:snippet_limit]
+        snippet = snippet_raw[:max_len]
         verified_links.append({
             "title": title,
             "snippet": snippet,
             "is_recent": l.get("is_recent", False),
             "scope": assess_source_scope(l.get("url", ""), title, snippet),
-            # Path B: propagate classification metadata so the LLM knows what
-            # kind of source this is (third-party vs company self-report vs
-            # foresight) and can apply the per-tier wording rules in prompts.py
-            # CLAIM_TIER_GUARDRAILS.  Without these fields, the prompt's tier
-            # rule references metadata the model never sees.
-            "claim_tier": l.get("claim_tier") or "D",
+            "claim_tier": tier,
             "source_label": describe_source(l),
         })
 
     # Add validated foresight sources to the evidence pool (max 3, validated only)
     # Foresight sources always get deep snippets (500 chars) — forward-looking signals.
     foresight_sources = []
+    fs_min, fs_max = tier_snippet_bounds("E")
     for l in full_data.get("foresight_links", []):
         if not (l.get("verified") is True and l.get("validated") is True):
             continue
         title = (l.get("title", "Foresight") or "Foresight")[:80]
         snippet_raw = (l.get("snippet") or "").strip()
-        # Same hollow-snippet filter for foresight: KB signals sometimes have
-        # snippet == title (just the trend name repeated) which gives the
-        # summary model nothing real to cite.
-        if len(snippet_raw) < 50 or snippet_raw.lower() == title.strip().lower():
-            continue
-        snippet = snippet_raw[:500]
+        # If the raw snippet is hollow / title-echo, compose one from
+        # source_says + possible_relevance.  possible_relevance is the
+        # company-specific impact hypothesis, already modality-sanitized by
+        # foresight_guardrails.py — safe to surface verbatim.  Joining them
+        # gives the LLM both the trend and its application without inventing
+        # claims; tier-E metadata still tells the model to hedge.
+        if (len(snippet_raw) < fs_min
+                or is_title_echo(snippet_raw, title)
+                or is_boilerplate_snippet(snippet_raw)):
+            source_says = (l.get("source_says") or "").strip()
+            relevance = (l.get("possible_relevance") or "").strip()
+            if is_title_echo(source_says, title):
+                source_says = ""
+            composed = " — ".join(p for p in (source_says, relevance) if p)
+            if len(composed) < fs_min:
+                continue
+            snippet_raw = composed
+        snippet = snippet_raw[:fs_max]
         foresight_sources.append({
             "title": title,
             "snippet": snippet,
             "is_recent": True,
             "scope": assess_source_scope(l.get("url", ""), title, snippet),
-            # Foresight is always tier E by definition — external trend / regulatory
-            # context, never current company practice.  See CLAIM_TIER_GUARDRAILS.
             "claim_tier": "E",
             "source_label": "Forward-looking foresight",
         })

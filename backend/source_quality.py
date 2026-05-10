@@ -13,6 +13,7 @@ Source Management (manage_evidence_sources):
 - "Gold Standard" detection: 15 high-credibility verified sources → skip new search.
 """
 
+import re
 from urllib.parse import urlparse
 from datetime import date, datetime
 from typing import Dict, Iterable, List, Tuple
@@ -658,6 +659,79 @@ def describe_source(link: dict) -> str:
     if link.get("independence") == "company-reported":
         return "Company self-report"
     return "Source"
+
+
+# -----------------------------------------------------------------------------
+# Snippet quality helpers
+#
+# These three helpers let general_summary._build_input_payload() apply
+# tier-aware filtering and substitution on evidence snippets.  Pre-Path-B the
+# snippet rules had to do double duty (content + credibility signal).  Now
+# claim_tier and source_label carry credibility, so snippets can return to
+# their proper role of providing the actual content the LLM should quote.
+# -----------------------------------------------------------------------------
+
+_BOILERPLATE_PATTERNS = (
+    re.compile(r"\b(accept|manage)\s+(all\s+)?cookies\b", re.I),
+    re.compile(r"\bcookie\s+(policy|preferences|settings)\b", re.I),
+    re.compile(r"\bprivacy\s+policy\b.*\bterms\b", re.I),
+    re.compile(r"\b(read|learn)\s+more\s+(about|here)\b", re.I),
+    re.compile(r"\b(sign|log)\s+in\s+to\s+continue\b", re.I),
+    re.compile(r"^\s*(home|about|services|contact)\s*[|/]", re.I),
+    re.compile(r"\b(404|page\s+not\s+found)\b", re.I),
+)
+
+
+def is_boilerplate_snippet(text: str) -> bool:
+    """True when text is cookie/legal/nav stub rather than substantive content."""
+    if not text or len(text) < 8:
+        return False
+    return any(p.search(text) for p in _BOILERPLATE_PATTERNS)
+
+
+_SITE_SUFFIX = re.compile(r"\s*[|\-–—]\s*[^|\-–—]{1,40}\s*$")
+_PUNCT_RE = re.compile(r"[^\w\s]")
+
+
+def _normalize_for_match(text: str) -> str:
+    if not text:
+        return ""
+    t = text.strip().lower()
+    t = _SITE_SUFFIX.sub("", t)
+    t = _PUNCT_RE.sub("", t)
+    return " ".join(t.split())
+
+
+def is_title_echo(snippet: str, title: str) -> bool:
+    """True when snippet is just a (near-)copy of the title.
+
+    Catches both exact matches and near-misses like trailing site suffixes
+    ("Foo | BCG" vs "Foo") and high-overlap substrings.
+    """
+    sn = _normalize_for_match(snippet)
+    ti = _normalize_for_match(title)
+    if not sn or not ti:
+        return False
+    if sn == ti:
+        return True
+    shorter, longer = sorted([sn, ti], key=len)
+    if shorter and shorter in longer and len(shorter) / max(1, len(longer)) >= 0.80:
+        return True
+    return False
+
+
+_TIER_BOUNDS = {
+    "A": (30, 300),  # third-party verified — dense, no padding needed
+    "B": (30, 300),  # filed disclosures — terse, factual
+    "C": (50, 400),  # company self-report — trim promotional bloat
+    "D": (50, 350),  # narrow / weak signal
+    "E": (60, 400),  # foresight — needs trend context
+}
+
+
+def tier_snippet_bounds(claim_tier: str) -> Tuple[int, int]:
+    """Per-tier (min_len, max_len) for snippet length gating and truncation."""
+    return _TIER_BOUNDS.get((claim_tier or "D").upper(), (50, 400))
 
 
 def infer_entity_scope(link: dict, company_name: str = "") -> str:
