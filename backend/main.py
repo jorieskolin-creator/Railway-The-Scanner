@@ -32,7 +32,7 @@ from market_intelligence import compute_market_intelligence
 from knowledge_base import get_evolving_framework
 from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, clean_summary, purge_false_evidence
 from general_summary import generate_general_summary, fact_check_general_summary
-from source_quality import manage_evidence_sources, assess_source_scope
+from source_quality import manage_evidence_sources, assess_source_scope, annotate_evidence_links
 from contradiction_detector import detect_contradictions
 from prompts import PROMPT_VERSION, build_shared_guardrails
 from database_sanitizer import sanitize_database
@@ -727,6 +727,14 @@ def _recheck_company_data(company_name: str, data: dict) -> dict:
     Returns dict with summary_check, pitch_check, ai_verification, recommendation,
     and cleaning results if auto-clean was performed.
     """
+    # Refresh evidence metadata before any validation step.  Companies last scanned
+    # before commit b857b1b may have stale or missing claim_tier / source_label —
+    # annotate_evidence_links normalises in place so all downstream steps (validate_summary,
+    # ai_fact_check_summary, generate_general_summary) and the final storage.save_company_data()
+    # all see current metadata.
+    company_domain = (data.get("companyUrl") or data.get("domain") or "").strip()
+    annotate_evidence_links(data.get("evidence_links") or [], company_domain)
+
     # Step 1: Heuristic validation (summary + pitch)
     summary_result = validate_summary(
         summary_text=data.get("summary_text", ""),

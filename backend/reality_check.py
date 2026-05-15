@@ -20,10 +20,17 @@ from gemini_backoff import call_with_503_backoff
 from foresight_guardrails import sanitize_future_insight, validate_foresight_text, validate_future_deadlines
 
 try:
-    from source_quality import annotate_evidence_links, filter_admissible_sources
+    from source_quality import (
+        annotate_evidence_links, filter_admissible_sources,
+        is_boilerplate_snippet, is_title_echo, tier_snippet_bounds, describe_source,
+    )
 except Exception:  # Keep reality_check import-safe in minimal deployments.
     annotate_evidence_links = None
     filter_admissible_sources = None
+    is_boilerplate_snippet = None
+    is_title_echo = None
+    tier_snippet_bounds = None
+    describe_source = None
 
 # Regex for detecting scan history references in fact-check claims.
 # These come from internal DB records (scan_history), not external web sources,
@@ -601,16 +608,45 @@ def _gemini_fact_check(summary_text, company_name, evidence_links=None, pitch_te
             "time_ms": 0,
         }
 
-    # Build evidence reference list so Gemini can attribute false claims to sources
+    # Build evidence reference list so Gemini can attribute false claims to sources.
+    # Uses tier-aware bounds + boilerplate/title-echo filters to mirror the quality
+    # gate in general_summary._build_input_payload(), and prefixes each entry with
+    # [tier=X] [Label] so the fact-checker can weight sources by independence/type.
     verified_links = []
     evidence_ref = ""
     if evidence_links:
-        verified_links = [l for l in evidence_links if l.get("verified", True)][:20]
+        for l in evidence_links:
+            if not l.get("verified", True):
+                continue
+            title = (l.get("title") or "Unknown")[:80]
+            snippet_raw = (l.get("snippet") or "").strip()
+            tier = (l.get("claim_tier") or "D").upper()
+            # Graceful degradation: fall back to flat 500-char truncation if the
+            # source_quality helpers failed to import (minimal deployments).
+            if tier_snippet_bounds is None:
+                min_len, max_len = 0, 500
+            else:
+                min_len, max_len = tier_snippet_bounds(tier)
+            if min_len and len(snippet_raw) < min_len:
+                continue
+            if is_title_echo and is_title_echo(snippet_raw, title):
+                continue
+            if is_boilerplate_snippet and is_boilerplate_snippet(snippet_raw):
+                continue
+            label = describe_source(l) if describe_source else "Source"
+            verified_links.append({
+                "title": title,
+                "url": l.get("url", ""),
+                "snippet": snippet_raw[:max_len],
+                "tier": tier,
+                "label": label,
+            })
+        verified_links = verified_links[:20]
         for i, link in enumerate(verified_links, 1):
-            title = link.get("title", "Unknown")
-            url = link.get("url", "")
-            snippet = link.get("snippet", "")[:500]
-            evidence_ref += f"[{i}] {title} | URL: {url} | Snippet: {snippet}\n"
+            evidence_ref += (
+                f"[{i}] [tier={link['tier']}] [{link['label']}] "
+                f"{link['title']} | URL: {link['url']} | Snippet: {link['snippet']}\n"
+            )
 
     evidence_section = ""
     if evidence_ref:
@@ -662,6 +698,15 @@ The company's OWN website, blog posts, marketing pages, press releases, and soci
    - If the company's self-reported source provides CONCRETE, SPECIFIC operational metrics that contradict the summary, you MUST acknowledge the company's metrics.
    - If the summary relies entirely on a "narrow" independent source (like an HR survey) to declare a company-wide failure, while ignoring concrete self-reported company-wide metrics, flag this as a [Contradiction]. 
    - Your correction MUST force the summary to acknowledge BOTH the self-reported metric AND the independent narrow observation (e.g., "While Wärtsilä reports 2,000 active users, an independent HR survey found..."). Do not allow the fact-checker to silence a company's specific, stated operational data just because it is self-reported.
+
+SOURCE CREDIBILITY TIERS — each evidence entry is prefixed with [tier=X] [Label]:
+- tier=A — Third-party verified (analyst, news, financial database): may be treated as fact when verifying a claim.
+- tier=B — Filed transactional disclosure (annual report, IR, regulatory filing): may be treated as fact.
+- tier=C — Company self-report (own website, press release, blog). The Self-Referential Source Rule above applies in full: a tier=C source ALONE cannot verify or refute an analytical claim about internal practices, organisational design, or operational reality.
+- tier=D — Narrow scope or weak signal (thesis, employee review, job posting): may corroborate a scoped claim, never a company-wide one.
+- tier=E — Forward-looking foresight or regulatory context: cannot prove current company practice. If the summary presents a tier=E source as a current operational fact, flag it as a hallucination.
+
+When verifying, weight each evidence match by its tier. A tier=C match does NOT verify a claim that requires independent confirmation. A tier=E match NEVER verifies a present-tense factual claim.
 
 FLAG A CLAIM AS FALSE IF IT MEETS ANY OF THESE CRITERIA:
 
