@@ -140,7 +140,10 @@ CATEGORIES = {
            "Proactive", "Visionary", "Holistic view", "Systemic thinking", "Long-term value",
            "OODA loop", "First principles thinking", "Backcasting", "Antifragility", "Infinite game",
            "Effectuation", "Sensemaking", "Value migration", "Crossing the chasm", "Flywheel effect",
-           "Network effects", "Doing the right thing", "Impact driven"
+           "Network effects", "Doing the right thing", "Impact driven",
+           "Customer Experience", "Customer Journey", "Voice of Customer", "Net Promoter",
+           "Customer Lifetime Value", "Omnichannel", "Personalization", "Self-service",
+           "Customer-first", "NPS"
        ],
        "good_fi": [
            "pohjantähti", "arvonluonti", "digitaalinen transformaatio", "kasvu", "visio",
@@ -148,7 +151,9 @@ CATEGORIES = {
            "suunnanmuutos", "toimeenpano", "havainnoi ja reagoi", "vaikuttavuusohjautuva", "julkaise ja opi",
            "strateginen valinta", "asiakasmenestys", "markkinan muokkaami", "ennakoiva", "kokonaisvaltainen",
            "systeemiajattelu", "pitkän aikavälin arvo", "verkostovaikutus", "ketterä strategia",
-           "kokeileva kehittämi", "uudistumiskyky", "strateginen ketteryys", "vaikuttavuus"
+           "kokeileva kehittämi", "uudistumiskyky", "strateginen ketteryys", "vaikuttavuus",
+           "asiakaskokemus", "asiakaspolku", "asiakkaan ääni", "asiakastyytyväisyys",
+           "monikanavai", "personointi", "itsepalvelu"
        ],
        "bad": [
            "Cost-cutting", "Defensive", "Short-term focus", "Static planning", "Reactive",
@@ -159,7 +164,9 @@ CATEGORIES = {
            "Quarterly result focused", "Cost reduction", "Layoffs", "Downsizing", "Optimizing for efficiency",
            "Race to the bottom", "Imitation", "Follower", "Conservative", "Sunk cost fallacy",
            "Vanity metrics", "Success theater", "Five year plan", "Annual budget cycle", "Cost center mentality",
-           "Maximize utilization", "Headcount freeze", "Arbitrary targets", "Hockey stick growth"
+           "Maximize utilization", "Headcount freeze", "Arbitrary targets", "Hockey stick growth",
+           "Customer complaints", "Poor reviews", "Service failures", "Customer churn",
+           "One-size-fits-all", "No feedback loop"
        ],
        "bad_fi": [
            "kulukuri", "säästöt", "leikkaukset", "yt-neuvottelut", "lyhytnäköi", "staattinen",
@@ -167,7 +174,8 @@ CATEGORIES = {
            "tehokkuusajattelu", "viisivuotissuunnitelma", "kiinteä tavoite", "kertarysäys",
            "kvartaalitalous", "kustannussäästö", "irtisanomi", "tehostami", "säilyttävä",
            "siiloutunut", "epäselvä suunta", "reaktiivinen", "numerolla johtaminen",
-           "hallinnollinen", "kaavamainen", "joustamaton"
+           "hallinnollinen", "kaavamainen", "joustamaton",
+           "asiakasvalitukset", "huonot arvostelut", "palveluongelmat", "asiakasvaihtuvuus"
        ]
    },
    "Business Model": {

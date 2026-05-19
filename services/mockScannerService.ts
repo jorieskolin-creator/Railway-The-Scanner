@@ -119,7 +119,7 @@ const FINNISH_COMPANIES = [
   "Nokia Oyj", "Neste Oyj", "Kone Oyj", "UPM-Kymmene Oyj", "Stora Enso Oyj",
   "Kesko Oyj", "Sampo Oyj", "Fortum Oyj", "Metso Oyj", "Wärtsilä Oyj",
   "Valmet Oyj", "Huhtamäki Oyj", "Orion Oyj", "Elisa Oyj", "Kemira Oyj",
-  "Cargotec Oyj", "Tietoevry Oyj", "YIT Oyj", "Outokumpu Oyj", "Sanoma Oyj",
+  "HIAB", "Tieto Oyj", "YIT Oyj", "Outokumpu Oyj", "Sanoma Oyj",
   "Finnair Oyj", "Kojamo Oyj", "Tokmanni Group", "Caverion Oyj", "Rovio Entertainment",
   "Fiskars Group", "Vaisala Oyj", "Olvi Oyj", "Ponsse Oyj", "Revenio Group"
 ];
@@ -162,7 +162,7 @@ const createMockResult = (name, intent, reality) => {
     let intent = Math.floor(Math.random() * 60) + 20; 
     let reality = Math.floor(Math.random() * 60) + 20;
     
-    if (["Nokia Oyj", "Elisa Oyj", "Tietoevry Oyj", "Rovio Entertainment", "Vaisala Oyj"].includes(name)) {
+    if (["Nokia Oyj", "Elisa Oyj", "Tieto Oyj", "Rovio Entertainment", "Vaisala Oyj"].includes(name)) {
         intent = Math.floor(Math.random() * 30) + 60;
         reality = Math.floor(Math.random() * 30) + 60;
     }

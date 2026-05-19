@@ -1,0 +1,26 @@
+{
+  "status": "PASS",
+  "syntax": {
+    "general_summary.py": "OK",
+    "prompts.py": "OK"
+  },
+  "readback_checks": {
+    "prompts_import": true,
+    "helper": true,
+    "summary_guardrails": true,
+    "fact_check_guardrails": true,
+    "regen_guardrails": true,
+    "payload_version": true
+  },
+  "functional_checks": {
+    "payload_has_version": true,
+    "prompt_has_shared_guardrails": true,
+    "factcheck_has_shared_guardrails": true,
+    "regen_has_shared_guardrails": true,
+    "prompt_has_foresight_rule": true,
+    "prompt_has_no_generalization_rule": true,
+    "prompt_contains_payload_version": true
+  },
+  "tested_file": "/mnt/file_upload/general_summary.py",
+  "prompt_version": "2026-05-03-phase2-label-governance"
+}

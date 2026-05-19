@@ -13,8 +13,8 @@
     <style>
       body {
         font-family: 'Inter', sans-serif;
-        background-color: #1e1b4b;
-        color: #f8fafc;
+        background-color: #f1f5f9;
+        color: #0f172a;
         overflow-x: hidden;
       }
       @keyframes pulse-glow {
@@ -24,10 +24,20 @@
       .animate-pulse-glow {
         animation: pulse-glow 12s ease-in-out infinite;
       }
+      @keyframes ref-pulse {
+        0% { transform: scale(1); opacity: 0.5; }
+        80% { transform: scale(2.2); opacity: 0; }
+        100% { transform: scale(2.2); opacity: 0; }
+      }
+      @keyframes ref-pulse-delayed {
+        0% { transform: scale(1); opacity: 0.3; }
+        80% { transform: scale(2.5); opacity: 0; }
+        100% { transform: scale(2.5); opacity: 0; }
+      }
       ::-webkit-scrollbar { width: 8px; height: 8px; }
-      ::-webkit-scrollbar-track { background: #1e1b4b; }
-      ::-webkit-scrollbar-thumb { background: #4f46e5; border-radius: 4px; border: 2px solid #1e1b4b; }
-      ::-webkit-scrollbar-thumb:hover { background: #6366f1; }
+      ::-webkit-scrollbar-track { background: #e2e8f0; }
+      ::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 4px; border: 2px solid #e2e8f0; }
+      ::-webkit-scrollbar-thumb:hover { background: #64748b; }
     </style>
     
     <!-- Initialize Globals and Load App -->
@@ -36,40 +46,36 @@
       import { createRoot } from 'https://esm.sh/react-dom@18.2.0/client?deps=react@18.2.0';
       import * as Lucide from 'https://esm.sh/lucide-react@0.344.0?deps=react@18.2.0';
       import * as Recharts from 'https://esm.sh/recharts@2.12.3?deps=react@18.2.0,react-dom@18.2.0';
-      import { GoogleGenAI } from 'https://esm.sh/@google/genai';
-
       // 1. Set Globals and Normalize Modules
       window.React = React;
       window.ReactDOM = { createRoot };
-      
+
       // Handle ESM modules that might export via 'default' or named exports
       window.Lucide = Lucide.default || Lucide;
       window.Recharts = Recharts.default || Recharts;
-      window.GoogleGenAI = GoogleGenAI;
-      
-      // Polyfill process.env for geminiService.ts
-      window.process = { env: { API_KEY: '' } };
 
       // Debugging
       console.log("Globals initialized:", {
         React: !!window.React,
         ReactDOM: !!window.ReactDOM,
         LucideKeys: Object.keys(window.Lucide).length,
-        RechartsKeys: Object.keys(window.Recharts).length,
-        GoogleGenAI: !!window.GoogleGenAI
+        RechartsKeys: Object.keys(window.Recharts).length
       });
 
-      // 2. Define App Scripts in dependency order
+      // 2. Define App Scripts in dependency order (cache-busted to prevent stale browser cache)
+      var cacheBust = '?v=' + Date.now();
       const scripts = [
-        "/types.ts",
-        "/constants.ts",
-        "/services/geminiService.ts",
-        "/components/ScannerInput.tsx",
-        "/components/TruthMatrix.tsx",
-        "/components/CompanySummary.tsx",
-        "/components/CompanyModal.tsx",
-        "/App.tsx",
-        "/index.tsx"
+        "/types.ts" + cacheBust,
+        "/constants.ts" + cacheBust,
+        "/components/ScannerInput.tsx" + cacheBust,
+        "/components/TruthMatrix.tsx" + cacheBust,
+        "/components/CompanySummary.tsx" + cacheBust,
+        "/components/ThemeExplorer.tsx" + cacheBust,
+        "/components/MarketIntelligenceModal.tsx" + cacheBust,
+        "/components/ObservatoryModal.tsx" + cacheBust,
+        "/components/CompanyModal.tsx" + cacheBust,
+        "/App.tsx" + cacheBust,
+        "/index.tsx" + cacheBust
       ];
 
       // 3. Helper to load scripts sequentially and compile with Babel
@@ -81,9 +87,11 @@
             const tsx = await response.text();
             
             // Transform TSX/TS to JS using Babel
+            // Strip query string from filename so Babel detects .ts/.tsx extensions correctly
+            const cleanFilename = url.split('?')[0];
             const js = Babel.transform(tsx, {
               presets: ['react', 'typescript'],
-              filename: url,
+              filename: cleanFilename,
             }).code;
 
             // Execute in IIFE using string concatenation
@@ -105,15 +113,8 @@
           document.body.innerHTML = "<div style='color:red; padding:20px'>Critical Error: Failed to load dependencies from CDN. Check internet connection or console.</div>";
       }
     </script>
-<script type="importmap">
-{
-  "imports": {
-    "react/": "https://esm.sh/react@^19.2.4/"
-  }
-}
-</script>
 </head>
-  <body class="bg-[#1e1b4b] text-slate-100 antialiased">
+  <body class="bg-[#f1f5f9] text-slate-900 antialiased">
     <div id="root"></div>
   </body>
 </html>

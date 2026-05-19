@@ -5,19 +5,58 @@ interface ScannerInputData {
   companyName: string;
   companyUrl: string;
   reportText: string;
-  modelId?: string; // Optional Model Override
 }
 
 interface EvidenceLink {
   title: string;
   url: string;
   source: string;
+  snippet?: string;
+  verified?: boolean;
+  source_credibility?: string; // "high" | "medium" | "low"
+  source_type?: string;
+  claim_tier?: string;
+  claim_type?: string;
+  scope?: string;
+  origin?: string;
+  company_specific?: boolean;
+  source_says?: string;
+  possible_relevance?: string;
+  source_says_was_genericized?: boolean;
+}
+
+interface ForesightLink {
+  title: string;
+  url: string;
+  snippet: string;
+  source_type: string;
+  verified: boolean;
+  source_credibility: string;
+  validated: boolean;
+  kb_dimension: string;
+  fp_theme: string;
+  timeframe: string;
+  force_type: string;
+  origin: string; // always "foresight"
+}
+
+interface LinkedInInsights {
+  found: boolean;
+  headline?: string | null;
+  verified_role?: string | null;
+  still_at_company?: boolean | null;
+  summary: string;
+  career_moves?: string[];
+  topics?: string[];
+  notable_posts?: string[];
+  model_used?: string | null;
 }
 
 interface KeyPerson {
   name: string;
   role: string;
   relevance: string;
+  linkedin_insights?: LinkedInInsights;
 }
 
 interface ScannerCategoryScore {
@@ -34,29 +73,210 @@ interface ScannerMetrics {
   total_bad_mentions: number;
 }
 
+interface AIVerification {
+  verified: boolean;
+  unsupported_claims?: string[];
+  unsupported_claims_detailed?: any[];
+  false_claims?: string[];
+  false_claims_detailed?: any[];
+  fact_check_skipped?: boolean;
+  model?: string;
+  time_ms?: number;
+  note?: string;
+}
+
+interface ScanQuality {
+  confidence_score?: number;
+  confidence?: number;
+  contradictions?: any[];
+  contradiction_warnings?: any[];
+}
+
+interface EvidenceSufficiency {
+  score?: number;
+  [key: string]: any;
+}
+
 interface AnalysisResult {
-  id: string; 
+  id: string;
   companyName: string;
   companyUrl?: string; // Optional field for persistence
   intent_score: number;
   reality_score: number;
-  reality_gap: number; 
-  confidence_score?: number; 
+  reality_gap: number;
+  confidence_score?: number;
   washing_flag?: boolean; // NEW: Washing Flag
   washing_type?: string | null; // NEW: AI Washing, Agile Washing, etc.
   evidence_links: EvidenceLink[];
+  foresight_links?: ForesightLink[]; // Validated foresight source links
+  excluded_evidence?: EvidenceLink[];
   key_people?: KeyPerson[];
   summary_text: string;
   pitch_text?: string; // NEW: Strategic Pitch
-  lastUpdated: string; 
+  evidence_based_risks?: string[]; // Neutral diagnostic risks derived from evidence
+  why_proposals?: string[]; // Desired Impact (WHY) — 2 proposals
+  what_proposals?: string[]; // Desired Effect (WHAT) — 2 proposals
+  lastUpdated: string;
   intent_breakdown: ScannerCategoryScore[];
   metrics?: ScannerMetrics;
   reality_checklist: {
     category: string;
     found: boolean;
     query: string;
+    source_type?: string;
+    sentiment?: string;
+    is_recent?: boolean;
   }[];
   is_simulated?: boolean;
+  ai_verification?: AIVerification; // AI-powered claim verification
+  ai_verified?: boolean; // Summary field for landing page badge
+  hallucination_flags?: string[];
+  hallucination_risk?: string;
+  hallucination_score?: number;
+  scan_quality?: ScanQuality;
+  evidence_sufficiency?: EvidenceSufficiency | number;
+  contradictions?: any[];
+  contradiction_warnings?: any[];
+  general_summary_false_claims?: string[];
+}
+
+// Market Intelligence Data (from /api/market-intelligence endpoint)
+interface MarketIntelForesight {
+  theme: string;
+  category: string;
+  count: number;
+  pct: number;
+  example_companies: string[];
+}
+
+interface MarketIntelCause {
+  cluster_label: string;
+  count: number;
+  why_count: number;
+  what_count: number;
+  examples: { text: string; company: string }[];
+}
+
+interface MarketIntelGapPattern {
+  dimension: string;
+  avg_intent: number;
+  avg_reality: number;
+  avg_gap: number;
+  company_count: number;
+}
+
+interface MarketIntelArchetypeFlow {
+  domain: string;
+  thriving: number;
+  modernizing: number;
+  cash_cow: number;
+  at_risk: number;
+  total: number;
+}
+
+interface MarketIntelCrossImpact {
+  theme: string;
+  dimension: string;
+  count: number;
+}
+
+interface MarketIntelRadar {
+  domain: string;
+  raw_scores: Record<string, number>;
+  normalized_scores: Record<string, number>;
+  total_signals: number;
+}
+
+interface MarketIntelHealth {
+  domain: string;
+  score: number;
+  avg_reality: number;
+  avg_financial: number;
+  avg_gap: number;
+  thriving_pct: number;
+  company_count: number;
+}
+
+interface MarketIntelCoverage {
+  covered: number;
+  total: number;
+  pct: number;
+  themes_detail: { theme: string; category: string; signal_count: number }[];
+}
+
+interface MarketIntelVulnerable {
+  name: string;
+  domain: string;
+  vulnerability_score: number;
+  residual: number;
+  gap: number;
+  archetype: string;
+  reality_score: number;
+  financial_index: number | null;
+  reasons: string[];
+}
+
+interface MarketIntelDemandIntensity {
+  dimension: string;
+  avg_gap: number;
+  max_gap: number;
+  companies_with_gap: number;
+  total_companies: number;
+}
+
+interface FAVIGapDetail {
+  dimension: string;
+  foresight_pressure: number;
+  reality_score: number | null;
+  gap: number;
+}
+
+interface FAVICompany {
+  name: string;
+  domain: string;
+  favi_score: number;
+  fps: number;                    // Foresight Pressure Score (0-100)
+  readiness_gap: number;          // Readiness Gap (0-100)
+  fac: number;                    // Financial Adaptation Capacity (0-100)
+  megatrend_exposure: number;     // Megatrend Exposure (0-100)
+  current_vulnerability: number;  // Current vulnerability score
+  segment: string;                // "Critical" | "Sleepwalking" | "Wounded but Sheltered" | "Safe Harbor"
+  formula: string;                // "geometric" | "additive"
+  foresight_count: number;
+  dimensions_covered: number;
+  gap_details: FAVIGapDetail[];
+}
+
+interface FAVISegments {
+  Critical: number;
+  "Wounded but Sheltered": number;
+  Sleepwalking: number;
+  "Safe Harbor": number;
+}
+
+interface FAVIDomainPressure {
+  domain: string;
+  avg_pressure: number;
+  max_pressure: number;
+  company_count: number;
+}
+
+interface MarketIntelligenceData {
+  company_count: number;
+  detailed_count: number;
+  top_foresights: MarketIntelForesight[];
+  top_causes: MarketIntelCause[];
+  gap_patterns: MarketIntelGapPattern[];
+  archetype_flow: MarketIntelArchetypeFlow[];
+  cross_impact: MarketIntelCrossImpact[];
+  industry_radar: MarketIntelRadar[];
+  market_health: MarketIntelHealth[];
+  foresight_coverage: MarketIntelCoverage;
+  vulnerable_companies: MarketIntelVulnerable[];
+  demand_intensity: MarketIntelDemandIntensity[];
+  favi_companies: FAVICompany[];
+  favi_segments: FAVISegments;
+  favi_domain_pressure: FAVIDomainPressure[];
 }
 
 // Attach Enums to window so they are available globally

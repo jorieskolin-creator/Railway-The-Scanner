@@ -1,26 +1,19 @@
 
 
+
 const { useState, useRef } = (window as any).React;
-const { Search, FileText, Globe, Zap, Link, AlertCircle, Database, Settings, Cpu, UploadCloud, File, X, Sparkles, Loader2 } = (window as any).Lucide;
+const { Search, FileText, Globe, Zap, Link, AlertCircle, Database, Settings, Cpu, UploadCloud, File, X, Loader2 } = (window as any).Lucide;
 
 const ScannerInput = ({ onScan }) => {
   const [companyName, setCompanyName] = useState('');
   const [companyUrl, setCompanyUrl] = useState('');
   const [reportText, setReportText] = useState('');
   const [urlError, setUrlError] = useState('');
-  const [showModels, setShowModels] = useState(false);
-  const [modelList, setModelList] = useState([]);
-  const [loadingModels, setLoadingModels] = useState(false);
-  
+
   // NEW: File Upload State
   const [selectedFiles, setSelectedFiles] = useState([]);
   const fileInputRef = useRef(null);
-  
-  // NEW: Model Override State
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  // Default is empty string, which implies "Hybrid Auto-Pilot"
-  const [selectedModel, setSelectedModel] = useState('');
-  
+
   // NEW: Auto-Discovery State
   const [isFindingUrl, setIsFindingUrl] = useState(false);
 
@@ -39,7 +32,7 @@ const ScannerInput = ({ onScan }) => {
   const handleUrlChange = (e) => {
     const val = e.target.value;
     setCompanyUrl(val);
-    
+
     if (val && !validateUrl(val)) {
       setUrlError("Invalid URL format. Please include http:// or https://");
     } else {
@@ -74,7 +67,7 @@ const ScannerInput = ({ onScan }) => {
         alert("Maximum 3 documents allowed.");
         return;
     }
-    
+
     const validFiles = files.filter((f: any) => {
         const isValidType = f.type === 'application/pdf' || f.type === 'text/html' || f.name.endsWith('.pdf') || f.name.endsWith('.html');
         const isValidSize = f.size <= MAX_FILE_SIZE;
@@ -88,11 +81,11 @@ const ScannerInput = ({ onScan }) => {
 
         return isValidType && isValidSize;
     });
-    
+
     if (validFiles.length !== files.length && files.some((f: any) => f.size <= MAX_FILE_SIZE)) {
         alert("Some files were skipped due to invalid format.");
     }
-    
+
     setSelectedFiles(prev => [...prev, ...validFiles]);
   };
 
@@ -102,7 +95,7 @@ const ScannerInput = ({ onScan }) => {
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    
+
     if (!companyName) {
       alert("Company Name is required.");
       return;
@@ -123,52 +116,14 @@ const ScannerInput = ({ onScan }) => {
     formData.append('companyName', companyName);
     if (companyUrl) formData.append('companyUrl', companyUrl);
     formData.append('reportText', reportText);
-    
-    // Only append modelId if user explicitly selected one. 
-    // If empty, backend uses Hybrid default.
-    if (selectedModel) {
-        formData.append('modelId', selectedModel);
-    }
-    
     formData.append('saveToDatabase', 'true');
-    
+
     selectedFiles.forEach(file => {
         formData.append('files', file);
     });
 
     // Pass formData to parent
     onScan(formData, true); // true flag indicates it's FormData
-  };
-
-  const fetchModels = async () => {
-    if (showModels) {
-        setShowModels(false);
-        return;
-    }
-    setLoadingModels(true);
-    setShowModels(true);
-    try {
-        const res = await fetch('/api/models');
-        const json = await res.json();
-        if (json.models) {
-            setModelList(json.models);
-        } else {
-            setModelList(["Error fetching models: " + JSON.stringify(json)]);
-        }
-    } catch (e) {
-        setModelList(["Network Error: " + e.message]);
-    } finally {
-        setLoadingModels(false);
-    }
-  };
-
-  // Helper to display current selection
-  const getModelLabel = () => {
-      if (!selectedModel) return "STRATEGY: HYBRID (DEFAULT)";
-      if (selectedModel.includes('3-pro')) return "STRATEGY: FORCE 3 PRO";
-      if (selectedModel.includes('flash')) return "STRATEGY: FORCE 3 FLASH";
-      if (selectedModel.includes('2.5')) return "STRATEGY: FORCE 2.5 PRO";
-      return selectedModel;
   };
 
   return (
@@ -180,88 +135,8 @@ const ScannerInput = ({ onScan }) => {
             </h3>
             <p className="text-[10px] text-slate-400 mt-1 uppercase tracking-widest font-semibold">Forensic Parameters (Finland Top 100)</p>
         </div>
-        <div className="flex gap-2 text-xs">
-           <button type="button" onClick={() => setShowAdvanced(!showAdvanced)} className={`px-3 py-1.5 rounded border transition-all font-mono text-[10px] flex items-center gap-1 font-bold ${!selectedModel ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-amber-500/10 text-amber-400 border-amber-500/30'}`}>
-            <Cpu size={10} /> {getModelLabel()}
-           </button>
-           <button type="button" onClick={fetchModels} className="px-3 py-1.5 rounded bg-white/5 hover:bg-white/10 text-slate-400 hover:text-cyan-300 border border-transparent hover:border-cyan-500/30 transition-all font-mono text-[10px] flex items-center gap-1">
-            <Database size={10} /> {showModels ? "HIDE LIST" : "CHECK SERVER"}
-           </button>
-        </div>
       </div>
 
-      {showModels && (
-          <div className="bg-black/30 p-4 border-b border-white/5 animate-in slide-in-from-top-2">
-            <h4 className="text-xs font-bold text-white mb-2">Available Gemini Models (Server-Side)</h4>
-            {loadingModels ? (
-                <div className="text-xs text-slate-400">Querying Google Cloud...</div>
-            ) : (
-                <div className="grid grid-cols-2 gap-2 max-h-32 overflow-y-auto custom-scrollbar">
-                    {modelList.map((m, i) => (
-                        <div key={i} className="text-[10px] font-mono text-emerald-400 bg-emerald-950/30 px-2 py-1 rounded border border-emerald-900/50 truncate cursor-pointer hover:bg-emerald-900/50" onClick={() => { setSelectedModel(m); setShowModels(false); setShowAdvanced(true); }}>
-                            {m}
-                        </div>
-                    ))}
-                    {modelList.length === 0 && <div className="text-xs text-rose-400">No models found or API Key invalid.</div>}
-                </div>
-            )}
-          </div>
-      )}
-
-      {showAdvanced && (
-          <div className="bg-indigo-950/20 p-4 border-b border-indigo-500/20 animate-in slide-in-from-top-2 flex flex-col gap-2">
-             <label className="text-[10px] font-bold uppercase tracking-widest text-indigo-300 flex items-center gap-2">
-                <Cpu size={12} /> Model Selection Strategy
-             </label>
-             <div className="flex flex-col gap-3">
-                 <div className="flex gap-1 flex-wrap">
-                    <button 
-                        type="button"
-                        onClick={() => setSelectedModel('')} 
-                        className={`flex-1 px-3 py-2 rounded text-[10px] border transition-all flex flex-col items-center gap-1 ${selectedModel === '' ? 'bg-emerald-600 text-white border-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
-                    >
-                        <span className="font-bold flex items-center gap-1"><Sparkles size={10} /> HYBRID (DEFAULT)</span>
-                        <span className="text-[9px] opacity-90">3 Pro (Logic) + 2.5 Pro (Text)</span>
-                    </button>
-                    
-                    <button 
-                        type="button"
-                        onClick={() => setSelectedModel('gemini-3-pro-preview')} 
-                        className={`flex-1 px-3 py-2 rounded text-[10px] border transition-all flex flex-col items-center gap-1 ${selectedModel === 'gemini-3-pro-preview' ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
-                    >
-                        <span className="font-bold">3 PRO</span>
-                        <span className="text-[9px] opacity-70">Force High Logic</span>
-                    </button>
-                    
-                    <button 
-                        type="button"
-                        onClick={() => setSelectedModel('gemini-3-flash-preview')} 
-                        className={`flex-1 px-3 py-2 rounded text-[10px] border transition-all flex flex-col items-center gap-1 ${selectedModel === 'gemini-3-flash-preview' ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
-                    >
-                        <span className="font-bold">3 FLASH</span>
-                        <span className="text-[9px] opacity-70">Force Speed</span>
-                    </button>
-                    
-                    <button 
-                        type="button"
-                        onClick={() => setSelectedModel('gemini-2.5-pro')} 
-                        className={`flex-1 px-3 py-2 rounded text-[10px] border transition-all flex flex-col items-center gap-1 ${selectedModel === 'gemini-2.5-pro' ? 'bg-indigo-600 text-white border-indigo-400' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}
-                    >
-                        <span className="font-bold">2.5 PRO</span>
-                        <span className="text-[9px] opacity-70">Force Creative</span>
-                    </button>
-                 </div>
-                 
-                 {selectedModel !== '' && (
-                     <div className="flex items-center gap-2 text-[10px] text-amber-300 bg-amber-950/30 p-2 rounded border border-amber-900/50">
-                         <AlertCircle size={12} />
-                         <span>Override Active: Single model used for entire pipeline.</span>
-                     </div>
-                 )}
-             </div>
-          </div>
-      )}
-      
       <form onSubmit={handleSubmit} className="p-8 space-y-6">
         <div className="grid md:grid-cols-2 gap-6">
           <div className="space-y-2">
@@ -281,7 +156,7 @@ const ScannerInput = ({ onScan }) => {
               </div>
             </div>
           </div>
-          
+
           <div className="space-y-2">
             <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500">Domain URL (Recommended)</label>
             <div className="relative group">
@@ -314,21 +189,21 @@ const ScannerInput = ({ onScan }) => {
                 <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-500">Deep Dive Sources (Internal Docs)</label>
                 <span className="text-[10px] text-slate-500 bg-white/5 px-2 py-0.5 rounded border border-white/5">Optional • PDF/HTML • Max 3 • &lt;10MB</span>
             </div>
-            
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div 
+                <div
                     onClick={() => fileInputRef.current?.click()}
                     className="md:col-span-1 h-32 border border-dashed border-white/10 rounded-lg bg-black/20 hover:bg-white/5 hover:border-cyan-500/30 transition-all cursor-pointer flex flex-col items-center justify-center gap-2 group"
                 >
                     <UploadCloud size={24} className="text-slate-500 group-hover:text-cyan-400 transition-colors" />
                     <span className="text-xs text-slate-400 font-medium group-hover:text-white">Add Document</span>
-                    <input 
-                        type="file" 
-                        multiple 
-                        accept=".pdf,.html,.htm" 
-                        ref={fileInputRef} 
-                        className="hidden" 
-                        onChange={handleFileChange} 
+                    <input
+                        type="file"
+                        multiple
+                        accept=".pdf,.html,.htm"
+                        ref={fileInputRef}
+                        className="hidden"
+                        onChange={handleFileChange}
                     />
                 </div>
 

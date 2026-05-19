@@ -1,0 +1,686 @@
+"""
+Score Correlation & Statistical Analysis
+=========================================
+Analyzes all company scores from the dashboard index and runs:
+  1. Spearman, Kendall & Pearson correlation: Reality Score vs Financial Index
+  2. Correlation matrix across all numeric scores (Spearman + Pearson)
+  3. Descriptive statistics (median, IQR, mean, std, min, max, skew)
+  4. Distribution shape diagnostics (skewness-aware)
+  5. Archetype distribution
+  6. Regression residuals (companies furthest from fit line)
+  7. Domain/industry and ownership breakdowns
+  8. Score distributions
+
+Statistical note: Reality Score and Financial Index are right-skewed
+(Poisson-like) distributions bounded at zero. Non-parametric methods
+(Spearman, Kendall) are used as primary correlation measures since
+they don't assume normality. Pearson is kept for reference but should
+be interpreted with caution on skewed data.
+
+Can be used as:
+  - API: imported by main.py and called via /api/analyze endpoint
+  - CLI: python backend/analyze_scores.py (requires BLOB_READ_WRITE_TOKEN env var)
+"""
+
+import json, sys, statistics, math
+from collections import Counter
+
+
+# ---------------------------------------------------------------------------
+# 1. DATA LOADING
+# ---------------------------------------------------------------------------
+
+def load_data_from_storage():
+    """Load dashboard data via the BlobStorage layer (requires token in env)."""
+    from storage import BlobStorage
+    storage = BlobStorage()
+    data = storage.retrieve_latest_data("index/summary_list")
+    return data or []
+
+
+def load_data_from_api():
+    """Fetch from the live API (fallback for local dev without blob token)."""
+    import requests, os
+    base = os.environ.get("VITE_API_URL", "https://diagnostic-engine.up.railway.app")
+    resp = requests.get(f"{base}/dashboard-data", timeout=30)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def load_data():
+    """Try storage first, then API fallback."""
+    import os
+    if os.environ.get("BLOB_READ_WRITE_TOKEN"):
+        print("Loading data from Vercel Blob Storage...")
+        data = load_data_from_storage()
+    else:
+        print("No BLOB_READ_WRITE_TOKEN found, trying API...")
+        data = load_data_from_api()
+    print(f"  -> {len(data)} companies loaded.\n")
+    return data
+
+
+# ---------------------------------------------------------------------------
+# 2. HELPERS
+# ---------------------------------------------------------------------------
+
+def pearson(x, y):
+    n = len(x)
+    if n < 3:
+        return None, None
+    mx, my = statistics.mean(x), statistics.mean(y)
+    sx = math.sqrt(sum((xi - mx)**2 for xi in x) / (n - 1))
+    sy = math.sqrt(sum((yi - my)**2 for yi in y) / (n - 1))
+    if sx == 0 or sy == 0:
+        return 0.0, 1.0
+    r = sum((xi - mx) * (yi - my) for xi, yi in zip(x, y)) / ((n - 1) * sx * sy)
+    t_stat = r * math.sqrt((n - 2) / (1 - r**2 + 1e-12))
+    p = 2 * (1 - _norm_cdf(abs(t_stat))) if n > 30 else None
+    return r, p
+
+
+def spearman(x, y):
+    """Spearman rank correlation (non-parametric)."""
+    def _rank(vals):
+        indexed = sorted(enumerate(vals), key=lambda t: t[1])
+        ranks = [0.0] * len(vals)
+        i = 0
+        while i < len(indexed):
+            j = i
+            while j < len(indexed) and indexed[j][1] == indexed[i][1]:
+                j += 1
+            avg_rank = (i + j + 1) / 2
+            for k in range(i, j):
+                ranks[indexed[k][0]] = avg_rank
+            i = j
+        return ranks
+    return pearson(_rank(x), _rank(y))
+
+
+def _norm_cdf(z):
+    return 0.5 * (1 + math.erf(z / math.sqrt(2)))
+
+
+def _describe(values):
+    """Return descriptive statistics as a dict.
+
+    Includes IQR and distribution shape diagnosis because our score
+    distributions (Reality, Financial) tend to be right-skewed rather
+    than normal.  Median/IQR are more informative than mean/std for
+    skewed data.
+    """
+    if not values:
+        return None
+    n = len(values)
+    avg = statistics.mean(values)
+    med = statistics.median(values)
+    std = statistics.stdev(values) if n > 1 else 0
+    skew = 0
+    if std > 0 and n > 2:
+        skew = (n / ((n-1)*(n-2))) * sum(((v - avg)/std)**3 for v in values)
+
+    sv = sorted(values)
+    q1 = sv[n // 4] if n >= 4 else sv[0]
+    q3 = sv[(3 * n) // 4] if n >= 4 else sv[-1]
+    iqr = round(q3 - q1, 1)
+
+    # Distribution shape diagnosis
+    if abs(skew) < 0.5:
+        shape = "approximately symmetric"
+    elif skew > 1.0:
+        shape = "strongly right-skewed"
+    elif skew > 0.5:
+        shape = "moderately right-skewed"
+    elif skew < -1.0:
+        shape = "strongly left-skewed"
+    else:
+        shape = "moderately left-skewed"
+
+    return {
+        "n": n,
+        "median": round(med, 1),
+        "q1": round(q1, 1),
+        "q3": round(q3, 1),
+        "iqr": iqr,
+        "mean": round(avg, 1),
+        "std": round(std, 1),
+        "min": round(min(values), 1),
+        "max": round(max(values), 1),
+        "skew": round(skew, 2),
+        "shape": shape,
+    }
+
+
+def kendall_tau(x, y):
+    """Kendall's tau-b rank correlation (handles ties).
+
+    Non-parametric — makes no distributional assumptions.
+    More robust than Spearman with small samples and many ties.
+    O(n^2) but fine for our dataset sizes (15-30 companies).
+    """
+    n = len(x)
+    if n < 3:
+        return None, None
+    concordant = 0
+    discordant = 0
+    tied_x = 0
+    tied_y = 0
+    for i in range(n):
+        for j in range(i + 1, n):
+            dx = x[i] - x[j]
+            dy = y[i] - y[j]
+            if dx * dy > 0:
+                concordant += 1
+            elif dx * dy < 0:
+                discordant += 1
+            else:
+                if dx == 0:
+                    tied_x += 1
+                if dy == 0:
+                    tied_y += 1
+    n_pairs = n * (n - 1) / 2
+    denom = math.sqrt((n_pairs - tied_x) * (n_pairs - tied_y))
+    if denom == 0:
+        return 0.0, 1.0
+    tau = (concordant - discordant) / denom
+    # Normal approximation for p-value (reasonable for n >= 10)
+    if n >= 10:
+        var = (2 * (2 * n + 5)) / (9 * n * (n - 1))
+        z = tau / math.sqrt(var) if var > 0 else 0
+        p = 2 * (1 - _norm_cdf(abs(z)))
+    else:
+        p = None
+    return round(tau, 3), round(p, 4) if p is not None else None
+
+
+def classify_archetype(reality, financial):
+    """Classify using Reality vs Financial (unified archetype system)."""
+    if reality >= 50:
+        return "Thriving" if financial >= 50 else "Modernizing"
+    else:
+        return "Cash Cow" if financial >= 50 else "At Risk"
+
+
+# ---------------------------------------------------------------------------
+# 3. ANALYSIS ENGINE (returns structured dict)
+# ---------------------------------------------------------------------------
+
+def _analyze_dataset(companies, label="full"):
+    """Core analysis logic on a list of company dicts. Returns a structured dict."""
+    if len(companies) < 3:
+        return {"error": "Not enough companies with scores to analyze", "n": len(companies), "label": label}
+
+    result = {"n": len(companies), "label": label}
+
+    # --- A. Descriptive Statistics ---
+    result["descriptive"] = {
+        "intent": _describe([c["intent"] for c in companies]),
+        "reality": _describe([c["reality"] for c in companies]),
+        "financial": _describe([c["financial"] for c in companies if c["financial"] is not None]),
+        "confidence": _describe([c["confidence"] for c in companies if c["confidence"] is not None]),
+        "gap": _describe([c["gap"] for c in companies if c["gap"] is not None]),
+    }
+
+    # --- B. Core Correlation: Reality vs Financial ---
+    # Spearman (rank-based) is the primary metric because our data is
+    # right-skewed / Poisson-like, not normally distributed.
+    # Kendall's tau is included as a second non-parametric measure —
+    # it's more robust with small n and many ties.
+    # Pearson is kept for reference but may be misleading on skewed data.
+    paired_rf = [(c["reality"], c["financial"]) for c in companies if c["financial"] is not None]
+    core_corr = {"n": len(paired_rf)}
+    if len(paired_rf) >= 3:
+        rx, ry = zip(*paired_rf)
+        r_s, p_s = spearman(list(rx), list(ry))
+        tau, p_tau = kendall_tau(list(rx), list(ry))
+        r_p, p_p = pearson(list(rx), list(ry))
+
+        core_corr["spearman_rho"] = round(r_s, 3) if r_s is not None else None
+        core_corr["spearman_p"] = round(p_s, 4) if p_s is not None else None
+        core_corr["kendall_tau"] = tau
+        core_corr["kendall_p"] = p_tau
+        core_corr["pearson_r"] = round(r_p, 3) if r_p is not None else None
+        core_corr["pearson_p"] = round(p_p, 4) if p_p is not None else None
+
+        # Interpret based on Spearman (appropriate for skewed data)
+        primary = abs(r_s) if r_s else 0
+        if primary < 0.1:
+            interp = "negligible"
+        elif primary < 0.3:
+            interp = "weak"
+        elif primary < 0.5:
+            interp = "moderate"
+        elif primary < 0.7:
+            interp = "strong"
+        else:
+            interp = "very strong"
+        direction = "positive" if r_s and r_s > 0 else "negative"
+        core_corr["interpretation"] = f"{interp} {direction}"
+
+        # Note if Pearson and Spearman disagree meaningfully
+        if r_p is not None and r_s is not None:
+            delta = abs(r_p - r_s)
+            if delta > 0.15:
+                core_corr["divergence_note"] = (
+                    f"Pearson ({r_p:+.3f}) and Spearman ({r_s:+.3f}) differ by {delta:.3f}. "
+                    f"This is expected with skewed distributions — Spearman is more reliable here."
+                )
+
+        # Residuals from regression line (Spearman-based rank regression)
+        if len(paired_rf) >= 5 and r_p is not None:
+            sx_val = statistics.stdev(list(rx))
+            slope = r_p * (statistics.stdev(list(ry)) / (sx_val + 1e-12)) if sx_val else 0
+            intercept = statistics.mean(list(ry)) - slope * statistics.mean(list(rx))
+            residuals = []
+            for c in companies:
+                if c["financial"] is not None:
+                    predicted = slope * c["reality"] + intercept
+                    residual = c["financial"] - predicted
+                    residuals.append({
+                        "name": c["name"],
+                        "x_val": c["reality"],
+                        "y_val": c["financial"],
+                        "reality": c["reality"],
+                        "financial": c["financial"],
+                        "residual": round(residual, 1),
+                    })
+            residuals.sort(key=lambda r: abs(r["residual"]), reverse=True)
+            core_corr["residuals"] = residuals[:5]
+
+    result["reality_vs_financial"] = core_corr
+
+    # --- B2. Correlation: Intent vs Reality ---
+    paired_ir = [(c["intent"], c["reality"]) for c in companies]
+    ir_corr = {"n": len(paired_ir)}
+    if len(paired_ir) >= 3:
+        ix, iy = zip(*paired_ir)
+        r_s, p_s = spearman(list(ix), list(iy))
+        tau, p_tau = kendall_tau(list(ix), list(iy))
+        r_p, p_p = pearson(list(ix), list(iy))
+        ir_corr["spearman_rho"] = round(r_s, 3) if r_s is not None else None
+        ir_corr["spearman_p"] = round(p_s, 4) if p_s is not None else None
+        ir_corr["kendall_tau"] = tau
+        ir_corr["kendall_p"] = p_tau
+        ir_corr["pearson_r"] = round(r_p, 3) if r_p is not None else None
+        ir_corr["pearson_p"] = round(p_p, 4) if p_p is not None else None
+        primary = abs(r_s) if r_s else 0
+        if primary < 0.1: interp = "negligible"
+        elif primary < 0.3: interp = "weak"
+        elif primary < 0.5: interp = "moderate"
+        elif primary < 0.7: interp = "strong"
+        else: interp = "very strong"
+        direction = "positive" if r_s and r_s > 0 else "negative"
+        ir_corr["interpretation"] = f"{interp} {direction}"
+        if r_p is not None and r_s is not None:
+            delta = abs(r_p - r_s)
+            if delta > 0.15:
+                ir_corr["divergence_note"] = (
+                    f"Pearson ({r_p:+.3f}) and Spearman ({r_s:+.3f}) differ by {delta:.3f}. "
+                    f"This is expected with skewed distributions — Spearman is more reliable here."
+                )
+        # Residuals: Intent → Reality regression
+        if len(paired_ir) >= 5 and r_p is not None:
+            sx_val = statistics.stdev(list(ix))
+            slope = r_p * (statistics.stdev(list(iy)) / (sx_val + 1e-12)) if sx_val else 0
+            intercept = statistics.mean(list(iy)) - slope * statistics.mean(list(ix))
+            residuals = []
+            for c in companies:
+                predicted = slope * c["intent"] + intercept
+                residual = c["reality"] - predicted
+                residuals.append({
+                    "name": c["name"],
+                    "x_val": c["intent"],
+                    "y_val": c["reality"],
+                    "residual": round(residual, 1),
+                })
+            residuals.sort(key=lambda r: abs(r["residual"]), reverse=True)
+            ir_corr["residuals"] = residuals[:5]
+    result["intent_vs_reality"] = ir_corr
+
+    # --- B3. Correlation: Intent vs Financial ---
+    paired_if = [(c["intent"], c["financial"]) for c in companies if c["financial"] is not None]
+    if_corr = {"n": len(paired_if)}
+    if len(paired_if) >= 3:
+        ix, iy = zip(*paired_if)
+        r_s, p_s = spearman(list(ix), list(iy))
+        tau, p_tau = kendall_tau(list(ix), list(iy))
+        r_p, p_p = pearson(list(ix), list(iy))
+        if_corr["spearman_rho"] = round(r_s, 3) if r_s is not None else None
+        if_corr["spearman_p"] = round(p_s, 4) if p_s is not None else None
+        if_corr["kendall_tau"] = tau
+        if_corr["kendall_p"] = p_tau
+        if_corr["pearson_r"] = round(r_p, 3) if r_p is not None else None
+        if_corr["pearson_p"] = round(p_p, 4) if p_p is not None else None
+        primary = abs(r_s) if r_s else 0
+        if primary < 0.1: interp = "negligible"
+        elif primary < 0.3: interp = "weak"
+        elif primary < 0.5: interp = "moderate"
+        elif primary < 0.7: interp = "strong"
+        else: interp = "very strong"
+        direction = "positive" if r_s and r_s > 0 else "negative"
+        if_corr["interpretation"] = f"{interp} {direction}"
+        if r_p is not None and r_s is not None:
+            delta = abs(r_p - r_s)
+            if delta > 0.15:
+                if_corr["divergence_note"] = (
+                    f"Pearson ({r_p:+.3f}) and Spearman ({r_s:+.3f}) differ by {delta:.3f}. "
+                    f"This is expected with skewed distributions — Spearman is more reliable here."
+                )
+        # Residuals: Intent → Financial regression
+        if len(paired_if) >= 5 and r_p is not None:
+            sx_val = statistics.stdev(list(ix))
+            slope = r_p * (statistics.stdev(list(iy)) / (sx_val + 1e-12)) if sx_val else 0
+            intercept = statistics.mean(list(iy)) - slope * statistics.mean(list(ix))
+            residuals = []
+            for c in companies:
+                if c["financial"] is not None:
+                    predicted = slope * c["intent"] + intercept
+                    residual = c["financial"] - predicted
+                    residuals.append({
+                        "name": c["name"],
+                        "x_val": c["intent"],
+                        "y_val": c["financial"],
+                        "residual": round(residual, 1),
+                    })
+            residuals.sort(key=lambda r: abs(r["residual"]), reverse=True)
+            if_corr["residuals"] = residuals[:5]
+    result["intent_vs_financial"] = if_corr
+
+    # --- C. Full Correlation Matrix (Spearman + Pearson) ---
+    score_keys = ["intent", "reality", "financial", "confidence"]
+    matrix_spearman = {}
+    matrix_pearson = {}
+    for ki in score_keys:
+        row_s = {}
+        row_p = {}
+        for kj in score_keys:
+            pairs = [(c[ki], c[kj]) for c in companies if c[ki] is not None and c[kj] is not None]
+            if len(pairs) >= 3:
+                x, y = zip(*pairs)
+                rs, _ = spearman(list(x), list(y))
+                rp, _ = pearson(list(x), list(y))
+                row_s[kj] = round(rs, 3) if rs is not None else None
+                row_p[kj] = round(rp, 3) if rp is not None else None
+            else:
+                row_s[kj] = None
+                row_p[kj] = None
+        matrix_spearman[ki] = row_s
+        matrix_pearson[ki] = row_p
+    result["correlation_matrix"] = matrix_spearman
+    result["correlation_matrix_pearson"] = matrix_pearson
+
+    # --- D. Archetype Distribution ---
+    archetypes = [classify_archetype(c["reality"], c["financial"] if c["financial"] is not None else c["intent"]) for c in companies]
+    counts = Counter(archetypes)
+    total = len(archetypes)
+    result["archetypes"] = {
+        arch: {"count": counts.get(arch, 0), "pct": round(counts.get(arch, 0) / total * 100, 1)}
+        for arch in ["Thriving", "Modernizing", "Cash Cow", "At Risk"]
+    }
+
+    # --- E. Domain Breakdown ---
+    domains = {}
+    for c in companies:
+        d = c["domain"] or "Unknown"
+        domains.setdefault(d, []).append(c)
+    domain_stats = {}
+    for d, cs in sorted(domains.items()):
+        fin_vals = [c["financial"] for c in cs if c["financial"] is not None]
+        gap_vals = [c["gap"] for c in cs if c["gap"] is not None]
+        domain_stats[d] = {
+            "n": len(cs),
+            "avg_intent": round(statistics.mean([c["intent"] for c in cs]), 1),
+            "avg_reality": round(statistics.mean([c["reality"] for c in cs]), 1),
+            "avg_financial": round(statistics.mean(fin_vals), 1) if fin_vals else None,
+            "avg_gap": round(statistics.mean(gap_vals), 1) if gap_vals else None,
+        }
+    result["by_domain"] = domain_stats
+
+    # --- F. Ownership Breakdown ---
+    ownerships = {}
+    for c in companies:
+        o = c["ownership"] or "Unknown"
+        ownerships.setdefault(o, []).append(c)
+    ownership_stats = {}
+    for o, cs in sorted(ownerships.items()):
+        fin_vals = [c["financial"] for c in cs if c["financial"] is not None]
+        ownership_stats[o] = {
+            "n": len(cs),
+            "avg_intent": round(statistics.mean([c["intent"] for c in cs]), 1),
+            "avg_reality": round(statistics.mean([c["reality"] for c in cs]), 1),
+            "avg_financial": round(statistics.mean(fin_vals), 1) if fin_vals else None,
+        }
+    result["by_ownership"] = ownership_stats
+
+    # --- G. Top & Bottom ---
+    by_reality = sorted(companies, key=lambda c: c["reality"], reverse=True)
+    result["top_10_reality"] = [
+        {"name": c["name"], "intent": c["intent"], "reality": c["reality"], "financial": c["financial"]}
+        for c in by_reality[:10]
+    ]
+    result["bottom_10_reality"] = [
+        {"name": c["name"], "intent": c["intent"], "reality": c["reality"], "financial": c["financial"]}
+        for c in by_reality[-10:]
+    ]
+
+    # --- H. Distributions ---
+    distributions = {}
+    for key in ["intent", "reality", "financial"]:
+        vals = [c[key] for c in companies if c[key] is not None]
+        if not vals:
+            continue
+        bins = [0] * 10
+        for v in vals:
+            idx = min(int(v // 10), 9)
+            bins[idx] += 1
+        distributions[key] = {
+            "n": len(vals),
+            "bins": [{"range": f"{i*10}-{(i+1)*10-1 if i < 9 else 100}", "count": bins[i]} for i in range(10)],
+        }
+    result["distributions"] = distributions
+
+    return result
+
+
+def run_analysis(data):
+    """Run full statistical analysis on dashboard data.
+
+    Returns a structured dict with all analysis at the top level.
+    No outlier removal or data cleaning is performed — all companies
+    with valid scores are analyzed as-is. Low-scoring companies are
+    legitimate data points (struggling companies), not statistical
+    artifacts to be removed.
+
+    Non-parametric methods (Spearman, Kendall) are used as primary
+    correlation measures because our score distributions are right-skewed
+    (Poisson-like), not normally distributed.
+    """
+
+    # --- Extract scores ---
+    companies = []
+    for c in data:
+        intent = c.get("intent_score")
+        reality = c.get("reality_score")
+        if intent is None or reality is None:
+            continue
+        companies.append({
+            "name": c.get("companyName", "?"),
+            "intent": float(intent),
+            "reality": float(reality),
+            "financial": float(c["financial_index"]) if c.get("financial_index") is not None else None,
+            "confidence": float(c["confidence_score"]) if c.get("confidence_score") is not None else None,
+            "gap": float(c["reality_gap"]) if c.get("reality_gap") is not None else None,
+            "revenue": float(c["revenue_avg_3yr"]) if c.get("revenue_avg_3yr") else None,
+            "employees": int(c["employees"]) if c.get("employees") else None,
+            "ownership": c.get("ownership", ""),
+            "domain": c.get("domain", ""),
+        })
+
+    if len(companies) < 3:
+        return {"error": "Not enough companies with scores to analyze", "n": len(companies)}
+
+    # Single-pass analysis on all data
+    result = _analyze_dataset(companies, label="full")
+
+    # --- Distribution diagnostics ---
+    # Flag which variables are significantly skewed so the frontend
+    # can explain why non-parametric methods are used.
+    dist_notes = {}
+    for key in ["reality", "financial"]:
+        desc = result.get("descriptive", {}).get(key)
+        if desc and abs(desc["skew"]) > 0.5:
+            dist_notes[key] = {
+                "skew": desc["skew"],
+                "shape": desc["shape"],
+                "note": (
+                    f"{key.title()} distribution is {desc['shape']} (skew={desc['skew']:+.2f}). "
+                    f"Non-parametric correlations (Spearman, Kendall) are more reliable than "
+                    f"Pearson for this data shape."
+                ),
+            }
+    if dist_notes:
+        result["distribution_diagnostics"] = dist_notes
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# 4. PRETTY PRINTER (for CLI usage)
+# ---------------------------------------------------------------------------
+
+def print_analysis(r):
+    """Print structured analysis results in a human-readable format."""
+    if "error" in r:
+        print(f"ERROR: {r['error']}")
+        return
+
+    print(f"{'='*70}")
+    print(f" STATISTICAL ANALYSIS — {r['n']} companies")
+    print(f"{'='*70}\n")
+
+    # A. Descriptive
+    print("A. DESCRIPTIVE STATISTICS")
+    print("-" * 70)
+    for label, key in [("Intent Score", "intent"), ("Reality Score", "reality"),
+                       ("Financial Index", "financial"), ("Confidence Score", "confidence"),
+                       ("Reality Gap (I-R)", "gap")]:
+        d = r["descriptive"].get(key)
+        if d:
+            print(f"  {label:25s}  n={d['n']:3d}  median={d['median']:5.1f}  IQR=[{d['q1']:.1f}-{d['q3']:.1f}]({d['iqr']:.1f})  "
+                  f"mean={d['mean']:5.1f}  std={d['std']:5.1f}  range=[{d['min']:.1f}-{d['max']:.1f}]  "
+                  f"skew={d['skew']:+.2f}  [{d['shape']}]")
+        else:
+            print(f"  {label:25s}  no data")
+    print()
+
+    # B. Core Correlation
+    print("B. CORE CORRELATION: Reality Score vs Financial Index")
+    print("-" * 70)
+    cc = r["reality_vs_financial"]
+    if cc.get("spearman_rho") is not None:
+        print(f"  Paired observations:  n = {cc['n']}")
+        s_str = f"(p={cc['spearman_p']:.4f})" if cc.get('spearman_p') is not None else "(p: n/a, n<30)"
+        t_str = f"(p={cc['kendall_p']:.4f})" if cc.get('kendall_p') is not None else "(p: n/a, n<10)"
+        p_str = f"(p={cc['pearson_p']:.4f})" if cc.get('pearson_p') is not None else "(p: n/a, n<30)"
+        print(f"  Spearman rho = {cc['spearman_rho']:+.3f}  {s_str}  [PRIMARY — non-parametric]")
+        print(f"  Kendall  tau = {cc['kendall_tau']:+.3f}  {t_str}  [non-parametric]")
+        print(f"  Pearson  r   = {cc['pearson_r']:+.3f}  {p_str}  [assumes normality — use with caution]")
+        print(f"\n  Interpretation (Spearman): {cc['interpretation'].upper()}")
+        if cc.get("divergence_note"):
+            print(f"  NOTE: {cc['divergence_note']}")
+        if cc.get("residuals"):
+            print(f"\n  Largest residuals from Reality->Financial regression:")
+            for i, o in enumerate(cc["residuals"]):
+                label = "Financial > expected" if o["residual"] > 0 else "Financial < expected"
+                fin = f"{o['financial']:4.0f}"
+                print(f"    {i+1}. {o['name']:35s}  Reality={o['reality']:4.0f}  Financial={fin}  residual={o['residual']:+.1f}  ({label})")
+    else:
+        print(f"  Not enough paired data (n={cc['n']}). Need >=3 companies with both scores.")
+    print()
+
+    # C. Correlation Matrix
+    print("C. FULL CORRELATION MATRIX (Spearman)")
+    print("-" * 70)
+    labels = ["Intent", "Reality", "Financial", "Confidence"]
+    keys = ["intent", "reality", "financial", "confidence"]
+    print(f"  {'':15s}", end="")
+    for lbl in labels:
+        print(f"{lbl:>12s}", end="")
+    print()
+    for i, ki in enumerate(keys):
+        print(f"  {labels[i]:15s}", end="")
+        for kj in keys:
+            v = r["correlation_matrix"].get(ki, {}).get(kj)
+            print(f"{v:+12.3f}" if v is not None else f"{'n/a':>12s}", end="")
+        print()
+    print()
+
+    # D. Archetypes
+    print("D. ARCHETYPE DISTRIBUTION")
+    print("-" * 70)
+    for arch in ["Thriving", "Modernizing", "Cash Cow", "At Risk"]:
+        a = r["archetypes"][arch]
+        bar = "#" * int(a["pct"] / 100 * 40)
+        print(f"  {arch:30s}  {a['count']:3d} ({a['pct']:4.1f}%)  {bar}")
+    print()
+
+    # E. Domain
+    print("E. AVERAGE SCORES BY INDUSTRY DOMAIN")
+    print("-" * 70)
+    print(f"  {'Domain':40s} {'n':>3s} {'Intent':>7s} {'Reality':>8s} {'Fin.Idx':>8s} {'Gap':>6s}")
+    for d, s in r["by_domain"].items():
+        fin = f"{s['avg_financial']:8.1f}" if s["avg_financial"] is not None else "     n/a"
+        gap = f"{s['avg_gap']:+6.1f}" if s["avg_gap"] is not None else "   n/a"
+        print(f"  {d:40s} {s['n']:3d} {s['avg_intent']:7.1f} {s['avg_reality']:8.1f} {fin} {gap}")
+    print()
+
+    # F. Ownership
+    print("F. AVERAGE SCORES BY OWNERSHIP TYPE")
+    print("-" * 70)
+    print(f"  {'Ownership':25s} {'n':>3s} {'Intent':>7s} {'Reality':>8s} {'Fin.Idx':>8s}")
+    for o, s in r["by_ownership"].items():
+        fin = f"{s['avg_financial']:8.1f}" if s["avg_financial"] is not None else "     n/a"
+        print(f"  {o:25s} {s['n']:3d} {s['avg_intent']:7.1f} {s['avg_reality']:8.1f} {fin}")
+    print()
+
+    # G. Top/Bottom
+    print("G. TOP 10 & BOTTOM 10 BY REALITY SCORE")
+    print("-" * 70)
+    print("  TOP 10:")
+    for i, c in enumerate(r["top_10_reality"]):
+        fin = f"{c['financial']:4.0f}" if c["financial"] is not None else " n/a"
+        print(f"    {i+1:2d}. {c['name']:35s}  Intent={c['intent']:4.0f}  Reality={c['reality']:4.0f}  Financial={fin}")
+    print("\n  BOTTOM 10:")
+    for i, c in enumerate(r["bottom_10_reality"]):
+        fin = f"{c['financial']:4.0f}" if c["financial"] is not None else " n/a"
+        print(f"    {i+1:2d}. {c['name']:35s}  Intent={c['intent']:4.0f}  Reality={c['reality']:4.0f}  Financial={fin}")
+    print()
+
+    # H. Distributions
+    print("H. SCORE DISTRIBUTIONS (text histogram)")
+    print("-" * 70)
+    for label, key in [("Reality Score", "reality"), ("Financial Index", "financial"), ("Intent Score", "intent")]:
+        dist = r["distributions"].get(key)
+        if not dist:
+            continue
+        bins = dist["bins"]
+        max_count = max(b["count"] for b in bins) if bins else 1
+        print(f"\n  {label} (n={dist['n']}):")
+        for b in bins:
+            bar = "#" * int(b["count"] / max_count * 30) if max_count > 0 else ""
+            print(f"    {b['range']:>7s}: {bar} {b['count']}")
+    print()
+
+    print("=" * 70)
+    print(" ANALYSIS COMPLETE")
+    print("=" * 70)
+
+
+# ---------------------------------------------------------------------------
+# 5. CLI ENTRY POINT
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    data = load_data()
+    result = run_analysis(data)
+    print_analysis(result)
