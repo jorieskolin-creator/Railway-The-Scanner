@@ -114,6 +114,12 @@ const isForesightContext = (link) => {
   };
   const getSourceSays = (link) => link?.source_says || link?.snippet || link?.description || '';
   const getPossibleRelevance = (link) => link?.possible_relevance || '';
+  const normalizeCredibility = (cred) => {
+    const normalized = String(cred || '').toLowerCase();
+    if (['high', 'very_high', 'trusted', 'authoritative'].includes(normalized)) return 'high';
+    if (['medium', 'moderate'].includes(normalized)) return 'medium';
+    return 'low';
+  };
 
   // ARCHETYPE LOGIC (Reality vs Financial — unified with dashboard)
   // Prefer the stored archetype from the backend (single source of truth).
@@ -836,6 +842,30 @@ const isForesightContext = (link) => {
                     }
                     const allLinks = [...currentLinks, ...foresightLinks, ...historyLinks];
                     const extractDomain = (url) => { try { return new URL(url).hostname.replace('www.', ''); } catch { return url; } };
+                    const trustSummary = allLinks.reduce((acc, link) => {
+                        const cred = normalizeCredibility(link?.source_credibility || link?.credibility || link?.credibility_level);
+                        acc.credibility[cred] = (acc.credibility[cred] || 0) + 1;
+                        if (link?.verified === true || cred === 'high' || link?.ai_verification?.verified === true) acc.verified += 1;
+                        if (link?.verified === false || cred === 'low' || link?.ai_verification?.verified === false) acc.weakOrUnverified += 1;
+                        return acc;
+                    }, { verified: 0, weakOrUnverified: 0, credibility: { high: 0, medium: 0, low: 0 } });
+                    const contradictionWarnings = data?.ai_verification?.contradiction_warnings
+                        || data?.ai_verification?.contradictions
+                        || data?.scan_quality?.contradiction_warnings
+                        || data?.scan_quality?.contradictions
+                        || [];
+                    const hallucinationFlags = data?.hallucination_flags
+                        || data?.ai_verification?.hallucination_flags
+                        || data?.scan_quality?.hallucination_flags
+                        || [];
+                    const unsupportedClaimFlags = data?.ai_verification?.unsupported_claim_flags
+                        || data?.scan_quality?.unsupported_claim_flags
+                        || [];
+                    const previousScanCarryForward = data?.scan_quality?.previous_scan_evidence_carried_forward
+                        ?? data?.ai_verification?.previous_scan_evidence_carried_forward
+                        ?? data?.scan_quality?.evidence_carried_forward
+                        ?? false;
+                    const confidenceScore = data?.confidence_score ?? data?.scan_quality?.confidence_score ?? data?.ai_verification?.confidence_score;
 
                     if (allLinks.length === 0) {
                         return (
@@ -846,14 +876,38 @@ const isForesightContext = (link) => {
                         );
                     }
 
-                    return allLinks.map((link, idx) => (
-                        <a
-                            key={idx}
-                            href={link.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="block p-4 rounded-xl bg-black/20 border border-white/5 hover:border-emerald-500/50 hover:bg-emerald-500/5 transition-all group"
-                        >
+                    return (
+                      <>
+                        <div className="p-4 rounded-xl bg-indigo-500/10 border border-indigo-500/25 space-y-3">
+                            <h4 className="text-sm font-bold text-indigo-200 flex items-center gap-2">
+                                <ShieldCheck size={14} /> Evidence Trust
+                            </h4>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+                                <div className="rounded bg-black/20 border border-white/10 px-3 py-2 text-slate-300">Verified sources: <span className="font-bold text-emerald-300">{trustSummary.verified}</span></div>
+                                <div className="rounded bg-black/20 border border-white/10 px-3 py-2 text-slate-300">Weak / unverified: <span className="font-bold text-rose-300">{trustSummary.weakOrUnverified}</span></div>
+                                <div className="rounded bg-black/20 border border-white/10 px-3 py-2 text-slate-300">Confidence score: <span className="font-bold text-cyan-300">{confidenceScore != null ? `${confidenceScore}%` : 'n/a'}</span></div>
+                                <div className="rounded bg-black/20 border border-white/10 px-3 py-2 text-slate-300">Credibility (H/M/L): <span className="font-bold text-violet-300">{trustSummary.credibility.high} / {trustSummary.credibility.medium} / {trustSummary.credibility.low}</span></div>
+                            </div>
+                            <div className="space-y-1 text-[11px]">
+                                <p className={contradictionWarnings.length > 0 ? 'text-amber-300' : 'text-slate-400'}>
+                                    Contradiction warnings: {contradictionWarnings.length > 0 ? contradictionWarnings.length : 'none'}
+                                </p>
+                                <p className={(hallucinationFlags.length > 0 || unsupportedClaimFlags.length > 0) ? 'text-rose-300' : 'text-slate-400'}>
+                                    Hallucination / unsupported-claim flags: {(hallucinationFlags.length || 0) + (unsupportedClaimFlags.length || 0)}
+                                </p>
+                                <p className={previousScanCarryForward ? 'text-cyan-300' : 'text-slate-400'}>
+                                    Previous-scan evidence carried forward: {previousScanCarryForward ? 'yes' : 'no'}
+                                </p>
+                            </div>
+                        </div>
+                        {allLinks.map((link, idx) => (
+                          <a
+                              key={idx}
+                              href={link.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="block p-4 rounded-xl bg-black/20 border border-white/5 hover:border-emerald-500/50 hover:bg-emerald-500/5 transition-all group"
+                          >
                             <div className="flex items-start justify-between gap-2">
                                 <div className="min-w-0 flex-grow">
                                     <h4 className="font-medium text-slate-200 group-hover:text-emerald-400 transition-colors text-sm line-clamp-1">
@@ -933,8 +987,10 @@ const isForesightContext = (link) => {
                                 </div>
                                 <ExternalLink size={16} className="text-slate-600 group-hover:text-emerald-400 mt-1 shrink-0" />
                             </div>
-                        </a>
-                    ));
+                          </a>
+                        ))}
+                      </>
+                    );
                 })()}
             </div>
             </div>
