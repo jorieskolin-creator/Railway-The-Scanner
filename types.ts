@@ -113,6 +113,7 @@ interface AnalysisResult {
   key_people?: KeyPerson[];
   summary_text: string;
   pitch_text?: string; // NEW: Strategic Pitch
+  evidence_based_risks?: string[]; // Neutral diagnostic risks derived from evidence
   why_proposals?: string[]; // Desired Impact (WHY) — 2 proposals
   what_proposals?: string[]; // Desired Effect (WHAT) — 2 proposals
   lastUpdated: string;

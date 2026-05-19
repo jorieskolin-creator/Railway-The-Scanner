@@ -1623,6 +1623,7 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
   - TEMPORAL PRECISION: When evidence contains the same metric for different periods (e.g. Q1 vs full-year, 2024 vs 2025), always use the most recent FULL-YEAR / ANNUAL figure — not interim or quarterly snapshots. If only a quarterly figure is available, label it explicitly (e.g. "as of Q1 2025"). Never present a quarterly number as if it were the annual result.
   - ORGANIZATIONAL CLAIMS PROHIBITION: NEVER claim or imply leadership gaps, unfilled executive roles, succession planning issues, management vacancies, or organizational restructuring unless the evidence EXPLICITLY states this. The absence of a person in scanner results does NOT mean the role is vacant — it means the scanner didn't find them. Do NOT invent risk factors about people, roles, or organizational structure to add analytical depth. If the evidence doesn't mention an organizational problem, the problem does not exist for this analysis.
   - Use ONLY the four archetype labels: Thriving, Modernizing, Cash Cow, At Risk.
+  - CRITICAL SEPARATION: This section is strictly neutral diagnosis. Do NOT use sales language, calls-to-action, persuasion, or proposal framing here.
 
 STEP 4 — PITCH (90-110 words):
 A direct cold-outreach message to a C-level executive at {company_name}:
@@ -1633,7 +1634,12 @@ A direct cold-outreach message to a C-level executive at {company_name}:
   - Tone: Professional, direct, evidence-led. Every claim in the pitch must be verifiable from the scan data. The recipient should feel understood, not sold to.
   - Structure as exactly 3 short paragraphs separated by \n\n (opening hook / proposals / closing CTA).
 
-STEP 5 — IMPACT PROPOSALS (derived from Steps 1-4):
+STEP 5 — EVIDENCE-BASED RISKS:
+Generate 2-4 neutral risk bullets in a JSON array named evidence_based_risks.
+  - Each risk must be diagnostic, evidence-backed, and free of sales/promotional language.
+  - No solutions or CTA in this section; just what risk exists and why.
+
+STEP 6 — IMPACT PROPOSALS (derived from Steps 1-4):
 Generate 1-2 WHY statements and 1-2 WHAT statements (matching count).
 If evidence strongly supports 2 distinct weaknesses, produce 2 pairs. If evidence is limited, produce 1 pair. One strong evidence-based proposal beats two fabricated ones.
 
@@ -1664,9 +1670,9 @@ Rules:
 - Every factual claim in the summary must be traceable to a specific piece of evidence above.
 
 ### OUTPUT
-Respond with valid JSON only. Six fields required:
-{{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."]}}
-Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs total). The pitch value must also contain \n\n between its 3 paragraphs.
+Respond with valid JSON only. Required fields:
+{"diagnostic_summary": "...", "evidence_based_risks": ["..."], "commercial_pitch": "...", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."], "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}
+Note: diagnostic_summary must contain \n\n between paragraphs (3-4 paragraphs total). commercial_pitch must also contain \n\n between its 3 paragraphs.
 Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2.
 
 ### CRITICAL CONTEXT — FACT-CHECK CORRECTIONS
@@ -1742,8 +1748,8 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
         resynth_payload = extract_json_from_text(resynth_text)
         if resynth_payload:
             resynth_json = json.loads(resynth_payload, strict=False)
-            new_summary = resynth_json.get("summary", "")
-            new_pitch = resynth_json.get("pitch", "")
+            new_summary = resynth_json.get("diagnostic_summary", resynth_json.get("summary", ""))
+            new_pitch = resynth_json.get("commercial_pitch", resynth_json.get("pitch", ""))
 
             if new_summary:
                 new_summary = _apply_deterministic_corrections(new_summary, detailed_claims)
@@ -1751,6 +1757,9 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
             if new_pitch:
                 new_pitch = _apply_deterministic_corrections(new_pitch, detailed_claims)
                 data["pitch_text"] = new_pitch
+            new_risks = resynth_json.get("evidence_based_risks", [])
+            if isinstance(new_risks, list) and new_risks:
+                data["evidence_based_risks"] = new_risks
             new_why = resynth_json.get("why_proposals", [])
             new_what = resynth_json.get("what_proposals", [])
             if new_why and isinstance(new_why, list):
@@ -2412,9 +2421,85 @@ async def get_cross_impact_interpretation(response: Response):
 
 
 # --- MAIN SCAN ENDPOINT (MULTIPART) ---
+
+
+# --- ASYNC SCAN JOB STATE ---
+_scan_jobs = {}
+_scan_jobs_lock = threading.Lock()
+
+def _append_scan_log(job_id: str, message: str):
+    with _scan_jobs_lock:
+        job = _scan_jobs.get(job_id)
+        if not job:
+            return
+        logs = job.setdefault("logs", [])
+        logs.append({"ts": datetime.utcnow().isoformat(), "message": message})
+        if len(logs) > 200:
+            del logs[:-200]
+
+def _update_scan_job(job_id: str, **fields):
+    with _scan_jobs_lock:
+        job = _scan_jobs.get(job_id)
+        if not job:
+            return
+        job.update(fields)
+
+def _run_scan_job(job_id: str, request: Request, companyName: str, companyUrl: Optional[str], reportText: str, saveToDatabase: bool, files: List[UploadFile]):
+    try:
+        _update_scan_job(job_id, status="running", phase="scan_pipeline", progress=10)
+        _append_scan_log(job_id, f"Started scan for {companyName}")
+        result = _execute_scan_pipeline(request=request, job_id=job_id, companyName=companyName, companyUrl=companyUrl, reportText=reportText, saveToDatabase=saveToDatabase, files=files)
+        _update_scan_job(job_id, status="completed", phase="completed", progress=100, result=result, completed_at=datetime.utcnow().isoformat())
+        _append_scan_log(job_id, "Scan completed")
+    except HTTPException as e:
+        _update_scan_job(job_id, status="failed", phase="failed", error=e.detail, progress=100, completed_at=datetime.utcnow().isoformat())
+        _append_scan_log(job_id, f"Scan failed: {e.detail}")
+    except Exception as e:
+        _update_scan_job(job_id, status="failed", phase="failed", error=str(e), progress=100, completed_at=datetime.utcnow().isoformat())
+        _append_scan_log(job_id, f"Scan failed: {e}")
+
 @app.post("/scan")
-def run_scan(
+def submit_scan_job(
     request: Request,
+    companyName: str = Form(...),
+    companyUrl: Optional[str] = Form(None),
+    reportText: str = Form(""),
+    saveToDatabase: bool = Form(True),
+    files: List[UploadFile] = File(None)
+):
+    verify_admin(request)
+    job_id = str(uuid.uuid4())
+    with _scan_jobs_lock:
+        _scan_jobs[job_id] = {
+            "job_id": job_id,
+            "status": "queued",
+            "phase": "queued",
+            "progress": 0,
+            "logs": [{"ts": datetime.utcnow().isoformat(), "message": f"Queued scan for {companyName}"}],
+            "result": None,
+            "error": None,
+            "created_at": datetime.utcnow().isoformat(),
+            "completed_at": None,
+            "company_name": companyName,
+        }
+
+    thread = threading.Thread(target=_run_scan_job, args=(job_id, request, companyName, companyUrl, reportText, saveToDatabase, files), daemon=True)
+    thread.start()
+    return {"job_id": job_id, "status": "queued"}
+
+@app.get("/scan-status/{job_id}")
+def get_scan_status(job_id: str, request: Request):
+    verify_admin(request)
+    with _scan_jobs_lock:
+        job = _scan_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Scan job not found")
+        return dict(job)
+
+# --- MAIN SCAN PIPELINE (SYNC, USED BY BACKGROUND JOB) ---
+def _execute_scan_pipeline(
+    request: Request,
+    job_id: Optional[str] = None,
     companyName: str = Form(...),
     companyUrl: Optional[str] = Form(None),
     reportText: str = Form(""),
@@ -2438,6 +2523,9 @@ def run_scan(
         #   Synthesis:     60s per model call (with fallback chain)
         SCAN_TOTAL_BUDGET = 540
         print(f"🚀 --- LIVE SCAN INITIATED FOR: {companyName} (budget: {SCAN_TOTAL_BUDGET}s) ---")
+        if job_id:
+            _update_scan_job(job_id, phase="initializing", progress=5)
+            _append_scan_log(job_id, "Initializing scan pipeline")
 
         # Model pipeline: Sonnet 4.6 + Web Search (forensic) | Gemini 2.5 Pro (financial) | Opus 4.7 (synthesis)
         # Forensic fallback: Gemini 3.1 Pro. Synthesis fallback: Gemini 3.1 Pro → Gemini 3 Pro
@@ -2456,6 +2544,9 @@ def run_scan(
                     uploaded_doc_names.append(file.filename)
         
         # --- STEP 1: SCANNER 1 (Intent) ---
+        if job_id:
+            _update_scan_job(job_id, phase="intent_analysis", progress=20)
+            _append_scan_log(job_id, "Running intent analysis")
         target_url = companyUrl
         company_subsidiaries = None
 
@@ -2519,6 +2610,9 @@ def run_scan(
             print(f"   [History] Could not load previous data (non-critical): {e}")
 
         # --- STEP 2: SCANNER 2 (Reality) + FINANCIAL HEALTH (Parallel) ---
+        if job_id:
+            _update_scan_job(job_id, phase="reality_and_financial", progress=45)
+            _append_scan_log(job_id, "Running reality and financial analysis")
         # Allocate time: reserve 150s for synthesis + self-analysis + post-processing
         elapsed_so_far = time.time() - scan_start
         reality_budget = max(180, int(SCAN_TOTAL_BUDGET - elapsed_so_far - 150))
@@ -2808,8 +2902,12 @@ def run_scan(
         foresight_links = sanitize_foresight_collection(foresight_links, domain=company_domain)  # final foresight card sanitation
 
         # --- STEP 3: SYNTHESIS ---
+        if job_id:
+            _update_scan_job(job_id, phase="synthesis", progress=75)
+            _append_scan_log(job_id, "Generating synthesis")
         summary = "AI Summary Unavailable"
         pitch = "Pitch Unavailable"
+        evidence_based_risks = []
         why_proposals = []
         what_proposals = []
         scan_quality = "empty_reality" if _s2_empty else "complete"  # downgraded if phases are skipped due to time
@@ -3035,6 +3133,7 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
   - TEMPORAL PRECISION: When evidence contains the same metric for different periods (e.g. Q1 vs full-year, 2024 vs 2025), always use the most recent FULL-YEAR / ANNUAL figure — not interim or quarterly snapshots. If only a quarterly figure is available, label it explicitly (e.g. "as of Q1 2025"). Never present a quarterly number as if it were the annual result.
   - ORGANIZATIONAL CLAIMS PROHIBITION: NEVER claim or imply leadership gaps, unfilled executive roles, succession planning issues, management vacancies, or organizational restructuring unless the evidence EXPLICITLY states this. The absence of a person in scanner results does NOT mean the role is vacant — it means the scanner didn't find them. Do NOT invent risk factors about people, roles, or organizational structure to add analytical depth. If the evidence doesn't mention an organizational problem, the problem does not exist for this analysis.
   - Use ONLY the four archetype labels: Thriving, Modernizing, Cash Cow, At Risk.
+  - CRITICAL SEPARATION: This section is strictly neutral diagnosis. Do NOT use sales language, calls-to-action, persuasion, or proposal framing here.
 
 STEP 4 — PITCH (90-110 words):
 A direct cold-outreach message to a C-level executive at {companyName}:
@@ -3048,7 +3147,12 @@ A direct cold-outreach message to a C-level executive at {companyName}:
   - Tone: Professional, direct, evidence-led. Every claim in the pitch must be verifiable from the scan data. The recipient should feel understood, not sold to.
   - Structure as exactly 3 short paragraphs separated by \n\n (opening hook / proposals / closing CTA).
 
-STEP 5 — IMPACT PROPOSALS (derived from Steps 1-4):
+STEP 5 — EVIDENCE-BASED RISKS:
+Generate 2-4 neutral risk bullets in a JSON array named evidence_based_risks.
+  - Each risk must be diagnostic, evidence-backed, and free of sales/promotional language.
+  - No solutions or CTA in this section; just what risk exists and why.
+
+STEP 6 — IMPACT PROPOSALS (derived from Steps 1-4):
 Generate 1-2 WHY statements and 1-2 WHAT statements (matching count).
 If evidence strongly supports 2 distinct weaknesses, produce 2 pairs. If evidence is limited, produce 1 pair. One strong evidence-based proposal beats two fabricated ones.
 
@@ -3081,9 +3185,9 @@ Rules:
 - Every factual claim in the summary must be traceable to a specific piece of evidence above.
 
 ### OUTPUT
-Respond with valid JSON only. Six fields required:
-{{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."]}}
-Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs total). The pitch value must also contain \n\n between its 3 paragraphs.
+Respond with valid JSON only. Required fields:
+{"diagnostic_summary": "...", "evidence_based_risks": ["..."], "commercial_pitch": "...", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."], "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}
+Note: diagnostic_summary must contain \n\n between paragraphs (3-4 paragraphs total). commercial_pitch must also contain \n\n between its 3 paragraphs.
 Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2."""
 
                 # --- Synthesis with fallback chain: Opus 4.7 → Gemini 3.1 Pro → Sonnet 4.6 ---
@@ -3212,8 +3316,9 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                     payload = extract_json_from_text(response_text)
                     if payload:
                          json_data = json.loads(payload, strict=False)
-                         summary = json_data.get("summary", summary)
-                         pitch = json_data.get("pitch", pitch) or pitch
+                         summary = json_data.get("diagnostic_summary", json_data.get("summary", summary))
+                         pitch = json_data.get("commercial_pitch", json_data.get("pitch", pitch)) or pitch
+                         evidence_based_risks = json_data.get("evidence_based_risks", evidence_based_risks) or evidence_based_risks
                          why_proposals = json_data.get("why_proposals", why_proposals) or why_proposals
                          what_proposals = json_data.get("what_proposals", what_proposals) or what_proposals
 
@@ -3374,6 +3479,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
             "key_people": key_people,
             "summary_text": _strip_tac_codes(summary),
             "pitch_text": pitch,
+            "evidence_based_risks": evidence_based_risks,
             "why_proposals": why_proposals,
             "what_proposals": what_proposals,
             "lastUpdated": new_timestamp,
@@ -3652,8 +3758,8 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                         resynth_payload = extract_json_from_text(resynth_text)
                         if resynth_payload:
                             resynth_json = json.loads(resynth_payload, strict=False)
-                            new_summary = resynth_json.get("summary", "")
-                            new_pitch = resynth_json.get("pitch", "")
+                            new_summary = resynth_json.get("diagnostic_summary", resynth_json.get("summary", ""))
+                            new_pitch = resynth_json.get("commercial_pitch", resynth_json.get("pitch", ""))
 
                             if new_summary:
                                 new_summary = _apply_deterministic_corrections(new_summary, detailed_claims)
@@ -3661,6 +3767,9 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                             if new_pitch:
                                 new_pitch = _apply_deterministic_corrections(new_pitch, detailed_claims)
                                 full_data["pitch_text"] = new_pitch
+                            new_risks = resynth_json.get("evidence_based_risks", [])
+                            if isinstance(new_risks, list) and new_risks:
+                                full_data["evidence_based_risks"] = new_risks
                             new_why = resynth_json.get("why_proposals", [])
                             new_what = resynth_json.get("what_proposals", [])
                             if new_why and isinstance(new_why, list):
@@ -3888,6 +3997,9 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
 
         # Sync final scan_quality back into full_data (may have been updated by fact-check)
         full_data["scan_quality"] = scan_quality
+        if job_id:
+            _update_scan_job(job_id, phase="finalizing", progress=95)
+            _append_scan_log(job_id, "Finalizing scan result")
 
         total_ms = int((time.time() - scan_start) * 1000)
         total_sec = round(total_ms / 1000, 1)
