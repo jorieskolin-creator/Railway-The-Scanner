@@ -1623,6 +1623,7 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
   - TEMPORAL PRECISION: When evidence contains the same metric for different periods (e.g. Q1 vs full-year, 2024 vs 2025), always use the most recent FULL-YEAR / ANNUAL figure — not interim or quarterly snapshots. If only a quarterly figure is available, label it explicitly (e.g. "as of Q1 2025"). Never present a quarterly number as if it were the annual result.
   - ORGANIZATIONAL CLAIMS PROHIBITION: NEVER claim or imply leadership gaps, unfilled executive roles, succession planning issues, management vacancies, or organizational restructuring unless the evidence EXPLICITLY states this. The absence of a person in scanner results does NOT mean the role is vacant — it means the scanner didn't find them. Do NOT invent risk factors about people, roles, or organizational structure to add analytical depth. If the evidence doesn't mention an organizational problem, the problem does not exist for this analysis.
   - Use ONLY the four archetype labels: Thriving, Modernizing, Cash Cow, At Risk.
+  - CRITICAL SEPARATION: This section is strictly neutral diagnosis. Do NOT use sales language, calls-to-action, persuasion, or proposal framing here.
 
 STEP 4 — PITCH (90-110 words):
 A direct cold-outreach message to a C-level executive at {company_name}:
@@ -1633,7 +1634,12 @@ A direct cold-outreach message to a C-level executive at {company_name}:
   - Tone: Professional, direct, evidence-led. Every claim in the pitch must be verifiable from the scan data. The recipient should feel understood, not sold to.
   - Structure as exactly 3 short paragraphs separated by \n\n (opening hook / proposals / closing CTA).
 
-STEP 5 — IMPACT PROPOSALS (derived from Steps 1-4):
+STEP 5 — EVIDENCE-BASED RISKS:
+Generate 2-4 neutral risk bullets in a JSON array named evidence_based_risks.
+  - Each risk must be diagnostic, evidence-backed, and free of sales/promotional language.
+  - No solutions or CTA in this section; just what risk exists and why.
+
+STEP 6 — IMPACT PROPOSALS (derived from Steps 1-4):
 Generate 1-2 WHY statements and 1-2 WHAT statements (matching count).
 If evidence strongly supports 2 distinct weaknesses, produce 2 pairs. If evidence is limited, produce 1 pair. One strong evidence-based proposal beats two fabricated ones.
 
@@ -1664,9 +1670,9 @@ Rules:
 - Every factual claim in the summary must be traceable to a specific piece of evidence above.
 
 ### OUTPUT
-Respond with valid JSON only. Six fields required:
-{{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."]}}
-Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs total). The pitch value must also contain \n\n between its 3 paragraphs.
+Respond with valid JSON only. Required fields:
+{"diagnostic_summary": "...", "evidence_based_risks": ["..."], "commercial_pitch": "...", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."], "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}
+Note: diagnostic_summary must contain \n\n between paragraphs (3-4 paragraphs total). commercial_pitch must also contain \n\n between its 3 paragraphs.
 Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2.
 
 ### CRITICAL CONTEXT — FACT-CHECK CORRECTIONS
@@ -1742,8 +1748,8 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
         resynth_payload = extract_json_from_text(resynth_text)
         if resynth_payload:
             resynth_json = json.loads(resynth_payload, strict=False)
-            new_summary = resynth_json.get("summary", "")
-            new_pitch = resynth_json.get("pitch", "")
+            new_summary = resynth_json.get("diagnostic_summary", resynth_json.get("summary", ""))
+            new_pitch = resynth_json.get("commercial_pitch", resynth_json.get("pitch", ""))
 
             if new_summary:
                 new_summary = _apply_deterministic_corrections(new_summary, detailed_claims)
@@ -1751,6 +1757,9 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
             if new_pitch:
                 new_pitch = _apply_deterministic_corrections(new_pitch, detailed_claims)
                 data["pitch_text"] = new_pitch
+            new_risks = resynth_json.get("evidence_based_risks", [])
+            if isinstance(new_risks, list) and new_risks:
+                data["evidence_based_risks"] = new_risks
             new_why = resynth_json.get("why_proposals", [])
             new_what = resynth_json.get("what_proposals", [])
             if new_why and isinstance(new_why, list):
@@ -2810,6 +2819,7 @@ def run_scan(
         # --- STEP 3: SYNTHESIS ---
         summary = "AI Summary Unavailable"
         pitch = "Pitch Unavailable"
+        evidence_based_risks = []
         why_proposals = []
         what_proposals = []
         scan_quality = "empty_reality" if _s2_empty else "complete"  # downgraded if phases are skipped due to time
@@ -3035,6 +3045,7 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
   - TEMPORAL PRECISION: When evidence contains the same metric for different periods (e.g. Q1 vs full-year, 2024 vs 2025), always use the most recent FULL-YEAR / ANNUAL figure — not interim or quarterly snapshots. If only a quarterly figure is available, label it explicitly (e.g. "as of Q1 2025"). Never present a quarterly number as if it were the annual result.
   - ORGANIZATIONAL CLAIMS PROHIBITION: NEVER claim or imply leadership gaps, unfilled executive roles, succession planning issues, management vacancies, or organizational restructuring unless the evidence EXPLICITLY states this. The absence of a person in scanner results does NOT mean the role is vacant — it means the scanner didn't find them. Do NOT invent risk factors about people, roles, or organizational structure to add analytical depth. If the evidence doesn't mention an organizational problem, the problem does not exist for this analysis.
   - Use ONLY the four archetype labels: Thriving, Modernizing, Cash Cow, At Risk.
+  - CRITICAL SEPARATION: This section is strictly neutral diagnosis. Do NOT use sales language, calls-to-action, persuasion, or proposal framing here.
 
 STEP 4 — PITCH (90-110 words):
 A direct cold-outreach message to a C-level executive at {companyName}:
@@ -3048,7 +3059,12 @@ A direct cold-outreach message to a C-level executive at {companyName}:
   - Tone: Professional, direct, evidence-led. Every claim in the pitch must be verifiable from the scan data. The recipient should feel understood, not sold to.
   - Structure as exactly 3 short paragraphs separated by \n\n (opening hook / proposals / closing CTA).
 
-STEP 5 — IMPACT PROPOSALS (derived from Steps 1-4):
+STEP 5 — EVIDENCE-BASED RISKS:
+Generate 2-4 neutral risk bullets in a JSON array named evidence_based_risks.
+  - Each risk must be diagnostic, evidence-backed, and free of sales/promotional language.
+  - No solutions or CTA in this section; just what risk exists and why.
+
+STEP 6 — IMPACT PROPOSALS (derived from Steps 1-4):
 Generate 1-2 WHY statements and 1-2 WHAT statements (matching count).
 If evidence strongly supports 2 distinct weaknesses, produce 2 pairs. If evidence is limited, produce 1 pair. One strong evidence-based proposal beats two fabricated ones.
 
@@ -3081,9 +3097,9 @@ Rules:
 - Every factual claim in the summary must be traceable to a specific piece of evidence above.
 
 ### OUTPUT
-Respond with valid JSON only. Six fields required:
-{{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."]}}
-Note: the summary value must contain \n\n between paragraphs (3-4 paragraphs total). The pitch value must also contain \n\n between its 3 paragraphs.
+Respond with valid JSON only. Required fields:
+{"diagnostic_summary": "...", "evidence_based_risks": ["..."], "commercial_pitch": "...", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."], "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}
+Note: diagnostic_summary must contain \n\n between paragraphs (3-4 paragraphs total). commercial_pitch must also contain \n\n between its 3 paragraphs.
 Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2."""
 
                 # --- Synthesis with fallback chain: Opus 4.7 → Gemini 3.1 Pro → Sonnet 4.6 ---
@@ -3212,8 +3228,9 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                     payload = extract_json_from_text(response_text)
                     if payload:
                          json_data = json.loads(payload, strict=False)
-                         summary = json_data.get("summary", summary)
-                         pitch = json_data.get("pitch", pitch) or pitch
+                         summary = json_data.get("diagnostic_summary", json_data.get("summary", summary))
+                         pitch = json_data.get("commercial_pitch", json_data.get("pitch", pitch)) or pitch
+                         evidence_based_risks = json_data.get("evidence_based_risks", evidence_based_risks) or evidence_based_risks
                          why_proposals = json_data.get("why_proposals", why_proposals) or why_proposals
                          what_proposals = json_data.get("what_proposals", what_proposals) or what_proposals
 
@@ -3374,6 +3391,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
             "key_people": key_people,
             "summary_text": _strip_tac_codes(summary),
             "pitch_text": pitch,
+            "evidence_based_risks": evidence_based_risks,
             "why_proposals": why_proposals,
             "what_proposals": what_proposals,
             "lastUpdated": new_timestamp,
@@ -3652,8 +3670,8 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                         resynth_payload = extract_json_from_text(resynth_text)
                         if resynth_payload:
                             resynth_json = json.loads(resynth_payload, strict=False)
-                            new_summary = resynth_json.get("summary", "")
-                            new_pitch = resynth_json.get("pitch", "")
+                            new_summary = resynth_json.get("diagnostic_summary", resynth_json.get("summary", ""))
+                            new_pitch = resynth_json.get("commercial_pitch", resynth_json.get("pitch", ""))
 
                             if new_summary:
                                 new_summary = _apply_deterministic_corrections(new_summary, detailed_claims)
@@ -3661,6 +3679,9 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                             if new_pitch:
                                 new_pitch = _apply_deterministic_corrections(new_pitch, detailed_claims)
                                 full_data["pitch_text"] = new_pitch
+                            new_risks = resynth_json.get("evidence_based_risks", [])
+                            if isinstance(new_risks, list) and new_risks:
+                                full_data["evidence_based_risks"] = new_risks
                             new_why = resynth_json.get("why_proposals", [])
                             new_what = resynth_json.get("what_proposals", [])
                             if new_why and isinstance(new_why, list):
