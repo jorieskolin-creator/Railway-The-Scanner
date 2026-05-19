@@ -69,7 +69,40 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading, marketInt
       }
       if (!response.ok) throw new Error("Refresh failed");
       const json = await response.json();
-      onUpdate(json.data);
+      if (json.data) {
+        onUpdate(json.data);
+      } else if (json.job_id) {
+        let completedResult = null;
+        let attempts = 0;
+        while (attempts < 240) {
+          const statusRes = await fetch(`/scan-status/${json.job_id}?t=${Date.now()}`, {
+            headers: { 'Authorization': `Bearer ${authToken}` }
+          });
+
+          if (statusRes.status === 401) {
+            alert("Session expired. Please log in again.");
+            return;
+          }
+          if (!statusRes.ok) throw new Error("Refresh status polling failed");
+
+          const statusJson = await statusRes.json();
+          if (statusJson.status === 'completed') {
+            completedResult = statusJson.result?.data;
+            break;
+          }
+          if (statusJson.status === 'failed') {
+            throw new Error(statusJson.error || "Refresh scan failed");
+          }
+
+          await new Promise(resolve => setTimeout(resolve, 2500));
+          attempts += 1;
+        }
+
+        if (!completedResult) throw new Error("Refresh scan timed out or returned no result");
+        onUpdate(completedResult);
+      } else {
+        throw new Error("Refresh returned an unknown response shape");
+      }
       
       // Reset state
       setRefreshFiles([]);

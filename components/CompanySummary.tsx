@@ -118,12 +118,8 @@ const isForesightContext = (link) => {
     const normalized = String(cred || '').toLowerCase();
     if (['high', 'very_high', 'trusted', 'authoritative'].includes(normalized)) return 'high';
     if (['medium', 'moderate'].includes(normalized)) return 'medium';
-    return 'low';
-  };
-
-  const normalizeCredibility = (cred) => {
-    const normalized = String(cred || '').toLowerCase();
-    return ['high', 'medium', 'low'].includes(normalized) ? normalized : 'unknown';
+    if (['low', 'weak', 'unverified'].includes(normalized)) return 'low';
+    return 'unknown';
   };
 
   const stringifyTrustItem = (item) => {
