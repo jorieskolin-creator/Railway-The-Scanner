@@ -415,9 +415,8 @@ app.mount("/components", StaticFiles(directory="../components"), name="component
 app.mount("/services", StaticFiles(directory="../services"), name="services")
 
 # --- FILE PROCESSING HELPERS ---
-def extract_text_from_file(file: UploadFile) -> str:
-    content = file.file.read()
-    filename = file.filename.lower()
+def extract_text_from_uploaded_content(filename: str, content: bytes) -> str:
+    filename = (filename or "uploaded_document").lower()
     text = ""
     
     try:
@@ -444,6 +443,25 @@ def extract_text_from_file(file: UploadFile) -> str:
         return ""
         
     return text
+
+def extract_text_from_file(file: UploadFile) -> str:
+    return extract_text_from_uploaded_content(file.filename, file.file.read())
+
+def materialize_uploads(files: Optional[List[UploadFile]]) -> list:
+    """Copy UploadFile payloads before the request lifecycle ends."""
+    materialized = []
+    for file in files or []:
+        try:
+            materialized.append({
+                "filename": file.filename or "uploaded_document",
+                "content": file.file.read(),
+            })
+        finally:
+            try:
+                file.file.close()
+            except Exception:
+                pass
+    return materialized
 
 # --- ROUTES ---
 
@@ -2444,11 +2462,11 @@ def _update_scan_job(job_id: str, **fields):
             return
         job.update(fields)
 
-def _run_scan_job(job_id: str, request: Request, companyName: str, companyUrl: Optional[str], reportText: str, saveToDatabase: bool, files: List[UploadFile]):
+def _run_scan_job(job_id: str, companyName: str, companyUrl: Optional[str], reportText: str, saveToDatabase: bool, files: list):
     try:
         _update_scan_job(job_id, status="running", phase="scan_pipeline", progress=10)
         _append_scan_log(job_id, f"Started scan for {companyName}")
-        result = _execute_scan_pipeline(request=request, job_id=job_id, companyName=companyName, companyUrl=companyUrl, reportText=reportText, saveToDatabase=saveToDatabase, files=files)
+        result = _execute_scan_pipeline(job_id=job_id, companyName=companyName, companyUrl=companyUrl, reportText=reportText, saveToDatabase=saveToDatabase, files=files)
         _update_scan_job(job_id, status="completed", phase="completed", progress=100, result=result, completed_at=datetime.utcnow().isoformat())
         _append_scan_log(job_id, "Scan completed")
     except HTTPException as e:
@@ -2468,6 +2486,7 @@ def submit_scan_job(
     files: List[UploadFile] = File(None)
 ):
     verify_admin(request)
+    materialized_files = materialize_uploads(files)
     job_id = str(uuid.uuid4())
     with _scan_jobs_lock:
         _scan_jobs[job_id] = {
@@ -2483,7 +2502,7 @@ def submit_scan_job(
             "company_name": companyName,
         }
 
-    thread = threading.Thread(target=_run_scan_job, args=(job_id, request, companyName, companyUrl, reportText, saveToDatabase, files), daemon=True)
+    thread = threading.Thread(target=_run_scan_job, args=(job_id, companyName, companyUrl, reportText, saveToDatabase, materialized_files), daemon=True)
     thread.start()
     return {"job_id": job_id, "status": "queued"}
 
@@ -2498,20 +2517,17 @@ def get_scan_status(job_id: str, request: Request):
 
 # --- MAIN SCAN PIPELINE (SYNC, USED BY BACKGROUND JOB) ---
 def _execute_scan_pipeline(
-    request: Request,
     job_id: Optional[str] = None,
-    companyName: str = Form(...),
-    companyUrl: Optional[str] = Form(None),
-    reportText: str = Form(""),
-    saveToDatabase: bool = Form(True),
-    files: List[UploadFile] = File(None)
+    companyName: str = "",
+    companyUrl: Optional[str] = None,
+    reportText: str = "",
+    saveToDatabase: bool = True,
+    files: Optional[list] = None
 ):
     """
     Hybrid Forensic Scan: Accepts Text + URLs + Uploaded Documents (PDF/HTML).
     Requires admin authentication.
     """
-    verify_admin(request)
-
     try:
         scan_start = time.time()
         # Global scan time budget (seconds). All phases must fit within this window.
@@ -2538,10 +2554,11 @@ def _execute_scan_pipeline(
         if files:
             print(f"   [Upload] Processing {len(files)} uploaded documents...")
             for file in files:
-                doc_text = extract_text_from_file(file)
+                filename = file.get("filename", "uploaded_document")
+                doc_text = extract_text_from_uploaded_content(filename, file.get("content", b""))
                 if doc_text:
-                    combined_text += f"\n\n--- INTERNAL DOCUMENT: {file.filename} ---\n{doc_text}"
-                    uploaded_doc_names.append(file.filename)
+                    combined_text += f"\n\n--- INTERNAL DOCUMENT: {filename} ---\n{doc_text}"
+                    uploaded_doc_names.append(filename)
         
         # --- STEP 1: SCANNER 1 (Intent) ---
         if job_id:
