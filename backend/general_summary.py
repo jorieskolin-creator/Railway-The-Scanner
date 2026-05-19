@@ -34,6 +34,47 @@ def _general_summary_guardrails() -> str:
     return build_shared_guardrails(include_diagnostic=False, include_foresight=True, include_claim_tier=True)
 
 
+def _clean_env_var(value: str) -> str:
+    if not value:
+        return ""
+    if "=" in value:
+        try:
+            value = value.split("=", 1)[1]
+        except Exception:
+            pass
+    return value.strip().strip('"').strip("'")
+
+
+def _get_openai_text(response) -> str:
+    """Extract text from OpenAI Responses API output shapes."""
+    text = getattr(response, "output_text", None)
+    if text:
+        return text.strip()
+
+    parts = []
+    for item in getattr(response, "output", []) or []:
+        for content in getattr(item, "content", []) or []:
+            content_text = getattr(content, "text", None)
+            if content_text:
+                parts.append(content_text)
+    return "\n".join(parts).strip()
+
+
+def _call_openai_summary(prompt: str, model: str = "gpt-5.5", timeout: int = 90) -> str:
+    api_key = _clean_env_var(os.environ.get("GPT_API_KEY") or os.environ.get("OPENAI_API_KEY") or "")
+    if not api_key:
+        raise ValueError("No GPT_API_KEY configured")
+
+    from openai import OpenAI
+    client = OpenAI(api_key=api_key, timeout=timeout)
+    response = client.responses.create(
+        model=model,
+        input=prompt,
+        max_output_tokens=6000,
+    )
+    return _get_openai_text(response)
+
+
 
 
 def _dict_items_only(items, label: str = "items") -> list:
@@ -502,77 +543,66 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
     Returns (summary_text, model_used).
     Returns ("", "") on failure — caller should catch exceptions separately.
     """
-    try:
-        client = get_gemini_client()
-    except ValueError:
-        print("   ⚠️ [General Summary] No GEMINI_API_KEY — skipping")
-        return "", ""
-
     full_data = _sanitize_general_summary_input(full_data or {}, f"{company_name}.general_summary_factcheck_input")
     payload = _build_input_payload(full_data, company_name)
     prompt = _build_prompt(payload, company_name)
 
-    # Primary model: gemini-3.1-pro-preview (2 attempts)
-    # gemini-3-pro-preview removed: shares 3.x rate limits with 3.1-pro (useless
-    # as fallback during overload) and is being deprecated by Google.
-    PRIMARY_MODEL = "gemini-3.1-pro-preview"
+    # Primary: GPT-5.5 (evidence-bound prose from already-built structured payload)
+    try:
+        PRIMARY_MODEL = "gpt-5.5"
+        print(f"   [General Summary] Trying primary {PRIMARY_MODEL}")
+        t0 = time.time()
+        text = _strip_links(_call_openai_summary(prompt, model=PRIMARY_MODEL, timeout=90))
+        wc = _word_count(text)
+        elapsed = int((time.time() - t0) * 1000)
+        print(f"   [General Summary] {PRIMARY_MODEL}: {wc} words ({elapsed}ms)")
+        if text:
+            if not (_WORD_MIN <= wc <= _WORD_MAX):
+                print(f"   [General Summary] {PRIMARY_MODEL} word count outside [{_WORD_MIN}-{_WORD_MAX}] — using non-empty result")
+            return text, PRIMARY_MODEL
+    except Exception as e:
+        print(f"   ❌ [General Summary] GPT-5.5 primary failed: {e}")
 
-    FIRST_CONFIG = genai_types.GenerateContentConfig(
-        temperature=1.0,
-        max_output_tokens=6000,
-        thinking_config=genai_types.ThinkingConfig(thinking_budget=2048),
-    )
-    RETRY_CONFIG = genai_types.GenerateContentConfig(
-        temperature=1.0,
-        max_output_tokens=6000,
-        thinking_config=genai_types.ThinkingConfig(thinking_budget=512),
-    )
-
-    # Attempts 1 & 2: primary model
-    for attempt, config in enumerate([FIRST_CONFIG, RETRY_CONFIG], start=1):
-        try:
+    # Backup 1: Sonnet 4.6 (independent provider)
+    try:
+        import anthropic
+        anthropic_key = _clean_env_var(os.environ.get("ANTHROPIC_API_KEY", ""))
+        if not anthropic_key:
+            print("   ⚠️ [General Summary] No ANTHROPIC_API_KEY — skipping Sonnet backup")
+        else:
+            SONNET_MODEL = "claude-sonnet-4-6"
+            print(f"   [General Summary] GPT-5.5 unavailable — trying {SONNET_MODEL}")
             t0 = time.time()
-            response = call_with_503_backoff(
-                lambda: client.models.generate_content(
-                    model=PRIMARY_MODEL,
-                    contents=prompt,
-                    config=config,
-                ),
-                label=f"General Summary {PRIMARY_MODEL}",
-                model=PRIMARY_MODEL,
-                timeout=90,
+            claude_client = anthropic.Anthropic(api_key=anthropic_key)
+            claude_resp = claude_client.messages.create(
+                model=SONNET_MODEL,
+                max_tokens=4000,
+                messages=[{"role": "user", "content": prompt}],
             )
-            text = _strip_links((response.text or "").strip())
+            text = _strip_links((claude_resp.content[0].text or "").strip())
             wc = _word_count(text)
             elapsed = int((time.time() - t0) * 1000)
-            print(f"   [General Summary] {PRIMARY_MODEL} attempt {attempt}: {wc} words ({elapsed}ms)")
-
-            if _WORD_MIN <= wc <= _WORD_MAX:
-                return text, PRIMARY_MODEL
-
-            if attempt == 1:
-                print(f"   [General Summary] {wc} words outside [{_WORD_MIN}-{_WORD_MAX}] — retrying")
-                continue
-
-            # Attempt 2 result: use if non-empty (best-effort over silence),
-            # but still fall through to backup if completely empty.
+            print(f"   [General Summary] {SONNET_MODEL} backup: {wc} words ({elapsed}ms)")
             if text:
-                print(f"   [General Summary] Using attempt 2 result ({wc} words) — outside range but non-empty")
-                return text, PRIMARY_MODEL
+                return text, SONNET_MODEL
+    except Exception as e:
+        print(f"   ❌ [General Summary] Sonnet backup failed: {e}")
 
-        except Exception as e:
-            print(f"   ❌ [General Summary] {PRIMARY_MODEL} attempt {attempt} failed: {e}")
-            if attempt == 1:
-                continue
-
-    # Attempt 3: Gemini 2.5 Pro backup (different model — survives primary model outages/quota)
+    # Backup 2: Gemini 3.1 Pro (last resort for this test)
     try:
-        BACKUP_MODEL = "gemini-2.5-pro"
-        print(f"   [General Summary] Primary model failed — trying backup {BACKUP_MODEL}")
+        client = get_gemini_client()
+    except ValueError:
+        print("   ⚠️ [General Summary] No GEMINI_API_KEY — skipping Gemini backup")
+        return "", ""
+
+    try:
+        BACKUP_MODEL = "gemini-3.1-pro-preview"
+        print(f"   [General Summary] GPT/Sonnet exhausted — trying backup {BACKUP_MODEL}")
         t0 = time.time()
         backup_config = genai_types.GenerateContentConfig(
-            temperature=0.1,
-            max_output_tokens=4000,
+            temperature=1.0,
+            max_output_tokens=6000,
+            thinking_config=genai_types.ThinkingConfig(thinking_budget=1024),
         )
         backup_resp = call_with_503_backoff(
             lambda: client.models.generate_content(
@@ -592,31 +622,6 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
             return text, BACKUP_MODEL
     except Exception as e:
         print(f"   ❌ [General Summary] {BACKUP_MODEL} backup failed: {e}")
-
-    # Attempt 4: Sonnet 4.6 (survives total Gemini outages)
-    try:
-        import anthropic
-        anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
-        if not anthropic_key:
-            print("   ⚠️ [General Summary] No ANTHROPIC_API_KEY — skipping Sonnet backup")
-        else:
-            SONNET_MODEL = "claude-sonnet-4-6"
-            print(f"   [General Summary] Gemini models exhausted — trying {SONNET_MODEL}")
-            t0 = time.time()
-            claude_client = anthropic.Anthropic(api_key=anthropic_key)
-            claude_resp = claude_client.messages.create(
-                model=SONNET_MODEL,
-                max_tokens=4000,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            text = _strip_links((claude_resp.content[0].text or "").strip())
-            wc = _word_count(text)
-            elapsed = int((time.time() - t0) * 1000)
-            print(f"   [General Summary] {SONNET_MODEL} backup: {wc} words ({elapsed}ms)")
-            if text:
-                return text, SONNET_MODEL
-    except Exception as e:
-        print(f"   ❌ [General Summary] Sonnet backup failed: {e}")
 
     return "", ""
 
