@@ -27,6 +27,7 @@ from source_quality import (
 )
 from contradiction_detector import detect_contradictions
 from prompts import PROMPT_VERSION, build_shared_guardrails
+from entity_identity import apply_entity_scope, get_company_identity
 
 
 def _general_summary_guardrails() -> str:
@@ -266,11 +267,14 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
                 or is_boilerplate_snippet(snippet_raw)):
             continue
         snippet = snippet_raw[:max_len]
+        scoped_link = apply_entity_scope(dict(l), company_name)
         verified_links.append({
             "title": title,
             "snippet": snippet,
             "is_recent": l.get("is_recent", False),
             "scope": assess_source_scope(l.get("url", ""), title, snippet),
+            "entity_scope": scoped_link.get("entity_scope", "unknown"),
+            "scope_warning": scoped_link.get("scope_warning", ""),
             "claim_tier": tier,
             "source_label": describe_source(l),
         })
@@ -302,11 +306,14 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
                 continue
             snippet_raw = composed
         snippet = snippet_raw[:fs_max]
+        scoped_link = apply_entity_scope(dict(l), company_name)
         foresight_sources.append({
             "title": title,
             "snippet": snippet,
             "is_recent": True,
             "scope": assess_source_scope(l.get("url", ""), title, snippet),
+            "entity_scope": scoped_link.get("entity_scope", "unknown"),
+            "scope_warning": scoped_link.get("scope_warning", ""),
             "claim_tier": "E",
             "source_label": "Forward-looking foresight",
         })
@@ -354,6 +361,12 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
             # Without this, financial_findings reach the prompt with no provenance signal
             # and the model defaults to "according to the company's filings" for everything.
             if source_url:
+                scoped_fin = apply_entity_scope({
+                    "url": source_url,
+                    "title": source_title,
+                    "snippet": evidence_snippet,
+                    "entity_scope": f.get("entity_scope") or "",
+                }, company_name)
                 stype = infer_source_type(source_url, source_title, evidence_snippet)
                 independence = (
                     "third-party-or-independent"
@@ -368,6 +381,11 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
                 })
             else:
                 stype, tier = "unknown", "D"
+                scoped_fin = apply_entity_scope({
+                    "title": source_title,
+                    "snippet": evidence_snippet,
+                    "entity_scope": f.get("entity_scope") or "",
+                }, company_name)
             if stype == "financial_data_aggregator":
                 source_label = "Third-party financial database"
             elif stype in {"company_financial_report", "annual_report", "investor_relations", "quarterly_report", "financial_report"}:
@@ -382,6 +400,8 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
                 "assessment": f.get("assessment", ""),
                 "source_label": source_label,
                 "claim_tier": tier,
+                "entity_scope": scoped_fin.get("entity_scope", "unknown"),
+                "scope_warning": scoped_fin.get("scope_warning", ""),
             }
             if evidence_snippet:
                 entry["evidence_snippet"] = evidence_snippet
@@ -415,6 +435,10 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
     result: dict = {
         "company_name": company_name,
         "prompt_guardrails_version": PROMPT_VERSION,
+        "entity_identity": {
+            "canonical_name": get_company_identity(company_name).get("canonical_name", company_name),
+            "entity_scope_policy": get_company_identity(company_name).get("entity_scope_policy", ""),
+        },
         "delta": delta,
         "key_findings": key_findings,
         "evidence_links": verified_links,
@@ -504,7 +528,10 @@ MANDATORY RULES:
    - NARROW SCOPE: When citing a finding from a narrow-scope source (job postings, employee reviews, single-department surveys), you MUST include a scope qualifier (e.g., "in a survey of HR personnel").
    - ANTI-EXTRAPOLATION: NEVER extrapolate a narrow-scope finding into a macro-trend. State the narrow fact exactly as it is, without macro-commentary.
    - SELF-REPORTED DATA: For company self-claims, qualify every concrete assertion ("The company states...", "According to the company..."). Do not omit specific numbers, but never present them as independently verified.
-   - ENTITY SCOPE: When evidence is tagged [group], cite the parent entity explicitly (e.g., "[Company] Group"). Do not attribute group-level figures to the local entity.
+   - ENTITY SCOPE: Each evidence or financial item may carry entity_scope. Treat "canonical_group" as the target company. Treat "local_legal_entity", "subsidiary", "former_name", and "parent_owner" as scoped evidence only.
+   - LOCAL LEGAL ENTITY RULE: If a financial figure is supported only by local_legal_entity evidence, qualify it in the same sentence as local/legal-entity evidence (for example, "the Finnish legal-entity data shows...", "{company_name}'s Finnish legal entity...", or the exact legal entity name if the payload provides it). Do not write it as unqualified company-wide performance.
+   - FORMER NAME RULE: Former-name evidence may support history/continuity, but current claims must say the source relates to the predecessor/former name unless a current canonical_group source also supports it.
+   - OWNER RULE: parent_owner evidence supports ownership/acquisition context only. Do not use owner/acquirer data as evidence of the target company's operations or finances.
 
 9. BALANCING CONTRADICTIONS & PROPORTIONALITY — CRITICAL: 
    - If a narrow-scope independent source contradicts a broad self-reported metric, briefly state both side-by-side (e.g., "Wärtsilä reports [X] company-wide users, though a departmental survey of HR found [Y]").
@@ -519,9 +546,9 @@ MANDATORY RULES:
 13. FORMAT: Plain prose only. No headers, no bullet points, no markdown, no links, no citations. CRITICAL: Do NOT use HTML tags like <br> to format line breaks.
 
 14. ENTITY NAMING CONSISTENCY — CRITICAL:
-   - Always refer to the target company by its PRIMARY BRAND NAME ({company_name}) throughout the summary. Do not surface individual country-specific legal entity registrations (e.g., "{company_name} Oy", "{company_name} Ltd", "{company_name} Limited", "{company_name} GmbH", "{company_name} s.r.o.", "{company_name} AB", "{company_name} AS", etc.) as if they were separate, noteworthy organisations.
+   - Usually refer to the target company by its PRIMARY BRAND NAME ({company_name}) throughout the summary. Do not surface individual country-specific legal entity registrations (e.g., "{company_name} Oy", "{company_name} Ltd", "{company_name} Limited", "{company_name} GmbH", "{company_name} s.r.o.", "{company_name} AB", "{company_name} AS", etc.) as if they were separate, noteworthy organisations.
    - Evidence sources may come from company registries (Companies House, Finnish Trade Register, etc.) that use formal legal names in ALL CAPS or with full legal suffixes. These are data sources only — do NOT reproduce the formal registered name in the summary prose.
-   - If the company's corporate structure is genuinely relevant (e.g., a parent/subsidiary relationship with a DIFFERENT brand name), you may note it once briefly. But legal entity variants of the SAME brand name must never be named as separate entities.
+   - If the company's corporate structure is genuinely relevant (e.g., a parent/subsidiary relationship with a DIFFERENT brand name), you may note it once briefly. Legal entity variants of the SAME brand name must not be named as separate organisations. They may be named only to qualify a sourced local legal-entity financial figure and must not be promoted into group-wide evidence.
 
 Output only the prose text. Nothing else."""
 
@@ -658,11 +685,13 @@ INSTRUCTIONS:
 4. SCOPE INFLATION CHECK — Each evidence_links item has a "scope" field ("broad" or "narrow"). For each numeric or scale claim in the summary, identify which evidence item it traces back to. Flag the claim as UNSUPPORTED if:
    D. The claim is derived from a "narrow"-scope source AND is presented as a company-wide fact without a scope qualifier in the same sentence (qualifier examples: "in a survey of HR personnel", "in a 100-respondent study", "in a Vaasa-based pilot", "according to a master's thesis"). For example, "9% of personnel use Tool X" lifted from a narrow HR-only thesis without saying "in HR" is scope inflation.
    E. The payload has a top-level "contradictions" array, the summary cites one side but does NOT acknowledge the other side at all. Both sides of a listed contradiction must appear in the prose.
+   G. The claim is derived from an item with entity_scope="local_legal_entity", "subsidiary", "former_name", or "parent_owner" and is presented as an unqualified {company_name}-wide fact. Local legal-entity financial figures must be qualified as local/legal-entity data; parent_owner evidence must only support ownership/acquisition context.
 5. Do NOT flag:
    - Reasonable connecting language between evidence points (e.g., "meanwhile," "in parallel")
    - Direct restatements of payload data, even if paraphrased
    - The opening trend sentence if it accurately reflects the delta data
    - Claims from narrow-scope sources THAT ARE properly qualified in the same sentence
+   - A country-specific legal entity name when it is used only to qualify a local legal-entity financial figure supported by entity_scope="local_legal_entity"
 
 OUTPUT FORMAT — valid JSON only:
 

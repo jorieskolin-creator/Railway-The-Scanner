@@ -60,8 +60,9 @@ Sources tagged [C] may ONLY support claims about: the company's own identity, br
 NEVER use [C] evidence to assert actual operational performance, real headcount, technology deployment, or revenue — even if the number sounds specific. Qualify it: "The company states..." not "The company has..."
 
 ENTITY SCOPE:
-When evidence is tagged [group], cite the parent/group level explicitly (e.g., "[Company] Group") — do NOT attribute group-level financials or headcount to the local entity.
-When evidence is tagged [local], cite the local/subsidiary entity explicitly.
+When evidence is tagged [canonical_group], it may support target-company claims.
+When evidence is tagged [local_legal_entity], [subsidiary], [former_name], or [parent_owner], cite that scope explicitly and do not promote it into unqualified target-company claims.
+Parent/owner evidence supports acquisition or ownership context only unless it explicitly discusses the target company's operations.
 When a metric appears at both levels, state them separately.
 """
 

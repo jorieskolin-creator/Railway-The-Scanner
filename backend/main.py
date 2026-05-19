@@ -751,7 +751,7 @@ def _recheck_company_data(company_name: str, data: dict) -> dict:
     # ai_fact_check_summary, generate_general_summary) and the final storage.save_company_data()
     # all see current metadata.
     company_domain = (data.get("companyUrl") or data.get("domain") or "").strip()
-    annotate_evidence_links(data.get("evidence_links") or [], company_domain)
+    annotate_evidence_links(data.get("evidence_links") or [], company_domain, company_name)
 
     # Step 1: Heuristic validation (summary + pitch)
     summary_result = validate_summary(
@@ -1576,6 +1576,7 @@ If evidence is thin, say so — a short honest analysis beats a long fabricated 
    - NARROW SCOPE: When an evidence item describes a limited population (a master's thesis, a single-department survey, a regional pilot, a study of N participants), you MUST include a scope qualifier in the same sentence (e.g., "in a survey of HR personnel", "in a 100-respondent study", "according to a master's thesis"). Never present a narrow-scope statistic as a company-wide truth.
    - ANTI-EXTRAPOLATION: NEVER extrapolate a narrow-scope finding into a macro-trend or section-level diagnosis. If a survey only covers the HR department, you are FORBIDDEN from writing sweeping claims like "enterprise adoption lags significantly", "the company struggles with AI", "internal landscape presents a material vulnerability", "AI Readiness remains highly fragmented", or "Pilot Purgatory across the firm". State the narrow fact exactly as it is, scoped to its actual population, without macro-commentary.
    - SELF-REPORTED DATA: If evidence comes from the company's own representatives or publications and provides CONCRETE operational metrics (e.g., "thousands of weekly users", "30% downtime reduction"), you must ingest and report these metrics, but qualify the source ("The company reports..."). Do not treat them as independently verified, but DO NOT omit them. Marketing fluff without concrete numbers ("AI-first company") may be skipped.
+   - ENTITY SCOPE: If evidence carries entity_scope="local_legal_entity", "subsidiary", "former_name", or "parent_owner", qualify it in the same sentence and do not present it as unqualified company-wide evidence. Parent/owner evidence supports acquisition or ownership context only. Local legal-entity financial data supports that legal entity unless group-level evidence corroborates it.
 6. BALANCING CONTRADICTIONS & PROPORTIONALITY — CRITICAL:
    - If a narrow-scope independent source contradicts a broad self-reported metric on the same topic, briefly state both side-by-side (e.g., "While the company reports thousands of weekly users on its internal AI tool, a departmental survey of HR personnel found only 9% report frequent use").
    - PROPORTIONALITY: You are diagnosing a multi-billion euro enterprise. Keep narrow departmental statistics confined to a single contextualised sentence within the relevant section. Do not let a single departmental survey dominate the technology, AI Readiness, or operational narrative of a global firm. Address the contradiction factually, weight it against company-wide evidence, and move on.
@@ -3078,6 +3079,7 @@ If evidence is thin, say so — a short honest analysis beats a long fabricated 
    - NARROW SCOPE: When an evidence item describes a limited population (a master's thesis, a single-department survey, a regional pilot, a study of N participants), you MUST include a scope qualifier in the same sentence (e.g., "in a survey of HR personnel", "in a 100-respondent study", "according to a master's thesis"). Never present a narrow-scope statistic as a company-wide truth.
    - ANTI-EXTRAPOLATION: NEVER extrapolate a narrow-scope finding into a macro-trend or section-level diagnosis. If a survey only covers the HR department, you are FORBIDDEN from writing sweeping claims like "enterprise adoption lags significantly", "the company struggles with AI", "internal landscape presents a material vulnerability", "AI Readiness remains highly fragmented", or "Pilot Purgatory across the firm". State the narrow fact exactly as it is, scoped to its actual population, without macro-commentary.
    - SELF-REPORTED DATA: If evidence comes from the company's own representatives or publications and provides CONCRETE operational metrics (e.g., "thousands of weekly users", "30% downtime reduction"), you must ingest and report these metrics, but qualify the source ("The company reports..."). Do not treat them as independently verified, but DO NOT omit them. Marketing fluff without concrete numbers ("AI-first company") may be skipped.
+   - ENTITY SCOPE: If evidence carries entity_scope="local_legal_entity", "subsidiary", "former_name", or "parent_owner", qualify it in the same sentence and do not present it as unqualified company-wide evidence. Parent/owner evidence supports acquisition or ownership context only. Local legal-entity financial data supports that legal entity unless group-level evidence corroborates it.
 6. BALANCING CONTRADICTIONS & PROPORTIONALITY — CRITICAL:
    - If a narrow-scope independent source contradicts a broad self-reported metric on the same topic, briefly state both side-by-side (e.g., "While the company reports thousands of weekly users on its internal AI tool, a departmental survey of HR personnel found only 9% report frequent use").
    - PROPORTIONALITY: You are diagnosing a multi-billion euro enterprise. Keep narrow departmental statistics confined to a single contextualised sentence within the relevant section. Do not let a single departmental survey dominate the technology, AI Readiness, or operational narrative of a global firm. Address the contradiction factually, weight it against company-wide evidence, and move on.
@@ -3469,6 +3471,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
             existing_links=existing_evidence,
             new_links=reality_results["links"],
             company_domain=_company_site_domain,
+            company_name=companyName,
         )
         managed_evidence_links = source_mgmt["links"]
 

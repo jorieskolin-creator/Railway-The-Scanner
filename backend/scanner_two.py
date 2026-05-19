@@ -14,6 +14,7 @@ from gemini_client import get_gemini_client
 import anthropic
 from knowledge_base import get_evolving_framework
 from source_quality import assess_evidence_quality, confidence_quality_penalty, annotate_evidence_links, filter_admissible_sources, evidence_sufficiency_score, classify_generation_context, apply_language_metadata
+from entity_identity import build_entity_context_block, entity_search_terms
 
 # --- HELPER: IMPROVE SEARCH RECALL ---
 def clean_company_name_for_search(name):
@@ -1754,6 +1755,14 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     primary_model = model_id or "gemini-3.1-pro-preview"
 
     search_name = clean_company_name_for_search(company_name)
+    entity_terms = entity_search_terms(company_name)
+    search_alias_block = ""
+    if entity_terms and len(entity_terms) > 1:
+        search_alias_block = (
+            "    ENTITY SEARCH TERMS: Also search these names when they are relevant to the same target: "
+            + ", ".join(f'"{term}"' for term in entity_terms[:8])
+            + "\n"
+        )
     domain_hint = get_clean_domain(company_url) if company_url else f"{search_name.lower().replace(' ', '')}.fi"
 
     if not api_key:
@@ -1822,6 +1831,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     is_likely_subsidiary = any(kw in name_lower for kw in subsidiary_keywords)
 
     subsidiary_block = ""
+    entity_context_block = build_entity_context_block(company_name)
     if is_likely_subsidiary:
         print(f"   [Scanner 2] Subsidiary indicator detected in '{search_name}'. Enabling parent company search.")
         subsidiary_block = f"""
@@ -1869,6 +1879,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     CONTEXT: Internal/Marketing text analysis suggests an Intent Score of {intent_score}/100.
     {history_block}
     {evidence_anchors}
+    {entity_context_block}
+    {search_alias_block}
     {subsidiary_block}
     {pre_verified_block}
     SEARCH STRATEGY:
@@ -2059,6 +2071,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 "snippet": "Quote...",
                 "title": "Source Title",
                 "url": "URL",
+                "entity_scope": "canonical_group" or "local_legal_entity" or "former_name" or "subsidiary" or "parent_owner" or "wrong_entity" or "unknown",
                 "is_recent": boolean (True if < 12 months)
             }}
         ],
@@ -2775,9 +2788,9 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         # external sources and must not be filtered by source admissibility rules.
         # Annotating them for metadata is fine; filtering them out is not.
         company_domain = get_clean_domain(company_url) if company_url else ""
-        raw_findings = annotate_evidence_links(raw_findings, company_domain)
-        checklist = annotate_evidence_links(checklist, company_domain)
-        raw_findings, excluded_evidence = filter_admissible_sources(raw_findings, company_domain)
+        raw_findings = annotate_evidence_links(raw_findings, company_domain, company_name)
+        checklist = annotate_evidence_links(checklist, company_domain, company_name)
+        raw_findings, excluded_evidence = filter_admissible_sources(raw_findings, company_domain, company_name)
         excluded_total = len(excluded_evidence)
         if excluded_total:
             reasons = {}
@@ -2874,7 +2887,7 @@ RETURN STRICT JSON:
                     # Only keep verified recovery links, dedup against existing URLs
                     existing_urls = {(f.get("url") or "").rstrip("/").lower() for f in raw_findings}
                     added = 0
-                    recovery_links = annotate_evidence_links(recovery_links, company_domain)
+                    recovery_links = annotate_evidence_links(recovery_links, company_domain, company_name)
                     for link in recovery_links:
                         if link.get("verified") and link.get("url") and link.get("admissible") is not False:
                             url_key = link["url"].rstrip("/").lower()
@@ -3086,6 +3099,11 @@ def financial_health_search(company_name: str, company_url: str = None, model_id
 
     search_name = clean_company_name_for_search(company_name)
     domain_hint = get_clean_domain(company_url) if company_url else f"{search_name.lower().replace(' ', '')}.fi"
+    entity_context_block = build_entity_context_block(company_name)
+    entity_terms = entity_search_terms(company_name)
+    entity_search_block = ""
+    if entity_terms and len(entity_terms) > 1:
+        entity_search_block = "Also use these entity search terms where relevant: " + ", ".join(f'"{t}"' for t in entity_terms[:8]) + "."
 
     DEFAULT_RESULT = {
         "financial_index": None,
@@ -3102,6 +3120,11 @@ def financial_health_search(company_name: str, company_url: str = None, model_id
     prompt = f"""Perform a FINANCIAL HEALTH ASSESSMENT on "{search_name}" (Domain: {domain_hint}).
 
 TARGET: Finnish companies. Use BOTH English and Finnish search terms.
+{entity_context_block}
+{entity_search_block}
+
+ENTITY-SCOPE RULE — CRITICAL:
+Financial data for a local legal entity is admissible only as local legal-entity evidence. If a source describes "{search_name} Oy", a country subsidiary, a former name, or an owner/acquirer, set entity_scope accordingly and do NOT treat it as unqualified group-wide financial performance unless a group-level source explicitly supports that.
 
 DATA FRESHNESS — CRITICAL RULE:
 Always use the MOST RECENT financial data available. Today is {date.today().isoformat()}.
@@ -3163,28 +3186,32 @@ RETURN STRICT JSON:
         "assessment": "Brief assessment (growing/stable/declining with % if available)",
         "evidence_snippet": "Key quote or data point found",
         "source_url": "URL where found",
-        "source_title": "Page/article title"
+        "source_title": "Page/article title",
+        "entity_scope": "canonical_group" or "local_legal_entity" or "former_name" or "subsidiary" or "parent_owner" or "wrong_entity" or "unknown"
     }}}},
     "profitability": {{{{
         "score": (integer 0-25),
         "assessment": "Brief assessment",
         "evidence_snippet": "Key data point",
         "source_url": "URL",
-        "source_title": "Title"
+        "source_title": "Title",
+        "entity_scope": "canonical_group" or "local_legal_entity" or "former_name" or "subsidiary" or "parent_owner" or "wrong_entity" or "unknown"
     }}}},
     "financial_stability": {{{{
         "score": (integer 0-25),
         "assessment": "Brief assessment with equity ratio/debt level if available",
         "evidence_snippet": "Key data point",
         "source_url": "URL",
-        "source_title": "Title"
+        "source_title": "Title",
+        "entity_scope": "canonical_group" or "local_legal_entity" or "former_name" or "subsidiary" or "parent_owner" or "wrong_entity" or "unknown"
     }}}},
     "investment_signal": {{{{
         "score": (integer 0-25),
         "assessment": "Brief assessment of investment activity",
         "evidence_snippet": "Key data point",
         "source_url": "URL",
-        "source_title": "Title"
+        "source_title": "Title",
+        "entity_scope": "canonical_group" or "local_legal_entity" or "former_name" or "subsidiary" or "parent_owner" or "wrong_entity" or "unknown"
     }}}},
     "financial_confidence": (integer 0-100)
 }}}}
@@ -3243,7 +3270,8 @@ CONFIDENCE GUIDE:
             "assessment": dim_data.get("assessment", "No data found"),
             "evidence_snippet": dim_data.get("evidence_snippet", ""),
             "source_url": dim_data.get("source_url", ""),
-            "source_title": dim_data.get("source_title", "")
+            "source_title": dim_data.get("source_title", ""),
+            "entity_scope": dim_data.get("entity_scope", "unknown")
         })
 
     # Quality gate: if all dimensions fell back to defaults, the API returned

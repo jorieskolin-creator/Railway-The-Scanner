@@ -698,6 +698,16 @@ const isForesightContext = (link) => {
                                     <span className="text-[10px] text-slate-500">Foresight Vulnerability</span>
                                     <span className={`text-sm font-mono font-bold ${seg.color}`}>{faviData.favi_score}</span>
                                 </div>
+                                {(faviData.fps != null || faviData.readiness_gap != null || faviData.current_vulnerability_signal != null) && (
+                                    <div className="flex flex-wrap items-center justify-end gap-2 mt-2 text-[10px] text-slate-400">
+                                        {faviData.fps != null && <span>FPS {faviData.fps}</span>}
+                                        {faviData.readiness_gap != null && <span>Gap {faviData.readiness_gap}</span>}
+                                        {faviData.current_vulnerability_signal != null && <span>Current {faviData.current_vulnerability_signal}</span>}
+                                        {faviData.readiness_gap_source === 'current_vulnerability_adjusted' && (
+                                            <span className="text-amber-300">current-risk adjusted</span>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         </div>
                     );

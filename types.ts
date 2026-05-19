@@ -18,6 +18,10 @@ interface EvidenceLink {
   claim_tier?: string;
   claim_type?: string;
   scope?: string;
+  entity_scope?: string;
+  scope_warning?: string;
+  canonical_company?: string;
+  entity_match?: string;
   origin?: string;
   company_specific?: boolean;
   source_says?: string;
@@ -38,6 +42,8 @@ interface ForesightLink {
   timeframe: string;
   force_type: string;
   origin: string; // always "foresight"
+  entity_scope?: string;
+  scope_warning?: string;
 }
 
 interface LinkedInInsights {
@@ -240,6 +246,9 @@ interface FAVICompany {
   fac: number;                    // Financial Adaptation Capacity (0-100)
   megatrend_exposure: number;     // Megatrend Exposure (0-100)
   current_vulnerability: number;  // Current vulnerability score
+  intent_readiness_gap?: number;  // Raw intent-dimension readiness gap before current-risk adjustment
+  current_vulnerability_signal?: number; // Current-risk floor used to prevent false zero FAVI
+  readiness_gap_source?: string;  // "intent_dimensions" | "current_vulnerability_adjusted"
   segment: string;                // "Critical" | "Sleepwalking" | "Wounded but Sheltered" | "Safe Harbor"
   formula: string;                // "geometric" | "additive"
   foresight_count: number;

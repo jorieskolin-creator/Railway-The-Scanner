@@ -227,7 +227,25 @@ TOP_100_COMPANIES = [
     {"name": "Mandatum", "url": "https://mandatum.com",
      "domain": "Financial Services", "revenue_avg_3yr": 1200, "employees": 700, "ownership": "Public", "hq_country": "FI"},
     {"name": "Vivicta", "url": "https://www.vivicta.fi",
-     "domain": "IT Services & Consulting", "revenue_avg_3yr": 500, "employees": 7230, "ownership": "Private", "hq_country": "FI"},
+     "domain": "IT Services & Consulting", "revenue_avg_3yr": 500, "employees": 7230, "ownership": "Private", "hq_country": "FI",
+     "aliases": ["Vivicta Group"],
+     "former_names": ["Tietoevry Tech Services", "Tietoevry Tech Services business"],
+     "legal_entities": [
+         {"name": "Vivicta Oy", "country": "FI", "scope": "local_legal_entity"},
+         {"name": "Tietoevry Tech Services Finland Oy", "country": "FI", "scope": "local_legal_entity"},
+     ],
+     "subsidiaries": [
+         {"name": "Tietoevry Tech Services Finland Oy", "country": "FI"},
+         {"name": "Tietoevry Tech Services Sweden AB", "country": "SE"},
+         {"name": "Tietoevry Tech Services Norway AS", "country": "NO"},
+         {"name": "Tietoevry Tech Services Lithuania", "country": "LT"},
+     ],
+     "parent_or_owner": [{"name": "Agilitas", "relationship": "owner/acquirer"}],
+     "transition_events": [
+         {"date": "2025-09-02", "event": "Tietoevry Tech Services became standalone as Vivicta after the Agilitas-backed buy-out."},
+         {"date": "2025-10-31", "event": "Vivicta launched the new brand identity."},
+     ],
+     "entity_scope_policy": "Use Vivicta for canonical/group claims; use Vivicta Oy only for Finnish legal-entity financial facts."},
     {"name": "Vincit Oyj", "url": "https://www.vincit.com",
      "domain": "IT Services & Consulting", "revenue_avg_3yr": 80, "employees": 500, "ownership": "Public", "hq_country": "FI"},
 

@@ -18,6 +18,13 @@ from urllib.parse import urlparse
 from datetime import date, datetime
 from typing import Dict, Iterable, List, Tuple
 
+from entity_identity import (
+    ENTITY_SCOPE_CANONICAL_GROUP,
+    ENTITY_SCOPE_LOCAL_LEGAL_ENTITY,
+    ENTITY_SCOPE_WRONG_ENTITY,
+    apply_entity_scope,
+)
+
 
 # -----------------------------------------------------------------------------
 # Source context classification constants
@@ -735,10 +742,14 @@ def tier_snippet_bounds(claim_tier: str) -> Tuple[int, int]:
 
 
 def infer_entity_scope(link: dict, company_name: str = "") -> str:
-    """Infer whether evidence refers to the group/parent or the local entity.
+    """Infer whether evidence refers to the canonical target or a scoped entity."""
+    if company_name:
+        enriched = dict(link or {})
+        apply_entity_scope(enriched, company_name)
+        scope = enriched.get("entity_scope")
+        if scope and scope != "unknown":
+            return scope
 
-    Returns "group", "local", or "unknown".
-    """
     text = " ".join([
         link.get("title", ""),
         link.get("snippet", ""),
@@ -752,9 +763,9 @@ def infer_entity_scope(link: dict, company_name: str = "") -> str:
                      "nordic", "local entity"}
 
     if any(sig in text for sig in group_signals):
-        return "group"
+        return ENTITY_SCOPE_CANONICAL_GROUP
     if any(sig in text for sig in local_signals):
-        return "local"
+        return ENTITY_SCOPE_LOCAL_LEGAL_ENTITY
     return "unknown"
 
 
@@ -788,8 +799,7 @@ def normalize_evidence_link(link: dict, company_domain: str = "", company_name: 
     # Claim tier and entity scope — computed last so all upstream fields are set
     if not link.get("claim_tier"):
         link["claim_tier"] = compute_claim_tier(link)
-    if not link.get("entity_scope"):
-        link["entity_scope"] = infer_entity_scope(link, company_name)
+    apply_entity_scope(link, company_name)
 
     return apply_language_metadata(link)
 
@@ -807,7 +817,11 @@ def is_admissible_source(link: dict, company_domain: str = "", *, allow_unverifi
     link = normalize_evidence_link(link, company_domain)
     if link.get("manual_override") is True:
         return True, "manual_override"
-    if link.get("wrong_entity") is True or link.get("entity_match") == "wrong":
+    if (
+        link.get("wrong_entity") is True
+        or link.get("entity_match") == "wrong"
+        or link.get("entity_scope") == ENTITY_SCOPE_WRONG_ENTITY
+    ):
         return False, "wrong_entity_true"
     url = (link.get("url") or link.get("source_url") or "").strip()
     if url and link.get("verified") is False:
@@ -827,13 +841,13 @@ def is_admissible_source(link: dict, company_domain: str = "", *, allow_unverifi
     return True, "admissible"
 
 
-def annotate_evidence_links(links: list, company_domain: str = "") -> list:
+def annotate_evidence_links(links: list, company_domain: str = "", company_name: str = "") -> list:
     """Normalize links in-place and annotate admissibility fields."""
     annotated = []
     for link in links or []:
         if not isinstance(link, dict):
             continue
-        normalize_evidence_link(link, company_domain)
+        normalize_evidence_link(link, company_domain, company_name)
         ok, reason = is_admissible_source(link, company_domain)
         link["admissible"] = ok
         link["exclusion_reason"] = "" if ok else reason
@@ -841,10 +855,10 @@ def annotate_evidence_links(links: list, company_domain: str = "") -> list:
     return annotated
 
 
-def filter_admissible_sources(links: list, company_domain: str = "") -> Tuple[List[dict], List[dict]]:
+def filter_admissible_sources(links: list, company_domain: str = "", company_name: str = "") -> Tuple[List[dict], List[dict]]:
     """Return (admissible, excluded) after deterministic source gating."""
     admissible, excluded = [], []
-    for link in annotate_evidence_links(links or [], company_domain):
+    for link in annotate_evidence_links(links or [], company_domain, company_name):
         if link.get("admissible"):
             admissible.append(link)
         else:
@@ -852,9 +866,9 @@ def filter_admissible_sources(links: list, company_domain: str = "") -> Tuple[Li
     return admissible, excluded
 
 
-def evidence_sufficiency_score(links: list, company_domain: str = "") -> dict:
+def evidence_sufficiency_score(links: list, company_domain: str = "", company_name: str = "") -> dict:
     """Small 0-5 evidence sufficiency score for diagnosis confidence."""
-    usable, excluded = filter_admissible_sources(links or [], company_domain)
+    usable, excluded = filter_admissible_sources(links or [], company_domain, company_name)
     if not usable:
         return {"score": 0, "label": "none", "usable": 0, "excluded": len(excluded)}
     broad = sum(1 for l in usable if l.get("scope") == "broad")
@@ -971,6 +985,7 @@ def manage_evidence_sources(
     existing_links: list,
     new_links: list,
     company_domain: str = "",
+    company_name: str = "",
 ) -> dict:
     """
     Merge new evidence sources into existing ones, respecting the MAX_EVIDENCE_SOURCES cap
@@ -998,8 +1013,8 @@ def manage_evidence_sources(
     """
     # Ensure all sources have credibility, scope, source_type and admissibility assessed.
     # Bad evidence is not allowed to compete with good evidence in the eviction pool.
-    existing_links = annotate_evidence_links(existing_links or [], company_domain)
-    new_links = annotate_evidence_links(new_links or [], company_domain)
+    existing_links = annotate_evidence_links(existing_links or [], company_domain, company_name)
+    new_links = annotate_evidence_links(new_links or [], company_domain, company_name)
     excluded_links = [l for l in existing_links + new_links if l.get("admissible") is False]
     existing_links = [l for l in existing_links if l.get("admissible") is not False]
     new_links = [l for l in new_links if l.get("admissible") is not False]

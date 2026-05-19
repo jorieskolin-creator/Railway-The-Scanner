@@ -19,6 +19,7 @@ from gemini_backoff import call_with_503_backoff
 from gemini_client import get_gemini_client
 from source_quality import assess_source_scope
 from contradiction_detector import detect_contradictions
+from entity_identity import apply_entity_scope
 
 
 _FORBIDDEN_TERMS = [
@@ -89,10 +90,13 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
             continue
         title = (l.get("title", "Source") or "Source")[:80]
         snippet = (l.get("snippet") or "")[:300]
+        scoped_link = apply_entity_scope(dict(l), company_name)
         verified_links.append({
             "title": title,
             "snippet": snippet,
             "scope": assess_source_scope(l.get("url", ""), title, snippet),
+            "entity_scope": scoped_link.get("entity_scope", "unknown"),
+            "scope_warning": scoped_link.get("scope_warning", ""),
         })
         if len(verified_links) >= 20:
             break
@@ -104,12 +108,15 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
             continue
         title = (l.get("title", "Foresight Source") or "Foresight Source")[:80]
         snippet = (l.get("snippet") or "")[:300]
+        scoped_link = apply_entity_scope(dict(l), company_name)
         foresight_links.append({
             "title": title,
             "snippet": snippet,
             "origin": "foresight",
             "source_type": l.get("source_type", ""),
             "scope": assess_source_scope(l.get("url", ""), title, snippet),
+            "entity_scope": scoped_link.get("entity_scope", "unknown"),
+            "scope_warning": scoped_link.get("scope_warning", ""),
         })
         if len(foresight_links) >= 5:
             break
@@ -298,7 +305,7 @@ MANDATORY RULES:
    - NARROW SCOPE: When citing a finding from a narrow-scope source (master's thesis, single-department survey, regional pilot), you MUST include a scope qualifier in the same sentence. Never present a narrow-scope statistic as a company-wide truth.
    - ANTI-EXTRAPOLATION: NEVER extrapolate a narrow-scope finding into a macro-trend or section-level diagnosis.
    - SELF-REPORTED DATA: For company self-claims, qualify every assertion ("The company states...", "According to the company..."). Do not omit specific numbers, but never present them as independently verified.
-   - ENTITY SCOPE: When evidence carries entity_scope="group", cite the parent entity (e.g., "[Company] Group"). Do not attribute group-level metrics to the local entity.
+   - ENTITY SCOPE: entity_scope="canonical_group" may support target-company claims. entity_scope="local_legal_entity", "subsidiary", "former_name", or "parent_owner" must be qualified in the same sentence and must not be promoted into unqualified company-wide evidence.
 8. BALANCING CONTRADICTIONS & PROPORTIONALITY — CRITICAL:
    - If a top-level "contradictions" array is present in the payload, EACH listed contradiction MUST be addressed in the prose — cite both sides with their respective scope ("broad"/"narrow") and source titles, in the same sentence or adjacent sentences. Silently picking one side is a violation of this rule.
    - If a narrow-scope independent source contradicts a broad self-reported metric, briefly state both side-by-side (e.g., "Wärtsilä reports [X] company-wide users, though a departmental survey of HR found [Y]").
