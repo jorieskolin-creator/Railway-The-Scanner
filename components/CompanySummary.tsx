@@ -72,6 +72,7 @@ const CompanySummary = ({ data, faviData, observatoryData = null }) => {
   const [copied, setCopied] = useState(false);
   const [pitchCopied, setPitchCopied] = useState(false);
   const [whyWhatCopied, setWhyWhatCopied] = useState(false);
+  const [activeTab, setActiveTab] = useState("diagnosis");
 
   
   const isCompanySpecificEvidence = (link) => {
@@ -696,6 +697,12 @@ const isForesightContext = (link) => {
             </div>
         )}
 
+        <div className="flex items-center gap-2">
+            <button onClick={() => setActiveTab("diagnosis")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${activeTab === "diagnosis" ? "bg-indigo-500/20 border-indigo-400/40 text-indigo-200" : "bg-white/5 border-white/10 text-slate-400"}`}>Diagnosis</button>
+            <button onClick={() => setActiveTab("activation")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${activeTab === "activation" ? "bg-cyan-500/20 border-cyan-400/40 text-cyan-200" : "bg-white/5 border-white/10 text-slate-400"}`}>Activation</button>
+        </div>
+
+        {activeTab === "diagnosis" && (
         <div className="bg-slate-800/40 p-8 rounded-2xl border border-slate-600/30 backdrop-blur-sm">
             <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
             <ShieldCheck className="text-indigo-400" />
@@ -704,7 +711,16 @@ const isForesightContext = (link) => {
             <p className="text-slate-200 leading-relaxed whitespace-pre-line text-base font-light">
                 <HighlightText text={data.summary_text} />
             </p>
+            {data.evidence_based_risks && data.evidence_based_risks.length > 0 && (
+                <div className="mt-5">
+                    <p className="text-[11px] font-bold text-rose-300 uppercase tracking-wider mb-2">Evidence-Based Risks</p>
+                    <ul className="space-y-2">
+                        {data.evidence_based_risks.map((risk, i) => (<li key={i} className="text-sm text-slate-300 bg-black/20 border border-white/10 rounded-lg p-3">{risk}</li>))}
+                    </ul>
+                </div>
+            )}
         </div>
+        )}
 
         {/* REALITY CHECKLIST SECTION */}
         {data.reality_checklist && data.reality_checklist.length > 0 && (
@@ -995,6 +1011,7 @@ const isForesightContext = (link) => {
             </div>
         )}
 
+        {activeTab === "activation" && (<>
         {/* STRATEGIC PITCH SECTION */}
         {data.pitch_text && (
             <div className="bg-white/5 p-6 rounded-2xl border border-white/10 backdrop-blur-md">
@@ -1075,6 +1092,8 @@ const isForesightContext = (link) => {
                 </p>
             </div>
         )}
+
+        </>)}
 
         {/* === STRATEGIC FORESIGHT VISUALIZATIONS === */}
         {data.strategic_foresight?.dimension_forces?.length > 0 && (() => {
