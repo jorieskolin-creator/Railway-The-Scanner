@@ -352,6 +352,10 @@ const isForesightContext = (link) => {
     for (var i = 0; i < reportOnlySections.length; i++) {
         reportOnlySections[i].parentNode.removeChild(reportOnlySections[i]);
     }
+    var tabbedDiagnosisSections = container.querySelectorAll('.ai-diagnosis-section');
+    for (var j = 0; j < tabbedDiagnosisSections.length; j++) {
+        tabbedDiagnosisSections[j].parentNode.removeChild(tabbedDiagnosisSections[j]);
+    }
     var visuals = container.innerHTML;
 
     console.log('[HTML Export v6] Starting. data.detailed_report:',
@@ -368,6 +372,40 @@ const isForesightContext = (link) => {
 
         // Prepare raw data — escape </script to prevent HTML parser issues
         var rawData = JSON.stringify(exportData, null, 2).replace(/<\/script/gi, '<\\/script');
+        var escapeHTML = function(value) {
+            return String(value || '')
+                .replace(/&/g, '&amp;')
+                .replace(/\x3c/g, '&lt;')
+                .replace(/>/g, '&gt;');
+        };
+
+        // Pre-build AI Diagnosis section from data so it is always included,
+        // regardless of which tab was active when the visual snapshot was captured.
+        var aiDiagnosisHTML = '';
+        if (exportData.summary_text && typeof exportData.summary_text === 'string') {
+            var diagnosisParagraphs = exportData.summary_text.split(/\n\n+/).map(function(para, pi) {
+                var escaped = escapeHTML(para).replace(/\n/g, '<br>');
+                var cls = 'text-slate-200 leading-relaxed text-base font-light' + (pi > 0 ? ' mt-4' : '');
+                return '<p class="' + cls + '">' + escaped + '</p>';
+            }).join('\n');
+            var risksHTML = '';
+            if (exportData.evidence_based_risks && exportData.evidence_based_risks.length > 0) {
+                risksHTML = '<div class="mt-5">'
+                    + '<p class="text-[11px] font-bold text-rose-300 uppercase tracking-wider mb-2">Evidence-Based Risks</p>'
+                    + '<ul class="space-y-2">'
+                    + exportData.evidence_based_risks.map(function(risk) {
+                        return '<li class="text-sm text-slate-300 bg-black/20 border border-white/10 rounded-lg p-3">' + escapeHTML(risk) + '</li>';
+                    }).join('')
+                    + '</ul></div>';
+            }
+            aiDiagnosisHTML = '<div class="bg-slate-800/40 p-8 rounded-2xl border border-slate-600/30 backdrop-blur-sm">'
+                + '<h3 class="text-xl font-bold text-white mb-4 flex items-center gap-2">'
+                + '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>'
+                + 'AI Diagnosis</h3>'
+                + '<div>' + diagnosisParagraphs + '</div>'
+                + risksHTML
+                + '</div>';
+        }
 
         // Pre-build detailed report section
         var detailedReportHTML = '';
@@ -478,6 +516,10 @@ const isForesightContext = (link) => {
             htmlContent += '            <span class="px-2.5 py-1 rounded-full text-[10px] font-bold font-mono bg-slate-800 text-slate-300 border border-white/10">FHI: ' + exportData.financial_index + '/100</span>\n';
         }
         htmlContent += '        </div>\n    </div>\n\n';
+
+        // AI Diagnosis section
+        htmlContent += '    <!-- AI DIAGNOSIS -->\n'
+            + '    ' + aiDiagnosisHTML + '\n\n';
 
         // Visual snapshot
         htmlContent += '    <!-- VISUAL REPORT SNAPSHOT -->\n'
@@ -914,7 +956,7 @@ const isForesightContext = (link) => {
         </div>
 
         {activeTab === "diagnosis" && (
-        <div className="bg-slate-800/40 p-8 rounded-2xl border border-slate-600/30 backdrop-blur-sm">
+        <div className="ai-diagnosis-section bg-slate-800/40 p-8 rounded-2xl border border-slate-600/30 backdrop-blur-sm">
             <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
             <ShieldCheck className="text-indigo-400" />
             AI Diagnosis
