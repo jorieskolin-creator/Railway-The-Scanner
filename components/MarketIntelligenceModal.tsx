@@ -2693,11 +2693,85 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
   );
 };
 
+const OpportunityMapTab = ({ data, onCompanyClick }: { data: any; onCompanyClick: (company: any) => void }) => {
+  const opportunityMap = data.opportunity_map || {};
+  const domains = opportunityMap.domain_rankings || [];
+  const companies = opportunityMap.company_rankings || [];
+  return (
+    <div className="space-y-6">
+      <div className="bg-black/20 border border-white/10 rounded-lg p-4">
+        <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-1">Opportunity Map — Future Pressure vs Current Capability Gaps</h4>
+        <p className="text-[10px] text-slate-500 mb-3">
+          Ranked by high foresight pressure, low readiness, financial capacity, intent-reality gap, and repeated WHY/WHAT clusters.
+        </p>
+        {opportunityMap.formula && (
+          <div className="text-[10px] text-slate-500 font-mono">Score formula: {opportunityMap.formula}</div>
+        )}
+      </div>
+
+      <div className="bg-black/20 border border-white/10 rounded-lg p-4">
+        <h4 className="text-[10px] font-bold text-violet-300 uppercase tracking-wide mb-3">Domain Rankings</h4>
+        <div className="overflow-x-auto">
+          <table className="w-full text-[10px]">
+            <thead><tr className="text-slate-500 border-b border-white/10">
+              <th className="p-2 text-left">#</th><th className="p-2 text-left">Domain</th><th className="p-2 text-left">Opportunity</th>
+              <th className="p-2 text-left">Pressure</th><th className="p-2 text-left">Readiness Gap</th><th className="p-2 text-left">Fin. Capacity</th><th className="p-2 text-left">Intent-Reality Gap</th><th className="p-2 text-left">WHY/WHAT Signal</th><th className="p-2 text-left">Companies</th>
+            </tr></thead>
+            <tbody>
+              {domains.map((d: any, i: number) => (
+                <tr key={d.domain} className="border-t border-white/5">
+                  <td className="p-2 text-slate-500">{i + 1}</td>
+                  <td className="p-2 text-cyan-300 font-medium">{d.domain}</td>
+                  <td className="p-2 font-mono font-bold text-rose-300">{d.opportunity_score}</td>
+                  <td className="p-2 font-mono text-violet-300">{d.foresight_pressure}</td>
+                  <td className="p-2 font-mono text-amber-300">{d.readiness_gap}</td>
+                  <td className="p-2 font-mono text-emerald-300">{d.financial_capacity}</td>
+                  <td className="p-2 font-mono text-rose-300">{d.intent_reality_gap}</td>
+                  <td className="p-2 font-mono text-cyan-300">{d.proposal_cluster_signal}</td>
+                  <td className="p-2 font-mono text-slate-400">{d.company_count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="bg-black/20 border border-white/10 rounded-lg p-4">
+        <h4 className="text-[10px] font-bold text-rose-300 uppercase tracking-wide mb-3">Top Company Opportunities</h4>
+        <div className="overflow-x-auto">
+          <table className="w-full text-[10px]">
+            <thead><tr className="text-slate-500 border-b border-white/10">
+              <th className="p-2 text-left">#</th><th className="p-2 text-left">Company</th><th className="p-2 text-left">Domain</th><th className="p-2 text-left">Opportunity</th>
+              <th className="p-2 text-left">Pressure</th><th className="p-2 text-left">Readiness Gap</th><th className="p-2 text-left">Fin. Capacity</th><th className="p-2 text-left">Intent-Reality Gap</th><th className="p-2 text-left">WHY/WHAT Signal</th>
+            </tr></thead>
+            <tbody>
+              {companies.slice(0, 20).map((c: any, i: number) => (
+                <tr key={c.name} className="border-t border-white/5 hover:bg-white/5 cursor-pointer transition-colors" onClick={() => onCompanyClick({ companyName: c.name, domain: c.domain })}>
+                  <td className="p-2 text-slate-500">{i + 1}</td>
+                  <td className="p-2 text-cyan-300 font-medium">{c.name}</td>
+                  <td className="p-2 text-slate-400">{c.domain}</td>
+                  <td className="p-2 font-mono font-bold text-rose-300">{c.opportunity_score}</td>
+                  <td className="p-2 font-mono text-violet-300">{c.foresight_pressure}</td>
+                  <td className="p-2 font-mono text-amber-300">{c.readiness_gap}</td>
+                  <td className="p-2 font-mono text-emerald-300">{c.financial_capacity}</td>
+                  <td className="p-2 font-mono text-rose-300">{c.intent_reality_gap}</td>
+                  <td className="p-2 font-mono text-cyan-300">{c.proposal_cluster_signal}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN MODAL
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const TABS = [
+  { id: 'opportunity', label: 'Opportunity Map', icon: Crosshair },
   { id: 'executive', label: 'Executive Summary', icon: Gauge },
   { id: 'future', label: 'Future Demand', icon: TrendingUp },
   { id: 'current', label: 'Current Demand', icon: Target },
@@ -2717,7 +2791,7 @@ const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, on
   onRefreshCrossImpactInterpretation?: () => void;
   crossImpactInterpretationLoading?: boolean;
 }) => {
-  const [activeTab, setActiveTab] = useState('executive');
+  const [activeTab, setActiveTab] = useState('opportunity');
 
   if (!isOpen) return null;
 
@@ -2789,6 +2863,7 @@ const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, on
             <div className="text-center py-16 text-slate-400">No data available</div>
           ) : (
             <>
+              {activeTab === 'opportunity' && <OpportunityMapTab data={data} onCompanyClick={onCompanyClick} />}
               {activeTab === 'executive' && <ExecutiveSummaryTab data={data} observatoryData={observatoryData} />}
               {activeTab === 'future' && <FutureDemandTab data={data} observatoryData={observatoryData} crossImpactInterpretationData={crossImpactInterpretationData} onRefreshCrossImpactInterpretation={onRefreshCrossImpactInterpretation} crossImpactInterpretationLoading={crossImpactInterpretationLoading} />}
               {activeTab === 'current' && <CurrentDemandTab data={data} />}
