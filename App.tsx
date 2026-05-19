@@ -44,6 +44,7 @@ const App = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
+  const [scanJobStatus, setScanJobStatus] = useState<any>(null);
   const [lastSynced, setLastSynced] = useState(null);
   const [sortConfig, setSortConfig] = useState({ key: 'reality_score', direction: 'desc' });
   const [systemStatus, setSystemStatus] = useState({ online: false, storage: false, google: false, ai: false });
@@ -312,20 +313,41 @@ const App = () => {
 
       const response = await fetch(`/scan`, { method: 'POST', headers: headers, body: body });
       if (response.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return; }
-      if (!response.ok) throw new Error("Scan failed");
-      const json = await response.json();
-      const newResult = json.data;
+      if (!response.ok) throw new Error("Scan submission failed");
+      const submit = await response.json();
+      setScanJobStatus({ status: submit.status, phase: 'queued', progress: 0, logs: [] });
 
-      setIsScannerOpen(false);
-      setSelectedCompany(newResult);
-      setIsModalOpen(true);
-      fetchSummaryData(true);
-      // Refresh Market Intelligence (FAVI data) after new scan
-      fetchMarketIntelData();
+      let attempts = 0;
+      while (attempts < 240) {
+        const statusRes = await fetch(`/scan-status/${submit.job_id}?t=${Date.now()}`, { headers: authHeaders() });
+        if (statusRes.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return; }
+        if (!statusRes.ok) throw new Error("Status polling failed");
+        const statusJson = await statusRes.json();
+        setScanJobStatus(statusJson);
+
+        if (statusJson.status === 'completed') {
+          const newResult = statusJson.result?.data;
+          if (!newResult) throw new Error('Scan completed without result payload');
+          setIsScannerOpen(false);
+          setSelectedCompany(newResult);
+          setIsModalOpen(true);
+          fetchSummaryData(true);
+          fetchMarketIntelData();
+          break;
+        }
+
+        if (statusJson.status === 'failed') {
+          throw new Error(statusJson.error || 'Scan job failed');
+        }
+
+        await new Promise(r => setTimeout(r, 2500));
+        attempts += 1;
+      }
       
     } catch (error) {
       console.error(error);
       alert("Error running scan.");
+      setScanJobStatus(null);
     } finally {
       setIsScanning(false);
     }
@@ -1310,6 +1332,10 @@ const App = () => {
                    <div className="p-16 flex flex-col items-center justify-center">
                        <Loader2 className="animate-spin text-cyan-400 mb-4" size={32} />
                        <p className="text-white">Scanning...</p>
+                       <p className="text-slate-300 text-xs mt-2">Phase: {scanJobStatus?.phase || 'queued'} ({scanJobStatus?.progress ?? 0}%)</p>
+                       {scanJobStatus?.logs?.length > 0 && (
+                         <p className="text-slate-400 text-[11px] mt-1 max-w-md text-center truncate">{scanJobStatus.logs[scanJobStatus.logs.length - 1]?.message}</p>
+                       )}
                    </div>
                ) : (
                     <>
