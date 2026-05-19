@@ -11,8 +11,18 @@ interface EvidenceLink {
   title: string;
   url: string;
   source: string;
+  snippet?: string;
   verified?: boolean;
   source_credibility?: string; // "high" | "medium" | "low"
+  source_type?: string;
+  claim_tier?: string;
+  claim_type?: string;
+  scope?: string;
+  origin?: string;
+  company_specific?: boolean;
+  source_says?: string;
+  possible_relevance?: string;
+  source_says_was_genericized?: boolean;
 }
 
 interface ForesightLink {
@@ -65,9 +75,26 @@ interface ScannerMetrics {
 
 interface AIVerification {
   verified: boolean;
-  unsupported_claims: string[];
-  model: string;
-  time_ms: number;
+  unsupported_claims?: string[];
+  unsupported_claims_detailed?: any[];
+  false_claims?: string[];
+  false_claims_detailed?: any[];
+  fact_check_skipped?: boolean;
+  model?: string;
+  time_ms?: number;
+  note?: string;
+}
+
+interface ScanQuality {
+  confidence_score?: number;
+  confidence?: number;
+  contradictions?: any[];
+  contradiction_warnings?: any[];
+}
+
+interface EvidenceSufficiency {
+  score?: number;
+  [key: string]: any;
 }
 
 interface AnalysisResult {
@@ -82,6 +109,7 @@ interface AnalysisResult {
   washing_type?: string | null; // NEW: AI Washing, Agile Washing, etc.
   evidence_links: EvidenceLink[];
   foresight_links?: ForesightLink[]; // Validated foresight source links
+  excluded_evidence?: EvidenceLink[];
   key_people?: KeyPerson[];
   summary_text: string;
   pitch_text?: string; // NEW: Strategic Pitch
@@ -94,10 +122,21 @@ interface AnalysisResult {
     category: string;
     found: boolean;
     query: string;
+    source_type?: string;
+    sentiment?: string;
+    is_recent?: boolean;
   }[];
   is_simulated?: boolean;
   ai_verification?: AIVerification; // AI-powered claim verification
   ai_verified?: boolean; // Summary field for landing page badge
+  hallucination_flags?: string[];
+  hallucination_risk?: string;
+  hallucination_score?: number;
+  scan_quality?: ScanQuality;
+  evidence_sufficiency?: EvidenceSufficiency | number;
+  contradictions?: any[];
+  contradiction_warnings?: any[];
+  general_summary_false_claims?: string[];
 }
 
 // Market Intelligence Data (from /api/market-intelligence endpoint)

@@ -114,6 +114,118 @@ const isForesightContext = (link) => {
   const getSourceSays = (link) => link?.source_says || link?.snippet || link?.description || '';
   const getPossibleRelevance = (link) => link?.possible_relevance || '';
 
+  const normalizeCredibility = (cred) => {
+    const normalized = String(cred || '').toLowerCase();
+    return ['high', 'medium', 'low'].includes(normalized) ? normalized : 'unknown';
+  };
+
+  const stringifyTrustItem = (item) => {
+    if (!item) return '';
+    if (typeof item === 'string') return item;
+    if (typeof item !== 'object') return String(item);
+    if (item.preferred_wording) return item.preferred_wording;
+    if (item.warning) return item.warning;
+    if (item.message) return item.message;
+    if (item.claim) return item.claim;
+    if (item.topic) {
+        const severity = item.severity ? `${item.severity}: ` : '';
+        return `${severity}${item.topic}`;
+    }
+    try {
+        return JSON.stringify(item);
+    } catch {
+        return '';
+    }
+  };
+
+  const normalizeTrustList = (...values) => {
+    const out = [];
+    values.forEach((value) => {
+        if (!value) return;
+        const items = Array.isArray(value) ? value : [value];
+        items.forEach((item) => {
+            const text = stringifyTrustItem(item).trim();
+            if (text && !out.includes(text)) out.push(text);
+        });
+    });
+    return out;
+  };
+
+  const buildEvidenceTrustPool = () => {
+    const pool = [];
+    const seen = new Set();
+    const addLink = (link, scanLabel) => {
+        if (!link || typeof link !== 'object') return;
+        const url = link.url || link.source_url || '';
+        const title = link.title || link.source_title || link.dimension || 'Evidence source';
+        const snippet = link.snippet || link.evidence_snippet || link.description || '';
+        const key = url
+            ? url.toLowerCase().replace(/\/$/, '')
+            : `${scanLabel}:${title}:${snippet}`.toLowerCase().slice(0, 240);
+        if (!key || seen.has(key)) return;
+        seen.add(key);
+        pool.push({
+            ...link,
+            url,
+            title,
+            snippet,
+            _scan: link._scan || scanLabel
+        });
+    };
+
+    (data.evidence_links || []).forEach((link) => addLink(link, link?.source_type === 'historical' ? 'historical' : 'current'));
+    (data.foresight_links || []).forEach((link) => addLink(link, 'foresight'));
+    (data.history || []).forEach((h) => {
+        const scanDate = h.date ? new Date(h.date).toLocaleDateString('en-US', { month: 'short', year: '2-digit' }) : 'history';
+        (h.evidence || []).forEach((link) => addLink(link, scanDate));
+        (h.foresight_evidence || []).forEach((link) => addLink(link, `${scanDate} foresight`));
+    });
+
+    return pool;
+  };
+
+  const evidenceTrustPool = buildEvidenceTrustPool();
+  const credibilityCounts = evidenceTrustPool.reduce((acc, link) => {
+    const cred = normalizeCredibility(link.source_credibility);
+    acc[cred] = (acc[cred] || 0) + 1;
+    return acc;
+  }, { high: 0, medium: 0, low: 0, unknown: 0 });
+  const verifiedSourceCount = evidenceTrustPool.filter((link) => link.verified === true).length;
+  const weakOrUnverifiedSourceCount = evidenceTrustPool.filter((link) => {
+    const cred = normalizeCredibility(link.source_credibility);
+    return link.verified === false || cred === 'low' || (!!link.url && cred === 'unknown');
+  }).length;
+  const confidenceRaw = data.confidence_score
+    ?? data.scan_quality?.confidence_score
+    ?? data.scan_quality?.confidence
+    ?? data.evidence_sufficiency?.score
+    ?? (typeof data.evidence_sufficiency === 'number' ? data.evidence_sufficiency : null);
+  const confidenceScore = confidenceRaw != null && !Number.isNaN(Number(confidenceRaw))
+    ? Math.round(Number(confidenceRaw))
+    : null;
+  const confidenceClass = confidenceScore == null
+    ? 'text-slate-300'
+    : confidenceScore >= 70 ? 'text-emerald-300'
+    : confidenceScore >= 45 ? 'text-amber-300'
+    : 'text-rose-300';
+  const contradictionWarnings = normalizeTrustList(
+    data.scan_quality?.contradictions,
+    data.scan_quality?.contradiction_warnings,
+    data.contradictions,
+    data.contradiction_warnings
+  );
+  const hallucinationFlags = normalizeTrustList(
+    data.hallucination_flags,
+    data.ai_verification?.false_claims,
+    data.ai_verification?.unsupported_claims,
+    data.general_summary_false_claims,
+    data.hallucination_risk && data.hallucination_risk !== 'low'
+        ? `Hallucination risk: ${data.hallucination_risk}${data.hallucination_score != null ? ` (${data.hallucination_score}/100)` : ''}`
+        : null
+  );
+  const previousScanCarriedForward = (data.evidence_links || []).some((link) => String(link?.source_type || '').toLowerCase() === 'historical')
+    || (data.reality_checklist || []).some((item) => String(item?.source_type || '').toLowerCase() === 'historical');
+
   // ARCHETYPE LOGIC (Reality vs Financial — unified with dashboard)
   // Prefer the stored archetype from the backend (single source of truth).
   // Fall back to score-based computation for backward compatibility with old data.
@@ -673,6 +785,103 @@ const isForesightContext = (link) => {
                 )}
             </div>
         )}
+
+        {/* EVIDENCE TRUST SECTION */}
+        <div className="bg-white/5 p-6 rounded-2xl border border-white/10 backdrop-blur-md">
+            <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4 mb-5">
+                <div>
+                    <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                        <ShieldCheck className="text-cyan-400" size={20} />
+                        Evidence Trust
+                    </h3>
+                    <p className="text-[10px] text-slate-500 uppercase tracking-wider font-mono mt-1">
+                        Source quality, verification status, and scan carry-forward signals
+                    </p>
+                </div>
+                <div className="flex items-center gap-2 text-[10px] font-mono">
+                    <span className={`px-2 py-1 rounded border ${previousScanCarriedForward ? 'bg-amber-500/10 text-amber-300 border-amber-500/30' : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'}`}>
+                        Carried forward: {previousScanCarriedForward ? 'Yes' : 'No'}
+                    </span>
+                    <span className="px-2 py-1 rounded border bg-slate-800/70 text-slate-400 border-white/10">
+                        {evidenceTrustPool.length} total sources
+                    </span>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="bg-black/20 p-4 rounded-xl border border-emerald-500/20">
+                    <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Verified</span>
+                        <CheckCircle size={14} className="text-emerald-400" />
+                    </div>
+                    <p className="text-3xl font-black text-emerald-300">{verifiedSourceCount}</p>
+                    <p className="text-[10px] text-slate-500 mt-1">reachable sources</p>
+                </div>
+                <div className="bg-black/20 p-4 rounded-xl border border-amber-500/20">
+                    <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Weak / Unverified</span>
+                        <AlertTriangle size={14} className="text-amber-400" />
+                    </div>
+                    <p className="text-3xl font-black text-amber-300">{weakOrUnverifiedSourceCount}</p>
+                    <p className="text-[10px] text-slate-500 mt-1">needs caution</p>
+                </div>
+                <div className="bg-black/20 p-4 rounded-xl border border-cyan-500/20">
+                    <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Confidence</span>
+                        <Activity size={14} className="text-cyan-400" />
+                    </div>
+                    <p className={`text-3xl font-black ${confidenceClass}`}>
+                        {confidenceScore == null ? 'N/A' : confidenceScore}
+                    </p>
+                    <p className="text-[10px] text-slate-500 mt-1">{confidenceScore == null ? 'not reported' : '/ 100'}</p>
+                </div>
+                <div className="bg-black/20 p-4 rounded-xl border border-indigo-500/20">
+                    <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Credibility</span>
+                        <Eye size={14} className="text-indigo-400" />
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 font-mono">{credibilityCounts.high} high</span>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 font-mono">{credibilityCounts.medium} medium</span>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300 font-mono">{credibilityCounts.low} low</span>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-600/30 text-slate-400 font-mono">{credibilityCounts.unknown} unknown</span>
+                    </div>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mt-4">
+                <div className={`p-4 rounded-xl border ${contradictionWarnings.length > 0 ? 'bg-amber-500/10 border-amber-500/30' : 'bg-black/20 border-white/5'}`}>
+                    <div className="flex items-center gap-2 mb-2">
+                        <Scale size={14} className={contradictionWarnings.length > 0 ? 'text-amber-400' : 'text-slate-500'} />
+                        <span className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Contradiction Warnings</span>
+                    </div>
+                    {contradictionWarnings.length > 0 ? (
+                        <div className="space-y-1.5">
+                            {contradictionWarnings.slice(0, 4).map((warning, i) => (
+                                <p key={i} className="text-[11px] text-amber-100/90 leading-relaxed font-mono">- {warning}</p>
+                            ))}
+                        </div>
+                    ) : (
+                        <p className="text-xs text-slate-500">None detected.</p>
+                    )}
+                </div>
+                <div className={`p-4 rounded-xl border ${hallucinationFlags.length > 0 ? 'bg-rose-500/10 border-rose-500/30' : 'bg-black/20 border-white/5'}`}>
+                    <div className="flex items-center gap-2 mb-2">
+                        <AlertOctagon size={14} className={hallucinationFlags.length > 0 ? 'text-rose-400' : 'text-slate-500'} />
+                        <span className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Unsupported Claim Flags</span>
+                    </div>
+                    {hallucinationFlags.length > 0 ? (
+                        <div className="space-y-1.5">
+                            {hallucinationFlags.slice(0, 5).map((flag, i) => (
+                                <p key={i} className="text-[11px] text-rose-100/90 leading-relaxed font-mono">- {flag}</p>
+                            ))}
+                        </div>
+                    ) : (
+                        <p className="text-xs text-slate-500">No hallucination or unsupported-claim flags reported.</p>
+                    )}
+                </div>
+            </div>
+        </div>
 
         {/* GENERAL SUMMARY — plain prose, no inline links (links shown in AI Diagnosis) */}
         {data.general_summary && (
