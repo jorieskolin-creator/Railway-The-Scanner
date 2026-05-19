@@ -2412,9 +2412,85 @@ async def get_cross_impact_interpretation(response: Response):
 
 
 # --- MAIN SCAN ENDPOINT (MULTIPART) ---
+
+
+# --- ASYNC SCAN JOB STATE ---
+_scan_jobs = {}
+_scan_jobs_lock = threading.Lock()
+
+def _append_scan_log(job_id: str, message: str):
+    with _scan_jobs_lock:
+        job = _scan_jobs.get(job_id)
+        if not job:
+            return
+        logs = job.setdefault("logs", [])
+        logs.append({"ts": datetime.utcnow().isoformat(), "message": message})
+        if len(logs) > 200:
+            del logs[:-200]
+
+def _update_scan_job(job_id: str, **fields):
+    with _scan_jobs_lock:
+        job = _scan_jobs.get(job_id)
+        if not job:
+            return
+        job.update(fields)
+
+def _run_scan_job(job_id: str, request: Request, companyName: str, companyUrl: Optional[str], reportText: str, saveToDatabase: bool, files: List[UploadFile]):
+    try:
+        _update_scan_job(job_id, status="running", phase="scan_pipeline", progress=10)
+        _append_scan_log(job_id, f"Started scan for {companyName}")
+        result = _execute_scan_pipeline(request=request, job_id=job_id, companyName=companyName, companyUrl=companyUrl, reportText=reportText, saveToDatabase=saveToDatabase, files=files)
+        _update_scan_job(job_id, status="completed", phase="completed", progress=100, result=result, completed_at=datetime.utcnow().isoformat())
+        _append_scan_log(job_id, "Scan completed")
+    except HTTPException as e:
+        _update_scan_job(job_id, status="failed", phase="failed", error=e.detail, progress=100, completed_at=datetime.utcnow().isoformat())
+        _append_scan_log(job_id, f"Scan failed: {e.detail}")
+    except Exception as e:
+        _update_scan_job(job_id, status="failed", phase="failed", error=str(e), progress=100, completed_at=datetime.utcnow().isoformat())
+        _append_scan_log(job_id, f"Scan failed: {e}")
+
 @app.post("/scan")
-def run_scan(
+def submit_scan_job(
     request: Request,
+    companyName: str = Form(...),
+    companyUrl: Optional[str] = Form(None),
+    reportText: str = Form(""),
+    saveToDatabase: bool = Form(True),
+    files: List[UploadFile] = File(None)
+):
+    verify_admin(request)
+    job_id = str(uuid.uuid4())
+    with _scan_jobs_lock:
+        _scan_jobs[job_id] = {
+            "job_id": job_id,
+            "status": "queued",
+            "phase": "queued",
+            "progress": 0,
+            "logs": [{"ts": datetime.utcnow().isoformat(), "message": f"Queued scan for {companyName}"}],
+            "result": None,
+            "error": None,
+            "created_at": datetime.utcnow().isoformat(),
+            "completed_at": None,
+            "company_name": companyName,
+        }
+
+    thread = threading.Thread(target=_run_scan_job, args=(job_id, request, companyName, companyUrl, reportText, saveToDatabase, files), daemon=True)
+    thread.start()
+    return {"job_id": job_id, "status": "queued"}
+
+@app.get("/scan-status/{job_id}")
+def get_scan_status(job_id: str, request: Request):
+    verify_admin(request)
+    with _scan_jobs_lock:
+        job = _scan_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Scan job not found")
+        return dict(job)
+
+# --- MAIN SCAN PIPELINE (SYNC, USED BY BACKGROUND JOB) ---
+def _execute_scan_pipeline(
+    request: Request,
+    job_id: Optional[str] = None,
     companyName: str = Form(...),
     companyUrl: Optional[str] = Form(None),
     reportText: str = Form(""),
@@ -2438,6 +2514,9 @@ def run_scan(
         #   Synthesis:     60s per model call (with fallback chain)
         SCAN_TOTAL_BUDGET = 540
         print(f"🚀 --- LIVE SCAN INITIATED FOR: {companyName} (budget: {SCAN_TOTAL_BUDGET}s) ---")
+        if job_id:
+            _update_scan_job(job_id, phase="initializing", progress=5)
+            _append_scan_log(job_id, "Initializing scan pipeline")
 
         # Model pipeline: Sonnet 4.6 + Web Search (forensic) | Gemini 2.5 Pro (financial) | Opus 4.7 (synthesis)
         # Forensic fallback: Gemini 3.1 Pro. Synthesis fallback: Gemini 3.1 Pro → Gemini 3 Pro
@@ -2456,6 +2535,9 @@ def run_scan(
                     uploaded_doc_names.append(file.filename)
         
         # --- STEP 1: SCANNER 1 (Intent) ---
+        if job_id:
+            _update_scan_job(job_id, phase="intent_analysis", progress=20)
+            _append_scan_log(job_id, "Running intent analysis")
         target_url = companyUrl
         company_subsidiaries = None
 
@@ -2519,6 +2601,9 @@ def run_scan(
             print(f"   [History] Could not load previous data (non-critical): {e}")
 
         # --- STEP 2: SCANNER 2 (Reality) + FINANCIAL HEALTH (Parallel) ---
+        if job_id:
+            _update_scan_job(job_id, phase="reality_and_financial", progress=45)
+            _append_scan_log(job_id, "Running reality and financial analysis")
         # Allocate time: reserve 150s for synthesis + self-analysis + post-processing
         elapsed_so_far = time.time() - scan_start
         reality_budget = max(180, int(SCAN_TOTAL_BUDGET - elapsed_so_far - 150))
@@ -2808,6 +2893,9 @@ def run_scan(
         foresight_links = sanitize_foresight_collection(foresight_links, domain=company_domain)  # final foresight card sanitation
 
         # --- STEP 3: SYNTHESIS ---
+        if job_id:
+            _update_scan_job(job_id, phase="synthesis", progress=75)
+            _append_scan_log(job_id, "Generating synthesis")
         summary = "AI Summary Unavailable"
         pitch = "Pitch Unavailable"
         why_proposals = []
@@ -3888,6 +3976,9 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
 
         # Sync final scan_quality back into full_data (may have been updated by fact-check)
         full_data["scan_quality"] = scan_quality
+        if job_id:
+            _update_scan_job(job_id, phase="finalizing", progress=95)
+            _append_scan_log(job_id, "Finalizing scan result")
 
         total_ms = int((time.time() - scan_start) * 1000)
         total_sec = round(total_ms / 1000, 1)
