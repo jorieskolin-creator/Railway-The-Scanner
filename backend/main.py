@@ -1689,7 +1689,7 @@ Rules:
 
 ### OUTPUT
 Respond with valid JSON only. Required fields:
-{"diagnostic_summary": "...", "evidence_based_risks": ["..."], "commercial_pitch": "...", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."], "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}
+{{"diagnostic_summary": "...", "evidence_based_risks": ["..."], "commercial_pitch": "...", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."], "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
 Note: diagnostic_summary must contain \n\n between paragraphs (3-4 paragraphs total). commercial_pitch must also contain \n\n between its 3 paragraphs.
 Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2.
 
@@ -3203,7 +3203,7 @@ Rules:
 
 ### OUTPUT
 Respond with valid JSON only. Required fields:
-{"diagnostic_summary": "...", "evidence_based_risks": ["..."], "commercial_pitch": "...", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."], "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}
+{{"diagnostic_summary": "...", "evidence_based_risks": ["..."], "commercial_pitch": "...", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."], "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
 Note: diagnostic_summary must contain \n\n between paragraphs (3-4 paragraphs total). commercial_pitch must also contain \n\n between its 3 paragraphs.
 Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2."""
 
