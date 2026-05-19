@@ -16,7 +16,7 @@ from entity_identity import (
     apply_entity_scope,
     build_entity_context_block,
 )
-from foresight_vulnerability import compute_favi_for_company
+from foresight_vulnerability import compute_current_vulnerability_score, compute_favi_for_company, compute_favi_index
 
 
 def test_vivicta_entity_scope_classification():
@@ -121,3 +121,119 @@ def test_favi_does_not_collapse_to_zero_when_current_risk_exists():
     assert result["readiness_gap"] > 0.0
     assert result["readiness_gap_source"] == "current_vulnerability_adjusted"
     assert result["favi_score"] > 0.0
+
+
+def _foresight_link(dim="Operating Model"):
+    return {
+        "validated": True,
+        "is_priority_dimension": True,
+        "source_credibility": "high",
+        "force_type": "Probable/Emerging",
+        "timeframe": "12-24mo",
+        "kb_dimension": dim,
+        "fp_theme": "Data & Digitalisation",
+    }
+
+
+def test_current_vulnerability_score_is_continuous_for_non_ranked_companies():
+    score = compute_current_vulnerability_score(
+        {
+            "companyName": "Steady Co",
+            "reality_score": 82,
+            "reality_gap": 0,
+            "confidence_score": 80,
+            "financial_index": 70,
+            "reality_checklist": [],
+        },
+        max_gap=50,
+    )
+    assert score > 0
+    assert score < 40
+
+
+def test_favi_index_exposes_cutoffs_and_all_company_current_vulnerability():
+    company_details = [
+        {
+            "companyName": "Ranked Co",
+            "domain": "IT",
+            "reality_score": 52,
+            "reality_gap": 35,
+            "confidence_score": 62,
+            "financial_index": 45,
+            "washing_flag": True,
+            "financial_sub_scores": {"profitability": 10, "financial_stability": 10, "investment_signal": 10},
+            "intent_breakdown": [{"name": "Operating Model", "score": 60}, {"name": "Strategy", "score": 60}],
+            "reality_checklist": [
+                {"found": True, "sentiment": "negative"},
+                {"found": True, "sentiment": "negative"},
+            ],
+            "foresight_links": [_foresight_link("Operating Model"), _foresight_link("Strategy"), _foresight_link("AI Readiness")],
+        },
+        {
+            "companyName": "Continuous Co",
+            "domain": "IT",
+            "reality_score": 84,
+            "reality_gap": 0,
+            "confidence_score": 78,
+            "financial_index": 72,
+            "financial_sub_scores": {"profitability": 18, "financial_stability": 16, "investment_signal": 14},
+            "intent_breakdown": [{"name": "Operating Model", "score": 90}, {"name": "Strategy", "score": 90}],
+            "reality_checklist": [],
+            "foresight_links": [_foresight_link("Operating Model"), _foresight_link("Strategy"), _foresight_link("AI Readiness")],
+        },
+        {
+            "companyName": "Checklist Co",
+            "domain": "Services",
+            "reality_score": 76,
+            "reality_gap": 12,
+            "confidence_score": 70,
+            "financial_index": 64,
+            "financial_sub_scores": {"profitability": 15, "financial_stability": 14, "investment_signal": 12},
+            "intent_breakdown": [{"name": "Operating Model", "score": 80}, {"name": "Strategy", "score": 78}],
+            "reality_checklist": [
+                {"found": True, "sentiment": "negative"},
+                {"found": True, "sentiment": "negative"},
+                {"found": True, "sentiment": "negative"},
+            ],
+            "foresight_links": [_foresight_link("Operating Model"), _foresight_link("Strategy"), _foresight_link("AI Readiness")],
+        },
+        {
+            "companyName": "Low Signal Co",
+            "domain": "Services",
+            "reality_score": 95,
+            "reality_gap": 0,
+            "confidence_score": 90,
+            "financial_index": 90,
+            "financial_sub_scores": {"profitability": 22, "financial_stability": 22, "investment_signal": 20},
+            "intent_breakdown": [{"name": "Operating Model", "score": 95}, {"name": "Strategy", "score": 96}],
+            "reality_checklist": [],
+            "foresight_links": [_foresight_link("Operating Model"), _foresight_link("Strategy"), _foresight_link("AI Readiness")],
+        },
+    ]
+    dashboard_data = [
+        {
+            "companyName": c["companyName"],
+            "domain": c["domain"],
+            "reality_score": c["reality_score"],
+            "reality_gap": c["reality_gap"],
+            "financial_index": c["financial_index"],
+            "confidence_score": c["confidence_score"],
+        }
+        for c in company_details
+    ]
+    vulnerable_companies = [{"name": "Ranked Co", "vulnerability_score": 100}]
+
+    result = compute_favi_index(
+        company_details,
+        dashboard_data,
+        vulnerable_companies,
+        [{"theme": "Data & Digitalisation"}],
+    )
+
+    assert result["favi_cutoffs"]["source"].startswith("percentile")
+    assert sum(result["favi_segments"].values()) == len(company_details)
+
+    by_name = {c["name"]: c for c in result["favi_companies"]}
+    assert by_name["Ranked Co"]["current_vulnerability"] > by_name["Continuous Co"]["current_vulnerability"]
+    assert by_name["Continuous Co"]["current_vulnerability"] > 0
+    assert by_name["Checklist Co"]["current_vulnerability"] > by_name["Continuous Co"]["current_vulnerability"]

@@ -270,6 +270,12 @@ interface FAVIDomainPressure {
   company_count: number;
 }
 
+interface FAVICutoffs {
+  favi: number;
+  current_vulnerability: number;
+  source: string;
+}
+
 interface MarketIntelligenceData {
   company_count: number;
   detailed_count: number;
@@ -286,6 +292,7 @@ interface MarketIntelligenceData {
   favi_companies: FAVICompany[];
   favi_segments: FAVISegments;
   favi_domain_pressure: FAVIDomainPressure[];
+  favi_cutoffs?: FAVICutoffs;
 }
 
 // Attach Enums to window so they are available globally

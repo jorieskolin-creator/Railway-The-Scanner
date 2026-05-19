@@ -841,6 +841,7 @@ def compute_market_intelligence(dashboard_data, company_details, analysis_result
     result["favi_companies"] = favi_result["favi_companies"]
     result["favi_segments"] = favi_result["favi_segments"]
     result["favi_domain_pressure"] = favi_result["favi_domain_pressure"]
+    result["favi_cutoffs"] = favi_result["favi_cutoffs"]
     favi_with_score = [c for c in favi_result["favi_companies"] if c["favi_score"] > 0]
     print(f"   [Market Intel] FAVI: {len(favi_with_score)} companies scored, segments: {favi_result['favi_segments']}")
 
