@@ -659,6 +659,114 @@ def compute_demand_intensity(company_details, dashboard_data):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# 12. OPPORTUNITY MAP (PRESSURE × READINESS GAP × CAPACITY × CLUSTER SIGNAL)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def compute_opportunity_map(dashboard_data, top_causes, favi_companies):
+    """Rank domains and companies where future pressure meets current capability gaps.
+
+    Priority logic:
+      1) High foresight pressure
+      2) Low readiness (high readiness gap)
+      3) Sufficient financial capacity
+      4) Large intent-reality gap (current vulnerability)
+      5) Repeated WHY/WHAT proposal clusters
+    """
+    favi_by_company = {c.get("name"): c for c in (favi_companies or []) if c.get("name")}
+
+    domain_cluster_counts = defaultdict(int)
+    company_cluster_counts = defaultdict(int)
+    for cluster in (top_causes or []):
+        why_count = int(cluster.get("why_count") or 0)
+        what_count = int(cluster.get("what_count") or 0)
+        repeat_signal = max(0, why_count + what_count - 1)
+        for ex in (cluster.get("examples") or []):
+            company = ex.get("company")
+            if not company:
+                continue
+            company_cluster_counts[company] += repeat_signal
+
+    domain_rows = defaultdict(lambda: {"count": 0, "pressure": [], "gap": [], "fac": [], "vuln": [], "clusters": []})
+    company_rows = []
+    for c in dashboard_data:
+        name = c.get("companyName")
+        if not name:
+            continue
+        domain = c.get("domain") or "Unknown"
+        favi = favi_by_company.get(name, {})
+
+        pressure = float(favi.get("fps") or 0)
+        readiness_gap = float(favi.get("readiness_gap") or 0)
+        fac = float(favi.get("fac") or 0)
+        current_vulnerability = float(favi.get("current_vulnerability") or max(0, c.get("reality_gap") or 0))
+        cluster_signal = float(company_cluster_counts.get(name, 0))
+
+        financial_capacity = min(100.0, fac)
+        opportunity_score = (
+            pressure * 0.30 +
+            readiness_gap * 0.25 +
+            financial_capacity * 0.15 +
+            current_vulnerability * 0.20 +
+            min(100.0, cluster_signal * 8.0) * 0.10
+        )
+
+        company_rows.append({
+            "name": name,
+            "domain": domain,
+            "opportunity_score": round(opportunity_score, 1),
+            "foresight_pressure": round(pressure, 1),
+            "readiness_gap": round(readiness_gap, 1),
+            "financial_capacity": round(financial_capacity, 1),
+            "intent_reality_gap": round(current_vulnerability, 1),
+            "proposal_cluster_signal": round(cluster_signal, 1),
+        })
+
+        domain_bucket = domain_rows[domain]
+        domain_bucket["count"] += 1
+        domain_bucket["pressure"].append(pressure)
+        domain_bucket["gap"].append(readiness_gap)
+        domain_bucket["fac"].append(financial_capacity)
+        domain_bucket["vuln"].append(current_vulnerability)
+        domain_bucket["clusters"].append(cluster_signal)
+        domain_cluster_counts[domain] += cluster_signal
+
+    company_rows.sort(key=lambda x: x["opportunity_score"], reverse=True)
+    domain_results = []
+    for domain, vals in domain_rows.items():
+        if vals["count"] == 0:
+            continue
+        avg_pressure = statistics.mean(vals["pressure"]) if vals["pressure"] else 0
+        avg_gap = statistics.mean(vals["gap"]) if vals["gap"] else 0
+        avg_fac = statistics.mean(vals["fac"]) if vals["fac"] else 0
+        avg_vuln = statistics.mean(vals["vuln"]) if vals["vuln"] else 0
+        avg_clusters = statistics.mean(vals["clusters"]) if vals["clusters"] else 0
+        domain_score = (
+            avg_pressure * 0.30 +
+            avg_gap * 0.25 +
+            avg_fac * 0.15 +
+            avg_vuln * 0.20 +
+            min(100.0, avg_clusters * 8.0) * 0.10
+        )
+        domain_results.append({
+            "domain": domain,
+            "company_count": vals["count"],
+            "opportunity_score": round(domain_score, 1),
+            "foresight_pressure": round(avg_pressure, 1),
+            "readiness_gap": round(avg_gap, 1),
+            "financial_capacity": round(avg_fac, 1),
+            "intent_reality_gap": round(avg_vuln, 1),
+            "proposal_cluster_signal": round(avg_clusters, 1),
+        })
+    domain_results.sort(key=lambda x: x["opportunity_score"], reverse=True)
+
+    return {
+        "formula": "0.30*pressure + 0.25*readiness_gap + 0.15*financial_capacity + 0.20*intent_reality_gap + 0.10*proposal_cluster_signal_scaled",
+        "domain_rankings": domain_results,
+        "company_rankings": company_rows[:50],
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # MAIN ORCHESTRATOR
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -735,6 +843,14 @@ def compute_market_intelligence(dashboard_data, company_details, analysis_result
     result["favi_domain_pressure"] = favi_result["favi_domain_pressure"]
     favi_with_score = [c for c in favi_result["favi_companies"] if c["favi_score"] > 0]
     print(f"   [Market Intel] FAVI: {len(favi_with_score)} companies scored, segments: {favi_result['favi_segments']}")
+
+    # 12. Opportunity Map
+    result["opportunity_map"] = compute_opportunity_map(
+        dashboard_data,
+        result["top_causes"],
+        result["favi_companies"]
+    )
+    print(f"   [Market Intel] Opportunity map: {len(result['opportunity_map']['domain_rankings'])} domains / {len(result['opportunity_map']['company_rankings'])} companies ranked")
 
     print(f"   [Market Intel] ✅ Market intelligence computation complete\n")
     return result

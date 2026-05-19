@@ -87,7 +87,24 @@ def market_intelligence():
 
 ### File: `components/MarketIntelligenceModal.tsx` (NEW)
 
-**Structure:** Full-width modal (reuse CompanyModal pattern but `max-w-6xl` for charts). Tabbed navigation for 4 sections.
+**Structure:** Full-width modal (reuse CompanyModal pattern but `max-w-6xl` for charts). Tabbed navigation starts with a top-level **Opportunity Map** before the existing sections.
+
+### Tab 0: Opportunity Map (Top-level Priority)
+
+| Component | Visual | Data Source |
+|-----------|--------|-------------|
+| Domain Opportunity Ranking | Ranked table | `opportunity_map.domain_rankings` |
+| Company Opportunity Ranking | Ranked table | `opportunity_map.company_rankings` |
+| Scoring Formula | Formula snippet | `opportunity_map.formula` |
+
+- Primary rank = `opportunity_score`
+- Weighted inputs:
+  1. High foresight pressure
+  2. Low readiness / reality (readiness gap)
+  3. Sufficient financial capacity
+  4. Large intent-reality gap
+  5. Repeated WHY/WHAT proposal cluster signals
+- Goal: prioritize segments where future pressure is already colliding with current capability constraints.
 
 ### Tab 1: Executive Summary
 
