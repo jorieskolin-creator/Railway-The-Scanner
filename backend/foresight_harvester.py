@@ -28,9 +28,13 @@ from google import genai
 from google.genai import types as genai_types
 from gemini_backoff import call_with_503_backoff
 from gemini_client import get_gemini_client
-from source_quality import HIGH_CREDIBILITY_DOMAINS, assess_source_credibility
+from source_quality import (
+    HIGH_CREDIBILITY_DOMAINS,
+    assess_source_credibility,
+    apply_analysis_verification,
+)
 from foresight_guardrails import build_foresight_guardrails, annotate_foresight_signal, sanitize_foresight_record, sanitize_foresight_text
-from source_claim_validator import _fetch_page_text, _check_relevance
+from source_claim_validator import CLEAN_EVIDENCE_MODEL_CHAIN, _check_relevance
 from strategic_foresight import (
     FP_THEMES_30, FP_THEME_SOURCES, THEME_FALLBACK_MAP,
     _verify_foresight_url, _extract_json_from_text,
@@ -38,6 +42,7 @@ from strategic_foresight import (
 from storage import BlobStorage
 
 MAX_SIGNALS_PER_THEME = 15
+FORESIGHT_KB_EVIDENCE_VERSION = "analysis-verification-v1"
 
 
 def _theme_to_slug(theme: str) -> str:
@@ -106,6 +111,169 @@ def _revalidate_existing_signals(existing_signals: list[dict], theme: str) -> li
 
     print(f"   🧹 [Clean] {theme}: {len(alive)} existing alive, {dead} expired → removed")
     return alive
+
+
+def _signal_claim_text(sig: dict) -> str:
+    """Return the text that a Foresight KB source must actually support."""
+    return str(
+        sig.get("source_says")
+        or sig.get("description")
+        or sig.get("summary")
+        or sig.get("snippet")
+        or sig.get("title")
+        or ""
+    ).strip()
+
+
+def _prepare_signal_for_promotion(sig: dict, theme: str) -> dict:
+    """Preserve legacy interpretation and normalize fields for source gating."""
+    if not isinstance(sig, dict):
+        return sig
+
+    claim = _signal_claim_text(sig)
+    if claim and not sig.get("legacy_snippet"):
+        sig["legacy_snippet"] = claim
+    if claim and not sig.get("snippet"):
+        # Company evidence uses `snippet` as the claim text.  For KB records the
+        # original meaning remains interpretation/context, not a verified quote.
+        sig["snippet"] = claim
+
+    url = (sig.get("source_url") or sig.get("url") or "").strip()
+    if url and not sig.get("url"):
+        sig["url"] = url
+    if sig.get("url_verified") is True and sig.get("verified") is not True:
+        sig["verified"] = True
+    if sig.get("url_verified") is False:
+        sig["verified"] = False
+
+    sig.setdefault("source_type", "foresight")
+    sig["fp_theme"] = sig.get("fp_theme") or theme
+    sig["claim_type"] = "foresight_context"
+    sig["company_specific"] = False
+    sig["not_evidence_of_deployment"] = True
+    sig["requires_company_specific_corroboration"] = True
+    return sig
+
+
+def _apply_signal_promotion(sig: dict, result: dict | None, theme: str) -> dict:
+    """Apply analysis-verification metadata to a Foresight KB signal."""
+    sig = _prepare_signal_for_promotion(sig, theme)
+    result = result or {}
+
+    score = result.get("relevance_score")
+    if score is not None:
+        sig["content_relevance_score"] = score
+        sig["content_match_score"] = score
+    sig["claim_support_status"] = result.get("claim_support_status") or sig.get("claim_support_status") or "unchecked"
+    sig["content_verified"] = result.get("content_verified") is True
+    reason = result.get("reason") or sig.get("content_verification_reason") or ""
+    sig["content_verification_reason"] = reason
+    sig["content_match_reason"] = reason
+    sig["verification_model"] = result.get("verification_model", sig.get("verification_model"))
+    if result.get("source_quote"):
+        sig["source_quote"] = result["source_quote"]
+
+    apply_analysis_verification(sig)
+    sig["foresight_evidence_version"] = FORESIGHT_KB_EVIDENCE_VERSION
+    return sig
+
+
+def _promote_foresight_signals_for_analysis(
+    data: dict,
+    max_checks: int | None = None,
+    max_workers: int = 4,
+) -> dict:
+    """
+    Upgrade Foresight KB signals to the same analysis-verification contract used
+    by company evidence.  Weak sources stay in the KB for audit, but generated
+    synthesis only sees `generation_eligible` signals.
+    """
+    if not data or not data.get("signals"):
+        return data
+
+    theme = data.get("theme", "?")
+    signals = [s for s in data.get("signals", []) if isinstance(s, dict)]
+    data["signals"] = signals
+
+    candidates = []
+    for sig in signals:
+        _prepare_signal_for_promotion(sig, theme)
+        url = (sig.get("source_url") or sig.get("url") or "").strip()
+        claim = _signal_claim_text(sig)
+        if not sig.get("url_verified"):
+            sig["claim_support_status"] = "unavailable" if url else "unchecked"
+            sig["content_verified"] = False
+            apply_analysis_verification(sig)
+            sig["foresight_evidence_version"] = FORESIGHT_KB_EVIDENCE_VERSION
+            continue
+        if url and claim and len(claim) > 20:
+            candidates.append((url, claim, sig))
+        else:
+            sig["claim_support_status"] = "unchecked"
+            sig["content_verified"] = False
+            apply_analysis_verification(sig)
+            sig["foresight_evidence_version"] = FORESIGHT_KB_EVIDENCE_VERSION
+
+    to_check = candidates if max_checks is None else candidates[:max_checks]
+    content_results = {}
+
+    if to_check:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {
+                pool.submit(
+                    _check_relevance,
+                    url,
+                    claim,
+                    None,
+                    12,
+                    CLEAN_EVIDENCE_MODEL_CHAIN,
+                ): sig
+                for url, claim, sig in to_check
+            }
+            for future in concurrent.futures.as_completed(futures):
+                sig = futures[future]
+                try:
+                    result = future.result(timeout=24)
+                except Exception as exc:
+                    result = {
+                        "relevance_score": -1,
+                        "relevant": False,
+                        "claim_support_status": "unchecked",
+                        "content_verified": False,
+                        "source_quote": "",
+                        "reason": f"Verifier failed: {str(exc)[:120]}",
+                        "verification_model": "none",
+                    }
+                content_results[id(sig)] = result
+
+    for sig in signals:
+        result = content_results.get(id(sig))
+        if result is not None:
+            _apply_signal_promotion(sig, result, theme)
+        elif sig.get("foresight_evidence_version") != FORESIGHT_KB_EVIDENCE_VERSION:
+            # Not checked because of max_checks or missing claim. Keep visible,
+            # but do not let legacy snippets become generation evidence.
+            sig["claim_support_status"] = sig.get("claim_support_status") or "unchecked"
+            sig["content_verified"] = sig.get("content_verified") is True and bool(sig.get("source_quote"))
+            apply_analysis_verification(sig)
+            sig["foresight_evidence_version"] = FORESIGHT_KB_EVIDENCE_VERSION
+
+    if "validation" not in data:
+        data["validation"] = {}
+    data["validation"]["analysis_checked"] = len(to_check)
+    data["validation"]["analysis_verified"] = sum(1 for s in signals if s.get("analysis_verified") is True)
+    data["validation"]["generation_eligible"] = sum(1 for s in signals if s.get("generation_eligible") is True)
+    data["validation"]["display_only"] = sum(1 for s in signals if s.get("promotion_status") == "display_only")
+    data["validation"]["excluded"] = sum(1 for s in signals if s.get("promotion_status") == "excluded")
+    data["validation"]["foresight_evidence_version"] = FORESIGHT_KB_EVIDENCE_VERSION
+
+    print(
+        f"   🛡️ [Analysis-Verify] {theme}: "
+        f"{data['validation']['analysis_verified']} verified for analysis, "
+        f"{data['validation']['display_only']} display-only, "
+        f"{data['validation']['excluded']} excluded"
+    )
+    return data
 
 
 def _merge_signals(existing: list[dict], new_signals: list[dict], max_total: int = MAX_SIGNALS_PER_THEME) -> list[dict]:
@@ -380,102 +548,11 @@ def _validate_harvest_signals(data: dict) -> dict:
     return data
 
 
-def _verify_signal_content(data: dict, max_checks: int = 10, max_workers: int = 4) -> dict:
+def _verify_signal_content(data: dict, max_checks: int | None = None, max_workers: int = 4) -> dict:
     """
-    Verify that signal descriptions are grounded in actual source page content.
-
-    Fetches the primary source page for each signal and uses Gemini Flash to
-    check whether the signal description matches what the source actually says.
-    Signals where the description has NO relation to the source content are
-    removed entirely (same treatment as dead URLs).
-
-    Only runs on signals that already passed URL verification.
+    Backward-compatible wrapper for the stricter KB evidence-promotion step.
     """
-    if not data or not data.get("signals"):
-        return data
-
-    theme = data.get("theme", "?")
-
-    try:
-        client = get_gemini_client()
-    except ValueError:
-        print(f"   ⚠️ [Content-Verify] {theme}: no Gemini key — skipped")
-        return data
-
-    # Select signals with verified URLs and descriptions worth checking
-    candidates = []
-    for sig in data["signals"]:
-        if not sig.get("url_verified"):
-            continue
-        url = (sig.get("source_url") or "").strip()
-        desc = (sig.get("description") or "").strip()
-        if url and desc and len(desc) > 20:
-            candidates.append(sig)
-
-    if not candidates:
-        return data
-
-    to_check = candidates[:max_checks]
-
-    # Parallel: fetch page text + check relevance
-    content_results = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {}
-        for sig in to_check:
-            url = sig["source_url"]
-            desc = sig["description"]
-            future = pool.submit(_check_relevance, url, desc, client, 12)
-            futures[future] = sig
-
-        for future in concurrent.futures.as_completed(futures):
-            sig = futures[future]
-            try:
-                result = future.result(timeout=20)
-            except Exception:
-                result = {"relevance_score": -1, "relevant": True, "reason": "Timeout"}
-            content_results[sig["source_url"]] = result
-
-    # Annotate signals and remove those with no content match
-    kept = []
-    removed = 0
-    for sig in data["signals"]:
-        url = sig.get("source_url", "")
-        result = content_results.get(url)
-
-        if result is None:
-            # Not checked (exceeded max_checks or no URL) — keep
-            sig["content_verified"] = None
-            kept.append(sig)
-            continue
-
-        score = result.get("relevance_score", -1)
-        if score < 0:
-            # Could not fetch/check (JS-rendered, paywalled) — keep, don't penalise
-            sig["content_verified"] = None
-            kept.append(sig)
-            continue
-
-        sig["content_match_score"] = score
-        sig["content_match_reason"] = result.get("reason", "")
-
-        if score < 25:
-            # Source has NO relation to the signal description — remove entirely
-            removed += 1
-            continue
-
-        sig["content_verified"] = True
-        kept.append(sig)
-
-    data["signals"] = kept
-
-    if "validation" not in data:
-        data["validation"] = {}
-    data["validation"]["content_checked"] = len(content_results)
-    data["validation"]["content_removed"] = removed
-    data["validation"]["signals_after_content_verify"] = len(kept)
-
-    print(f"   📄 [Content-Verify] {theme}: {len(content_results)} checked, {removed} removed (description didn't match source) → {len(kept)} signals kept")
-    return data
+    return _promote_foresight_signals_for_analysis(data, max_checks=max_checks, max_workers=max_workers)
 
 
 def harvest_all_themes(
@@ -518,9 +595,15 @@ def harvest_all_themes(
 
         # Step 1: Load & clean existing KB signals for this theme
         existing_data = storage.get_foresight_kb(slug)
+        existing_before_count = len((existing_data or {}).get("signals", []))
         existing_signals = []
         if existing_data and existing_data.get("signals"):
             existing_signals = _revalidate_existing_signals(existing_data["signals"], theme)
+            promoted_existing = _promote_foresight_signals_for_analysis({
+                "theme": theme,
+                "signals": existing_signals,
+            })
+            existing_signals = promoted_existing.get("signals", [])
 
         # Step 2: Harvest new signals
         data = _harvest_single_theme(theme, client, search_queries)
@@ -552,11 +635,12 @@ def harvest_all_themes(
             "harvested_at": datetime.now(timezone.utc).isoformat(),
             "model": data.get("model", (existing_data or {}).get("model", "unknown")) if data else (existing_data or {}).get("model", "unknown"),
             "merge_stats": {
-                "existing_before_clean": len((existing_data or {}).get("signals", [])),
+                "existing_before_clean": existing_before_count,
                 "existing_after_clean": len(existing_signals),
                 "new_harvested": len(new_validated_signals),
                 "merged_total": len(merged_signals),
             },
+            "foresight_evidence_version": FORESIGHT_KB_EVIDENCE_VERSION,
         }
 
         url = storage.save_foresight_kb(slug, merged_data)
@@ -589,6 +673,16 @@ def harvest_all_themes(
     return results
 
 
+def _is_kb_signal_generation_eligible(sig: dict) -> bool:
+    """Only analysis-verified KB signals may enter generation prompts."""
+    return (
+        isinstance(sig, dict)
+        and sig.get("analysis_verified") is True
+        and sig.get("generation_eligible") is True
+        and sig.get("promotion_status") == "generation_eligible"
+    )
+
+
 def get_kb_signals_for_themes(theme_names: list[str]) -> list[dict]:
     """
     Retrieve pre-validated signals from the Foresight KB for a set of FP themes.
@@ -611,10 +705,11 @@ def get_kb_signals_for_themes(theme_names: list[str]) -> list[dict]:
 
         if data and data.get("signals"):
             for sig in data["signals"]:
-                if sig.get("validated") or sig.get("confidence") in ("high", "medium"):
-                    sig["_from_kb"] = True
-                    sig["_kb_theme"] = theme
-                    signals_found.append(sig)
+                if _is_kb_signal_generation_eligible(sig):
+                    promoted = dict(sig)
+                    promoted["_from_kb"] = True
+                    promoted["_kb_theme"] = theme
+                    signals_found.append(promoted)
 
         # Near-fit fallback: if no signals for this theme, try related themes
         if not signals_found:
@@ -624,11 +719,12 @@ def get_kb_signals_for_themes(theme_names: list[str]) -> list[dict]:
                 fallback_data = storage.get_foresight_kb(fallback_slug)
                 if fallback_data and fallback_data.get("signals"):
                     for sig in fallback_data["signals"]:
-                        if sig.get("validated") or sig.get("confidence") in ("high", "medium"):
-                            sig["_from_kb"] = True
-                            sig["_kb_theme"] = theme  # Tag with the originally requested theme
-                            sig["_kb_fallback_from"] = fallback_theme  # Track substitution source
-                            signals_found.append(sig)
+                        if _is_kb_signal_generation_eligible(sig):
+                            promoted = dict(sig)
+                            promoted["_from_kb"] = True
+                            promoted["_kb_theme"] = theme  # Tag with the originally requested theme
+                            promoted["_kb_fallback_from"] = fallback_theme  # Track substitution source
+                            signals_found.append(promoted)
                     if signals_found:
                         print(f"   📚 [KB Near-Fit] No data for '{theme}' → using '{fallback_theme}' ({len(signals_found)} signals)")
                         break  # Use the first fallback that has data
@@ -673,11 +769,12 @@ def format_kb_signals_for_prompt(signals: list[dict], max_signals: int = 8) -> s
 
     selected = signals[:max_signals]
     lines = [
-        "PRE-VALIDATED MEGATREND SIGNALS (from Foresight Knowledge Base):",
-        "The following signals have been independently verified with 2+ authoritative sources.",
+        "ANALYSIS-VERIFIED MEGATREND SIGNALS (from Foresight Knowledge Base):",
+        "The following signals have reachable sources and content verified for analysis use.",
         "Use these as GROUNDING CONTEXT — synthesize their impact on this specific company.",
         "IMPORTANT: These are foresight_context signals (company_specific=False).",
-        "  - source_says is a company-NEUTRAL summary of what the source/trend says.",
+        "  - Verified source quote is extracted source text.",
+        "  - KB interpretation is a company-neutral scanner interpretation, not a quote.",
         "  - Where shown, 'Example hypothesis' is a starting-point hypothesis from the KB.",
         "    Build upon it, challenge it, or replace it — but generate your own assessment",
         "    using modal language (may / could / should evaluate / if in scope / if not",
@@ -691,7 +788,12 @@ def format_kb_signals_for_prompt(signals: list[dict], max_signals: int = 8) -> s
         lines.append(f"Signal {i}: {sig.get('title', 'Unknown signal')}")
         lines.append(f"  Theme: {theme}")
         lines.append(f"  Type: {sig.get('signal_type', 'N/A')} | Timeframe: {sig.get('timeframe', 'N/A')}")
-        lines.append(f"  Source says (company-neutral): {sig.get('source_says') or sig.get('description', '')}")
+        source_quote = (sig.get("source_quote") or "").strip()
+        if source_quote:
+            lines.append(f"  Verified source quote: {source_quote[:420]}")
+        source_interpretation = (sig.get("source_says") or sig.get("description") or "").strip()
+        if source_interpretation:
+            lines.append(f"  KB interpretation (not a quote): {source_interpretation[:320]}")
         # Include KB possible_relevance as a starting-point hypothesis only — clearly labeled
         # so the LLM treats it as an example to build upon, challenge, or refine rather than
         # recycling it verbatim.  Modal language is still required in the LLM's own output.
@@ -732,6 +834,9 @@ def cleanup_foresight_kb(progress_callback=None) -> dict:
         "signals_before": 0,
         "signals_after": 0,
         "signals_removed": 0,
+        "analysis_verified": 0,
+        "display_only": 0,
+        "excluded": 0,
         "details": [],
     }
 
@@ -753,22 +858,43 @@ def cleanup_foresight_kb(progress_callback=None) -> dict:
         before_count = len(signals)
         results["signals_before"] += before_count
 
-        # Re-verify all primary URLs in parallel
+        # Re-verify all primary URLs, then upgrade still-live signals to the
+        # shared analysis-verification metadata used by company evidence.
         alive_signals = _revalidate_existing_signals(signals, theme_name)
+        promoted_data = _promote_foresight_signals_for_analysis({
+            "theme": theme_name,
+            "signals": alive_signals,
+        })
+        alive_signals = promoted_data.get("signals", [])
         after_count = len(alive_signals)
         removed = before_count - after_count
+        analysis_verified = sum(1 for s in alive_signals if s.get("analysis_verified") is True)
+        display_only = sum(1 for s in alive_signals if s.get("promotion_status") == "display_only")
+        excluded = sum(1 for s in alive_signals if s.get("promotion_status") == "excluded")
         results["signals_after"] += after_count
         results["signals_removed"] += removed
+        results["analysis_verified"] += analysis_verified
+        results["display_only"] += display_only
+        results["excluded"] += excluded
         results["themes_checked"] += 1
 
-        if removed > 0:
+        if removed > 0 or alive_signals != signals:
             results["themes_cleaned"] += 1
             # Save the cleaned data back
-            cleaned_data = {**theme_data, "signals": alive_signals, "last_cleanup": datetime.now(timezone.utc).isoformat()}
+            cleaned_data = {
+                **theme_data,
+                "signals": alive_signals,
+                "last_cleanup": datetime.now(timezone.utc).isoformat(),
+                "foresight_evidence_version": FORESIGHT_KB_EVIDENCE_VERSION,
+                "evidence_cleaning_stats": promoted_data.get("validation", {}),
+            }
             storage.save_foresight_kb(slug, cleaned_data)
-            print(f"   💾 [{i+1}/{total_themes}] {theme_name}: {before_count} → {after_count} (removed {removed})")
+            print(
+                f"   💾 [{i+1}/{total_themes}] {theme_name}: {before_count} → {after_count} "
+                f"(removed {removed}, analysis-verified {analysis_verified})"
+            )
         else:
-            print(f"   ✅ [{i+1}/{total_themes}] {theme_name}: {before_count} signals all alive")
+            print(f"   ✅ [{i+1}/{total_themes}] {theme_name}: {before_count} signals already clean")
 
         results["details"].append({
             "theme": theme_name,
@@ -776,6 +902,9 @@ def cleanup_foresight_kb(progress_callback=None) -> dict:
             "before": before_count,
             "after": after_count,
             "removed": removed,
+            "analysis_verified": analysis_verified,
+            "display_only": display_only,
+            "excluded": excluded,
         })
 
     print(f"\n{'='*70}")
