@@ -365,243 +365,251 @@ const isForesightContext = (link) => {
   };
 
   const handleDownloadHTML = () => {
-    if (!summaryRef.current) return;
-
-    // Capture innerHTML synchronously BEFORE any async operations
-    // Strip report-only-section divs from the snapshot to avoid duplication —
-    // they are rebuilt fresh from backend data and appended separately below.
-    var container = document.createElement('div');
-    container.innerHTML = summaryRef.current.innerHTML;
-    var reportOnlySections = container.querySelectorAll('.report-only-section');
-    for (var i = 0; i < reportOnlySections.length; i++) {
-        reportOnlySections[i].parentNode.removeChild(reportOnlySections[i]);
-    }
-    var tabbedDiagnosisSections = container.querySelectorAll('.ai-diagnosis-section');
-    for (var j = 0; j < tabbedDiagnosisSections.length; j++) {
-        tabbedDiagnosisSections[j].parentNode.removeChild(tabbedDiagnosisSections[j]);
-    }
-    var visuals = container.innerHTML;
-
-    console.log('[HTML Export v6] Starting. data.detailed_report:',
-        !!data.detailed_report, data.detailed_report ? data.detailed_report.length + ' chars' : 'MISSING',
-        '| data.foresight_summary:', !!data.foresight_summary);
-
-    // Helper: build HTML and trigger download (called after data is ready)
     var buildAndDownload = function(exportData) {
-        console.log('[HTML Export v6] Building HTML. exportData.detailed_report:',
-            !!exportData.detailed_report,
-            exportData.detailed_report ? exportData.detailed_report.length + ' chars' : 'MISSING',
-            '| exportData.foresight_summary:', !!exportData.foresight_summary,
-            exportData.foresight_summary ? exportData.foresight_summary.length + ' chars' : 'MISSING');
-
-        // Prepare raw data — escape </script to prevent HTML parser issues
+        var companyName = exportData.companyName || exportData.company_name || exportData.name || 'Company';
+        var generatedDate = new Date().toISOString().split('T')[0];
         var rawData = JSON.stringify(exportData, null, 2).replace(/<\/script/gi, '<\\/script');
         var escapeHTML = function(value) {
-            return String(value || '')
+            return String(value == null ? '' : value)
                 .replace(/&/g, '&amp;')
                 .replace(/\x3c/g, '&lt;')
-                .replace(/>/g, '&gt;');
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
         };
-
-        // Pre-build AI Diagnosis section from data so it is always included,
-        // regardless of which tab was active when the visual snapshot was captured.
-        var aiDiagnosisHTML = '';
-        if (exportData.summary_text && typeof exportData.summary_text === 'string') {
-            var diagnosisParagraphs = exportData.summary_text.split(/\n\n+/).map(function(para, pi) {
-                var escaped = escapeHTML(para).replace(/\n/g, '<br>');
-                var cls = 'text-slate-200 leading-relaxed text-base font-light' + (pi > 0 ? ' mt-4' : '');
-                return '<p class="' + cls + '">' + escaped + '</p>';
-            }).join('\n');
-            var risksHTML = '';
-            if (exportData.evidence_based_risks && exportData.evidence_based_risks.length > 0) {
-                risksHTML = '<div class="mt-5">'
-                    + '<p class="text-[11px] font-bold text-rose-300 uppercase tracking-wider mb-2">Evidence-Based Risks</p>'
-                    + '<ul class="space-y-2">'
-                    + exportData.evidence_based_risks.map(function(risk) {
-                        return '<li class="text-sm text-slate-300 bg-black/20 border border-white/10 rounded-lg p-3">' + escapeHTML(risk) + '</li>';
-                    }).join('')
-                    + '</ul></div>';
+        var renderInlineMarkdown = function(value) {
+            return escapeHTML(value).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+        };
+        var hasText = function(value) {
+            return typeof value === 'string' && value.trim().length > 0;
+        };
+        var renderParagraphs = function(text) {
+            if (!hasText(text)) return '';
+            return String(text).split(/\n\n+/).map(function(block) {
+                var trimmed = block.trim();
+                if (!trimmed) return '';
+                return '<p>' + renderInlineMarkdown(trimmed).replace(/\n/g, '<br>') + '</p>';
+            }).join('');
+        };
+        var renderReportBlocks = function(text) {
+            if (!hasText(text)) return '';
+            return String(text).split(/\n\n+/).map(function(block) {
+                var trimmed = block.trim();
+                if (!trimmed) return '';
+                var h2Match = trimmed.match(/^##\s+(.+)/);
+                if (h2Match) return '<h3>' + renderInlineMarkdown(h2Match[1]) + '</h3>';
+                var h3Match = trimmed.match(/^###\s+(.+)/);
+                if (h3Match) return '<h4>' + renderInlineMarkdown(h3Match[1]) + '</h4>';
+                if (/^-{3,}$/.test(trimmed)) return '<hr>';
+                return '<p>' + renderInlineMarkdown(trimmed).replace(/\n/g, '<br>') + '</p>';
+            }).join('');
+        };
+        var renderList = function(items) {
+            if (!Array.isArray(items) || items.length === 0) return '';
+            return '<ul>' + items.filter(Boolean).map(function(item) {
+                return '<li>' + renderInlineMarkdown(typeof item === 'string' ? item : JSON.stringify(item)) + '</li>';
+            }).join('') + '</ul>';
+        };
+        var renderSection = function(title, eyebrow, bodyHTML, modifier) {
+            if (!bodyHTML) return '';
+            var label = eyebrow ? '<div class="eyebrow">' + escapeHTML(eyebrow) + '</div>' : '';
+            return '<section class="section ' + (modifier || '') + '">' + label + '<h2>' + escapeHTML(title) + '</h2>' + bodyHTML + '</section>';
+        };
+        var renderMetric = function(label, value, hint) {
+            return '<div class="metric"><span>' + escapeHTML(label) + '</span><strong>' + escapeHTML(value) + '</strong>' + (hint ? '<em>' + escapeHTML(hint) + '</em>' : '') + '</div>';
+        };
+        var formatScore = function(value, suffix) {
+            if (value === null || value === undefined || value === '') return 'n/a';
+            var num = Number(value);
+            if (!Number.isFinite(num)) return String(value);
+            return Math.round(num).toString() + (suffix || '');
+        };
+        var stringifyItem = function(item) {
+            if (!item) return '';
+            if (typeof item === 'string') return item;
+            if (typeof item !== 'object') return String(item);
+            return item.preferred_wording || item.warning || item.message || item.claim || item.topic || JSON.stringify(item);
+        };
+        var normalizeList = function() {
+            var out = [];
+            Array.prototype.slice.call(arguments).forEach(function(value) {
+                if (!value) return;
+                (Array.isArray(value) ? value : [value]).forEach(function(item) {
+                    var text = stringifyItem(item).trim();
+                    if (text && out.indexOf(text) === -1) out.push(text);
+                });
+            });
+            return out;
+        };
+        var normalizeCred = function(cred) {
+            var c = String(cred || '').toLowerCase();
+            if (['high', 'very_high', 'trusted', 'authoritative'].indexOf(c) >= 0) return 'high';
+            if (['medium', 'moderate'].indexOf(c) >= 0) return 'medium';
+            if (['low', 'weak', 'unverified'].indexOf(c) >= 0) return 'low';
+            return 'unknown';
+        };
+        var evidencePool = []
+            .concat(Array.isArray(exportData.evidence_links) ? exportData.evidence_links : [])
+            .concat(Array.isArray(exportData.foresight_links) ? exportData.foresight_links : []);
+        var credibility = evidencePool.reduce(function(acc, link) {
+            var cred = normalizeCred(link && (link.source_credibility || link.credibility));
+            acc[cred] = (acc[cred] || 0) + 1;
+            return acc;
+        }, { high: 0, medium: 0, low: 0, unknown: 0 });
+        var verifiedSources = evidencePool.filter(function(link) {
+            return link && (link.verified === true || link.validated === true || link.url_verified === true);
+        }).length;
+        var analysisVerifiedSources = evidencePool.filter(function(link) {
+            return link && (link.analysis_verified === true || link.promotion_status === 'generation_eligible' || link.generation_eligible === true);
+        }).length;
+        var weakSources = evidencePool.filter(function(link) {
+            var cred = normalizeCred(link && (link.source_credibility || link.credibility));
+            return link && (link.verified === false || link.url_verified === false || cred === 'low' || ((link.url || link.source_url) && cred === 'unknown'));
+        }).length;
+        var carriedForward = evidencePool.some(function(link) {
+            return String(link && link.source_type || '').toLowerCase() === 'historical';
+        }) || (exportData.reality_checklist || []).some(function(item) {
+            return String(item && item.source_type || '').toLowerCase() === 'historical';
+        });
+        var contradictionWarnings = normalizeList(
+            exportData.scan_quality && exportData.scan_quality.contradictions,
+            exportData.scan_quality && exportData.scan_quality.contradiction_warnings,
+            exportData.contradictions,
+            exportData.contradiction_warnings
+        );
+        var hallucinationWarnings = normalizeList(
+            exportData.hallucination_flags,
+            exportData.ai_verification && exportData.ai_verification.false_claims,
+            exportData.ai_verification && exportData.ai_verification.unsupported_claims,
+            exportData.general_summary_false_claims,
+            exportData.hallucination_risk && exportData.hallucination_risk !== 'low' ? 'Hallucination risk: ' + exportData.hallucination_risk : null
+        );
+        var gap = Number(exportData.intent_score || 0) - Number(exportData.reality_score || 0);
+        var metrics = [
+            renderMetric('Ambition Score', formatScore(exportData.intent_score, '/100'), 'Narrative clarity'),
+            renderMetric('Reality Score', formatScore(exportData.reality_score, '/100'), 'Evidence check'),
+            renderMetric('Integrity Delta', (gap > 0 ? '+' : '') + Math.round(gap), 'Ambition minus reality'),
+            renderMetric('Confidence', formatScore(exportData.confidence_score ?? exportData.scan_quality?.confidence_score ?? exportData.evidence_sufficiency?.score, '%'), 'Model confidence'),
+            renderMetric('Financial Health', formatScore(exportData.financial_index, '/100'), 'Adaptation capacity'),
+            renderMetric('Verified URLs', verifiedSources, weakSources + ' weak/unverified'),
+            renderMetric('Analysis Verified', analysisVerifiedSources, 'content supports claim'),
+            renderMetric('Evidence Links', evidencePool.length, 'Company and foresight sources'),
+            renderMetric('Washing Flag', exportData.washing_flag ? 'Yes' : 'No', exportData.washing_type || 'Narrative vs evidence'),
+            renderMetric('Carried Forward', carriedForward ? 'Yes' : 'No', 'Previous-scan evidence')
+        ];
+        if (faviData && faviData.segment) {
+            var faviCutoff = faviData.favi_cutoff ?? faviData.favi_cutoffs?.favi ?? 50;
+            var facCutoff = faviData.fac_cutoff ?? 50;
+            metrics.push(renderMetric('Adaptation Segment', getAdaptationSegment(faviData, faviCutoff, facCutoff), 'FAC x FAVI'));
+            metrics.push(renderMetric('FAVI', formatScore(faviData.favi_score, '/100'), 'Foresight vulnerability'));
+            metrics.push(renderMetric('Foresight Pressure', formatScore(faviData.fps, '/100'), 'FPS'));
+            metrics.push(renderMetric('Readiness Gap', formatScore(faviData.readiness_gap, '/100'), faviData.readiness_gap_source || 'Current x future gap'));
+            metrics.push(renderMetric('Adaptation Capacity', formatScore(faviData.fac, '/100'), 'FAC'));
+            metrics.push(renderMetric('Current Vulnerability', formatScore(faviData.current_vulnerability ?? faviData.current_vulnerability_signal, '/100'), 'Portfolio-relative'));
+        }
+        var headerMeta = [
+            exportData.domain ? '<span>' + escapeHTML(exportData.domain) + '</span>' : '',
+            exportData.archetype ? '<span>' + escapeHTML(exportData.archetype) + '</span>' : '',
+            exportData.lastUpdated ? '<span>Scanned ' + escapeHTML(new Date(exportData.lastUpdated).toLocaleDateString('en-FI', { day: 'numeric', month: 'long', year: 'numeric' })) + '</span>' : '',
+            '<span>Generated ' + escapeHTML(generatedDate) + '</span>'
+        ].filter(Boolean).join('');
+        var keyPeople = Array.isArray(exportData.key_people)
+            ? exportData.key_people.filter(function(person) { return person && (!person.linkedin_insights || person.linkedin_insights.still_at_company !== false); })
+            : [];
+        var stakeholdersHTML = keyPeople.length > 0 ? '<div class="stakeholders">' + keyPeople.map(function(person) {
+            var insights = person.linkedin_insights || {};
+            var insightBits = []
+                .concat(insights.verified_role ? ['Verified role: ' + insights.verified_role] : [])
+                .concat(insights.summary ? [insights.summary] : [])
+                .concat(Array.isArray(insights.topics) && insights.topics.length > 0 ? ['Topics: ' + insights.topics.slice(0, 5).join(', ')] : []);
+            return '<article><h3>' + escapeHTML(person.name) + '</h3><div class="role">' + escapeHTML(person.role || 'Role unavailable') + '</div><p>' + escapeHTML(person.relevance || '') + '</p>' + (insightBits.length > 0 ? '<small>' + escapeHTML(insightBits.join(' | ')) + '</small>' : '') + '</article>';
+        }).join('') + '</div>' : '<p class="muted">No current key stakeholders were available in this scan.</p>';
+        var diagnosisHTML = renderParagraphs(exportData.summary_text)
+            + (Array.isArray(exportData.evidence_based_risks) && exportData.evidence_based_risks.length > 0
+                ? '<div class="callout"><h3>Evidence-Based Risks</h3>' + renderList(exportData.evidence_based_risks) + '</div>'
+                : '');
+        var trustHTML = '<div class="metrics">'
+            + renderMetric('URL Verified', verifiedSources, 'reachable source links')
+            + renderMetric('Weak / Unverified', weakSources, 'low, unknown, or failed sources')
+            + renderMetric('Confidence', formatScore(exportData.confidence_score ?? exportData.scan_quality?.confidence_score ?? exportData.evidence_sufficiency?.score, '%'), 'evidence confidence')
+            + renderMetric('Credibility Mix', 'H' + credibility.high + ' M' + credibility.medium + ' L' + credibility.low + ' U' + credibility.unknown, 'high/medium/low/unknown')
+            + renderMetric('Contradictions', contradictionWarnings.length || 'None', 'stored warnings')
+            + renderMetric('Unsupported Flags', hallucinationWarnings.length || 'None', 'hallucination checks')
+            + '</div>'
+            + (contradictionWarnings.length ? '<div class="callout amber"><h3>Contradiction Warnings</h3>' + renderList(contradictionWarnings) + '</div>' : '<p class="muted">No contradiction warnings detected.</p>')
+            + (hallucinationWarnings.length ? '<div class="callout"><h3>Hallucination / Unsupported-Claim Flags</h3>' + renderList(hallucinationWarnings) + '</div>' : '<p class="muted">No hallucination or unsupported-claim flags detected.</p>');
+        var sourceTable = evidencePool.length ? '<div class="table-wrap"><table><thead><tr><th>Source</th><th>Type</th><th>Cred</th><th>URL</th><th>Analysis</th><th>Support</th><th>Snippet / Quote</th></tr></thead><tbody>'
+            + evidencePool.map(function(link) {
+                var url = link.url || link.source_url || '';
+                var sourceName = link.title || link.source || link.source_title || link.fp_theme || 'Evidence source';
+                var quote = link.source_quote || link.source_says || link.snippet || link.description || link.summary || '';
+                var analysis = link.analysis_verified === true || link.promotion_status === 'generation_eligible' || link.generation_eligible === true ? 'Verified for analysis' : (link.promotion_status || link.verification_reason || 'Display only');
+                return '<tr><td>' + escapeHTML(sourceName) + '</td><td>' + escapeHTML(link.source_type || link.origin || '') + '</td><td>' + escapeHTML(link.source_credibility || link.credibility || 'unknown') + '</td><td>' + (url ? '<a href="' + escapeHTML(url) + '">' + escapeHTML(url) + '</a>' : '') + '</td><td>' + escapeHTML(analysis) + '</td><td>' + escapeHTML(link.claim_support_status || '') + '</td><td>' + escapeHTML(String(quote).slice(0, 420)) + '</td></tr>';
+            }).join('') + '</tbody></table></div>' : '<p class="muted">No evidence links were available in this export.</p>';
+        var checklistHTML = Array.isArray(exportData.reality_checklist) && exportData.reality_checklist.length > 0
+            ? '<div class="table-wrap"><table><thead><tr><th>Finding</th><th>Category</th><th>Status</th><th>Source</th></tr></thead><tbody>'
+                + exportData.reality_checklist.map(function(item) {
+                    return '<tr><td>' + escapeHTML(item.name || item.title || item.finding || '') + '</td><td>' + escapeHTML(item.category || '') + '</td><td>' + escapeHTML(item.status || (item.passed ? 'passed' : 'not verified')) + '</td><td>' + escapeHTML(item.source_type || item.source || '') + '</td></tr>';
+                }).join('') + '</tbody></table></div>' : '';
+        var breakdownHTML = Array.isArray(exportData.intent_breakdown) && exportData.intent_breakdown.length > 0
+            ? '<div class="table-wrap"><table><thead><tr><th>Dimension</th><th>Score</th></tr></thead><tbody>'
+                + exportData.intent_breakdown.map(function(item) {
+                    return '<tr><td>' + escapeHTML(item.name) + '</td><td>' + escapeHTML(item.score) + '/100</td></tr>';
+                }).join('') + '</tbody></table></div>' : '';
+        var domainDossierHTML = '';
+        if (exportData.domain && observatoryData && observatoryData.domain_dossiers) {
+            var dossier = observatoryData.domain_dossiers.find(function(d) { return d.domain === exportData.domain; });
+            if (dossier && dossier.text) {
+                domainDossierHTML = renderReportBlocks(String(dossier.text).replace(/^#\s+Domain Force Dossier.*$/im, '').trim());
             }
-            aiDiagnosisHTML = '<div class="bg-slate-800/40 p-8 rounded-2xl border border-slate-600/30 backdrop-blur-sm">'
-                + '<h3 class="text-xl font-bold text-white mb-4 flex items-center gap-2">'
-                + '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>'
-                + 'AI Diagnosis</h3>'
-                + '<div>' + diagnosisParagraphs + '</div>'
-                + risksHTML
-                + '</div>';
         }
-
-        // Pre-build detailed report section
-        var detailedReportHTML = '';
-        if (exportData.detailed_report && typeof exportData.detailed_report === 'string') {
-            var drParagraphs = exportData.detailed_report.split(/\n\n+/).map(function(block, pi) {
-                var headingMatch = block.match(/^##\s+(.+)/);
-                if (headingMatch) {
-                    var headingText = headingMatch[1].replace(/&/g, '&amp;').replace(/\x3c/g, '&lt;').replace(/>/g, '&gt;');
-                    var hcls = 'text-base font-semibold text-violet-300 uppercase tracking-wide' + (pi > 0 ? ' mt-6 mb-2' : ' mb-2');
-                    return '<h4 class="' + hcls + '">' + headingText + '</h4>';
-                }
-                var escaped = block.replace(/&/g, '&amp;');
-                escaped = escaped.replace(/\x3c/g, '&lt;');
-                escaped = escaped.replace(/>/g, '&gt;');
-                var cls = 'text-slate-200 leading-relaxed text-sm font-light' + (pi > 0 ? ' mt-4' : '');
-                return '<p class="' + cls + '">' + escaped + '</p>';
-            }).join('\n');
-            detailedReportHTML = '<div class="mt-8 space-y-8"><div class="bg-black/20 p-8 rounded-2xl border-l-4 border-violet-500 backdrop-blur-sm">'
-                + '<h3 class="text-xl font-bold text-white mb-2 flex items-center gap-2">'
-                + '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>'
-                + ' Detailed Forensic Report</h3>'
-                + '<p class="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">Deep diagnostic with evidence and stakeholder context</p>'
-                + '<div>' + drParagraphs + '</div>'
-                + '</div></div>';
-            console.log('[HTML Export v6] detailedReportHTML built:', detailedReportHTML.length, 'chars');
-        } else {
-            console.warn('[HTML Export v6] NO detailed_report found in exportData. Keys:', Object.keys(exportData).join(', '));
-        }
-
-        // Pre-build foresight section
-        var foresightHTML = '';
-        if (exportData.foresight_summary && typeof exportData.foresight_summary === 'string') {
-            var fsParagraphs = exportData.foresight_summary.split(/\n\n+/).map(function(para, pi) {
-                var escaped = para.replace(/&/g, '&amp;');
-                escaped = escaped.replace(/\x3c/g, '&lt;');
-                escaped = escaped.replace(/>/g, '&gt;');
-                // Convert **bold** markers to styled spans for key forces
-                escaped = escaped.replace(/\*\*([^*]+)\*\*/g, '<span class="font-semibold text-teal-300">$1</span>');
-                // Style Foresight attribution line as a footnote
-                if (para.indexOf('This Future Insight is based on') === 0) {
-                    return '<p class="mt-5 pt-3 border-t border-teal-800/40 text-[10px] text-slate-500 uppercase tracking-wider font-mono">' + escaped + '</p>';
-                }
-                var cls = 'text-slate-200 leading-relaxed text-sm font-light' + (pi > 0 ? ' mt-4' : '');
-                return '<p class="' + cls + '">' + escaped + '</p>';
-            }).join('\n');
-            foresightHTML = '<div class="mt-8 space-y-8"><div class="bg-black/20 p-8 rounded-2xl border-l-4 border-teal-500 backdrop-blur-sm">'
-                + '<h3 class="text-xl font-bold text-white mb-2 flex items-center gap-2">'
-                + '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2dd4bf" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>'
-                + ' Future Insight</h3>'
-                + '<p class="text-[10px] text-slate-500 mb-2 uppercase tracking-wider font-mono">Forward-looking narrative based on strategic foresight analysis</p>'
-                + '<p class="text-[10px] text-teal-300/70 mb-4 font-mono">External trend context — not proof of current company deployment or deterministic obligation.</p>'
-                + '<div>' + fsParagraphs + '</div>'
-                + '</div></div>';
-            console.log('[HTML Export v6] foresightHTML built:', foresightHTML.length, 'chars');
-        }
-
-        // Construct Standalone HTML
+        var activationHTML = '<div class="two-col"><div><h3>WHY</h3>' + renderList(exportData.why_proposals) + '</div><div><h3>WHAT</h3>' + renderList(exportData.what_proposals) + '</div></div>'
+            + renderSection('Strategic Pitch', 'Outbound narrative', renderParagraphs(exportData.pitch_text), 'nested');
+        var rawDataHTML = '<details><summary>Open complete raw JSON payload</summary><pre>' + escapeHTML(JSON.stringify(exportData, null, 2)) + '</pre></details>';
         var htmlContent = '<!DOCTYPE html>\n<html lang="en">\n<head>\n'
-            + '    <meta charset="UTF-8">\n'
-            + '    <meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
-            + '    <title>' + exportData.companyName + ' - Forensic Report</title>\n'
-            + '    <script src="https://cdn.tailwindcss.com"><' + '/script>\n'
-            + '    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">\n'
-            + '    <style>\n'
-            + '      body { font-family: \'Inter\', sans-serif; background-color: #0f172a; color: #f8fafc; }\n'
-            + '      ::-webkit-scrollbar { width: 8px; height: 8px; }\n'
-            + '      ::-webkit-scrollbar-track { background: #1e1b4b; }\n'
-            + '      ::-webkit-scrollbar-thumb { background: #4f46e5; border-radius: 4px; border: 2px solid #1e1b4b; }\n'
-            + '      .report-only-section { display: block !important; }\n'
-            + '    </style>\n'
-            + '</head>\n'
-            + '<body class="p-8 max-w-7xl mx-auto">\n';
-
-        // Header
-        htmlContent += '    <div class="mb-6 border-b border-slate-700 pb-6">\n'
-            + '        <div class="flex justify-between items-start">\n'
-            + '            <div>\n'
-            + '                <div class="flex items-center gap-3 flex-wrap">\n'
-            + '                    <h1 class="text-3xl font-bold text-white tracking-tight">' + exportData.companyName + '</h1>\n';
-        if (exportData.id) {
-            htmlContent += '                    <span class="px-2 py-0.5 rounded text-[10px] font-mono bg-white/5 text-slate-400 border border-white/5">ID: ' + exportData.id.substring(0,8) + '</span>\n';
-        }
-        if (exportData.has_docs) {
-            htmlContent += '                    <span class="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">DEEP DIVE</span>\n';
-        }
-        if (exportData.washing_flag && exportData.intent_score > exportData.reality_score) {
-            var washLabel = exportData.washing_type ? exportData.washing_type.toUpperCase() : 'WASHING DETECTED';
-            htmlContent += '                    <span class="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">' + washLabel + '</span>\n';
-        }
-        htmlContent += '                </div>\n'
-            + '                <p class="text-slate-400 text-sm mt-1">Final Forensic Report</p>\n'
-            + '            </div>\n'
-            + '            <div class="text-right text-xs text-slate-500 font-mono space-y-1">\n'
-            + '                <div>Report: ' + new Date().toISOString().split('T')[0] + '</div>\n';
-        if (exportData.lastUpdated) {
-            htmlContent += '                <div>Scanned: ' + new Date(exportData.lastUpdated).toLocaleDateString('en-FI', { day: 'numeric', month: 'long', year: 'numeric' }) + '</div>\n';
-        }
-        htmlContent += '            </div>\n'
-            + '        </div>\n'
-            + '        <div class="flex items-center gap-3 mt-3 flex-wrap">\n';
-        if (exportData.domain) {
-            htmlContent += '            <span class="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-slate-800 text-slate-300 border border-white/10">' + exportData.domain + '</span>\n';
-        }
-        if (exportData.archetype) {
-            htmlContent += '            <span class="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-indigo-500/15 text-indigo-300 border border-indigo-500/20">' + exportData.archetype + '</span>\n';
-        }
-        if (exportData.financial_index != null) {
-            htmlContent += '            <span class="px-2.5 py-1 rounded-full text-[10px] font-bold font-mono bg-slate-800 text-slate-300 border border-white/10">FHI: ' + exportData.financial_index + '/100</span>\n';
-        }
-        htmlContent += '        </div>\n    </div>\n\n';
-
-        // AI Diagnosis section
-        htmlContent += '    <!-- AI DIAGNOSIS -->\n'
-            + '    ' + aiDiagnosisHTML + '\n\n';
-
-        // Visual snapshot
-        htmlContent += '    <!-- VISUAL REPORT SNAPSHOT -->\n'
-            + '    <div id="visual-report" class="space-y-8">\n'
-            + '        ' + visuals + '\n'
-            + '    </div>\n\n';
-
-        // Foresight section
-        htmlContent += '    <!-- FUTURE INSIGHT -->\n'
-            + '    ' + foresightHTML + '\n\n';
-
-        // Detailed report section
-        htmlContent += '    <!-- DETAILED FORENSIC REPORT -->\n'
-            + '    ' + detailedReportHTML + '\n\n';
-
-        // Raw data capsule
-        htmlContent += '    <!-- RAW DATA CAPSULE (Hidden, for Deep Dive Tool Parsing) -->\n'
-            + '    <script id="forensic-data" type="application/json">\n'
-            + '        ' + rawData + '\n'
-            + '    <' + '/script>\n\n';
-
-        // Footer
-        htmlContent += '    <div class="mt-8 pt-8 border-t border-slate-700 text-center text-slate-500 text-xs font-mono opacity-50">\n'
-            + '        AdaptabilityScanner | Forensic Suite | Data contained in #forensic-data tag\n'
-            + '    </div>\n'
-            + '</body>\n</html>';
-
-        // Download
+            + '<meta charset="UTF-8">\n'
+            + '<meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
+            + '<title>' + escapeHTML(companyName) + ' - Master Data Report</title>\n'
+            + '<style>\n'
+            + ':root{color-scheme:dark;--bg:#0f172a;--panel:#172033;--panel2:#111827;--line:#334155;--text:#e5e7eb;--muted:#94a3b8;--cyan:#67e8f9;--green:#6ee7b7;--amber:#fbbf24;--rose:#fda4af;--violet:#c4b5fd;}\n'
+            + '*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Arial,sans-serif;line-height:1.55}main{max-width:1180px;margin:0 auto;padding:40px 28px 56px}.hero{border:1px solid var(--line);background:linear-gradient(135deg,#172033,#0f172a);border-radius:8px;padding:30px;margin-bottom:20px}.kicker{color:var(--cyan);font-size:11px;font-weight:800;letter-spacing:.16em;text-transform:uppercase}.hero h1{margin:8px 0 10px;font-size:34px;line-height:1.1}.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.meta span,.chips span{border:1px solid rgba(148,163,184,.28);background:rgba(15,23,42,.62);border-radius:999px;padding:5px 9px;color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:14px 0}.metric{border:1px solid rgba(148,163,184,.22);background:rgba(15,23,42,.72);border-radius:8px;padding:14px}.metric span{display:block;color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em}.metric strong{display:block;margin-top:4px;font-size:23px;color:white}.metric em{display:block;margin-top:3px;color:var(--muted);font-size:11px;font-style:normal}.section{border:1px solid rgba(148,163,184,.22);background:rgba(17,24,39,.78);border-radius:8px;padding:24px;margin-top:16px}.section.nested{background:rgba(15,23,42,.38);padding:18px}.section h2{margin:0 0 14px;color:white;font-size:20px}.section h3{margin:20px 0 8px;color:var(--cyan);font-size:14px;text-transform:uppercase;letter-spacing:.08em}.section h4{margin:16px 0 6px;color:white;font-size:14px}.section p{margin:0 0 13px;color:#dbe4f0}.eyebrow{margin-bottom:6px;color:var(--muted);font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}.two-col{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px}.two-col h3{color:var(--amber)}ul{margin:0;padding-left:20px}li{margin:8px 0}.callout{margin-top:18px;border-left:3px solid var(--rose);background:rgba(244,63,94,.08);padding:14px 16px}.callout.amber{border-left-color:var(--amber);background:rgba(251,191,36,.08)}.stakeholders{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.stakeholders article{border:1px solid rgba(148,163,184,.18);background:rgba(15,23,42,.55);border-radius:8px;padding:15px}.stakeholders h3{margin:0;color:white;text-transform:none;letter-spacing:0;font-size:15px}.role{color:var(--green);font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin:4px 0 8px}.stakeholders small{display:block;margin-top:10px;color:var(--muted);font-size:11px}.table-wrap{overflow-x:auto;margin-top:10px;margin-bottom:18px;border:1px solid rgba(148,163,184,.18);border-radius:8px}table{width:100%;border-collapse:collapse;font-size:11px;min-width:820px}th,td{padding:8px 10px;text-align:left;border-bottom:1px solid rgba(148,163,184,.14);vertical-align:top}th{color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.08em;background:rgba(15,23,42,.68)}td{color:#dbe4f0}a{color:var(--cyan);word-break:break-all}.muted{color:var(--muted)!important}strong{color:white}hr{border:0;border-top:1px solid var(--line);margin:20px 0}details{border:1px solid rgba(148,163,184,.22);border-radius:8px;background:rgba(15,23,42,.72);padding:14px}summary{cursor:pointer;color:var(--cyan);font-weight:800}pre{white-space:pre-wrap;word-break:break-word;color:#cbd5e1;font-size:11px;line-height:1.45;max-height:720px;overflow:auto}.footer{margin-top:28px;color:#64748b;font-size:11px;text-align:center}.page-note{color:var(--muted);max-width:850px;margin:0}.scanner-link{display:inline-block;border:1px solid rgba(103,232,249,.38);background:rgba(8,145,178,.18);color:var(--cyan);border-radius:8px;padding:10px 14px;font-weight:800;text-decoration:none}\n'
+            + '</style>\n</head>\n<body>\n<main>\n'
+            + '<header class="hero"><div class="kicker">Master Data HTML Export</div><h1>' + escapeHTML(companyName) + '</h1><p class="page-note">Complete uploadable evidence and analysis package. This file includes collected sources, trust metadata, diagnosis, activation context, foresight analysis, detailed forensic report, and the raw JSON payload.</p><div class="meta">' + headerMeta + '</div></header>\n'
+            + renderSection('General Summary', 'Executive context', renderParagraphs(exportData.general_summary))
+            + renderSection('AI Diagnosis', 'Interpretation and risks', diagnosisHTML)
+            + renderSection('Master Metrics', 'All score and trust signals', '<div class="metrics">' + metrics.join('') + '</div>' + breakdownHTML)
+            + renderSection('Evidence Trust', 'Source verification and promotion state', trustHTML)
+            + renderSection('Key Stakeholders', 'People and influence', stakeholdersHTML)
+            + renderSection('Strategic Activation', 'WHY, WHAT, and pitch', activationHTML)
+            + renderSection('Reality Checklist', 'Forensic reality markers', checklistHTML)
+            + renderSection('Source Evidence Register', 'All company and foresight sources', sourceTable)
+            + renderSection(exportData.domain ? 'Domain Force Dossier: ' + exportData.domain : 'Domain Force Dossier', 'Market context', domainDossierHTML)
+            + renderSection('Future Insight', 'Foresight narrative', renderReportBlocks(exportData.foresight_summary))
+            + renderSection('Detailed Forensic Report', 'Diagnostic detail', renderReportBlocks(exportData.detailed_report))
+            + renderSection('Raw JSON Payload', 'Machine-readable master data', rawDataHTML)
+            + '<section class="section"><div class="eyebrow">Interactive source</div><h2>See Detailed Report</h2><p class="muted">For the full interactive scanner view, open the Scanner.</p><p><a class="scanner-link" href="https://the-demand-scanner.up.railway.app/" target="_blank" rel="noopener noreferrer">See detailed report - Scanner</a></p></section>'
+            + '<script id="forensic-data" type="application/json">\n' + rawData + '\n<' + '/script>\n'
+            + '<div class="footer">AdaptabilityScanner | Master data export | Complete raw data embedded in #forensic-data</div>\n'
+            + '</main>\n</body>\n</html>';
         var blob = new Blob([htmlContent], { type: 'text/html' });
         var url = URL.createObjectURL(blob);
         var a = document.createElement('a');
         a.href = url;
-        a.download = 'Forensic_Report_' + exportData.companyName.replace(/\s+/g, '_') + '_' + new Date().toISOString().split('T')[0] + '.html';
+        a.download = 'Master_Data_Report_' + String(companyName).replace(/\s+/g, '_') + '_' + generatedDate + '.html';
         a.click();
         URL.revokeObjectURL(url);
-
-        console.log('[HTML Export v6] Download triggered. HTML size:', htmlContent.length, 'chars');
     };
 
-    // Fetch fresh data via Promise chain (NO async/await — avoids Babel IIFE compilation issues)
     fetch('/company/' + encodeURIComponent(data.companyName) + '?t=' + Date.now())
         .then(function(res) {
             if (res.ok) return res.json();
-            console.warn('[HTML Export v6] Fetch response not ok:', res.status);
+            console.warn('[Master Data HTML Export] Fetch response not ok:', res.status);
             return null;
         })
         .catch(function(err) {
-            console.warn('[HTML Export v6] Fetch error:', err);
+            console.warn('[Master Data HTML Export] Fetch error:', err);
             return null;
         })
         .then(function(fresh) {
-            if (fresh) {
-                console.log('[HTML Export v6] Fresh data received. Keys:', Object.keys(fresh).join(', '));
-                console.log('[HTML Export v6] fresh.detailed_report:', !!fresh.detailed_report,
-                    fresh.detailed_report ? fresh.detailed_report.length + ' chars' : 'MISSING');
-            } else {
-                console.warn('[HTML Export v6] No fresh data — using component data only');
-            }
             var exportData = fresh ? Object.assign({}, data, fresh) : data;
             buildAndDownload(exportData);
         });
@@ -851,10 +859,10 @@ const isForesightContext = (link) => {
         <button 
             onClick={handleDownloadHTML}
             className="flex items-center gap-2 px-3 py-1.5 rounded bg-indigo-600/80 hover:bg-indigo-500 border border-indigo-400/30 text-xs font-bold text-white transition-all shadow-lg shadow-indigo-900/20"
-            title="Download Offline HTML Report (Visuals + Data)"
+            title="Download Master Data HTML (Complete evidence, analysis, and raw JSON)"
         >
             <Download size={14} />
-            DOWNLOAD REPORT
+            MASTER DATA
         </button>
       </div>
 
