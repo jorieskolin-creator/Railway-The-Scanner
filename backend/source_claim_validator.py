@@ -11,6 +11,8 @@ the claim it's attached to.
 """
 
 import concurrent.futures
+from datetime import datetime
+import re
 import time
 
 import requests as http_requests
@@ -28,6 +30,8 @@ _HEADERS = {
 }
 
 _MAX_PAGE_CHARS = 3000  # Keep page text compact for the LLM prompt
+_ANALYSIS_SUPPORT_THRESHOLD = 55
+_PARTIAL_SUPPORT_THRESHOLD = 40
 
 
 def _fetch_page_text(url: str, timeout: int = 6) -> str:
@@ -69,6 +73,35 @@ def _fetch_page_text(url: str, timeout: int = 6) -> str:
         return ""
 
 
+def _best_source_quote(page_text: str, claim: str, max_chars: int = 420) -> str:
+    """Select a compact source-text sentence that best overlaps the claim."""
+    if not page_text:
+        return ""
+    claim_terms = {
+        t.lower()
+        for t in re.findall(r"[A-Za-zÅÄÖåäö0-9][A-Za-zÅÄÖåäö0-9\-]{2,}", claim or "")
+    }
+    if not claim_terms:
+        return page_text[:max_chars].strip()
+
+    sentences = re.split(r"(?<=[.!?])\s+", page_text)
+    best = ""
+    best_score = -1
+    for sentence in sentences:
+        cleaned = " ".join(sentence.split())
+        if len(cleaned) < 40:
+            continue
+        terms = {
+            t.lower()
+            for t in re.findall(r"[A-Za-zÅÄÖåäö0-9][A-Za-zÅÄÖåäö0-9\-]{2,}", cleaned)
+        }
+        score = len(claim_terms & terms)
+        if score > best_score:
+            best_score = score
+            best = cleaned
+    return (best or page_text[:max_chars]).strip()[:max_chars]
+
+
 # ── Single source-claim relevance check ──────────────────────────────────────
 
 def _check_relevance(url: str, claim: str, client, timeout: int = 10) -> dict:
@@ -77,15 +110,24 @@ def _check_relevance(url: str, claim: str, client, timeout: int = 10) -> dict:
 
     Returns dict with:
       - relevance_score: 0-100 (how well the source supports the claim)
-      - relevant: bool (score >= threshold)
+      - relevant: bool (score >= analysis support threshold)
+      - claim_support_status: supported / partial / unsupported / unchecked / unavailable
+      - content_verified: bool (readable page text was extracted)
+      - source_quote: compact source-text excerpt selected from extracted content
       - reason: short explanation
     """
-    THRESHOLD = 25  # Below this = source doesn't support the claim at all
-
     page_text = _fetch_page_text(url)
     if not page_text or len(page_text) < 50:
-        # Can't fetch content — don't penalise (might be JS-rendered, paywalled, etc.)
-        return {"relevance_score": -1, "relevant": True, "reason": "Page content not extractable"}
+        # URL liveness is not enough for analysis.  Keep the source visible, but
+        # mark it as unavailable so generation paths do not promote it.
+        return {
+            "relevance_score": -1,
+            "relevant": False,
+            "claim_support_status": "unavailable",
+            "content_verified": False,
+            "source_quote": "",
+            "reason": "Page content not extractable",
+        }
 
     prompt = f"""You are a fact-checking assistant. A forensic scanner cited this source URL to support a specific claim. Your job: determine if the source page content actually supports or relates to the claim.
 
@@ -128,15 +170,30 @@ Respond with ONLY a JSON object, no other text:
         result = json.loads(raw)
         score = int(result.get("score", 50))
         reason = result.get("reason", "")
+        if score >= _ANALYSIS_SUPPORT_THRESHOLD:
+            support_status = "supported"
+        elif score >= _PARTIAL_SUPPORT_THRESHOLD:
+            support_status = "partial"
+        else:
+            support_status = "unsupported"
 
         return {
             "relevance_score": score,
-            "relevant": score >= THRESHOLD,
+            "relevant": score >= _ANALYSIS_SUPPORT_THRESHOLD,
+            "claim_support_status": support_status,
+            "content_verified": True,
+            "source_quote": _best_source_quote(page_text, claim),
             "reason": reason,
         }
     except Exception as e:
-        # On any failure, don't penalise — assume relevant
-        return {"relevance_score": -1, "relevant": True, "reason": f"Validation error: {str(e)[:80]}"}
+        return {
+            "relevance_score": -1,
+            "relevant": False,
+            "claim_support_status": "unchecked",
+            "content_verified": False,
+            "source_quote": "",
+            "reason": f"Validation error: {str(e)[:80]}",
+        }
 
 
 # ── Batch validation for evidence sets ───────────────────────────────────────
@@ -171,9 +228,17 @@ def validate_source_claims(
     except ValueError:
         return {"checked": 0, "irrelevant": 0, "flagged_urls": [], "elapsed_ms": 0}
 
+    def _candidate_priority(item: dict) -> tuple:
+        cred = str(item.get("source_credibility") or "").lower()
+        tier = str(item.get("claim_tier") or "").upper()
+        cred_rank = {"high": 0, "medium": 1, "unknown": 2, "low": 3}.get(cred, 2)
+        tier_rank = {"A": 0, "B": 1, "C": 2, "D": 3, "E": 4}.get(tier, 3)
+        snippet_len = len((item.get("snippet") or item.get("description") or "").strip())
+        return (cred_rank, tier_rank, -snippet_len)
+
     # Select candidates: verified sources with snippets
     candidates = []
-    for item in findings:
+    for item in sorted([f for f in findings if isinstance(f, dict)], key=_candidate_priority):
         if not item.get("verified", False):
             continue
         url = (item.get("url") or item.get("source_url") or "").strip()
@@ -207,14 +272,22 @@ def validate_source_claims(
             # Annotate the finding with relevance data
             if result["relevance_score"] >= 0:
                 item["claim_relevance"] = result["relevance_score"]
-                if not result["relevant"]:
-                    item["claim_irrelevant"] = True
+            item["content_relevance_score"] = result["relevance_score"]
+            item["claim_support_status"] = result.get("claim_support_status", "unchecked")
+            item["content_verified"] = result.get("content_verified") is True
+            item["content_verification_reason"] = result.get("reason", "")
+            if result.get("source_quote"):
+                item["source_quote"] = result["source_quote"]
+            if result["relevant"]:
+                item["analysis_verified_at"] = datetime.utcnow().isoformat()
+            elif result.get("claim_support_status") == "unsupported":
+                item["claim_irrelevant"] = True
 
     elapsed_ms = int((time.time() - start) * 1000)
 
     checked = len(results)
     flagged = [url for url, r in results.items()
-               if r["relevance_score"] >= 0 and not r["relevant"]]
+               if r["relevance_score"] >= 0 and r.get("claim_support_status") == "unsupported"]
 
     if flagged:
         print(f"   ⚠️ [Source-Claim] {len(flagged)}/{checked} verified sources don't support their claims ({elapsed_ms}ms)")

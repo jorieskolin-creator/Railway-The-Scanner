@@ -32,7 +32,7 @@ from market_intelligence import compute_market_intelligence
 from knowledge_base import get_evolving_framework
 from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, clean_summary, purge_false_evidence
 from general_summary import generate_general_summary, fact_check_general_summary
-from source_quality import manage_evidence_sources, assess_source_scope, annotate_evidence_links
+from source_quality import manage_evidence_sources, assess_source_scope, annotate_evidence_links, is_generation_eligible_source
 from contradiction_detector import detect_contradictions
 from prompts import PROMPT_VERSION, build_shared_guardrails
 from database_sanitizer import sanitize_database
@@ -104,7 +104,7 @@ def _build_contradictions_block(verified_links: list, company_name: str) -> str:
     enriched = []
     for l in verified_links[:25]:
         title = (l.get("title") or "")[:80]
-        snippet = (l.get("snippet") or "")[:350]
+        snippet = (l.get("source_quote") or l.get("snippet") or "")[:350]
         enriched.append({
             "title": title,
             "snippet": snippet,
@@ -130,6 +130,11 @@ def _build_contradictions_block(verified_links: list, company_name: str) -> str:
             f"   - [{c.get('scope_b', 'broad')}] {c.get('source_b_title', '')}: {c.get('claim_b', '')}"
         )
     return "\n".join(lines) + "\n"
+
+
+def _analysis_evidence_links(links: list) -> list:
+    """Sources allowed to feed generated analysis, not merely live URLs."""
+    return [l for l in (links or []) if is_generation_eligible_source(l)]
 
 
 def _shared_prompt_guardrails(include_diagnostic: bool = True, include_foresight: bool = True, include_claim_tier: bool = False) -> str:
@@ -1102,15 +1107,18 @@ def _refresh_proposals_for_company(company_name: str, data: dict) -> dict:
     pitch_text = data.get("pitch_text", "")
     archetype = data.get("archetype", "Unknown")
     reality_score = data.get("reality_score", 0)
-    evidence_links = data.get("evidence_links", [])
+    evidence_links = _analysis_evidence_links(data.get("evidence_links", []))
     evidence_list = '\n'.join([
-        f"[{l.get('claim_tier','D')}]{'['+l.get('entity_scope','')+']' if l.get('entity_scope','unknown') != 'unknown' else ''} {l.get('title','Unknown')}: {l.get('snippet','')}"
+        f"[{l.get('claim_tier','D')}]{'['+l.get('entity_scope','')+']' if l.get('entity_scope','unknown') != 'unknown' else ''} {l.get('title','Unknown')}: {l.get('source_quote') or l.get('snippet','')}"
         for l in evidence_links[:20]
     ])
     proposal_guardrails = _shared_prompt_guardrails(include_diagnostic=True, include_foresight=True, include_claim_tier=True)
 
     # Build the weakest dimensions from reality checklist
-    negative_findings = [item for item in reality_checklist if item.get("sentiment") == "negative"]
+    negative_findings = [
+        item for item in reality_checklist
+        if item.get("sentiment") == "negative" and is_generation_eligible_source(item)
+    ]
     negative_summary = "\n".join([f"- {item.get('query', '')}: {item.get('snippet', 'No detail')}" for item in negative_findings[:6]])
 
     prompt = f"""You are a strategic consulting advisor analyzing {company_name}.
@@ -1507,9 +1515,9 @@ def _clean_company_data(company_name: str, data: dict) -> dict:
     knowledge_context = get_evolving_framework()
     intent_narrative = json.dumps(data.get("intent_breakdown", {}))
     clean_evidence_links = data.get("evidence_links", [])
-    clean_verified = [l for l in clean_evidence_links if l.get('verified') is True]
+    clean_verified = _analysis_evidence_links(clean_evidence_links)
     evidence_list = '\n'.join([
-        f"[{l.get('claim_tier','D')}]{'['+l.get('entity_scope','')+']' if l.get('entity_scope','unknown') != 'unknown' else ''} {l.get('title','Unknown')}: {l.get('snippet','')}"
+        f"[{l.get('claim_tier','D')}]{'['+l.get('entity_scope','')+']' if l.get('entity_scope','unknown') != 'unknown' else ''} {l.get('title','Unknown')}: {l.get('source_quote') or l.get('snippet','')}"
         for l in clean_verified[:20]
     ])
     # Run contradiction detection on the same evidence the synthesizer will see.
@@ -2936,14 +2944,14 @@ def _execute_scan_pipeline(
             try:
                 claude_client = anthropic.Anthropic(api_key=anthropic_key) if anthropic_key else None
                 intent_narrative = json.dumps(intent_results["breakdown"])
-                verified_links = [l for l in reality_results['links'] if l.get('verified') is True]
+                verified_links = _analysis_evidence_links(reality_results['links'])
 
                 def _fmt_evidence_link(l):
                     tier = l.get('claim_tier', 'D')
                     scope = l.get('entity_scope', 'unknown')
                     scope_tag = f"[{scope}]" if scope != 'unknown' else ''
                     prefix = f"[{tier}]{scope_tag}"
-                    return f"{prefix} {l.get('title', 'Unknown')}: {l.get('snippet', '')}"
+                    return f"{prefix} {l.get('title', 'Unknown')}: {l.get('source_quote') or l.get('snippet', '')}"
 
                 evidence_list = '\n'.join([_fmt_evidence_link(l) for l in verified_links[:20]])
                 # Run contradiction detection on the same evidence pool. Block
@@ -3037,8 +3045,9 @@ Include the trend trajectory in the summary. Note persistent patterns or turning
                             found = f.get("found", False)
                             findings_lines.append(f"  [{sentiment.upper()}] {query} (found={found})")
                         parts.append(f"Previous Findings:\n" + "\n".join(findings_lines))
+                    prev_evidence = _analysis_evidence_links(prev_evidence)
                     if prev_evidence:
-                        ev_lines = [f"  - {e.get('title', '?')}: {e.get('snippet', '')[:100]}" for e in prev_evidence[:8]]
+                        ev_lines = [f"  - {e.get('title', '?')}: {(e.get('source_quote') or e.get('snippet', ''))[:100]}" for e in prev_evidence[:8]]
                         parts.append(f"Previous Evidence Sources:\n" + "\n".join(ev_lines))
 
                     if parts:
@@ -3055,7 +3064,10 @@ If new evidence shows improvement, highlight the positive trajectory."""
                     foresight_context = format_foresight_for_synthesis(foresight_data, companyName, company_domain)
 
                 # Build constraint-driven context for pitch and proposals
-                _neg_items = [item for item in reality_results.get("checklist", []) if item.get("sentiment") == "negative"]
+                _neg_items = [
+                    item for item in reality_results.get("checklist", [])
+                    if item.get("sentiment") == "negative" and is_generation_eligible_source(item)
+                ]
                 negative_summary = "\n".join([f"- {item.get('query', '')}: {item.get('snippet', 'No detail')}" for item in _neg_items[:6]])
                 negative_findings_context = f"\nKey Negative Findings (Scanner 2):\n{negative_summary}" if negative_summary else ""
 
@@ -3673,8 +3685,8 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                 if _do_resynth:
                     # Rebuild evidence list from purged data
                     clean_evidence_links = full_data.get("evidence_links", [])
-                    clean_verified = [l for l in clean_evidence_links if l.get('verified') is True]
-                    clean_evidence_list = ', '.join([f"{l.get('title', 'Unknown')}: {l.get('snippet', '')}" for l in clean_verified[:20]])
+                    clean_verified = _analysis_evidence_links(clean_evidence_links)
+                    clean_evidence_list = ', '.join([f"{l.get('title', 'Unknown')}: {l.get('source_quote') or l.get('snippet', '')}" for l in clean_verified[:20]])
 
                     # Note which claims were removed (with verified corrections when available)
                     removed_claims_lines = []

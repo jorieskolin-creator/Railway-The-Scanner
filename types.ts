@@ -27,6 +27,16 @@ interface EvidenceLink {
   source_says?: string;
   possible_relevance?: string;
   source_says_was_genericized?: boolean;
+  url_verified?: boolean;
+  content_verified?: boolean;
+  claim_support_status?: 'supported' | 'partial' | 'unsupported' | 'unchecked' | 'unavailable' | string;
+  analysis_verified?: boolean;
+  analysis_verified_at?: string;
+  promotion_status?: 'generation_eligible' | 'display_only' | 'excluded' | string;
+  content_relevance_score?: number;
+  verification_reason?: string;
+  content_verification_reason?: string;
+  source_quote?: string;
 }
 
 interface ForesightLink {

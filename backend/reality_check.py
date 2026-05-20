@@ -23,6 +23,7 @@ try:
     from source_quality import (
         annotate_evidence_links, filter_admissible_sources,
         is_boilerplate_snippet, is_title_echo, tier_snippet_bounds, describe_source,
+        is_generation_eligible_source,
     )
 except Exception:  # Keep reality_check import-safe in minimal deployments.
     annotate_evidence_links = None
@@ -31,6 +32,7 @@ except Exception:  # Keep reality_check import-safe in minimal deployments.
     is_title_echo = None
     tier_snippet_bounds = None
     describe_source = None
+    is_generation_eligible_source = None
 
 # Regex for detecting scan history references in fact-check claims.
 # These come from internal DB records (scan_history), not external web sources,
@@ -616,10 +618,12 @@ def _gemini_fact_check(summary_text, company_name, evidence_links=None, pitch_te
     evidence_ref = ""
     if evidence_links:
         for l in evidence_links:
+            if is_generation_eligible_source and not is_generation_eligible_source(l):
+                continue
             if not l.get("verified", True):
                 continue
             title = (l.get("title") or "Unknown")[:80]
-            snippet_raw = (l.get("snippet") or "").strip()
+            snippet_raw = (l.get("source_quote") or l.get("snippet") or "").strip()
             tier = (l.get("claim_tier") or "D").upper()
             # Graceful degradation: fall back to flat 500-char truncation if the
             # source_quality helpers failed to import (minimal deployments).

@@ -63,6 +63,16 @@ CONTEXT_ONLY_SOURCE_TYPES = {
     "policy_report",
 }
 
+ANALYSIS_SUPPORT_SUPPORTED = "supported"
+ANALYSIS_SUPPORT_PARTIAL = "partial"
+ANALYSIS_SUPPORT_UNSUPPORTED = "unsupported"
+ANALYSIS_SUPPORT_UNCHECKED = "unchecked"
+ANALYSIS_SUPPORT_UNAVAILABLE = "unavailable"
+
+PROMOTION_GENERATION_ELIGIBLE = "generation_eligible"
+PROMOTION_DISPLAY_ONLY = "display_only"
+PROMOTION_EXCLUDED = "excluded"
+
 
 # === DOMAIN AUTHORITY TIERS ===
 
@@ -841,6 +851,102 @@ def is_admissible_source(link: dict, company_domain: str = "", *, allow_unverifi
     return True, "admissible"
 
 
+def apply_analysis_verification(link: dict, company_domain: str = "", company_name: str = "") -> dict:
+    """Annotate whether a source is safe to use in generated analysis.
+
+    URL verification only proves that a link resolves.  `analysis_verified`
+    requires a readable source body plus a content-relevance check that says the
+    page supports the attached claim/snippet.  Sources that fail this stricter
+    test can still render in Deep Dive as audit material, but generation paths
+    should ignore them.
+    """
+    if not isinstance(link, dict):
+        return link
+
+    normalize_evidence_link(link, company_domain, company_name)
+
+    ok, admissibility_reason = is_admissible_source(link, company_domain)
+    url = (link.get("url") or link.get("source_url") or "").strip()
+    support_status = (link.get("claim_support_status") or "").strip().lower()
+    if not support_status:
+        if link.get("claim_irrelevant") is True:
+            support_status = ANALYSIS_SUPPORT_UNSUPPORTED
+        elif link.get("claim_relevance") is not None or link.get("content_relevance_score") is not None:
+            try:
+                score = int(link.get("content_relevance_score", link.get("claim_relevance")))
+            except Exception:
+                score = -1
+            if score >= 55:
+                support_status = ANALYSIS_SUPPORT_SUPPORTED
+            elif score >= 40:
+                support_status = ANALYSIS_SUPPORT_PARTIAL
+            elif score >= 0:
+                support_status = ANALYSIS_SUPPORT_UNSUPPORTED
+            else:
+                support_status = ANALYSIS_SUPPORT_UNAVAILABLE
+        else:
+            support_status = ANALYSIS_SUPPORT_UNCHECKED
+    link["claim_support_status"] = support_status
+
+    if link.get("content_relevance_score") is None and link.get("claim_relevance") is not None:
+        link["content_relevance_score"] = link.get("claim_relevance")
+
+    if link.get("content_verified") is None:
+        link["content_verified"] = bool(link.get("source_quote"))
+
+    reason = ""
+    promotion = PROMOTION_DISPLAY_ONLY
+    analysis_verified = False
+
+    if link.get("manual_override") is True:
+        reason = "manual_override"
+        promotion = PROMOTION_GENERATION_ELIGIBLE
+        analysis_verified = True
+    elif not ok:
+        reason = admissibility_reason
+        promotion = PROMOTION_EXCLUDED if admissibility_reason in {"wrong_entity_true", "url_not_verified"} else PROMOTION_DISPLAY_ONLY
+    elif not url:
+        reason = "missing_url"
+    elif link.get("verified") is not True and link.get("url_verified") is not True:
+        reason = "url_not_verified"
+        promotion = PROMOTION_EXCLUDED
+    elif link.get("entity_scope") == ENTITY_SCOPE_WRONG_ENTITY or link.get("wrong_entity") is True:
+        reason = "wrong_entity"
+        promotion = PROMOTION_EXCLUDED
+    elif link.get("source_credibility") == "low":
+        reason = "weak_source"
+    elif link.get("content_verified") is not True:
+        reason = "content_unavailable"
+    elif support_status == ANALYSIS_SUPPORT_SUPPORTED:
+        reason = "verified_for_analysis"
+        promotion = PROMOTION_GENERATION_ELIGIBLE
+        analysis_verified = True
+    elif support_status == ANALYSIS_SUPPORT_PARTIAL:
+        reason = "partial_support"
+    elif support_status == ANALYSIS_SUPPORT_UNSUPPORTED:
+        reason = "claim_unsupported"
+    elif support_status == ANALYSIS_SUPPORT_UNAVAILABLE:
+        reason = "content_unavailable"
+    else:
+        reason = "claim_unchecked"
+
+    link["analysis_verified"] = analysis_verified
+    link["promotion_status"] = promotion
+    link["verification_reason"] = reason
+    if analysis_verified and not link.get("analysis_verified_at"):
+        link["analysis_verified_at"] = datetime.utcnow().isoformat()
+    return link
+
+
+def is_generation_eligible_source(link: dict) -> bool:
+    """True when a source may feed generated prose."""
+    return (
+        isinstance(link, dict)
+        and link.get("analysis_verified") is True
+        and link.get("promotion_status") == PROMOTION_GENERATION_ELIGIBLE
+    )
+
+
 def annotate_evidence_links(links: list, company_domain: str = "", company_name: str = "") -> list:
     """Normalize links in-place and annotate admissibility fields."""
     annotated = []
@@ -851,6 +957,7 @@ def annotate_evidence_links(links: list, company_domain: str = "", company_name:
         ok, reason = is_admissible_source(link, company_domain)
         link["admissible"] = ok
         link["exclusion_reason"] = "" if ok else reason
+        apply_analysis_verification(link, company_domain, company_name)
         annotated.append(link)
     return annotated
 

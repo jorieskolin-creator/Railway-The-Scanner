@@ -751,6 +751,7 @@ def _validate_evidence_urls(links, checklist, max_workers=6, company_name=None):
         if url and url in url_results:
             r = url_results[url]
             item["verified"] = r["verified"]
+            item["url_verified"] = r["verified"]
             # Mark sources about wrong entity — don't hard-reject but flag for downstream
             if r["verified"] and r.get("company_mentioned") is False:
                 item["wrong_entity"] = True
@@ -778,6 +779,7 @@ def _validate_evidence_urls(links, checklist, max_workers=6, company_name=None):
         if url and url in url_results:
             r = url_results[url]
             item["verified"] = r["verified"]
+            item["url_verified"] = r["verified"]
             if r["verified"] and r.get("company_mentioned") is False:
                 item["wrong_entity"] = True
             # Override is_recent with extracted date
@@ -2925,10 +2927,11 @@ RETURN STRICT JSON:
         # Check if verified sources actually support their claimed snippets.
         # Only runs when time permits (adds ~5-10s for page fetches + Flash calls).
         _elapsed = time.time() - _fn_start
-        if _elapsed < (time_budget - 40) and url_verified >= 2:
+        if _elapsed < (time_budget - 40) and url_verified >= 1:
             try:
                 from source_claim_validator import validate_source_claims
-                scv_result = validate_source_claims(raw_findings, max_checks=8, max_workers=4)
+                scv_result = validate_source_claims(raw_findings, max_checks=12, max_workers=4)
+                raw_findings = annotate_evidence_links(raw_findings, company_domain, company_name)
                 if scv_result["irrelevant"] > 0:
                     # Penalise confidence for irrelevant sources
                     irr_ratio = scv_result["irrelevant"] / max(scv_result["checked"], 1)
@@ -2941,6 +2944,10 @@ RETURN STRICT JSON:
                 print(f"   ⚠️ [Source-Claim] Validation skipped: {scv_err}")
         elif _elapsed >= (time_budget - 40):
             print(f"   ⏰ [Source-Claim] Skipped — time budget exhausted ({int(_elapsed)}s/{time_budget}s)")
+
+        # Ensure every source carries final promotion metadata, even when
+        # source-claim validation was skipped or only covered part of the pool.
+        raw_findings = annotate_evidence_links(raw_findings, company_domain, company_name)
 
         # --- SOURCE QUALITY ASSESSMENT ---
         # Evaluate credibility of each source domain (not just URL liveness).

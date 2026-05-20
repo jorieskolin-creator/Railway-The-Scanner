@@ -24,6 +24,7 @@ from gemini_backoff import call_with_503_backoff
 from source_quality import (
     assess_source_scope, infer_source_type, compute_claim_tier, describe_source,
     is_boilerplate_snippet, is_title_echo, tier_snippet_bounds,
+    is_generation_eligible_source,
 )
 from contradiction_detector import detect_contradictions
 from prompts import PROMPT_VERSION, build_shared_guardrails
@@ -233,6 +234,7 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
         l for l in _dict_items_only(full_data.get("evidence_links", []), "evidence_links")
         if l.get("verified") is True and l.get("url") and not _is_legal_page(l.get("url", ""))
         and not l.get("wrong_entity")  # Exclude sources about a different company with same name
+        and is_generation_eligible_source(l)
     ]
     _recent = [l for l in _all_verified if l.get("is_recent") is True]
     _older = [l for l in _all_verified if l.get("is_recent") is not True]
@@ -252,7 +254,7 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
     verified_links = []
     for i, l in enumerate(_all_evidence):
         title = (l.get("title", "Source") or "Source")[:80]
-        snippet_raw = (l.get("snippet") or "").strip()
+        snippet_raw = (l.get("source_quote") or l.get("snippet") or "").strip()
         tier = (l.get("claim_tier") or "D").upper()
         min_len, max_len = tier_snippet_bounds(tier)
         # Tighter ceiling on secondary evidence regardless of tier.
@@ -341,7 +343,9 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
             "source_label": describe_source(item) if item.get("url") else "Scanner analysis finding",
         }
         for item in full_data.get("reality_checklist", [])
-        if item.get("found") and not (item.get("url") and _is_legal_page(item.get("url", "")))
+        if item.get("found")
+        and is_generation_eligible_source(item)
+        and not (item.get("url") and _is_legal_page(item.get("url", "")))
     ][:12]
 
     # Financial findings — structured with all dimensions.

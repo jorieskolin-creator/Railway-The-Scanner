@@ -17,7 +17,7 @@ from google import genai
 from google.genai import types as genai_types
 from gemini_backoff import call_with_503_backoff
 from gemini_client import get_gemini_client
-from source_quality import assess_source_scope
+from source_quality import assess_source_scope, is_generation_eligible_source
 from contradiction_detector import detect_contradictions
 from entity_identity import apply_entity_scope
 
@@ -86,10 +86,15 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
     # as company-wide truths.
     verified_links = []
     for l in full_data.get("evidence_links", []):
-        if not (l.get("verified") is True and l.get("url") and not _is_legal_page(l.get("url", ""))):
+        if not (
+            l.get("verified") is True
+            and l.get("url")
+            and not _is_legal_page(l.get("url", ""))
+            and is_generation_eligible_source(l)
+        ):
             continue
         title = (l.get("title", "Source") or "Source")[:80]
-        snippet = (l.get("snippet") or "")[:300]
+        snippet = (l.get("source_quote") or l.get("snippet") or "")[:300]
         scoped_link = apply_entity_scope(dict(l), company_name)
         verified_links.append({
             "title": title,
@@ -130,7 +135,10 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
             "sentiment": item.get("sentiment", ""),
         }
         for item in full_data.get("reality_checklist", [])
-        if item.get("found") and item.get("url") and not _is_legal_page(item.get("url", ""))
+        if item.get("found")
+        and item.get("url")
+        and is_generation_eligible_source(item)
+        and not _is_legal_page(item.get("url", ""))
     ][:12]
 
     # Financial — sub-scores plus findings

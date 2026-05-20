@@ -114,6 +114,18 @@ const isForesightContext = (link) => {
   };
   const getSourceSays = (link) => link?.source_says || link?.snippet || link?.description || '';
   const getPossibleRelevance = (link) => link?.possible_relevance || '';
+  const isAnalysisVerified = (link) => link?.analysis_verified === true || link?.promotion_status === 'generation_eligible';
+  const getPromotionLabel = (link) => {
+    if (isAnalysisVerified(link)) return 'Verified for analysis';
+    if (link?.promotion_status === 'excluded') return 'Excluded';
+    if (link?.promotion_status === 'display_only') return 'Display only';
+    return '';
+  };
+  const getVerificationReason = (link) => {
+    const reason = String(link?.verification_reason || link?.claim_support_status || '').replace(/_/g, ' ');
+    const detail = String(link?.content_verification_reason || '').replace(/_/g, ' ');
+    return [reason, detail].filter(Boolean).join(' — ');
+  };
   const normalizeCredibility = (cred) => {
     const normalized = String(cred || '').toLowerCase();
     if (['high', 'very_high', 'trusted', 'authoritative'].includes(normalized)) return 'high';
@@ -194,6 +206,7 @@ const isForesightContext = (link) => {
     return acc;
   }, { high: 0, medium: 0, low: 0, unknown: 0 });
   const verifiedSourceCount = evidenceTrustPool.filter((link) => link.verified === true).length;
+  const analysisVerifiedCount = evidenceTrustPool.filter((link) => isAnalysisVerified(link)).length;
   const weakOrUnverifiedSourceCount = evidenceTrustPool.filter((link) => {
     const cred = normalizeCredibility(link.source_credibility);
     return link.verified === false || cred === 'low' || (!!link.url && cred === 'unknown');
@@ -663,6 +676,9 @@ const isForesightContext = (link) => {
         const verifiedSources = evidencePool.filter(function(link) {
             return link && (link.verified === true || link.validated === true || link.url_verified === true);
         }).length;
+        const analysisVerifiedSources = evidencePool.filter(function(link) {
+            return link && (link.analysis_verified === true || link.promotion_status === 'generation_eligible');
+        }).length;
         const weakSources = evidencePool.filter(function(link) {
             const cred = String(link?.source_credibility || link?.credibility || '').toLowerCase();
             return link && (link.verified === false || cred === 'low' || (!cred && (link.url || link.link)));
@@ -683,7 +699,8 @@ const isForesightContext = (link) => {
             renderMetric('Integrity Delta', (gap > 0 ? '+' : '') + Math.round(gap), 'Ambition minus reality'),
             renderMetric('Confidence', formatScore(exportData.confidence_score ?? exportData.scan_quality?.confidence_score ?? exportData.evidence_sufficiency?.score, '%'), 'Model confidence'),
             renderMetric('Financial Health', formatScore(exportData.financial_index, '/100'), 'Adaptation capacity'),
-            renderMetric('Verified Sources', verifiedSources, weakSources + ' weak/unverified'),
+            renderMetric('URL Verified Sources', verifiedSources, weakSources + ' weak/unverified'),
+            renderMetric('Analysis Verified', analysisVerifiedSources, 'content supports claim'),
             renderMetric('Evidence Links', evidencePool.length, 'Company and foresight sources'),
             renderMetric('Unsupported Flags', unsupportedClaimCount, 'Hallucination and false-claim checks'),
             renderMetric('Washing Flag', exportData.washing_flag ? 'Yes' : 'No', exportData.washing_type || 'Narrative vs evidence'),
@@ -1084,14 +1101,22 @@ const isForesightContext = (link) => {
                 </div>
             </div>
 
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
                 <div className="bg-black/20 p-4 rounded-xl border border-emerald-500/20">
                     <div className="flex items-center justify-between mb-2">
-                        <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Verified</span>
+                        <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">URL Verified</span>
                         <CheckCircle size={14} className="text-emerald-400" />
                     </div>
                     <p className="text-3xl font-black text-emerald-300">{verifiedSourceCount}</p>
                     <p className="text-[10px] text-slate-500 mt-1">reachable sources</p>
+                </div>
+                <div className="bg-black/20 p-4 rounded-xl border border-teal-500/20">
+                    <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Analysis Verified</span>
+                        <ShieldCheck size={14} className="text-teal-300" />
+                    </div>
+                    <p className="text-3xl font-black text-teal-300">{analysisVerifiedCount}</p>
+                    <p className="text-[10px] text-slate-500 mt-1">content supports claim</p>
                 </div>
                 <div className="bg-black/20 p-4 rounded-xl border border-amber-500/20">
                     <div className="flex items-center justify-between mb-2">
@@ -1359,8 +1384,10 @@ const isForesightContext = (link) => {
                                                 </p>
                                             )}
                                         </div>
-                                    ) : link.snippet && (
-                                        <p className="text-[11px] text-slate-400 mt-1 line-clamp-2 leading-relaxed">{link.snippet}</p>
+                                    ) : (link.source_quote || link.snippet) && (
+                                        <p className="text-[11px] text-slate-400 mt-1 line-clamp-2 leading-relaxed">
+                                            {link.source_quote || link.snippet}
+                                        </p>
                                     )}
                                     <div className="flex items-center gap-2 mt-1">
                                         <span className="text-[10px] text-slate-500 font-mono truncate">{link.source || extractDomain(link.url)}</span>
@@ -1377,6 +1404,20 @@ const isForesightContext = (link) => {
                                         {isCompanySpecificEvidence(link) && (
                                             <span className="text-[9px] bg-emerald-500/15 text-emerald-300 px-1.5 py-0.5 rounded font-mono shrink-0" title="Direct company-specific evidence">
                                                 company-fact
+                                            </span>
+                                        )}
+                                        {getPromotionLabel(link) && (
+                                            <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono shrink-0 ${
+                                                isAnalysisVerified(link) ? 'bg-teal-500/20 text-teal-300' :
+                                                link.promotion_status === 'excluded' ? 'bg-rose-500/20 text-rose-300' :
+                                                'bg-slate-700/60 text-slate-400'
+                                            }`} title={getVerificationReason(link)}>
+                                                {getPromotionLabel(link)}
+                                            </span>
+                                        )}
+                                        {link.claim_support_status && !isAnalysisVerified(link) && (
+                                            <span className="text-[9px] bg-slate-700/50 text-slate-400 px-1.5 py-0.5 rounded font-mono shrink-0" title={getVerificationReason(link)}>
+                                                {String(link.claim_support_status).replace(/_/g, ' ')}
                                             </span>
                                         )}
                                         {needsSourceRelevanceSplit(link) && (
