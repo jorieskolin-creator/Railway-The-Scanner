@@ -255,10 +255,7 @@ const isForesightContext = (link) => {
     data.hallucination_flags,
     data.ai_verification?.false_claims,
     data.ai_verification?.unsupported_claims,
-    data.general_summary_false_claims,
-    data.hallucination_risk && data.hallucination_risk !== 'low'
-        ? `Hallucination risk: ${data.hallucination_risk}${data.hallucination_score != null ? ` (${data.hallucination_score}/100)` : ''}`
-        : null
+    data.general_summary_false_claims
   );
   const qualityNotes = normalizeTrustList(
     data.quality_notes,
@@ -496,8 +493,7 @@ const isForesightContext = (link) => {
             exportData.hallucination_flags,
             exportData.ai_verification && exportData.ai_verification.false_claims,
             exportData.ai_verification && exportData.ai_verification.unsupported_claims,
-            exportData.general_summary_false_claims,
-            exportData.hallucination_risk && exportData.hallucination_risk !== 'low' ? 'Hallucination risk: ' + exportData.hallucination_risk : null
+            exportData.general_summary_false_claims
         );
         var getSummaryLengthWordCount = function(note) {
             var match = String(note || '').match(/Summary (?:unusually long|length outside target range) \((\d+) words, expected 325-375\)/i);
@@ -1123,35 +1119,6 @@ const isForesightContext = (link) => {
                 {data.financial_confidence != null && (
                     <div className="mt-3 text-[10px] text-slate-500 font-mono flex items-center gap-1.5">
                         <Eye size={10} /> Data Confidence: {data.financial_confidence}%
-                    </div>
-                )}
-            </div>
-        )}
-
-        {/* HALLUCINATION WARNING BANNER */}
-        {data.hallucination_risk && data.hallucination_risk !== 'low' && (
-            <div className={`p-4 rounded-xl border-l-4 ${
-                data.hallucination_risk === 'high'
-                    ? 'bg-rose-500/10 border-rose-500 text-rose-200'
-                    : 'bg-amber-500/10 border-amber-500 text-amber-200'
-            }`}>
-                <div className="flex items-center gap-2 mb-1">
-                    <AlertOctagon size={16} className={data.hallucination_risk === 'high' ? 'text-rose-400' : 'text-amber-400'} />
-                    <span className="font-bold text-sm uppercase">
-                        Reality Check: {data.hallucination_risk} hallucination risk
-                        {data.hallucination_score != null && ` (score: ${data.hallucination_score}/100)`}
-                    </span>
-                </div>
-                {hallucinationFlags.length > 0 && (
-                    <div className="space-y-0.5 mt-2">
-                        {hallucinationFlags.map((flag, i) => (
-                            <div key={i} className="text-[11px] font-mono opacity-80">- {flag}</div>
-                        ))}
-                    </div>
-                )}
-                {data.hallucination_risk === 'high' && (
-                    <div className="mt-2 text-[11px] font-mono opacity-60">
-                        This summary was automatically blocked. Rescan the company to generate fresh data.
                     </div>
                 )}
             </div>
