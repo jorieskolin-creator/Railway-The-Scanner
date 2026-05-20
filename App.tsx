@@ -132,9 +132,6 @@ const App = () => {
     setIsDataReviewOpen(false);
   };
 
-  // SERVER-SIDE BATCH STATE
-  const [batchStatus, setBatchStatus] = useState({ is_running: false, current: 0, total: 0, current_name: '' });
-
   // DATA REVIEW STATE
   const [isDataReviewOpen, setIsDataReviewOpen] = useState(false);
   const [dataReviewItems, setDataReviewItems] = useState([]);
@@ -187,10 +184,6 @@ const App = () => {
 
   useEffect(() => {
     checkHealth();
-    // Check if a batch refresh is already running on the server
-    fetch(`/batch-status?t=${Date.now()}`).then(r => r.ok ? r.json() : null).then(status => {
-      if (status && status.is_running) setBatchStatus(status);
-    }).catch(() => {});
   }, []);
 
   const fetchSummaryData = async (silent = false) => {
@@ -228,28 +221,6 @@ const App = () => {
   useEffect(() => {
     fetchSummaryData();
   }, []);
-
-  // Poll batch status when a refresh is running
-  useEffect(() => {
-    if (!batchStatus.is_running) return;
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`/batch-status?t=${Date.now()}`);
-        if (res.ok) {
-          const status = await res.json();
-          setBatchStatus(status);
-          // When batch finishes, refresh dashboard data
-          if (!status.is_running) {
-            fetchSummaryData(true);
-          }
-        }
-      } catch (e) {
-        console.warn("Batch status poll failed", e);
-      }
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [batchStatus.is_running]);
-
 
   const handleCompanyClick = async (summaryItem) => {
     if (!summaryItem) return;
@@ -351,35 +322,6 @@ const App = () => {
     } finally {
       setIsScanning(false);
     }
-  };
-
-  // --- SERVER-SIDE BATCH LOGIC ---
-  const handleStartBatch = async () => {
-    if (!isAdmin) return;
-
-    if (!confirm("Start full database refresh?\n\nThis runs on the server — you can close this tab safely.\nProgress will be shown in the header.")) return;
-
-    try {
-        const res = await fetch('/batch-refresh', {
-            method: 'POST',
-            headers: authHeaders()
-        });
-        if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return; }
-        if (res.status === 409) { alert("A batch refresh is already in progress."); return; }
-        if (!res.ok) throw new Error("Failed to start batch");
-        const json = await res.json();
-        setBatchStatus({ is_running: true, current: 0, total: json.total, current_name: 'Starting...' });
-    } catch(e) { alert("Failed to start batch refresh."); console.error(e); }
-  };
-
-  const handleStopBatch = async () => {
-    if (!isAdmin) return;
-    try {
-        await fetch('/batch-refresh/stop', {
-            method: 'POST',
-            headers: authHeaders()
-        });
-    } catch(e) { console.error(e); }
   };
 
   const handleOpenAnalytics = async () => {
@@ -1115,22 +1057,6 @@ const App = () => {
                 <button onClick={handleOpenDataReview} className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-amber-900/40 hover:bg-amber-800/60 border border-amber-700/50 text-amber-200 font-mono font-bold text-[10px] rounded transition-all">
                     <ShieldAlert size={12} /> REVIEW
                 </button>
-                {batchStatus.is_running ? (
-                    <div className="flex items-center gap-2 px-3 py-1.5 bg-cyan-900/40 border border-cyan-500/40 rounded-lg">
-                        <Loader2 size={14} className="animate-spin text-cyan-400" />
-                        <span className="text-cyan-200 font-mono font-bold text-[10px]">
-                            REFRESH {batchStatus.current}/{batchStatus.total}
-                        </span>
-                        <button onClick={handleStopBatch} className="text-rose-400 hover:text-rose-300 text-[10px] font-mono font-bold ml-1">
-                            STOP
-                        </button>
-                    </div>
-                ) : (
-                    <button onClick={handleStartBatch} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-lg transition-all">
-                        <Database size={14} />
-                        REFRESH DB
-                    </button>
-                )}
                 </>
             )}
             <div className="flex items-center gap-2">
@@ -1173,7 +1099,7 @@ const App = () => {
                     <h3 className="text-white font-bold text-lg">{systemStatus.storage ? "Database Ready (Empty)" : "Storage Disconnected"}</h3>
                     <p className="text-sm max-w-md mt-2">
                         {systemStatus.storage 
-                           ? "Vercel Blob Storage is connected. Initialize via Admin Batch." 
+                           ? "Vercel Blob Storage is connected. Use focused scans, review, and refresh tools to populate or clean records."
                            : "Could not connect to Vercel Blob."}
                     </p>
                 </div>
