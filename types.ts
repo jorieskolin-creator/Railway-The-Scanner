@@ -118,6 +118,7 @@ interface ScanQuality {
   confidence?: number;
   contradictions?: any[];
   contradiction_warnings?: any[];
+  quality_notes?: string[];
 }
 
 interface EvidenceSufficiency {
@@ -159,6 +160,7 @@ interface AnalysisResult {
   ai_verification?: AIVerification; // AI-powered claim verification
   ai_verified?: boolean; // Summary field for landing page badge
   hallucination_flags?: string[];
+  quality_notes?: string[];
   hallucination_risk?: string;
   hallucination_score?: number;
   scan_quality?: ScanQuality;

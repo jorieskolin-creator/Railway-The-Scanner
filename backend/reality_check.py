@@ -377,6 +377,7 @@ def validate_summary(summary_text, company_name, key_people=None, evidence_links
         dict with:
             - risk: "low" | "medium" | "high"
             - flags: list of specific issues found
+            - quality_notes: non-evidence format/style notes
             - score: 0-100 hallucination suspicion score
             - summary_ok: bool (True if safe to save as-is)
     """
@@ -384,11 +385,13 @@ def validate_summary(summary_text, company_name, key_people=None, evidence_links
         return {
             "risk": "high",
             "flags": ["Summary is empty or too short"],
+            "quality_notes": [],
             "score": 90,
             "summary_ok": False,
         }
 
     flags = []
+    quality_notes = []
     score = 0
     text_lower = summary_text.lower()
 
@@ -467,11 +470,10 @@ def validate_summary(summary_text, company_name, key_people=None, evidence_links
             flags.append(f"Low confidence ({confidence_score}/100) combined with dramatic claims")
             score += 15
 
-    # --- CHECK 7: Excessive length (AI rambling / hallucination drift) ---
+    # --- CHECK 7: Format length note (not evidence/hallucination signal) ---
     word_count = len(summary_text.split())
-    if word_count > 350:
-        flags.append(f"Summary unusually long ({word_count} words, expected 325-375)")
-        score += 10
+    if word_count > 375:
+        quality_notes.append(f"Summary length outside target range ({word_count} words, expected 325-375)")
 
     # --- CHECK 8: Repetitive patterns (hallucination loops) ---
     sentences = [s.strip() for s in re.split(r'[.!?]', summary_text) if len(s.strip()) > 20]
@@ -513,6 +515,7 @@ def validate_summary(summary_text, company_name, key_people=None, evidence_links
     return {
         "risk": risk,
         "flags": flags,
+        "quality_notes": quality_notes,
         "score": score,
         "summary_ok": score < 50,
     }

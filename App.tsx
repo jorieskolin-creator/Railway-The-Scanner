@@ -1796,16 +1796,16 @@ const App = () => {
                   onClick={handleRecalculateFinancial}
                   disabled={recalcLoading}
                   className="flex items-center gap-1.5 px-2.5 py-1 bg-cyan-900/40 hover:bg-cyan-800/60 border border-cyan-600/50 text-cyan-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
-                  title="Recalculate financial and derived scores for all stored companies"
+                  title="Recalculate financial, reality, FAVI, and derived scores. Does not regenerate text."
                 >
                   {recalcLoading ? <Loader2 size={12} className="animate-spin" /> : <Calculator size={12} />}
-                  SCORES
+                  RECALC SCORES
                 </button>
                 <button
                   onClick={handleRefreshProposalsAll}
                   disabled={refreshProposalsLoading}
                   className="flex items-center gap-1.5 px-2.5 py-1 bg-orange-900/40 hover:bg-orange-800/60 border border-orange-600/50 text-orange-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
-                  title="Refresh WHY and WHAT proposals for all stored companies"
+                  title="Regenerate WHY and WHAT proposal text for stored companies."
                 >
                   {refreshProposalsLoading ? <Loader2 size={12} className="animate-spin" /> : <Zap size={12} />}
                   WHY/WHAT
@@ -1814,7 +1814,7 @@ const App = () => {
                   onClick={handleEnrichStakeholdersAll}
                   disabled={enrichStakeholdersLoading}
                   className="flex items-center gap-1.5 px-2.5 py-1 bg-indigo-900/40 hover:bg-indigo-800/60 border border-indigo-600/50 text-indigo-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
-                  title="Enrich key stakeholder intelligence for all stored companies"
+                  title="Enrich key people and roles with stakeholder intelligence."
                 >
                   {enrichStakeholdersLoading ? <Loader2 size={12} className="animate-spin" /> : <Search size={12} />}
                   STAKEHOLDERS
@@ -1823,53 +1823,53 @@ const App = () => {
                   onClick={handleRecheckAll}
                   disabled={recheckLoading}
                   className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-900/40 hover:bg-amber-800/60 border border-amber-600/50 text-amber-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
-                  title="Run reality checks and auto-clean false narrative claims"
+                  title="Run reality/fact checks and remove false or unsupported narrative claims."
                 >
                   {recheckLoading ? <Loader2 size={12} className="animate-spin" /> : <Eye size={12} />}
-                  REALITY
+                  CHECK CLAIMS
                 </button>
                 <button
                   onClick={handleCleanEvidenceAll}
                   disabled={evidenceCleanLoading}
                   className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-900/40 hover:bg-emerald-800/60 border border-emerald-600/50 text-emerald-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
-                  title="Clean Evidence: revalidate URLs, content relevance, and analysis-verification tags for all companies"
+                  title="Re-check stored evidence URLs and page content. Updates analysis-verification tags. Does not regenerate summaries."
                 >
                   {evidenceCleanLoading ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
-                  {evidenceCleanLoading && evidenceCleanStatus ? `EVID ${evidenceCleanStatus.current}/${evidenceCleanStatus.total}` : 'EVIDENCE'}
+                  {evidenceCleanLoading && evidenceCleanStatus ? `EVID ${evidenceCleanStatus.current}/${evidenceCleanStatus.total}` : 'VERIFY EVIDENCE'}
                 </button>
                 <button
                   onClick={handleRefreshForesightKb}
                   disabled={foresightKbLoading}
                   className="flex items-center gap-1.5 px-2.5 py-1 bg-cyan-900/40 hover:bg-cyan-800/60 border border-cyan-600/50 text-cyan-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
-                  title="Harvest megatrend signals from 30 FP themes into the Foresight Knowledge Base"
+                  title="Search all 30 foresight themes for new external trend signals. Verifies URLs and content support, then updates the shared Foresight KB."
                 >
                   {foresightKbLoading ? <Loader2 size={12} className="animate-spin" /> : <Database size={12} />}
-                  {foresightKbLoading && foresightKbStatus?.harvest ? `KB ${foresightKbStatus.harvest.current}/${foresightKbStatus.harvest.total}` : 'KB REFRESH'}
+                  {foresightKbLoading && foresightKbStatus?.harvest ? `KB ${foresightKbStatus.harvest.current}/${foresightKbStatus.harvest.total}` : 'HARVEST KB'}
                 </button>
                 <button
                   onClick={handleSanitizeForesightAll}
                   disabled={foresightSanitizerLoading}
                   className="flex items-center gap-1.5 px-2.5 py-1 bg-violet-900/40 hover:bg-violet-800/60 border border-violet-600/50 text-violet-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
-                  title="Dry-run first, then optionally sanitize stored foresight/source-card snippets and past deadlines"
+                  title="Clean stored company-level foresight wording and metadata. Does not search, verify links, or create new foresight."
                 >
                   {foresightSanitizerLoading ? <Loader2 size={12} className="animate-spin" /> : <Shield size={12} />}
-                  {foresightSanitizerLoading ? 'SAN...' : 'FORESIGHT'}
+                  {foresightSanitizerLoading ? 'SAN...' : 'SANITIZE FS'}
                 </button>
                 <button
                   onClick={handleCleanupForesightKb}
                   disabled={kbCleanupLoading || foresightKbLoading}
                   className="flex items-center gap-1.5 px-2.5 py-1 bg-teal-900/40 hover:bg-teal-800/60 border border-teal-600/50 text-teal-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
-                  title="Re-verify all stored KB URLs and remove signals with dead sources"
+                  title="Re-check existing Foresight KB signals. Removes dead links and updates analysis-verification metadata. Does not harvest new signals."
                 >
                   {kbCleanupLoading ? <Loader2 size={12} className="animate-spin" /> : <Shield size={12} />}
-                  {kbCleanupLoading ? 'KB...' : 'KB CLEAN'}
+                  {kbCleanupLoading ? 'KB...' : 'VERIFY KB'}
                 </button>
                 <button
                   onClick={handleCleanupIndex}
                   className="flex items-center gap-1.5 px-2.5 py-1 bg-rose-900/40 hover:bg-rose-800/60 border border-rose-600/50 text-rose-200 font-mono font-bold text-[10px] rounded transition-all"
-                  title="Remove orphaned entries from the landing page index (companies without data files)"
+                  title="Remove landing-page index entries for companies that no longer have stored data."
                 >
-                  <Trash2 size={12} /> INDEX
+                  <Trash2 size={12} /> CLEAN INDEX
                 </button>
                 <button onClick={() => setIsDataReviewOpen(false)} className="text-slate-400 hover:text-white">
                   <X size={18} />
@@ -2076,7 +2076,8 @@ const App = () => {
                   </div>
                   <div className="space-y-1">
                     {dataReviewItems.map((item, idx) => {
-                      const hasFlags = item.hallucination_flags && item.hallucination_flags.length > 0;
+                      const evidenceFlags = (item.hallucination_flags || []).filter((flag) => !/Summary (?:unusually long|length outside target range) \(\d+ words, expected 325-375\)/i.test(String(flag || '')));
+                      const hasFlags = evidenceFlags.length > 0;
                       const isHighRisk = item.hallucination_risk === 'high';
                       const isMediumRisk = item.hallucination_risk === 'medium';
                       const isFlaggedSummary = (item.summary_preview || '').includes('[FLAGGED]');
@@ -2113,7 +2114,7 @@ const App = () => {
                             </div>
                             {hasFlags && (
                               <div className="mt-1 space-y-0.5">
-                                {item.hallucination_flags.slice(0, 3).map((flag, fi) => (
+                                {evidenceFlags.slice(0, 3).map((flag, fi) => (
                                   <div key={fi} className="text-[9px] text-amber-400/70 font-mono">- {flag}</div>
                                 ))}
                               </div>
@@ -2136,7 +2137,7 @@ const App = () => {
                                 {enrichingStakeholderCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
                               </button>
                               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block z-50 pointer-events-none">
-                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 whitespace-nowrap shadow-xl">Stakeholder Intel<br/><span className="text-slate-500">Enrich key people with LinkedIn insights</span></div>
+                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 w-64 whitespace-normal shadow-xl">Stakeholders<br/><span className="text-slate-500">Enrich stakeholders for this company.</span></div>
                               </div>
                             </div>
                             <div className="relative group/tip">
@@ -2148,7 +2149,7 @@ const App = () => {
                                 {refreshingProposalsCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
                               </button>
                               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block z-50 pointer-events-none">
-                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 whitespace-nowrap shadow-xl">Refresh WHY/WHAT<br/><span className="text-slate-500">Regenerate strategic proposals</span></div>
+                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 w-64 whitespace-normal shadow-xl">WHY/WHAT<br/><span className="text-slate-500">Regenerate WHY/WHAT proposals for this company.</span></div>
                               </div>
                             </div>
                             <div className="relative group/tip">
@@ -2160,7 +2161,7 @@ const App = () => {
                                 {sanitizingForesightCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <Shield size={14} />}
                               </button>
                               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block z-50 pointer-events-none">
-                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 whitespace-nowrap shadow-xl">Sanitize Foresight<br/><span className="text-slate-500">Dry-run and clean stored foresight/source-card snippets</span></div>
+                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 w-64 whitespace-normal shadow-xl">Sanitize Foresight<br/><span className="text-slate-500">Sanitize this company's stored foresight wording. Does not verify sources.</span></div>
                               </div>
                             </div>
                             <div className="relative group/tip">
@@ -2172,7 +2173,7 @@ const App = () => {
                                 {cleaningCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <ShieldAlert size={14} />}
                               </button>
                               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block z-50 pointer-events-none">
-                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 whitespace-nowrap shadow-xl">Reality Check<br/><span className="text-slate-500">Verify claims & auto-clean false statements</span></div>
+                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 w-64 whitespace-normal shadow-xl">Check Claims<br/><span className="text-slate-500">Check this company's narrative claims and auto-clean false statements.</span></div>
                               </div>
                             </div>
                             <div className="relative group/tip">
@@ -2184,7 +2185,7 @@ const App = () => {
                                 {cleaningEvidenceCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
                               </button>
                               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block z-50 pointer-events-none">
-                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 whitespace-nowrap shadow-xl">Clean Evidence<br/><span className="text-slate-500">Revalidate URLs, content, and analysis tags</span></div>
+                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 w-64 whitespace-normal shadow-xl">Verify Evidence<br/><span className="text-slate-500">Verify this company's evidence links and content support. Does not regenerate summaries.</span></div>
                               </div>
                             </div>
                             <div className="relative group/tip">

@@ -996,6 +996,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
             pitch_check = validate_pitch(pitch_text=pitch_text, company_name=company_name)
 
             full_data["hallucination_flags"] = summary_check["flags"] + pitch_check.get("flags", [])
+            full_data["quality_notes"] = summary_check.get("quality_notes", [])
             full_data["hallucination_risk"] = summary_check["risk"]
             full_data["hallucination_score"] = summary_check["score"]
 
