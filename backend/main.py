@@ -39,6 +39,7 @@ from database_sanitizer import sanitize_database
 from foresight_guardrails import sanitize_foresight_collection, sanitize_report_foresight_fields
 from domain_classifier import infer_domain
 from gemini_backoff import call_with_503_backoff
+from evidence_cleaner import CLEAN_EVIDENCE_MODEL_CHAIN, clean_company_evidence
 
 # VERIFICATION LOG: v5.4.0 - Extended Thinking + Search Budget Upgrade
 print("Starting Adaptability Scanner Backend (v5.4.0 - Extended Thinking + Search Budget Upgrade)...", flush=True)
@@ -710,6 +711,111 @@ async def review_data(request: Request):
     verify_admin(request)
     companies = storage.get_all_companies_summary()
     return {"companies": companies, "total": len(companies)}
+
+
+_evidence_clean_state = {
+    "is_running": False,
+    "started_at": None,
+    "completed_at": None,
+    "current_company": None,
+    "current": 0,
+    "total": 0,
+    "result": None,
+    "errors": [],
+}
+_evidence_clean_lock = threading.Lock()
+
+
+def _clean_evidence_for_company(company_name: str, data: dict) -> dict:
+    result = clean_company_evidence(
+        company_name,
+        data,
+        model_chain=CLEAN_EVIDENCE_MODEL_CHAIN,
+    )
+    safe_data = _make_json_safe_payload(data, f"{company_name}.clean_evidence")
+    storage.save_company_data(company_name, safe_data)
+    return result
+
+
+def _run_clean_evidence_all(companies: list[dict]):
+    results = []
+    errors = []
+    try:
+        for idx, company in enumerate(companies, start=1):
+            name = company.get("companyName", "")
+            if not name:
+                continue
+            with _evidence_clean_lock:
+                _evidence_clean_state["current"] = idx
+                _evidence_clean_state["current_company"] = name
+            try:
+                data = storage.get_company_data(name)
+                if not data:
+                    raise ValueError("Company data not found")
+                result = _clean_evidence_for_company(name, data)
+                results.append(result)
+            except Exception as exc:
+                error = {"company": name, "error": str(exc)[:240]}
+                errors.append(error)
+                with _evidence_clean_lock:
+                    _evidence_clean_state["errors"] = errors[-20:]
+                print(f"   ❌ [Clean Evidence] {name}: {exc}")
+        with _evidence_clean_lock:
+            _evidence_clean_state["is_running"] = False
+            _evidence_clean_state["completed_at"] = datetime.utcnow().isoformat()
+            _evidence_clean_state["current_company"] = None
+            _evidence_clean_state["result"] = {
+                "status": "done",
+                "total": len(companies),
+                "cleaned": len(results),
+                "failed": len(errors),
+                "results": results,
+                "errors": errors,
+            }
+    except Exception as exc:
+        with _evidence_clean_lock:
+            _evidence_clean_state["is_running"] = False
+            _evidence_clean_state["completed_at"] = datetime.utcnow().isoformat()
+            _evidence_clean_state["result"] = {"status": "failed", "error": str(exc)}
+
+
+@app.post("/admin/clean-evidence/{company_name}")
+async def clean_evidence_single(company_name: str, request: Request):
+    """Revalidate stored evidence metadata for one company without regenerating prose."""
+    verify_admin(request)
+    data = storage.get_company_data(company_name)
+    if not data:
+        raise HTTPException(status_code=404, detail=f"Company '{company_name}' not found in database.")
+    return _clean_evidence_for_company(company_name, data)
+
+
+@app.post("/admin/clean-evidence-all")
+async def clean_evidence_all(request: Request):
+    """Start background evidence cleaning for all stored companies."""
+    verify_admin(request)
+    companies = storage.get_all_companies_summary()
+    with _evidence_clean_lock:
+        if _evidence_clean_state["is_running"]:
+            raise HTTPException(status_code=409, detail="Evidence cleaning already in progress.")
+        _evidence_clean_state["is_running"] = True
+        _evidence_clean_state["started_at"] = datetime.utcnow().isoformat()
+        _evidence_clean_state["completed_at"] = None
+        _evidence_clean_state["current_company"] = "Starting..."
+        _evidence_clean_state["current"] = 0
+        _evidence_clean_state["total"] = len(companies)
+        _evidence_clean_state["result"] = None
+        _evidence_clean_state["errors"] = []
+    thread = threading.Thread(target=_run_clean_evidence_all, args=(companies,), daemon=True)
+    thread.start()
+    return {"status": "started", "total": len(companies)}
+
+
+@app.get("/admin/clean-evidence-status")
+async def clean_evidence_status(request: Request):
+    """Return evidence cleaning progress."""
+    verify_admin(request)
+    with _evidence_clean_lock:
+        return dict(_evidence_clean_state)
 
 @app.post("/admin/sanitize-foresight-records")
 async def sanitize_foresight_records(

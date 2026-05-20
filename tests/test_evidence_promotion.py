@@ -46,6 +46,7 @@ def test_supported_content_is_verified_for_analysis():
 
     assert link["analysis_verified"] is True
     assert link["promotion_status"] == PROMOTION_GENERATION_ELIGIBLE
+    assert link["generation_eligible"] is True
     assert link["verification_reason"] == "verified_for_analysis"
     assert link["analysis_verified_at"]
     assert is_generation_eligible_source(link) is True
@@ -64,6 +65,7 @@ def test_live_but_irrelevant_content_is_display_only():
 
     assert link["analysis_verified"] is False
     assert link["promotion_status"] == PROMOTION_DISPLAY_ONLY
+    assert link["generation_eligible"] is False
     assert link["verification_reason"] == "claim_unsupported"
     assert is_generation_eligible_source(link) is False
 

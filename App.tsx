@@ -153,6 +153,9 @@ const App = () => {
  const [foresightSanitizerLoading, setForesightSanitizerLoading] = useState(false);
  const [foresightSanitizerResults, setForesightSanitizerResults] = useState(null);
  const [sanitizingForesightCompany, setSanitizingForesightCompany] = useState(null);
+ const [evidenceCleanLoading, setEvidenceCleanLoading] = useState(false);
+ const [evidenceCleanStatus, setEvidenceCleanStatus] = useState(null);
+ const [cleaningEvidenceCompany, setCleaningEvidenceCompany] = useState(null);
 
   // MANUAL EDIT STATE
   const [editingCompany, setEditingCompany] = useState(null);  // company name being edited
@@ -837,6 +840,79 @@ const App = () => {
  alert('Foresight Sanitizer failed: ' + (e?.message || e));
  } finally {
  setSanitizingForesightCompany(null);
+ }
+ };
+
+ const formatEvidenceCleanSummary = (result) => {
+ const stats = result?.stats || result?.evidence_cleaning_stats || {};
+ const validation = stats.validation || {};
+ return `Sources: ${stats.total_sources ?? 0}\nAnalysis verified: ${stats.analysis_verified ?? 0}\nDisplay-only: ${stats.display_only ?? 0}\nExcluded: ${stats.excluded ?? 0}\nUnsupported: ${stats.unsupported ?? 0}\nDead/unavailable: ${stats.dead_or_unavailable ?? 0}\nUnchecked: ${stats.unchecked ?? 0}\nSource quotes: ${stats.source_quotes ?? 0}\nModel checks: ${validation.checked ?? 0}`;
+ };
+
+ const refreshReviewAfterAdminAction = async () => {
+ const reviewRes = await fetch('/admin/review-data', { headers: authHeaders() });
+ if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
+ fetchSummaryData(true);
+ };
+
+ const handleCleanEvidenceSingle = async (companyName) => {
+ if (!isAdmin) return;
+ setCleaningEvidenceCompany(companyName);
+ try {
+ const res = await fetch(`/admin/clean-evidence/${encodeURIComponent(companyName)}`, {
+ method: 'POST',
+ headers: authHeaders()
+ });
+ if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return; }
+ if (!res.ok) throw new Error(await res.text());
+ const json = await res.json();
+ alert(`Clean Evidence "${companyName}" complete.\n\n${formatEvidenceCleanSummary(json)}\n\nSummaries and diagnosis were not regenerated.`);
+ await refreshReviewAfterAdminAction();
+ } catch (e) {
+ console.error(e);
+ alert('Clean Evidence failed: ' + (e?.message || e));
+ } finally {
+ setCleaningEvidenceCompany(null);
+ }
+ };
+
+ const handleCleanEvidenceAll = async () => {
+ if (!isAdmin) return;
+ const proceed = confirm('Clean Evidence for all stored companies?\n\nThis revalidates URLs and source content, updates analysis-verification tags, and does not regenerate summaries.');
+ if (!proceed) return;
+ setEvidenceCleanLoading(true);
+ setEvidenceCleanStatus(null);
+ try {
+ const res = await fetch('/admin/clean-evidence-all', {
+ method: 'POST',
+ headers: authHeaders()
+ });
+ if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); setEvidenceCleanLoading(false); return; }
+ if (res.status === 409) { alert("Evidence cleaning is already in progress."); setEvidenceCleanLoading(false); return; }
+ if (!res.ok) throw new Error(await res.text());
+ const started = await res.json();
+ alert(`Clean Evidence started for ${started.total ?? 0} companies.\n\nYou can keep this panel open while progress updates.`);
+ const pollInterval = setInterval(async () => {
+ try {
+ const statusRes = await fetch('/admin/clean-evidence-status', { headers: authHeaders() });
+ if (!statusRes.ok) return;
+ const status = await statusRes.json();
+ setEvidenceCleanStatus(status);
+ if (!status.is_running && status.completed_at) {
+ clearInterval(pollInterval);
+ setEvidenceCleanLoading(false);
+ const result = status.result || {};
+ alert(`Clean Evidence complete.\n\nCompanies cleaned: ${result.cleaned ?? 0}/${result.total ?? 0}\nFailed: ${result.failed ?? 0}`);
+ await refreshReviewAfterAdminAction();
+ }
+ } catch (pollErr) {
+ console.error(pollErr);
+ }
+ }, 3000);
+ } catch (e) {
+ console.error(e);
+ alert('Clean Evidence failed: ' + (e?.message || e));
+ setEvidenceCleanLoading(false);
  }
  };
 
@@ -1715,72 +1791,85 @@ const App = () => {
                 <ShieldAlert size={18} className="text-amber-400" />
                 Data Review & Cleanup
               </h3>
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap justify-end items-center gap-2">
                 <button
                   onClick={handleRecalculateFinancial}
                   disabled={recalcLoading}
-                  className="flex items-center gap-1.5 px-3 py-1 bg-cyan-900/40 hover:bg-cyan-800/60 border border-cyan-600/50 text-cyan-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
+                  className="flex items-center gap-1.5 px-2.5 py-1 bg-cyan-900/40 hover:bg-cyan-800/60 border border-cyan-600/50 text-cyan-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
+                  title="Recalculate financial and derived scores for all stored companies"
                 >
                   {recalcLoading ? <Loader2 size={12} className="animate-spin" /> : <Calculator size={12} />}
-                  RECALC SCORES
+                  SCORES
                 </button>
                 <button
                   onClick={handleRefreshProposalsAll}
                   disabled={refreshProposalsLoading}
-                  className="flex items-center gap-1.5 px-3 py-1 bg-orange-900/40 hover:bg-orange-800/60 border border-orange-600/50 text-orange-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
+                  className="flex items-center gap-1.5 px-2.5 py-1 bg-orange-900/40 hover:bg-orange-800/60 border border-orange-600/50 text-orange-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
+                  title="Refresh WHY and WHAT proposals for all stored companies"
                 >
                   {refreshProposalsLoading ? <Loader2 size={12} className="animate-spin" /> : <Zap size={12} />}
-                  REFRESH WHY/WHAT
+                  WHY/WHAT
                 </button>
                 <button
                   onClick={handleEnrichStakeholdersAll}
                   disabled={enrichStakeholdersLoading}
-                  className="flex items-center gap-1.5 px-3 py-1 bg-indigo-900/40 hover:bg-indigo-800/60 border border-indigo-600/50 text-indigo-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
+                  className="flex items-center gap-1.5 px-2.5 py-1 bg-indigo-900/40 hover:bg-indigo-800/60 border border-indigo-600/50 text-indigo-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
+                  title="Enrich key stakeholder intelligence for all stored companies"
                 >
                   {enrichStakeholdersLoading ? <Loader2 size={12} className="animate-spin" /> : <Search size={12} />}
-                  STAKEHOLDER INTEL
+                  STAKEHOLDERS
                 </button>
                 <button
                   onClick={handleRecheckAll}
                   disabled={recheckLoading}
-                  className="flex items-center gap-1.5 px-3 py-1 bg-amber-900/40 hover:bg-amber-800/60 border border-amber-600/50 text-amber-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
+                  className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-900/40 hover:bg-amber-800/60 border border-amber-600/50 text-amber-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
+                  title="Run reality checks and auto-clean false narrative claims"
                 >
                   {recheckLoading ? <Loader2 size={12} className="animate-spin" /> : <Eye size={12} />}
-                  REALITY CHECK ALL
+                  REALITY
+                </button>
+                <button
+                  onClick={handleCleanEvidenceAll}
+                  disabled={evidenceCleanLoading}
+                  className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-900/40 hover:bg-emerald-800/60 border border-emerald-600/50 text-emerald-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
+                  title="Clean Evidence: revalidate URLs, content relevance, and analysis-verification tags for all companies"
+                >
+                  {evidenceCleanLoading ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
+                  {evidenceCleanLoading && evidenceCleanStatus ? `EVID ${evidenceCleanStatus.current}/${evidenceCleanStatus.total}` : 'EVIDENCE'}
                 </button>
                 <button
                   onClick={handleRefreshForesightKb}
                   disabled={foresightKbLoading}
-                  className="flex items-center gap-1.5 px-3 py-1 bg-cyan-900/40 hover:bg-cyan-800/60 border border-cyan-600/50 text-cyan-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
+                  className="flex items-center gap-1.5 px-2.5 py-1 bg-cyan-900/40 hover:bg-cyan-800/60 border border-cyan-600/50 text-cyan-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
                   title="Harvest megatrend signals from 30 FP themes into the Foresight Knowledge Base"
                 >
                   {foresightKbLoading ? <Loader2 size={12} className="animate-spin" /> : <Database size={12} />}
-                  {foresightKbLoading && foresightKbStatus?.harvest ? `KB ${foresightKbStatus.harvest.current}/${foresightKbStatus.harvest.total}` : 'REFRESH FORESIGHT KB'}
+                  {foresightKbLoading && foresightKbStatus?.harvest ? `KB ${foresightKbStatus.harvest.current}/${foresightKbStatus.harvest.total}` : 'KB REFRESH'}
                 </button>
                 <button
                   onClick={handleSanitizeForesightAll}
                   disabled={foresightSanitizerLoading}
-                  className="flex items-center gap-1.5 px-3 py-1 bg-violet-900/40 hover:bg-violet-800/60 border border-violet-600/50 text-violet-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
+                  className="flex items-center gap-1.5 px-2.5 py-1 bg-violet-900/40 hover:bg-violet-800/60 border border-violet-600/50 text-violet-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
                   title="Dry-run first, then optionally sanitize stored foresight/source-card snippets and past deadlines"
                 >
                   {foresightSanitizerLoading ? <Loader2 size={12} className="animate-spin" /> : <Shield size={12} />}
-                  {foresightSanitizerLoading ? 'SANITIZING...' : 'SANITIZE FORESIGHT'}
+                  {foresightSanitizerLoading ? 'SAN...' : 'FORESIGHT'}
                 </button>
                 <button
                   onClick={handleCleanupForesightKb}
                   disabled={kbCleanupLoading || foresightKbLoading}
-                  className="flex items-center gap-1.5 px-3 py-1 bg-teal-900/40 hover:bg-teal-800/60 border border-teal-600/50 text-teal-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
+                  className="flex items-center gap-1.5 px-2.5 py-1 bg-teal-900/40 hover:bg-teal-800/60 border border-teal-600/50 text-teal-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
                   title="Re-verify all stored KB URLs and remove signals with dead sources"
                 >
                   {kbCleanupLoading ? <Loader2 size={12} className="animate-spin" /> : <Shield size={12} />}
-                  {kbCleanupLoading ? 'CLEANING KB...' : 'CLEAN KB'}
+                  {kbCleanupLoading ? 'KB...' : 'KB CLEAN'}
                 </button>
                 <button
                   onClick={handleCleanupIndex}
-                  className="flex items-center gap-1.5 px-3 py-1 bg-rose-900/40 hover:bg-rose-800/60 border border-rose-600/50 text-rose-200 font-mono font-bold text-[10px] rounded transition-all"
+                  className="flex items-center gap-1.5 px-2.5 py-1 bg-rose-900/40 hover:bg-rose-800/60 border border-rose-600/50 text-rose-200 font-mono font-bold text-[10px] rounded transition-all"
                   title="Remove orphaned entries from the landing page index (companies without data files)"
                 >
-                  <Trash2 size={12} /> CLEAN INDEX
+                  <Trash2 size={12} /> INDEX
                 </button>
                 <button onClick={() => setIsDataReviewOpen(false)} className="text-slate-400 hover:text-white">
                   <X size={18} />
@@ -1992,6 +2081,7 @@ const App = () => {
                       const isMediumRisk = item.hallucination_risk === 'medium';
                       const isFlaggedSummary = (item.summary_preview || '').includes('[FLAGGED]');
                       const hasUnverifiedClaims = item.ai_verified === false && item.unsupported_claims?.length > 0;
+                      const evStats = item.evidence_cleaning_stats || {};
                       return (
                         <div key={idx} className="space-y-1">
                         <div className={`flex items-center justify-between px-3 py-2 rounded-lg border transition-all ${
@@ -2016,6 +2106,9 @@ const App = () => {
                               {item.intent_score != null && <span className="mr-2">I:{item.intent_score}</span>}
                               {item.reality_score != null && <span className="mr-2">R:{item.reality_score}</span>}
                               {item.confidence_score != null && <span className="mr-2">C:{item.confidence_score}</span>}
+                              {evStats.analysis_verified != null && <span className="mr-2 text-emerald-400/70">AV:{evStats.analysis_verified}</span>}
+                              {evStats.display_only != null && <span className="mr-2 text-sky-400/70">DO:{evStats.display_only}</span>}
+                              {evStats.unsupported != null && <span className="mr-2 text-orange-400/70">UN:{evStats.unsupported}</span>}
                               {item.lastUpdated && <span className="text-slate-600">{item.lastUpdated.split('T')[0]}</span>}
                             </div>
                             {hasFlags && (
@@ -2080,6 +2173,18 @@ const App = () => {
                               </button>
                               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block z-50 pointer-events-none">
                                 <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 whitespace-nowrap shadow-xl">Reality Check<br/><span className="text-slate-500">Verify claims & auto-clean false statements</span></div>
+                              </div>
+                            </div>
+                            <div className="relative group/tip">
+                              <button
+                                onClick={() => handleCleanEvidenceSingle(item.companyName)}
+                                disabled={cleaningEvidenceCompany === item.companyName}
+                                className="text-slate-500 hover:text-emerald-300 p-1.5 rounded hover:bg-emerald-500/10 transition-all disabled:opacity-50"
+                              >
+                                {cleaningEvidenceCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                              </button>
+                              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block z-50 pointer-events-none">
+                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 whitespace-nowrap shadow-xl">Clean Evidence<br/><span className="text-slate-500">Revalidate URLs, content, and analysis tags</span></div>
                               </div>
                             </div>
                             <div className="relative group/tip">

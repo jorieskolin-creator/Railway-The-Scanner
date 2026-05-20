@@ -12,6 +12,8 @@ the claim it's attached to.
 
 import concurrent.futures
 from datetime import datetime
+import json
+import os
 import re
 import time
 
@@ -32,6 +34,8 @@ _HEADERS = {
 _MAX_PAGE_CHARS = 3000  # Keep page text compact for the LLM prompt
 _ANALYSIS_SUPPORT_THRESHOLD = 55
 _PARTIAL_SUPPORT_THRESHOLD = 40
+DEFAULT_MODEL_CHAIN = ("gemini-2.0-flash",)
+CLEAN_EVIDENCE_MODEL_CHAIN = ("gpt-5.4", "gemini-2.5-pro", "gemini-3-flash-preview")
 
 
 def _fetch_page_text(url: str, timeout: int = 6) -> str:
@@ -104,7 +108,102 @@ def _best_source_quote(page_text: str, claim: str, max_chars: int = 420) -> str:
 
 # ── Single source-claim relevance check ──────────────────────────────────────
 
-def _check_relevance(url: str, claim: str, client, timeout: int = 10) -> dict:
+def _clean_env_var(value: str) -> str:
+    if not value:
+        return ""
+    if "=" in value:
+        try:
+            value = value.split("=", 1)[1]
+        except Exception:
+            pass
+    return value.strip().strip('"').strip("'")
+
+
+def _get_openai_text(response) -> str:
+    text = getattr(response, "output_text", None)
+    if text:
+        return text.strip()
+    parts = []
+    for item in getattr(response, "output", []) or []:
+        for content in getattr(item, "content", []) or []:
+            content_text = getattr(content, "text", None)
+            if content_text:
+                parts.append(content_text)
+    return "\n".join(parts).strip()
+
+
+def _build_relevance_prompt(claim: str, page_text: str) -> str:
+    return f"""You are a fact-checking assistant. A forensic scanner cited this source URL to support a specific claim. Your job: determine if the source page content actually supports or relates to the claim.
+
+CLAIM (from the scanner's evidence):
+"{claim}"
+
+SOURCE PAGE CONTENT (extracted text):
+"{page_text[:2000]}"
+
+Score 0-100:
+- 0-24: Source has NO relation to the claim (completely irrelevant topic)
+- 25-49: Source is tangentially related but doesn't directly support the claim
+- 50-74: Source discusses the same topic and partially supports the claim
+- 75-100: Source directly supports or corroborates the claim
+
+Respond with ONLY a JSON object, no other text:
+{{"score": <0-100>, "reason": "<one sentence explanation>"}}"""
+
+
+def _parse_relevance_json(raw: str) -> tuple[int, str]:
+    raw = (raw or "").strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    result = json.loads(raw)
+    score = max(0, min(100, int(result.get("score", 50))))
+    reason = str(result.get("reason", "") or "").strip()
+    return score, reason
+
+
+def _call_openai_relevance(prompt: str, model: str, timeout: int) -> str:
+    api_key = _clean_env_var(os.environ.get("GPT_API_KEY") or os.environ.get("OPENAI_API_KEY") or "")
+    if not api_key:
+        raise ValueError("No GPT_API_KEY configured")
+    from openai import OpenAI
+    client = OpenAI(api_key=api_key, timeout=timeout)
+    response = client.responses.create(
+        model=model,
+        input=prompt,
+        max_output_tokens=200,
+    )
+    return _get_openai_text(response)
+
+
+def _call_gemini_relevance(prompt: str, model: str, timeout: int):
+    client = get_gemini_client()
+    config_kwargs = {"temperature": 0.0, "max_output_tokens": 140}
+    if model == "gemini-2.5-pro":
+        # Gemini 2.5 Pro rejects a zero thinking budget, so keep a tiny budget
+        # for deterministic classification while avoiding token starvation.
+        config_kwargs["thinking_config"] = genai_types.ThinkingConfig(thinking_budget=256)
+    resp = call_with_503_backoff(
+        lambda: client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(**config_kwargs),
+        ),
+        label=f"Source-Claim Relevance {model}",
+        model=model,
+        timeout=timeout,
+    )
+    return (resp.text or "").strip()
+
+
+def _score_to_status(score: int) -> tuple[bool, str]:
+    if score >= _ANALYSIS_SUPPORT_THRESHOLD:
+        return True, "supported"
+    if score >= _PARTIAL_SUPPORT_THRESHOLD:
+        return False, "partial"
+    return False, "unsupported"
+
+
+def _check_relevance(url: str, claim: str, client=None, timeout: int = 10, model_chain=None) -> dict:
     """
     Fetch the source page and ask Gemini Flash whether it supports the claim.
 
@@ -129,71 +228,54 @@ def _check_relevance(url: str, claim: str, client, timeout: int = 10) -> dict:
             "reason": "Page content not extractable",
         }
 
-    prompt = f"""You are a fact-checking assistant. A forensic scanner cited this source URL to support a specific claim. Your job: determine if the source page content actually supports or relates to the claim.
+    prompt = _build_relevance_prompt(claim, page_text)
+    errors = []
+    for model in model_chain or DEFAULT_MODEL_CHAIN:
+        try:
+            if str(model).startswith("gpt-"):
+                raw = _call_openai_relevance(prompt, model, timeout)
+            elif model == "gemini-2.0-flash" and client is not None:
+                resp = call_with_503_backoff(
+                    lambda: client.models.generate_content(
+                        model=model,
+                        contents=prompt,
+                        config=genai_types.GenerateContentConfig(
+                            temperature=0.0,
+                            max_output_tokens=100,
+                        ),
+                    ),
+                    label="Source-Claim Relevance",
+                    model=model,
+                    timeout=timeout,
+                )
+                raw = (resp.text or "").strip()
+            else:
+                raw = _call_gemini_relevance(prompt, model, timeout)
 
-CLAIM (from the scanner's evidence):
-"{claim}"
+            score, reason = _parse_relevance_json(raw)
+            relevant, support_status = _score_to_status(score)
 
-SOURCE PAGE CONTENT (extracted text):
-"{page_text[:2000]}"
+            return {
+                "relevance_score": score,
+                "relevant": relevant,
+                "claim_support_status": support_status,
+                "content_verified": True,
+                "source_quote": _best_source_quote(page_text, claim),
+                "reason": reason,
+                "verification_model": model,
+            }
+        except Exception as e:
+            errors.append(f"{model}: {str(e)[:80]}")
 
-Score 0-100:
-- 0-24: Source has NO relation to the claim (completely irrelevant topic)
-- 25-49: Source is tangentially related but doesn't directly support the claim
-- 50-74: Source discusses the same topic and partially supports the claim
-- 75-100: Source directly supports or corroborates the claim
-
-Respond with ONLY a JSON object, no other text:
-{{"score": <0-100>, "reason": "<one sentence explanation>"}}"""
-
-    try:
-        resp = call_with_503_backoff(
-            lambda: client.models.generate_content(
-                model="gemini-2.0-flash",
-                contents=prompt,
-                config=genai_types.GenerateContentConfig(
-                    temperature=0.0,
-                    max_output_tokens=100,
-                ),
-            ),
-            label="Source-Claim Relevance",
-            model="gemini-2.0-flash",
-            timeout=timeout,
-        )
-        raw = (resp.text or "").strip()
-
-        # Parse the JSON response
-        import json
-        # Handle markdown code blocks
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-        result = json.loads(raw)
-        score = int(result.get("score", 50))
-        reason = result.get("reason", "")
-        if score >= _ANALYSIS_SUPPORT_THRESHOLD:
-            support_status = "supported"
-        elif score >= _PARTIAL_SUPPORT_THRESHOLD:
-            support_status = "partial"
-        else:
-            support_status = "unsupported"
-
-        return {
-            "relevance_score": score,
-            "relevant": score >= _ANALYSIS_SUPPORT_THRESHOLD,
-            "claim_support_status": support_status,
-            "content_verified": True,
-            "source_quote": _best_source_quote(page_text, claim),
-            "reason": reason,
-        }
-    except Exception as e:
-        return {
-            "relevance_score": -1,
-            "relevant": False,
-            "claim_support_status": "unchecked",
-            "content_verified": False,
-            "source_quote": "",
-            "reason": f"Validation error: {str(e)[:80]}",
-        }
+    return {
+        "relevance_score": -1,
+        "relevant": False,
+        "claim_support_status": "unchecked",
+        "content_verified": True,
+        "source_quote": _best_source_quote(page_text, claim),
+        "reason": "Verifier failed: " + " | ".join(errors)[:240],
+        "verification_model": "none",
+    }
 
 
 # ── Batch validation for evidence sets ───────────────────────────────────────
@@ -202,6 +284,7 @@ def validate_source_claims(
     findings: list,
     max_checks: int = 8,
     max_workers: int = 4,
+    model_chain=None,
 ) -> dict:
     """
     Validate that verified evidence sources actually support their claimed snippets.
@@ -223,10 +306,13 @@ def validate_source_claims(
         "elapsed_ms": int,
     }
     """
-    try:
-        client = get_gemini_client()
-    except ValueError:
-        return {"checked": 0, "irrelevant": 0, "flagged_urls": [], "elapsed_ms": 0}
+    client = None
+    if model_chain is None or "gemini-2.0-flash" in model_chain:
+        try:
+            client = get_gemini_client()
+        except ValueError:
+            if model_chain is None:
+                return {"checked": 0, "irrelevant": 0, "flagged_urls": [], "elapsed_ms": 0}
 
     def _candidate_priority(item: dict) -> tuple:
         cred = str(item.get("source_credibility") or "").lower()
@@ -249,8 +335,9 @@ def validate_source_claims(
     if not candidates:
         return {"checked": 0, "irrelevant": 0, "flagged_urls": [], "elapsed_ms": 0}
 
-    # Limit checks for cost control
-    to_check = candidates[:max_checks]
+    # Limit checks for cost control when requested.  Admin evidence cleaning
+    # passes max_checks=None so every current stored source can be migrated.
+    to_check = candidates if max_checks is None else candidates[:max_checks]
 
     start = time.time()
     results = {}
@@ -258,7 +345,7 @@ def validate_source_claims(
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_item = {}
         for url, snippet, item in to_check:
-            future = executor.submit(_check_relevance, url, snippet, client)
+            future = executor.submit(_check_relevance, url, snippet, client, 10, model_chain)
             future_to_item[future] = (url, snippet, item)
 
         for future in concurrent.futures.as_completed(future_to_item):
@@ -276,6 +363,7 @@ def validate_source_claims(
             item["claim_support_status"] = result.get("claim_support_status", "unchecked")
             item["content_verified"] = result.get("content_verified") is True
             item["content_verification_reason"] = result.get("reason", "")
+            item["verification_model"] = result.get("verification_model", item.get("verification_model"))
             if result.get("source_quote"):
                 item["source_quote"] = result["source_quote"]
             if result["relevant"]:

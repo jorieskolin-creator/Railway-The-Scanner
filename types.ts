@@ -33,6 +33,7 @@ interface EvidenceLink {
   analysis_verified?: boolean;
   analysis_verified_at?: string;
   promotion_status?: 'generation_eligible' | 'display_only' | 'excluded' | string;
+  generation_eligible?: boolean;
   content_relevance_score?: number;
   verification_reason?: string;
   content_verification_reason?: string;
@@ -54,6 +55,17 @@ interface ForesightLink {
   origin: string; // always "foresight"
   entity_scope?: string;
   scope_warning?: string;
+  url_verified?: boolean;
+  content_verified?: boolean;
+  claim_support_status?: 'supported' | 'partial' | 'unsupported' | 'unchecked' | 'unavailable' | string;
+  analysis_verified?: boolean;
+  analysis_verified_at?: string;
+  promotion_status?: 'generation_eligible' | 'display_only' | 'excluded' | string;
+  generation_eligible?: boolean;
+  content_relevance_score?: number;
+  verification_reason?: string;
+  content_verification_reason?: string;
+  source_quote?: string;
 }
 
 interface LinkedInInsights {

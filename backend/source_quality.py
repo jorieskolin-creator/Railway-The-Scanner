@@ -932,6 +932,7 @@ def apply_analysis_verification(link: dict, company_domain: str = "", company_na
 
     link["analysis_verified"] = analysis_verified
     link["promotion_status"] = promotion
+    link["generation_eligible"] = promotion == PROMOTION_GENERATION_ELIGIBLE
     link["verification_reason"] = reason
     if analysis_verified and not link.get("analysis_verified_at"):
         link["analysis_verified_at"] = datetime.utcnow().isoformat()
