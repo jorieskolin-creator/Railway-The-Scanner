@@ -8,7 +8,7 @@ const MIIcons = new Proxy(LucideRaw, {
     return () => null;
   }
 });
-const { X, Loader2, TrendingUp, Target, Crosshair, ShieldAlert, Download, ChevronRight, Activity, BarChart3, Gauge, Radar, RefreshCw, Eye, AlertTriangle, BookOpen, Globe, FileText } = MIIcons;
+const { X, Loader2, TrendingUp, Target, Crosshair, Download, ChevronRight, Activity, BarChart3, Gauge, Radar, RefreshCw, Eye, AlertTriangle, BookOpen, Globe, FileText } = MIIcons;
 
 const {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -749,7 +749,7 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
       `<div><div style="font-size:28px;font-weight:bold;color:white">${data.company_count}</div><div style="font-size:10px;color:#94a3b8;text-transform:uppercase">Total Companies</div></div>` +
       `<div><div style="font-size:28px;font-weight:bold;color:#22d3ee">${data.detailed_count}</div><div style="font-size:10px;color:#94a3b8;text-transform:uppercase">With Full Data</div></div>` +
       `<div><div style="font-size:28px;font-weight:bold;color:#34d399">${(data.top_foresights || []).length}</div><div style="font-size:10px;color:#94a3b8;text-transform:uppercase">Top Foresight Themes</div></div>` +
-      `<div><div style="font-size:28px;font-weight:bold;color:#fb7185">${(data.vulnerable_companies || []).length}</div><div style="font-size:10px;color:#94a3b8;text-transform:uppercase">Vulnerable Companies</div></div>` +
+      `<div><div style="font-size:28px;font-weight:bold;color:#fb7185">${(data.opportunity_map?.company_rankings || []).length}</div><div style="font-size:10px;color:#94a3b8;text-transform:uppercase">Opportunity Ranked</div></div>` +
       `</div></div>`;
 
     // FAVI Segment Summary
@@ -1198,9 +1198,9 @@ const ExecutiveSummaryTab = ({ data, observatoryData = null }: { data: any; obse
           <div className="text-[8px] text-slate-500 mt-1 leading-relaxed">Most frequently detected megatrends creating strategic pressure across the market</div>
         </div>
         <div className="bg-black/20 border border-white/10 rounded-lg p-3 text-center">
-          <div className="text-2xl font-bold text-rose-400">{(data.vulnerable_companies || []).length}</div>
-          <div className="text-[9px] text-slate-400 uppercase">Vulnerable Companies</div>
-          <div className="text-[8px] text-slate-500 mt-1 leading-relaxed">Companies with high intent-reality gap — strongest sales opportunities</div>
+          <div className="text-2xl font-bold text-rose-400">{(data.opportunity_map?.company_rankings || []).length}</div>
+          <div className="text-[9px] text-slate-400 uppercase">Opportunity Ranked</div>
+          <div className="text-[8px] text-slate-500 mt-1 leading-relaxed">Companies ranked by future pressure, readiness gap, financial capacity, and WHY/WHAT signal</div>
         </div>
       </div>
 
@@ -2155,129 +2155,6 @@ const CurrentDemandTab = ({ data }: { data: any }) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// TAB 4: SALES PRIORITIES
-// ═══════════════════════════════════════════════════════════════════════════════
-
-const SalesPrioritiesTab = ({ data, onCompanyClick }: { data: any; onCompanyClick: (company: any) => void }) => {
-  const [sortKey, setSortKey] = useState('vulnerability_score');
-  const [sortDir, setSortDir] = useState('desc');
-  const vulnerable = data.vulnerable_companies || [];
-
-  const sorted = useMemo(() => {
-    return [...vulnerable].sort((a: any, b: any) => {
-      const va = a[sortKey] ?? 0;
-      const vb = b[sortKey] ?? 0;
-      return sortDir === 'desc' ? vb - va : va - vb;
-    });
-  }, [vulnerable, sortKey, sortDir]);
-
-  const handleSort = (key: string) => {
-    if (sortKey === key) {
-      setSortDir(sortDir === 'desc' ? 'asc' : 'desc');
-    } else {
-      setSortKey(key);
-      setSortDir('desc');
-    }
-  };
-
-  const handleExportCSV = () => {
-    if (sorted.length === 0) return;
-    const headers = ['Rank', 'Company', 'Domain', 'Vulnerability Score', 'Residual', 'Gap', 'Archetype', 'Reasons'];
-    const rows = sorted.map((v: any, i: number) => [
-      i + 1, v.name, v.domain, v.vulnerability_score, v.residual, v.gap, v.archetype, (v.reasons || []).join('; ')
-    ]);
-    const csv = [headers, ...rows].map(r => r.map((c: any) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'vulnerable_companies.csv';
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const vulnColor = (score: number) => {
-    if (score >= 60) return 'text-rose-400 bg-rose-500/10';
-    if (score >= 30) return 'text-amber-400 bg-amber-500/10';
-    return 'text-slate-400';
-  };
-
-  const SortHeader = ({ label, dataKey }: { label: string; dataKey: string }) => (
-    <th className="p-2 text-left cursor-pointer hover:text-white select-none whitespace-nowrap" onClick={() => handleSort(dataKey)}>
-      {label} {sortKey === dataKey ? (sortDir === 'desc' ? '\u2193' : '\u2191') : ''}
-    </th>
-  );
-
-  return (
-    <div className="space-y-6">
-      {/* Vulnerability Table */}
-      <div className="bg-black/20 border border-white/10 rounded-lg p-4">
-        <div className="flex justify-between items-center mb-3">
-          <h4 className="text-[10px] font-bold text-rose-300 uppercase tracking-wide flex items-center gap-2">
-            <ShieldAlert size={12} /> Most Vulnerable Companies
-          </h4>
-          <button onClick={handleExportCSV} className="flex items-center gap-1 px-2 py-1 text-[10px] bg-white/5 hover:bg-white/10 border border-white/10 rounded text-slate-300">
-            <Download size={10} /> CSV
-          </button>
-        </div>
-
-        {sorted.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full text-[10px]">
-              <thead>
-                <tr className="text-slate-500 border-b border-white/10">
-                  <th className="p-2 text-left">#</th>
-                  <th className="p-2 text-left">Company</th>
-                  <th className="p-2 text-left">Domain</th>
-                  <SortHeader label="Vuln. Score" dataKey="vulnerability_score" />
-                  <SortHeader label="Residual" dataKey="residual" />
-                  <SortHeader label="Gap" dataKey="gap" />
-                  <th className="p-2 text-left">Archetype</th>
-                  <th className="p-2 text-left">Reason</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sorted.map((v: any, i: number) => (
-                  <tr key={v.name} className="border-t border-white/5 hover:bg-white/5 cursor-pointer transition-colors"
-                    onClick={() => onCompanyClick({ companyName: v.name, domain: v.domain })}>
-                    <td className="p-2 text-slate-500">{i + 1}</td>
-                    <td className="p-2 text-cyan-300 font-medium">{v.name}</td>
-                    <td className="p-2 text-slate-400">{v.domain}</td>
-                    <td className={`p-2 font-mono font-bold ${vulnColor(v.vulnerability_score)}`}>
-                      {v.vulnerability_score}
-                    </td>
-                    <td className={`p-2 font-mono ${v.residual < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
-                      {v.residual > 0 ? '+' : ''}{v.residual}
-                    </td>
-                    <td className={`p-2 font-mono ${v.gap > 10 ? 'text-amber-400' : 'text-slate-400'}`}>
-                      {v.gap}
-                    </td>
-                    <td className="p-2">
-                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
-                        v.archetype === 'At Risk' ? 'bg-rose-500/20 text-rose-300' :
-                        v.archetype === 'Cash Cow' ? 'bg-blue-500/20 text-blue-300' :
-                        v.archetype === 'Modernizing' ? 'bg-amber-500/20 text-amber-300' :
-                        'bg-emerald-500/20 text-emerald-300'
-                      }`}>{v.archetype}</span>
-                    </td>
-                    <td className="p-2 text-slate-500 max-w-[200px] truncate" title={(v.reasons || []).join(', ')}>
-                      {(v.reasons || [])[0] || '-'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="text-slate-500 text-xs py-8 text-center">No vulnerability data available</div>
-        )}
-      </div>
-
-    </div>
-  );
-};
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // TAB 5: FORESIGHT-ADJUSTED VULNERABILITY INDEX
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -2745,7 +2622,7 @@ const OpportunityMapTab = ({ data, onCompanyClick }: { data: any; onCompanyClick
               <th className="p-2 text-left">Pressure</th><th className="p-2 text-left">Readiness Gap</th><th className="p-2 text-left">Fin. Capacity</th><th className="p-2 text-left">Intent-Reality Gap</th><th className="p-2 text-left">WHY/WHAT Signal</th>
             </tr></thead>
             <tbody>
-              {companies.slice(0, 20).map((c: any, i: number) => (
+              {companies.slice(0, 30).map((c: any, i: number) => (
                 <tr key={c.name} className="border-t border-white/5 hover:bg-white/5 cursor-pointer transition-colors" onClick={() => onCompanyClick({ companyName: c.name, domain: c.domain })}>
                   <td className="p-2 text-slate-500">{i + 1}</td>
                   <td className="p-2 text-cyan-300 font-medium">{c.name}</td>
@@ -2775,7 +2652,6 @@ const TABS = [
   { id: 'executive', label: 'Executive Summary', icon: Gauge },
   { id: 'future', label: 'Future Demand', icon: TrendingUp },
   { id: 'current', label: 'Current Demand', icon: Target },
-  { id: 'sales', label: 'Vulnerability Now', icon: Crosshair },
   { id: 'favi', label: 'Foresight Vulnerability', icon: Eye },
 ];
 
@@ -2867,7 +2743,6 @@ const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, on
               {activeTab === 'executive' && <ExecutiveSummaryTab data={data} observatoryData={observatoryData} />}
               {activeTab === 'future' && <FutureDemandTab data={data} observatoryData={observatoryData} crossImpactInterpretationData={crossImpactInterpretationData} onRefreshCrossImpactInterpretation={onRefreshCrossImpactInterpretation} crossImpactInterpretationLoading={crossImpactInterpretationLoading} />}
               {activeTab === 'current' && <CurrentDemandTab data={data} />}
-              {activeTab === 'sales' && <SalesPrioritiesTab data={data} onCompanyClick={onCompanyClick} />}
               {activeTab === 'favi' && <ForesightVulnerabilityTab data={data} onCompanyClick={onCompanyClick} />}
             </>
           )}

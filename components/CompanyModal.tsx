@@ -172,7 +172,7 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading, marketInt
                <>
                   <CompanySummary data={company} faviData={
                     marketIntelData?.favi_companies?.find((c: any) => c.name === company?.companyName) || null
-                  } observatoryData={observatoryData} />
+                  } observatoryData={observatoryData} marketIntelData={marketIntelData} />
                </>
            )}
         </div>
