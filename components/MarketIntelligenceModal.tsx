@@ -179,6 +179,13 @@ const downloadHtml = (html: string, filename: string) => {
   URL.revokeObjectURL(url);
 };
 
+const escapeMiHtml = (value: any) => String(value == null ? '' : value)
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
 // Adaptation Capacity x Future Vulnerability scatter for the static HTML export.
 // Mirrors the in-app Recharts version: dots colored by segment, dashed
 // reference lines at the calibrated FAVI cutoff and the FAC median, four
@@ -2295,13 +2302,6 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
   a.click();
   URL.revokeObjectURL(url);
 };
-
-const escapeMiHtml = (value: any) => String(value == null ? '' : value)
-  .replace(/&/g, '&amp;')
-  .replace(/</g, '&lt;')
-  .replace(/>/g, '&gt;')
-  .replace(/"/g, '&quot;')
-  .replace(/'/g, '&#39;');
 
   const SortHeader = ({ label, dataKey }: { label: string; dataKey: string }) => (
     <th className="p-2 text-left cursor-pointer hover:text-white select-none whitespace-nowrap" onClick={() => handleSort(dataKey)}>
