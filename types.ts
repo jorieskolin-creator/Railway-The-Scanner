@@ -259,7 +259,7 @@ interface FAVICompany {
   intent_readiness_gap?: number;  // Raw intent-dimension readiness gap before current-risk adjustment
   current_vulnerability_signal?: number; // Current-risk floor used to prevent false zero FAVI
   readiness_gap_source?: string;  // "intent_dimensions" | "current_vulnerability_adjusted"
-  segment: string;                // "Critical" | "Sleepwalking" | "Wounded but Sheltered" | "Safe Harbor"
+  segment: string;                // Legacy Current x FAVI segment; UI may derive FAC x FAVI segment
   formula: string;                // "geometric" | "additive"
   foresight_count: number;
   dimensions_covered: number;

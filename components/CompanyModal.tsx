@@ -119,6 +119,20 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading, marketInt
   const dateObj = new Date(company.lastUpdated);
   const dateStr = dateObj.toLocaleDateString('en-FI', { day: 'numeric', month: 'long', year: 'numeric' });
   const timeStr = dateObj.toLocaleTimeString('en-FI', { hour: '2-digit', minute: '2-digit' });
+  const faviCompanies = marketIntelData?.favi_companies || [];
+  const facValues = faviCompanies.map((c: any) => Number(c?.fac || 0)).filter((x: number) => Number.isFinite(x) && x >= 0);
+  const sortedFac = [...facValues].sort((a: number, b: number) => a - b);
+  const facMid = Math.floor(sortedFac.length / 2);
+  const facCutoff = sortedFac.length
+    ? (sortedFac.length % 2 === 0 ? (sortedFac[facMid - 1] + sortedFac[facMid]) / 2 : sortedFac[facMid])
+    : 50;
+  const matchedFaviCompany = faviCompanies.find((c: any) => c.name === company?.companyName);
+  const enrichedFaviData = matchedFaviCompany ? {
+    ...matchedFaviCompany,
+    favi_cutoffs: marketIntelData?.favi_cutoffs,
+    favi_cutoff: marketIntelData?.favi_cutoffs?.favi,
+    fac_cutoff: facCutoff,
+  } : null;
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
@@ -170,9 +184,7 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading, marketInt
                </div>
            ) : (
                <>
-                  <CompanySummary data={company} faviData={
-                    marketIntelData?.favi_companies?.find((c: any) => c.name === company?.companyName) || null
-                  } observatoryData={observatoryData} />
+                  <CompanySummary data={company} faviData={enrichedFaviData} observatoryData={observatoryData} />
                </>
            )}
         </div>

@@ -116,6 +116,45 @@ const SEGMENT_CONFIG: Record<string, { color: string; bg: string; border: string
   "Safe Harbor": { color: "text-emerald-300", bg: "bg-emerald-500/15", border: "border-emerald-500/30", description: "Healthy and future-ready" },
 };
 
+const ADAPTATION_SEGMENT_CONFIG: Record<string, { color: string; hex: string; bg: string; border: string; description: string; condition: string }> = {
+  "Trapped": { color: "text-rose-300", hex: "#fb7185", bg: "bg-rose-500/15", border: "border-rose-500/30", description: "Low cushion, future pressure is high", condition: "Low adaptation capacity + high future vulnerability" },
+  "Wealthy Under Pressure": { color: "text-amber-300", hex: "#fbbf24", bg: "bg-amber-500/15", border: "border-amber-500/30", description: "Financial cushion exists, but future forces are building", condition: "High adaptation capacity + high future vulnerability" },
+  "Mature & Stable": { color: "text-blue-300", hex: "#60a5fa", bg: "bg-blue-500/15", border: "border-blue-500/30", description: "Financially steady with lower future pressure", condition: "Low adaptation pressure + lower future vulnerability" },
+  "Future-Ready": { color: "text-emerald-300", hex: "#34d399", bg: "bg-emerald-500/15", border: "border-emerald-500/30", description: "Strong cushion and lower future pressure", condition: "High adaptation capacity + lower future vulnerability" },
+};
+
+const getFacCutoff = (companies: any[] = []) => {
+  const values = companies.map((c: any) => Number(c?.fac || 0)).filter((x: number) => Number.isFinite(x) && x >= 0);
+  if (!values.length) return 50;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+};
+
+const getAdaptationSegment = (company: any, faviCutoff = 50, facCutoff = 50) => {
+  const fac = Number(company?.fac || 0);
+  const favi = Number(company?.favi_score || 0);
+  const highFuture = favi >= faviCutoff;
+  const highCapacity = fac >= facCutoff;
+  if (highFuture && !highCapacity) return "Trapped";
+  if (highFuture && highCapacity) return "Wealthy Under Pressure";
+  if (!highFuture && !highCapacity) return "Mature & Stable";
+  return "Future-Ready";
+};
+
+const getAdaptationSegmentCounts = (companies: any[] = [], faviCutoff = 50, facCutoff = 50) => {
+  const counts: Record<string, number> = {
+    "Trapped": 0,
+    "Wealthy Under Pressure": 0,
+    "Mature & Stable": 0,
+    "Future-Ready": 0,
+  };
+  companies.forEach((company: any) => {
+    counts[getAdaptationSegment(company, faviCutoff, facCutoff)] += 1;
+  });
+  return counts;
+};
+
 const FAVI_COLOR = (score: number) => {
   if (score >= 60) return '#f43f5e';
   if (score >= 40) return '#f59e0b';
@@ -200,10 +239,10 @@ const buildSvgAdaptabilityScatter = (
   const plotW = chartW - mL - mR, plotH = chartH - mT - mB;
   const xToPx = (x: number) => mL + (Math.max(0, Math.min(100, x)) / 100) * plotW;
   const yToPx = (y: number) => mT + plotH - (Math.max(0, Math.min(100, y)) / 100) * plotH;
-  const segColor = (seg: string) =>
-    seg === 'Critical' ? '#f43f5e' :
-    seg === 'Sleepwalking' ? '#f59e0b' :
-    seg === 'Wounded but Sheltered' ? '#3b82f6' : '#10b981';
+  const segColor = (company: any) => {
+    const seg = getAdaptationSegment(company, faviCutoff, facCutoff);
+    return ADAPTATION_SEGMENT_CONFIG[seg]?.hex || '#94a3b8';
+  };
 
   // Gridlines + tick labels at 0/25/50/75/100 on each axis.
   const ticks = [0, 25, 50, 75, 100];
@@ -240,9 +279,10 @@ const buildSvgAdaptabilityScatter = (
     .filter((c: any) => (c.favi_score || 0) > 0 || (c.fac || 0) > 0)
     .map((c: any) => {
       const cx = xToPx(c.fac || 0), cy = yToPx(c.favi_score || 0);
-      const fill = segColor(c.segment);
+      const adaptationSegment = getAdaptationSegment(c, faviCutoff, facCutoff);
+      const fill = segColor(c);
       const safeName = String(c.name || '').replace(/[<>&"']/g, ch => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' } as any)[ch] || ch);
-      return `<circle cx="${cx}" cy="${cy}" r="4.5" fill="${fill}" fill-opacity="0.78" stroke="${fill}" stroke-opacity="0.95"><title>${safeName} (${c.domain || ''}) — FAC=${c.fac || 0}, FAVI=${c.favi_score || 0}, ${c.segment || ''}</title></circle>`;
+      return `<circle cx="${cx}" cy="${cy}" r="4.5" fill="${fill}" fill-opacity="0.78" stroke="${fill}" stroke-opacity="0.95"><title>${safeName} (${c.domain || ''}) — FAC=${c.fac || 0}, FAVI=${c.favi_score || 0}, ${adaptationSegment}</title></circle>`;
     }).join('\n');
 
   // Axis titles.
@@ -780,19 +820,22 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
       content += `<div class="section"><h2>Opportunity Map</h2><p style="font-size:10px;color:#64748b;margin-bottom:12px">Ranked by high foresight pressure, low readiness, financial capacity, intent-reality gap, and repeated WHY/WHAT clusters.</p>${formula}${domainTable}${companyTable}</div>`;
     }
 
-    // FAVI Segment Summary
-    if (data.favi_segments) {
+    // Adaptation Capacity x Future Vulnerability Summary
+    if (data.favi_companies?.length) {
+      const faviCutoff = data.favi_cutoffs?.favi ?? 48;
+      const facCutoff = getFacCutoff(data.favi_companies);
+      const adaptationSegments = getAdaptationSegmentCounts(data.favi_companies, faviCutoff, facCutoff);
       const segs = [
-        { key: 'Critical', color: '#f43f5e', bg: 'rgba(244,63,94,0.1)', border: 'rgba(244,63,94,0.3)', desc: 'Struggling now AND blind to what\'s coming' },
-        { key: 'Sleepwalking', color: '#f59e0b', bg: 'rgba(245,158,11,0.1)', border: 'rgba(245,158,11,0.3)', desc: 'Looks fine today but forces are building' },
-        { key: 'Wounded but Sheltered', color: '#3b82f6', bg: 'rgba(59,130,246,0.1)', border: 'rgba(59,130,246,0.3)', desc: 'Problems are real but future isn\'t adding pressure' },
-        { key: 'Safe Harbor', color: '#10b981', bg: 'rgba(16,185,129,0.1)', border: 'rgba(16,185,129,0.3)', desc: 'Healthy and future-ready' },
+        { key: 'Trapped', color: '#f43f5e', bg: 'rgba(244,63,94,0.1)', border: 'rgba(244,63,94,0.3)', desc: ADAPTATION_SEGMENT_CONFIG["Trapped"].description },
+        { key: 'Wealthy Under Pressure', color: '#f59e0b', bg: 'rgba(245,158,11,0.1)', border: 'rgba(245,158,11,0.3)', desc: ADAPTATION_SEGMENT_CONFIG["Wealthy Under Pressure"].description },
+        { key: 'Mature & Stable', color: '#3b82f6', bg: 'rgba(59,130,246,0.1)', border: 'rgba(59,130,246,0.3)', desc: ADAPTATION_SEGMENT_CONFIG["Mature & Stable"].description },
+        { key: 'Future-Ready', color: '#10b981', bg: 'rgba(16,185,129,0.1)', border: 'rgba(16,185,129,0.3)', desc: ADAPTATION_SEGMENT_CONFIG["Future-Ready"].description },
       ];
       const cards = segs.map(s => {
-        const count = data.favi_segments[s.key] || 0;
+        const count = adaptationSegments[s.key] || 0;
         return `<div class="segment-card" style="background:${s.bg};border:1px solid ${s.border}"><h4 style="color:${s.color}">${s.key}</h4><div class="count" style="color:${s.color}">${count}</div><div class="desc">${s.desc}</div></div>`;
       }).join('');
-      content += `<div class="section"><h2>Foresight-Adjusted Vulnerability Index</h2><div class="segment-grid">${cards}</div></div>`;
+      content += `<div class="section"><h2>Adaptation Capacity x Future Vulnerability</h2><div class="segment-grid">${cards}</div></div>`;
     }
 
     // Observatory Layer 2 Sections 3 & 4 — Three Horizons + Contrarian Signal
@@ -932,21 +975,30 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
   }
 
   if (tabName === 'favi') {
-    // Strategic Foresight Vulnerability Matrix — mirrors the in-app 2x2 layout:
-    // Top-left = Critical, Top-right = Wounded but Sheltered,
-    // Bottom-left = Sleepwalking, Bottom-right = Safe Harbor.
-    if (data.favi_segments) {
+    // Strategic Foresight Vulnerability Matrix — mirrors the FAC x FAVI layout:
+    // Top-left = Trapped, Top-right = Wealthy Under Pressure,
+    // Bottom-left = Mature & Stable, Bottom-right = Future-Ready.
+    if (data.favi_companies?.length) {
+      const facValues = data.favi_companies.map((c: any) => c.fac || 0).filter((x: number) => x >= 0);
+      let facMedian = 50;
+      if (facValues.length) {
+        const sortedFac = [...facValues].sort((a: number, b: number) => a - b);
+        const mid = Math.floor(sortedFac.length / 2);
+        facMedian = sortedFac.length % 2 === 0 ? (sortedFac[mid - 1] + sortedFac[mid]) / 2 : sortedFac[mid];
+      }
+      const faviCutoff = data.favi_cutoffs?.favi ?? 48;
+      const adaptationSegments = getAdaptationSegmentCounts(data.favi_companies, faviCutoff, facMedian);
       // Each entry carries the same per-card text the modal renders so the
       // download reads identically to what the user sees on screen.
       const matrixCards = [
-        { key: 'Critical',              color: '#fb7185', bg: 'rgba(244,63,94,0.08)',  border: 'rgba(244,63,94,0.25)', desc: "Struggling now AND blind to what's coming",            condition: 'Scaled Current Vulnerability + High Foresight Vulnerability' },
-        { key: 'Wounded but Sheltered', color: '#60a5fa', bg: 'rgba(59,130,246,0.08)', border: 'rgba(59,130,246,0.25)', desc: "Problems are real but future isn't adding pressure",  condition: 'Scaled Current Vulnerability + Foresight Vulnerability' },
-        { key: 'Sleepwalking',          color: '#fbbf24', bg: 'rgba(245,158,11,0.08)', border: 'rgba(245,158,11,0.25)', desc: 'Looks fine today but forces are building',             condition: 'Scaled Current Vulnerability + High Foresight Vulnerability' },
-        { key: 'Safe Harbor',           color: '#34d399', bg: 'rgba(16,185,129,0.08)', border: 'rgba(16,185,129,0.25)', desc: 'Healthy and future-ready',                             condition: 'Scaled Current Vulnerability + Low Foresight Vulnerability' },
+        { key: 'Trapped',                 color: '#fb7185', bg: 'rgba(244,63,94,0.08)',  border: 'rgba(244,63,94,0.25)', desc: ADAPTATION_SEGMENT_CONFIG["Trapped"].description,                 condition: ADAPTATION_SEGMENT_CONFIG["Trapped"].condition },
+        { key: 'Wealthy Under Pressure',  color: '#fbbf24', bg: 'rgba(245,158,11,0.08)', border: 'rgba(245,158,11,0.25)', desc: ADAPTATION_SEGMENT_CONFIG["Wealthy Under Pressure"].description,  condition: ADAPTATION_SEGMENT_CONFIG["Wealthy Under Pressure"].condition },
+        { key: 'Mature & Stable',         color: '#60a5fa', bg: 'rgba(59,130,246,0.08)', border: 'rgba(59,130,246,0.25)', desc: ADAPTATION_SEGMENT_CONFIG["Mature & Stable"].description,         condition: ADAPTATION_SEGMENT_CONFIG["Mature & Stable"].condition },
+        { key: 'Future-Ready',            color: '#34d399', bg: 'rgba(16,185,129,0.08)', border: 'rgba(16,185,129,0.25)', desc: ADAPTATION_SEGMENT_CONFIG["Future-Ready"].description,            condition: ADAPTATION_SEGMENT_CONFIG["Future-Ready"].condition },
       ];
-      const totalCo = Object.values(data.favi_segments).reduce((a: number, b: any) => a + (b || 0), 0) as number;
+      const totalCo = Object.values(adaptationSegments).reduce((a: number, b: any) => a + (b || 0), 0) as number;
       const renderCard = (s: any) => {
-        const count = data.favi_segments[s.key] || 0;
+        const count = adaptationSegments[s.key] || 0;
         const pctBar = totalCo > 0 ? (count / totalCo) * 100 : 0;
         return `<div style="background:${s.bg};border:1px solid ${s.border};padding:16px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -972,16 +1024,16 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
         const sourceLabel = src.startsWith('percentile')
           ? src.replace('percentile:', '').replace(/p(\d+(\.\d+)?)/g, '$1th percentile').replace(/,/g, ', ').replace('favi=', 'FAVI ').replace('current=', 'Current ')
           : 'fixed fallback';
-        cutoffsHtml = `<p style="font-size:11px;color:#94a3b8;margin-top:12px">Cutoffs (${sourceLabel}): FAVI &ge; <span style="font-family:ui-monospace,monospace;color:#cbd5e1">${data.favi_cutoffs.favi}</span> &middot; Current Vulnerability &ge; <span style="font-family:ui-monospace,monospace;color:#cbd5e1">${data.favi_cutoffs.current_vulnerability}</span></p>`;
+        cutoffsHtml = `<p style="font-size:11px;color:#94a3b8;margin-top:12px">Cutoffs (${sourceLabel}): FAVI &ge; <span style="font-family:ui-monospace,monospace;color:#cbd5e1">${data.favi_cutoffs.favi}</span> &middot; FAC median &ge; <span style="font-family:ui-monospace,monospace;color:#cbd5e1">${facMedian.toFixed(1)}</span></p>`;
       }
 
       // Matrix axis labels — same pair of labels rendered below the matrix in the modal.
       const axisLabels = `<div style="display:flex;justify-content:space-between;margin-top:10px;font-size:8px;color:#64748b;text-transform:uppercase;letter-spacing:0.08em">
-        <div style="display:flex;align-items:center;gap:6px"><span style="display:inline-block;width:24px;height:1px;background:#475569"></span>Current Vulnerability (x-axis)<span style="display:inline-block;width:24px;height:1px;background:#475569"></span></div>
+        <div style="display:flex;align-items:center;gap:6px"><span style="display:inline-block;width:24px;height:1px;background:#475569"></span>Financial Adaptation Capacity (x-axis)<span style="display:inline-block;width:24px;height:1px;background:#475569"></span></div>
         <div style="display:flex;align-items:center;gap:6px"><span style="display:inline-block;width:24px;height:1px;background:#475569"></span>Foresight-Adjusted Vulnerability Index (y-axis)<span style="display:inline-block;width:24px;height:1px;background:#475569"></span></div>
       </div>`;
 
-      content += `<div class="section"><h2>Strategic Foresight Vulnerability Matrix (Current x Future)</h2>${matrixGrid}${cutoffsHtml}${axisLabels}</div>`;
+      content += `<div class="section"><h2>Adaptation Capacity x Future Vulnerability</h2>${matrixGrid}${cutoffsHtml}${axisLabels}</div>`;
     }
 
     // Adaptation Capacity x Future Vulnerability scatter — replaces the old Domain
@@ -1004,11 +1056,12 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
     if (data.favi_companies?.length) {
       const sorted = [...data.favi_companies].sort((a: any, b: any) => (b.favi_score || 0) - (a.favi_score || 0));
       const segBadge = (seg: string) => {
-        const cls = seg === 'Critical' ? 'badge-critical' : seg === 'Sleepwalking' ? 'badge-sleepwalking' : seg?.includes('Wounded') ? 'badge-wounded' : 'badge-safe';
-        return `<span class="badge ${cls}">${seg}</span>`;
+        const cfg = ADAPTATION_SEGMENT_CONFIG[seg] || ADAPTATION_SEGMENT_CONFIG["Future-Ready"];
+        return `<span class="badge" style="color:${cfg.hex};border-color:${cfg.hex};background:${cfg.hex}22">${seg}</span>`;
       };
       const rows = sorted.map((c: any, i: number) => {
         const fc = FAVI_COLOR(c.favi_score || 0);
+        const adaptationSegment = getAdaptationSegment(c, faviCutoff, facMedian);
         return `<tr>
           <td style="font-family:monospace;color:#64748b">${i + 1}</td>
           <td style="color:#22d3ee;font-weight:600">${c.name}</td>
@@ -1019,10 +1072,10 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
           <td style="font-family:monospace">${Math.round(c.fac || 0)}</td>
           <td style="font-family:monospace">${c.megatrend_exposure ? Math.round(c.megatrend_exposure) + '%' : '–'}</td>
           <td style="font-family:monospace">${Math.round(c.current_vulnerability || 0)}</td>
-          <td>${segBadge(c.segment)}</td>
+          <td>${segBadge(adaptationSegment)}</td>
         </tr>`;
       }).join('');
-      content += `<div class="section"><h2>Foresight-Adjusted Vulnerability Index — Company Rankings</h2><div style="overflow-x:auto"><table><thead><tr><th>#</th><th>Company</th><th>Domain</th><th>Vulnerability</th><th>Pressure</th><th>Gap</th><th>Adapt.</th><th>Megatrend</th><th>Vuln.</th><th>Segment</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+      content += `<div class="section"><h2>Foresight-Adjusted Vulnerability Index — Company Rankings</h2><div style="overflow-x:auto"><table><thead><tr><th>#</th><th>Company</th><th>Domain</th><th>Vulnerability</th><th>Pressure</th><th>Gap</th><th>Adapt.</th><th>Megatrend</th><th>Vuln.</th><th>FAC x FAVI Segment</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
     }
   }
 
@@ -1307,17 +1360,21 @@ const ExecutiveSummaryTab = ({ data, observatoryData = null }: { data: any; obse
         </div>
       )}
 
-      {/* FAVI Segment Summary (mini preview) */}
-      {data.favi_segments && (
+      {/* FAC x FAVI Segment Summary (mini preview) */}
+      {data.favi_companies?.length > 0 && (() => {
+        const faviCutoff = data.favi_cutoffs?.favi ?? 48;
+        const facCutoff = getFacCutoff(data.favi_companies);
+        const adaptationSegments = getAdaptationSegmentCounts(data.favi_companies, faviCutoff, facCutoff);
+        return (
         <div className="bg-black/20 border border-white/10 rounded-lg p-4">
           <h4 className="text-[10px] font-bold text-violet-300 uppercase tracking-wide mb-1 flex items-center gap-2">
-            <Eye size={12} /> Foresight-Adjusted Vulnerability Index
+            <Eye size={12} /> Adaptation Capacity x Future Vulnerability
           </h4>
-          <div className="text-[8px] text-slate-500 mb-3 leading-relaxed">Companies segmented by current vulnerability (today's gaps) vs. foresight pressure (future forces). This 2×2 matrix reveals who needs help now, who will need it soon, and where the highest-value opportunities lie.</div>
+          <div className="text-[8px] text-slate-500 mb-3 leading-relaxed">Companies segmented by financial capacity to absorb change vs. foresight-driven future pressure. This view shows who is trapped, who has cushion but rising pressure, and who is genuinely future-ready.</div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {(["Critical", "Sleepwalking", "Wounded but Sheltered", "Safe Harbor"] as const).map(seg => {
-              const cfg = SEGMENT_CONFIG[seg];
-              const count = data.favi_segments[seg] || 0;
+            {(["Trapped", "Wealthy Under Pressure", "Mature & Stable", "Future-Ready"] as const).map(seg => {
+              const cfg = ADAPTATION_SEGMENT_CONFIG[seg];
+              const count = adaptationSegments[seg] || 0;
               return (
                 <div key={seg} className={`${cfg.bg} border ${cfg.border} rounded-lg p-3 text-center`}>
                   <div className={`text-2xl font-bold ${cfg.color}`}>{count}</div>
@@ -1328,7 +1385,8 @@ const ExecutiveSummaryTab = ({ data, observatoryData = null }: { data: any; obse
             })}
           </div>
         </div>
-      )}
+      );
+      })()}
 
       {/* Observatory Layer 2 — Section 3: Three Horizons for Finland */}
       {(() => {
@@ -2267,7 +2325,6 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
   const [expandedCompany, setExpandedCompany] = useState<string | null>(null);
 
   const faviCompanies = data.favi_companies || [];
-  const segments = data.favi_segments || {};
   const domainPressure = data.favi_domain_pressure || [];
 
   const sorted = useMemo(() => {
@@ -2289,9 +2346,9 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
 
   const handleExportCSV = () => {
     if (sorted.length === 0) return;
-    const headers = ['Rank', 'Company', 'Domain', 'Foresight Vulnerability', 'Foresight Pressure', 'Readiness Gap', 'Adaptation Capacity', 'Current Vuln.', 'Segment', 'Formula'];
+    const headers = ['Rank', 'Company', 'Domain', 'Foresight Vulnerability', 'Foresight Pressure', 'Readiness Gap', 'Adaptation Capacity', 'Current Vuln.', 'FAC x FAVI Segment', 'Formula'];
     const rows = sorted.map((v: any, i: number) => [
-      i + 1, v.name, v.domain, v.favi_score, v.fps, v.readiness_gap, v.fac, v.current_vulnerability, v.segment, v.formula
+      i + 1, v.name, v.domain, v.favi_score, v.fps, v.readiness_gap, v.fac, v.current_vulnerability, getAdaptationSegment(v, faviCutoff, facCutoff), v.formula
     ]);
     const csv = [headers, ...rows].map(r => r.map((c: any) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
@@ -2309,62 +2366,65 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
     </th>
   );
 
-  const totalCompanies = Object.values(segments).reduce((s: number, v: any) => s + (v || 0), 0) || 1;
+  const faviCutoff = data.favi_cutoffs?.favi ?? 48;
+  const facCutoff = getFacCutoff(faviCompanies);
+  const adaptationSegments = getAdaptationSegmentCounts(faviCompanies, faviCutoff, facCutoff);
+  const totalCompanies = Object.values(adaptationSegments).reduce((s: number, v: any) => s + (v || 0), 0) || 1;
 
   return (
     <div className="space-y-6">
-      {/* 2x2 Strategic Segment Matrix */}
+      {/* 2x2 Adaptation Capacity x Future Vulnerability Matrix */}
       <div className="bg-black/20 border border-white/10 rounded-lg p-4">
         <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-4 flex items-center gap-2">
-          <Eye size={12} /> Strategic Foresight Vulnerability Matrix (Current x Future)
+          <Eye size={12} /> Adaptation Capacity x Future Vulnerability
         </h4>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-white/10 rounded-lg overflow-hidden">
-          {/* Top-left: Critical */}
-          <div className={`p-4 ${SEGMENT_CONFIG["Critical"].bg}`}>
+          {/* Top-left: Trapped */}
+          <div className={`p-4 ${ADAPTATION_SEGMENT_CONFIG["Trapped"].bg}`}>
             <div className="flex items-center justify-between mb-2">
-              <div className={`text-sm font-bold ${SEGMENT_CONFIG["Critical"].color}`}>Critical</div>
-              <div className="text-2xl font-bold text-rose-400">{segments["Critical"] || 0}</div>
+              <div className={`text-sm font-bold ${ADAPTATION_SEGMENT_CONFIG["Trapped"].color}`}>Trapped</div>
+              <div className="text-2xl font-bold text-rose-400">{adaptationSegments["Trapped"] || 0}</div>
             </div>
-            <div className="text-[9px] text-slate-400 mb-1">Scaled Current Vulnerability + High Foresight Vulnerability</div>
-            <div className="text-[9px] text-rose-300/70">{SEGMENT_CONFIG["Critical"].description}</div>
+            <div className="text-[9px] text-slate-400 mb-1">{ADAPTATION_SEGMENT_CONFIG["Trapped"].condition}</div>
+            <div className="text-[9px] text-rose-300/70">{ADAPTATION_SEGMENT_CONFIG["Trapped"].description}</div>
             <div className="mt-2 h-1 rounded-full bg-white/5 overflow-hidden">
-              <div className="h-full bg-rose-500 rounded-full" style={{ width: `${((segments["Critical"] || 0) / totalCompanies) * 100}%` }} />
+              <div className="h-full bg-rose-500 rounded-full" style={{ width: `${((adaptationSegments["Trapped"] || 0) / totalCompanies) * 100}%` }} />
             </div>
           </div>
-          {/* Top-right: Wounded but Sheltered */}
-          <div className={`p-4 ${SEGMENT_CONFIG["Wounded but Sheltered"].bg}`}>
+          {/* Top-right: Wealthy Under Pressure */}
+          <div className={`p-4 ${ADAPTATION_SEGMENT_CONFIG["Wealthy Under Pressure"].bg}`}>
             <div className="flex items-center justify-between mb-2">
-              <div className={`text-sm font-bold ${SEGMENT_CONFIG["Wounded but Sheltered"].color}`}>Wounded but Sheltered</div>
-              <div className="text-2xl font-bold text-blue-400">{segments["Wounded but Sheltered"] || 0}</div>
+              <div className={`text-sm font-bold ${ADAPTATION_SEGMENT_CONFIG["Wealthy Under Pressure"].color}`}>Wealthy Under Pressure</div>
+              <div className="text-2xl font-bold text-amber-400">{adaptationSegments["Wealthy Under Pressure"] || 0}</div>
             </div>
-            <div className="text-[9px] text-slate-400 mb-1">Scaled Current Vulnerability + Foresight Vulnerability</div>
-            <div className="text-[9px] text-blue-300/70">{SEGMENT_CONFIG["Wounded but Sheltered"].description}</div>
+            <div className="text-[9px] text-slate-400 mb-1">{ADAPTATION_SEGMENT_CONFIG["Wealthy Under Pressure"].condition}</div>
+            <div className="text-[9px] text-amber-300/70">{ADAPTATION_SEGMENT_CONFIG["Wealthy Under Pressure"].description}</div>
             <div className="mt-2 h-1 rounded-full bg-white/5 overflow-hidden">
-              <div className="h-full bg-blue-500 rounded-full" style={{ width: `${((segments["Wounded but Sheltered"] || 0) / totalCompanies) * 100}%` }} />
+              <div className="h-full bg-amber-500 rounded-full" style={{ width: `${((adaptationSegments["Wealthy Under Pressure"] || 0) / totalCompanies) * 100}%` }} />
             </div>
           </div>
-          {/* Bottom-left: Sleepwalking */}
-          <div className={`p-4 ${SEGMENT_CONFIG["Sleepwalking"].bg}`}>
+          {/* Bottom-left: Mature & Stable */}
+          <div className={`p-4 ${ADAPTATION_SEGMENT_CONFIG["Mature & Stable"].bg}`}>
             <div className="flex items-center justify-between mb-2">
-              <div className={`text-sm font-bold ${SEGMENT_CONFIG["Sleepwalking"].color}`}>Sleepwalking</div>
-              <div className="text-2xl font-bold text-amber-400">{segments["Sleepwalking"] || 0}</div>
+              <div className={`text-sm font-bold ${ADAPTATION_SEGMENT_CONFIG["Mature & Stable"].color}`}>Mature &amp; Stable</div>
+              <div className="text-2xl font-bold text-blue-400">{adaptationSegments["Mature & Stable"] || 0}</div>
             </div>
-            <div className="text-[9px] text-slate-400 mb-1">Scaled Current Vulnerability + High Foresight Vulnerability</div>
-            <div className="text-[9px] text-amber-300/70">{SEGMENT_CONFIG["Sleepwalking"].description}</div>
+            <div className="text-[9px] text-slate-400 mb-1">{ADAPTATION_SEGMENT_CONFIG["Mature & Stable"].condition}</div>
+            <div className="text-[9px] text-blue-300/70">{ADAPTATION_SEGMENT_CONFIG["Mature & Stable"].description}</div>
             <div className="mt-2 h-1 rounded-full bg-white/5 overflow-hidden">
-              <div className="h-full bg-amber-500 rounded-full" style={{ width: `${((segments["Sleepwalking"] || 0) / totalCompanies) * 100}%` }} />
+              <div className="h-full bg-blue-500 rounded-full" style={{ width: `${((adaptationSegments["Mature & Stable"] || 0) / totalCompanies) * 100}%` }} />
             </div>
           </div>
-          {/* Bottom-right: Safe Harbor */}
-          <div className={`p-4 ${SEGMENT_CONFIG["Safe Harbor"].bg}`}>
+          {/* Bottom-right: Future-Ready */}
+          <div className={`p-4 ${ADAPTATION_SEGMENT_CONFIG["Future-Ready"].bg}`}>
             <div className="flex items-center justify-between mb-2">
-              <div className={`text-sm font-bold ${SEGMENT_CONFIG["Safe Harbor"].color}`}>Safe Harbor</div>
-              <div className="text-2xl font-bold text-emerald-400">{segments["Safe Harbor"] || 0}</div>
+              <div className={`text-sm font-bold ${ADAPTATION_SEGMENT_CONFIG["Future-Ready"].color}`}>Future-Ready</div>
+              <div className="text-2xl font-bold text-emerald-400">{adaptationSegments["Future-Ready"] || 0}</div>
             </div>
-            <div className="text-[9px] text-slate-400 mb-1">Scaled Current Vulnerability + Low Foresight Vulnerability</div>
-            <div className="text-[9px] text-emerald-300/70">{SEGMENT_CONFIG["Safe Harbor"].description}</div>
+            <div className="text-[9px] text-slate-400 mb-1">{ADAPTATION_SEGMENT_CONFIG["Future-Ready"].condition}</div>
+            <div className="text-[9px] text-emerald-300/70">{ADAPTATION_SEGMENT_CONFIG["Future-Ready"].description}</div>
             <div className="mt-2 h-1 rounded-full bg-white/5 overflow-hidden">
-              <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${((segments["Safe Harbor"] || 0) / totalCompanies) * 100}%` }} />
+              <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${((adaptationSegments["Future-Ready"] || 0) / totalCompanies) * 100}%` }} />
             </div>
           </div>
         </div>
@@ -2377,14 +2437,14 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
               ? data.favi_cutoffs.source.replace('percentile:', '').replace(/p(\d+(\.\d+)?)/g, '$1th percentile').replace(/,/g, ', ').replace('favi=', 'FAVI ').replace('current=', 'Current ')
               : 'fixed fallback'}
             ): FAVI &ge; <span className="font-mono text-slate-300">{data.favi_cutoffs.favi}</span>
-            {' '}&middot; Current Vulnerability &ge; <span className="font-mono text-slate-300">{data.favi_cutoffs.current_vulnerability}</span>
+            {' '}&middot; FAC median &ge; <span className="font-mono text-slate-300">{facCutoff.toFixed(1)}</span>
           </div>
         )}
         {/* Matrix axis labels */}
         <div className="flex justify-between mt-3 text-[8px] text-slate-500 uppercase tracking-wider">
           <div className="flex items-center gap-1">
             <span className="inline-block w-8 h-px bg-slate-600" />
-            Current Vulnerability (x-axis)
+            Financial Adaptation Capacity (x-axis)
             <span className="inline-block w-8 h-px bg-slate-600" />
           </div>
           <div className="flex items-center gap-1">
@@ -2453,13 +2513,15 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
                     content={({ active, payload }: any) => {
                       if (!active || !payload?.length) return null;
                       const d = payload[0]?.payload;
+                      const adaptationSegment = getAdaptationSegment(d, faviCutoff, facMedian);
+                      const adaptationCfg = ADAPTATION_SEGMENT_CONFIG[adaptationSegment];
                       return (
                         <div className="bg-[#0f172a] border border-white/20 rounded-lg p-2 text-[10px]">
                           <div className="font-bold text-white">{d?.name}</div>
                           <div className="text-slate-400">{d?.domain}</div>
                           <div className="mt-1 text-cyan-300">Adaptability (FAC): {d?.fac}</div>
                           <div className="text-rose-300">Foresight Vulnerability: {d?.favi_score}</div>
-                          <div className={`mt-1 font-bold ${SEGMENT_CONFIG[d?.segment]?.color || 'text-slate-300'}`}>{d?.segment}</div>
+                          <div className={`mt-1 font-bold ${adaptationCfg?.color || 'text-slate-300'}`}>{adaptationSegment}</div>
                         </div>
                       );
                     }} />
@@ -2471,9 +2533,8 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
                   {ReferenceLine && <ReferenceLine y={Math.max(0, faviCutoff - 2)} stroke="#475569" strokeDasharray="6 4" label={{ value: `FAVI=${faviCutoff}`, fill: '#475569', fontSize: 8, position: 'right' }} />}
                   <Scatter data={sorted.filter((v: any) => v.favi_score > 0 || v.fac > 0)} name="Companies">
                     {sorted.filter((v: any) => v.favi_score > 0 || v.fac > 0).map((v: any, i: number) => {
-                      const segColor = v.segment === 'Critical' ? '#f43f5e' :
-                        v.segment === 'Sleepwalking' ? '#f59e0b' :
-                        v.segment === 'Wounded but Sheltered' ? '#3b82f6' : '#10b981';
+                      const segment = getAdaptationSegment(v, faviCutoff, facMedian);
+                      const segColor = ADAPTATION_SEGMENT_CONFIG[segment]?.hex || '#94a3b8';
                       return <Cell key={i} fill={segColor} fillOpacity={0.75} />;
                     })}
                   </Scatter>
@@ -2568,13 +2629,14 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
                   <SortHeader label="Adapt." dataKey="fac" />
                   <SortHeader label="Megatrend" dataKey="megatrend_exposure" />
                   <SortHeader label="Curr. Vuln" dataKey="current_vulnerability" />
-                  <th className="p-2 text-left">Segment</th>
+                  <th className="p-2 text-left">FAC x FAVI Segment</th>
                   <th className="p-2 text-left"></th>
                 </tr>
               </thead>
               <tbody>
                 {sorted.map((v: any, i: number) => {
-                  const segCfg = SEGMENT_CONFIG[v.segment] || SEGMENT_CONFIG["Safe Harbor"];
+                  const adaptationSegment = getAdaptationSegment(v, faviCutoff, facCutoff);
+                  const segCfg = ADAPTATION_SEGMENT_CONFIG[adaptationSegment] || ADAPTATION_SEGMENT_CONFIG["Future-Ready"];
                   const isExpanded = expandedCompany === v.name;
                   return (
                     <>
@@ -2603,7 +2665,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
                         </td>
                         <td className="p-2">
                           <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${segCfg.bg} ${segCfg.color} border ${segCfg.border}`}>
-                            {v.segment}
+                            {adaptationSegment}
                           </span>
                         </td>
                         <td className="p-2">

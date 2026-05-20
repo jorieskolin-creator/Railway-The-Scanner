@@ -60,11 +60,22 @@ const HighlightText = ({ text }) => {
   );
 };
 
-const FAVI_SEGMENT_CONFIG = {
-  "Critical": { color: "text-rose-400", bg: "bg-rose-500/15", border: "border-rose-500/30", icon: "text-rose-400", description: "High vulnerability + high future pressure" },
-  "Sleepwalking": { color: "text-amber-400", bg: "bg-amber-500/15", border: "border-amber-500/30", icon: "text-amber-400", description: "Looks fine today but forces are building" },
-  "Wounded but Sheltered": { color: "text-blue-400", bg: "bg-blue-500/15", border: "border-blue-500/30", icon: "text-blue-400", description: "Problems are real but future isn't adding pressure" },
-  "Safe Harbor": { color: "text-emerald-400", bg: "bg-emerald-500/15", border: "border-emerald-500/30", icon: "text-emerald-400", description: "Healthy and future-ready" },
+const ADAPTATION_SEGMENT_CONFIG = {
+  "Trapped": { color: "text-rose-400", bg: "bg-rose-500/15", border: "border-rose-500/30", icon: "text-rose-400", description: "Low cushion, future pressure is high" },
+  "Wealthy Under Pressure": { color: "text-amber-400", bg: "bg-amber-500/15", border: "border-amber-500/30", icon: "text-amber-400", description: "Financial cushion exists, but future forces are building" },
+  "Mature & Stable": { color: "text-blue-400", bg: "bg-blue-500/15", border: "border-blue-500/30", icon: "text-blue-400", description: "Financially steady with lower future pressure" },
+  "Future-Ready": { color: "text-emerald-400", bg: "bg-emerald-500/15", border: "border-emerald-500/30", icon: "text-emerald-400", description: "Strong cushion and lower future pressure" },
+};
+
+const getAdaptationSegment = (company, faviCutoff = 50, facCutoff = 50) => {
+  const fac = Number(company?.fac || 0);
+  const favi = Number(company?.favi_score || 0);
+  const highFuture = favi >= faviCutoff;
+  const highCapacity = fac >= facCutoff;
+  if (highFuture && !highCapacity) return "Trapped";
+  if (highFuture && highCapacity) return "Wealthy Under Pressure";
+  if (!highFuture && !highCapacity) return "Mature & Stable";
+  return "Future-Ready";
 };
 
 const CompanySummary = ({ data, faviData, observatoryData = null }) => {
@@ -707,7 +718,11 @@ const isForesightContext = (link) => {
             renderMetric('Carried Forward', carriedForward ? 'Yes' : 'No', 'Previous-scan evidence')
         ];
         if (faviData && faviData.segment) {
-            metrics.push(renderMetric('FAVI', formatScore(faviData.favi_score, '/100'), faviData.segment));
+            const faviCutoff = faviData.favi_cutoff ?? faviData.favi_cutoffs?.favi ?? 50;
+            const facCutoff = faviData.fac_cutoff ?? 50;
+            const adaptationSegment = getAdaptationSegment(faviData, faviCutoff, facCutoff);
+            metrics.push(renderMetric('Adaptation Segment', adaptationSegment, 'FAC x FAVI'));
+            metrics.push(renderMetric('FAVI', formatScore(faviData.favi_score, '/100'), 'Foresight vulnerability'));
             if (faviData.fps != null) {
                 metrics.push(renderMetric('Foresight Pressure', formatScore(faviData.fps, '/100'), 'FPS'));
             }
@@ -918,7 +933,10 @@ const isForesightContext = (link) => {
                 </div>
 
                 {faviData && faviData.segment && (() => {
-                    const seg = FAVI_SEGMENT_CONFIG[faviData.segment] || FAVI_SEGMENT_CONFIG["Sleepwalking"];
+                    const faviCutoff = faviData.favi_cutoff ?? faviData.favi_cutoffs?.favi ?? 50;
+                    const facCutoff = faviData.fac_cutoff ?? 50;
+                    const adaptationSegment = getAdaptationSegment(faviData, faviCutoff, facCutoff);
+                    const seg = ADAPTATION_SEGMENT_CONFIG[adaptationSegment] || ADAPTATION_SEGMENT_CONFIG["Mature & Stable"];
                     return (
                         <div className={`${seg.bg} p-4 rounded-xl border ${seg.border} flex items-center justify-between`}>
                             <div className="flex items-center gap-3">
@@ -926,8 +944,8 @@ const isForesightContext = (link) => {
                                     <Eye size={20} />
                                 </div>
                                 <div>
-                                    <h4 className="text-xs text-slate-400 font-bold uppercase tracking-wider">Foresight Vulnerability</h4>
-                                    <p className={`text-lg font-bold ${seg.color}`}>{faviData.segment}</p>
+                                    <h4 className="text-xs text-slate-400 font-bold uppercase tracking-wider">Adaptation x Future Vulnerability</h4>
+                                    <p className={`text-lg font-bold ${seg.color}`}>{adaptationSegment}</p>
                                 </div>
                             </div>
                             <div className="text-right">
