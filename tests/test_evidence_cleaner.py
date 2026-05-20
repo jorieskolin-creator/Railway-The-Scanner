@@ -138,3 +138,40 @@ def test_cleaner_processes_foresight_links_with_summary_claims(monkeypatch):
     assert link["source_type"] == "foresight"
     assert link["analysis_verified"] is True
     assert data["evidence_cleaning_stats"]["by_field"]["foresight_links"]["analysis_verified"] == 1
+
+
+def test_cleaner_blocks_same_name_wrong_entity_sources(monkeypatch):
+    monkeypatch.setattr(evidence_cleaner, "_verify_url", lambda url, timeout=6: (True, "url_verified"))
+
+    def fake_validate(links, **kwargs):
+        assert kwargs["company_name"] == "Rebase Consulting"
+        assert kwargs["company_domain"] == "https://rebase.fi"
+        for link in links:
+            link["claim_support_status"] = "supported"
+            link["content_verified"] = True
+            link["content_relevance_score"] = 90
+            link["source_quote"] = "Jason Myers founded Rebase Consultancy."
+            link["entity_match_status"] = "wrong"
+            link["entity_match_reason"] = "same_name_different_entity_in_page_text"
+            link["wrong_entity"] = True
+        return {"checked": len(links), "irrelevant": 0, "wrong_entity": len(links), "flagged_urls": [], "elapsed_ms": 1}
+
+    monkeypatch.setattr(evidence_cleaner, "validate_source_claims", fake_validate)
+    data = {
+        "companyName": "Rebase Consulting",
+        "companyUrl": "https://rebase.fi",
+        "evidence_links": [{
+            "url": "https://www.rebaseconsultancy.com/about.html",
+            "title": "About Rebase Consultancy",
+            "snippet": "Rebase Consultancy advisory work.",
+            "source_credibility": "medium",
+        }],
+    }
+
+    clean_company_evidence("Rebase Consulting", data)
+
+    link = data["evidence_links"][0]
+    assert link["wrong_entity"] is True
+    assert link["analysis_verified"] is False
+    assert link["promotion_status"] == "excluded"
+    assert data["evidence_cleaning_stats"]["wrong_entity"] == 1

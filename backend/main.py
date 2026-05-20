@@ -2989,7 +2989,12 @@ def _execute_scan_pipeline(
                     # STEP 2.7.2b: SOURCE-CLAIM RELEVANCE VALIDATION
                     try:
                         from source_claim_validator import validate_foresight_claims
-                        validate_foresight_claims(foresight_data, max_checks=6)
+                        validate_foresight_claims(
+                            foresight_data,
+                            max_checks=6,
+                            company_name=companyName,
+                            company_domain=company_domain,
+                        )
                     except Exception as scv_err:
                         print(f"   ⚠️ [Foresight Source-Claim] Validation skipped: {scv_err}")
 
@@ -3145,12 +3150,17 @@ Include the trend trajectory in the summary. Note persistent patterns or turning
                         parts.append("NOTE: The previous summary above may have used deprecated internal codes (TAC-xxx, DIM-xxx). Do NOT reproduce any such codes in the new summary — always write the full concept name.")
                     if prev_findings:
                         findings_lines = []
-                        for f in prev_findings[:10]:
+                        verified_prev_findings = [
+                            f for f in prev_findings
+                            if isinstance(f, dict) and f.get("found") and is_generation_eligible_source(f)
+                        ]
+                        for f in verified_prev_findings[:10]:
                             sentiment = f.get("sentiment", "neutral")
                             query = f.get("query", f.get("label", "Unknown"))
                             found = f.get("found", False)
                             findings_lines.append(f"  [{sentiment.upper()}] {query} (found={found})")
-                        parts.append(f"Previous Findings:\n" + "\n".join(findings_lines))
+                        if findings_lines:
+                            parts.append(f"Previous Findings:\n" + "\n".join(findings_lines))
                     prev_evidence = _analysis_evidence_links(prev_evidence)
                     if prev_evidence:
                         ev_lines = [f"  - {e.get('title', '?')}: {(e.get('source_quote') or e.get('snippet', ''))[:100]}" for e in prev_evidence[:8]]

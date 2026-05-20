@@ -10,6 +10,7 @@ deterministic so prompts and validators do not have to infer it from prose.
 from __future__ import annotations
 
 import re
+from urllib.parse import urlparse
 from typing import Dict, Iterable, List
 
 
@@ -46,6 +47,53 @@ def _contains_phrase(text: str, phrase: str) -> bool:
     if not phrase:
         return False
     return phrase in text
+
+
+def normalize_source_host(value: str | None) -> str:
+    """Return a lowercase host without www, or empty string for non-host values."""
+    raw = (value or "").strip().lower()
+    if not raw:
+        return ""
+    if " " in raw and "." not in raw:
+        return ""
+    try:
+        parsed = urlparse(raw if "://" in raw else f"//{raw}")
+        host = parsed.netloc or parsed.path
+    except Exception:
+        host = raw
+    host = host.split("@")[-1].split(":")[0].strip(".")
+    if host.startswith("www."):
+        host = host[4:]
+    if "." not in host:
+        return ""
+    return host
+
+
+def _host_matches(source_host: str, target_host: str) -> bool:
+    if not source_host or not target_host:
+        return False
+    return (
+        source_host == target_host
+        or source_host.endswith(f".{target_host}")
+        or target_host.endswith(f".{source_host}")
+    )
+
+
+def _host_slug(host: str) -> str:
+    if not host:
+        return ""
+    root = host.split(".")[0]
+    return re.sub(r"[^a-z0-9]+", "", root.lower())
+
+
+def _significant_tokens(value: str | None) -> list[str]:
+    legal = {
+        "oy", "oyj", "ab", "abp", "as", "asa", "ltd", "limited", "plc", "inc",
+        "corp", "corporation", "group", "company", "consulting", "consultancy",
+        "services", "service", "solutions", "technologies", "technology",
+    }
+    tokens = re.findall(r"[a-z0-9åäö]{3,}", _norm(value))
+    return [t for t in tokens if t not in legal]
 
 
 def _names(items: Iterable[dict | str]) -> List[str]:
@@ -139,6 +187,135 @@ def get_company_identity(company_name: str | None) -> dict:
         "parent_or_owner": [],
         "transition_events": [],
         "entity_scope_policy": "",
+    }
+
+
+def assess_entity_match(
+    link: dict,
+    company_name: str | None = "",
+    company_domain: str | None = "",
+    *,
+    page_text: str | None = "",
+) -> dict:
+    """Classify whether a source describes the scan target.
+
+    URL liveness and claim support are not enough: a source can support a
+    statement about a different same-name company.  This helper is deliberately
+    deterministic so scan-time, Admin cleaning, and rendering all use the same
+    entity gate.
+    """
+    if not isinstance(link, dict):
+        return {
+            "entity_match_status": "unknown",
+            "entity_match_reason": "not_a_dict",
+            "canonical_source_host": "",
+        }
+
+    source_url = str(link.get("url") or link.get("source_url") or "")
+    source_host = normalize_source_host(source_url)
+    target_host = normalize_source_host(company_domain)
+
+    if link.get("wrong_entity") is True or link.get("entity_match") == "wrong":
+        return {
+            "entity_match_status": "wrong",
+            "entity_match_reason": "pre_marked_wrong_entity",
+            "canonical_source_host": source_host,
+            "entity_scope": ENTITY_SCOPE_WRONG_ENTITY,
+        }
+
+    if source_host and target_host and _host_matches(source_host, target_host):
+        return {
+            "entity_match_status": "exact",
+            "entity_match_reason": "source_host_matches_target_domain",
+            "canonical_source_host": source_host,
+            "entity_scope": ENTITY_SCOPE_CANONICAL_GROUP,
+        }
+
+    identity = get_company_identity(company_name)
+    text = _norm(" ".join([
+        str(link.get("title") or link.get("source_title") or ""),
+        str(link.get("snippet") or link.get("evidence_snippet") or ""),
+        str(link.get("source_says") or link.get("source_quote") or ""),
+        str(link.get("description") or link.get("summary") or ""),
+        str(source_url),
+        str(page_text or ""),
+    ]))
+
+    canonical_names = []
+    for name in [identity.get("canonical_name") or company_name or "", *(identity.get("aliases") or [])]:
+        if name and name not in canonical_names:
+            canonical_names.append(str(name))
+
+    for name in canonical_names:
+        if _contains_phrase(text, name):
+            return {
+                "entity_match_status": "exact",
+                "entity_match_reason": f"mentions_target:{name}",
+                "canonical_source_host": source_host,
+                "entity_scope": ENTITY_SCOPE_CANONICAL_GROUP,
+            }
+
+    scoped_groups = [
+        (identity.get("legal_entities", []), ENTITY_SCOPE_LOCAL_LEGAL_ENTITY, "mentions_legal_entity"),
+        (identity.get("subsidiaries", []), ENTITY_SCOPE_SUBSIDIARY, "mentions_subsidiary"),
+        (identity.get("former_names", []), ENTITY_SCOPE_FORMER_NAME, "mentions_former_name"),
+        (identity.get("parent_or_owner", []), ENTITY_SCOPE_PARENT_OWNER, "mentions_parent_owner"),
+    ]
+    for items, scope, reason in scoped_groups:
+        for name in _names(items):
+            if _contains_phrase(text, name):
+                return {
+                    "entity_match_status": "scoped",
+                    "entity_match_reason": f"{reason}:{name}",
+                    "canonical_source_host": source_host,
+                    "entity_scope": scope,
+                }
+
+    stripped = _strip_legal_suffix(company_name or "")
+    if stripped and stripped != (company_name or "") and _contains_phrase(text, stripped):
+        return {
+            "entity_match_status": "exact",
+            "entity_match_reason": f"mentions_target_without_legal_suffix:{stripped}",
+            "canonical_source_host": source_host,
+            "entity_scope": ENTITY_SCOPE_CANONICAL_GROUP,
+        }
+
+    tokens = _significant_tokens(company_name)
+    primary = tokens[0] if tokens else ""
+    target_full_seen = any(_contains_phrase(text, name) for name in canonical_names if name)
+    source_slug = _host_slug(source_host)
+    target_slug = _host_slug(target_host)
+
+    if primary and primary in text and not target_full_seen:
+        alternate_entity_markers = (
+            f"{primary} inc", f"{primary} llc", f"{primary} ltd", f"{primary} limited",
+            f"{primary} corporation", f"{primary} consultancy", f"{primary} nyc",
+        )
+        if any(marker in text for marker in alternate_entity_markers):
+            return {
+                "entity_match_status": "wrong",
+                "entity_match_reason": "same_name_different_entity_in_page_text",
+                "canonical_source_host": source_host,
+                "entity_scope": ENTITY_SCOPE_WRONG_ENTITY,
+            }
+        if source_host and target_host and not _host_matches(source_host, target_host):
+            if primary in source_slug and source_slug != target_slug:
+                return {
+                    "entity_match_status": "wrong",
+                    "entity_match_reason": "same_name_different_source_domain",
+                    "canonical_source_host": source_host,
+                    "entity_scope": ENTITY_SCOPE_WRONG_ENTITY,
+                }
+        return {
+            "entity_match_status": "weak",
+            "entity_match_reason": "partial_name_match_only",
+            "canonical_source_host": source_host,
+        }
+
+    return {
+        "entity_match_status": "unknown",
+        "entity_match_reason": "target_entity_not_detected",
+        "canonical_source_host": source_host,
     }
 
 

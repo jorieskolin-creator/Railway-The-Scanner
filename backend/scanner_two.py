@@ -2930,7 +2930,13 @@ RETURN STRICT JSON:
         if _elapsed < (time_budget - 40) and url_verified >= 1:
             try:
                 from source_claim_validator import validate_source_claims
-                scv_result = validate_source_claims(raw_findings, max_checks=12, max_workers=4)
+                scv_result = validate_source_claims(
+                    raw_findings,
+                    max_checks=12,
+                    max_workers=4,
+                    company_name=company_name,
+                    company_domain=company_domain,
+                )
                 raw_findings = annotate_evidence_links(raw_findings, company_domain, company_name)
                 if scv_result["irrelevant"] > 0:
                     # Penalise confidence for irrelevant sources

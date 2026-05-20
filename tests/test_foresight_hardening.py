@@ -361,8 +361,9 @@ class TestCompanySpecificEvidencePreservation:
         item = classified["evidence_links"][0]
         assert item.get("excluded_from_company_fact_generation") is not True, \
             "Annual report must not be excluded from fact generation"
-        assert item.get("generation_eligible") is not False, \
-            "Annual report must remain generation-eligible"
+        assert item.get("generation_eligible") is False, \
+            "Annual report still needs analysis verification before generated prose"
+        assert item.get("promotion_status") == "display_only"
 
     def test_classify_marks_analyst_report_context_only(self):
         record = {
@@ -728,10 +729,11 @@ class TestCompanySpecificRecordProtection:
             "not_evidence_of_deployment=True wrongly stamped on company case_study"
         )
 
-    def test_case_study_generation_eligible(self):
+    def test_case_study_not_generation_eligible_without_analysis_verification(self):
         record = self._make_case_study()
         result = sanitize_foresight_record(record, report_date=REPORT_DATE, company_name=COMPANY)
-        assert result.get("generation_eligible") is True
+        assert result.get("generation_eligible") is False
+        assert result.get("promotion_status") == "display_only"
 
     def test_is_company_specific_record_detects_case_study(self):
         record = self._make_case_study()

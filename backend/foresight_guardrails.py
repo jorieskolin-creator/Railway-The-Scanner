@@ -465,7 +465,12 @@ def sanitize_foresight_record(
         # Company-specific evidence: preserve/restore company-fact metadata.
         # Text sanitization still runs below, but foresight-only flags must NOT be stamped.
         rec["company_specific"] = True
-        rec["generation_eligible"] = True
+        if rec.get("analysis_verified") is True and rec.get("promotion_status") == "generation_eligible":
+            rec["generation_eligible"] = True
+        else:
+            rec.setdefault("analysis_verified", False)
+            rec["generation_eligible"] = False
+            rec.setdefault("promotion_status", "display_only")
         # Correct claim_type if a previous (buggy) sanitizer pass wrongly set foresight_context.
         if rec.get("claim_type") in (FORESIGHT_CLAIM_TYPE, REGULATORY_CLAIM_TYPE, None, ""):
             rec["claim_type"] = rec.get("original_claim_type") or "company_fact"
@@ -666,7 +671,12 @@ def is_company_specific_evidence_record(record: dict) -> bool:
 
 def _mark_company_fact(record: dict) -> dict:
     record["company_specific"] = True
-    record.setdefault("generation_eligible", True)
+    if record.get("analysis_verified") is True and record.get("promotion_status") == "generation_eligible":
+        record["generation_eligible"] = True
+    else:
+        record.setdefault("analysis_verified", False)
+        record["generation_eligible"] = False
+        record.setdefault("promotion_status", "display_only")
     record["claim_type"] = "company_fact"
     record["scope"] = "company-specific"
     for key in ["excluded_from_company_fact_generation", "not_evidence_of_deployment", "forbidden_as_current_company_fact"]:

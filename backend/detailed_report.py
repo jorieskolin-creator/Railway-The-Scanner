@@ -109,7 +109,7 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
     # Add validated foresight sources (enriches the evidence pool with forward-looking sources)
     foresight_links = []
     for l in full_data.get("foresight_links", []):
-        if not (l.get("verified") is True and l.get("validated") is True):
+        if not is_generation_eligible_source(l):
             continue
         title = (l.get("title", "Foresight Source") or "Foresight Source")[:80]
         snippet = (l.get("snippet") or "")[:300]
@@ -191,7 +191,25 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
         result["reality_score"] = full_data.get("reality_score", 0)
 
     # Foresight data (if available) — pass rich context for evidence-grounded narrative
-    if foresight_data and foresight_data.get("dimension_forces"):
+    def _force_generation_eligible(force: dict) -> bool:
+        if not isinstance(force, dict):
+            return False
+        # Newer foresight force records carry the same analysis-verification
+        # fields as evidence links.  If those fields exist, enforce them.
+        if any(k in force for k in ("analysis_verified", "promotion_status", "generation_eligible", "claim_support_status")):
+            return is_generation_eligible_source({
+                **force,
+                "url": force.get("url") or force.get("source_url"),
+                "verified": force.get("verified", force.get("url_verified")),
+            })
+        return False
+
+    eligible_forces = [
+        f for f in (foresight_data.get("dimension_forces") or [])
+        if _force_generation_eligible(f)
+    ] if foresight_data else []
+
+    if eligible_forces:
         result["foresight"] = {
             "forces": [
                 {
@@ -208,7 +226,7 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
                     "trend_momentum": f.get("trend_momentum", ""),
                     "action_timing": f.get("action_timing", ""),
                 }
-                for f in foresight_data["dimension_forces"][:4]
+                for f in eligible_forces[:4]
             ],
             "cross_impact_chain": foresight_data.get("cross_impact_chain", ""),
             "scenarios": foresight_data.get("scenarios", {}),

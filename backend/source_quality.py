@@ -20,9 +20,14 @@ from typing import Dict, Iterable, List, Tuple
 
 from entity_identity import (
     ENTITY_SCOPE_CANONICAL_GROUP,
+    ENTITY_SCOPE_FORMER_NAME,
     ENTITY_SCOPE_LOCAL_LEGAL_ENTITY,
+    ENTITY_SCOPE_PARENT_OWNER,
+    ENTITY_SCOPE_SUBSIDIARY,
     ENTITY_SCOPE_WRONG_ENTITY,
+    ENTITY_SCOPE_UNKNOWN,
     apply_entity_scope,
+    assess_entity_match,
 )
 
 
@@ -806,15 +811,50 @@ def normalize_evidence_link(link: dict, company_domain: str = "", company_name: 
     )
     link["allowed_claim_types"] = sorted(SOURCE_TYPE_ALLOWED_USES.get(source_type, {"third_party_observation"}))
 
-    # Claim tier and entity scope — computed last so all upstream fields are set
+    # Claim tier, entity scope, and target-entity match — computed last so all
+    # upstream fields are set.  Entity match is stricter than URL liveness:
+    # same-name but wrong-company pages must not feed generated prose.
     if not link.get("claim_tier"):
         link["claim_tier"] = compute_claim_tier(link)
     apply_entity_scope(link, company_name)
 
+    entity_match = assess_entity_match(link, company_name, company_domain)
+    link["entity_match_status"] = entity_match.get("entity_match_status", "unknown")
+    link["entity_match_reason"] = entity_match.get("entity_match_reason", "")
+    link["canonical_source_host"] = entity_match.get("canonical_source_host", "")
+    inferred_scope = entity_match.get("entity_scope")
+    if entity_match.get("entity_match_status") == "wrong":
+        link["entity_scope"] = ENTITY_SCOPE_WRONG_ENTITY
+    elif inferred_scope and (not link.get("entity_scope") or link.get("entity_scope") == ENTITY_SCOPE_UNKNOWN):
+        link["entity_scope"] = inferred_scope
+    if link["entity_match_status"] == "wrong":
+        link["wrong_entity"] = True
+        link["entity_match"] = "wrong"
+    elif link["entity_match_status"] in {"exact", "scoped"}:
+        link["entity_match"] = link["entity_match_status"]
+        if link["entity_match_status"] == "exact" and link.get("entity_scope") == ENTITY_SCOPE_UNKNOWN:
+            link["entity_scope"] = ENTITY_SCOPE_CANONICAL_GROUP
+    if link.get("entity_scope") in {
+        ENTITY_SCOPE_LOCAL_LEGAL_ENTITY,
+        ENTITY_SCOPE_SUBSIDIARY,
+        ENTITY_SCOPE_PARENT_OWNER,
+        ENTITY_SCOPE_FORMER_NAME,
+    } and not link.get("scope_warning"):
+        link["scope_warning"] = (
+            f"Evidence scope is {link.get('entity_scope')}; do not use as unqualified "
+            f"{company_name or 'company'} group-wide evidence."
+        )
+
     return apply_language_metadata(link)
 
 
-def is_admissible_source(link: dict, company_domain: str = "", *, allow_unverified_without_url: bool = True) -> Tuple[bool, str]:
+def is_admissible_source(
+    link: dict,
+    company_domain: str = "",
+    company_name: str = "",
+    *,
+    allow_unverified_without_url: bool = True,
+) -> Tuple[bool, str]:
     """Hard gate for sources allowed to feed factual generation.
 
     This intentionally treats `wrong_entity=True` as fatal unless a human/manual
@@ -824,13 +864,15 @@ def is_admissible_source(link: dict, company_domain: str = "", *, allow_unverifi
     """
     if not isinstance(link, dict):
         return False, "not_a_dict"
-    link = normalize_evidence_link(link, company_domain)
+    link = normalize_evidence_link(link, company_domain, company_name)
     if link.get("manual_override") is True:
         return True, "manual_override"
+    entity_status = str(link.get("entity_match_status") or "").lower()
     if (
         link.get("wrong_entity") is True
         or link.get("entity_match") == "wrong"
         or link.get("entity_scope") == ENTITY_SCOPE_WRONG_ENTITY
+        or entity_status == "wrong"
     ):
         return False, "wrong_entity_true"
     url = (link.get("url") or link.get("source_url") or "").strip()
@@ -865,7 +907,7 @@ def apply_analysis_verification(link: dict, company_domain: str = "", company_na
 
     normalize_evidence_link(link, company_domain, company_name)
 
-    ok, admissibility_reason = is_admissible_source(link, company_domain)
+    ok, admissibility_reason = is_admissible_source(link, company_domain, company_name)
     url = (link.get("url") or link.get("source_url") or "").strip()
     support_status = (link.get("claim_support_status") or "").strip().lower()
     if not support_status:
@@ -898,6 +940,18 @@ def apply_analysis_verification(link: dict, company_domain: str = "", company_na
     promotion = PROMOTION_DISPLAY_ONLY
     analysis_verified = False
 
+    entity_status = str(link.get("entity_match_status") or "").lower()
+    entity_scope = str(link.get("entity_scope") or ENTITY_SCOPE_UNKNOWN).lower()
+    context_only = is_context_only_source(link) and link.get("company_specific") is not True
+    scoped_entity_scopes = {
+        ENTITY_SCOPE_LOCAL_LEGAL_ENTITY,
+        ENTITY_SCOPE_SUBSIDIARY,
+        ENTITY_SCOPE_PARENT_OWNER,
+        ENTITY_SCOPE_FORMER_NAME,
+    }
+    if entity_status == "scoped" and entity_scope == ENTITY_SCOPE_UNKNOWN:
+        entity_scope = ENTITY_SCOPE_LOCAL_LEGAL_ENTITY
+
     if link.get("manual_override") is True:
         reason = "manual_override"
         promotion = PROMOTION_GENERATION_ELIGIBLE
@@ -913,6 +967,17 @@ def apply_analysis_verification(link: dict, company_domain: str = "", company_na
     elif link.get("entity_scope") == ENTITY_SCOPE_WRONG_ENTITY or link.get("wrong_entity") is True:
         reason = "wrong_entity"
         promotion = PROMOTION_EXCLUDED
+    elif entity_status == "wrong":
+        reason = "wrong_entity"
+        promotion = PROMOTION_EXCLUDED
+    elif entity_status == "weak" and not context_only:
+        reason = "weak_entity_match"
+    elif entity_status in {"", "unknown"} and not context_only:
+        reason = "unknown_entity"
+    elif entity_scope == ENTITY_SCOPE_UNKNOWN and not context_only:
+        reason = "unknown_entity_scope"
+    elif entity_status not in {"exact", "scoped", "", "unknown"} and not context_only:
+        reason = "entity_not_generation_safe"
     elif link.get("source_credibility") == "low":
         reason = "weak_source"
     elif link.get("content_verified") is not True:
@@ -941,10 +1006,27 @@ def apply_analysis_verification(link: dict, company_domain: str = "", company_na
 
 def is_generation_eligible_source(link: dict) -> bool:
     """True when a source may feed generated prose."""
+    if not isinstance(link, dict):
+        return False
+    entity_status = str(link.get("entity_match_status") or "").lower()
+    entity_scope = str(link.get("entity_scope") or ENTITY_SCOPE_UNKNOWN).lower()
+    context_only = is_context_only_source(link) and link.get("company_specific") is not True
+    entity_ok = (
+        entity_status in {"exact", "scoped"}
+        and entity_scope not in {"", ENTITY_SCOPE_UNKNOWN, ENTITY_SCOPE_WRONG_ENTITY}
+    ) or (
+        context_only
+        and entity_status not in {"wrong"}
+        and link.get("wrong_entity") is not True
+    )
     return (
-        isinstance(link, dict)
-        and link.get("analysis_verified") is True
+        link.get("analysis_verified") is True
         and link.get("promotion_status") == PROMOTION_GENERATION_ELIGIBLE
+        and link.get("generation_eligible") is True
+        and (link.get("verified") is True or link.get("url_verified") is True)
+        and link.get("content_verified") is True
+        and str(link.get("claim_support_status") or "").lower() == ANALYSIS_SUPPORT_SUPPORTED
+        and entity_ok
     )
 
 
@@ -955,7 +1037,7 @@ def annotate_evidence_links(links: list, company_domain: str = "", company_name:
         if not isinstance(link, dict):
             continue
         normalize_evidence_link(link, company_domain, company_name)
-        ok, reason = is_admissible_source(link, company_domain)
+        ok, reason = is_admissible_source(link, company_domain, company_name)
         link["admissible"] = ok
         link["exclusion_reason"] = "" if ok else reason
         apply_analysis_verification(link, company_domain, company_name)
@@ -1144,6 +1226,7 @@ def manage_evidence_sources(
     if len(pool) >= MAX_EVIDENCE_SOURCES:
         all_high_verified = all(
             link.get("source_credibility") == "high" and link.get("verified") is True
+            and is_generation_eligible_source(link)
             for link in pool[:MAX_EVIDENCE_SOURCES]
         )
         if all_high_verified:
@@ -1336,7 +1419,7 @@ def classify_generation_context(link: dict) -> dict:
         return link
     if is_company_specific_evidence(link):
         link["company_specific"] = True
-        link.setdefault("generation_eligible", True)
+        link.setdefault("generation_eligible", False)
         link.setdefault("claim_type", "company_fact")
         link.setdefault("scope", "company-specific")
         # Remove context-only flags if an earlier pass over-stamped the record.
@@ -1350,7 +1433,7 @@ def classify_generation_context(link: dict) -> dict:
             link.pop("origin", None)
         return link
     if is_context_only_source(link):
-        link.setdefault("generation_eligible", True)
+        link.setdefault("generation_eligible", False)
         link.setdefault("claim_type", "foresight_context")
         link.setdefault("company_specific", False)
         link.setdefault("requires_company_specific_corroboration", True)
@@ -1447,7 +1530,7 @@ def classify_generation_context(link: dict) -> dict:
 
     if is_company_specific_evidence(link):
         link["company_specific"] = True
-        link.setdefault("generation_eligible", True)
+        link.setdefault("generation_eligible", False)
         link.setdefault("claim_type", "company_fact")
         link.setdefault("scope", "company-specific")
         # Remove context-only flags if an earlier pass over-stamped the record.
@@ -1462,7 +1545,7 @@ def classify_generation_context(link: dict) -> dict:
         return link
 
     if is_context_only_source(link):
-        link.setdefault("generation_eligible", True)
+        link.setdefault("generation_eligible", False)
         link.setdefault("claim_type", "foresight_context")
         link.setdefault("company_specific", False)
         link.setdefault("requires_company_specific_corroboration", True)
@@ -1585,7 +1668,7 @@ def classify_generation_context(link: dict) -> dict:
 
     if is_company_specific_evidence(link):
         link["company_specific"] = True
-        link.setdefault("generation_eligible", True)
+        link.setdefault("generation_eligible", False)
         link.setdefault("claim_type", "company_fact")
         link.setdefault("scope", "company-specific")
         for key in [
@@ -1599,7 +1682,7 @@ def classify_generation_context(link: dict) -> dict:
         return link
 
     if is_context_only_source(link):
-        link.setdefault("generation_eligible", True)
+        link.setdefault("generation_eligible", False)
         link.setdefault("claim_type", "foresight_context")
         link.setdefault("company_specific", False)
         link.setdefault("requires_company_specific_corroboration", True)
@@ -1720,7 +1803,12 @@ def classify_generation_context(link: dict) -> dict:
 
     if is_company_specific_evidence(link):
         link["company_specific"] = True
-        link.setdefault("generation_eligible", True)
+        # Being company-specific is not the same as being safe for generation.
+        # `apply_analysis_verification()` is the sole authority that can promote
+        # a source after URL, content, claim-support, and entity checks pass.
+        link.setdefault("analysis_verified", False)
+        link.setdefault("generation_eligible", False)
+        link.setdefault("promotion_status", PROMOTION_DISPLAY_ONLY)
         link["claim_type"] = "company_fact"
         link["scope"] = "company-specific"
         for key in [
@@ -1734,7 +1822,9 @@ def classify_generation_context(link: dict) -> dict:
         return link
 
     if is_context_only_source(link):
-        link.setdefault("generation_eligible", True)
+        link.setdefault("analysis_verified", False)
+        link.setdefault("generation_eligible", False)
+        link.setdefault("promotion_status", PROMOTION_DISPLAY_ONLY)
         link["claim_type"] = link.get("claim_type") or "foresight_context"
         link["company_specific"] = False
         link.setdefault("requires_company_specific_corroboration", True)

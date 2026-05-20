@@ -22,6 +22,10 @@ interface EvidenceLink {
   scope_warning?: string;
   canonical_company?: string;
   entity_match?: string;
+  entity_match_status?: 'exact' | 'scoped' | 'weak' | 'wrong' | 'unknown' | string;
+  entity_match_reason?: string;
+  canonical_source_host?: string;
+  wrong_entity?: boolean;
   origin?: string;
   company_specific?: boolean;
   source_says?: string;
@@ -55,6 +59,10 @@ interface ForesightLink {
   origin: string; // always "foresight"
   entity_scope?: string;
   scope_warning?: string;
+  entity_match_status?: 'exact' | 'scoped' | 'weak' | 'wrong' | 'unknown' | string;
+  entity_match_reason?: string;
+  canonical_source_host?: string;
+  wrong_entity?: boolean;
   url_verified?: boolean;
   content_verified?: boolean;
   claim_support_status?: 'supported' | 'partial' | 'unsupported' | 'unchecked' | 'unavailable' | string;

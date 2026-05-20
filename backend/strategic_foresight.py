@@ -28,7 +28,7 @@ from google import genai
 from google.genai import types as genai_types
 from gemini_backoff import call_with_503_backoff
 from gemini_client import get_gemini_client
-from source_quality import HIGH_CREDIBILITY_DOMAINS, LOW_CREDIBILITY_DOMAINS, assess_source_credibility, classify_generation_context
+from source_quality import HIGH_CREDIBILITY_DOMAINS, LOW_CREDIBILITY_DOMAINS, assess_source_credibility, classify_generation_context, is_generation_eligible_source
 from foresight_guardrails import build_foresight_guardrails, annotate_foresight_signal, annotate_foresight_link, validate_foresight_text, sanitize_foresight_text, sanitize_future_insight, sanitize_foresight_record, sanitize_foresight_collection, sanitize_report_foresight_fields
 
 
@@ -1660,6 +1660,21 @@ def generate_foresight(
     return None
 
 
+def _force_generation_eligible_for_context(force: dict) -> bool:
+    """True when a foresight force can feed generated prose as trend context."""
+    if not isinstance(force, dict):
+        return False
+    return is_generation_eligible_source({
+        **force,
+        "url": force.get("url") or force.get("source_url"),
+        "verified": force.get("verified", force.get("url_verified")),
+        "source_type": force.get("source_type", "foresight"),
+        "origin": force.get("origin", "foresight"),
+        "claim_type": force.get("claim_type", "foresight_context"),
+        "company_specific": force.get("company_specific", False),
+    })
+
+
 def format_foresight_for_synthesis(foresight_data: dict, company_name: str, domain: str) -> str:
     """
     Format foresight data into a context block for the synthesis prompt.
@@ -1667,9 +1682,12 @@ def format_foresight_for_synthesis(foresight_data: dict, company_name: str, doma
     """
     if not foresight_data or not foresight_data.get("dimension_forces"):
         return ""
+    forces = [f for f in foresight_data["dimension_forces"] if _force_generation_eligible_for_context(f)]
+    if not forces:
+        return ""
 
     forces_text = ""
-    for f in foresight_data["dimension_forces"]:
+    for f in forces:
         lc_tag = ""
         if f.get("lifecycle_stage"):
             lc_tag = f" [{f['lifecycle_stage']}/{f.get('trend_momentum', '?')}]"
@@ -1732,7 +1750,9 @@ def generate_foresight_summary(
         return "", ""
 
     # Format forces for the prompt — include rich context for better narrative
-    forces = foresight_data["dimension_forces"]
+    forces = [f for f in foresight_data["dimension_forces"] if _force_generation_eligible_for_context(f)]
+    if not forces:
+        return "", ""
 
     # Build attribution line — shows which Foresight themes from the DB were used
     _themes_used: set[str] = set()

@@ -11,7 +11,6 @@ the claim it's attached to.
 """
 
 import concurrent.futures
-from datetime import datetime
 import json
 import os
 import re
@@ -23,6 +22,7 @@ from google.genai import types as genai_types
 
 from gemini_client import get_gemini_client
 from gemini_backoff import call_with_503_backoff
+from entity_identity import assess_entity_match
 
 
 # ── Page content extraction ─────────────────────────────────────────────────
@@ -203,7 +203,17 @@ def _score_to_status(score: int) -> tuple[bool, str]:
     return False, "unsupported"
 
 
-def _check_relevance(url: str, claim: str, client=None, timeout: int = 10, model_chain=None) -> dict:
+def _check_relevance(
+    url: str,
+    claim: str,
+    client=None,
+    timeout: int = 10,
+    model_chain=None,
+    *,
+    company_name: str = "",
+    company_domain: str = "",
+    source_item: dict | None = None,
+) -> dict:
     """
     Fetch the source page and ask Gemini Flash whether it supports the claim.
 
@@ -216,6 +226,13 @@ def _check_relevance(url: str, claim: str, client=None, timeout: int = 10, model
       - reason: short explanation
     """
     page_text = _fetch_page_text(url)
+    entity_match = assess_entity_match(
+        source_item or {"url": url, "snippet": claim},
+        company_name,
+        company_domain,
+        page_text=page_text,
+    )
+
     if not page_text or len(page_text) < 50:
         # URL liveness is not enough for analysis.  Keep the source visible, but
         # mark it as unavailable so generation paths do not promote it.
@@ -226,6 +243,18 @@ def _check_relevance(url: str, claim: str, client=None, timeout: int = 10, model
             "content_verified": False,
             "source_quote": "",
             "reason": "Page content not extractable",
+            **entity_match,
+        }
+
+    if entity_match.get("entity_match_status") == "wrong":
+        return {
+            "relevance_score": 0,
+            "relevant": False,
+            "claim_support_status": "unsupported",
+            "content_verified": True,
+            "source_quote": _best_source_quote(page_text, claim),
+            "reason": f"Wrong entity: {entity_match.get('entity_match_reason', 'target entity not matched')}",
+            **entity_match,
         }
 
     prompt = _build_relevance_prompt(claim, page_text)
@@ -263,6 +292,7 @@ def _check_relevance(url: str, claim: str, client=None, timeout: int = 10, model
                 "source_quote": _best_source_quote(page_text, claim),
                 "reason": reason,
                 "verification_model": model,
+                **entity_match,
             }
         except Exception as e:
             errors.append(f"{model}: {str(e)[:80]}")
@@ -275,6 +305,7 @@ def _check_relevance(url: str, claim: str, client=None, timeout: int = 10, model
         "source_quote": _best_source_quote(page_text, claim),
         "reason": "Verifier failed: " + " | ".join(errors)[:240],
         "verification_model": "none",
+        **entity_match,
     }
 
 
@@ -285,6 +316,8 @@ def validate_source_claims(
     max_checks: int = 8,
     max_workers: int = 4,
     model_chain=None,
+    company_name: str = "",
+    company_domain: str = "",
 ) -> dict:
     """
     Validate that verified evidence sources actually support their claimed snippets.
@@ -345,7 +378,17 @@ def validate_source_claims(
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_item = {}
         for url, snippet, item in to_check:
-            future = executor.submit(_check_relevance, url, snippet, client, 10, model_chain)
+            future = executor.submit(
+                _check_relevance,
+                url,
+                snippet,
+                client,
+                10,
+                model_chain,
+                company_name=company_name,
+                company_domain=company_domain,
+                source_item=item,
+            )
             future_to_item[future] = (url, snippet, item)
 
         for future in concurrent.futures.as_completed(future_to_item):
@@ -364,11 +407,17 @@ def validate_source_claims(
             item["content_verified"] = result.get("content_verified") is True
             item["content_verification_reason"] = result.get("reason", "")
             item["verification_model"] = result.get("verification_model", item.get("verification_model"))
+            for key in ("entity_match_status", "entity_match_reason", "canonical_source_host"):
+                if result.get(key):
+                    item[key] = result[key]
+            if result.get("entity_scope") and not item.get("entity_scope"):
+                item["entity_scope"] = result["entity_scope"]
+            if result.get("entity_match_status") == "wrong":
+                item["wrong_entity"] = True
+                item["entity_match"] = "wrong"
             if result.get("source_quote"):
                 item["source_quote"] = result["source_quote"]
-            if result["relevant"]:
-                item["analysis_verified_at"] = datetime.utcnow().isoformat()
-            elif result.get("claim_support_status") == "unsupported":
+            if result.get("claim_support_status") == "unsupported":
                 item["claim_irrelevant"] = True
 
     elapsed_ms = int((time.time() - start) * 1000)
@@ -376,6 +425,10 @@ def validate_source_claims(
     checked = len(results)
     flagged = [url for url, r in results.items()
                if r["relevance_score"] >= 0 and r.get("claim_support_status") == "unsupported"]
+    wrong_entity = [
+        url for url, r in results.items()
+        if r.get("entity_match_status") == "wrong"
+    ]
 
     if flagged:
         print(f"   ⚠️ [Source-Claim] {len(flagged)}/{checked} verified sources don't support their claims ({elapsed_ms}ms)")
@@ -389,12 +442,19 @@ def validate_source_claims(
     return {
         "checked": checked,
         "irrelevant": len(flagged),
+        "wrong_entity": len(wrong_entity),
         "flagged_urls": flagged,
         "elapsed_ms": elapsed_ms,
     }
 
 
-def validate_foresight_claims(foresight_data: dict, max_checks: int = 6) -> dict:
+def validate_foresight_claims(
+    foresight_data: dict,
+    max_checks: int = 6,
+    *,
+    company_name: str = "",
+    company_domain: str = "",
+) -> dict:
     """
     Validate source-claim relevance for foresight dimension forces.
 
@@ -434,7 +494,21 @@ def validate_foresight_claims(foresight_data: dict, max_checks: int = 6) -> dict
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         future_to_item = {}
         for url, claim, force in to_check:
-            future = executor.submit(_check_relevance, url, claim, client)
+            future = executor.submit(
+                _check_relevance,
+                url,
+                claim,
+                client,
+                company_name=company_name,
+                company_domain=company_domain,
+                source_item={
+                    "url": url,
+                    "title": force.get("trend") or force.get("force_name") or "",
+                    "snippet": claim,
+                    "source_type": force.get("source_type", "foresight"),
+                    "origin": "foresight",
+                },
+            )
             future_to_item[future] = (url, claim, force)
 
         for future in concurrent.futures.as_completed(future_to_item):
@@ -449,6 +523,39 @@ def validate_foresight_claims(foresight_data: dict, max_checks: int = 6) -> dict
                 force["claim_relevance"] = result["relevance_score"]
                 if not result["relevant"]:
                     force["claim_irrelevant"] = True
+            force["claim_support_status"] = result.get("claim_support_status", force.get("claim_support_status", "unchecked"))
+            force["content_verified"] = result.get("content_verified") is True
+            force["content_relevance_score"] = result.get("relevance_score", force.get("content_relevance_score"))
+            force["content_verification_reason"] = result.get("reason", "")
+            if result.get("source_quote"):
+                force["source_quote"] = result["source_quote"]
+            for key in ("entity_match_status", "entity_match_reason", "canonical_source_host"):
+                if result.get(key):
+                    force[key] = result[key]
+            if result.get("entity_match_status") == "wrong":
+                force["wrong_entity"] = True
+            try:
+                from source_quality import apply_analysis_verification
+                promoted = apply_analysis_verification(
+                    {
+                        **force,
+                        "url": force.get("url") or force.get("source_url"),
+                        "verified": force.get("verified", force.get("url_verified")),
+                        "source_type": force.get("source_type", "foresight"),
+                        "origin": force.get("origin", "foresight"),
+                        "claim_type": force.get("claim_type", "foresight_context"),
+                    },
+                    company_domain,
+                    company_name,
+                )
+                for key in (
+                    "analysis_verified", "promotion_status", "generation_eligible",
+                    "verification_reason", "analysis_verified_at", "entity_scope",
+                ):
+                    if key in promoted:
+                        force[key] = promoted[key]
+            except Exception:
+                pass
 
     elapsed_ms = int((time.time() - start) * 1000)
     checked = len(results)

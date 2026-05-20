@@ -348,12 +348,11 @@ def _count_changed_strings(before: Any, after: Any, path: str = "") -> list[dict
 
 
 def classify_source_registry_items(record: dict) -> dict:
-    """Keep source/checklist memory but add generation eligibility metadata.
+    """Keep source/checklist memory without implying source verification.
 
-    Company-specific evidence (annual reports, press releases, case studies,
-    entity_match == exact) is preserved as generation-eligible even when the
-    item also mentions foresight topics.  Only genuinely generic context
-    (trend reports, analyst reports, regulations) is marked context-only.
+    Company-specific evidence is preserved as company-specific, but it is not
+    generation-eligible unless Clean Evidence has already promoted it through
+    analysis verification.
     """
     out = copy.deepcopy(record or {})
     for field in [
@@ -380,15 +379,23 @@ def classify_source_registry_items(record: dict) -> dict:
                 # Generic foresight/regulatory/trend context — not company fact evidence.
                 _mark_sanitized_foresight_context(item)
             else:
-                # Company-specific evidence: preserve generation eligibility.
+                # Company-specific evidence: preserve scope, but do not imply
+                # analysis verification from sanitation alone.
                 # If previously mis-classified as context-only, clear that flag.
-                item.setdefault("generation_eligible", True)
+                if _has_analysis_verified_promotion(item):
+                    item["generation_eligible"] = True
+                else:
+                    item.setdefault("analysis_verified", False)
+                    item["generation_eligible"] = False
+                    item.setdefault("promotion_status", "display_only")
+                    item.setdefault("claim_support_status", "unchecked")
+                    item.setdefault("verification_reason", "company_specific_not_analysis_verified")
                 if _is_company_specific_evidence(item) and item.get("excluded_from_company_fact_generation"):
                     item.pop("excluded_from_company_fact_generation", None)
-                    item["source_registry_status"] = "checked_generation_eligible"
+                    item["source_registry_status"] = "checked_company_specific"
                     item.setdefault("exclusion_reason", "company_specific_evidence_preserved")
                 else:
-                    item.setdefault("source_registry_status", "checked_generation_eligible")
+                    item.setdefault("source_registry_status", "checked_company_specific")
     return out
 
 

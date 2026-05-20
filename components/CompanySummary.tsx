@@ -125,7 +125,17 @@ const isForesightContext = (link) => {
   };
   const getSourceSays = (link) => link?.source_says || link?.snippet || link?.description || '';
   const getPossibleRelevance = (link) => link?.possible_relevance || '';
-  const isAnalysisVerified = (link) => link?.analysis_verified === true || link?.promotion_status === 'generation_eligible';
+  const isAnalysisVerified = (link) => (
+    link?.analysis_verified === true
+    && link?.promotion_status === 'generation_eligible'
+    && link?.generation_eligible === true
+  );
+  const isWrongEntity = (link) => link?.wrong_entity === true || String(link?.entity_match_status || '').toLowerCase() === 'wrong';
+  const isUnknownOrWeakEntity = (link) => {
+    const status = String(link?.entity_match_status || '').toLowerCase();
+    const scope = String(link?.entity_scope || '').toLowerCase();
+    return !isAnalysisVerified(link) && !isWrongEntity(link) && (status === 'weak' || status === 'unknown' || (!!link?.url && !status) || scope === 'unknown');
+  };
   const getPromotionLabel = (link) => {
     if (isAnalysisVerified(link)) return 'Verified for analysis';
     if (link?.promotion_status === 'excluded') return 'Excluded';
@@ -216,11 +226,24 @@ const isForesightContext = (link) => {
     acc[cred] = (acc[cred] || 0) + 1;
     return acc;
   }, { high: 0, medium: 0, low: 0, unknown: 0 });
-  const verifiedSourceCount = evidenceTrustPool.filter((link) => link.verified === true).length;
+  const verifiedSourceCount = evidenceTrustPool.filter((link) => link.verified === true || link.url_verified === true).length;
   const analysisVerifiedCount = evidenceTrustPool.filter((link) => isAnalysisVerified(link)).length;
+  const generationEligibleCount = evidenceTrustPool.filter((link) => isAnalysisVerified(link)).length;
+  const displayOnlyCount = evidenceTrustPool.filter((link) => link.promotion_status === 'display_only' || link.claim_support_status === 'unsupported').length;
+  const wrongEntityCount = evidenceTrustPool.filter((link) => isWrongEntity(link)).length;
+  const unknownEntityCount = evidenceTrustPool.filter((link) => isUnknownOrWeakEntity(link)).length;
   const weakOrUnverifiedSourceCount = evidenceTrustPool.filter((link) => {
     const cred = normalizeCredibility(link.source_credibility);
-    return link.verified === false || cred === 'low' || (!!link.url && cred === 'unknown');
+    const support = String(link.claim_support_status || '').toLowerCase();
+    const promotion = String(link.promotion_status || '').toLowerCase();
+    return link.verified === false
+      || link.url_verified === false
+      || cred === 'low'
+      || (!!link.url && cred === 'unknown')
+      || ['unsupported', 'unchecked', 'unavailable', 'partial'].includes(support)
+      || ['display_only', 'excluded'].includes(promotion)
+      || isWrongEntity(link)
+      || isUnknownOrWeakEntity(link);
   }).length;
   const confidenceRaw = data.confidence_score
     ?? data.scan_quality?.confidence_score
@@ -263,6 +286,9 @@ const isForesightContext = (link) => {
     rawHallucinationFlags.map(normalizeSummaryLengthNote).filter(Boolean)
   );
   const hallucinationFlags = rawHallucinationFlags.filter((flag) => getSummaryLengthWordCount(flag) == null);
+  const wrongEntityWarnings = evidenceTrustPool
+    .filter((link) => isWrongEntity(link))
+    .map((link) => `${link.title || link.source || link.url || 'Evidence source'}: ${String(link.entity_match_reason || link.verification_reason || 'wrong entity').replace(/_/g, ' ')}`);
   const previousScanCarriedForward = (data.evidence_links || []).some((link) => String(link?.source_type || '').toLowerCase() === 'historical')
     || (data.reality_checklist || []).some((item) => String(item?.source_type || '').toLowerCase() === 'historical');
 
@@ -469,14 +495,42 @@ const isForesightContext = (link) => {
             return acc;
         }, { high: 0, medium: 0, low: 0, unknown: 0 });
         var verifiedSources = evidencePool.filter(function(link) {
-            return link && (link.verified === true || link.validated === true || link.url_verified === true);
+            return link && (link.verified === true || link.url_verified === true);
         }).length;
+        var isAnalysisSafe = function(link) {
+            return link && link.analysis_verified === true && link.promotion_status === 'generation_eligible' && link.generation_eligible === true;
+        };
+        var isWrongEntity = function(link) {
+            return link && (link.wrong_entity === true || String(link.entity_match_status || '').toLowerCase() === 'wrong');
+        };
+        var isUnknownEntity = function(link) {
+            var status = String(link && link.entity_match_status || '').toLowerCase();
+            var scope = String(link && link.entity_scope || '').toLowerCase();
+            return link && !isAnalysisSafe(link) && !isWrongEntity(link) && (status === 'weak' || status === 'unknown' || (!!(link.url || link.source_url) && !status) || scope === 'unknown');
+        };
         var analysisVerifiedSources = evidencePool.filter(function(link) {
-            return link && (link.analysis_verified === true || link.promotion_status === 'generation_eligible');
+            return isAnalysisSafe(link);
         }).length;
+        var generationEligibleSources = analysisVerifiedSources;
+        var displayOnlySources = evidencePool.filter(function(link) {
+            return link && (link.promotion_status === 'display_only' || link.claim_support_status === 'unsupported');
+        }).length;
+        var wrongEntitySources = evidencePool.filter(isWrongEntity).length;
+        var unknownEntitySources = evidencePool.filter(isUnknownEntity).length;
         var weakSources = evidencePool.filter(function(link) {
             var cred = normalizeCred(link && (link.source_credibility || link.credibility));
-            return link && (link.verified === false || link.url_verified === false || cred === 'low' || ((link.url || link.source_url) && cred === 'unknown'));
+            var support = String(link && link.claim_support_status || '').toLowerCase();
+            var promotion = String(link && link.promotion_status || '').toLowerCase();
+            return link && (
+                link.verified === false
+                || link.url_verified === false
+                || cred === 'low'
+                || ((link.url || link.source_url) && cred === 'unknown')
+                || ['unsupported', 'unchecked', 'unavailable', 'partial'].indexOf(support) >= 0
+                || ['display_only', 'excluded'].indexOf(promotion) >= 0
+                || isWrongEntity(link)
+                || isUnknownEntity(link)
+            );
         }).length;
         var carriedForward = evidencePool.some(function(link) {
             return String(link && link.source_type || '').toLowerCase() === 'historical';
@@ -513,6 +567,9 @@ const isForesightContext = (link) => {
         hallucinationWarnings = hallucinationWarnings.filter(function(note) {
             return getSummaryLengthWordCount(note) === null;
         });
+        var wrongEntityWarnings = evidencePool.filter(isWrongEntity).map(function(link) {
+            return (link.title || link.source || link.url || 'Evidence source') + ': ' + String(link.entity_match_reason || link.verification_reason || 'wrong entity').replace(/_/g, ' ');
+        });
         var gap = Number(exportData.intent_score || 0) - Number(exportData.reality_score || 0);
         var metrics = [
             renderMetric('Ambition Score', formatScore(exportData.intent_score, '/100'), 'Narrative clarity'),
@@ -522,6 +579,10 @@ const isForesightContext = (link) => {
             renderMetric('Financial Health', formatScore(exportData.financial_index, '/100'), 'Adaptation capacity'),
             renderMetric('Verified URLs', verifiedSources, weakSources + ' weak/unverified'),
             renderMetric('Analysis Verified', analysisVerifiedSources, 'content supports claim'),
+            renderMetric('Generation Eligible', generationEligibleSources, 'safe for prose'),
+            renderMetric('Display / Unsupported', displayOnlySources, 'audit only'),
+            renderMetric('Wrong Entity', wrongEntitySources, 'blocked sources'),
+            renderMetric('Unknown Entity', unknownEntitySources, 'not promoted'),
             renderMetric('Evidence Links', evidencePool.length, 'Company and foresight sources'),
             renderMetric('Washing Flag', exportData.washing_flag ? 'Yes' : 'No', exportData.washing_type || 'Narrative vs evidence'),
             renderMetric('Carried Forward', carriedForward ? 'Yes' : 'No', 'Previous-scan evidence')
@@ -559,7 +620,12 @@ const isForesightContext = (link) => {
                 : '');
         var trustHTML = '<div class="metrics">'
             + renderMetric('URL Verified', verifiedSources, 'reachable source links')
-            + renderMetric('Weak / Unverified', weakSources, 'low, unknown, or failed sources')
+            + renderMetric('Analysis Verified', analysisVerifiedSources, 'content supports claim')
+            + renderMetric('Generation Eligible', generationEligibleSources, 'safe for prose')
+            + renderMetric('Display / Unsupported', displayOnlySources, 'audit only')
+            + renderMetric('Wrong Entity', wrongEntitySources, 'blocked sources')
+            + renderMetric('Unknown Entity', unknownEntitySources, 'not promoted')
+            + renderMetric('Weak / Unverified', weakSources, 'unsupported, weak, unknown, or failed')
             + renderMetric('Confidence', formatScore(exportData.confidence_score ?? exportData.scan_quality?.confidence_score ?? exportData.evidence_sufficiency?.score, '%'), 'evidence confidence')
             + renderMetric('Credibility Mix', 'H' + credibility.high + ' M' + credibility.medium + ' L' + credibility.low + ' U' + credibility.unknown, 'high/medium/low/unknown')
             + renderMetric('Contradictions', contradictionWarnings.length || 'None', 'stored warnings')
@@ -567,6 +633,7 @@ const isForesightContext = (link) => {
             + renderMetric('Quality Notes', qualityNotes.length || 'None', 'format/style checks')
             + '</div>'
             + (contradictionWarnings.length ? '<div class="callout amber"><h3>Contradiction Warnings</h3>' + renderList(contradictionWarnings) + '</div>' : '<p class="muted">No contradiction warnings detected.</p>')
+            + (wrongEntityWarnings.length ? '<div class="callout"><h3>Wrong-Entity Warnings</h3>' + renderList(wrongEntityWarnings) + '</div>' : '<p class="muted">No wrong-entity evidence detected.</p>')
             + (hallucinationWarnings.length ? '<div class="callout"><h3>Hallucination / Unsupported-Claim Flags</h3>' + renderList(hallucinationWarnings) + '</div>' : '<p class="muted">No hallucination or unsupported-claim flags detected.</p>')
             + (qualityNotes.length ? '<div class="callout cyan"><h3>Quality Notes</h3>' + renderList(qualityNotes) + '</div>' : '<p class="muted">No format or style notes detected.</p>');
         var sourceTable = evidencePool.length ? '<div class="table-wrap"><table><thead><tr><th>Source</th><th>Type</th><th>Cred</th><th>URL</th><th>Analysis</th><th>Support</th><th>Snippet / Quote</th></tr></thead><tbody>'
@@ -574,7 +641,7 @@ const isForesightContext = (link) => {
                 var url = link.url || link.source_url || '';
                 var sourceName = link.title || link.source || link.source_title || link.fp_theme || 'Evidence source';
                 var quote = link.source_quote || link.source_says || link.snippet || link.description || link.summary || '';
-                var analysis = link.analysis_verified === true || link.promotion_status === 'generation_eligible' ? 'Verified for analysis' : (link.promotion_status || link.verification_reason || 'Display only');
+                var analysis = isAnalysisSafe(link) ? 'Verified for analysis' : (link.promotion_status || link.verification_reason || link.entity_match_reason || 'Display only');
                 return '<tr><td>' + escapeHTML(sourceName) + '</td><td>' + escapeHTML(link.source_type || link.origin || '') + '</td><td>' + escapeHTML(link.source_credibility || link.credibility || 'unknown') + '</td><td>' + (url ? '<a href="' + escapeHTML(url) + '">' + escapeHTML(url) + '</a>' : '') + '</td><td>' + escapeHTML(analysis) + '</td><td>' + escapeHTML(link.claim_support_status || '') + '</td><td>' + escapeHTML(String(quote).slice(0, 420)) + '</td></tr>';
             }).join('') + '</tbody></table></div>' : '<p class="muted">No evidence links were available in this export.</p>';
         function checklistMarkerState(item) {
@@ -737,15 +804,43 @@ const isForesightContext = (link) => {
         const evidencePool = []
             .concat(Array.isArray(exportData.evidence_links) ? exportData.evidence_links : [])
             .concat(Array.isArray(exportData.foresight_links) ? exportData.foresight_links : []);
+        const isAnalysisSafe = function(link) {
+            return link && link.analysis_verified === true && link.promotion_status === 'generation_eligible' && link.generation_eligible === true;
+        };
+        const isWrongEntity = function(link) {
+            return link && (link.wrong_entity === true || String(link.entity_match_status || '').toLowerCase() === 'wrong');
+        };
+        const isUnknownEntity = function(link) {
+            const status = String(link?.entity_match_status || '').toLowerCase();
+            const scope = String(link?.entity_scope || '').toLowerCase();
+            return link && !isAnalysisSafe(link) && !isWrongEntity(link) && (status === 'weak' || status === 'unknown' || (!!(link.url || link.source_url) && !status) || scope === 'unknown');
+        };
         const verifiedSources = evidencePool.filter(function(link) {
-            return link && (link.verified === true || link.validated === true || link.url_verified === true);
+            return link && (link.verified === true || link.url_verified === true);
         }).length;
         const analysisVerifiedSources = evidencePool.filter(function(link) {
-            return link && (link.analysis_verified === true || link.promotion_status === 'generation_eligible');
+            return isAnalysisSafe(link);
         }).length;
+        const generationEligibleSources = analysisVerifiedSources;
+        const displayOnlySources = evidencePool.filter(function(link) {
+            return link && (link.promotion_status === 'display_only' || link.claim_support_status === 'unsupported');
+        }).length;
+        const wrongEntitySources = evidencePool.filter(isWrongEntity).length;
+        const unknownEntitySources = evidencePool.filter(isUnknownEntity).length;
         const weakSources = evidencePool.filter(function(link) {
             const cred = String(link?.source_credibility || link?.credibility || '').toLowerCase();
-            return link && (link.verified === false || cred === 'low' || (!cred && (link.url || link.link)));
+            const support = String(link?.claim_support_status || '').toLowerCase();
+            const promotion = String(link?.promotion_status || '').toLowerCase();
+            return link && (
+                link.verified === false
+                || link.url_verified === false
+                || cred === 'low'
+                || (!cred && (link.url || link.link))
+                || ['unsupported', 'unchecked', 'unavailable', 'partial'].includes(support)
+                || ['display_only', 'excluded'].includes(promotion)
+                || isWrongEntity(link)
+                || isUnknownEntity(link)
+            );
         }).length;
         const carriedForward = evidencePool.some(function(link) {
             return String(link?.source_type || '').toLowerCase() === 'historical';
@@ -768,6 +863,10 @@ const isForesightContext = (link) => {
             renderMetric('Financial Health', formatScore(exportData.financial_index, '/100'), 'Adaptation capacity'),
             renderMetric('URL Verified Sources', verifiedSources, weakSources + ' weak/unverified'),
             renderMetric('Analysis Verified', analysisVerifiedSources, 'content supports claim'),
+            renderMetric('Generation Eligible', generationEligibleSources, 'safe for prose'),
+            renderMetric('Display / Unsupported', displayOnlySources, 'audit only'),
+            renderMetric('Wrong Entity', wrongEntitySources, 'blocked sources'),
+            renderMetric('Unknown Entity', unknownEntitySources, 'not promoted'),
             renderMetric('Evidence Links', evidencePool.length, 'Company and foresight sources'),
             renderMetric('Unsupported Flags', unsupportedClaimCount, 'Hallucination and false-claim checks'),
             renderMetric('Washing Flag', exportData.washing_flag ? 'Yes' : 'No', exportData.washing_type || 'Narrative vs evidence'),
@@ -1146,7 +1245,7 @@ const isForesightContext = (link) => {
                 </div>
             </div>
 
-            <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
                 <div className="bg-black/20 p-4 rounded-xl border border-emerald-500/20">
                     <div className="flex items-center justify-between mb-2">
                         <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">URL Verified</span>
@@ -1163,6 +1262,14 @@ const isForesightContext = (link) => {
                     <p className="text-3xl font-black text-teal-300">{analysisVerifiedCount}</p>
                     <p className="text-[10px] text-slate-500 mt-1">content supports claim</p>
                 </div>
+                <div className="bg-black/20 p-4 rounded-xl border border-cyan-500/20">
+                    <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Generation Eligible</span>
+                        <CheckCircle size={14} className="text-cyan-300" />
+                    </div>
+                    <p className="text-3xl font-black text-cyan-300">{generationEligibleCount}</p>
+                    <p className="text-[10px] text-slate-500 mt-1">safe for prose</p>
+                </div>
                 <div className="bg-black/20 p-4 rounded-xl border border-amber-500/20">
                     <div className="flex items-center justify-between mb-2">
                         <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Weak / Unverified</span>
@@ -1170,6 +1277,30 @@ const isForesightContext = (link) => {
                     </div>
                     <p className="text-3xl font-black text-amber-300">{weakOrUnverifiedSourceCount}</p>
                     <p className="text-[10px] text-slate-500 mt-1">needs caution</p>
+                </div>
+                <div className="bg-black/20 p-4 rounded-xl border border-slate-500/20">
+                    <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Display / Unsupported</span>
+                        <Info size={14} className="text-slate-400" />
+                    </div>
+                    <p className="text-3xl font-black text-slate-300">{displayOnlyCount}</p>
+                    <p className="text-[10px] text-slate-500 mt-1">audit only</p>
+                </div>
+                <div className="bg-black/20 p-4 rounded-xl border border-rose-500/20">
+                    <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Wrong Entity</span>
+                        <AlertOctagon size={14} className="text-rose-400" />
+                    </div>
+                    <p className="text-3xl font-black text-rose-300">{wrongEntityCount}</p>
+                    <p className="text-[10px] text-slate-500 mt-1">blocked sources</p>
+                </div>
+                <div className="bg-black/20 p-4 rounded-xl border border-orange-500/20">
+                    <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Unknown Entity</span>
+                        <AlertTriangle size={14} className="text-orange-300" />
+                    </div>
+                    <p className="text-3xl font-black text-orange-300">{unknownEntityCount}</p>
+                    <p className="text-[10px] text-slate-500 mt-1">not promoted</p>
                 </div>
                 <div className="bg-black/20 p-4 rounded-xl border border-cyan-500/20">
                     <div className="flex items-center justify-between mb-2">
@@ -1195,7 +1326,7 @@ const isForesightContext = (link) => {
                 </div>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mt-4">
+            <div className="grid grid-cols-1 lg:grid-cols-4 gap-3 mt-4">
                 <div className={`p-4 rounded-xl border ${contradictionWarnings.length > 0 ? 'bg-amber-500/10 border-amber-500/30' : 'bg-black/20 border-white/5'}`}>
                     <div className="flex items-center gap-2 mb-2">
                         <Scale size={14} className={contradictionWarnings.length > 0 ? 'text-amber-400' : 'text-slate-500'} />
@@ -1205,6 +1336,21 @@ const isForesightContext = (link) => {
                         <div className="space-y-1.5">
                             {contradictionWarnings.slice(0, 4).map((warning, i) => (
                                 <p key={i} className="text-[11px] text-amber-100/90 leading-relaxed font-mono">- {warning}</p>
+                            ))}
+                        </div>
+                    ) : (
+                        <p className="text-xs text-slate-500">None detected.</p>
+                    )}
+                </div>
+                <div className={`p-4 rounded-xl border ${wrongEntityWarnings.length > 0 ? 'bg-rose-500/10 border-rose-500/30' : 'bg-black/20 border-white/5'}`}>
+                    <div className="flex items-center gap-2 mb-2">
+                        <AlertOctagon size={14} className={wrongEntityWarnings.length > 0 ? 'text-rose-400' : 'text-slate-500'} />
+                        <span className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Wrong-Entity Warnings</span>
+                    </div>
+                    {wrongEntityWarnings.length > 0 ? (
+                        <div className="space-y-1.5">
+                            {wrongEntityWarnings.slice(0, 5).map((warning, i) => (
+                                <p key={i} className="text-[11px] text-rose-100/90 leading-relaxed font-mono">- {warning}</p>
                             ))}
                         </div>
                     ) : (

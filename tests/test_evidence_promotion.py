@@ -118,3 +118,60 @@ def test_unchecked_content_stays_visible_but_not_generation_eligible():
     assert link["analysis_verified"] is False
     assert link["promotion_status"] == PROMOTION_DISPLAY_ONLY
     assert link["verification_reason"] == "content_unavailable"
+
+
+def test_same_name_wrong_domain_is_excluded_for_rebase_collision():
+    link = apply_analysis_verification(
+        _source(
+            title="About Rebase Consultancy",
+            url="https://www.rebaseconsultancy.com/about.html",
+            snippet="Jason Myers founded Rebase Consultancy to advise clients on operating models.",
+            source_quote="Jason Myers founded Rebase Consultancy to advise clients on operating models.",
+            source_type="company_website",
+        ),
+        company_domain="https://rebase.fi",
+        company_name="Rebase Consulting",
+    )
+
+    assert link["wrong_entity"] is True
+    assert link["entity_match_status"] == "wrong"
+    assert link["analysis_verified"] is False
+    assert link["promotion_status"] == PROMOTION_EXCLUDED
+    assert is_generation_eligible_source(link) is False
+
+
+def test_target_domain_source_can_be_promoted_even_when_page_uses_short_brand():
+    link = apply_analysis_verification(
+        _source(
+            title="Rebase technical careers",
+            url="https://rebase.fi/careers",
+            snippet="Rebase describes its modern engineering hiring process.",
+            source_quote="Rebase describes its modern engineering hiring process.",
+            source_type="company_website",
+        ),
+        company_domain="https://rebase.fi",
+        company_name="Rebase Consulting",
+    )
+
+    assert link["entity_match_status"] == "exact"
+    assert link["entity_scope"] == "canonical_group"
+    assert link["analysis_verified"] is True
+    assert is_generation_eligible_source(link) is True
+
+
+def test_supported_content_with_unknown_entity_is_not_generation_eligible():
+    link = apply_analysis_verification(
+        _source(
+            title="Modern engineering practices",
+            url="https://example-news.com/engineering",
+            snippet="A company adopted modern engineering practices.",
+            source_quote="A company adopted modern engineering practices.",
+        ),
+        company_domain="https://rebase.fi",
+        company_name="Rebase Consulting",
+    )
+
+    assert link["entity_match_status"] == "unknown"
+    assert link["analysis_verified"] is False
+    assert link["promotion_status"] == PROMOTION_DISPLAY_ONLY
+    assert link["verification_reason"] == "unknown_entity"

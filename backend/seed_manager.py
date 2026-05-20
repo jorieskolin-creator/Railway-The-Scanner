@@ -494,7 +494,12 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
                             fs_verified += newly_verified
                         try:
                             from source_claim_validator import validate_foresight_claims
-                            validate_foresight_claims(foresight_data, max_checks=6)
+                            validate_foresight_claims(
+                                foresight_data,
+                                max_checks=6,
+                                company_name=company_name,
+                                company_domain=company_domain,
+                            )
                         except Exception as scv_err:
                             print(f"   [{company_name}] ⚠️ [Foresight Source-Claim] Validation skipped: {scv_err}")
                         foresight_data, passes_gate = enforce_source_quality_gate(foresight_data)

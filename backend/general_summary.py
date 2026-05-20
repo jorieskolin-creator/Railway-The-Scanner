@@ -286,7 +286,7 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
     foresight_sources = []
     fs_min, fs_max = tier_snippet_bounds("E")
     for l in full_data.get("foresight_links", []):
-        if not (l.get("verified") is True and l.get("validated") is True):
+        if not is_generation_eligible_source(l):
             continue
         title = (l.get("title", "Foresight") or "Foresight")[:80]
         snippet_raw = (l.get("snippet") or "").strip()

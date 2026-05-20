@@ -112,6 +112,8 @@ def _build_stats(data: dict) -> dict[str, Any]:
         "excluded": 0,
         "unsupported": 0,
         "unchecked": 0,
+        "wrong_entity": 0,
+        "unknown_entity": 0,
         "source_quotes": 0,
         "by_field": {},
     }
@@ -123,6 +125,8 @@ def _build_stats(data: dict) -> dict[str, Any]:
             "excluded": 0,
             "unsupported": 0,
             "unchecked": 0,
+            "wrong_entity": 0,
+            "unknown_entity": 0,
         }
         for link in links:
             if not isinstance(link, dict):
@@ -152,6 +156,13 @@ def _build_stats(data: dict) -> dict[str, Any]:
             if link.get("claim_support_status") == "unchecked":
                 stats["unchecked"] += 1
                 field_stats["unchecked"] += 1
+            entity_status = str(link.get("entity_match_status") or "").lower()
+            if link.get("wrong_entity") is True or entity_status == "wrong":
+                stats["wrong_entity"] += 1
+                field_stats["wrong_entity"] += 1
+            elif entity_status in {"", "unknown", "weak"}:
+                stats["unknown_entity"] += 1
+                field_stats["unknown_entity"] += 1
             if link.get("source_quote"):
                 stats["source_quotes"] += 1
         stats["by_field"][field] = field_stats
@@ -186,6 +197,8 @@ def clean_company_evidence(company_name: str, data: dict, *, model_chain=None) -
         max_checks=None,
         max_workers=3,
         model_chain=model_chain or CLEAN_EVIDENCE_MODEL_CHAIN,
+        company_name=company_name,
+        company_domain=company_domain,
     )
 
     for _, links in _evidence_lists(data):

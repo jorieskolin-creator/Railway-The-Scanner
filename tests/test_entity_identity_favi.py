@@ -13,6 +13,8 @@ from entity_identity import (
     ENTITY_SCOPE_FORMER_NAME,
     ENTITY_SCOPE_LOCAL_LEGAL_ENTITY,
     ENTITY_SCOPE_PARENT_OWNER,
+    ENTITY_SCOPE_WRONG_ENTITY,
+    assess_entity_match,
     apply_entity_scope,
     build_entity_context_block,
 )
@@ -65,6 +67,37 @@ def test_entity_context_block_includes_scope_policy():
     assert "Vivicta Oy" in block
     assert "Agilitas" in block
     assert "entity_scope" in block
+
+
+def test_rebase_same_name_wrong_domain_is_wrong_entity():
+    result = assess_entity_match(
+        {
+            "title": "About Rebase Consultancy",
+            "url": "https://www.rebaseconsultancy.com/about.html",
+            "snippet": "Jason Myers founded Rebase Consultancy.",
+        },
+        "Rebase Consulting",
+        "https://rebase.fi",
+        page_text="Jason Myers founded Rebase Consultancy to advise clients.",
+    )
+
+    assert result["entity_match_status"] == "wrong"
+    assert result["entity_scope"] == ENTITY_SCOPE_WRONG_ENTITY
+
+
+def test_rebase_target_domain_is_exact_even_with_short_brand_text():
+    result = assess_entity_match(
+        {
+            "title": "Rebase careers",
+            "url": "https://rebase.fi/careers",
+            "snippet": "Rebase describes its hiring process.",
+        },
+        "Rebase Consulting",
+        "https://rebase.fi",
+    )
+
+    assert result["entity_match_status"] == "exact"
+    assert result["entity_scope"] == ENTITY_SCOPE_CANONICAL_GROUP
 
 
 def test_favi_does_not_collapse_to_zero_when_current_risk_exists():

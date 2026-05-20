@@ -846,7 +846,7 @@ const App = () => {
  const formatEvidenceCleanSummary = (result) => {
  const stats = result?.stats || result?.evidence_cleaning_stats || {};
  const validation = stats.validation || {};
- return `Sources: ${stats.total_sources ?? 0}\nAnalysis verified: ${stats.analysis_verified ?? 0}\nDisplay-only: ${stats.display_only ?? 0}\nExcluded: ${stats.excluded ?? 0}\nUnsupported: ${stats.unsupported ?? 0}\nDead/unavailable: ${stats.dead_or_unavailable ?? 0}\nUnchecked: ${stats.unchecked ?? 0}\nSource quotes: ${stats.source_quotes ?? 0}\nModel checks: ${validation.checked ?? 0}`;
+ return `Sources: ${stats.total_sources ?? 0}\nAnalysis verified: ${stats.analysis_verified ?? 0}\nDisplay-only: ${stats.display_only ?? 0}\nExcluded: ${stats.excluded ?? 0}\nUnsupported: ${stats.unsupported ?? 0}\nWrong entity: ${stats.wrong_entity ?? 0}\nUnknown/weak entity: ${stats.unknown_entity ?? 0}\nDead/unavailable: ${stats.dead_or_unavailable ?? 0}\nUnchecked: ${stats.unchecked ?? 0}\nSource quotes: ${stats.source_quotes ?? 0}\nModel checks: ${validation.checked ?? 0}`;
  };
 
  const refreshReviewAfterAdminAction = async () => {
