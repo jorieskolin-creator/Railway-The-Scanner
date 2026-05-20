@@ -25,6 +25,7 @@ from collections import Counter, defaultdict
 
 from analyze_scores import run_analysis, classify_archetype
 from foresight_vulnerability import compute_favi_index
+from market_cohorts import compute_market_cohorts
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -852,6 +853,16 @@ def compute_market_intelligence(dashboard_data, company_details, analysis_result
         result["favi_companies"]
     )
     print(f"   [Market Intel] Opportunity map: {len(result['opportunity_map']['domain_rankings'])} domains / {len(result['opportunity_map']['company_rankings'])} companies ranked")
+
+    # 13. Curated reporting cohorts
+    result["market_cohorts"] = compute_market_cohorts(
+        dashboard_data,
+        company_details,
+        result["opportunity_map"],
+        result["favi_companies"],
+    )
+    sweden = result["market_cohorts"].get("sweden_summary", {})
+    print(f"   [Market Intel] Sweden cohort: {sweden.get('matched_count', 0)}/{sweden.get('registry_count', 0)} companies matched")
 
     print(f"   [Market Intel] ✅ Market intelligence computation complete\n")
     return result

@@ -770,7 +770,39 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
   const date = new Date().toLocaleDateString('en-FI', { day: 'numeric', month: 'long', year: 'numeric' });
   let content = '';
 
-  if (tabName === 'executive') {
+  if (tabName === 'sweden') {
+    const cohort = data.market_cohorts?.sweden_summary || {};
+    const opportunities = Array.isArray(cohort.opportunities) ? cohort.opportunities : [];
+    const faviRows = Array.isArray(cohort.favi_companies) ? cohort.favi_companies : [];
+    const matched = Array.isArray(cohort.matched_companies) ? cohort.matched_companies : [];
+    const missing = Array.isArray(cohort.missing_companies) ? cohort.missing_companies : [];
+    content += `<div class="section"><h2>Sweden Cohort</h2><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;text-align:center">` +
+      `<div><div style="font-size:28px;font-weight:bold;color:#22d3ee">${cohort.matched_count || matched.length || 0}</div><div style="font-size:10px;color:#94a3b8;text-transform:uppercase">Matched Scans</div></div>` +
+      `<div><div style="font-size:28px;font-weight:bold;color:white">${cohort.registry_count || 0}</div><div style="font-size:10px;color:#94a3b8;text-transform:uppercase">Companies In List</div></div>` +
+      `<div><div style="font-size:28px;font-weight:bold;color:#fbbf24">${cohort.missing_count || missing.length || 0}</div><div style="font-size:10px;color:#94a3b8;text-transform:uppercase">Not Matched Yet</div></div>` +
+      `</div></div>`;
+
+    if (!matched.length) {
+      content += `<div class="section"><h2>No Sweden cohort companies scanned yet</h2><p style="font-size:12px;color:#94a3b8">Scan companies using the exact company name and URL from the Sweden list to populate this sheet.</p></div>`;
+    } else {
+      const opportunityRows = opportunities.length
+        ? opportunities.map((c: any, i: number) =>
+            `<tr><td>${i + 1}</td><td>${escapeMiHtml(c.name)}</td><td>${escapeMiHtml(c.domain)}</td><td>${escapeMiHtml(c.opportunity_score)}</td><td>${escapeMiHtml(c.foresight_pressure)}</td><td>${escapeMiHtml(c.readiness_gap)}</td><td>${escapeMiHtml(c.financial_capacity)}</td><td>${escapeMiHtml(c.intent_reality_gap)}</td><td>${escapeMiHtml(c.proposal_cluster_signal)}</td></tr>`
+          ).join('')
+        : `<tr><td colspan="9" style="color:#64748b">No Sweden opportunity rows available yet.</td></tr>`;
+      content += `<div class="section"><h2>Top Opportunities</h2><p style="font-size:10px;color:#64748b;margin-bottom:12px">Same opportunity logic as the global Top 30 company opportunities, filtered to matched Sweden cohort companies.</p><table><thead><tr><th>#</th><th>Company</th><th>Domain</th><th>Opportunity</th><th>Pressure</th><th>Readiness Gap</th><th>Fin. Capacity</th><th>Intent-Reality Gap</th><th>WHY/WHAT Signal</th></tr></thead><tbody>${opportunityRows}</tbody></table></div>`;
+
+      const faviCutoff = data.favi_cutoffs?.favi ?? 48;
+      const facCutoff = getFacCutoff(faviRows);
+      const faviTableRows = faviRows.length
+        ? faviRows.map((c: any, i: number) => {
+            const adaptationSegment = getAdaptationSegment(c, faviCutoff, facCutoff);
+            return `<tr><td>${i + 1}</td><td>${escapeMiHtml(c.name)}</td><td>${escapeMiHtml(c.domain)}</td><td>${escapeMiHtml(c.favi_score)}</td><td>${escapeMiHtml(c.fps)}</td><td>${escapeMiHtml(c.readiness_gap)}</td><td>${escapeMiHtml(c.fac)}</td><td>${escapeMiHtml(c.current_vulnerability)}</td><td>${escapeMiHtml(adaptationSegment)}</td></tr>`;
+          }).join('')
+        : `<tr><td colspan="9" style="color:#64748b">No Sweden Foresight Vulnerability rows available yet.</td></tr>`;
+      content += `<div class="section"><h2>Foresight Vulnerability</h2><p style="font-size:10px;color:#64748b;margin-bottom:12px">Same FAVI company-ranking content as the global Foresight Vulnerability sheet, filtered to matched Sweden cohort companies.</p><table><thead><tr><th>#</th><th>Company</th><th>Domain</th><th>FAVI</th><th>Pressure</th><th>Gap</th><th>Adaptation</th><th>Current Vuln.</th><th>FAC x FAVI Segment</th></tr></thead><tbody>${faviTableRows}</tbody></table></div>`;
+    }
+  } else if (tabName === 'executive') {
     // Market Health Gauges (SVG)
     if (data.market_health?.length) {
       content += `<div class="section"><h2>Market Health by Domain</h2><p style="font-size:10px;color:#64748b;margin-bottom:16px">Composite health score per industry domain based on average reality scores, intent-reality gaps, and archetype distribution.</p>${buildSvgHealthGauges(data.market_health)}</div>`;
@@ -1084,6 +1116,7 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
     future: 'Future Demand Analysis',
     current: 'Current Demand Analysis',
     favi: 'Foresight Vulnerability Analysis',
+    sweden: 'SWEDEN - SUMMARY',
   };
 
   const html = `<!DOCTYPE html>
@@ -1102,7 +1135,9 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
 </body>
 </html>`;
 
-  downloadHtml(html, `mi-${tabName}-${new Date().toISOString().slice(0, 10)}.html`);
+  downloadHtml(html, tabName === 'sweden'
+    ? `mi-sweden-summary-${new Date().toISOString().slice(0, 10)}.html`
+    : `mi-${tabName}-${new Date().toISOString().slice(0, 10)}.html`);
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2808,6 +2843,127 @@ const OpportunityMapTab = ({ data, onCompanyClick }: { data: any; onCompanyClick
   );
 };
 
+const SwedenSummaryTab = ({ data, onCompanyClick }: { data: any; onCompanyClick: (company: any) => void }) => {
+  const cohort = data.market_cohorts?.sweden_summary || {};
+  const opportunities = cohort.opportunities || [];
+  const faviRows = cohort.favi_companies || [];
+  const matched = cohort.matched_companies || [];
+  const missing = cohort.missing_companies || [];
+  const faviCutoff = data.favi_cutoffs?.favi ?? 48;
+  const facCutoff = getFacCutoff(faviRows);
+
+  if (!matched.length) {
+    return (
+      <div className="space-y-6">
+        <div className="bg-black/20 border border-white/10 rounded-lg p-6 text-center">
+          <h4 className="text-[11px] font-bold text-cyan-300 uppercase tracking-wide mb-2">SWEDEN - SUMMARY</h4>
+          <div className="text-slate-400 text-sm">No Sweden cohort companies scanned yet.</div>
+          <div className="text-[10px] text-slate-500 mt-2">
+            {cohort.registry_count || missing.length || 0} companies are in the Sweden list. Scan companies using the listed name and URL to populate this sheet.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-black/20 border border-white/10 rounded-lg p-4">
+        <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-1 flex items-center gap-2">
+          <Globe size={12} /> SWEDEN - SUMMARY
+        </h4>
+        <p className="text-[10px] text-slate-500 mb-4">
+          Curated Sweden cohort matched by company name and URL host. Uses the same opportunity and FAVI scoring as the global Market Intelligence views.
+        </p>
+        <div className="grid grid-cols-3 gap-3">
+          <div className="bg-white/5 rounded-lg border border-white/10 p-3 text-center">
+            <div className="text-2xl font-bold text-cyan-300">{cohort.matched_count || matched.length}</div>
+            <div className="text-[8px] text-slate-500 uppercase tracking-wide">Matched Scans</div>
+          </div>
+          <div className="bg-white/5 rounded-lg border border-white/10 p-3 text-center">
+            <div className="text-2xl font-bold text-white">{cohort.registry_count || matched.length + missing.length}</div>
+            <div className="text-[8px] text-slate-500 uppercase tracking-wide">Companies In List</div>
+          </div>
+          <div className="bg-white/5 rounded-lg border border-white/10 p-3 text-center">
+            <div className="text-2xl font-bold text-amber-300">{cohort.missing_count || missing.length}</div>
+            <div className="text-[8px] text-slate-500 uppercase tracking-wide">Not Matched Yet</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-black/20 border border-white/10 rounded-lg p-4">
+        <h4 className="text-[10px] font-bold text-rose-300 uppercase tracking-wide mb-3">Top Opportunities</h4>
+        <div className="overflow-x-auto">
+          <table className="w-full text-[10px]">
+            <thead><tr className="text-slate-500 border-b border-white/10">
+              <th className="p-2 text-left">#</th><th className="p-2 text-left">Company</th><th className="p-2 text-left">Domain</th><th className="p-2 text-left">Opportunity</th>
+              <th className="p-2 text-left">Pressure</th><th className="p-2 text-left">Readiness Gap</th><th className="p-2 text-left">Fin. Capacity</th><th className="p-2 text-left">Intent-Reality Gap</th><th className="p-2 text-left">WHY/WHAT Signal</th>
+            </tr></thead>
+            <tbody>
+              {opportunities.length > 0 ? opportunities.map((c: any, i: number) => (
+                <tr key={c.name} className="border-t border-white/5 hover:bg-white/5 cursor-pointer transition-colors" onClick={() => onCompanyClick({ companyName: c.name, domain: c.domain })}>
+                  <td className="p-2 text-slate-500">{i + 1}</td>
+                  <td className="p-2 text-cyan-300 font-medium">{c.name}</td>
+                  <td className="p-2 text-slate-400">{c.domain}</td>
+                  <td className="p-2 font-mono font-bold text-rose-300">{c.opportunity_score}</td>
+                  <td className="p-2 font-mono text-violet-300">{c.foresight_pressure}</td>
+                  <td className="p-2 font-mono text-amber-300">{c.readiness_gap}</td>
+                  <td className="p-2 font-mono text-emerald-300">{c.financial_capacity}</td>
+                  <td className="p-2 font-mono text-rose-300">{c.intent_reality_gap}</td>
+                  <td className="p-2 font-mono text-cyan-300">{c.proposal_cluster_signal}</td>
+                </tr>
+              )) : (
+                <tr className="border-t border-white/5">
+                  <td colSpan={9} className="p-4 text-center text-slate-500">No Sweden opportunity rows available yet.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="bg-black/20 border border-white/10 rounded-lg p-4">
+        <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-3">Foresight Vulnerability</h4>
+        <div className="overflow-x-auto">
+          <table className="w-full text-[10px]">
+            <thead><tr className="text-slate-500 border-b border-white/10">
+              <th className="p-2 text-left">#</th><th className="p-2 text-left">Company</th><th className="p-2 text-left">Domain</th><th className="p-2 text-left">FAVI</th>
+              <th className="p-2 text-left">Pressure</th><th className="p-2 text-left">Gap</th><th className="p-2 text-left">Adapt.</th><th className="p-2 text-left">Curr. Vuln</th><th className="p-2 text-left">FAC x FAVI Segment</th>
+            </tr></thead>
+            <tbody>
+              {faviRows.length > 0 ? faviRows.map((c: any, i: number) => {
+                const adaptationSegment = getAdaptationSegment(c, faviCutoff, facCutoff);
+                const segCfg = ADAPTATION_SEGMENT_CONFIG[adaptationSegment] || ADAPTATION_SEGMENT_CONFIG["Future-Ready"];
+                return (
+                  <tr key={c.name} className="border-t border-white/5 hover:bg-white/5 cursor-pointer transition-colors" onClick={() => onCompanyClick({ companyName: c.name, domain: c.domain })}>
+                    <td className="p-2 text-slate-500">{i + 1}</td>
+                    <td className="p-2 text-cyan-300 font-medium">{c.name}</td>
+                    <td className="p-2 text-slate-400">{c.domain}</td>
+                    <td className="p-2 font-mono font-bold" style={{ color: FAVI_COLOR(c.favi_score) }}>{c.favi_score}</td>
+                    <td className="p-2 font-mono text-violet-300">{c.fps}</td>
+                    <td className="p-2 font-mono text-amber-300">{c.readiness_gap}</td>
+                    <td className="p-2 font-mono text-emerald-300">{c.fac}</td>
+                    <td className="p-2 font-mono text-rose-300">{c.current_vulnerability}</td>
+                    <td className="p-2">
+                      <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${segCfg.bg} ${segCfg.color} border ${segCfg.border}`}>
+                        {adaptationSegment}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              }) : (
+                <tr className="border-t border-white/5">
+                  <td colSpan={9} className="p-4 text-center text-slate-500">No Sweden Foresight Vulnerability rows available yet.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN MODAL
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -2818,6 +2974,7 @@ const TABS = [
   { id: 'future', label: 'Future Demand', icon: TrendingUp },
   { id: 'current', label: 'Current Demand', icon: Target },
   { id: 'favi', label: 'Foresight Vulnerability', icon: Eye },
+  { id: 'sweden', label: 'SWEDEN - SUMMARY', icon: Globe },
 ];
 
 const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, onCompanyClick, observatoryData = null, crossImpactInterpretationData = null, onRefreshCrossImpactInterpretation, crossImpactInterpretationLoading = false }: {
@@ -2848,7 +3005,7 @@ const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, on
             {data && <span className="text-[10px] text-slate-500 font-normal ml-2">{data.company_count} companies analyzed</span>}
           </h3>
           <div className="flex items-center gap-2">
-            {data && ['executive', 'future', 'current', 'favi'].includes(activeTab) && (
+            {data && ['executive', 'future', 'current', 'favi', 'sweden'].includes(activeTab) && (
               <button
                 onClick={() => exportMiTabHtml(activeTab, data, observatoryData, crossImpactInterpretationData)}
                 className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 border border-white/10 transition-colors text-[9px] font-mono text-slate-400 hover:text-slate-200"
@@ -2909,6 +3066,7 @@ const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, on
               {activeTab === 'future' && <FutureDemandTab data={data} observatoryData={observatoryData} crossImpactInterpretationData={crossImpactInterpretationData} onRefreshCrossImpactInterpretation={onRefreshCrossImpactInterpretation} crossImpactInterpretationLoading={crossImpactInterpretationLoading} />}
               {activeTab === 'current' && <CurrentDemandTab data={data} />}
               {activeTab === 'favi' && <ForesightVulnerabilityTab data={data} onCompanyClick={onCompanyClick} />}
+              {activeTab === 'sweden' && <SwedenSummaryTab data={data} onCompanyClick={onCompanyClick} />}
             </>
           )}
         </div>
