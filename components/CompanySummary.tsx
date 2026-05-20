@@ -545,10 +545,23 @@ const isForesightContext = (link) => {
                 var analysis = link.analysis_verified === true || link.promotion_status === 'generation_eligible' || link.generation_eligible === true ? 'Verified for analysis' : (link.promotion_status || link.verification_reason || 'Display only');
                 return '<tr><td>' + escapeHTML(sourceName) + '</td><td>' + escapeHTML(link.source_type || link.origin || '') + '</td><td>' + escapeHTML(link.source_credibility || link.credibility || 'unknown') + '</td><td>' + (url ? '<a href="' + escapeHTML(url) + '">' + escapeHTML(url) + '</a>' : '') + '</td><td>' + escapeHTML(analysis) + '</td><td>' + escapeHTML(link.claim_support_status || '') + '</td><td>' + escapeHTML(String(quote).slice(0, 420)) + '</td></tr>';
             }).join('') + '</tbody></table></div>' : '<p class="muted">No evidence links were available in this export.</p>';
+        function checklistMarkerState(item) {
+            var source = String(item.source_type || item.source || '').toLowerCase();
+            var rawStatus = String(item.status || '').trim();
+            var normalizedStatus = rawStatus.toLowerCase().replace(/[_-]/g, ' ');
+            if (source === 'historical') return 'Carried forward';
+            if (rawStatus && normalizedStatus !== 'not verified' && normalizedStatus !== 'unverified') {
+                return rawStatus;
+            }
+            if (item.found === true || item.passed === true) return 'Detected';
+            if (item.found === false || item.passed === false) return 'Not detected in scan';
+            return 'Needs review';
+        }
         var checklistHTML = Array.isArray(exportData.reality_checklist) && exportData.reality_checklist.length > 0
-            ? '<div class="table-wrap"><table><thead><tr><th>Finding</th><th>Category</th><th>Status</th><th>Source</th></tr></thead><tbody>'
+            ? '<div class="table-wrap"><table><thead><tr><th>Finding</th><th>Category</th><th>Marker State</th><th>Source</th></tr></thead><tbody>'
                 + exportData.reality_checklist.map(function(item) {
-                    return '<tr><td>' + escapeHTML(item.name || item.title || item.finding || '') + '</td><td>' + escapeHTML(item.category || '') + '</td><td>' + escapeHTML(item.status || (item.passed ? 'passed' : 'not verified')) + '</td><td>' + escapeHTML(item.source_type || item.source || '') + '</td></tr>';
+                    var finding = item.query || item.name || item.title || item.finding || item.category || 'Reality marker';
+                    return '<tr><td>' + escapeHTML(finding) + '</td><td>' + escapeHTML(item.category || '') + '</td><td>' + escapeHTML(checklistMarkerState(item)) + '</td><td>' + escapeHTML(item.source_type || item.source || '') + '</td></tr>';
                 }).join('') + '</tbody></table></div>' : '';
         var breakdownHTML = Array.isArray(exportData.intent_breakdown) && exportData.intent_breakdown.length > 0
             ? '<div class="table-wrap"><table><thead><tr><th>Dimension</th><th>Score</th></tr></thead><tbody>'
