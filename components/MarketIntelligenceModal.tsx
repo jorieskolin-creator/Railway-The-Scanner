@@ -752,6 +752,27 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
       `<div><div style="font-size:28px;font-weight:bold;color:#fb7185">${(data.opportunity_map?.company_rankings || []).length}</div><div style="font-size:10px;color:#94a3b8;text-transform:uppercase">Opportunity Ranked</div></div>` +
       `</div></div>`;
 
+    // Opportunity Map — included in the Market Intelligence Executive Summary export
+    const opportunityMap = data.opportunity_map || {};
+    const opportunityDomains = Array.isArray(opportunityMap.domain_rankings) ? opportunityMap.domain_rankings.slice(0, 8) : [];
+    const opportunityCompanies = Array.isArray(opportunityMap.company_rankings) ? opportunityMap.company_rankings.slice(0, 30) : [];
+    if (opportunityDomains.length > 0 || opportunityCompanies.length > 0) {
+      const formula = opportunityMap.formula
+        ? `<p style="font-size:10px;color:#64748b;font-family:monospace;margin:0 0 12px">Score formula: ${escapeMiHtml(opportunityMap.formula)}</p>`
+        : '';
+      const domainTable = opportunityDomains.length > 0
+        ? `<h3>Domain Rankings</h3><table><thead><tr><th>#</th><th>Domain</th><th>Opportunity</th><th>Pressure</th><th>Readiness Gap</th><th>Fin. Capacity</th><th>Intent-Reality Gap</th><th>Companies</th></tr></thead><tbody>${opportunityDomains.map((d: any, i: number) =>
+            `<tr><td>${i + 1}</td><td>${escapeMiHtml(d.domain)}</td><td>${escapeMiHtml(d.opportunity_score)}</td><td>${escapeMiHtml(d.foresight_pressure)}</td><td>${escapeMiHtml(d.readiness_gap)}</td><td>${escapeMiHtml(d.financial_capacity)}</td><td>${escapeMiHtml(d.intent_reality_gap)}</td><td>${escapeMiHtml(d.company_count)}</td></tr>`
+          ).join('')}</tbody></table>`
+        : '';
+      const companyTable = opportunityCompanies.length > 0
+        ? `<h3>Top 30 Company Opportunities</h3><table><thead><tr><th>#</th><th>Company</th><th>Domain</th><th>Opportunity</th><th>Pressure</th><th>Readiness Gap</th><th>Fin. Capacity</th><th>Intent-Reality Gap</th><th>WHY/WHAT Signal</th></tr></thead><tbody>${opportunityCompanies.map((c: any, i: number) =>
+            `<tr><td>${i + 1}</td><td>${escapeMiHtml(c.name)}</td><td>${escapeMiHtml(c.domain)}</td><td>${escapeMiHtml(c.opportunity_score)}</td><td>${escapeMiHtml(c.foresight_pressure)}</td><td>${escapeMiHtml(c.readiness_gap)}</td><td>${escapeMiHtml(c.financial_capacity)}</td><td>${escapeMiHtml(c.intent_reality_gap)}</td><td>${escapeMiHtml(c.proposal_cluster_signal)}</td></tr>`
+          ).join('')}</tbody></table>`
+        : '';
+      content += `<div class="section"><h2>Opportunity Map</h2><p style="font-size:10px;color:#64748b;margin-bottom:12px">Ranked by high foresight pressure, low readiness, financial capacity, intent-reality gap, and repeated WHY/WHAT clusters.</p>${formula}${domainTable}${companyTable}</div>`;
+    }
+
     // FAVI Segment Summary
     if (data.favi_segments) {
       const segs = [
@@ -1136,6 +1157,9 @@ const ExecutiveSummaryTab = ({ data, observatoryData = null }: { data: any; obse
     }
     return map;
   }, [observatoryData]);
+  const opportunityMap = data.opportunity_map || {};
+  const opportunityDomains = opportunityMap.domain_rankings || [];
+  const opportunityCompanies = opportunityMap.company_rankings || [];
 
   return (
     <div className="space-y-6">
@@ -1203,6 +1227,78 @@ const ExecutiveSummaryTab = ({ data, observatoryData = null }: { data: any; obse
           <div className="text-[8px] text-slate-500 mt-1 leading-relaxed">Companies ranked by future pressure, readiness gap, financial capacity, and WHY/WHAT signal</div>
         </div>
       </div>
+
+      {/* Opportunity Map */}
+      {(opportunityDomains.length > 0 || opportunityCompanies.length > 0) && (
+        <div className="bg-black/20 border border-white/10 rounded-lg p-4">
+          <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-1 flex items-center gap-2">
+            <Crosshair size={12} /> Opportunity Map
+          </h4>
+          <div className="text-[8px] text-slate-500 mb-3 leading-relaxed">
+            Portfolio priorities ranked by future pressure, readiness gaps, financial capacity, intent-reality gap, and repeated WHY/WHAT clusters.
+          </div>
+          {opportunityMap.formula && (
+            <div className="text-[9px] text-slate-500 font-mono mb-4">Score formula: {opportunityMap.formula}</div>
+          )}
+
+          {opportunityDomains.length > 0 && (
+            <div className="mb-5">
+              <h5 className="text-[9px] font-bold text-violet-300 uppercase tracking-wide mb-2">Domain Rankings</h5>
+              <div className="overflow-x-auto">
+                <table className="w-full text-[10px]">
+                  <thead><tr className="text-slate-500 border-b border-white/10">
+                    <th className="p-2 text-left">#</th><th className="p-2 text-left">Domain</th><th className="p-2 text-left">Opportunity</th>
+                    <th className="p-2 text-left">Pressure</th><th className="p-2 text-left">Readiness Gap</th><th className="p-2 text-left">Fin. Capacity</th><th className="p-2 text-left">Intent-Reality Gap</th><th className="p-2 text-left">Companies</th>
+                  </tr></thead>
+                  <tbody>
+                    {opportunityDomains.slice(0, 8).map((d: any, i: number) => (
+                      <tr key={d.domain} className="border-t border-white/5">
+                        <td className="p-2 text-slate-500">{i + 1}</td>
+                        <td className="p-2 text-cyan-300 font-medium">{d.domain}</td>
+                        <td className="p-2 font-mono font-bold text-rose-300">{d.opportunity_score}</td>
+                        <td className="p-2 font-mono text-violet-300">{d.foresight_pressure}</td>
+                        <td className="p-2 font-mono text-amber-300">{d.readiness_gap}</td>
+                        <td className="p-2 font-mono text-emerald-300">{d.financial_capacity}</td>
+                        <td className="p-2 font-mono text-rose-300">{d.intent_reality_gap}</td>
+                        <td className="p-2 font-mono text-slate-400">{d.company_count}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {opportunityCompanies.length > 0 && (
+            <div>
+              <h5 className="text-[9px] font-bold text-rose-300 uppercase tracking-wide mb-2">Top 30 Company Opportunities</h5>
+              <div className="overflow-x-auto">
+                <table className="w-full text-[10px]">
+                  <thead><tr className="text-slate-500 border-b border-white/10">
+                    <th className="p-2 text-left">#</th><th className="p-2 text-left">Company</th><th className="p-2 text-left">Domain</th><th className="p-2 text-left">Opportunity</th>
+                    <th className="p-2 text-left">Pressure</th><th className="p-2 text-left">Readiness Gap</th><th className="p-2 text-left">Fin. Capacity</th><th className="p-2 text-left">Intent-Reality Gap</th><th className="p-2 text-left">WHY/WHAT Signal</th>
+                  </tr></thead>
+                  <tbody>
+                    {opportunityCompanies.slice(0, 30).map((c: any, i: number) => (
+                      <tr key={c.name} className="border-t border-white/5">
+                        <td className="p-2 text-slate-500">{i + 1}</td>
+                        <td className="p-2 text-cyan-300 font-medium">{c.name}</td>
+                        <td className="p-2 text-slate-400">{c.domain}</td>
+                        <td className="p-2 font-mono font-bold text-rose-300">{c.opportunity_score}</td>
+                        <td className="p-2 font-mono text-violet-300">{c.foresight_pressure}</td>
+                        <td className="p-2 font-mono text-amber-300">{c.readiness_gap}</td>
+                        <td className="p-2 font-mono text-emerald-300">{c.financial_capacity}</td>
+                        <td className="p-2 font-mono text-rose-300">{c.intent_reality_gap}</td>
+                        <td className="p-2 font-mono text-cyan-300">{c.proposal_cluster_signal}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* FAVI Segment Summary (mini preview) */}
       {data.favi_segments && (
@@ -2196,9 +2292,16 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
     const a = document.createElement('a');
     a.href = url;
     a.download = 'favi_vulnerability_index.csv';
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+const escapeMiHtml = (value: any) => String(value == null ? '' : value)
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
 
   const SortHeader = ({ label, dataKey }: { label: string; dataKey: string }) => (
     <th className="p-2 text-left cursor-pointer hover:text-white select-none whitespace-nowrap" onClick={() => handleSort(dataKey)}>

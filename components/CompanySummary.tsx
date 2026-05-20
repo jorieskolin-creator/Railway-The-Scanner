@@ -67,7 +67,7 @@ const FAVI_SEGMENT_CONFIG = {
   "Safe Harbor": { color: "text-emerald-400", bg: "bg-emerald-500/15", border: "border-emerald-500/30", icon: "text-emerald-400", description: "Healthy and future-ready" },
 };
 
-const CompanySummary = ({ data, faviData, observatoryData = null, marketIntelData = null }) => {
+const CompanySummary = ({ data, faviData, observatoryData = null }) => {
   const summaryRef = useRef(null);
   const [copied, setCopied] = useState(false);
   const [pitchCopied, setPitchCopied] = useState(false);
@@ -640,32 +640,6 @@ const isForesightContext = (link) => {
         return '<div class="metric"><span>' + escapeHTML(label) + '</span><strong>' + escapeHTML(value) + '</strong>' + (hint ? '<em>' + escapeHTML(hint) + '</em>' : '') + '</div>';
     };
 
-    const renderOpportunityMap = function() {
-        const opportunityMap = marketIntelData?.opportunity_map || {};
-        const companies = Array.isArray(opportunityMap.company_rankings) ? opportunityMap.company_rankings.slice(0, 30) : [];
-        const domains = Array.isArray(opportunityMap.domain_rankings) ? opportunityMap.domain_rankings.slice(0, 8) : [];
-        if (companies.length === 0 && domains.length === 0) return '';
-
-        const domainRows = domains.length > 0
-            ? '<h3>Domain Rankings</h3><div class="table-wrap"><table><thead><tr><th>#</th><th>Domain</th><th>Opportunity</th><th>Pressure</th><th>Readiness Gap</th><th>Financial Capacity</th><th>Intent-Reality Gap</th><th>Companies</th></tr></thead><tbody>'
-                + domains.map(function(d, i) {
-                    return '<tr><td>' + (i + 1) + '</td><td>' + escapeHTML(d.domain) + '</td><td>' + escapeHTML(d.opportunity_score) + '</td><td>' + escapeHTML(d.foresight_pressure) + '</td><td>' + escapeHTML(d.readiness_gap) + '</td><td>' + escapeHTML(d.financial_capacity) + '</td><td>' + escapeHTML(d.intent_reality_gap) + '</td><td>' + escapeHTML(d.company_count) + '</td></tr>';
-                }).join('')
-                + '</tbody></table></div>'
-            : '';
-
-        const companyRows = companies.length > 0
-            ? '<h3>Top Company Opportunities</h3><div class="table-wrap"><table><thead><tr><th>#</th><th>Company</th><th>Domain</th><th>Opportunity</th><th>Pressure</th><th>Readiness Gap</th><th>Financial Capacity</th><th>Intent-Reality Gap</th><th>WHY/WHAT Signal</th></tr></thead><tbody>'
-                + companies.map(function(c, i) {
-                    return '<tr><td>' + (i + 1) + '</td><td>' + escapeHTML(c.name) + '</td><td>' + escapeHTML(c.domain) + '</td><td>' + escapeHTML(c.opportunity_score) + '</td><td>' + escapeHTML(c.foresight_pressure) + '</td><td>' + escapeHTML(c.readiness_gap) + '</td><td>' + escapeHTML(c.financial_capacity) + '</td><td>' + escapeHTML(c.intent_reality_gap) + '</td><td>' + escapeHTML(c.proposal_cluster_signal) + '</td></tr>';
-                }).join('')
-                + '</tbody></table></div>'
-            : '';
-
-        const formula = opportunityMap.formula ? '<p class="muted formula">Score formula: ' + escapeHTML(opportunityMap.formula) + '</p>' : '';
-        return '<p class="muted">Ranked by foresight pressure, readiness gaps, financial capacity, intent-reality gap, and repeated WHY/WHAT clusters.</p>' + formula + domainRows + companyRows;
-    };
-
     const formatScore = function(value, suffix) {
         if (value === null || value === undefined || value === '') return 'n/a';
         const num = Number(value);
@@ -788,7 +762,6 @@ const isForesightContext = (link) => {
             + renderSection('General Summary', 'Executive context', renderParagraphs(exportData.general_summary))
             + renderSection('AI Diagnosis', 'Interpretation and risks', diagnosisHTML)
             + renderSection('Core Metrics', 'Scorecard', '<div class="metrics">' + metrics.join('') + '</div>')
-            + renderSection('Opportunity Map', 'Portfolio priorities', renderOpportunityMap())
             + renderSection('Key Stakeholders', 'People and influence', stakeholdersHTML)
             + renderSection('WHY and WHAT', 'Activation thesis', whyWhatHTML)
             + renderSection('Strategic Pitch', 'Outbound narrative', pitchHTML)
