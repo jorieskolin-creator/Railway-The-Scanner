@@ -583,6 +583,219 @@ const isForesightContext = (link) => {
         });
   };
 
+  const handleDownloadExecutiveHTML = () => {
+    const escapeHTML = function(value) {
+        return String(value == null ? '' : value)
+            .replace(/&/g, '&amp;')
+            .replace(/\x3c/g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    };
+
+    const renderInlineMarkdown = function(value) {
+        return escapeHTML(value).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    };
+
+    const hasText = function(value) {
+        return typeof value === 'string' && value.trim().length > 0;
+    };
+
+    const renderParagraphs = function(text) {
+        if (!hasText(text)) return '';
+        return String(text).split(/\n\n+/).map(function(block) {
+            const trimmed = block.trim();
+            if (!trimmed) return '';
+            return '<p>' + renderInlineMarkdown(trimmed).replace(/\n/g, '<br>') + '</p>';
+        }).join('');
+    };
+
+    const renderReportBlocks = function(text) {
+        if (!hasText(text)) return '';
+        return String(text).split(/\n\n+/).map(function(block) {
+            const trimmed = block.trim();
+            if (!trimmed) return '';
+            const h2Match = trimmed.match(/^##\s+(.+)/);
+            if (h2Match) return '<h3>' + renderInlineMarkdown(h2Match[1]) + '</h3>';
+            const h3Match = trimmed.match(/^###\s+(.+)/);
+            if (h3Match) return '<h4>' + renderInlineMarkdown(h3Match[1]) + '</h4>';
+            if (/^-{3,}$/.test(trimmed)) return '<hr>';
+            return '<p>' + renderInlineMarkdown(trimmed).replace(/\n/g, '<br>') + '</p>';
+        }).join('');
+    };
+
+    const renderList = function(items) {
+        if (!Array.isArray(items) || items.length === 0) return '';
+        return '<ul>' + items.filter(Boolean).map(function(item) {
+            return '<li>' + renderInlineMarkdown(item) + '</li>';
+        }).join('') + '</ul>';
+    };
+
+    const renderSection = function(title, eyebrow, bodyHTML, modifier) {
+        if (!bodyHTML) return '';
+        const label = eyebrow ? '<div class="eyebrow">' + escapeHTML(eyebrow) + '</div>' : '';
+        return '<section class="section ' + (modifier || '') + '">' + label + '<h2>' + escapeHTML(title) + '</h2>' + bodyHTML + '</section>';
+    };
+
+    const renderMetric = function(label, value, hint) {
+        return '<div class="metric"><span>' + escapeHTML(label) + '</span><strong>' + escapeHTML(value) + '</strong>' + (hint ? '<em>' + escapeHTML(hint) + '</em>' : '') + '</div>';
+    };
+
+    const formatScore = function(value, suffix) {
+        if (value === null || value === undefined || value === '') return 'n/a';
+        const num = Number(value);
+        if (!Number.isFinite(num)) return escapeHTML(value);
+        return Math.round(num).toString() + (suffix || '');
+    };
+
+    const getDossier = function(exportData) {
+        const domain = exportData?.domain;
+        if (!domain || !observatoryData?.domain_dossiers) return null;
+        return observatoryData.domain_dossiers.find(function(d) { return d.domain === domain; }) || null;
+    };
+
+    const buildAndDownloadExecutive = function(exportData) {
+        const companyName = exportData.companyName || exportData.company_name || exportData.name || 'Company';
+        const generatedDate = new Date().toISOString().split('T')[0];
+        const gap = Number(exportData.intent_score || 0) - Number(exportData.reality_score || 0);
+        const evidencePool = []
+            .concat(Array.isArray(exportData.evidence_links) ? exportData.evidence_links : [])
+            .concat(Array.isArray(exportData.foresight_links) ? exportData.foresight_links : []);
+        const verifiedSources = evidencePool.filter(function(link) {
+            return link && (link.verified === true || link.validated === true || link.url_verified === true);
+        }).length;
+        const weakSources = evidencePool.filter(function(link) {
+            const cred = String(link?.source_credibility || link?.credibility || '').toLowerCase();
+            return link && (link.verified === false || cred === 'low' || (!cred && (link.url || link.link)));
+        }).length;
+        const carriedForward = evidencePool.some(function(link) {
+            return String(link?.source_type || '').toLowerCase() === 'historical';
+        }) || (exportData.reality_checklist || []).some(function(item) {
+            return String(item?.source_type || '').toLowerCase() === 'historical';
+        });
+        const unsupportedClaimCount = (Array.isArray(exportData.hallucination_flags) ? exportData.hallucination_flags.length : 0)
+            + (Array.isArray(exportData.ai_verification?.false_claims) ? exportData.ai_verification.false_claims.length : 0)
+            + (Array.isArray(exportData.ai_verification?.unsupported_claims) ? exportData.ai_verification.unsupported_claims.length : 0)
+            + (Array.isArray(exportData.general_summary_false_claims) ? exportData.general_summary_false_claims.length : 0);
+
+        const metrics = [
+            renderMetric('Ambition Score', formatScore(exportData.intent_score, '/100'), 'Narrative clarity'),
+            renderMetric('Reality Score', formatScore(exportData.reality_score, '/100'), 'Evidence check'),
+            renderMetric('Integrity Delta', (gap > 0 ? '+' : '') + Math.round(gap), 'Ambition minus reality'),
+            renderMetric('Confidence', formatScore(exportData.confidence_score ?? exportData.scan_quality?.confidence_score ?? exportData.evidence_sufficiency?.score, '%'), 'Model confidence'),
+            renderMetric('Financial Health', formatScore(exportData.financial_index, '/100'), 'Adaptation capacity'),
+            renderMetric('Verified Sources', verifiedSources, weakSources + ' weak/unverified'),
+            renderMetric('Evidence Links', evidencePool.length, 'Company and foresight sources'),
+            renderMetric('Unsupported Flags', unsupportedClaimCount, 'Hallucination and false-claim checks'),
+            renderMetric('Washing Flag', exportData.washing_flag ? 'Yes' : 'No', exportData.washing_type || 'Narrative vs evidence'),
+            renderMetric('Carried Forward', carriedForward ? 'Yes' : 'No', 'Previous-scan evidence')
+        ];
+        if (faviData && faviData.segment) {
+            metrics.push(renderMetric('FAVI', formatScore(faviData.favi_score, '/100'), faviData.segment));
+            if (faviData.fps != null) {
+                metrics.push(renderMetric('Foresight Pressure', formatScore(faviData.fps, '/100'), 'FPS'));
+            }
+            if (faviData.readiness_gap != null) {
+                metrics.push(renderMetric('Readiness Gap', formatScore(faviData.readiness_gap, '/100'), faviData.readiness_gap_source || 'Current x future gap'));
+            }
+            if (faviData.fac != null) {
+                metrics.push(renderMetric('Adaptation Capacity', formatScore(faviData.fac, '/100'), 'FAC'));
+            }
+            if (faviData.current_vulnerability != null || faviData.current_vulnerability_signal != null) {
+                metrics.push(renderMetric('Current Vulnerability', formatScore(faviData.current_vulnerability ?? faviData.current_vulnerability_signal, '/100'), 'Portfolio-relative'));
+            }
+        }
+
+        const headerMeta = [
+            exportData.domain ? '<span>' + escapeHTML(exportData.domain) + '</span>' : '',
+            exportData.archetype ? '<span>' + escapeHTML(exportData.archetype) + '</span>' : '',
+            exportData.lastUpdated ? '<span>Scanned ' + escapeHTML(new Date(exportData.lastUpdated).toLocaleDateString('en-FI', { day: 'numeric', month: 'long', year: 'numeric' })) + '</span>' : ''
+        ].filter(Boolean).join('');
+
+        const keyPeople = Array.isArray(exportData.key_people)
+            ? exportData.key_people.filter(function(person) { return person?.linkedin_insights?.still_at_company !== false; })
+            : [];
+        const stakeholdersHTML = keyPeople.length > 0 ? '<div class="stakeholders">' + keyPeople.map(function(person) {
+            const insights = person.linkedin_insights || {};
+            const insightBits = []
+                .concat(insights.verified_role ? ['Verified role: ' + insights.verified_role] : [])
+                .concat(insights.summary ? [insights.summary] : [])
+                .concat(Array.isArray(insights.topics) && insights.topics.length > 0 ? ['Topics: ' + insights.topics.slice(0, 5).join(', ')] : []);
+            return '<article><h3>' + escapeHTML(person.name) + '</h3><div class="role">' + escapeHTML(person.role || 'Role unavailable') + '</div><p>' + escapeHTML(person.relevance || '') + '</p>' + (insightBits.length > 0 ? '<small>' + escapeHTML(insightBits.join(' | ')) + '</small>' : '') + '</article>';
+        }).join('') + '</div>' : '<p class="muted">No current key stakeholders were available in this scan.</p>';
+
+        const whyWhatHTML = '<div class="two-col"><div><h3>WHY</h3>' + renderList(exportData.why_proposals) + '</div><div><h3>WHAT</h3>' + renderList(exportData.what_proposals) + '</div></div>';
+        const pitchHTML = renderParagraphs(exportData.pitch_text);
+        const diagnosisHTML = renderParagraphs(exportData.summary_text)
+            + (Array.isArray(exportData.evidence_based_risks) && exportData.evidence_based_risks.length > 0
+                ? '<div class="callout"><h3>Evidence-Based Risks</h3>' + renderList(exportData.evidence_based_risks) + '</div>'
+                : '');
+
+        const dossier = getDossier(exportData);
+        let dossierHTML = '';
+        if (dossier?.text) {
+            const archDist = dossier.archetype_distribution || {};
+            const forces = dossier.forces_by_timescale || {};
+            const dossierStats = '<div class="chips">'
+                + (dossier.company_count != null ? '<span>' + escapeHTML(dossier.company_count) + ' companies</span>' : '')
+                + Object.keys(archDist).map(function(key) { return '<span>' + escapeHTML(key) + ': ' + escapeHTML(archDist[key]) + '</span>'; }).join('')
+                + (forces.act_now?.length ? '<span>Act Now: ' + escapeHTML(forces.act_now.length) + '</span>' : '')
+                + (forces.prepare?.length ? '<span>Prepare: ' + escapeHTML(forces.prepare.length) + '</span>' : '')
+                + (forces.position?.length ? '<span>Position: ' + escapeHTML(forces.position.length) + '</span>' : '')
+                + '</div>';
+            const dossierBody = String(dossier.text).split(/\n\n+/).filter(function(block) {
+                const trimmed = block.trim();
+                return trimmed && !/^#\s+Domain Force Dossier/i.test(trimmed);
+            }).join('\n\n');
+            dossierHTML = dossierStats + renderReportBlocks(dossierBody);
+        }
+
+        const htmlContent = '<!DOCTYPE html>\n<html lang="en">\n<head>\n'
+            + '<meta charset="UTF-8">\n'
+            + '<meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
+            + '<title>' + escapeHTML(companyName) + ' - Executive Summary</title>\n'
+            + '<style>\n'
+            + ':root{color-scheme:dark;--bg:#0f172a;--panel:#172033;--panel2:#111827;--line:#334155;--text:#e5e7eb;--muted:#94a3b8;--cyan:#67e8f9;--green:#6ee7b7;--amber:#fbbf24;--rose:#fda4af;--violet:#c4b5fd;}\n'
+            + '*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Arial,sans-serif;line-height:1.55}main{max-width:1120px;margin:0 auto;padding:40px 28px 56px}.hero{border:1px solid var(--line);background:linear-gradient(135deg,#172033,#0f172a);border-radius:8px;padding:30px;margin-bottom:20px}.kicker{color:var(--cyan);font-size:11px;font-weight:800;letter-spacing:.16em;text-transform:uppercase}.hero h1{margin:8px 0 10px;font-size:34px;line-height:1.1}.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.meta span,.chips span{border:1px solid rgba(148,163,184,.28);background:rgba(15,23,42,.62);border-radius:999px;padding:5px 9px;color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:20px 0}.metric{border:1px solid rgba(148,163,184,.22);background:rgba(15,23,42,.72);border-radius:8px;padding:14px}.metric span{display:block;color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em}.metric strong{display:block;margin-top:4px;font-size:24px;color:white}.metric em{display:block;margin-top:3px;color:var(--muted);font-size:11px;font-style:normal}.section{border:1px solid rgba(148,163,184,.22);background:rgba(17,24,39,.78);border-radius:8px;padding:24px;margin-top:16px}.section h2{margin:0 0 14px;color:white;font-size:20px}.section h3{margin:20px 0 8px;color:var(--cyan);font-size:14px;text-transform:uppercase;letter-spacing:.08em}.section h4{margin:16px 0 6px;color:white;font-size:14px}.section p{margin:0 0 13px;color:#dbe4f0}.eyebrow{margin-bottom:6px;color:var(--muted);font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}.two-col{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px}.two-col h3{color:var(--amber)}ul{margin:0;padding-left:20px}li{margin:8px 0}.callout{margin-top:18px;border-left:3px solid var(--rose);background:rgba(244,63,94,.08);padding:14px 16px}.stakeholders{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.stakeholders article{border:1px solid rgba(148,163,184,.18);background:rgba(15,23,42,.55);border-radius:8px;padding:15px}.stakeholders h3{margin:0;color:white;text-transform:none;letter-spacing:0;font-size:15px}.role{color:var(--green);font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin:4px 0 8px}.stakeholders small{display:block;margin-top:10px;color:var(--muted);font-size:11px}.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}.muted{color:var(--muted)!important}strong{color:white}hr{border:0;border-top:1px solid var(--line);margin:20px 0}.footer{margin-top:28px;color:#64748b;font-size:11px;text-align:center}.page-note{color:var(--muted);max-width:820px;margin:0}\n'
+            + '</style>\n</head>\n<body>\n<main>\n'
+            + '<header class="hero"><div class="kicker">Executive Summary HTML Export</div><h1>' + escapeHTML(companyName) + '</h1><p class="page-note">Compact context package for leadership review and upload workflows. This file intentionally excludes the full raw JSON payload.</p><div class="meta">' + headerMeta + '<span>Generated ' + escapeHTML(generatedDate) + '</span></div></header>\n'
+            + '<div class="metrics">' + metrics.join('') + '</div>\n'
+            + renderSection('General Summary', 'Executive context', renderParagraphs(exportData.general_summary))
+            + renderSection('AI Diagnosis', 'Interpretation and risks', diagnosisHTML)
+            + renderSection('Core Metrics', 'Scorecard', '<div class="metrics">' + metrics.join('') + '</div>')
+            + renderSection('Key Stakeholders', 'People and influence', stakeholdersHTML)
+            + renderSection('WHY and WHAT', 'Activation thesis', whyWhatHTML)
+            + renderSection('Strategic Pitch', 'Outbound narrative', pitchHTML)
+            + renderSection(exportData.domain ? 'Domain Force Dossier: ' + exportData.domain : 'Domain Force Dossier', 'Market context', dossierHTML)
+            + renderSection('Future Insight', 'Foresight narrative', renderReportBlocks(exportData.foresight_summary))
+            + renderSection('Detailed Forensic Report', 'Diagnostic detail', renderReportBlocks(exportData.detailed_report))
+            + '<div class="footer">AdaptabilityScanner | Executive export | No raw JSON embedded</div>\n'
+            + '</main>\n</body>\n</html>';
+
+        const blob = new Blob([htmlContent], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'Executive_Report_' + String(companyName).replace(/\s+/g, '_') + '_' + generatedDate + '.html';
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    fetch('/company/' + encodeURIComponent(data.companyName) + '?t=' + Date.now())
+        .then(function(res) {
+            if (res.ok) return res.json();
+            console.warn('[Executive HTML Export] Fetch response not ok:', res.status);
+            return null;
+        })
+        .catch(function(err) {
+            console.warn('[Executive HTML Export] Fetch error:', err);
+            return null;
+        })
+        .then(function(fresh) {
+            const exportData = fresh ? Object.assign({}, data, fresh) : data;
+            buildAndDownloadExecutive(exportData);
+        });
+  };
+
   return (
     <div className="space-y-4">
       {/* TOOLBAR */}
@@ -594,6 +807,14 @@ const isForesightContext = (link) => {
         >
             {copied ? <Check size={14} /> : <FileCode size={14} />}
             {copied ? "COPIED" : "COPY JSON"}
+        </button>
+        <button
+            onClick={handleDownloadExecutiveHTML}
+            className="flex items-center gap-2 px-3 py-1.5 rounded bg-cyan-600/80 hover:bg-cyan-500 border border-cyan-300/30 text-xs font-bold text-white transition-all shadow-lg shadow-cyan-900/20"
+            title="Download Executive Summary HTML (No Raw JSON)"
+        >
+            <Download size={14} />
+            EXEC SUMMARY
         </button>
         <button 
             onClick={handleDownloadHTML}
