@@ -381,6 +381,54 @@ class TestCompanySpecificEvidencePreservation:
         item = classified["foresight_links"][0]
         assert item.get("excluded_from_company_fact_generation") is True, \
             "Analyst/trend report should be context-only"
+        assert item.get("generation_eligible") is False, \
+            "Sanitized foresight must not become generation-eligible without analysis verification"
+        assert item.get("promotion_status") == "display_only"
+        assert item.get("claim_support_status") == "unchecked"
+        assert item.get("verification_reason") == "foresight_sanitized_not_analysis_verified"
+
+    def test_classify_preserves_analysis_verified_foresight_promotion(self):
+        record = {
+            "name": COMPANY,
+            "foresight_links": [
+                {
+                    "url": "https://gartner.com/ai-trends",
+                    "source_type": "analyst",
+                    "title": "Gartner AI Trend Report",
+                    "origin": "foresight",
+                    "claim_type": "foresight_context",
+                    "analysis_verified": True,
+                    "promotion_status": "generation_eligible",
+                    "generation_eligible": True,
+                    "claim_support_status": "supported",
+                }
+            ],
+        }
+        classified = classify_source_registry_items(record)
+        item = classified["foresight_links"][0]
+        assert item.get("generation_eligible") is True
+        assert item.get("analysis_verified") is True
+        assert item.get("promotion_status") == "generation_eligible"
+        assert item.get("claim_support_status") == "supported"
+        assert item.get("excluded_from_company_fact_generation") is True
+
+    def test_bare_generation_eligible_does_not_promote_generic_foresight(self):
+        record = {
+            "name": COMPANY,
+            "foresight_links": [
+                {
+                    "url": "https://example.com/trend",
+                    "source_type": "trend_report",
+                    "title": "Future of Work Trend",
+                    "generation_eligible": True,
+                }
+            ],
+        }
+        classified = classify_source_registry_items(record)
+        item = classified["foresight_links"][0]
+        assert item.get("analysis_verified") is False
+        assert item.get("generation_eligible") is False
+        assert item.get("promotion_status") == "display_only"
 
 
 # ---------------------------------------------------------------------------

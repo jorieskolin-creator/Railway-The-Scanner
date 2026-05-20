@@ -369,18 +369,16 @@ def classify_source_registry_items(record: dict) -> dict:
             item.setdefault("search_skip", True)
             if item.get("wrong_entity") is True or item.get("verified") is False:
                 item["generation_eligible"] = False
+                item.setdefault("analysis_verified", False)
+                item["promotion_status"] = "excluded"
+                item.setdefault("claim_support_status", "unavailable")
+                item.setdefault("verification_reason", "wrong_entity_or_unverified")
                 item["excluded_from_generation"] = True
                 item["source_registry_status"] = "checked_excluded"
                 item["exclusion_reason"] = "wrong_entity_or_unverified"
             elif _is_probably_foresight_record(item) and not _is_company_specific_evidence(item):
                 # Generic foresight/regulatory/trend context — not company fact evidence.
-                item.setdefault("generation_eligible", True)
-                item.setdefault("claim_type", "foresight_context")
-                item.setdefault("company_specific", False)
-                item.setdefault("requires_company_specific_corroboration", True)
-                item["excluded_from_company_fact_generation"] = True
-                item.setdefault("source_registry_status", "checked_context_only")
-                item.setdefault("exclusion_reason", "context_only_not_company_fact")
+                _mark_sanitized_foresight_context(item)
             else:
                 # Company-specific evidence: preserve generation eligibility.
                 # If previously mis-classified as context-only, clear that flag.
@@ -392,6 +390,35 @@ def classify_source_registry_items(record: dict) -> dict:
                 else:
                     item.setdefault("source_registry_status", "checked_generation_eligible")
     return out
+
+
+def _has_analysis_verified_promotion(item: dict) -> bool:
+    """True only when Clean Evidence has promoted this source for generated prose."""
+    return (
+        isinstance(item, dict)
+        and item.get("analysis_verified") is True
+        and item.get("promotion_status") == "generation_eligible"
+    )
+
+
+def _mark_sanitized_foresight_context(item: dict) -> None:
+    """Mark generic foresight as context-safe without implying source verification."""
+    item.setdefault("claim_type", "foresight_context")
+    item.setdefault("company_specific", False)
+    item.setdefault("requires_company_specific_corroboration", True)
+    item["excluded_from_company_fact_generation"] = True
+    item.setdefault("source_registry_status", "checked_context_only")
+    item.setdefault("exclusion_reason", "context_only_not_company_fact")
+
+    if _has_analysis_verified_promotion(item):
+        item["generation_eligible"] = True
+        return
+
+    item["analysis_verified"] = False
+    item["generation_eligible"] = False
+    item["promotion_status"] = "display_only"
+    item.setdefault("claim_support_status", "unchecked")
+    item.setdefault("verification_reason", "foresight_sanitized_not_analysis_verified")
 
 
 def _company_name_from_record(record: dict) -> str:

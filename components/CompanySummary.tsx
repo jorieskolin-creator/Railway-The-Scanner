@@ -459,7 +459,7 @@ const isForesightContext = (link) => {
             return link && (link.verified === true || link.validated === true || link.url_verified === true);
         }).length;
         var analysisVerifiedSources = evidencePool.filter(function(link) {
-            return link && (link.analysis_verified === true || link.promotion_status === 'generation_eligible' || link.generation_eligible === true);
+            return link && (link.analysis_verified === true || link.promotion_status === 'generation_eligible');
         }).length;
         var weakSources = evidencePool.filter(function(link) {
             var cred = normalizeCred(link && (link.source_credibility || link.credibility));
@@ -542,7 +542,7 @@ const isForesightContext = (link) => {
                 var url = link.url || link.source_url || '';
                 var sourceName = link.title || link.source || link.source_title || link.fp_theme || 'Evidence source';
                 var quote = link.source_quote || link.source_says || link.snippet || link.description || link.summary || '';
-                var analysis = link.analysis_verified === true || link.promotion_status === 'generation_eligible' || link.generation_eligible === true ? 'Verified for analysis' : (link.promotion_status || link.verification_reason || 'Display only');
+                var analysis = link.analysis_verified === true || link.promotion_status === 'generation_eligible' ? 'Verified for analysis' : (link.promotion_status || link.verification_reason || 'Display only');
                 return '<tr><td>' + escapeHTML(sourceName) + '</td><td>' + escapeHTML(link.source_type || link.origin || '') + '</td><td>' + escapeHTML(link.source_credibility || link.credibility || 'unknown') + '</td><td>' + (url ? '<a href="' + escapeHTML(url) + '">' + escapeHTML(url) + '</a>' : '') + '</td><td>' + escapeHTML(analysis) + '</td><td>' + escapeHTML(link.claim_support_status || '') + '</td><td>' + escapeHTML(String(quote).slice(0, 420)) + '</td></tr>';
             }).join('') + '</tbody></table></div>' : '<p class="muted">No evidence links were available in this export.</p>';
         function checklistMarkerState(item) {
