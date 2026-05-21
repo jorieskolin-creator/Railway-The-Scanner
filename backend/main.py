@@ -3992,10 +3992,14 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
         # Failure is non-fatal — old records without these fields are handled gracefully.
         gs_text, gs_model = "", ""
         fs_text, fs_model = "", ""
+        fs_skip_reason = ""
+        has_foresight_for_summary = bool(foresight_data and foresight_data.get("dimension_forces"))
         _gs_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
         parallel_ms = 0
         if _gs_remaining < 45:
             print(f"   ⏭ [GS+FS] Budget < 45s remaining ({int(_gs_remaining)}s) — skipping General Summary and Future Insight")
+            if has_foresight_for_summary:
+                fs_skip_reason = f"Budget < 45s remaining ({int(_gs_remaining)}s)"
             if scan_quality == "complete":
                 scan_quality = "partial_summary"
         else:
@@ -4006,7 +4010,7 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
 
                     # Future Insight runs in parallel with General Summary
                     fs_future = None
-                    if foresight_data and foresight_data.get("dimension_forces"):
+                    if has_foresight_for_summary:
                         from strategic_foresight import generate_foresight_summary
                         fs_future = pool.submit(generate_foresight_summary, foresight_data, companyName, company_domain)
 
@@ -4020,10 +4024,13 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                             fs_text, fs_model = fs_future.result(timeout=120)
                         except Exception as fs_err:
                             print(f"   ⚠️ [Future Insight] Failed: {fs_err} — skipping")
+                            fs_skip_reason = f"generation_failed: {str(fs_err)[:160]}"
 
                 parallel_ms = int((time.time() - parallel_start) * 1000)
             except Exception as parallel_err:
                 print(f"   ⚠️ [Summary+Foresight] Parallel execution failed: {parallel_err}")
+                if has_foresight_for_summary:
+                    fs_skip_reason = f"parallel_execution_failed: {str(parallel_err)[:160]}"
                 # Fallback: try general summary alone
                 try:
                     gs_text, gs_model = generate_general_summary(full_data, companyName)
@@ -4053,10 +4060,13 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
         if fs_text:
             full_data["foresight_summary"] = fs_text
             full_data["foresight_summary_model"] = fs_model
+            full_data["foresight_summary_status"] = "generated"
             wc = len(fs_text.split())
             print(f"   ✅ [Future Insight] {wc} words, model={fs_model} ({parallel_ms}ms)")
         else:
-            if foresight_data and foresight_data.get("dimension_forces"):
+            if has_foresight_for_summary:
+                full_data["foresight_summary_status"] = "skipped"
+                full_data["foresight_summary_skip_reason"] = fs_skip_reason or "empty_generation"
                 print(f"   ⚠️ [Future Insight] Generation returned empty — skipping")
 
         # --- STEP 3.7: DETAILED FORENSIC REPORT (meta-synthesis) ---
@@ -4107,6 +4117,10 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
         else:
             print(f"   ⚠️ [Detailed Report] Generation returned empty — skipping field")
 
+        # Sync final scan quality before save so optional Future Insight skips are
+        # visible in stored records and exported Master Data.
+        full_data["scan_quality"] = scan_quality
+
         # --- STEP 4: SAVE ---
         if saveToDatabase:
             print(f"   🔄 [Storage] Saving report to Vercel Blob...")
@@ -4144,8 +4158,6 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
             # Update index
             storage.update_global_index(summary_entry)
 
-        # Sync final scan_quality back into full_data (may have been updated by fact-check)
-        full_data["scan_quality"] = scan_quality
         if job_id:
             _update_scan_job(job_id, phase="finalizing", progress=95)
             _append_scan_log(job_id, "Finalizing scan result")

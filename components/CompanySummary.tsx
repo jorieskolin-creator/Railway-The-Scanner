@@ -674,8 +674,88 @@ const isForesightContext = (link) => {
                 domainDossierHTML = renderReportBlocks(String(dossier.text).replace(/^#\s+Domain Force Dossier.*$/im, '').trim());
             }
         }
+        var renderSourceLink = function(url, label) {
+            if (!url) return '';
+            return '<a href="' + escapeHTML(url) + '">' + escapeHTML(label || url) + '</a>';
+        };
+        var renderStrategicForesightEvidence = function(sf) {
+            if (!sf || typeof sf !== 'object') return '';
+            var parts = [];
+            var validation = sf.validation_summary || {};
+            var hasValidation = Object.keys(validation).length > 0 || sf.insufficient_evidence;
+            var forces = Array.isArray(sf.dimension_forces) ? sf.dimension_forces : [];
+            if (hasValidation) {
+                var validationMetrics = [
+                    renderMetric('Quality', validation.quality || (sf.insufficient_evidence ? 'Insufficient' : 'n/a'), 'validation gate'),
+                    renderMetric('Total Forces', validation.total_forces ?? forces.length, 'detected signals'),
+                    renderMetric('Validated Forces', validation.validated_forces ?? 0, 'passed checks'),
+                    renderMetric('Verified URLs', validation.total_verified_urls ?? 0, 'reachable evidence'),
+                    renderMetric('Flagged Forces', validation.flagged_forces ?? 0, 'needs caution')
+                ];
+                parts.push('<div class="metrics">' + validationMetrics.join('') + '</div>');
+                if (sf.insufficient_evidence) {
+                    parts.push('<div class="callout amber"><h3>Validation Note</h3><p>Strategic foresight evidence was marked as insufficient or limited for this scan.</p></div>');
+                }
+            }
+            if (forces.length) {
+                parts.push('<h3>Key Forces</h3><div class="table-wrap"><table><thead><tr><th>Force</th><th>Dimension / Theme</th><th>Timing</th><th>Confidence</th><th>Credibility</th><th>Verification</th><th>Company Impact</th><th>Source</th></tr></thead><tbody>'
+                    + forces.map(function(force) {
+                        var verification = [
+                            force.url_verified === true ? 'URL verified' : (force.url_verified === false ? 'URL not verified' : ''),
+                            force.analysis_verified === true ? 'Analysis verified' : '',
+                            force.promotion_status || force.claim_support_status || ''
+                        ].filter(Boolean).join(' / ');
+                        var sourceLinks = [];
+                        if (force.source_url) sourceLinks.push(renderSourceLink(force.source_url, 'Primary source'));
+                        if (Array.isArray(force.verified_supporting_sources)) {
+                            force.verified_supporting_sources.slice(0, 3).forEach(function(src, idx) {
+                                var srcUrl = typeof src === 'string' ? src : (src && (src.url || src.source_url));
+                                if (srcUrl && sourceLinks.indexOf(srcUrl) === -1) {
+                                    sourceLinks.push(renderSourceLink(srcUrl, 'Supporting source ' + (idx + 1)));
+                                }
+                            });
+                        }
+                        return '<tr><td>' + escapeHTML(force.type || force.trend || force.force || 'Foresight force') + '</td><td>' + escapeHTML([force.kb_dimension, force.fp_theme].filter(Boolean).join(' / ')) + '</td><td>' + escapeHTML(force.timeframe || '') + '</td><td>' + escapeHTML(force.confidence || '') + '</td><td>' + escapeHTML(force.source_credibility || force.credibility || 'unknown') + '</td><td>' + escapeHTML(verification || 'Not recorded') + '</td><td>' + escapeHTML(force.impact_on_company || force.possible_relevance || force.description || '') + '</td><td>' + (sourceLinks.join('<br>') || '') + '</td></tr>';
+                    }).join('') + '</tbody></table></div>');
+            }
+            if (hasText(sf.cross_impact_chain)) {
+                var chainNodes = String(sf.cross_impact_chain).split(/\s*(?:→|->)\s*/).map(function(node) { return node.trim(); }).filter(Boolean);
+                parts.push('<h3>Cross-Impact Chain</h3>' + (chainNodes.length > 1
+                    ? '<ol>' + chainNodes.map(function(node) { return '<li>' + renderInlineMarkdown(node) + '</li>'; }).join('') + '</ol>'
+                    : renderParagraphs(sf.cross_impact_chain)));
+            }
+            var scenarios = sf.scenarios || {};
+            var scenarioRows = [
+                ['If They Act Now', scenarios.acceleration],
+                ['Continue Unchanged', scenarios.status_quo],
+                ['If Disrupted', scenarios.disruption]
+            ].filter(function(row) { return hasText(row[1]); });
+            if (scenarioRows.length) {
+                parts.push('<h3>Micro-Scenarios</h3><div class="table-wrap"><table><thead><tr><th>Scenario</th><th>Implication</th></tr></thead><tbody>'
+                    + scenarioRows.map(function(row) {
+                        return '<tr><td>' + escapeHTML(row[0]) + '</td><td>' + renderInlineMarkdown(row[1]) + '</td></tr>';
+                    }).join('') + '</tbody></table></div>');
+            }
+            var climate = sf.climate_exposure || {};
+            if (hasText(climate.headline) || hasText(climate.physical_risk) || hasText(climate.transition_risk) || hasText(climate.risk_level)) {
+                parts.push('<h3>Climate Exposure</h3><div class="metrics">'
+                    + renderMetric('Risk Level', climate.risk_level || 'n/a', 'climate exposure')
+                    + '</div>'
+                    + (hasText(climate.headline) ? '<p>' + renderInlineMarkdown(climate.headline) + '</p>' : '')
+                    + (hasText(climate.physical_risk) ? '<h4>Physical Risk</h4><p>' + renderInlineMarkdown(climate.physical_risk) + '</p>' : '')
+                    + (hasText(climate.transition_risk) ? '<h4>Transition Risk</h4><p>' + renderInlineMarkdown(climate.transition_risk) + '</p>' : ''));
+            }
+            return parts.join('');
+        };
         var activationHTML = '<div class="two-col"><div><h3>WHY</h3>' + renderList(exportData.why_proposals) + '</div><div><h3>WHAT</h3>' + renderList(exportData.what_proposals) + '</div></div>'
             + renderSection('Strategic Pitch', 'Outbound narrative', renderParagraphs(exportData.pitch_text), 'nested');
+        var strategicForesightData = exportData.strategic_foresight || {};
+        var strategicForesightHTML = renderStrategicForesightEvidence(strategicForesightData);
+        var futureInsightHTML = renderReportBlocks(exportData.foresight_summary);
+        if (!futureInsightHTML && Array.isArray(strategicForesightData.dimension_forces) && strategicForesightData.dimension_forces.length > 0) {
+            futureInsightHTML = '<p class="muted">Future Insight narrative was not generated for this scan.</p>'
+                + (exportData.foresight_summary_skip_reason ? '<p class="muted">Reason: ' + escapeHTML(exportData.foresight_summary_skip_reason) + '</p>' : '');
+        }
         var rawDataHTML = '<details><summary>Open complete raw JSON payload</summary><pre>' + escapeHTML(JSON.stringify(exportData, null, 2)) + '</pre></details>';
         var htmlContent = '<!DOCTYPE html>\n<html lang="en">\n<head>\n'
             + '<meta charset="UTF-8">\n'
@@ -692,10 +772,11 @@ const isForesightContext = (link) => {
             + renderSection('Evidence Trust', 'Source verification and promotion state', trustHTML)
             + renderSection('Key Stakeholders', 'People and influence', stakeholdersHTML)
             + renderSection('Strategic Activation', 'WHY, WHAT, and pitch', activationHTML)
+            + renderSection('Future Insight', 'Foresight narrative', futureInsightHTML)
+            + renderSection('Strategic Foresight Evidence', 'Key forces, cross-impact, scenarios, and climate exposure', strategicForesightHTML)
             + renderSection('Reality Checklist', 'Forensic reality markers', checklistHTML)
             + renderSection('Source Evidence Register', 'All company and foresight sources', sourceTable)
             + renderSection(exportData.domain ? 'Domain Force Dossier: ' + exportData.domain : 'Domain Force Dossier', 'Market context', domainDossierHTML)
-            + renderSection('Future Insight', 'Foresight narrative', renderReportBlocks(exportData.foresight_summary))
             + renderSection('Detailed Forensic Report', 'Diagnostic detail', renderReportBlocks(exportData.detailed_report))
             + renderSection('Raw JSON Payload', 'Machine-readable master data', rawDataHTML)
             + '<section class="section"><div class="eyebrow">Interactive source</div><h2>See Detailed Report</h2><p class="muted">For the full interactive scanner view, open the Scanner.</p><p><a class="scanner-link" href="https://the-demand-scanner.up.railway.app/" target="_blank" rel="noopener noreferrer">See detailed report - Scanner</a></p></section>'
