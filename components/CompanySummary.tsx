@@ -265,13 +265,13 @@ const isForesightContext = (link) => {
     data.contradiction_warnings
   );
   const getSummaryLengthWordCount = (note: any) => {
-    const match = String(note || '').match(/Summary (?:unusually long|length outside target range) \((\d+) words, expected 325-375\)/i);
+    const match = String(note || '').match(/Summary (?:unusually long|length outside target range) \((\d+) words, expected 325-(?:375|475)\)/i);
     return match ? Number(match[1]) : null;
   };
   const normalizeSummaryLengthNote = (note: any) => {
     const wordCount = getSummaryLengthWordCount(note);
-    return wordCount != null && (wordCount < 325 || wordCount > 375)
-      ? `Summary length outside target range (${wordCount} words, expected 325-375)`
+    return wordCount != null && (wordCount < 325 || wordCount > 475)
+      ? `Summary length outside target range (${wordCount} words, expected 325-475)`
       : null;
   };
   const rawHallucinationFlags = normalizeTrustList(
@@ -550,13 +550,13 @@ const isForesightContext = (link) => {
             exportData.general_summary_false_claims
         );
         var getSummaryLengthWordCount = function(note) {
-            var match = String(note || '').match(/Summary (?:unusually long|length outside target range) \((\d+) words, expected 325-375\)/i);
+            var match = String(note || '').match(/Summary (?:unusually long|length outside target range) \((\d+) words, expected 325-(?:375|475)\)/i);
             return match ? Number(match[1]) : null;
         };
         var normalizeSummaryLengthNote = function(note) {
             var wordCount = getSummaryLengthWordCount(note);
-            return wordCount !== null && (wordCount < 325 || wordCount > 375)
-                ? 'Summary length outside target range (' + wordCount + ' words, expected 325-375)'
+            return wordCount !== null && (wordCount < 325 || wordCount > 475)
+                ? 'Summary length outside target range (' + wordCount + ' words, expected 325-475)'
                 : null;
         };
         var qualityNotes = normalizeList(
@@ -751,11 +751,6 @@ const isForesightContext = (link) => {
             + renderSection('Strategic Pitch', 'Outbound narrative', renderParagraphs(exportData.pitch_text), 'nested');
         var strategicForesightData = exportData.strategic_foresight || {};
         var strategicForesightHTML = renderStrategicForesightEvidence(strategicForesightData);
-        var futureInsightHTML = renderReportBlocks(exportData.foresight_summary);
-        if (!futureInsightHTML && Array.isArray(strategicForesightData.dimension_forces) && strategicForesightData.dimension_forces.length > 0) {
-            futureInsightHTML = '<p class="muted">Future Insight narrative was not generated for this scan.</p>'
-                + (exportData.foresight_summary_skip_reason ? '<p class="muted">Reason: ' + escapeHTML(exportData.foresight_summary_skip_reason) + '</p>' : '');
-        }
         var rawDataHTML = '<details><summary>Open complete raw JSON payload</summary><pre>' + escapeHTML(JSON.stringify(exportData, null, 2)) + '</pre></details>';
         var htmlContent = '<!DOCTYPE html>\n<html lang="en">\n<head>\n'
             + '<meta charset="UTF-8">\n'
@@ -772,7 +767,6 @@ const isForesightContext = (link) => {
             + renderSection('Evidence Trust', 'Source verification and promotion state', trustHTML)
             + renderSection('Key Stakeholders', 'People and influence', stakeholdersHTML)
             + renderSection('Strategic Activation', 'WHY, WHAT, and pitch', activationHTML)
-            + renderSection('Future Insight', 'Foresight narrative', futureInsightHTML)
             + renderSection('Strategic Foresight Evidence', 'Key forces, cross-impact, scenarios, and climate exposure', strategicForesightHTML)
             + renderSection('Reality Checklist', 'Forensic reality markers', checklistHTML)
             + renderSection('Source Evidence Register', 'All company and foresight sources', sourceTable)
@@ -929,7 +923,7 @@ const isForesightContext = (link) => {
             return String(item?.source_type || '').toLowerCase() === 'historical';
         });
         const isSummaryLengthWarning = function(note) {
-            return /Summary (?:unusually long|length outside target range) \(\d+ words, expected 325-375\)/i.test(String(note || ''));
+            return /Summary (?:unusually long|length outside target range) \(\d+ words, expected 325-(?:375|475)\)/i.test(String(note || ''));
         };
         const unsupportedClaimCount = (Array.isArray(exportData.hallucination_flags) ? exportData.hallucination_flags.filter(function(flag) { return !isSummaryLengthWarning(flag); }).length : 0)
             + (Array.isArray(exportData.ai_verification?.false_claims) ? exportData.ai_verification.false_claims.length : 0)
@@ -1033,7 +1027,6 @@ const isForesightContext = (link) => {
             + renderSection('WHY and WHAT', 'Activation thesis', whyWhatHTML)
             + renderSection('Strategic Pitch', 'Outbound narrative', pitchHTML)
             + renderSection(exportData.domain ? 'Domain Force Dossier: ' + exportData.domain : 'Domain Force Dossier', 'Market context', dossierHTML)
-            + renderSection('Future Insight', 'Foresight narrative', renderReportBlocks(exportData.foresight_summary))
             + renderSection('Detailed Forensic Report', 'Diagnostic detail', renderReportBlocks(exportData.detailed_report))
             + '<section class="section"><div class="eyebrow">Continue analysis</div><h2>See Detailed Report</h2><p class="muted">For the full interactive scanner view, source context, and deeper company diagnostics, open the Scanner.</p><p><a class="scanner-link" href="https://the-demand-scanner.up.railway.app/" target="_blank" rel="noopener noreferrer">See detailed report - Scanner</a></p></section>'
             + '<div class="footer">AdaptabilityScanner | Executive export | No raw JSON embedded</div>\n'
@@ -2165,37 +2158,6 @@ const isForesightContext = (link) => {
         {/* === REPORT-ONLY SECTIONS (hidden in modal, visible in downloaded HTML) === */}
         {/* These sections are wrapped with report-only class which is display:none in the app
             but the downloaded HTML overrides it to display:block */}
-
-        {data.foresight_summary && (
-            <div className="report-only-section" style={{ display: 'none' }}>
-                <div className="bg-black/20 p-8 rounded-2xl border-l-4 border-teal-500 backdrop-blur-sm">
-                    <h3 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
-                        <TrendingUp className="text-teal-400" size={22} />
-                        Future Insight
-                    </h3>
-                    <p className="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">
-                        Forward-looking narrative based on strategic foresight analysis
-                    </p>
-                    <div>
-                        {data.foresight_summary.split(/\n\n+/).map((para, pi) => (
-                            para.startsWith("This Future Insight is based on") ? (
-                                <p key={pi} className="mt-5 pt-3 border-t border-teal-800/40 text-[10px] text-slate-500 uppercase tracking-wider font-mono">
-                                    {para}
-                                </p>
-                            ) : (
-                                <p key={pi} className={`text-slate-200 leading-relaxed text-sm font-light${pi > 0 ? " mt-4" : ""}`}>
-                                    {para.split(/\*\*([^*]+)\*\*/).map((segment, si) =>
-                                        si % 2 === 1
-                                            ? <span key={si} className="font-semibold text-teal-300">{segment}</span>
-                                            : <React.Fragment key={si}>{segment}</React.Fragment>
-                                    )}
-                                </p>
-                            )
-                        ))}
-                    </div>
-                </div>
-            </div>
-        )}
 
         {data.detailed_report && (
             <div className="report-only-section" style={{ display: 'none' }}>

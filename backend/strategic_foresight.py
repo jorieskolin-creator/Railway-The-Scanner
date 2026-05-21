@@ -1675,24 +1675,81 @@ def _force_generation_eligible_for_context(force: dict) -> bool:
     })
 
 
+def _norm_force_gate_value(value: object) -> str:
+    if isinstance(value, (int, float)):
+        if value >= 70:
+            return "high"
+        if value >= 45:
+            return "medium"
+        if value > 0:
+            return "low"
+    return str(value or "").strip().lower().replace("-", "_")
+
+
+def _has_verified_force_support(force: dict) -> bool:
+    """Return true when a force has at least one reachable supporting source."""
+    if force.get("url_verified") is True or force.get("verified") is True:
+        return True
+
+    for key in ("verified_supporting_sources", "supporting_sources", "sources"):
+        sources = force.get(key)
+        if not isinstance(sources, list):
+            continue
+        for src in sources:
+            if isinstance(src, dict):
+                if src.get("url_verified") is True or src.get("verified") is True:
+                    return True
+                if src.get("url") and src.get("analysis_verified") is True:
+                    return True
+            elif key == "verified_supporting_sources" and isinstance(src, str) and src.strip():
+                # Legacy strategic foresight forces often retain only already-vetted source URLs.
+                return True
+    return False
+
+
+def _force_ai_diagnosis_eligible(force: dict) -> bool:
+    """Gate external foresight forces allowed into the AI Diagnosis final paragraph."""
+    if not isinstance(force, dict):
+        return False
+
+    confidence = _norm_force_gate_value(force.get("confidence"))
+    credibility = _norm_force_gate_value(force.get("source_credibility") or force.get("credibility"))
+    support = _norm_force_gate_value(force.get("claim_support_status"))
+    promotion = _norm_force_gate_value(force.get("promotion_status"))
+    entity_status = _norm_force_gate_value(force.get("entity_match_status"))
+
+    if confidence not in {"medium", "high"}:
+        return False
+    if credibility not in {"medium", "high"}:
+        return False
+    if support in {"unsupported", "unavailable"}:
+        return False
+    if promotion == "excluded":
+        return False
+    if force.get("wrong_entity") is True or entity_status == "wrong":
+        return False
+    return _has_verified_force_support(force)
+
+
 def format_foresight_for_synthesis(foresight_data: dict, company_name: str, domain: str) -> str:
     """
-    Format foresight data into a context block for the synthesis prompt.
+    Format qualified foresight forces into a compact AI Diagnosis context block.
     Returns an empty string if foresight data is insufficient.
     """
     if not foresight_data or not foresight_data.get("dimension_forces"):
         return ""
-    forces = [f for f in foresight_data["dimension_forces"] if _force_generation_eligible_for_context(f)]
+    forces = [f for f in foresight_data["dimension_forces"] if _force_ai_diagnosis_eligible(f)]
     if not forces:
         return ""
 
     forces_text = ""
-    for f in forces:
+    for f in forces[:5]:
         lc_tag = ""
         if f.get("lifecycle_stage"):
             lc_tag = f" [{f['lifecycle_stage']}/{f.get('trend_momentum', '?')}]"
+        gate_tag = f"confidence={f.get('confidence', '?')}, credibility={f.get('source_credibility') or f.get('credibility', '?')}"
         forces_text += (
-            f"- [{f.get('type', '?')}] {f.get('trend', '?')} ({f.get('timeframe', '?')}){lc_tag} "
+            f"- [{f.get('type', '?')}; {gate_tag}] {f.get('trend', '?')} ({f.get('timeframe', '?')}){lc_tag} "
             f"→ impacts {f.get('kb_dimension', '?')}: {f.get('impact_on_company', '?')}"
         )
         if f.get("proposal_angle"):
@@ -1708,7 +1765,7 @@ def format_foresight_for_synthesis(foresight_data: dict, company_name: str, doma
         climate_line = f"\nClimate exposure ({climate.get('risk_level', '?')}): {climate['headline']}"
 
     return f"""
-STRATEGIC FORESIGHT CONTEXT (external forces, next 12-36 months):
+AI DIAGNOSIS FORESIGHT INPUTS (external trend pressure only; not company fact evidence):
 {forces_text}
 Cross-impact chain: {cross_impact}
 
@@ -1716,13 +1773,10 @@ Key scenario — Status Quo: {scenarios.get('status_quo', 'N/A')}
 Key scenario — Disruption: {scenarios.get('disruption', 'N/A')}
 {climate_line}
 
-INSTRUCTION: You may weave 1-2 forward-looking insights into the summary's final paragraph, but only as external context.
-The pitch should reference an external force only when the evidence supports relevance; do not state it as current company deployment.
-WHY/WHAT proposals should be future-aware and validation-first — frame the weakest KB dimension against
-its potentially relevant external force.
-Example: Instead of "Your AI maturity needs improvement" →
-"With agentic AI reshaping {domain} in 12-18 months, your current state creates
-an urgent modernization window."
+INSTRUCTION: Use these only for one final 3-5 sentence foresight implication paragraph in AI Diagnosis.
+Phrase them as external pressure or market context, not as facts about {company_name}, unless company-specific evidence elsewhere supports the company fact.
+Allowed: "External {domain} signals suggest pressure from..."
+Forbidden: "{company_name} is already losing traffic/revenue/customers because..." unless that exact company-specific evidence is present.
 """
 
 

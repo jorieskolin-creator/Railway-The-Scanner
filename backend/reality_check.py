@@ -472,8 +472,8 @@ def validate_summary(summary_text, company_name, key_people=None, evidence_links
 
     # --- CHECK 7: Format length note (not evidence/hallucination signal) ---
     word_count = len(summary_text.split())
-    if word_count > 375:
-        quality_notes.append(f"Summary length outside target range ({word_count} words, expected 325-375)")
+    if word_count > 475:
+        quality_notes.append(f"Summary length outside target range ({word_count} words, expected 325-475)")
 
     # --- CHECK 8: Repetitive patterns (hallucination loops) ---
     sentences = [s.strip() for s in re.split(r'[.!?]', summary_text) if len(s.strip()) > 20]

@@ -239,8 +239,6 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
         result["prior_analyses"] = {}
         if prior_summaries.get("general_summary"):
             result["prior_analyses"]["general_summary"] = prior_summaries["general_summary"]
-        if prior_summaries.get("foresight_summary"):
-            result["prior_analyses"]["foresight_summary"] = prior_summaries["foresight_summary"]
         if prior_summaries.get("ai_summary"):
             result["prior_analyses"]["ai_diagnosis"] = prior_summaries["ai_summary"]
         if prior_summaries.get("why_what"):
@@ -362,8 +360,8 @@ def generate_detailed_report(
     """
     Generate an 800-1200 word detailed diagnostic report.
 
-    When prior_summaries is provided (general_summary, foresight_summary, ai_summary,
-    why_what), the report acts as a meta-synthesis of all previously generated
+    When prior_summaries is provided (general_summary, ai_summary, why_what),
+    the report acts as a meta-synthesis of all previously generated
     analyses rather than duplicating analysis from raw evidence. No new searches
     are performed — it works entirely from data already in memory.
 

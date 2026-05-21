@@ -35,9 +35,9 @@ def test_summary_inside_target_range_has_no_length_warning():
 
 
 def test_summary_above_target_range_is_quality_note_not_unsupported_flag():
-    result = validate_summary(_summary(390), "ExampleCo")
+    result = validate_summary(_summary(490), "ExampleCo")
 
-    expected = "Summary length outside target range (390 words, expected 325-375)"
+    expected = "Summary length outside target range (490 words, expected 325-475)"
     assert expected in result.get("quality_notes", [])
     assert expected not in result["flags"]
     assert result["risk"] == "low"

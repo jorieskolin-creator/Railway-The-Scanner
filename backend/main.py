@@ -1740,11 +1740,15 @@ Use YOUR reality_score + Financial Health Index ({fin_for_arch}):
   - reality_score < 50 AND Financial Health Index < 50 → "At Risk"
 This is a mechanical derivation — do not override based on narrative interpretation.
 
-STEP 3 — SUMMARY (up to 375 words):
+STEP 3 — AI DIAGNOSIS SUMMARY:
 Write a diagnostic narrative that reads like an expert assessment, not a template:
-  - Structure: exactly 3-4 paragraphs, each covering a distinct KB dimension (e.g. overall position
+  - Structure: exactly 3-4 core paragraphs, each covering a distinct KB dimension (e.g. overall position
     & operating model / strategy & culture / service portfolio & AI readiness / financial context).
     Separate paragraphs with \n\n in the JSON string — this is required for rendering.
+  - If SCAN DATA includes "AI DIAGNOSIS FORESIGHT INPUTS", add exactly one final foresight implication paragraph of 3-5 sentences after the core diagnosis.
+  - The final foresight paragraph must phrase forces as external pressure or market context, not as company facts, unless company-specific evidence above supports the fact.
+  - If no qualified foresight inputs exist, do not force a future paragraph.
+  - Target length: 250-375 words without foresight inputs; 325-475 words when the optional foresight paragraph is present.
   - First sentence: State the archetype and what defines this company's position.
   - Body: Map 3-4 key findings to specific KB dimensions. For each finding, connect the evidence
     to the KB pattern it reveals.
@@ -1805,7 +1809,7 @@ Rules:
 ### OUTPUT
 Respond with valid JSON only. Required fields:
 {{"diagnostic_summary": "...", "evidence_based_risks": ["..."], "commercial_pitch": "...", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."], "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
-Note: diagnostic_summary must contain \n\n between paragraphs (3-4 paragraphs total). commercial_pitch must also contain \n\n between its 3 paragraphs.
+Note: diagnostic_summary must contain \n\n between paragraphs (3-4 core paragraphs plus one optional final foresight implication paragraph). commercial_pitch must also contain \n\n between its 3 paragraphs.
 Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2.
 
 ### CRITICAL CONTEXT — FACT-CHECK CORRECTIONS
@@ -3261,11 +3265,15 @@ Use YOUR reality_score + Financial Health Index ({fin_for_archetype}):
   - reality_score < 50 AND Financial Health Index < 50 → "At Risk"
 This is a mechanical derivation — do not override based on narrative interpretation.
 
-STEP 3 — SUMMARY (up to 375 words):
+STEP 3 — AI DIAGNOSIS SUMMARY:
 Write a diagnostic narrative that reads like an expert assessment, not a template:
-  - Structure: exactly 3-4 paragraphs, each covering a distinct KB dimension (e.g. overall position
+  - Structure: exactly 3-4 core paragraphs, each covering a distinct KB dimension (e.g. overall position
     & operating model / strategy & culture / service portfolio & AI readiness / financial context).
     Separate paragraphs with \n\n in the JSON string — this is required for rendering.
+  - If SCAN DATA includes "AI DIAGNOSIS FORESIGHT INPUTS", add exactly one final foresight implication paragraph of 3-5 sentences after the core diagnosis.
+  - The final foresight paragraph must phrase forces as external pressure or market context, not as company facts, unless company-specific evidence above supports the fact.
+  - If no qualified foresight inputs exist, do not force a future paragraph.
+  - Target length: 250-375 words without foresight inputs; 325-475 words when the optional foresight paragraph is present.
   - First sentence: State the archetype and what defines this company's position.
   - Body: Map 3-4 key findings to specific KB dimensions. For each finding, connect the evidence
     to the KB pattern it reveals (e.g., "Job postings emphasize hierarchical reporting lines,
@@ -3334,7 +3342,7 @@ Rules:
 ### OUTPUT
 Respond with valid JSON only. Required fields:
 {{"diagnostic_summary": "...", "evidence_based_risks": ["..."], "commercial_pitch": "...", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."], "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
-Note: diagnostic_summary must contain \n\n between paragraphs (3-4 paragraphs total). commercial_pitch must also contain \n\n between its 3 paragraphs.
+Note: diagnostic_summary must contain \n\n between paragraphs (3-4 core paragraphs plus one optional final foresight implication paragraph). commercial_pitch must also contain \n\n between its 3 paragraphs.
 Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2."""
 
                 # --- Synthesis with fallback chain: Opus 4.7 → Gemini 3.1 Pro → Sonnet 4.6 ---
@@ -4088,8 +4096,6 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                 prior_summaries = {}
                 if full_data.get("general_summary"):
                     prior_summaries["general_summary"] = full_data["general_summary"]
-                if full_data.get("foresight_summary"):
-                    prior_summaries["foresight_summary"] = full_data["foresight_summary"]
                 if full_data.get("summary_text"):
                     prior_summaries["ai_summary"] = full_data["summary_text"]
                 why_what_parts = []
