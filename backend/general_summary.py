@@ -1,7 +1,7 @@
 """
-general_summary.py — Plain-language General Summary generator + payload fact-check.
+general_summary.py — Evidence-based business snapshot generator + payload fact-check.
 
-Assembles a 250-300 word narrative from already-computed structured scan data
+Assembles a 250-320 word narrative from already-computed structured scan data
 (jury findings, financial findings, delta). No inline links are included —
 the General Summary is plain prose only; all evidence links are already shown
 in the AI Diagnosis section of the UI.
@@ -174,7 +174,7 @@ _FORBIDDEN_TERMS = [
 ]
 
 _WORD_MIN = 250
-_WORD_MAX = 300
+_WORD_MAX = 320
 
 
 def _build_input_payload(full_data: dict, company_name: str) -> dict:
@@ -416,12 +416,6 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
             # Legacy fallback: plain string
             fin_findings.append(str(f))
 
-    # Key people (max 4)
-    people = [
-        p.get("name", "") for p in (full_data.get("key_people") or [])[:4]
-        if p.get("name")
-    ]
-
     # Only include scores the model genuinely needs for context.
     # intent_score, confidence_score, and financial_sub_scores are intentionally
     # excluded: when present as JSON fields the model treats them as "facts to
@@ -446,7 +440,6 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
         "delta": delta,
         "key_findings": key_findings,
         "evidence_links": verified_links,
-        "key_people": people,
         "financial_findings": fin_findings,
         "financial_index": full_data.get("financial_index"),
     }
@@ -460,9 +453,15 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
 def _build_prompt(payload: dict, company_name: str) -> str:
     forbidden = ", ".join(_FORBIDDEN_TERMS)
     summary_guardrails = _general_summary_guardrails()
-    return f"""You are writing the General Summary section of a forensic B2B intelligence report about {company_name}. Your role in this section is evidence reporter — not analyst, not advisor. You synthesise verified facts into readable prose, but you do not speculate, project, or editorialize.
+    return f"""You are writing the General Summary section of a forensic B2B intelligence report about {company_name}. Your role in this section is to write an evidence-based business snapshot: what is materially true about the company right now, with light financial and operational interpretation that is directly supported by the payload. You are not writing the AI Diagnosis, not giving advice, not making recommendations, and not projecting future outcomes.
 
-This section differs from the AI Diagnosis section: the Diagnosis interprets and projects; this Summary strictly reports what the evidence shows.
+This section differs from nearby report sections:
+- AI Diagnosis owns deeper interpretation, risk framing, recommendations, and projected consequences.
+- Stakeholder List owns people and role details.
+- Future Insight owns forward-looking pressure.
+- Evidence Trust owns source verification status.
+
+The General Summary should connect evidence into a concise executive snapshot without duplicating those sections.
 
 SHARED FACT-DISCIPLINE / FORESIGHT GUARDRAILS:
 {summary_guardrails}
@@ -472,6 +471,12 @@ EVIDENCE — the ONLY material you may reference. Every sentence you write must 
 
 WRITING APPROACH:
 Weave the evidence into a coherent narrative that gives a C-level reader an immediate, factual understanding of where this company stands today. Connect related findings to reveal patterns — do not list them. Stay in the present and past tense: report what has happened and what currently exists. Do not project future outcomes, consequences, or trajectories — that belongs in the AI Diagnosis section.
+
+The summary should answer four questions, only where the payload supports them:
+1. What is the company's current verified business context?
+2. What do the financial facts imply about pressure, resilience, or adaptation capacity?
+3. What operational reality is actually evidenced?
+4. What unresolved tension or contradiction should the reader notice?
 
 MANDATORY RULES:
 
@@ -490,7 +495,7 @@ MANDATORY RULES:
      (c) If you must reference an older source, explicitly qualify it as historical (e.g., "previously used," "historically relied on"). But prefer to OMIT old sources entirely if sufficient recent evidence exists.
      (d) If a snippet mentions a technology, product, or platform that was clearly from a different era (e.g., discontinued products, legacy platforms), do NOT include it regardless of is_recent value.
 
-3. DATA HANDLING / META-METRICS: Do not reference the report's internal scoring metrics (e.g., "Reality Score," "Ambition Score," "Friction Index," "Integrity Delta") by name in the generated prose. These scores should inform your overall analytical tone, but the summary itself must focus strictly on the company's real-world financial, operational, and organizational data.
+3. DATA HANDLING / META-METRICS: Do not reference the report's internal scoring metrics (e.g., "Reality Score," "Ambition Score," "Friction Index," "Integrity Delta," "Financial Health") by name in the generated prose. These scores should inform your overall tone only. The summary itself must focus strictly on the company's real-world financial, operational, and organizational data.
 
 3a. FINANCIAL FINDINGS ATTRIBUTION — CRITICAL:
    Each item in financial_findings carries:
@@ -502,6 +507,7 @@ MANDATORY RULES:
      - If source_label = "Company filing / investor relations" → write "the company's annual report shows" or "filed accounts disclose"
      - If source_label = "Independent news / analyst" → write "[source_title] reported"
    The "assessment" text is interpretation, not a quote. Use the underlying figure (revenue, margin, ratio) but rephrase in your own words; never present the model's interpretive language as if it were a source quote.
+   Financial paragraph goal: do not list figures mechanically. Use concrete financial evidence to explain what it indicates about pressure, resilience, profitability, liquidity, or capacity to absorb change. Keep the interpretation narrow and evidence-bound. If financial evidence is thin, say that financial visibility is limited rather than inventing a read-through.
 
 4. FORBIDDEN TERMS: Do not use any of these: {forbidden}. Use plain descriptive language instead.
 
@@ -516,15 +522,15 @@ MANDATORY RULES:
    - Never open with a revenue figure, profit margin, or financial ratio.
    - Never open with a number. Never open with a narrative characterisation — anchor on a specific, verifiable data point.
 
-7. COVERAGE: Address at least 3 distinct dimensions if the evidence supports them — for example: strategic position or key structural events, operational or technology signals, financial performance, people and leadership. Do not write the entire summary about a single event or topic. If the evidence does not support a dimension, omit it rather than filling the gap with unsupported claims.
+7. COVERAGE: Address at least 3 distinct dimensions if the evidence supports them — business context or structural events, financial read-through, operational or technology reality, and open tensions or contradictions. Do not write the entire summary about a single event or topic. If the evidence does not support a dimension, omit it rather than filling the gap with unsupported claims.
 
 8. PARAGRAPH ALLOCATION — CRITICAL:
    Financial data (revenue, profit, margins, equity ratios) may occupy AT MOST one of the 3–4 paragraphs, and only when the financial evidence is concrete and material. Do not lead with financial data.
    Default priority order for paragraph topics:
-     1. The most significant strategic event or structural change (carve-out, acquisition, major contract win, certification, new business unit)
-     2. Operational and technology signals (delivery model, AI integration, platform, tools, certifications, partnerships)
-     3. Financial performance — only if concrete figures exist and materially change the picture
-     4. People and leadership — only if a key stakeholder change or team signal is documented
+     1. Current verified business context: what the company is, entity-scope caveats, and material strategic or structural changes (carve-out, acquisition, major contract win, certification, new business unit)
+     2. Financial read-through: what concrete financial evidence says about pressure, resilience, profitability, liquidity, or capacity to absorb change
+     3. Operational reality: delivery model, technology signals, AI integration, platform, tools, certifications, partnerships, culture, or service portfolio evidence
+     4. Open tension: a concise neutral question or caveat where stated ambition, operational evidence, financial signals, or source claims do not fully align
    If only financial evidence is strong and operational evidence is thin, one paragraph on financials is acceptable — but do not pad other paragraphs with weak signals to meet the 3-paragraph minimum. Acknowledge the evidential gap instead.
 
 9. SCOPE & SOURCE QUALIFICATION — CRITICAL:
@@ -539,11 +545,14 @@ MANDATORY RULES:
 
 9. BALANCING CONTRADICTIONS & PROPORTIONALITY — CRITICAL: 
    - If a narrow-scope independent source contradicts a broad self-reported metric, briefly state both side-by-side (e.g., "Wärtsilä reports [X] company-wide users, though a departmental survey of HR found [Y]").
+   - If intent and reality appear misaligned, mention the tension neutrally as an open evidence question. Example form: "The open question is whether the documented operating evidence is sufficient to substantiate the stated modernization position." Do not explain root causes or predict consequences.
    - PROPORTIONALITY: You are summarizing a multi-billion euro enterprise. Keep narrow departmental statistics extremely brief. Do not let a single departmental survey dominate the technology or operational narrative of a global firm. Address the contradiction in a single, strictly factual sentence and move on.
 
 10. RISK REPORTING: If the evidence documents negative trends or concrete vulnerabilities, report them factually. If the data reflects standard business practices (e.g., strategic outsourcing, white-labeling), do not manufacture artificial crises. Do not speculate about consequences — state the documented fact and let the reader draw conclusions.
 
 11. PLAIN BUSINESS ENGLISH: No superlatives. No marketing language. No hedging phrases like "it appears that" or "it seems". State findings directly.
+
+11a. STAKEHOLDER NON-DUPLICATION — CRITICAL: Do not include a stakeholder inventory, named stakeholder list, or generic people/role paragraph. Named people belong in the Stakeholder List section, not here. You may mention leadership only when the payload documents a material leadership, ownership, acquisition, carve-out, or governance event and that event changes the business context. Do not mention stakeholder names merely because people data exists elsewhere in the report.
 
 12. PARAGRAPHS: Structure the output as exactly 3-4 paragraphs, each covering a distinct dimension. Separate paragraphs using standard newline characters (\\n\\n). This is required for readability.
 
@@ -569,7 +578,7 @@ def _strip_links(text: str) -> str:
 
 def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, str]:
     """
-    Generate a 250-300 word General Summary from structured scan data.
+    Generate a 250-320 word General Summary from structured scan data.
 
     Returns (summary_text, model_used).
     Returns ("", "") on failure — caller should catch exceptions separately.
@@ -686,6 +695,7 @@ INSTRUCTIONS:
    B. It significantly exaggerates or distorts something from the payload.
    C. It introduces market statistics, industry benchmarks, or regulatory details not present in the payload — these are likely hallucinated from the model's training data.
    F. It refers to {company_name} using a country-specific legal entity suffix (e.g., "{company_name} Limited", "{company_name} Oy", "{company_name} GmbH", "{company_name} Ltd", "{company_name} s.r.o.", "{company_name} AB", "{company_name} AS") as if it were a distinct, separately noteworthy organisation. The summary must use the primary brand name "{company_name}" consistently.
+   H. It includes a named stakeholder, stakeholder inventory, or generic people/role detail without a material leadership, ownership, acquisition, carve-out, or governance event supported by the payload. People lists belong in the Stakeholder List section, not the General Summary.
 4. SCOPE INFLATION CHECK — Each evidence_links item has a "scope" field ("broad" or "narrow"). For each numeric or scale claim in the summary, identify which evidence item it traces back to. Flag the claim as UNSUPPORTED if:
    D. The claim is derived from a "narrow"-scope source AND is presented as a company-wide fact without a scope qualifier in the same sentence (qualifier examples: "in a survey of HR personnel", "in a 100-respondent study", "in a Vaasa-based pilot", "according to a master's thesis"). For example, "9% of personnel use Tool X" lifted from a narrow HR-only thesis without saying "in HR" is scope inflation.
    E. The payload has a top-level "contradictions" array, the summary cites one side but does NOT acknowledge the other side at all. Both sides of a listed contradiction must appear in the prose.
@@ -696,6 +706,7 @@ INSTRUCTIONS:
    - The opening trend sentence if it accurately reflects the delta data
    - Claims from narrow-scope sources THAT ARE properly qualified in the same sentence
    - A country-specific legal entity name when it is used only to qualify a local legal-entity financial figure supported by entity_scope="local_legal_entity"
+   - A named leader only when the same sentence is about a material leadership, ownership, acquisition, carve-out, or governance event that is directly supported by the payload
 
 OUTPUT FORMAT — valid JSON only:
 
