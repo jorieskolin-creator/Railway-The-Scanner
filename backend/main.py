@@ -2667,15 +2667,18 @@ def _execute_scan_pipeline(
     """
     try:
         scan_start = time.time()
-        # Global scan time budget (seconds). All phases must fit within this window.
-        # Railway proxy timeout is typically 300-600s; 540s (9 min) keeps us safely under.
+        # Global scan time budget (seconds). Background jobs can run longer than
+        # the request/response lifecycle; keep a protected post-synthesis reserve
+        # so expensive model fallbacks cannot starve summaries, reports, and save.
         # Budget allocation:
         #   Reality check: budget - 150s (reserves time for synthesis + post-processing)
         #   Financial:     120s (parallel with reality, non-blocking)
         #   Self-analysis: only if remaining > 120s
-        #   Synthesis:     60s per model call (with fallback chain)
-        SCAN_TOTAL_BUDGET = 540
-        print(f"🚀 --- LIVE SCAN INITIATED FOR: {companyName} (budget: {SCAN_TOTAL_BUDGET}s) ---")
+        #   Synthesis:     adaptive chain with hard wall-clock timeouts
+        SCAN_TOTAL_BUDGET = 720
+        POST_SYNTHESIS_RESERVE = 150
+        scan_skip_reasons = {}
+        print(f"🚀 --- LIVE SCAN INITIATED FOR: {companyName} (budget: {SCAN_TOTAL_BUDGET}s, post-synthesis reserve: {POST_SYNTHESIS_RESERVE}s) ---")
         if job_id:
             _update_scan_job(job_id, phase="initializing", progress=5)
             _append_scan_log(job_id, "Initializing scan pipeline")
@@ -3363,22 +3366,51 @@ Respond with valid JSON only. Required fields:
 Note: diagnostic_summary must contain \n\n between paragraphs (3-4 core paragraphs plus one optional final foresight implication paragraph). commercial_pitch must also contain \n\n between its 3 paragraphs.
 Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2."""
 
-                # --- Synthesis with fallback chain: Opus 4.7 → GPT 5.5 → Gemini 3.1 Pro → Sonnet 4.6 ---
-                # Opus is the judge — it does ONE thing: synthesize. Fallbacks degrade gracefully.
-                # Opus uses Extended Thinking to reason through conflicting intent vs. reality
-                # evidence before generating the synthesis — exactly what a "judge" model should do.
+                # --- Synthesis with adaptive fallback chain ---
+                # Healthy budget: Opus 4.7 → GPT 5.5 → Sonnet 4.6 → Gemini 3.1 Pro.
+                # Moderate budget: skip Opus and preserve time for summaries/report/save.
+                # Every provider call uses a hard wall-clock timeout; SDK timeouts alone
+                # are not reliable enough to protect the scan budget.
                 response_text = ""
                 synth_start = time.time()
                 synth_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
-                # Dynamic per-attempt timeout: share remaining budget across 3 fallback attempts.
-                # Reserve 60s for post-synthesis phases (fact-check, GS, Detailed Report, save).
-                _synth_chain_budget = min(240, max(90, int(synth_remaining) - 60))
-                SYNTH_TIMEOUT = max(30, _synth_chain_budget // 3)
-                print(f"   [Synthesis] Time remaining: {int(synth_remaining)}s | chain budget: {_synth_chain_budget}s | per-attempt: {SYNTH_TIMEOUT}s")
+                _synth_chain_budget = max(0, min(240, int(synth_remaining) - POST_SYNTHESIS_RESERVE))
+                if synth_remaining >= POST_SYNTHESIS_RESERVE + 210:
+                    _synth_plan = ["opus", "gpt", "sonnet", "gemini31"]
+                elif synth_remaining >= POST_SYNTHESIS_RESERVE + 120:
+                    _synth_plan = ["gpt", "sonnet"]
+                elif synth_remaining >= POST_SYNTHESIS_RESERVE + 45:
+                    _synth_plan = ["sonnet"]
+                else:
+                    _synth_plan = []
+                SYNTH_TIMEOUT = max(25, min(75, _synth_chain_budget // max(1, len(_synth_plan) or 1)))
+                print(
+                    f"   [Synthesis] Time remaining: {int(synth_remaining)}s | "
+                    f"protected reserve: {POST_SYNTHESIS_RESERVE}s | chain budget: {_synth_chain_budget}s | "
+                    f"per-attempt: {SYNTH_TIMEOUT}s | plan: {' → '.join(_synth_plan) or 'skip'}"
+                )
 
-                if synth_remaining < 90:
+                def _remaining_scan_budget():
+                    return SCAN_TOTAL_BUDGET - (time.time() - scan_start)
+
+                def _can_spend_synthesis(min_seconds=25):
+                    return (_remaining_scan_budget() - POST_SYNTHESIS_RESERVE) >= min_seconds
+
+                def _run_with_hard_timeout(label, fn, timeout_seconds):
+                    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                    future = pool.submit(fn)
+                    try:
+                        return future.result(timeout=timeout_seconds)
+                    except concurrent.futures.TimeoutError:
+                        print(f"   ⏰ [Synthesis] {label} timed out after {timeout_seconds}s")
+                        raise TimeoutError(f"{label} timeout after {timeout_seconds}s")
+                    finally:
+                        pool.shutdown(wait=False)
+
+                if not _synth_plan:
                     scan_quality = "partial_synthesis"
-                    print(f"   ⏭ [Synthesis] Budget < 90s — skipping all synthesis models, scan stored as partial")
+                    scan_skip_reasons["synthesis"] = f"Budget too low for synthesis with {POST_SYNTHESIS_RESERVE}s reserve ({int(synth_remaining)}s remaining)"
+                    print(f"   ⏭ [Synthesis] Budget too low after reserve — skipping all synthesis models, scan stored as partial")
                 else:
                     def _synth_opus():
                         return claude_client.messages.create(
@@ -3389,12 +3421,10 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                             messages=[{"role": "user", "content": synthesis_prompt}]
                         )
 
-                    try:
-                        print(f"   🔄 [Synthesis] Attempting claude-opus-4-7 with Extended Thinking (timeout: {SYNTH_TIMEOUT}s)...")
-                        synth_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                        synth_future = synth_pool.submit(_synth_opus)
+                    if "opus" in _synth_plan and not response_text and _can_spend_synthesis(SYNTH_TIMEOUT):
                         try:
-                            response = synth_future.result(timeout=SYNTH_TIMEOUT)
+                            print(f"   🔄 [Synthesis] Attempting claude-opus-4-7 with Extended Thinking (timeout: {SYNTH_TIMEOUT}s)...")
+                            response = _run_with_hard_timeout("claude-opus-4-7", _synth_opus, SYNTH_TIMEOUT)
                             # Extended thinking response: [ThinkingBlock, TextBlock]
                             # Extract the text block (skip thinking blocks)
                             response_text = ""
@@ -3404,101 +3434,100 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                                         response_text = block.text
                                         break
                             print(f"   ✅ [Synthesis] claude-opus-4-7 + Extended Thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
-                        except concurrent.futures.TimeoutError:
-                            synth_pool.shutdown(wait=False)
-                            print(f"   ⏰ [Synthesis] claude-opus-4-7 timed out after {SYNTH_TIMEOUT}s")
-                            raise Exception(f"Opus timeout after {SYNTH_TIMEOUT}s")
-                        synth_pool.shutdown(wait=False)
-                    except Exception as opus_err:
-                        print(f"   ❌ [Synthesis] Opus 4.7 failed: {opus_err}")
+                        except Exception as opus_err:
+                            scan_skip_reasons["synthesis_timeout"] = str(opus_err)
+                            print(f"   ❌ [Synthesis] Opus 4.7 failed: {opus_err}")
+                    elif "opus" in _synth_plan and not response_text:
+                        print(f"   ⏭ [Synthesis] Skipping Opus to protect post-synthesis reserve ({int(_remaining_scan_budget())}s left)")
 
-                        # Fallback 1: GPT 5.5 (text-only synthesis from verified evidence)
-                        if not response_text and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 60:
-                            try:
-                                print(f"   🔄 [Synthesis] Falling back to GPT 5.5 (timeout: {SYNTH_TIMEOUT}s)...")
-                                gpt_start = time.time()
-                                response_text = _call_openai_text(
+                    # Fallback 1: GPT 5.5 (text-only synthesis from verified evidence)
+                    if "gpt" in _synth_plan and not response_text and _can_spend_synthesis(SYNTH_TIMEOUT):
+                        try:
+                            print(f"   🔄 [Synthesis] Falling back to GPT 5.5 (hard timeout: {SYNTH_TIMEOUT}s)...")
+                            gpt_start = time.time()
+
+                            def _synth_gpt55():
+                                return _call_openai_text(
                                     synthesis_prompt,
                                     model="gpt-5.5",
                                     max_output_tokens=12000,
                                     timeout=SYNTH_TIMEOUT,
                                 )
-                                print(f"   ✅ [Synthesis] GPT 5.5 succeeded in {int((time.time() - gpt_start) * 1000)}ms")
-                            except Exception as gpt_err:
-                                print(f"   ❌ [Synthesis] GPT 5.5 failed: {gpt_err}")
 
-                        # Fallback 2: Gemini 3.1 Pro Preview (thinking_budget=3000 ≈ MEDIUM; 2000-3500 range)
-                        gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-                        if not response_text and gemini_key and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 60:
-                            try:
-                                print(f"   🔄 [Synthesis] Falling back to Gemini 3.1 Pro Preview (timeout: {SYNTH_TIMEOUT}s)...")
-                                g_start = time.time()
-                                gemini_client = get_gemini_client()
+                            response_text = _run_with_hard_timeout("gpt-5.5", _synth_gpt55, SYNTH_TIMEOUT)
+                            print(f"   ✅ [Synthesis] GPT 5.5 succeeded in {int((time.time() - gpt_start) * 1000)}ms")
+                        except Exception as gpt_err:
+                            scan_skip_reasons["synthesis_timeout"] = str(gpt_err)
+                            print(f"   ❌ [Synthesis] GPT 5.5 failed: {gpt_err}")
+                    elif "gpt" in _synth_plan and not response_text:
+                        print(f"   ⏭ [Synthesis] Skipping GPT 5.5 to protect post-synthesis reserve ({int(_remaining_scan_budget())}s left)")
 
-                                def _synth_gemini31():
-                                    return gemini_client.models.generate_content(
-                                        model="gemini-3.1-pro-preview",
-                                        contents=synthesis_prompt,
-                                        config=types.GenerateContentConfig(
-                                            temperature=0.5,
-                                            thinking_config=types.ThinkingConfig(thinking_budget=3000),  # MEDIUM = 2000-3500 tokens; explicit cap
-                                            max_output_tokens=12000
-                                        )
-                                    )
+                    # Fallback 2: Claude Sonnet 4.6 (independent provider, shorter output when budget is tight)
+                    if "sonnet" in _synth_plan and not response_text and _can_spend_synthesis(SYNTH_TIMEOUT):
+                        try:
+                            sonnet_tokens = 4000 if len(_synth_plan) > 1 else 2600
+                            print(f"   🔄 [Synthesis] Falling back to Claude Sonnet 4.6 (timeout: {SYNTH_TIMEOUT}s, max_tokens={sonnet_tokens})...")
+                            m_start = time.time()
 
-                                g_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                                g_future = g_pool.submit(_synth_gemini31)
-                                try:
-                                    gemini_resp = g_future.result(timeout=SYNTH_TIMEOUT)
-                                    response_text = gemini_resp.text or ""
-                                    print(f"   ✅ [Synthesis] Gemini 3.1 Pro Preview succeeded in {int((time.time() - g_start) * 1000)}ms")
-                                except concurrent.futures.TimeoutError:
-                                    g_pool.shutdown(wait=False)
-                                    print(f"   ⏰ [Synthesis] Gemini 3.1 Pro Preview timed out after {SYNTH_TIMEOUT}s")
-                                g_pool.shutdown(wait=False)
-                            except Exception as gemini31_err:
-                                print(f"   ❌ [Synthesis] Gemini 3.1 Pro Preview failed: {gemini31_err}")
+                            _sonnet_system = (
+                                "CRITICAL: You are a CONSERVATIVE analyst. When in doubt, say 'insufficient evidence.' "
+                                "Do NOT extrapolate. Do NOT infer organizational problems. Do NOT sound deeper than "
+                                "your evidence supports. A boring, accurate summary beats an impressive, fabricated one. "
+                                "NEVER invent leadership gaps, morale issues, succession problems, or strategic conclusions "
+                                "from minor details like tool names in job ads."
+                            )
 
-                        # gemini-3-pro-preview fallback removed: shares 3.x rate limits with 3.1-pro
-                        # and is being deprecated by Google.
-
-                        # Fallback 3: Claude Sonnet 4.6 (independent provider — survives Google outages)
-                        if not response_text and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 60:
-                            try:
-                                print(f"   🔄 [Synthesis] Falling back to Claude Sonnet 4.6 (timeout: {SYNTH_TIMEOUT}s)...")
-                                m_start = time.time()
-
-                                _sonnet_system = (
-                                    "CRITICAL: You are a CONSERVATIVE analyst. When in doubt, say 'insufficient evidence.' "
-                                    "Do NOT extrapolate. Do NOT infer organizational problems. Do NOT sound deeper than "
-                                    "your evidence supports. A boring, accurate summary beats an impressive, fabricated one. "
-                                    "NEVER invent leadership gaps, morale issues, succession problems, or strategic conclusions "
-                                    "from minor details like tool names in job ads."
+                            def _synth_sonnet():
+                                return claude_client.messages.create(
+                                    model="claude-sonnet-4-6",
+                                    max_tokens=sonnet_tokens,
+                                    system=_sonnet_system,
+                                    messages=[{"role": "user", "content": synthesis_prompt}],
                                 )
 
-                                def _synth_sonnet():
-                                    return claude_client.messages.create(
-                                        model="claude-sonnet-4-6",
-                                        max_tokens=4000,
-                                        system=_sonnet_system,
-                                        messages=[{"role": "user", "content": synthesis_prompt}],
-                                    )
+                            sonnet_resp = _run_with_hard_timeout("claude-sonnet-4-6", _synth_sonnet, SYNTH_TIMEOUT)
+                            for block in sonnet_resp.content:
+                                if getattr(block, 'type', None) == 'text':
+                                    response_text = block.text
+                                    break
+                            print(f"   ✅ [Synthesis] Claude Sonnet 4.6 succeeded in {int((time.time() - m_start) * 1000)}ms")
+                        except Exception as sonnet_err:
+                            scan_skip_reasons["synthesis_timeout"] = str(sonnet_err)
+                            print(f"   ❌ [Synthesis] Sonnet 4.6 failed: {sonnet_err}")
+                    elif "sonnet" in _synth_plan and not response_text:
+                        print(f"   ⏭ [Synthesis] Skipping Sonnet to protect post-synthesis reserve ({int(_remaining_scan_budget())}s left)")
 
-                                m_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                                m_future = m_pool.submit(_synth_sonnet)
-                                try:
-                                    sonnet_resp = m_future.result(timeout=SYNTH_TIMEOUT)
-                                    for block in sonnet_resp.content:
-                                        if getattr(block, 'type', None) == 'text':
-                                            response_text = block.text
-                                            break
-                                    print(f"   ✅ [Synthesis] Claude Sonnet 4.6 succeeded in {int((time.time() - m_start) * 1000)}ms")
-                                except concurrent.futures.TimeoutError:
-                                    m_pool.shutdown(wait=False)
-                                    print(f"   ⏰ [Synthesis] Claude Sonnet 4.6 timed out after {SYNTH_TIMEOUT}s")
-                                m_pool.shutdown(wait=False)
-                            except Exception as sonnet_err:
-                                print(f"   ❌ [Synthesis] All models failed. Last error: {sonnet_err}")
+                    # Fallback 3: Gemini 3.1 Pro Preview last resort.
+                    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
+                    if "gemini31" in _synth_plan and not response_text and gemini_key and _can_spend_synthesis(SYNTH_TIMEOUT):
+                        try:
+                            print(f"   🔄 [Synthesis] Falling back to Gemini 3.1 Pro Preview last resort (timeout: {SYNTH_TIMEOUT}s)...")
+                            g_start = time.time()
+                            gemini_client = get_gemini_client()
+
+                            def _synth_gemini31():
+                                return gemini_client.models.generate_content(
+                                    model="gemini-3.1-pro-preview",
+                                    contents=synthesis_prompt,
+                                    config=types.GenerateContentConfig(
+                                        temperature=0.5,
+                                        thinking_config=types.ThinkingConfig(thinking_budget=3000),
+                                        max_output_tokens=12000
+                                    )
+                                )
+
+                            gemini_resp = _run_with_hard_timeout("gemini-3.1-pro-preview", _synth_gemini31, SYNTH_TIMEOUT)
+                            response_text = gemini_resp.text or ""
+                            print(f"   ✅ [Synthesis] Gemini 3.1 Pro Preview succeeded in {int((time.time() - g_start) * 1000)}ms")
+                        except Exception as gemini31_err:
+                            scan_skip_reasons["synthesis_timeout"] = str(gemini31_err)
+                            print(f"   ❌ [Synthesis] Gemini 3.1 Pro Preview failed: {gemini31_err}")
+                    elif "gemini31" in _synth_plan and not response_text:
+                        print(f"   ⏭ [Synthesis] Skipping Gemini 3.1 to protect post-synthesis reserve ({int(_remaining_scan_budget())}s left)")
+
+                    if not response_text:
+                        scan_quality = "partial_synthesis"
+                        scan_skip_reasons.setdefault("synthesis", "All synthesis attempts failed or timed out before producing output")
 
                 if response_text:
                     payload = extract_json_from_text(response_text)
@@ -3723,6 +3752,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
         _fc_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
         if _fc_remaining < 60:
             print(f"   ⏭ [Fact-Check] Budget < 60s remaining ({int(_fc_remaining)}s) — skipping, summary stored as unverified")
+            scan_skip_reasons["fact_check_skipped_budget"] = f"Budget < 60s remaining ({int(_fc_remaining)}s)"
             fact_check = {
                 "verified": False,
                 "fact_check_skipped": True,
@@ -3754,6 +3784,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
             # --- SKIPPED: Budget exhausted or all fact-check models failed. Summary is unverified. ---
             _fc_skip_reason = "budget exhausted" if fact_check.get("fact_check_model") == "skipped_budget" else "all models failed"
             print(f"   ⚠️ [Fact-Check] Skipped ({_fc_skip_reason}) — summary stored as UNVERIFIED ({fact_check['fact_check_time_ms']}ms)")
+            scan_skip_reasons.setdefault("fact_check", _fc_skip_reason)
             if scan_quality == "complete":
                 scan_quality = "unverified"
         elif fact_check["verified"]:
@@ -3827,6 +3858,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                 _resynth_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
                 if _resynth_remaining < 60:
                     print(f"   ⏭ [Re-Synthesis] Budget < 60s ({int(_resynth_remaining)}s) — skipping re-synthesis, saving with false claims flagged")
+                    scan_skip_reasons["re_synthesis_skipped_budget"] = f"Budget < 60s remaining ({int(_resynth_remaining)}s)"
                     full_data["re_synthesis"] = {
                         "was_resynthesized": False,
                         "false_claims_found": fact_check["false_claims"],
@@ -4034,10 +4066,10 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                             "reason": "Gemini re-synthesis failed",
                         }
 
-        # --- STEP 3.5 & 3.6: GENERAL SUMMARY + FUTURE INSIGHT (parallel) ---
+        # --- STEP 3.5 & 3.6: GENERAL SUMMARY + FUTURE INSIGHT ---
         # General Summary: Plain-language narrative (225-275 words) from already-verified data.
         # Future Insight: Forward-looking narrative based on foresight data (250-300 words).
-        # Both run in parallel after fact-check so evidence_links are already purged/verified.
+        # General Summary is prioritized; Future Insight is optional and non-blocking.
         # Failure is non-fatal — old records without these fields are handled gracefully.
         gs_text, gs_model = "", ""
         fs_text, fs_model = "", ""
@@ -4045,53 +4077,83 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
         has_foresight_for_summary = bool(foresight_data and foresight_data.get("dimension_forces"))
         _gs_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
         parallel_ms = 0
+
+        def _run_post_synthesis_with_timeout(label, fn, timeout_seconds):
+            pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            future = pool.submit(fn)
+            try:
+                return future.result(timeout=timeout_seconds)
+            except concurrent.futures.TimeoutError:
+                print(f"   ⏰ [{label}] Timed out after {timeout_seconds}s")
+                raise TimeoutError(f"{label} timeout after {timeout_seconds}s")
+            finally:
+                pool.shutdown(wait=False)
+
         if _gs_remaining < 45:
             print(f"   ⏭ [GS+FS] Budget < 45s remaining ({int(_gs_remaining)}s) — skipping General Summary and Future Insight")
+            scan_skip_reasons["general_summary_skipped_budget"] = f"Budget < 45s remaining ({int(_gs_remaining)}s)"
             if has_foresight_for_summary:
                 fs_skip_reason = f"Budget < 45s remaining ({int(_gs_remaining)}s)"
+                scan_skip_reasons["future_insight_skipped_budget"] = fs_skip_reason
             if scan_quality == "complete":
                 scan_quality = "partial_summary"
         else:
+            summary_start = time.time()
+            gs_timeout = max(25, min(90, int(_gs_remaining) - 60))
             try:
-                parallel_start = time.time()
-                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-                    gs_future = pool.submit(generate_general_summary, full_data, companyName)
+                print(f"   🔄 [General Summary] Generating first (hard timeout: {gs_timeout}s)...")
+                gs_text, gs_model = _run_post_synthesis_with_timeout(
+                    "General Summary",
+                    lambda: generate_general_summary(full_data, companyName),
+                    gs_timeout,
+                )
+            except Exception as gs_err:
+                print(f"   ⚠️ [General Summary] Failed: {gs_err} — skipping")
+                scan_skip_reasons["general_summary"] = f"generation_failed: {str(gs_err)[:160]}"
 
-                    # Future Insight runs in parallel with General Summary
-                    fs_future = None
-                    if has_foresight_for_summary:
-                        from strategic_foresight import generate_foresight_summary
-                        fs_future = pool.submit(generate_foresight_summary, foresight_data, companyName, company_domain)
-
+            _fs_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
+            if has_foresight_for_summary:
+                if _fs_remaining < 45:
+                    fs_skip_reason = f"Budget < 45s remaining ({int(_fs_remaining)}s)"
+                    scan_skip_reasons["future_insight_skipped_budget"] = fs_skip_reason
+                    print(f"   ⏭ [Future Insight] {fs_skip_reason} — skipping")
+                else:
                     try:
-                        gs_text, gs_model = gs_future.result(timeout=120)
-                    except Exception as gs_err:
-                        print(f"   ⚠️ [General Summary] Failed: {gs_err} — skipping")
+                        from strategic_foresight import generate_foresight_summary
+                        fs_timeout = max(20, min(45, int(_fs_remaining) - 30))
+                        print(f"   🔄 [Future Insight] Optional generation (hard timeout: {fs_timeout}s)...")
+                        fs_text, fs_model = _run_post_synthesis_with_timeout(
+                            "Future Insight",
+                            lambda: generate_foresight_summary(foresight_data, companyName, company_domain),
+                            fs_timeout,
+                        )
+                    except Exception as fs_err:
+                        print(f"   ⚠️ [Future Insight] Failed: {fs_err} — skipping")
+                        fs_skip_reason = f"generation_failed: {str(fs_err)[:160]}"
+                        scan_skip_reasons["future_insight"] = fs_skip_reason
 
-                    if fs_future:
-                        try:
-                            fs_text, fs_model = fs_future.result(timeout=120)
-                        except Exception as fs_err:
-                            print(f"   ⚠️ [Future Insight] Failed: {fs_err} — skipping")
-                            fs_skip_reason = f"generation_failed: {str(fs_err)[:160]}"
-
-                parallel_ms = int((time.time() - parallel_start) * 1000)
-            except Exception as parallel_err:
-                print(f"   ⚠️ [Summary+Foresight] Parallel execution failed: {parallel_err}")
-                if has_foresight_for_summary:
-                    fs_skip_reason = f"parallel_execution_failed: {str(parallel_err)[:160]}"
-                # Fallback: try general summary alone
-                try:
-                    gs_text, gs_model = generate_general_summary(full_data, companyName)
-                except Exception:
-                    pass
+            parallel_ms = int((time.time() - summary_start) * 1000)
 
         if gs_text:
             wc = len(gs_text.split())
             print(f"   ✅ [General Summary] {wc} words, model={gs_model} ({parallel_ms}ms)")
 
-            # Fact-check General Summary against its own input payload
-            gs_check = fact_check_general_summary(gs_text, full_data, companyName)
+            # Fact-check General Summary against its own input payload when
+            # there is enough time left; do not let this optional verification
+            # consume the save/report reserve.
+            _gs_check_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
+            if _gs_check_remaining < 45:
+                gs_check = {
+                    "verified": False,
+                    "false_claims": [],
+                    "corrected_summary": "",
+                    "corrected_model": "",
+                    "check_time_ms": 0,
+                }
+                scan_skip_reasons["general_summary_fact_check_skipped_budget"] = f"Budget < 45s remaining ({int(_gs_check_remaining)}s)"
+                print(f"   ⏭ [GS Fact-Check] Budget < 45s remaining ({int(_gs_check_remaining)}s) — storing General Summary as unverified")
+            else:
+                gs_check = fact_check_general_summary(gs_text, full_data, companyName)
             if gs_check.get("corrected_summary"):
                 gs_text = gs_check["corrected_summary"]
                 gs_model = gs_check["corrected_model"] or gs_model
@@ -4105,6 +4167,7 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
             ]
         else:
             print(f"   ⚠️ [General Summary] Generation returned empty — skipping field")
+            scan_skip_reasons.setdefault("general_summary", "empty_generation")
 
         if fs_text:
             full_data["foresight_summary"] = fs_text
@@ -4116,6 +4179,7 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
             if has_foresight_for_summary:
                 full_data["foresight_summary_status"] = "skipped"
                 full_data["foresight_summary_skip_reason"] = fs_skip_reason or "empty_generation"
+                scan_skip_reasons.setdefault("future_insight", fs_skip_reason or "empty_generation")
                 print(f"   ⚠️ [Future Insight] Generation returned empty — skipping")
 
         # --- STEP 3.7: DETAILED FORENSIC REPORT (meta-synthesis) ---
@@ -4128,6 +4192,7 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
         _dr_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
         if _dr_remaining < 30:
             print(f"   ⏭ [Detailed Report] Budget < 30s remaining ({int(_dr_remaining)}s) — skipping")
+            scan_skip_reasons["detailed_report_skipped_budget"] = f"Budget < 30s remaining ({int(_dr_remaining)}s)"
         else:
             try:
                 from detailed_report import generate_detailed_report
@@ -4147,14 +4212,21 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                 if why_what_parts:
                     prior_summaries["why_what"] = " | ".join(why_what_parts)
 
-                dr_text, dr_model = generate_detailed_report(
-                    full_data, companyName, foresight_data,
-                    prior_summaries=prior_summaries if prior_summaries else None,
+                dr_timeout = max(20, min(75, int(_dr_remaining) - 20))
+                print(f"   🔄 [Detailed Report] Generating with hard timeout: {dr_timeout}s")
+                dr_text, dr_model = _run_post_synthesis_with_timeout(
+                    "Detailed Report",
+                    lambda: generate_detailed_report(
+                        full_data, companyName, foresight_data,
+                        prior_summaries=prior_summaries if prior_summaries else None,
+                    ),
+                    dr_timeout,
                 )
                 dr_ms = int((time.time() - dr_start) * 1000)
             except Exception as dr_err:
                 dr_ms = 0
                 print(f"   ⚠️ [Detailed Report] Failed: {dr_err} — skipping")
+                scan_skip_reasons["detailed_report"] = f"generation_failed: {str(dr_err)[:160]}"
 
         if dr_text:
             full_data["detailed_report"] = dr_text
@@ -4163,10 +4235,13 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
             print(f"   ✅ [Detailed Report] {wc} words, model={dr_model} ({dr_ms}ms)")
         else:
             print(f"   ⚠️ [Detailed Report] Generation returned empty — skipping field")
+            scan_skip_reasons.setdefault("detailed_report", "empty_generation")
 
         # Sync final scan quality before save so optional Future Insight skips are
         # visible in stored records and exported Master Data.
         full_data["scan_quality"] = scan_quality
+        if scan_skip_reasons:
+            full_data["scan_skip_reasons"] = scan_skip_reasons
 
         # --- STEP 4: SAVE ---
         if saveToDatabase:
