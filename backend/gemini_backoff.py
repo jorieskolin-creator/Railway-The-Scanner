@@ -38,7 +38,6 @@ import random
 import time
 
 from gemini_circuit import is_open, record_failure, record_success
-from gemini_client import rotate_gemini_client
 
 
 def _is_retriable(err_str: str) -> bool:
@@ -50,12 +49,6 @@ def _is_retriable(err_str: str) -> bool:
         or "incomplete chunked read" in s
         or "peer closed connection" in s
     )
-
-
-def _is_429(err_str: str) -> bool:
-    """True for quota-exceeded (rate-limit) errors — key rotation may help."""
-    s = err_str.lower()
-    return "429" in s or "resource_exhausted" in s or "too many requests" in s
 
 
 def call_with_503_backoff(fn, label="Gemini", delays=(3, 8, 20), timeout=None, model=None):
@@ -131,17 +124,6 @@ def call_with_503_backoff(fn, label="Gemini", delays=(3, 8, 20), timeout=None, m
 
         except Exception as e:
             err_str = str(e)
-            if _is_429(err_str):
-                # Quota exceeded: rotate to next API key so fn() uses it on retry
-                rotate_gemini_client()
-                last_exc = e
-                if i < len(delays):
-                    print(f"   ⚠️ [{label}] 429 quota exceeded — rotated API key, will retry after backoff")
-                    continue
-                if model:
-                    record_failure(model)
-                print(f"   ❌ [{label}] 429 persists after {len(delays)} retries — escalating to fallback")
-                raise last_exc
             if _is_retriable(err_str):
                 last_exc = e
                 if i < len(delays):
