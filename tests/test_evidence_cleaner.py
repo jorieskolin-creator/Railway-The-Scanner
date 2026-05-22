@@ -26,6 +26,9 @@ def test_cleaner_promotes_supported_sources_and_preserves_legacy_snippet(monkeyp
             link["content_verified"] = True
             link["content_relevance_score"] = 88
             link["source_quote"] = "The company deployed a new cloud platform."
+            link["content_entity_match_status"] = "exact"
+            link["content_entity_match_reason"] = "source_host_matches_target_domain"
+            link["entity_verified"] = True
         return {"checked": len(links), "irrelevant": 0, "flagged_urls": [], "elapsed_ms": 1}
 
     monkeypatch.setattr(evidence_cleaner, "validate_source_claims", fake_validate)
@@ -63,6 +66,8 @@ def test_cleaner_keeps_live_irrelevant_sources_display_only(monkeypatch):
             link["content_verified"] = True
             link["content_relevance_score"] = 8
             link["source_quote"] = "The page discusses milk and butter prices."
+            link["content_entity_match_status"] = "exact"
+            link["entity_verified"] = True
         return {"checked": len(links), "irrelevant": len(links), "flagged_urls": [], "elapsed_ms": 1}
 
     monkeypatch.setattr(evidence_cleaner, "validate_source_claims", fake_validate)
@@ -120,6 +125,7 @@ def test_cleaner_processes_foresight_links_with_summary_claims(monkeypatch):
         links[0]["content_verified"] = True
         links[0]["content_relevance_score"] = 80
         links[0]["source_quote"] = "Demand for platform automation is rising."
+        links[0]["entity_verified"] = True
         return {"checked": 1, "irrelevant": 0, "flagged_urls": [], "elapsed_ms": 1}
 
     monkeypatch.setattr(evidence_cleaner, "validate_source_claims", fake_validate)
@@ -153,6 +159,9 @@ def test_cleaner_blocks_same_name_wrong_entity_sources(monkeypatch):
             link["source_quote"] = "Jason Myers founded Rebase Consultancy."
             link["entity_match_status"] = "wrong"
             link["entity_match_reason"] = "same_name_different_entity_in_page_text"
+            link["content_entity_match_status"] = "wrong"
+            link["content_entity_match_reason"] = "same_name_different_entity_in_page_text"
+            link["entity_verified"] = False
             link["wrong_entity"] = True
         return {"checked": len(links), "irrelevant": 0, "wrong_entity": len(links), "flagged_urls": [], "elapsed_ms": 1}
 

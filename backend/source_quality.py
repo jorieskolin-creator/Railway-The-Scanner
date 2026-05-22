@@ -910,10 +910,10 @@ def apply_analysis_verification(link: dict, company_domain: str = "", company_na
     ok, admissibility_reason = is_admissible_source(link, company_domain, company_name)
     url = (link.get("url") or link.get("source_url") or "").strip()
     support_status = (link.get("claim_support_status") or "").strip().lower()
-    if not support_status:
-        if link.get("claim_irrelevant") is True:
-            support_status = ANALYSIS_SUPPORT_UNSUPPORTED
-        elif link.get("claim_relevance") is not None or link.get("content_relevance_score") is not None:
+    if link.get("claim_irrelevant") is True:
+        support_status = ANALYSIS_SUPPORT_UNSUPPORTED
+    elif not support_status:
+        if link.get("claim_relevance") is not None or link.get("content_relevance_score") is not None:
             try:
                 score = int(link.get("content_relevance_score", link.get("claim_relevance")))
             except Exception:
@@ -941,8 +941,17 @@ def apply_analysis_verification(link: dict, company_domain: str = "", company_na
     analysis_verified = False
 
     entity_status = str(link.get("entity_match_status") or "").lower()
+    content_entity_status = str(link.get("content_entity_match_status") or entity_status or "").lower()
     entity_scope = str(link.get("entity_scope") or ENTITY_SCOPE_UNKNOWN).lower()
     context_only = is_context_only_source(link) and link.get("company_specific") is not True
+    content_entity_known = bool(link.get("content_entity_match_status"))
+    entity_verified = (
+        link.get("entity_verified") is True
+        or (content_entity_status in {"exact", "scoped"} and not link.get("wrong_entity"))
+        or (context_only and content_entity_status != "wrong" and link.get("wrong_entity") is not True)
+    )
+    if link.get("entity_verified") is not entity_verified:
+        link["entity_verified"] = entity_verified
     scoped_entity_scopes = {
         ENTITY_SCOPE_LOCAL_LEGAL_ENTITY,
         ENTITY_SCOPE_SUBSIDIARY,
@@ -967,9 +976,21 @@ def apply_analysis_verification(link: dict, company_domain: str = "", company_na
     elif link.get("entity_scope") == ENTITY_SCOPE_WRONG_ENTITY or link.get("wrong_entity") is True:
         reason = "wrong_entity"
         promotion = PROMOTION_EXCLUDED
-    elif entity_status == "wrong":
+    elif link.get("verification_conflict") is True:
+        reason = "verification_conflict"
+    elif link.get("quote_mismatch") is True:
+        reason = "entity_or_quote_mismatch"
+    elif entity_status == "wrong" or content_entity_status == "wrong":
         reason = "wrong_entity"
         promotion = PROMOTION_EXCLUDED
+        link["wrong_entity"] = True
+        link["entity_match"] = "wrong"
+    elif content_entity_known and content_entity_status == "weak" and not context_only:
+        reason = "weak_target_entity"
+    elif content_entity_known and content_entity_status in {"", "unknown"} and not context_only:
+        reason = "target_entity_not_verified"
+    elif not entity_verified and not context_only:
+        reason = "target_entity_not_verified"
     elif entity_status == "weak" and not context_only:
         reason = "weak_entity_match"
     elif entity_status in {"", "unknown"} and not context_only:
@@ -997,7 +1018,7 @@ def apply_analysis_verification(link: dict, company_domain: str = "", company_na
 
     link["analysis_verified"] = analysis_verified
     link["promotion_status"] = promotion
-    link["generation_eligible"] = promotion == PROMOTION_GENERATION_ELIGIBLE
+    link["generation_eligible"] = promotion == PROMOTION_GENERATION_ELIGIBLE and analysis_verified is True
     link["verification_reason"] = reason
     if analysis_verified and not link.get("analysis_verified_at"):
         link["analysis_verified_at"] = datetime.utcnow().isoformat()
@@ -1009,13 +1030,22 @@ def is_generation_eligible_source(link: dict) -> bool:
     if not isinstance(link, dict):
         return False
     entity_status = str(link.get("entity_match_status") or "").lower()
+    content_entity_status = str(link.get("content_entity_match_status") or entity_status or "").lower()
     entity_scope = str(link.get("entity_scope") or ENTITY_SCOPE_UNKNOWN).lower()
     context_only = is_context_only_source(link) and link.get("company_specific") is not True
+    if link.get("claim_irrelevant") is True or link.get("verification_conflict") is True or link.get("quote_mismatch") is True:
+        return False
+    entity_verified = link.get("entity_verified") is True or (
+        content_entity_status in {"exact", "scoped"} and link.get("wrong_entity") is not True
+    )
     entity_ok = (
         entity_status in {"exact", "scoped"}
+        and (not link.get("content_entity_match_status") or content_entity_status in {"exact", "scoped"})
+        and entity_verified
         and entity_scope not in {"", ENTITY_SCOPE_UNKNOWN, ENTITY_SCOPE_WRONG_ENTITY}
     ) or (
         context_only
+        and content_entity_status != "wrong"
         and entity_status not in {"wrong"}
         and link.get("wrong_entity") is not True
     )

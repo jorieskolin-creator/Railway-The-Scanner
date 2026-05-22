@@ -174,4 +174,59 @@ def test_supported_content_with_unknown_entity_is_not_generation_eligible():
     assert link["entity_match_status"] == "unknown"
     assert link["analysis_verified"] is False
     assert link["promotion_status"] == PROMOTION_DISPLAY_ONLY
-    assert link["verification_reason"] == "unknown_entity"
+    assert link["verification_reason"] in {"unknown_entity", "target_entity_not_verified"}
+
+
+def test_verification_conflict_blocks_supported_status_from_bad_finder_page():
+    link = apply_analysis_verification(
+        _source(
+            title="Vivicta Oy - Vivicta - yritystiedot, päättäjät, taloustiedot | Finder",
+            url="https://www.finder.fi/IT-konsultointi+IT-palvelut/Vivicta+Oy/Espoo/yhteystiedot/3692841",
+            snippet="Vivicta Oy financial profile shows revenue and decision-makers.",
+            source_quote="Katso Finderista yhtiön Ålands Turist & Konferens yritystiedot, päättäjät ja taloustiedot.",
+            claim_support_status="supported",
+            content_relevance_score=83,
+            content_entity_match_status="unknown",
+            content_entity_match_reason="target_entity_not_detected",
+            entity_verified=False,
+            verification_conflict=True,
+            quote_mismatch=True,
+            claim_irrelevant=True,
+            content_verification_reason="The page appears to be for Ålands Turist & Konferens rather than Vivicta Oy.",
+        ),
+        company_domain="https://www.vivicta.com",
+        company_name="Vivicta",
+    )
+
+    assert link["analysis_verified"] is False
+    assert link["generation_eligible"] is False
+    assert link["promotion_status"] == PROMOTION_DISPLAY_ONLY
+    assert link["verification_reason"] in {"verification_conflict", "entity_or_quote_mismatch", "target_entity_not_verified"}
+    assert is_generation_eligible_source(link) is False
+
+
+def test_scoped_legal_entity_financial_source_can_be_generation_eligible():
+    link = apply_analysis_verification(
+        _source(
+            title="Vivicta Oy taloustiedot",
+            url="https://www.finder.fi/it-palvelut/vivicta-oy",
+            snippet="Vivicta Oy reported 2025 local legal-entity revenue of 10.2 million euros.",
+            source_quote="Vivicta Oy reported 2025 revenue of 10.2 million euros.",
+            entity_scope="local_legal_entity",
+            content_entity_match_status="scoped",
+            content_entity_match_reason="mentions_legal_entity:Vivicta Oy",
+            entity_verified=True,
+            claim_support_status="supported",
+            claim_irrelevant=False,
+            verification_conflict=False,
+            quote_mismatch=False,
+        ),
+        company_domain="https://www.vivicta.com",
+        company_name="Vivicta",
+    )
+
+    assert link["analysis_verified"] is True
+    assert link["generation_eligible"] is True
+    assert link["promotion_status"] == PROMOTION_GENERATION_ELIGIBLE
+    assert link["entity_scope"] == "local_legal_entity"
+    assert link["scope_warning"]

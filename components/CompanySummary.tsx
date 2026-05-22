@@ -125,10 +125,18 @@ const isForesightContext = (link) => {
   };
   const getSourceSays = (link) => link?.source_says || link?.snippet || link?.description || '';
   const getPossibleRelevance = (link) => link?.possible_relevance || '';
+  const isVerificationConflict = (link) => link?.verification_conflict === true || link?.quote_mismatch === true || link?.claim_irrelevant === true;
+  const isEntityVerified = (link) => {
+    const contentStatus = String(link?.content_entity_match_status || link?.entity_match_status || '').toLowerCase();
+    return link?.entity_verified === true || contentStatus === 'exact' || contentStatus === 'scoped';
+  };
+  const isClaimSupported = (link) => String(link?.claim_support_status || '').toLowerCase() === 'supported' && !isVerificationConflict(link);
   const isAnalysisVerified = (link) => (
     link?.analysis_verified === true
     && link?.promotion_status === 'generation_eligible'
     && link?.generation_eligible === true
+    && isEntityVerified(link)
+    && isClaimSupported(link)
   );
   const isWrongEntity = (link) => link?.wrong_entity === true || String(link?.entity_match_status || '').toLowerCase() === 'wrong';
   const isUnknownOrWeakEntity = (link) => {
@@ -138,6 +146,7 @@ const isForesightContext = (link) => {
   };
   const getPromotionLabel = (link) => {
     if (isAnalysisVerified(link)) return 'Verified for analysis';
+    if (isVerificationConflict(link)) return 'Blocked: verification conflict';
     if (link?.promotion_status === 'excluded') return 'Excluded';
     if (link?.promotion_status === 'display_only') return 'Display only';
     return '';
@@ -227,9 +236,13 @@ const isForesightContext = (link) => {
     return acc;
   }, { high: 0, medium: 0, low: 0, unknown: 0 });
   const verifiedSourceCount = evidenceTrustPool.filter((link) => link.verified === true || link.url_verified === true).length;
+  const contentReadableCount = evidenceTrustPool.filter((link) => link.content_verified === true).length;
+  const entityVerifiedCount = evidenceTrustPool.filter((link) => isEntityVerified(link) && !isWrongEntity(link)).length;
+  const claimSupportedCount = evidenceTrustPool.filter((link) => isClaimSupported(link)).length;
   const analysisVerifiedCount = evidenceTrustPool.filter((link) => isAnalysisVerified(link)).length;
-  const generationEligibleCount = evidenceTrustPool.filter((link) => isAnalysisVerified(link)).length;
+  const generationEligibleCount = evidenceTrustPool.filter((link) => isAnalysisVerified(link) && link.generation_eligible === true).length;
   const displayOnlyCount = evidenceTrustPool.filter((link) => link.promotion_status === 'display_only' || link.claim_support_status === 'unsupported').length;
+  const verificationConflictCount = evidenceTrustPool.filter((link) => isVerificationConflict(link)).length;
   const wrongEntityCount = evidenceTrustPool.filter((link) => isWrongEntity(link)).length;
   const unknownEntityCount = evidenceTrustPool.filter((link) => isUnknownOrWeakEntity(link)).length;
   const weakOrUnverifiedSourceCount = evidenceTrustPool.filter((link) => {
@@ -242,6 +255,7 @@ const isForesightContext = (link) => {
       || (!!link.url && cred === 'unknown')
       || ['unsupported', 'unchecked', 'unavailable', 'partial'].includes(support)
       || ['display_only', 'excluded'].includes(promotion)
+      || isVerificationConflict(link)
       || isWrongEntity(link)
       || isUnknownOrWeakEntity(link);
   }).length;
@@ -497,8 +511,18 @@ const isForesightContext = (link) => {
         var verifiedSources = evidencePool.filter(function(link) {
             return link && (link.verified === true || link.url_verified === true);
         }).length;
+        var isVerificationConflict = function(link) {
+            return link && (link.verification_conflict === true || link.quote_mismatch === true || link.claim_irrelevant === true);
+        };
+        var isEntitySafe = function(link) {
+            var status = String(link && (link.content_entity_match_status || link.entity_match_status) || '').toLowerCase();
+            return link && (link.entity_verified === true || status === 'exact' || status === 'scoped');
+        };
+        var isClaimSupported = function(link) {
+            return link && String(link.claim_support_status || '').toLowerCase() === 'supported' && !isVerificationConflict(link);
+        };
         var isAnalysisSafe = function(link) {
-            return link && link.analysis_verified === true && link.promotion_status === 'generation_eligible' && link.generation_eligible === true;
+            return link && link.analysis_verified === true && link.promotion_status === 'generation_eligible' && link.generation_eligible === true && isEntitySafe(link) && isClaimSupported(link);
         };
         var isWrongEntity = function(link) {
             return link && (link.wrong_entity === true || String(link.entity_match_status || '').toLowerCase() === 'wrong');
@@ -511,7 +535,11 @@ const isForesightContext = (link) => {
         var analysisVerifiedSources = evidencePool.filter(function(link) {
             return isAnalysisSafe(link);
         }).length;
-        var generationEligibleSources = analysisVerifiedSources;
+        var contentReadableSources = evidencePool.filter(function(link) { return link && link.content_verified === true; }).length;
+        var entityVerifiedSources = evidencePool.filter(function(link) { return isEntitySafe(link) && !isWrongEntity(link); }).length;
+        var claimSupportedSources = evidencePool.filter(isClaimSupported).length;
+        var generationEligibleSources = evidencePool.filter(function(link) { return isAnalysisSafe(link) && link.generation_eligible === true; }).length;
+        var verificationConflictSources = evidencePool.filter(isVerificationConflict).length;
         var displayOnlySources = evidencePool.filter(function(link) {
             return link && (link.promotion_status === 'display_only' || link.claim_support_status === 'unsupported');
         }).length;
@@ -528,6 +556,7 @@ const isForesightContext = (link) => {
                 || ((link.url || link.source_url) && cred === 'unknown')
                 || ['unsupported', 'unchecked', 'unavailable', 'partial'].indexOf(support) >= 0
                 || ['display_only', 'excluded'].indexOf(promotion) >= 0
+                || isVerificationConflict(link)
                 || isWrongEntity(link)
                 || isUnknownEntity(link)
             );
@@ -577,12 +606,15 @@ const isForesightContext = (link) => {
             renderMetric('Integrity Delta', (gap > 0 ? '+' : '') + Math.round(gap), 'Ambition minus reality'),
             renderMetric('Confidence', formatScore(exportData.confidence_score ?? exportData.scan_quality?.confidence_score ?? exportData.evidence_sufficiency?.score, '%'), 'Model confidence'),
             renderMetric('Financial Health', formatScore(exportData.financial_index, '/100'), 'Adaptation capacity'),
-            renderMetric('Verified URLs', verifiedSources, weakSources + ' weak/unverified'),
-            renderMetric('Analysis Verified', analysisVerifiedSources, 'content supports claim'),
+            renderMetric('URL Verified', verifiedSources, weakSources + ' weak/unverified'),
+            renderMetric('Content Readable', contentReadableSources, 'readable page text'),
+            renderMetric('Target Entity Verified', entityVerifiedSources, 'right company/scope'),
+            renderMetric('Claim Supported', claimSupportedSources, 'source backs claim'),
             renderMetric('Generation Eligible', generationEligibleSources, 'safe for prose'),
             renderMetric('Display / Unsupported', displayOnlySources, 'audit only'),
             renderMetric('Wrong Entity', wrongEntitySources, 'blocked sources'),
             renderMetric('Unknown Entity', unknownEntitySources, 'not promoted'),
+            renderMetric('Verification Conflict', verificationConflictSources, 'blocked conflicts'),
             renderMetric('Evidence Links', evidencePool.length, 'Company and foresight sources'),
             renderMetric('Washing Flag', exportData.washing_flag ? 'Yes' : 'No', exportData.washing_type || 'Narrative vs evidence'),
             renderMetric('Carried Forward', carriedForward ? 'Yes' : 'No', 'Previous-scan evidence')
@@ -620,11 +652,14 @@ const isForesightContext = (link) => {
                 : '');
         var trustHTML = '<div class="metrics">'
             + renderMetric('URL Verified', verifiedSources, 'reachable source links')
-            + renderMetric('Analysis Verified', analysisVerifiedSources, 'content supports claim')
+            + renderMetric('Content Readable', contentReadableSources, 'readable page text')
+            + renderMetric('Target Entity Verified', entityVerifiedSources, 'right company or explicit scope')
+            + renderMetric('Claim Supported', claimSupportedSources, 'source content backs claim')
             + renderMetric('Generation Eligible', generationEligibleSources, 'safe for prose')
             + renderMetric('Display / Unsupported', displayOnlySources, 'audit only')
             + renderMetric('Wrong Entity', wrongEntitySources, 'blocked sources')
             + renderMetric('Unknown Entity', unknownEntitySources, 'not promoted')
+            + renderMetric('Verification Conflict', verificationConflictSources, 'blocked conflicts')
             + renderMetric('Weak / Unverified', weakSources, 'unsupported, weak, unknown, or failed')
             + renderMetric('Confidence', formatScore(exportData.confidence_score ?? exportData.scan_quality?.confidence_score ?? exportData.evidence_sufficiency?.score, '%'), 'evidence confidence')
             + renderMetric('Credibility Mix', 'H' + credibility.high + ' M' + credibility.medium + ' L' + credibility.low + ' U' + credibility.unknown, 'high/medium/low/unknown')
@@ -636,13 +671,15 @@ const isForesightContext = (link) => {
             + (wrongEntityWarnings.length ? '<div class="callout"><h3>Wrong-Entity Warnings</h3>' + renderList(wrongEntityWarnings) + '</div>' : '<p class="muted">No wrong-entity evidence detected.</p>')
             + (hallucinationWarnings.length ? '<div class="callout"><h3>Hallucination / Unsupported-Claim Flags</h3>' + renderList(hallucinationWarnings) + '</div>' : '<p class="muted">No hallucination or unsupported-claim flags detected.</p>')
             + (qualityNotes.length ? '<div class="callout cyan"><h3>Quality Notes</h3>' + renderList(qualityNotes) + '</div>' : '<p class="muted">No format or style notes detected.</p>');
-        var sourceTable = evidencePool.length ? '<div class="table-wrap"><table><thead><tr><th>Source</th><th>Type</th><th>Cred</th><th>URL</th><th>Analysis</th><th>Support</th><th>Snippet / Quote</th></tr></thead><tbody>'
+        var sourceTable = evidencePool.length ? '<div class="table-wrap"><table><thead><tr><th>Source</th><th>Type</th><th>Cred</th><th>URL</th><th>Promotion</th><th>Entity</th><th>Support</th><th>Model</th><th>Quote / Reason</th></tr></thead><tbody>'
             + evidencePool.map(function(link) {
                 var url = link.url || link.source_url || '';
                 var sourceName = link.title || link.source || link.source_title || link.fp_theme || 'Evidence source';
                 var quote = link.source_quote || link.source_says || link.snippet || link.description || link.summary || '';
-                var analysis = isAnalysisSafe(link) ? 'Verified for analysis' : (link.promotion_status || link.verification_reason || link.entity_match_reason || 'Display only');
-                return '<tr><td>' + escapeHTML(sourceName) + '</td><td>' + escapeHTML(link.source_type || link.origin || '') + '</td><td>' + escapeHTML(link.source_credibility || link.credibility || 'unknown') + '</td><td>' + (url ? '<a href="' + escapeHTML(url) + '">' + escapeHTML(url) + '</a>' : '') + '</td><td>' + escapeHTML(analysis) + '</td><td>' + escapeHTML(link.claim_support_status || '') + '</td><td>' + escapeHTML(String(quote).slice(0, 420)) + '</td></tr>';
+                var analysis = isAnalysisSafe(link) ? 'Verified for analysis' : (isVerificationConflict(link) ? 'Blocked: verification conflict' : (link.promotion_status || link.verification_reason || link.entity_match_reason || 'Display only'));
+                var entity = link.entity_verified === true ? 'verified' : (link.content_entity_match_status || link.entity_match_status || 'unknown');
+                var reason = [quote, link.content_verification_reason, link.content_entity_match_reason].filter(Boolean).join(' — ');
+                return '<tr><td>' + escapeHTML(sourceName) + '</td><td>' + escapeHTML(link.source_type || link.origin || '') + '</td><td>' + escapeHTML(link.source_credibility || link.credibility || 'unknown') + '</td><td>' + (url ? '<a href="' + escapeHTML(url) + '">' + escapeHTML(url) + '</a>' : '') + '</td><td>' + escapeHTML(analysis) + '</td><td>' + escapeHTML(entity) + '</td><td>' + escapeHTML(link.claim_support_status || '') + '</td><td>' + escapeHTML(link.verification_model || '') + '</td><td>' + escapeHTML(String(reason).slice(0, 520)) + '</td></tr>';
             }).join('') + '</tbody></table></div>' : '<p class="muted">No evidence links were available in this export.</p>';
         function checklistMarkerState(item) {
             var source = String(item.source_type || item.source || '').toLowerCase();
@@ -879,8 +916,18 @@ const isForesightContext = (link) => {
         const evidencePool = []
             .concat(Array.isArray(exportData.evidence_links) ? exportData.evidence_links : [])
             .concat(Array.isArray(exportData.foresight_links) ? exportData.foresight_links : []);
+        const isVerificationConflict = function(link) {
+            return link && (link.verification_conflict === true || link.quote_mismatch === true || link.claim_irrelevant === true);
+        };
+        const isEntitySafe = function(link) {
+            const status = String(link && (link.content_entity_match_status || link.entity_match_status) || '').toLowerCase();
+            return link && (link.entity_verified === true || status === 'exact' || status === 'scoped');
+        };
+        const isClaimSupported = function(link) {
+            return link && String(link.claim_support_status || '').toLowerCase() === 'supported' && !isVerificationConflict(link);
+        };
         const isAnalysisSafe = function(link) {
-            return link && link.analysis_verified === true && link.promotion_status === 'generation_eligible' && link.generation_eligible === true;
+            return link && link.analysis_verified === true && link.promotion_status === 'generation_eligible' && link.generation_eligible === true && isEntitySafe(link) && isClaimSupported(link);
         };
         const isWrongEntity = function(link) {
             return link && (link.wrong_entity === true || String(link.entity_match_status || '').toLowerCase() === 'wrong');
@@ -896,7 +943,9 @@ const isForesightContext = (link) => {
         const analysisVerifiedSources = evidencePool.filter(function(link) {
             return isAnalysisSafe(link);
         }).length;
-        const generationEligibleSources = analysisVerifiedSources;
+        const generationEligibleSources = evidencePool.filter(function(link) {
+            return isAnalysisSafe(link) && link.generation_eligible === true;
+        }).length;
         const displayOnlySources = evidencePool.filter(function(link) {
             return link && (link.promotion_status === 'display_only' || link.claim_support_status === 'unsupported');
         }).length;
@@ -1330,11 +1379,27 @@ const isForesightContext = (link) => {
                 </div>
                 <div className="bg-black/20 p-4 rounded-xl border border-teal-500/20">
                     <div className="flex items-center justify-between mb-2">
-                        <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Analysis Verified</span>
+                        <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Content Readable</span>
                         <ShieldCheck size={14} className="text-teal-300" />
                     </div>
-                    <p className="text-3xl font-black text-teal-300">{analysisVerifiedCount}</p>
-                    <p className="text-[10px] text-slate-500 mt-1">content supports claim</p>
+                    <p className="text-3xl font-black text-teal-300">{contentReadableCount}</p>
+                    <p className="text-[10px] text-slate-500 mt-1">readable page text</p>
+                </div>
+                <div className="bg-black/20 p-4 rounded-xl border border-cyan-500/20">
+                    <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Target Entity Verified</span>
+                        <CheckCircle size={14} className="text-cyan-300" />
+                    </div>
+                    <p className="text-3xl font-black text-cyan-300">{entityVerifiedCount}</p>
+                    <p className="text-[10px] text-slate-500 mt-1">right company or scope</p>
+                </div>
+                <div className="bg-black/20 p-4 rounded-xl border border-sky-500/20">
+                    <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Claim Supported</span>
+                        <CheckCircle size={14} className="text-sky-300" />
+                    </div>
+                    <p className="text-3xl font-black text-sky-300">{claimSupportedCount}</p>
+                    <p className="text-[10px] text-slate-500 mt-1">quote supports claim</p>
                 </div>
                 <div className="bg-black/20 p-4 rounded-xl border border-cyan-500/20">
                     <div className="flex items-center justify-between mb-2">
@@ -1367,6 +1432,14 @@ const isForesightContext = (link) => {
                     </div>
                     <p className="text-3xl font-black text-rose-300">{wrongEntityCount}</p>
                     <p className="text-[10px] text-slate-500 mt-1">blocked sources</p>
+                </div>
+                <div className="bg-black/20 p-4 rounded-xl border border-fuchsia-500/20">
+                    <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Verification Conflict</span>
+                        <AlertOctagon size={14} className="text-fuchsia-300" />
+                    </div>
+                    <p className="text-3xl font-black text-fuchsia-300">{verificationConflictCount}</p>
+                    <p className="text-[10px] text-slate-500 mt-1">blocked conflicts</p>
                 </div>
                 <div className="bg-black/20 p-4 rounded-xl border border-orange-500/20">
                     <div className="flex items-center justify-between mb-2">
@@ -1689,6 +1762,7 @@ const isForesightContext = (link) => {
                                         {getPromotionLabel(link) && (
                                             <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono shrink-0 ${
                                                 isAnalysisVerified(link) ? 'bg-teal-500/20 text-teal-300' :
+                                                isVerificationConflict(link) ? 'bg-fuchsia-500/20 text-fuchsia-300' :
                                                 link.promotion_status === 'excluded' ? 'bg-rose-500/20 text-rose-300' :
                                                 'bg-slate-700/60 text-slate-400'
                                             }`} title={getVerificationReason(link)}>

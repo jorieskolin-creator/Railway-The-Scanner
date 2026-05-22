@@ -114,6 +114,11 @@ def _build_stats(data: dict) -> dict[str, Any]:
         "unchecked": 0,
         "wrong_entity": 0,
         "unknown_entity": 0,
+        "entity_verified": 0,
+        "entity_failed": 0,
+        "claim_failed": 0,
+        "quote_mismatch": 0,
+        "verification_conflict": 0,
         "source_quotes": 0,
         "by_field": {},
     }
@@ -127,6 +132,11 @@ def _build_stats(data: dict) -> dict[str, Any]:
             "unchecked": 0,
             "wrong_entity": 0,
             "unknown_entity": 0,
+            "entity_verified": 0,
+            "entity_failed": 0,
+            "claim_failed": 0,
+            "quote_mismatch": 0,
+            "verification_conflict": 0,
         }
         for link in links:
             if not isinstance(link, dict):
@@ -157,12 +167,28 @@ def _build_stats(data: dict) -> dict[str, Any]:
                 stats["unchecked"] += 1
                 field_stats["unchecked"] += 1
             entity_status = str(link.get("entity_match_status") or "").lower()
-            if link.get("wrong_entity") is True or entity_status == "wrong":
+            content_entity_status = str(link.get("content_entity_match_status") or entity_status or "").lower()
+            if link.get("wrong_entity") is True or entity_status == "wrong" or content_entity_status == "wrong":
                 stats["wrong_entity"] += 1
                 field_stats["wrong_entity"] += 1
             elif entity_status in {"", "unknown", "weak"}:
                 stats["unknown_entity"] += 1
                 field_stats["unknown_entity"] += 1
+            if link.get("entity_verified") is True:
+                stats["entity_verified"] += 1
+                field_stats["entity_verified"] += 1
+            elif content_entity_status in {"wrong", "weak", "unknown", ""} and link.get("company_specific") is not False:
+                stats["entity_failed"] += 1
+                field_stats["entity_failed"] += 1
+            if link.get("claim_support_status") in {"unsupported", "partial", "unavailable"}:
+                stats["claim_failed"] += 1
+                field_stats["claim_failed"] += 1
+            if link.get("quote_mismatch") is True:
+                stats["quote_mismatch"] += 1
+                field_stats["quote_mismatch"] += 1
+            if link.get("verification_conflict") is True:
+                stats["verification_conflict"] += 1
+                field_stats["verification_conflict"] += 1
             if link.get("source_quote"):
                 stats["source_quotes"] += 1
         stats["by_field"][field] = field_stats

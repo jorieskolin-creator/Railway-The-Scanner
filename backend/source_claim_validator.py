@@ -15,6 +15,7 @@ import json
 import os
 import re
 import time
+from urllib.parse import urlparse
 
 import requests as http_requests
 from bs4 import BeautifulSoup
@@ -132,8 +133,112 @@ def _get_openai_text(response) -> str:
     return "\n".join(parts).strip()
 
 
-def _build_relevance_prompt(claim: str, page_text: str) -> str:
-    return f"""You are a fact-checking assistant. A forensic scanner cited this source URL to support a specific claim. Your job: determine if the source page content actually supports or relates to the claim.
+def _host_only_url(url: str) -> str:
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+    except Exception:
+        pass
+    return url
+
+
+def _content_entity_match(url: str, page_text: str, company_name: str, company_domain: str) -> dict:
+    """Assess target-entity evidence using only resolved host + extracted page text.
+
+    Scanner snippets, titles, and URL paths are intentionally excluded here. They
+    are useful audit context, but they must not prove that page content describes
+    the scanned company.
+    """
+    return assess_entity_match(
+        {"url": _host_only_url(url), "title": "", "snippet": "", "description": "", "source_quote": ""},
+        company_name,
+        company_domain,
+        page_text=page_text,
+    )
+
+
+def _reason_indicates_no_support(reason: str) -> bool:
+    text = (reason or "").lower()
+    conflict_markers = (
+        "does not mention",
+        "doesn't mention",
+        "does not include",
+        "no mention",
+        "not mention",
+        "not the target",
+        "wrong entity",
+        "different entity",
+        "different company",
+        "appears to be for",
+        "rather than",
+        "unrelated",
+        "does not support",
+        "doesn't support",
+        "not support",
+        "no evidence",
+        "cannot verify",
+    )
+    return any(marker in text for marker in conflict_markers)
+
+
+def _numeric_tokens(text: str) -> set[str]:
+    tokens = set()
+    for match in re.findall(r"\d+(?:[.,]\d+)?(?:\s?%|[mkb]|\s?m€|\s?eur)?", text or "", flags=re.IGNORECASE):
+        cleaned = re.sub(r"\s+", "", match.lower())
+        if cleaned:
+            tokens.add(cleaned)
+    return tokens
+
+
+def _quote_value_overlap(claim: str, quote: str, page_text: str) -> bool:
+    claim_numbers = _numeric_tokens(claim)
+    if not claim_numbers:
+        return True
+    source_numbers = _numeric_tokens(" ".join([quote or "", page_text or ""]))
+    if not source_numbers:
+        return False
+    required = 1 if len(claim_numbers) <= 2 else 2
+    return len(claim_numbers & source_numbers) >= required
+
+
+def _is_context_only_source(source_item: dict | None) -> bool:
+    if not isinstance(source_item, dict):
+        return False
+    if source_item.get("company_specific") is True:
+        return False
+    source_type = str(source_item.get("source_type") or source_item.get("origin") or "").lower()
+    claim_type = str(source_item.get("claim_type") or "").lower()
+    scope = str(source_item.get("scope") or source_item.get("entity_scope") or "").lower()
+    allowed = [str(x).lower() for x in source_item.get("allowed_claim_types") or []]
+    return (
+        source_type in {
+            "foresight", "foresight_report", "trend_report", "regulation",
+            "regulatory_context", "analyst", "analyst_report", "market_report",
+            "industry_report", "research_report", "think_tank", "policy_report",
+        }
+        or claim_type in {"foresight_context", "regulatory_context"}
+        or scope == "external-trend"
+        or "foresight_context" in allowed
+        or "regulatory_context" in allowed
+    )
+
+
+def _build_relevance_prompt(claim: str, page_text: str, company_name: str = "", company_domain: str = "", context_only: bool = False) -> str:
+    target = company_name or "the scanned company"
+    domain = company_domain or "unknown domain"
+    scope_rule = (
+        "This source is external trend/regulatory/market context. It does NOT need to mention the target company, but it must support the external trend claim and must not be described as company-specific proof."
+        if context_only else
+        "This is company-specific evidence. The extracted source text must identify the target company, its official domain, a known legal entity/subsidiary/former name, or an explicitly scoped parent/owner context."
+    )
+    return f"""You are a strict evidence verifier. A forensic scanner cited this source URL to support a specific claim about a target company.
+
+TARGET COMPANY:
+"{target}"
+
+TARGET DOMAIN:
+"{domain}"
 
 CLAIM (from the scanner's evidence):
 "{claim}"
@@ -147,18 +252,36 @@ Score 0-100:
 - 50-74: Source discusses the same topic and partially supports the claim
 - 75-100: Source directly supports or corroborates the claim
 
+Entity rule:
+- {scope_rule}
+- A live page about a different same-name company is not support.
+- A supporting_quote should be copied from the source text and should contain the target/scoped entity name or exact values that prove the claim.
+
 Respond with ONLY a JSON object, no other text:
-{{"score": <0-100>, "reason": "<one sentence explanation>"}}"""
+{{"score": <0-100>, "claim_supported": <true|false>, "entity_match_status": "exact|scoped|weak|wrong|unknown", "entity_name_found": "<entity name or empty>", "supporting_quote": "<short exact source excerpt or empty>", "unsupported_reason": "<why unsupported or empty>", "reason": "<one sentence explanation>"}}"""
 
 
-def _parse_relevance_json(raw: str) -> tuple[int, str]:
+def _parse_relevance_json(raw: str) -> dict:
     raw = (raw or "").strip()
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
     result = json.loads(raw)
     score = max(0, min(100, int(result.get("score", 50))))
-    reason = str(result.get("reason", "") or "").strip()
-    return score, reason
+    reason = str(result.get("reason", "") or result.get("unsupported_reason", "") or "").strip()
+    claim_supported = result.get("claim_supported")
+    if isinstance(claim_supported, str):
+        claim_supported = claim_supported.strip().lower() in {"true", "yes", "supported"}
+    elif claim_supported is not None:
+        claim_supported = bool(claim_supported)
+    return {
+        "score": score,
+        "reason": reason,
+        "claim_supported": claim_supported,
+        "entity_match_status": str(result.get("entity_match_status") or "").strip().lower(),
+        "entity_name_found": str(result.get("entity_name_found") or "").strip(),
+        "supporting_quote": str(result.get("supporting_quote") or "").strip(),
+        "unsupported_reason": str(result.get("unsupported_reason") or "").strip(),
+    }
 
 
 def _call_openai_relevance(prompt: str, model: str, timeout: int) -> str:
@@ -170,14 +293,14 @@ def _call_openai_relevance(prompt: str, model: str, timeout: int) -> str:
     response = client.responses.create(
         model=model,
         input=prompt,
-        max_output_tokens=200,
+        max_output_tokens=320,
     )
     return _get_openai_text(response)
 
 
 def _call_gemini_relevance(prompt: str, model: str, timeout: int):
     client = get_gemini_client()
-    config_kwargs = {"temperature": 0.0, "max_output_tokens": 140}
+    config_kwargs = {"temperature": 0.0, "max_output_tokens": 320}
     if model == "gemini-2.5-pro":
         # Gemini 2.5 Pro rejects a zero thinking budget, so keep a tiny budget
         # for deterministic classification while avoiding token starvation.
@@ -226,12 +349,15 @@ def _check_relevance(
       - reason: short explanation
     """
     page_text = _fetch_page_text(url)
-    entity_match = assess_entity_match(
+    display_entity_match = assess_entity_match(
         source_item or {"url": url, "snippet": claim},
         company_name,
         company_domain,
         page_text=page_text,
     )
+    content_entity_match = _content_entity_match(url, page_text, company_name, company_domain)
+    content_entity_status = str(content_entity_match.get("entity_match_status") or "unknown").lower()
+    context_only = _is_context_only_source(source_item)
 
     if not page_text or len(page_text) < 50:
         # URL liveness is not enough for analysis.  Keep the source visible, but
@@ -243,21 +369,29 @@ def _check_relevance(
             "content_verified": False,
             "source_quote": "",
             "reason": "Page content not extractable",
-            **entity_match,
+            "entity_verified": False,
+            "content_entity_match_status": "unknown",
+            "content_entity_match_reason": "page_content_not_extractable",
+            **display_entity_match,
         }
 
-    if entity_match.get("entity_match_status") == "wrong":
+    if content_entity_status == "wrong" and not context_only:
         return {
             "relevance_score": 0,
             "relevant": False,
             "claim_support_status": "unsupported",
             "content_verified": True,
             "source_quote": _best_source_quote(page_text, claim),
-            "reason": f"Wrong entity: {entity_match.get('entity_match_reason', 'target entity not matched')}",
-            **entity_match,
+            "reason": f"Wrong entity: {content_entity_match.get('entity_match_reason', 'target entity not matched')}",
+            "entity_verified": False,
+            "content_entity_match_status": content_entity_status,
+            "content_entity_match_reason": content_entity_match.get("entity_match_reason", ""),
+            "verification_conflict": True,
+            "quote_mismatch": True,
+            **display_entity_match,
         }
 
-    prompt = _build_relevance_prompt(claim, page_text)
+    prompt = _build_relevance_prompt(claim, page_text, company_name, company_domain, context_only)
     errors = []
     for model in model_chain or DEFAULT_MODEL_CHAIN:
         try:
@@ -270,7 +404,7 @@ def _check_relevance(
                         contents=prompt,
                         config=genai_types.GenerateContentConfig(
                             temperature=0.0,
-                            max_output_tokens=100,
+                            max_output_tokens=320,
                         ),
                     ),
                     label="Source-Claim Relevance",
@@ -281,18 +415,45 @@ def _check_relevance(
             else:
                 raw = _call_gemini_relevance(prompt, model, timeout)
 
-            score, reason = _parse_relevance_json(raw)
+            parsed = _parse_relevance_json(raw)
+            score = parsed["score"]
+            reason = parsed["reason"]
             relevant, support_status = _score_to_status(score)
+            supporting_quote = parsed.get("supporting_quote") or _best_source_quote(page_text, claim)
+            entity_verified = content_entity_status in {"exact", "scoped"} or context_only
+            model_claim_supported = parsed.get("claim_supported")
+            if model_claim_supported is False:
+                support_status = "unsupported"
+                relevant = False
+
+            conflict_reason = reason or parsed.get("unsupported_reason", "")
+            verification_conflict = _reason_indicates_no_support(conflict_reason)
+            quote_mismatch = not _quote_value_overlap(claim, supporting_quote, page_text)
+            if (not entity_verified and not context_only) or verification_conflict or quote_mismatch:
+                support_status = "unsupported"
+                relevant = False
+                if not reason:
+                    reason = "Source content did not safely verify the target entity and claim."
+                if not entity_verified and not context_only:
+                    reason = f"Target entity not verified in extracted source content: {content_entity_match.get('entity_match_reason', 'target entity not detected')}"
+                elif quote_mismatch:
+                    reason = "Supporting quote/source content does not contain the target entity or claimed values."
 
             return {
                 "relevance_score": score,
                 "relevant": relevant,
                 "claim_support_status": support_status,
                 "content_verified": True,
-                "source_quote": _best_source_quote(page_text, claim),
+                "source_quote": supporting_quote,
                 "reason": reason,
                 "verification_model": model,
-                **entity_match,
+                "entity_verified": entity_verified,
+                "entity_name_found": parsed.get("entity_name_found") or "",
+                "content_entity_match_status": content_entity_status,
+                "content_entity_match_reason": content_entity_match.get("entity_match_reason", ""),
+                "verification_conflict": verification_conflict,
+                "quote_mismatch": quote_mismatch,
+                **display_entity_match,
             }
         except Exception as e:
             errors.append(f"{model}: {str(e)[:80]}")
@@ -305,7 +466,10 @@ def _check_relevance(
         "source_quote": _best_source_quote(page_text, claim),
         "reason": "Verifier failed: " + " | ".join(errors)[:240],
         "verification_model": "none",
-        **entity_match,
+        "entity_verified": content_entity_status in {"exact", "scoped"},
+        "content_entity_match_status": content_entity_status,
+        "content_entity_match_reason": content_entity_match.get("entity_match_reason", ""),
+        **display_entity_match,
     }
 
 
@@ -407,18 +571,28 @@ def validate_source_claims(
             item["content_verified"] = result.get("content_verified") is True
             item["content_verification_reason"] = result.get("reason", "")
             item["verification_model"] = result.get("verification_model", item.get("verification_model"))
-            for key in ("entity_match_status", "entity_match_reason", "canonical_source_host"):
-                if result.get(key):
+            for key in (
+                "entity_match_status", "entity_match_reason", "canonical_source_host",
+                "content_entity_match_status", "content_entity_match_reason",
+                "entity_verified", "entity_name_found", "verification_conflict",
+                "quote_mismatch",
+            ):
+                if key in result and result.get(key) not in (None, ""):
                     item[key] = result[key]
             if result.get("entity_scope") and not item.get("entity_scope"):
                 item["entity_scope"] = result["entity_scope"]
             if result.get("entity_match_status") == "wrong":
                 item["wrong_entity"] = True
                 item["entity_match"] = "wrong"
+            if result.get("content_entity_match_status") == "wrong":
+                item["wrong_entity"] = True
+                item["entity_match"] = "wrong"
             if result.get("source_quote"):
                 item["source_quote"] = result["source_quote"]
             if result.get("claim_support_status") == "unsupported":
                 item["claim_irrelevant"] = True
+            elif result.get("claim_support_status") == "supported":
+                item["claim_irrelevant"] = False
 
     elapsed_ms = int((time.time() - start) * 1000)
 
@@ -427,7 +601,16 @@ def validate_source_claims(
                if r["relevance_score"] >= 0 and r.get("claim_support_status") == "unsupported"]
     wrong_entity = [
         url for url, r in results.items()
-        if r.get("entity_match_status") == "wrong"
+        if r.get("entity_match_status") == "wrong" or r.get("content_entity_match_status") == "wrong"
+    ]
+    entity_failed = [
+        url for url, r in results.items()
+        if r.get("entity_verified") is False
+        or str(r.get("content_entity_match_status") or "").lower() in {"wrong", "weak", "unknown"}
+    ]
+    quote_mismatch = [
+        url for url, r in results.items()
+        if r.get("quote_mismatch") is True or r.get("verification_conflict") is True
     ]
 
     if flagged:
@@ -443,6 +626,9 @@ def validate_source_claims(
         "checked": checked,
         "irrelevant": len(flagged),
         "wrong_entity": len(wrong_entity),
+        "entity_failed": len(entity_failed),
+        "claim_failed": len(flagged),
+        "quote_mismatch": len(quote_mismatch),
         "flagged_urls": flagged,
         "elapsed_ms": elapsed_ms,
     }
@@ -529,10 +715,15 @@ def validate_foresight_claims(
             force["content_verification_reason"] = result.get("reason", "")
             if result.get("source_quote"):
                 force["source_quote"] = result["source_quote"]
-            for key in ("entity_match_status", "entity_match_reason", "canonical_source_host"):
-                if result.get(key):
+            for key in (
+                "entity_match_status", "entity_match_reason", "canonical_source_host",
+                "content_entity_match_status", "content_entity_match_reason",
+                "entity_verified", "entity_name_found", "verification_conflict",
+                "quote_mismatch",
+            ):
+                if key in result and result.get(key) not in (None, ""):
                     force[key] = result[key]
-            if result.get("entity_match_status") == "wrong":
+            if result.get("entity_match_status") == "wrong" or result.get("content_entity_match_status") == "wrong":
                 force["wrong_entity"] = True
             try:
                 from source_quality import apply_analysis_verification

@@ -24,6 +24,10 @@ interface EvidenceLink {
   entity_match?: string;
   entity_match_status?: 'exact' | 'scoped' | 'weak' | 'wrong' | 'unknown' | string;
   entity_match_reason?: string;
+  content_entity_match_status?: 'exact' | 'scoped' | 'weak' | 'wrong' | 'unknown' | string;
+  content_entity_match_reason?: string;
+  entity_verified?: boolean;
+  entity_name_found?: string;
   canonical_source_host?: string;
   wrong_entity?: boolean;
   origin?: string;
@@ -39,6 +43,9 @@ interface EvidenceLink {
   promotion_status?: 'generation_eligible' | 'display_only' | 'excluded' | string;
   generation_eligible?: boolean;
   content_relevance_score?: number;
+  verification_model?: string;
+  verification_conflict?: boolean;
+  quote_mismatch?: boolean;
   verification_reason?: string;
   content_verification_reason?: string;
   source_quote?: string;
@@ -61,6 +68,10 @@ interface ForesightLink {
   scope_warning?: string;
   entity_match_status?: 'exact' | 'scoped' | 'weak' | 'wrong' | 'unknown' | string;
   entity_match_reason?: string;
+  content_entity_match_status?: 'exact' | 'scoped' | 'weak' | 'wrong' | 'unknown' | string;
+  content_entity_match_reason?: string;
+  entity_verified?: boolean;
+  entity_name_found?: string;
   canonical_source_host?: string;
   wrong_entity?: boolean;
   url_verified?: boolean;
@@ -71,6 +82,9 @@ interface ForesightLink {
   promotion_status?: 'generation_eligible' | 'display_only' | 'excluded' | string;
   generation_eligible?: boolean;
   content_relevance_score?: number;
+  verification_model?: string;
+  verification_conflict?: boolean;
+  quote_mismatch?: boolean;
   verification_reason?: string;
   content_verification_reason?: string;
   source_quote?: string;
