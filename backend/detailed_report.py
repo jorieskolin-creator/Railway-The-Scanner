@@ -383,10 +383,8 @@ def generate_detailed_report(
             response = claude_client.messages.create(
                 model=OPUS_MODEL,
                 max_tokens=8000,
-                thinking={
-                    "type": "enabled",
-                    "budget_tokens": 5000,
-                },
+                thinking={"type": "adaptive"},
+                extra_body={"output_config": {"effort": "xhigh"}},
                 messages=[{"role": "user", "content": prompt}],
             )
             # Extract text from response blocks (skip thinking blocks)
