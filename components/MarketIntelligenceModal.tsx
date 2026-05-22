@@ -1013,19 +1013,16 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
   }
 
   if (tabName === 'favi') {
+    const faviRows = Array.isArray(data.favi_companies) ? data.favi_companies : [];
+    const faviCutoff = data.favi_cutoffs?.favi ?? 48;
+    const currentCutoff = data.favi_cutoffs?.current_vulnerability ?? 40;
+    const facMedian = getFacCutoff(faviRows);
+
     // Strategic Foresight Vulnerability Matrix — mirrors the FAC x FAVI layout:
     // Top-left = Trapped, Top-right = Wealthy Under Pressure,
     // Bottom-left = Mature & Stable, Bottom-right = Future-Ready.
-    if (data.favi_companies?.length) {
-      const facValues = data.favi_companies.map((c: any) => c.fac || 0).filter((x: number) => x >= 0);
-      let facMedian = 50;
-      if (facValues.length) {
-        const sortedFac = [...facValues].sort((a: number, b: number) => a - b);
-        const mid = Math.floor(sortedFac.length / 2);
-        facMedian = sortedFac.length % 2 === 0 ? (sortedFac[mid - 1] + sortedFac[mid]) / 2 : sortedFac[mid];
-      }
-      const faviCutoff = data.favi_cutoffs?.favi ?? 48;
-      const adaptationSegments = getAdaptationSegmentCounts(data.favi_companies, faviCutoff, facMedian);
+    if (faviRows.length) {
+      const adaptationSegments = getAdaptationSegmentCounts(faviRows, faviCutoff, facMedian);
       // Each entry carries the same per-card text the modal renders so the
       // download reads identically to what the user sees on screen.
       const matrixCards = [
@@ -1076,23 +1073,14 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
 
     // Adaptation Capacity x Future Vulnerability scatter — replaces the old Domain
     // Foresight Pressure bar in the static export, mirroring the in-app view.
-    if (data.favi_companies?.length) {
-      const facValues = data.favi_companies.map((c: any) => c.fac || 0).filter((x: number) => x >= 0);
-      let facMedian = 50;
-      if (facValues.length) {
-        const sortedFac = [...facValues].sort((a: number, b: number) => a - b);
-        const mid = Math.floor(sortedFac.length / 2);
-        facMedian = sortedFac.length % 2 === 0 ? (sortedFac[mid - 1] + sortedFac[mid]) / 2 : sortedFac[mid];
-      }
-      const faviCutoff = data.favi_cutoffs?.favi ?? 48;
-      const currentCutoff = data.favi_cutoffs?.current_vulnerability ?? 40;
-      content += `<div class="section"><h2>Adaptation Capacity x Future Vulnerability</h2><p style="font-size:10px;color:#64748b;margin-bottom:10px">X = financial capacity to absorb change. Y = foresight-driven future pressure. Top-left = trapped; bottom-right = future-ready.</p>${buildSvgAdaptabilityScatter(data.favi_companies, faviCutoff, facMedian)}</div>`;
-      content += `<div class="section"><h2>Foresight-Adjusted Vulnerability vs Current Vulnerability</h2><p style="font-size:10px;color:#64748b;margin-bottom:10px">X = how vulnerable today. Y = how vulnerable tomorrow. The reference lines split the plane into the four strategic segments (Critical / Sleepwalking / Wounded / Safe Harbor).</p>${buildSvgFaviCurrentScatter(data.favi_companies, faviCutoff, currentCutoff)}</div>`;
+    if (faviRows.length) {
+      content += `<div class="section"><h2>Adaptation Capacity x Future Vulnerability</h2><p style="font-size:10px;color:#64748b;margin-bottom:10px">X = financial capacity to absorb change. Y = foresight-driven future pressure. Top-left = trapped; bottom-right = future-ready.</p>${buildSvgAdaptabilityScatter(faviRows, faviCutoff, facMedian)}</div>`;
+      content += `<div class="section"><h2>Foresight-Adjusted Vulnerability vs Current Vulnerability</h2><p style="font-size:10px;color:#64748b;margin-bottom:10px">X = how vulnerable today. Y = how vulnerable tomorrow. The reference lines split the plane into the four strategic segments (Critical / Sleepwalking / Wounded / Safe Harbor).</p>${buildSvgFaviCurrentScatter(faviRows, faviCutoff, currentCutoff)}</div>`;
     }
 
     // FAVI company table
-    if (data.favi_companies?.length) {
-      const sorted = [...data.favi_companies].sort((a: any, b: any) => (b.favi_score || 0) - (a.favi_score || 0));
+    if (faviRows.length) {
+      const sorted = [...faviRows].sort((a: any, b: any) => (b.favi_score || 0) - (a.favi_score || 0));
       const segBadge = (seg: string) => {
         const cfg = ADAPTATION_SEGMENT_CONFIG[seg] || ADAPTATION_SEGMENT_CONFIG["Future-Ready"];
         return `<span class="badge" style="color:${cfg.hex};border-color:${cfg.hex};background:${cfg.hex}22">${seg}</span>`;
