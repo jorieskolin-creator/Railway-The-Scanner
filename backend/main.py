@@ -30,7 +30,7 @@ from finland_list import TOP_100_COMPANIES, get_company_metadata
 from analyze_scores import run_analysis
 from market_intelligence import compute_market_intelligence
 from knowledge_base import get_evolving_framework
-from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, clean_summary, purge_false_evidence
+from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, clean_summary, purge_false_evidence, _call_openai_text
 from general_summary import generate_general_summary, fact_check_general_summary
 from source_quality import manage_evidence_sources, assess_source_scope, annotate_evidence_links, is_generation_eligible_source
 from contradiction_detector import detect_contradictions
@@ -503,7 +503,7 @@ async def find_company_url(name: str):
 
     try:
         response = client.models.generate_content(
-            model='gemini-3-flash-preview',
+            model='gemini-3.5-flash',
             contents=f"What is the official website homepage URL for the organization '{name}'? Return ONLY the URL string (e.g. https://www.example.com). Do not include markdown or explanations.",
             config={
                 'tools': [{'google_search': {}}],
@@ -1824,40 +1824,22 @@ Generate a completely fresh synthesis. Do NOT reference or re-introduce any of t
 
 CRITICAL: Do not just rephrase the false claims. You must act as if the concepts mentioned in the false claims above do not exist for this company at all — unless a VERIFIED CORRECTION is provided, in which case use that exact correction. If the cleaned evidence does not explicitly state a fact, remain silent on that topic."""
 
-    # Step 3: Full Gemini re-synthesis — same model chain as Deep Scanning re-synthesis
+    # Step 3: Full GPT-led re-synthesis — correction work should not burn Gemini 3.1 quota.
     resynth_start = time.time()
     resynth_text = ""
     resynth_model_used = ""
 
-    # Primary: Gemini 3.1 Pro Preview (same as Deep Scanning re-synthesis)
+    # Primary: GPT 5.5
     try:
-        gemini_client = get_gemini_client()
-        print(f"   🔄 [Clean Re-Synthesis] Attempting gemini-3.1-pro-preview...")
-        resynth_response = call_with_503_backoff(
-            lambda: gemini_client.models.generate_content(
-                model="gemini-3.1-pro-preview",
-                contents=synthesis_prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.5,
-                    thinking_config=types.ThinkingConfig(thinking_budget=3000),  # MEDIUM = 2000-3500 tokens; explicit cap
-                    max_output_tokens=12000
-                )
-            ),
-            label="Clean Re-Synthesis gemini-3.1-pro-preview",
-            model="gemini-3.1-pro-preview",
-            timeout=120,
-        )
-        resynth_text = resynth_response.text or ""
-        resynth_model_used = "gemini-3.1-pro-preview"
+        print(f"   🔄 [Clean Re-Synthesis] Attempting gpt-5.5...")
+        resynth_text = _call_openai_text(synthesis_prompt, model="gpt-5.5", max_output_tokens=12000, timeout=120)
+        resynth_model_used = "gpt-5.5"
         resynth_ms = int((time.time() - resynth_start) * 1000)
-        print(f"   ✅ [Clean Re-Synthesis] Gemini 3.1 Pro complete ({resynth_ms}ms)")
-    except Exception as g31_err:
-        print(f"   ❌ [Clean Re-Synthesis] Gemini 3.1 Pro failed: {g31_err}")
+        print(f"   ✅ [Clean Re-Synthesis] GPT 5.5 complete ({resynth_ms}ms)")
+    except Exception as gpt_err:
+        print(f"   ❌ [Clean Re-Synthesis] GPT 5.5 failed: {gpt_err}")
 
-    # gemini-3-pro-preview fallback removed: shares 3.x rate limits with 3.1-pro
-    # and is being deprecated by Google.
-
-    # Fallback: Claude Sonnet 4.6 (independent provider — survives Google outages)
+    # Fallback: Claude Sonnet 4.6 (independent provider — survives OpenAI outages)
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not resynth_text and anthropic_key:
         try:
@@ -1878,7 +1860,43 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
             print(f"   ✅ [Clean Re-Synthesis] Claude Sonnet 4.6 complete ({resynth_ms}ms)")
         except Exception as sonnet_err:
             resynth_ms = int((time.time() - resynth_start) * 1000)
-            print(f"   ❌ [Clean Re-Synthesis] All re-synthesis models failed. Last error: {sonnet_err} ({resynth_ms}ms)")
+            print(f"   ❌ [Clean Re-Synthesis] Claude Sonnet 4.6 failed: {sonnet_err} ({resynth_ms}ms)")
+
+    # Last resort: Gemini 3.1 Pro Preview
+    try:
+        if not resynth_text:
+            gemini_client = get_gemini_client()
+            print(f"   🔄 [Clean Re-Synthesis] Trying gemini-3.1-pro-preview last resort...")
+        else:
+            gemini_client = None
+    except Exception as g31_err:
+        gemini_client = None
+        if not resynth_text:
+            print(f"   ❌ [Clean Re-Synthesis] Gemini client unavailable: {g31_err}")
+
+    if not resynth_text and gemini_client:
+        try:
+            resynth_response = call_with_503_backoff(
+                lambda: gemini_client.models.generate_content(
+                    model="gemini-3.1-pro-preview",
+                    contents=synthesis_prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.5,
+                        thinking_config=types.ThinkingConfig(thinking_budget=3000),  # MEDIUM = 2000-3500 tokens; explicit cap
+                        max_output_tokens=12000
+                    )
+                ),
+                label="Clean Re-Synthesis gemini-3.1-pro-preview",
+                model="gemini-3.1-pro-preview",
+                timeout=120,
+            )
+            resynth_text = resynth_response.text or ""
+            resynth_model_used = "gemini-3.1-pro-preview"
+            resynth_ms = int((time.time() - resynth_start) * 1000)
+            print(f"   ✅ [Clean Re-Synthesis] Gemini 3.1 Pro complete ({resynth_ms}ms)")
+        except Exception as g31_err:
+            resynth_ms = int((time.time() - resynth_start) * 1000)
+            print(f"   ❌ [Clean Re-Synthesis] All re-synthesis models failed. Last error: {g31_err} ({resynth_ms}ms)")
 
     # Step 4: Parse re-synthesis result and apply
     if resynth_text:
@@ -3345,7 +3363,7 @@ Respond with valid JSON only. Required fields:
 Note: diagnostic_summary must contain \n\n between paragraphs (3-4 core paragraphs plus one optional final foresight implication paragraph). commercial_pitch must also contain \n\n between its 3 paragraphs.
 Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2."""
 
-                # --- Synthesis with fallback chain: Opus 4.7 → Gemini 3.1 Pro → Sonnet 4.6 ---
+                # --- Synthesis with fallback chain: Opus 4.7 → GPT 5.5 → Gemini 3.1 Pro → Sonnet 4.6 ---
                 # Opus is the judge — it does ONE thing: synthesize. Fallbacks degrade gracefully.
                 # Opus uses Extended Thinking to reason through conflicting intent vs. reality
                 # evidence before generating the synthesis — exactly what a "judge" model should do.
@@ -3394,7 +3412,22 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                     except Exception as opus_err:
                         print(f"   ❌ [Synthesis] Opus 4.7 failed: {opus_err}")
 
-                        # Fallback 1: Gemini 3.1 Pro Preview (thinking_budget=3000 ≈ MEDIUM; 2000-3500 range)
+                        # Fallback 1: GPT 5.5 (text-only synthesis from verified evidence)
+                        if not response_text and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 60:
+                            try:
+                                print(f"   🔄 [Synthesis] Falling back to GPT 5.5 (timeout: {SYNTH_TIMEOUT}s)...")
+                                gpt_start = time.time()
+                                response_text = _call_openai_text(
+                                    synthesis_prompt,
+                                    model="gpt-5.5",
+                                    max_output_tokens=12000,
+                                    timeout=SYNTH_TIMEOUT,
+                                )
+                                print(f"   ✅ [Synthesis] GPT 5.5 succeeded in {int((time.time() - gpt_start) * 1000)}ms")
+                            except Exception as gpt_err:
+                                print(f"   ❌ [Synthesis] GPT 5.5 failed: {gpt_err}")
+
+                        # Fallback 2: Gemini 3.1 Pro Preview (thinking_budget=3000 ≈ MEDIUM; 2000-3500 range)
                         gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
                         if not response_text and gemini_key and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 60:
                             try:
@@ -3429,7 +3462,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                         # gemini-3-pro-preview fallback removed: shares 3.x rate limits with 3.1-pro
                         # and is being deprecated by Google.
 
-                        # Fallback 2: Claude Sonnet 4.6 (independent provider — survives Google outages)
+                        # Fallback 3: Claude Sonnet 4.6 (independent provider — survives Google outages)
                         if not response_text and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 60:
                             try:
                                 print(f"   🔄 [Synthesis] Falling back to Claude Sonnet 4.6 (timeout: {SYNTH_TIMEOUT}s)...")
@@ -3861,34 +3894,15 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                     resynth_model_used = ""
                     gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
 
-                    # Primary: Gemini 3.1 Pro Preview
-                    if gemini_key:
-                        try:
-                            print(f"   🔄 [Re-Synthesis] Attempting gemini-3.1-pro-preview...")
-                            gemini_client = get_gemini_client()
-                            resynth_response = call_with_503_backoff(
-                                lambda: gemini_client.models.generate_content(
-                                    model="gemini-3.1-pro-preview",
-                                    contents=resynth_prompt,
-                                    config=types.GenerateContentConfig(
-                                        temperature=0.5,
-                                        thinking_config=types.ThinkingConfig(thinking_budget=3000),  # MEDIUM = 2000-3500 tokens; explicit cap
-                                        max_output_tokens=12000
-                                    )
-                                ),
-                                label="Re-Synthesis gemini-3.1-pro-preview",
-                                model="gemini-3.1-pro-preview",
-                                timeout=120,
-                            )
-                            resynth_text = resynth_response.text or ""
-                            resynth_model_used = "gemini-3.1-pro-preview"
-                            resynth_ms = int((time.time() - resynth_start) * 1000)
-                            print(f"   ✅ [Re-Synthesis] Gemini 3.1 Pro re-synthesis complete ({resynth_ms}ms)")
-                        except Exception as g31_err:
-                            print(f"   ❌ [Re-Synthesis] Gemini 3.1 Pro failed: {g31_err}")
-
-                    # gemini-3-pro-preview fallback removed: shares 3.x rate limits with 3.1-pro
-                    # and is being deprecated by Google.
+                    # Primary: GPT 5.5
+                    try:
+                        print(f"   🔄 [Re-Synthesis] Attempting gpt-5.5...")
+                        resynth_text = _call_openai_text(resynth_prompt, model="gpt-5.5", max_output_tokens=12000, timeout=120)
+                        resynth_model_used = "gpt-5.5"
+                        resynth_ms = int((time.time() - resynth_start) * 1000)
+                        print(f"   ✅ [Re-Synthesis] GPT 5.5 re-synthesis complete ({resynth_ms}ms)")
+                    except Exception as gpt_err:
+                        print(f"   ❌ [Re-Synthesis] GPT 5.5 failed: {gpt_err}")
 
                     # Fallback: Claude Sonnet 4.6 (independent provider — survives Google outages)
                     if not resynth_text:
@@ -3909,7 +3923,34 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                             print(f"   ✅ [Re-Synthesis] Claude Sonnet 4.6 re-synthesis complete ({resynth_ms}ms)")
                         except Exception as sonnet_err:
                             resynth_ms = int((time.time() - resynth_start) * 1000)
-                            print(f"   ❌ [Re-Synthesis] All re-synthesis models failed. Last error: {sonnet_err} ({resynth_ms}ms)")
+                            print(f"   ❌ [Re-Synthesis] Claude Sonnet 4.6 failed: {sonnet_err} ({resynth_ms}ms)")
+
+                    # Last resort: Gemini 3.1 Pro Preview
+                    if not resynth_text and gemini_key:
+                        try:
+                            print(f"   🔄 [Re-Synthesis] Trying gemini-3.1-pro-preview last resort...")
+                            gemini_client = get_gemini_client()
+                            resynth_response = call_with_503_backoff(
+                                lambda: gemini_client.models.generate_content(
+                                    model="gemini-3.1-pro-preview",
+                                    contents=resynth_prompt,
+                                    config=types.GenerateContentConfig(
+                                        temperature=0.5,
+                                        thinking_config=types.ThinkingConfig(thinking_budget=3000),  # MEDIUM = 2000-3500 tokens; explicit cap
+                                        max_output_tokens=12000
+                                    )
+                                ),
+                                label="Re-Synthesis gemini-3.1-pro-preview",
+                                model="gemini-3.1-pro-preview",
+                                timeout=120,
+                            )
+                            resynth_text = resynth_response.text or ""
+                            resynth_model_used = "gemini-3.1-pro-preview"
+                            resynth_ms = int((time.time() - resynth_start) * 1000)
+                            print(f"   ✅ [Re-Synthesis] Gemini 3.1 Pro re-synthesis complete ({resynth_ms}ms)")
+                        except Exception as g31_err:
+                            resynth_ms = int((time.time() - resynth_start) * 1000)
+                            print(f"   ❌ [Re-Synthesis] All re-synthesis models failed. Last error: {g31_err} ({resynth_ms}ms)")
 
                     if resynth_text:
                         resynth_payload = extract_json_from_text(resynth_text)
@@ -3971,7 +4012,7 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                             "was_resynthesized": True,
                             "false_claims_found": fact_check["false_claims"],
                             "evidence_purged": purge_result,
-                            "resynth_model": resynth_model_used or "gemini-3.1-pro-preview",
+                            "resynth_model": resynth_model_used or "gpt-5.5",
                             "resynth_time_ms": resynth_ms,
                             "method": "separate_re_synthesis_fallback",
                         }

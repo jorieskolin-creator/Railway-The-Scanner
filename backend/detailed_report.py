@@ -365,21 +365,56 @@ def generate_detailed_report(
     analyses rather than duplicating analysis from raw evidence. No new searches
     are performed — it works entirely from data already in memory.
 
-    Model chain: Sonnet 4.6 → Gemini 3.1 Pro → Gemini 2.5 Pro.
+    Model chain: Opus 4.7 → Sonnet 4.6 → Gemini 3.1 Pro → Gemini 2.5 Pro.
     Returns (report_text, model_used).
     Returns ("", "") on failure.
     """
     payload = _build_input_payload(full_data, company_name, foresight_data, prior_summaries)
     prompt = _build_prompt(payload, company_name)
 
-    # --- Attempt 1: Claude Sonnet 4.6 (primary) ---
+    # --- Attempt 1: Claude Opus 4.7 (accuracy-first primary) ---
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if anthropic_key:
-        SONNET_MODEL = "claude-sonnet-4-6"
+        OPUS_MODEL = "claude-opus-4-7"
         try:
-            print(f"   📝 [Detailed Report] Attempting {SONNET_MODEL}...")
+            print(f"   📝 [Detailed Report] Attempting {OPUS_MODEL}...")
             t0 = time.time()
             claude_client = anthropic.Anthropic(api_key=anthropic_key)
+            response = claude_client.messages.create(
+                model=OPUS_MODEL,
+                max_tokens=8000,
+                thinking={
+                    "type": "enabled",
+                    "budget_tokens": 5000,
+                },
+                messages=[{"role": "user", "content": prompt}],
+            )
+            # Extract text from response blocks (skip thinking blocks)
+            text_parts = []
+            for block in response.content:
+                if block.type == "text":
+                    text_parts.append(block.text)
+            text = _strip_links("\n".join(text_parts).strip())
+            wc = _word_count(text)
+            elapsed = int((time.time() - t0) * 1000)
+            print(f"   📝 [Detailed Report] {OPUS_MODEL}: {wc} words ({elapsed}ms)")
+
+            if text and wc >= _WORD_MIN:
+                return text, OPUS_MODEL
+            elif text and wc >= 500:
+                print(f"   [Detailed Report] Opus result usable ({wc} words) — below target but acceptable")
+                return text, OPUS_MODEL
+            else:
+                print(f"   ⚠️ [Detailed Report] Opus too short ({wc} words) — falling back to Sonnet")
+        except Exception as e:
+            elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
+            print(f"   ❌ [Detailed Report] {OPUS_MODEL} failed ({elapsed}ms): {e}")
+
+        # --- Attempt 2: Claude Sonnet 4.6 (same-provider backup) ---
+        SONNET_MODEL = "claude-sonnet-4-6"
+        try:
+            print(f"   📝 [Detailed Report] Attempting {SONNET_MODEL} fallback...")
+            t0 = time.time()
             response = claude_client.messages.create(
                 model=SONNET_MODEL,
                 max_tokens=8000,
@@ -389,7 +424,6 @@ def generate_detailed_report(
                 },
                 messages=[{"role": "user", "content": prompt}],
             )
-            # Extract text from response blocks (skip thinking blocks)
             text_parts = []
             for block in response.content:
                 if block.type == "text":
@@ -410,7 +444,7 @@ def generate_detailed_report(
             elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
             print(f"   ❌ [Detailed Report] {SONNET_MODEL} failed ({elapsed}ms): {e}")
 
-    # --- Attempt 2-3: Gemini 3.1 Pro Preview (backup) ---
+    # --- Gemini fallbacks ---
     try:
         client = get_gemini_client()
     except ValueError:

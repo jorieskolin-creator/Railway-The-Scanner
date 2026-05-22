@@ -282,7 +282,7 @@ Rules:
 - Do not invent a domain not in the list."""
 
         # Attempt 1: Flash (fast, cheap, good for classification)
-        domain = _call_classifier(client, "gemini-3-flash-preview", prompt, company_name, timeout=15)
+        domain = _call_classifier(client, "gemini-3.5-flash", prompt, company_name, timeout=15)
         if domain:
             return domain
 

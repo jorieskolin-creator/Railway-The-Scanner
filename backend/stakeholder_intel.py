@@ -239,7 +239,7 @@ def enrich_single_person(person: dict, company_name: str, gemini_key: str) -> di
     response_text = ""
     model_used = ""
 
-    # Primary: Gemini 3.1 Pro with Google Search grounding (better name accuracy)
+    # Primary: Gemini 2.5 Pro with Google Search grounding.
     if not response_text:
         _safety = [
             {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
@@ -248,7 +248,33 @@ def enrich_single_person(person: dict, company_name: str, gemini_key: str) -> di
             {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
         ]
         try:
-            print(f"      🔍 [Stakeholder Intel] Searching for {name} ({role}) via gemini-3.1-pro-preview...")
+            print(f"      🔍 [Stakeholder Intel] Searching for {name} ({role}) via gemini-2.5-pro...")
+            client = get_gemini_client()
+            resp = call_with_503_backoff(
+                lambda: client.models.generate_content(
+                    model="gemini-2.5-pro",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        tools=[{'google_search': {}}],
+                        temperature=0.0,
+                        thinking_config=types.ThinkingConfig(thinking_budget=1024),
+                        max_output_tokens=4000,
+                        safety_settings=_safety,
+                    )
+                ),
+                label=f"Stakeholder Intel {name} gemini-2.5-pro",
+                model="gemini-2.5-pro",
+                timeout=60,
+            )
+            response_text = resp.text or ""
+            model_used = "gemini-2.5-pro"
+        except Exception as g25_err:
+            print(f"      ❌ [Stakeholder Intel] Gemini 2.5 Pro failed for {name}: {g25_err}")
+
+    # Escalation: Gemini 3.1 Pro with Google Search for hard/ambiguous cases.
+    if not response_text:
+        try:
+            print(f"      🔄 [Stakeholder Intel] Escalating to gemini-3.1-pro-preview for {name}...")
             client = get_gemini_client()
             resp = call_with_503_backoff(
                 lambda: client.models.generate_content(
@@ -271,31 +297,30 @@ def enrich_single_person(person: dict, company_name: str, gemini_key: str) -> di
         except Exception as g31_err:
             print(f"      ❌ [Stakeholder Intel] Gemini 3.1 Pro failed for {name}: {g31_err}")
 
-    # Fallback: Gemini 2.5 Pro with Google Search
+    # Escape hatch: Gemini 3.5 Flash
     if not response_text:
         try:
-            print(f"      🔄 [Stakeholder Intel] Falling back to gemini-2.5-pro for {name}...")
+            print(f"      🔄 [Stakeholder Intel] Trying gemini-3.5-flash escape hatch for {name}...")
             client = get_gemini_client()
             resp = call_with_503_backoff(
                 lambda: client.models.generate_content(
-                    model="gemini-2.5-pro",
+                    model="gemini-3.5-flash",
                     contents=prompt,
                     config=types.GenerateContentConfig(
                         tools=[{'google_search': {}}],
                         temperature=0.0,
-                        thinking_config=types.ThinkingConfig(thinking_budget=1024),
                         max_output_tokens=4000,
                         safety_settings=_safety,
                     )
                 ),
-                label=f"Stakeholder Intel {name} gemini-2.5-pro",
-                model="gemini-2.5-pro",
-                timeout=60,
+                label=f"Stakeholder Intel {name} gemini-3.5-flash",
+                model="gemini-3.5-flash",
+                timeout=45,
             )
             response_text = resp.text or ""
-            model_used = "gemini-2.5-pro"
-        except Exception as g25_err:
-            print(f"      ❌ [Stakeholder Intel] All models failed for {name}: {g25_err}")
+            model_used = "gemini-3.5-flash"
+        except Exception as flash_err:
+            print(f"      ❌ [Stakeholder Intel] All models failed for {name}: {flash_err}")
 
     # Parse response
     if not response_text:
@@ -391,7 +416,7 @@ def _enrich_batch(people_with_names: list[dict], company_name: str, gemini_key: 
     response_text = ""
     model_used = ""
 
-    # Primary: Gemini 3.1 Pro with Google Search grounding (better name accuracy)
+    # Primary: Gemini 2.5 Pro with Google Search grounding.
     if not response_text:
         _safety = [
             {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
@@ -400,7 +425,33 @@ def _enrich_batch(people_with_names: list[dict], company_name: str, gemini_key: 
             {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
         ]
         try:
-            print(f"      🔍 [Stakeholder Intel] Batched search for {len(people_with_names)} people ({names_str}) via gemini-3.1-pro-preview...")
+            print(f"      🔍 [Stakeholder Intel] Batched search for {len(people_with_names)} people ({names_str}) via gemini-2.5-pro...")
+            client = get_gemini_client()
+            resp = call_with_503_backoff(
+                lambda: client.models.generate_content(
+                    model="gemini-2.5-pro",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        tools=[{'google_search': {}}],
+                        temperature=0.0,
+                        thinking_config=types.ThinkingConfig(thinking_budget=1024),
+                        max_output_tokens=8000,
+                        safety_settings=_safety,
+                    )
+                ),
+                label=f"Stakeholder Intel batch gemini-2.5-pro",
+                model="gemini-2.5-pro",
+                timeout=90,
+            )
+            response_text = resp.text or ""
+            model_used = "gemini-2.5-pro"
+        except Exception as g25_err:
+            print(f"      ❌ [Stakeholder Intel] Batch Gemini 2.5 Pro failed: {g25_err}")
+
+    # Escalation: Gemini 3.1 Pro
+    if not response_text:
+        try:
+            print(f"      🔄 [Stakeholder Intel] Batch escalating to gemini-3.1-pro-preview...")
             client = get_gemini_client()
             resp = call_with_503_backoff(
                 lambda: client.models.generate_content(
@@ -423,31 +474,30 @@ def _enrich_batch(people_with_names: list[dict], company_name: str, gemini_key: 
         except Exception as g31_err:
             print(f"      ❌ [Stakeholder Intel] Batch Gemini 3.1 Pro failed: {g31_err}")
 
-    # Fallback: Gemini 2.5 Pro
+    # Escape hatch: Gemini 3.5 Flash
     if not response_text:
         try:
-            print(f"      🔄 [Stakeholder Intel] Batch falling back to gemini-2.5-pro...")
+            print(f"      🔄 [Stakeholder Intel] Batch trying gemini-3.5-flash escape hatch...")
             client = get_gemini_client()
             resp = call_with_503_backoff(
                 lambda: client.models.generate_content(
-                    model="gemini-2.5-pro",
+                    model="gemini-3.5-flash",
                     contents=prompt,
                     config=types.GenerateContentConfig(
                         tools=[{'google_search': {}}],
                         temperature=0.0,
-                        thinking_config=types.ThinkingConfig(thinking_budget=1024),
                         max_output_tokens=8000,
                         safety_settings=_safety,
                     )
                 ),
-                label=f"Stakeholder Intel batch gemini-2.5-pro",
-                model="gemini-2.5-pro",
-                timeout=90,
+                label=f"Stakeholder Intel batch gemini-3.5-flash",
+                model="gemini-3.5-flash",
+                timeout=60,
             )
             response_text = resp.text or ""
-            model_used = "gemini-2.5-pro"
-        except Exception as g25_err:
-            print(f"      ❌ [Stakeholder Intel] Batch all models failed: {g25_err}")
+            model_used = "gemini-3.5-flash"
+        except Exception as flash_err:
+            print(f"      ❌ [Stakeholder Intel] Batch all models failed: {flash_err}")
 
     if not response_text:
         return False

@@ -35,7 +35,7 @@ _MAX_PAGE_CHARS = 3000  # Keep page text compact for the LLM prompt
 _ANALYSIS_SUPPORT_THRESHOLD = 55
 _PARTIAL_SUPPORT_THRESHOLD = 40
 DEFAULT_MODEL_CHAIN = ("gemini-2.0-flash",)
-CLEAN_EVIDENCE_MODEL_CHAIN = ("gpt-5.4", "gemini-2.5-pro", "gemini-3-flash-preview")
+CLEAN_EVIDENCE_MODEL_CHAIN = ("gpt-5.4", "gemini-2.5-pro", "gemini-3.5-flash")
 
 
 def _fetch_page_text(url: str, timeout: int = 6) -> str:

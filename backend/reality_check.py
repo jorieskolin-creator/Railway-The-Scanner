@@ -19,6 +19,44 @@ import time
 from gemini_backoff import call_with_503_backoff
 from foresight_guardrails import sanitize_future_insight, validate_foresight_text, validate_future_deadlines
 
+
+def _clean_env_var(value: str) -> str:
+    if not value:
+        return ""
+    if "=" in value:
+        try:
+            value = value.split("=", 1)[1]
+        except Exception:
+            pass
+    return value.strip().strip('"').strip("'")
+
+
+def _get_openai_text(response) -> str:
+    text = getattr(response, "output_text", None)
+    if text:
+        return text.strip()
+    parts = []
+    for item in getattr(response, "output", []) or []:
+        for content in getattr(item, "content", []) or []:
+            content_text = getattr(content, "text", None)
+            if content_text:
+                parts.append(content_text)
+    return "\n".join(parts).strip()
+
+
+def _call_openai_text(prompt: str, model: str = "gpt-5.5", max_output_tokens: int = 10000, timeout: int = 90) -> str:
+    api_key = _clean_env_var(os.environ.get("GPT_API_KEY") or os.environ.get("OPENAI_API_KEY") or "")
+    if not api_key:
+        raise ValueError("No GPT_API_KEY configured")
+    from openai import OpenAI
+    client = OpenAI(api_key=api_key, timeout=timeout)
+    response = client.responses.create(
+        model=model,
+        input=prompt,
+        max_output_tokens=max_output_tokens,
+    )
+    return _get_openai_text(response)
+
 try:
     from source_quality import (
         annotate_evidence_links, filter_admissible_sources,
@@ -1101,23 +1139,13 @@ OUTPUT FORMAT — valid JSON only:
     elapsed2 = 0
     s2_model_name = None
 
-    # ── Gemini 3.1 Pro for Stage 2 correction ──────────────────────────────
+    # ── GPT 5.5 for Stage 2 correction ──────────────────────────────
     if not s2_model_name:
         try:
-            print(f"   🔄 [Fact-Check S2] Gemini 3.1 Pro correcting {len(stage1_false_claims)} false claim(s)...")
-            try:
-                response2, elapsed2 = _call_model("gemini-3.1-pro-preview", gemini_31_correction_config, stage2_prompt, 60)
-            except TimeoutError as te:
-                print(f"   ⏰ [Fact-Check S2] gemini-3.1-pro-preview {te} — returning claims without correction")
-                return {
-                    "false_claims": stage1_false_claims,
-                    "corrected_summary": "",
-                    "corrected_pitch": "",
-                    "model": f"{stage1_model_name}+3.1pro(s2-timeout)",
-                    "time_ms": stage1_time_ms,
-                }
-
-            text2 = _extract_text(response2, "gemini-3.1-pro-preview (S2 correction)")
+            print(f"   🔄 [Fact-Check S2] GPT 5.5 correcting {len(stage1_false_claims)} false claim(s)...")
+            s2_start = time.time()
+            text2 = _call_openai_text(stage2_prompt, model="gpt-5.5", max_output_tokens=10000, timeout=90)
+            elapsed2 = int((time.time() - s2_start) * 1000)
             if text2:
                 result2 = _robust_parse_json(text2)
                 if result2:
@@ -1125,7 +1153,7 @@ OUTPUT FORMAT — valid JSON only:
                     corrected_pitch = result2.get("corrected_pitch", "")
                     if corrected_summary:
                         print(f"   ✏️ [Fact-Check S2] Correction produced ({len(corrected_summary.split())} words, {elapsed2}ms)")
-                        s2_model_name = "3.1pro"
+                        s2_model_name = "gpt-5.5"
                     else:
                         print(f"   ⚠️ [Fact-Check S2] Parsed but no corrected_summary in response")
                 else:
@@ -1134,7 +1162,7 @@ OUTPUT FORMAT — valid JSON only:
                 print(f"   ⚠️ [Fact-Check S2] Empty response from Stage 2")
 
         except Exception as e:
-            print(f"   ❌ [Fact-Check S2] gemini-3.1-pro-preview failed: {e}")
+            print(f"   ❌ [Fact-Check S2] gpt-5.5 failed: {e}")
 
     # ── Sonnet 4.6 fallback for Stage 2 correction ──────────────────────────────
     if not corrected_summary:
@@ -1142,7 +1170,7 @@ OUTPUT FORMAT — valid JSON only:
         if anthropic_key:
             try:
                 import anthropic
-                print(f"   🔄 [Fact-Check S2] Gemini correction failed — trying Claude Sonnet 4.6 fallback...")
+                print(f"   🔄 [Fact-Check S2] GPT correction failed — trying Claude Sonnet 4.6 fallback...")
                 m2_start = time.time()
                 sonnet_client = anthropic.Anthropic(api_key=anthropic_key)
                 sonnet_resp = sonnet_client.messages.create(
@@ -1175,6 +1203,36 @@ OUTPUT FORMAT — valid JSON only:
 
             except Exception as e2:
                 print(f"   ❌ [Fact-Check S2] claude-sonnet-4-6 fallback failed: {e2} — returning claims without correction")
+
+    # ── Gemini 3.1 Pro last resort for Stage 2 correction ──────────────────────────────
+    if not corrected_summary:
+        try:
+            print(f"   🔄 [Fact-Check S2] Trying Gemini 3.1 Pro last-resort correction...")
+            try:
+                response2, elapsed2 = _call_model("gemini-3.1-pro-preview", gemini_31_correction_config, stage2_prompt, 60)
+            except TimeoutError as te:
+                print(f"   ⏰ [Fact-Check S2] gemini-3.1-pro-preview {te} — returning claims without correction")
+                return {
+                    "false_claims": stage1_false_claims,
+                    "corrected_summary": "",
+                    "corrected_pitch": "",
+                    "model": f"{stage1_model_name}+3.1pro(s2-timeout)",
+                    "time_ms": stage1_time_ms,
+                }
+
+            text2 = _extract_text(response2, "gemini-3.1-pro-preview (S2 correction)")
+            if text2:
+                result2 = _robust_parse_json(text2)
+                if result2:
+                    corrected_summary = result2.get("corrected_summary", "")
+                    corrected_pitch = result2.get("corrected_pitch", "")
+                    if corrected_summary:
+                        print(f"   ✏️ [Fact-Check S2] Gemini last resort produced ({len(corrected_summary.split())} words, {elapsed2}ms)")
+                        s2_model_name = "3.1pro"
+                else:
+                    print(f"   ⚠️ [Fact-Check S2] Could not parse Gemini last-resort response: {text2[:500]}")
+        except Exception as e:
+            print(f"   ❌ [Fact-Check S2] gemini-3.1-pro-preview last resort failed: {e}")
 
     return {
         "false_claims": stage1_false_claims,

@@ -16,7 +16,7 @@ from scanner_one import analyze_intent
 from scanner_two import x_ray_search, extract_json_from_text, run_self_analysis, financial_health_search, migrate_financial_sub_scores, _validate_key_people
 from knowledge_base import get_evolving_framework
 from storage import BlobStorage
-from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, purge_false_evidence
+from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, purge_false_evidence, _call_openai_text
 from general_summary import generate_general_summary, fact_check_general_summary
 from source_quality import manage_evidence_sources
 from prompts import PROMPT_VERSION, build_shared_guardrails
@@ -114,7 +114,7 @@ def scrape_strategic_content(base_url: str, company_name: str = "Unknown", subsi
         if api_key:
              try:
                 client = get_gemini_client()
-                resp = client.models.generate_content(model='gemini-3-flash-preview', contents=fallback_prompt)
+                resp = client.models.generate_content(model='gemini-3.5-flash', contents=fallback_prompt)
                 if resp.text:
                     print(f"   [Scanner 1] ✅ AI Successfully retrieved strategic context for {company_name}.")
                     return f"--- AI GENERATED CONTEXT FOR {company_name} (SCRAPE FALLBACK — NOT VERIFIED EVIDENCE) ---\n{resp.text}"
@@ -1247,29 +1247,15 @@ re-introduce any of the false claims listed above."""
                     resynth_model_used = ""
                     resynth_ms = 0
 
-                    # Primary: Gemini 3.1 Pro Preview
+                    # Primary: GPT 5.5
                     try:
-                        print(f"   [{company_name}] 🔄 [Re-Synthesis] Attempting gemini-3.1-pro-preview...")
-                        resynth_response = call_with_503_backoff(
-                            lambda: get_gemini_client().models.generate_content(
-                                model="gemini-3.1-pro-preview",
-                                contents=resynth_prompt,
-                                config=types.GenerateContentConfig(
-                                    temperature=0.5,
-                                    thinking_config=types.ThinkingConfig(thinking_budget=3000),
-                                    max_output_tokens=12000
-                                )
-                            ),
-                            label=f"Re-Synthesis gemini-3.1-pro-preview [{company_name}]",
-                            model="gemini-3.1-pro-preview",
-                            timeout=120,
-                        )
-                        resynth_text = resynth_response.text or ""
-                        resynth_model_used = "gemini-3.1-pro-preview"
+                        print(f"   [{company_name}] 🔄 [Re-Synthesis] Attempting gpt-5.5...")
+                        resynth_text = _call_openai_text(resynth_prompt, model="gpt-5.5", max_output_tokens=12000, timeout=120)
+                        resynth_model_used = "gpt-5.5"
                         resynth_ms = int((time.time() - resynth_start) * 1000)
-                        print(f"   [{company_name}] ✅ [Re-Synthesis] Gemini 3.1 Pro complete ({resynth_ms}ms)")
-                    except Exception as g31_err:
-                        print(f"   [{company_name}] ❌ [Re-Synthesis] Gemini 3.1 Pro failed: {g31_err}")
+                        print(f"   [{company_name}] ✅ [Re-Synthesis] GPT 5.5 complete ({resynth_ms}ms)")
+                    except Exception as gpt_err:
+                        print(f"   [{company_name}] ❌ [Re-Synthesis] GPT 5.5 failed: {gpt_err}")
 
                     # Fallback: Claude Sonnet 4.6 (independent provider — survives Google outages)
                     if not resynth_text:
@@ -1290,7 +1276,33 @@ re-introduce any of the false claims listed above."""
                             print(f"   [{company_name}] ✅ [Re-Synthesis] Claude Sonnet 4.6 complete ({resynth_ms}ms)")
                         except Exception as sonnet_err:
                             resynth_ms = int((time.time() - resynth_start) * 1000)
-                            print(f"   [{company_name}] ❌ [Re-Synthesis] All models failed. Last error: {sonnet_err} ({resynth_ms}ms)")
+                            print(f"   [{company_name}] ❌ [Re-Synthesis] Claude Sonnet 4.6 failed: {sonnet_err} ({resynth_ms}ms)")
+
+                    # Last resort: Gemini 3.1 Pro Preview
+                    if not resynth_text:
+                        try:
+                            print(f"   [{company_name}] 🔄 [Re-Synthesis] Trying gemini-3.1-pro-preview last resort...")
+                            resynth_response = call_with_503_backoff(
+                                lambda: get_gemini_client().models.generate_content(
+                                    model="gemini-3.1-pro-preview",
+                                    contents=resynth_prompt,
+                                    config=types.GenerateContentConfig(
+                                        temperature=0.5,
+                                        thinking_config=types.ThinkingConfig(thinking_budget=3000),
+                                        max_output_tokens=12000
+                                    )
+                                ),
+                                label=f"Re-Synthesis gemini-3.1-pro-preview [{company_name}]",
+                                model="gemini-3.1-pro-preview",
+                                timeout=120,
+                            )
+                            resynth_text = resynth_response.text or ""
+                            resynth_model_used = "gemini-3.1-pro-preview"
+                            resynth_ms = int((time.time() - resynth_start) * 1000)
+                            print(f"   [{company_name}] ✅ [Re-Synthesis] Gemini 3.1 Pro complete ({resynth_ms}ms)")
+                        except Exception as g31_err:
+                            resynth_ms = int((time.time() - resynth_start) * 1000)
+                            print(f"   [{company_name}] ❌ [Re-Synthesis] All models failed. Last error: {g31_err} ({resynth_ms}ms)")
 
                     if resynth_text:
                         resynth_payload = extract_json_from_text(resynth_text)
@@ -1345,7 +1357,7 @@ re-introduce any of the false claims listed above."""
                             "was_resynthesized": True,
                             "false_claims_found": fact_check["false_claims"],
                             "evidence_purged": purge_result,
-                            "resynth_model": resynth_model_used or "gemini-3.1-pro-preview",
+                            "resynth_model": resynth_model_used or "gpt-5.5",
                             "resynth_time_ms": resynth_ms,
                             "method": "separate_re_synthesis_fallback",
                         }

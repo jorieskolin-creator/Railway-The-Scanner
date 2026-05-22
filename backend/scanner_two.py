@@ -1665,7 +1665,7 @@ Return STRICT JSON:
 
         # Pro → Flash fallback: both share similar quality for this lightweight task,
         # but Flash runs on separate infra and succeeds when Pro-tier returns 503.
-        _sa_model_chain = [("gemini-2.5-pro", 60), ("gemini-3-flash-preview", 45)]
+        _sa_model_chain = [("gemini-2.5-pro", 60), ("gemini-3.5-flash", 45)]
         for _sa_model, _sa_timeout in _sa_model_chain:
             print(f"   [Self-Analysis] Trying {_sa_model} (Google Search grounding)...")
 
@@ -2481,28 +2481,28 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             print(f"   ❌ [Forensic Scan] claude-sonnet-4-6 + Web Search failed in {elapsed}ms: {e}")
             return None
 
-    # --- SEQUENTIAL: Gemini 3.1 Pro Preview → Gemini 2.5 Pro → Gemini 3-Flash ---
-    # 3.1 Pro Preview is PRIMARY: native Google Search, temp=0.5, thinking_budget=3000.
-    # 2.5 Pro is BACKUP: same Pro-tier family but different rate-limit bucket.
-    # 3-Flash is ESCAPE HATCH: runs on different infra — succeeds when entire Pro tier is 503ing.
+    # --- SEQUENTIAL: Gemini 2.5 Pro → Gemini 3.1 Pro Preview → Gemini 3.5 Flash ---
+    # 2.5 Pro is PRIMARY for frequent web-discovery scans to reduce 3.1 quota pressure.
+    # 3.1 Pro Preview is ESCALATION: native Google Search for hard/low-yield cases.
+    # 3.5 Flash is ESCAPE HATCH: runs on different infra — succeeds when Pro tier is 503ing.
     data = None
 
-    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: 3.1 Pro → 2.5 Pro → 3-Flash")
+    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: 2.5 Pro → 3.1 Pro → 3.5 Flash")
 
-    # --- PRIMARY: Gemini 3.1 Pro Preview — two-pass mode ---
+    # --- PRIMARY: Gemini 2.5 Pro (separate rate-limit bucket from 3.x family) ---
     if not data:
+        data = execute_with_model("gemini-2.5-pro", call_timeout=120)
+
+    # --- ESCALATION: Gemini 3.1 Pro Preview — two-pass mode ---
+    if not data:
+        print(f"   ⚠️ [Forensic Scan] Gemini 2.5 Pro returned no data. Escalating to Gemini 3.1 Pro Preview...")
         _forensic_per_model = min(150, max(60, time_budget // 3))
         data = execute_with_model("gemini-3.1-pro-preview", None, _forensic_per_model)
 
-    # --- BACKUP: Gemini 2.5 Pro (separate rate-limit bucket from 3.x family) ---
+    # --- ESCAPE HATCH: Gemini 3.5 Flash (different infra; succeeds when Pro tier is fully down) ---
     if not data:
-        print(f"   ⚠️ [Forensic Scan] Gemini 3.1 Pro Preview returned no data. Falling back to Gemini 2.5 Pro...")
-        data = execute_with_model("gemini-2.5-pro", call_timeout=120)
-
-    # --- ESCAPE HATCH: Gemini 3-Flash (different infra; succeeds when Pro tier is fully down) ---
-    if not data:
-        print(f"   ⚠️ [Forensic Scan] Gemini 2.5 Pro also returned no data. Trying Gemini 3-Flash escape hatch...")
-        data = execute_with_model("gemini-3-flash-preview", call_timeout=90)
+        print(f"   ⚠️ [Forensic Scan] Gemini 3.1 Pro also returned no data. Trying Gemini 3.5 Flash escape hatch...")
+        data = execute_with_model("gemini-3.5-flash", call_timeout=90)
 
     # --- CONFIDENCE FLOOR (two-pass structuring safety net) ---
     # When the structuring model (Pass 2) cannot determine confidence from
@@ -2565,7 +2565,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 if not research_data:
                     research_data = execute_with_model("gemini-2.5-pro", custom_prompt=research_prompt)
                 if not research_data:
-                    research_data = execute_with_model("gemini-3-flash-preview", custom_prompt=research_prompt)
+                    research_data = execute_with_model("gemini-3.5-flash", custom_prompt=research_prompt)
 
                 if not research_data:
                     print(f"   [Re-Search] Loop {loop} returned no parseable data. Stopping.")
@@ -3101,7 +3101,7 @@ def financial_health_search(company_name: str, company_url: str = None, model_id
     Returns a 0-100 composite score with 4 sub-dimensions (0-25 each).
     """
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-    primary_model = model_id or "gemini-3-flash-preview"
+    primary_model = model_id or "gemini-3.5-flash"
     _fh_start = time.time()
     _FH_BUDGET = 180  # seconds — abort remaining attempts if cumulative elapsed exceeds this
 

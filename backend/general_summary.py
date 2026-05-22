@@ -772,15 +772,17 @@ def fact_check_general_summary(
     t0 = time.time()
 
     # Stage 1: Detect unsupported claims
-    # Primary: Gemini 3.1 Pro | Backup 1: Gemini 2.5 Pro (small thinking budget) | Backup 2: Sonnet 4.6
+    # Primary: Gemini 2.5 Pro | Backup 1: Sonnet 4.6 | Backup 2: Gemini 3.1 Pro.
+    # General Summary is normally GPT-generated, so the fact-checker stays outside
+    # the GPT family unless a later regeneration step is explicitly needed.
     # Gemini 2.5 Pro REQUIRES non-zero thinking_budget (the API rejects 0 with
     # "Budget 0 is invalid. This model only works in thinking mode."). We pass a
     # small budget (512) and rely on the part-extraction logic below to filter
     # out the thought parts so only text parts feed the JSON parser.
     CHECK_MODELS = [
-        ("gemini-3.1-pro-preview", "gemini"),
         ("gemini-2.5-pro", "gemini"),
         ("claude-sonnet-4-6", "anthropic"),
+        ("gemini-3.1-pro-preview", "gemini"),
     ]
     false_claims = []
     detection_succeeded = False
@@ -888,26 +890,12 @@ def fact_check_general_summary(
     # Stage 2: Re-generate with false claims as explicit warnings
     regen_prompt = _build_regen_prompt(payload, company_name, summary_text, false_claims)
 
-    REGEN_MODEL = "gemini-3.1-pro-preview"
+    REGEN_MODEL = "gpt-5.5"
     corrected_summary = ""
     corrected_model = ""
 
     try:
-        regen_resp = call_with_503_backoff(
-            lambda: client.models.generate_content(
-                model=REGEN_MODEL,
-                contents=regen_prompt,
-                config=genai_types.GenerateContentConfig(
-                    temperature=1.0,
-                    max_output_tokens=6000,
-                    thinking_config=genai_types.ThinkingConfig(thinking_budget=2048),
-                ),
-            ),
-            label="GS Re-generation",
-            model=REGEN_MODEL,
-            timeout=90,
-        )
-        corrected_summary = _strip_links((regen_resp.text or "").strip())
+        corrected_summary = _strip_links(_call_openai_summary(regen_prompt, model=REGEN_MODEL, timeout=90))
         corrected_model = REGEN_MODEL
         wc = _word_count(corrected_summary)
         print(f"   ✅ [GS Fact-Check] Re-generated clean summary: {wc} words ({REGEN_MODEL})")
