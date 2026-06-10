@@ -1,0 +1,1292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Scanner - Foresight Creation Methodology</title>
+<meta name="description" content="A static methodology brief describing how The Scanner creates, verifies, classifies, and applies strategic foresight signals.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #0E1B2C;
+    --ink-2: #1F2D3F;
+    --ink-3: #4A5668;
+    --paper: #F7F5F0;
+    --paper-2: #ECE8DF;
+    --paper-3: #E3DDD2;
+    --surface: #FDFCF8;
+    --rule: #C9C2B5;
+    --rule-soft: #E1DCD0;
+    --accent: #B5472D;
+    --accent-2: #2D5F4E;
+    --accent-3: #8C6D2F;
+    --accent-4: #395A7F;
+    --accent-5: #A15B2A;
+    --serif: 'Fraunces', Georgia, serif;
+    --sans: 'Inter', -apple-system, system-ui, sans-serif;
+    --mono: 'JetBrains Mono', 'Courier New', monospace;
+    --max: 1180px;
+    --gutter: clamp(20px, 4vw, 56px);
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.44;
+    background-image: radial-gradient(circle at 1px 1px, rgba(14, 27, 44, 0.025) 1px, transparent 0);
+    background-size: 24px 24px;
+    z-index: 0;
+  }
+
+  main { position: relative; z-index: 1; }
+  .container { max-width: var(--max); margin: 0 auto; padding: 0 var(--gutter); }
+  section { padding: 80px 0; border-bottom: 1px solid var(--rule-soft); }
+  section:last-of-type { border-bottom: none; }
+
+  .hero { padding: 100px 0 80px; border-bottom: 1px solid var(--rule); }
+
+  .eyebrow, .section-tag, .meta-label, .pill, .nav-link, .step-num, .quality-label, .card-kicker, .note-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  .eyebrow, .section-tag {
+    color: var(--ink-3);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .eyebrow { margin-bottom: 32px; }
+  .eyebrow::before {
+    content: '';
+    width: 32px;
+    height: 1px;
+    background: var(--accent);
+  }
+
+  .section-tag { align-items: baseline; gap: 16px; margin-bottom: 18px; }
+  .section-tag .num { color: var(--accent); font-weight: 600; }
+
+  h1, h2, h3 {
+    font-family: var(--serif);
+    color: var(--ink);
+    font-variation-settings: "opsz" 120;
+  }
+
+  h1 {
+    font-weight: 400;
+    font-size: clamp(38px, 5.5vw, 68px);
+    line-height: 1.03;
+    letter-spacing: -0.02em;
+    margin: 0 0 32px;
+    max-width: 1080px;
+  }
+
+  h1 em { color: var(--accent); font-style: italic; }
+
+  h2 {
+    font-weight: 400;
+    font-size: clamp(28px, 3.7vw, 46px);
+    line-height: 1.15;
+    letter-spacing: -0.015em;
+    margin: 0 0 24px;
+    max-width: 940px;
+  }
+
+  h3 {
+    font-size: clamp(20px, 2vw, 26px);
+    line-height: 1.25;
+    margin: 0 0 12px;
+    font-weight: 500;
+  }
+
+  p { margin: 0 0 16px; }
+  p:last-child { margin-bottom: 0; }
+  strong { font-weight: 600; color: var(--ink); }
+  code { font-family: var(--mono); font-size: 0.9em; }
+
+  .lede {
+    font-family: var(--serif);
+    font-weight: 300;
+    font-size: clamp(18px, 1.8vw, 23px);
+    line-height: 1.5;
+    color: var(--ink-2);
+    max-width: 900px;
+  }
+
+  .lede strong {
+    font-weight: 500;
+    background: linear-gradient(transparent 60%, rgba(181, 71, 45, 0.18) 60%);
+    padding: 0 2px;
+  }
+
+  .small { color: var(--ink-3); font-size: 14px; }
+
+  .meta-strip {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 1px;
+    margin-top: 56px;
+    border: 1px solid var(--rule);
+    background: var(--rule);
+  }
+
+  .meta-box {
+    background: var(--surface);
+    padding: 24px;
+    min-height: 150px;
+  }
+
+  .meta-value {
+    display: block;
+    font-family: var(--serif);
+    font-size: clamp(34px, 4vw, 52px);
+    line-height: 1;
+    color: var(--accent);
+    margin-bottom: 8px;
+  }
+
+  .meta-label { display: block; color: var(--ink-3); margin-bottom: 12px; }
+
+  .nav-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 28px;
+  }
+
+  .nav-link {
+    color: var(--ink);
+    text-decoration: none;
+    border: 1px solid var(--rule);
+    background: var(--surface);
+    padding: 10px 14px;
+    transition: color 160ms ease, border-color 160ms ease, background 160ms ease;
+  }
+
+  .nav-link:hover { color: var(--accent); border-color: var(--accent); background: #fff; }
+
+  .cta-strip {
+    display: flex;
+    justify-content: center;
+    padding: 36px var(--gutter) 10px;
+  }
+
+  .cta-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 54px;
+    padding: 14px 24px;
+    border: 1px solid var(--accent);
+    background: var(--surface);
+    color: var(--accent);
+    text-decoration: none;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    transition: background 160ms ease, color 160ms ease, border-color 160ms ease;
+  }
+
+  .cta-button:hover {
+    background: var(--accent);
+    color: var(--surface);
+    border-color: var(--accent);
+  }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 0.9fr 1.1fr;
+    gap: clamp(32px, 6vw, 72px);
+    align-items: start;
+  }
+
+  .three-col {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 20px;
+  }
+
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+  }
+
+  .card, .principle, .boundary, .pipeline-step, .stage-card {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+  }
+
+  .card {
+    padding: 28px;
+    min-height: 210px;
+  }
+
+  .card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 22px;
+  }
+
+  .card-kicker { color: var(--ink-3); margin-bottom: 10px; }
+  .card-id { font-family: var(--mono); color: var(--accent); letter-spacing: 0.12em; font-size: 12px; }
+
+  .pill-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+  .pill {
+    display: inline-block;
+    color: var(--ink);
+    border: 1px solid var(--rule);
+    border-radius: 999px;
+    padding: 5px 11px;
+    background: rgba(255,255,255,0.45);
+  }
+  .pill.green { color: var(--accent-2); border-color: rgba(45, 95, 78, 0.35); }
+  .pill.gold { color: var(--accent-3); border-color: rgba(140, 109, 47, 0.35); }
+  .pill.blue { color: var(--accent-4); border-color: rgba(57, 90, 127, 0.35); }
+  .pill.red { color: var(--accent); border-color: rgba(181, 71, 45, 0.35); }
+
+  .principles { display: grid; gap: 14px; }
+  .principle {
+    padding: 22px 24px;
+    border-left: 4px solid var(--accent);
+  }
+  .principle:nth-child(2) { border-left-color: var(--accent-2); }
+  .principle:nth-child(3) { border-left-color: var(--accent-3); }
+  .principle:nth-child(4) { border-left-color: var(--accent-4); }
+
+  .pipeline {
+    display: grid;
+    gap: 14px;
+    margin-top: 34px;
+  }
+
+  .pipeline-step {
+    display: grid;
+    grid-template-columns: 56px minmax(0, 1fr) minmax(230px, 0.55fr);
+    gap: 22px;
+    align-items: start;
+    padding: 24px;
+  }
+
+  .step-num {
+    color: var(--accent);
+    border-top: 1px solid var(--accent);
+    padding-top: 8px;
+  }
+
+  .flow {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 1px;
+    border: 1px solid var(--rule);
+    background: var(--rule);
+    margin-top: 36px;
+  }
+
+  .flow-step {
+    background: var(--surface);
+    padding: 22px 18px;
+    min-height: 170px;
+    position: relative;
+  }
+
+  .flow-step::after {
+    content: '>';
+    position: absolute;
+    right: -13px;
+    top: 28px;
+    z-index: 2;
+    width: 24px;
+    height: 24px;
+    border: 1px solid var(--rule);
+    background: var(--paper);
+    display: grid;
+    place-items: center;
+    color: var(--accent);
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+
+  .flow-step:last-child::after { content: none; }
+
+  .table-wrap {
+    border: 1px solid var(--rule);
+    overflow-x: auto;
+    background: var(--surface);
+    margin-top: 34px;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 760px;
+  }
+
+  th, td {
+    text-align: left;
+    vertical-align: top;
+    border-bottom: 1px solid var(--rule-soft);
+    padding: 18px 20px;
+    font-size: 14px;
+  }
+
+  th {
+    font-family: var(--mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--ink-3);
+    background: var(--paper-2);
+  }
+
+  tr:last-child td { border-bottom: none; }
+
+  .boundary {
+    margin-top: 34px;
+    padding: 30px;
+    border-left: 4px solid var(--accent-2);
+  }
+
+  .boundary.warning { border-left-color: var(--accent); }
+  .boundary.blue { border-left-color: var(--accent-4); }
+  .boundary.gold { border-left-color: var(--accent-3); }
+
+  .boundary-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    border: 1px solid var(--rule);
+    background: var(--rule);
+    margin-top: 34px;
+  }
+
+  .boundary-cell {
+    background: var(--surface);
+    padding: 24px;
+  }
+
+  .boundary-cell.allowed { border-top: 4px solid var(--accent-2); }
+  .boundary-cell.forbidden { border-top: 4px solid var(--accent); }
+
+  .force-card {
+    border: 1px solid var(--rule);
+    background: var(--surface);
+    margin-top: 34px;
+    display: grid;
+    grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+    gap: 1px;
+    background-color: var(--rule);
+  }
+
+  .force-panel {
+    background: var(--surface);
+    padding: 28px;
+  }
+
+  .field-list {
+    display: grid;
+    gap: 1px;
+    background: var(--rule-soft);
+    border: 1px solid var(--rule-soft);
+  }
+
+  .field-row {
+    background: var(--surface);
+    display: grid;
+    grid-template-columns: minmax(130px, 0.38fr) minmax(0, 1fr);
+    gap: 16px;
+    padding: 14px 16px;
+    font-size: 14px;
+  }
+
+  .field-row strong {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  .formula {
+    border: 1px solid var(--rule);
+    background: #171A20;
+    color: #F4EFE6;
+    margin-top: 34px;
+    padding: 28px;
+    overflow-x: auto;
+  }
+
+  .formula code {
+    display: block;
+    white-space: pre;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.75;
+  }
+
+  .matrix {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1px;
+    border: 1px solid var(--rule);
+    background: var(--rule);
+    margin-top: 34px;
+  }
+
+  .quadrant {
+    background: var(--surface);
+    min-height: 180px;
+    padding: 24px;
+  }
+
+  .quality-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 1px;
+    border: 1px solid var(--rule);
+    background: var(--rule);
+    margin-top: 34px;
+  }
+
+  .quality-state {
+    background: var(--surface);
+    padding: 22px;
+  }
+
+  .quality-label { color: var(--accent); display: block; margin-bottom: 10px; }
+  .quality-state:nth-child(2n) .quality-label { color: var(--accent-2); }
+  .quality-state:nth-child(3n) .quality-label { color: var(--accent-3); }
+
+  .note-label { color: var(--accent); margin-bottom: 10px; display: block; }
+
+  .footer-note {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-3);
+    padding: 38px 0 70px;
+  }
+
+  @media (max-width: 1040px) {
+    .meta-strip, .three-col, .flow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .flow-step::after { content: none; }
+  }
+
+  @media (max-width: 900px) {
+    .two-col, .card-grid, .pipeline-step, .boundary-grid, .force-card, .matrix, .quality-grid { grid-template-columns: 1fr; }
+    section { padding: 56px 0; }
+    .hero { padding-top: 70px; }
+  }
+
+  @media (max-width: 640px) {
+    .container { padding: 0 18px; }
+    .hero { padding: 58px 0 50px; }
+    h1 { font-size: clamp(38px, 14vw, 56px); }
+    .meta-strip, .three-col, .flow { grid-template-columns: 1fr; }
+    .card, .meta-box, .pipeline-step, .boundary, .boundary-cell, .flow-step, .force-panel, .quality-state { padding: 20px; }
+    .field-row { grid-template-columns: 1fr; gap: 6px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header class="hero">
+    <div class="container">
+      <div class="eyebrow">The Scanner Foresight Methodology</div>
+      <h1>Foresight creation is a <em>verified signal system</em>, not a future-story generator.</h1>
+      <p class="lede">
+        The Scanner creates foresight by separating three intellectual acts: harvesting external signals into a
+        controlled Foresight Knowledge Base, synthesizing company-specific implications from analysis-verified signals,
+        and converting those signals into structured forces, scenarios, source links, diagnosis context, and FAVI pressure.
+        The governing rule is simple: <strong>trend evidence can describe external pressure, but it cannot prove current company behavior.</strong>
+      </p>
+
+      <div class="meta-strip" aria-label="Foresight creation summary">
+        <div class="meta-box">
+          <span class="meta-value">30</span>
+          <span class="meta-label">Foresight themes</span>
+          <p class="small">Macro domains of change, from AI and data to climate, finance, governance, work, and demographics.</p>
+        </div>
+        <div class="meta-box">
+          <span class="meta-value">5</span>
+          <span class="meta-label">KB dimensions</span>
+          <p class="small">Operating Model, Strategy, Values, Service Portfolio, and AI Readiness absorb external pressure.</p>
+        </div>
+        <div class="meta-box">
+          <span class="meta-value">4</span>
+          <span class="meta-label">Evidence gates</span>
+          <p class="small">URL liveness, source credibility, content support, and generation eligibility govern promotion.</p>
+        </div>
+        <div class="meta-box">
+          <span class="meta-value">2</span>
+          <span class="meta-label">Use layers</span>
+          <p class="small">Company foresight evidence and portfolio-level FAVI / Market Intelligence are produced from the same stored signals.</p>
+        </div>
+      </div>
+
+      <nav class="nav-strip" aria-label="Page sections">
+        <a class="nav-link" href="#thesis">01 Thesis</a>
+        <a class="nav-link" href="#pipeline">02 Pipeline</a>
+        <a class="nav-link" href="#kb-harvest">03 KB Harvest</a>
+        <a class="nav-link" href="#company-synthesis">04 Company</a>
+        <a class="nav-link" href="#force-anatomy">05 Force</a>
+        <a class="nav-link" href="#verification">06 Verification</a>
+        <a class="nav-link" href="#methodology">07 Method</a>
+        <a class="nav-link" href="#favi">08 FAVI</a>
+        <a class="nav-link" href="#boundaries">09 Boundaries</a>
+      </nav>
+    </div>
+  </header>
+
+  <section id="thesis">
+    <div class="container two-col">
+      <div>
+        <div class="section-tag"><span class="num">01</span><span>Thesis</span></div>
+        <h2>The Scanner treats foresight as external pressure mapped against company readiness.</h2>
+        <p class="lede">
+          Foresight is not a forecast that claims to know the future. It is an evidence discipline:
+          a signal is harvested from authoritative sources, checked, classified, stored, and then used as context for
+          how a company may need to interpret its present reality.
+        </p>
+      </div>
+      <div class="principles">
+        <div class="principle">
+          <h3>Foresight is company-neutral at source.</h3>
+          <p class="small">KB signals are marked as <code>foresight_context</code>, <code>company_specific=False</code>, and <code>not_evidence_of_deployment=True</code>. They are trend pressure, not proof of company action.</p>
+        </div>
+        <div class="principle">
+          <h3>Company relevance is synthesized later.</h3>
+          <p class="small">The company scan maps verified KB signals to domain themes, priority dimensions, current reality, archetype, financial capacity, and top findings.</p>
+        </div>
+        <div class="principle">
+          <h3>Evidence gates precede narrative.</h3>
+          <p class="small">Only analysis-verified, generation-eligible KB signals enter foresight synthesis. Weak or unverified sources remain audit material.</p>
+        </div>
+        <div class="principle">
+          <h3>Structured evidence outranks prose.</h3>
+          <p class="small">The primary artifact is not a future essay; it is <code>dimension_forces</code>, <code>cross_impact_chain</code>, <code>scenarios</code>, <code>climate_exposure</code>, and <code>foresight_links</code>.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="pipeline">
+    <div class="container">
+      <div class="section-tag"><span class="num">02</span><span>End-To-End Pipeline</span></div>
+      <h2>The foresight system has two loops: a knowledge-base loop and a company-scan loop.</h2>
+      <p class="lede">
+        The KB loop gathers and cleans external trend signals. The company loop reuses only promoted KB signals to create
+        company-specific foresight, avoiding uncontrolled live search during normal scans.
+      </p>
+
+      <div class="flow" aria-label="Foresight creation flow">
+        <article class="flow-step">
+          <div class="card-kicker">01 Research</div>
+          <h3>Harvest themes</h3>
+          <p class="small">Searches authoritative sources for 3-5 horizontal signals per FP theme.</p>
+        </article>
+        <article class="flow-step">
+          <div class="card-kicker">02 Verify</div>
+          <h3>Promote signals</h3>
+          <p class="small">Checks URLs, credibility, content relevance, source quote, and generation eligibility.</p>
+        </article>
+        <article class="flow-step">
+          <div class="card-kicker">03 Store</div>
+          <h3>Maintain KB</h3>
+          <p class="small">Deduplicates by URL/title, merges with existing records, caps theme memory, and stores in Blob.</p>
+        </article>
+        <article class="flow-step">
+          <div class="card-kicker">04 Select</div>
+          <h3>Map to domain</h3>
+          <p class="small">Company domain selects relevant FP themes, core dimensions, priority dimensions, and climate exposure.</p>
+        </article>
+        <article class="flow-step">
+          <div class="card-kicker">05 Synthesize</div>
+          <h3>Create forces</h3>
+          <p class="small">KB-first synthesis creates dimension forces, cross-impact, scenarios, and optional climate exposure.</p>
+        </article>
+        <article class="flow-step">
+          <div class="card-kicker">06 Apply</div>
+          <h3>Score and diagnose</h3>
+          <p class="small">Foresight links feed AI Diagnosis context, FAVI, Market Intelligence, and export evidence.</p>
+        </article>
+      </div>
+
+      <div class="boundary blue">
+        <h3>Foresight creation path</h3>
+        <p>
+          Company-level foresight is created from the Scanner's verified Foresight Knowledge Base. External signals are
+          first harvested, validated, content-checked, deduplicated, classified, and stored at KB level. Company foresight
+          then synthesizes only those governed signals against the scanned company's verified reality, financial capacity,
+          intent-reality gaps, and strategic context. This keeps foresight creation evidence-led rather than dependent on
+          ad hoc live-search results during each company scan.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section id="kb-harvest">
+    <div class="container">
+      <div class="section-tag"><span class="num">03</span><span>Foresight KB Harvest</span></div>
+      <h2>The KB harvest is the controlled research gate for new external information.</h2>
+      <p class="lede">
+        The harvester scans the 30-theme taxonomy, but it does not simply save whatever the model finds. It applies
+        source targeting, SIFT-style validation, URL checks, credibility scoring, content verification, deduplication,
+        and merge rules.
+      </p>
+
+      <div class="pipeline">
+        <article class="pipeline-step">
+          <div class="step-num">01</div>
+          <div>
+            <h3>Load and revalidate existing KB signals</h3>
+            <p class="small">Existing theme records are loaded from storage. Primary URLs are rechecked; dead sources are removed before new material is merged.</p>
+          </div>
+          <div class="pill-row"><span class="pill">existing KB</span><span class="pill red">dead URL removal</span><span class="pill green">analysis recheck</span></div>
+        </article>
+        <article class="pipeline-step">
+          <div class="step-num">02</div>
+          <div>
+            <h3>Harvest 3-5 current signals per theme</h3>
+            <p class="small">Gemini with Google Search is instructed to find horizontal, recent, authoritative signals, not company-specific news.</p>
+          </div>
+          <div class="pill-row"><span class="pill blue">Google Search</span><span class="pill">theme sources</span><span class="pill gold">12 month recency</span></div>
+        </article>
+        <article class="pipeline-step">
+          <div class="step-num">03</div>
+          <div>
+            <h3>Validate sources and confidence</h3>
+            <p class="small">Primary and supporting URLs are probed. Source credibility is assessed. Confidence is recalibrated from actual source count and credibility.</p>
+          </div>
+          <div class="pill-row"><span class="pill green">url_verified</span><span class="pill">source_count</span><span class="pill">credibility</span></div>
+        </article>
+        <article class="pipeline-step">
+          <div class="step-num">04</div>
+          <div>
+            <h3>Verify content support</h3>
+            <p class="small">The same evidence-cleaning model chain checks whether page content supports the signal claim and extracts a source quote when available.</p>
+          </div>
+          <div class="pill-row"><span class="pill">GPT 5.4</span><span class="pill">Gemini 2.5 Pro</span><span class="pill">Gemini 3.5 Flash</span></div>
+        </article>
+        <article class="pipeline-step">
+          <div class="step-num">05</div>
+          <div>
+            <h3>Deduplicate, rank, and store</h3>
+            <p class="small">Signals are keyed by URL or normalized title, newer duplicates replace older ones, and theme memory is capped at 15 signals ranked by confidence and recency.</p>
+          </div>
+          <div class="pill-row"><span class="pill">URL key</span><span class="pill">title key</span><span class="pill gold">MAX 15</span></div>
+        </article>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Harvest Rule</th>
+              <th>Implementation Meaning</th>
+              <th>Reliability Effect</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Horizontal signal</strong></td>
+              <td>The signal must describe a macro force in the theme, not a single company claim.</td>
+              <td>Prevents KB memory from becoming a pile of unrelated company anecdotes.</td>
+            </tr>
+            <tr>
+              <td><strong>Authoritative source targeting</strong></td>
+              <td>Primary source domains are tiered: intergovernmental, academic, think-tank, specialist foresight, analyst, and major news.</td>
+              <td>Reduces noise from blogs, press releases, content farms, and marketing pages.</td>
+            </tr>
+            <tr>
+              <td><strong>Independent corroboration</strong></td>
+              <td>High confidence requires 3+ sources; medium requires 2; weaker support is marked low confidence.</td>
+              <td>Aligns confidence with source plurality rather than model certainty.</td>
+            </tr>
+            <tr>
+              <td><strong>Analysis verification</strong></td>
+              <td>Only signals with <code>analysis_verified</code>, <code>generation_eligible</code>, and safe promotion status enter generation.</td>
+              <td>Separates displayed audit context from narrative fuel.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="company-synthesis">
+    <div class="container">
+      <div class="section-tag"><span class="num">04</span><span>Company-Level Synthesis</span></div>
+      <h2>A company scan transforms external signals into company-specific pressure, but only through domain and evidence gates.</h2>
+      <p class="lede">
+        During scanning, the company domain selects relevant foresight themes and priority dimensions. The Scanner then
+        retrieves only generation-eligible KB signals. If fewer than three usable signals are available, foresight is
+        skipped rather than fabricated.
+      </p>
+
+      <div class="card-grid">
+        <article class="card">
+          <div class="card-top">
+            <div>
+              <div class="card-kicker">Domain Resolver</div>
+              <h3>From company to foresight territory</h3>
+            </div>
+            <div class="card-id">SYN-01</div>
+          </div>
+          <p class="small">The company domain maps to FP themes, core dimensions, priority dimensions, OSINT keywords, target sources, and optional climate exposure.</p>
+          <div class="pill-row"><span class="pill">DOMAIN_TO_FORESIGHT</span><span class="pill blue">fp_themes</span><span class="pill green">priority_dimensions</span></div>
+        </article>
+        <article class="card">
+          <div class="card-top">
+            <div>
+              <div class="card-kicker">Signal Selector</div>
+              <h3>Only promoted KB signals enter</h3>
+            </div>
+            <div class="card-id">SYN-02</div>
+          </div>
+          <p class="small">Signals must be analysis verified, generation eligible, and safely promoted. If a requested theme has no data, near-fit fallback can use related themes, explicitly tagged as fallback.</p>
+          <div class="pill-row"><span class="pill green">generation eligible</span><span class="pill gold">near-fit fallback</span><span class="pill red">no live search</span></div>
+        </article>
+        <article class="card">
+          <div class="card-top">
+            <div>
+              <div class="card-kicker">Synthesis Engine</div>
+              <h3>From signal to force</h3>
+            </div>
+            <div class="card-id">SYN-03</div>
+          </div>
+          <p class="small">The KB-first prompt asks for dimension-level forces, cross-impact chain, micro-scenarios, optional climate exposure, and a headline.</p>
+          <div class="pill-row"><span class="pill">dimension forces</span><span class="pill">scenarios</span><span class="pill">cross-impact</span></div>
+        </article>
+        <article class="card">
+          <div class="card-top">
+            <div>
+              <div class="card-kicker">Company Context</div>
+              <h3>Foresight meets present reality</h3>
+            </div>
+            <div class="card-id">SYN-04</div>
+          </div>
+          <p class="small">The synthesis sees archetype, reality score, financial index, and top reality findings, so the same external signal can imply different pressure for different companies.</p>
+          <div class="pill-row"><span class="pill blue">archetype</span><span class="pill gold">reality score</span><span class="pill green">financial index</span></div>
+        </article>
+      </div>
+
+      <div class="boundary warning">
+        <h3>Why the company path is KB-only</h3>
+        <p>
+          This is a reliability choice. Company scans already have many moving parts: entity verification, reality evidence,
+          summary generation, fact-checking, and exports. By moving live search to the KB harvest, the Scanner reduces
+          hallucinated URLs and keeps company-level foresight inside a previously verified evidence universe.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section id="force-anatomy">
+    <div class="container">
+      <div class="section-tag"><span class="num">05</span><span>Key Force Anatomy</span></div>
+      <h2>A key force is not just a trend label. It is a structured argument.</h2>
+      <p class="lede">
+        Each force binds a macro signal to a Scanner knowledge dimension, a company-specific implication, a time horizon,
+        a source set, lifecycle state, and action timing. That structure is what makes the force usable in reports,
+        diagnosis, FAVI, and Market Intelligence.
+      </p>
+
+      <div class="force-card">
+        <div class="force-panel">
+          <div class="card-kicker">Conceptual Object</div>
+          <h3>Dimension Force</h3>
+          <p class="small">
+            A dimension force answers one question: what external pressure is most relevant to this company’s readiness
+            in a specific KB dimension?
+          </p>
+          <div class="pill-row">
+            <span class="pill">external pressure</span>
+            <span class="pill green">dimension mapped</span>
+            <span class="pill blue">source linked</span>
+            <span class="pill gold">time bounded</span>
+          </div>
+        </div>
+        <div class="force-panel">
+          <div class="field-list">
+            <div class="field-row"><strong>Trend</strong><span>Concrete name of the force, not a vague theme.</span></div>
+            <div class="field-row"><strong>Type</strong><span>Plausible/Maturing, Probable/Emerging, Weakening/Declining, or Preposterous/Black Swan.</span></div>
+            <div class="field-row"><strong>Timeframe</strong><span>6-12, 12-24, or 24-36 months.</span></div>
+            <div class="field-row"><strong>Dimension</strong><span>AI Readiness, Operating Model, Service Portfolio, Strategy, or Values.</span></div>
+            <div class="field-row"><strong>Impact</strong><span>Company-specific interpretation based on archetype, reality score, financial index, and findings.</span></div>
+            <div class="field-row"><strong>Evidence</strong><span>Primary URL, supporting sources, source type, credibility, confidence, and OSINT validation.</span></div>
+            <div class="field-row"><strong>Lifecycle</strong><span>weak_signal through market_saturation/fading_signal, plus trend momentum and action timing.</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="quality-grid" aria-label="Force classification dimensions">
+        <div class="quality-state">
+          <span class="quality-label">Signal Type</span>
+          <p class="small">Classifies uncertainty and maturity: weak, emerging, maturing, declining, or black-swan style pressure.</p>
+        </div>
+        <div class="quality-state">
+          <span class="quality-label">Lifecycle Stage</span>
+          <p class="small">Places the force on an adoption curve: weak signal, strong signal, hype, valley, go-to-market, breakout, established, saturation, weakening, fading.</p>
+        </div>
+        <div class="quality-state">
+          <span class="quality-label">Action Timing</span>
+          <p class="small">Translates lifecycle into posture: monitor, prepare, act now, last chance, or optimize.</p>
+        </div>
+        <div class="quality-state">
+          <span class="quality-label">Confidence</span>
+          <p class="small">Comes from corroborating source count and credibility, not merely from model certainty.</p>
+        </div>
+        <div class="quality-state">
+          <span class="quality-label">Credibility</span>
+          <p class="small">Assessed from source type and domain reputation through the shared source quality layer.</p>
+        </div>
+        <div class="quality-state">
+          <span class="quality-label">Scope</span>
+          <p class="small">The force remains external context unless separate company evidence proves company-specific action.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="verification">
+    <div class="container">
+      <div class="section-tag"><span class="num">06</span><span>Verification And Guardrails</span></div>
+      <h2>The foresight evidence ladder is deliberately narrower than ordinary web research.</h2>
+      <p class="lede">
+        The Scanner is designed to preserve useful weak signals while preventing weak or wrongly scoped sources from
+        becoming generated claims. Verification decides what may influence prose and scoring.
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Gate</th>
+              <th>Question</th>
+              <th>Stored Fields</th>
+              <th>Failure Mode</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>URL verification</strong></td>
+              <td>Does the primary or supporting URL resolve?</td>
+              <td><code>url_verified</code>, <code>verified_supporting_sources</code></td>
+              <td>Dead sources are removed, demoted, or blocked.</td>
+            </tr>
+            <tr>
+              <td><strong>Credibility assessment</strong></td>
+              <td>Is the domain/source type high, medium, low, or unknown?</td>
+              <td><code>source_credibility</code>, <code>source_type</code></td>
+              <td>Confidence is downgraded when source quality is weak.</td>
+            </tr>
+            <tr>
+              <td><strong>Content verification</strong></td>
+              <td>Does readable source content support the signal claim?</td>
+              <td><code>content_verified</code>, <code>claim_support_status</code>, <code>source_quote</code></td>
+              <td>Unchecked or unsupported content becomes display-only/excluded.</td>
+            </tr>
+            <tr>
+              <td><strong>Promotion gate</strong></td>
+              <td>Can the signal enter generated analysis?</td>
+              <td><code>analysis_verified</code>, <code>generation_eligible</code>, <code>promotion_status</code></td>
+              <td>Non-promoted signals remain visible for audit, not synthesis.</td>
+            </tr>
+            <tr>
+              <td><strong>Language guardrail</strong></td>
+              <td>Does foresight overstate certainty or obligations?</td>
+              <td><code>foresight_sanitized</code>, <code>clean_by_construction</code>, warning lists</td>
+              <td>Deterministic wording is softened to modal, conditional language.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="boundary-grid">
+        <div class="boundary-cell allowed">
+          <h3>Allowed</h3>
+          <p class="small">"External financial-sector signals suggest pressure from AI governance, which may require banks to evaluate accountability and operating-model readiness if in scope."</p>
+        </div>
+        <div class="boundary-cell forbidden">
+          <h3>Forbidden</h3>
+          <p class="small">"The company is deploying AI governance and must redesign its operating model." A trend source cannot prove current deployment or create a direct obligation by itself.</p>
+        </div>
+      </div>
+
+      <div class="boundary gold">
+        <h3>Guardrail principle</h3>
+        <p>
+          The foresight sanitizer rewrites deterministic language such as "must", "forces", "has deployed",
+          "currently uses", "is non-compliant", and past deadlines. This keeps future-oriented analysis modal:
+          "may", "could", "should evaluate", "if in scope", and "if not already completed."
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section id="methodology">
+    <div class="container">
+      <div class="section-tag"><span class="num">07</span><span>Methodological Foundations</span></div>
+      <h2>The system combines futures studies, OSINT validation, evidence promotion, company-readiness analysis, and a Popper-compatible methods mix.</h2>
+      <p class="lede">
+        The implementation is pragmatic rather than purely theoretical, but its logic is academically defensible:
+        classify the external environment, validate sources laterally, map signals to organizational capacities, and
+        distinguish plausible pressure from proven company facts. Rafael Popper's Foresight Diamond is visible here as
+        a background logic: the Scanner combines evidence, expertise, creativity, and limited interaction rather than
+        relying on a single foresight method.
+      </p>
+
+      <div class="card-grid">
+        <article class="card">
+          <div class="card-top">
+            <div>
+              <div class="card-kicker">Futures Studies</div>
+              <h3>Horizon scanning and signal taxonomy</h3>
+            </div>
+            <div class="card-id">M-01</div>
+          </div>
+          <p class="small">The 30 FP themes create a wide scan field so the system does not only chase technology headlines. Signal type and lifecycle stage distinguish weak signals, maturing trends, saturation, and decline.</p>
+        </article>
+        <article class="card">
+          <div class="card-top">
+            <div>
+              <div class="card-kicker">OSINT</div>
+              <h3>SIFT and lateral reading</h3>
+            </div>
+            <div class="card-id">M-02</div>
+          </div>
+          <p class="small">The prompts instruct Stop, Investigate source, Find better coverage, and Trace claims. The code reinforces that with URL checks, source counts, credibility scoring, and content support checks.</p>
+        </article>
+        <article class="card">
+          <div class="card-top">
+            <div>
+              <div class="card-kicker">Evidence Theory</div>
+              <h3>Promotion rather than collection</h3>
+            </div>
+            <div class="card-id">M-03</div>
+          </div>
+          <p class="small">The important methodological move is not gathering many links. It is deciding which links can legitimately influence analysis, which must remain display-only, and which must be excluded.</p>
+        </article>
+        <article class="card">
+          <div class="card-top">
+            <div>
+              <div class="card-kicker">Organizational Diagnosis</div>
+              <h3>External pressure meets internal readiness</h3>
+            </div>
+            <div class="card-id">M-04</div>
+          </div>
+          <p class="small">A force becomes strategically meaningful only when mapped against reality score, archetype, financial capacity, and Scanner knowledge dimensions.</p>
+        </article>
+      </div>
+
+      <div class="boundary gold">
+        <h3>Popper-compatible reading: the Foresight Diamond</h3>
+        <p>
+          The Scanner should not be described as a full participatory foresight programme in Popper's sense. It is not
+          running citizen panels, Delphi rounds, or workshop-based stakeholder deliberation. But the methodological
+          dynamics are clearly aligned with Popper's Foresight Diamond: evidence grounds the signal, expertise frames
+          relevance, creativity opens alternative futures, and interaction appears through review, maintenance, and
+          renewal loops.
+        </p>
+      </div>
+
+      <div class="boundary blue">
+        <h3>Relationship to common strategy frameworks</h3>
+        <p>
+          The Scanner does not reject familiar methods such as PESTEL, SWOT, Porter's Five Forces, scenario planning,
+          or horizon scanning. It treats them as partial lenses. Its own method combines horizon scanning, evidence
+          qualification, entity-aware verification, knowledge-base classification, cross-impact reasoning, and
+          company-specific readiness analysis.
+        </p>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Method</th>
+              <th>Useful For</th>
+              <th>Limitation In This Context</th>
+              <th>How The Scanner Extends It</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>PESTEL</strong></td>
+              <td>Structuring macro-environmental forces across political, economic, social, technological, environmental, and legal categories.</td>
+              <td>It names categories of change, but does not verify source quality, entity relevance, signal maturity, or whether a pressure connects to a specific company's operating reality.</td>
+              <td>Uses the broader 30-theme foresight taxonomy, then gates each signal through credibility, content support, classification, and company-readiness mapping.</td>
+            </tr>
+            <tr>
+              <td><strong>SWOT</strong></td>
+              <td>Communicating strengths, weaknesses, opportunities, and threats in a simple executive form.</td>
+              <td>It can become subjective and static when assumptions, opinions, and verified facts are mixed without source governance.</td>
+              <td>Separates verified company reality from external opportunity and threat signals, then keeps weak, unsupported, or wrong-entity evidence out of generated conclusions.</td>
+            </tr>
+            <tr>
+              <td><strong>Porter's Five Forces</strong></td>
+              <td>Assessing industry structure, bargaining power, substitution, rivalry, and entry barriers.</td>
+              <td>It is less sensitive to cross-domain forces such as AI governance, data infrastructure, climate regulation, autonomous operations, work transformation, and ecosystem shifts.</td>
+              <td>Combines industry/domain context with cross-impact chains and priority dimensions, so external pressure can be mapped to operating model, strategy, service portfolio, values, and AI readiness.</td>
+            </tr>
+            <tr>
+              <td><strong>Scenario planning</strong></td>
+              <td>Exploring plausible alternative futures and strategic uncertainty.</td>
+              <td>It can become speculative if scenarios are not tied back to evidence quality, timeframe, source credibility, and present company constraints.</td>
+              <td>Creates micro-scenarios only from qualified forces, then links them to evidence status, action timing, risk/reward framing, and readiness limits.</td>
+            </tr>
+            <tr>
+              <td><strong>Horizon scanning</strong></td>
+              <td>Detecting weak signals, emerging issues, and trend momentum before they become mainstream planning assumptions.</td>
+              <td>Raw scanning can over-collect links and promote loosely related material if there is no strict evidence-promotion boundary.</td>
+              <td>Preserves horizon scanning as the research layer, but adds URL/content verification, source quotes, credibility scoring, deduplication, and generation eligibility before signals can influence synthesis.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Foresight Diamond Capability</th>
+              <th>How It Appears In The Scanner</th>
+              <th>What The Wording Should Not Overclaim</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Evidence</strong></td>
+              <td>Authoritative source targeting, URL verification, credibility scoring, source quotes, claim support, analysis verification, FAVI.</td>
+              <td>Evidence of a trend is not evidence that a specific company has already acted.</td>
+            </tr>
+            <tr>
+              <td><strong>Expertise</strong></td>
+              <td>Curated 30-theme taxonomy, domain-to-foresight mapping, KB dimensions, source tiers, lifecycle classification, action timing.</td>
+              <td>The system uses codified expert frameworks; it does not replace domain expert judgment.</td>
+            </tr>
+            <tr>
+              <td><strong>Creativity</strong></td>
+              <td>Weak-signal scanning, black-swan category, micro-scenarios, cross-impact chains, and alternative future pressure narratives.</td>
+              <td>Creative foresight remains bounded by source support and modal language.</td>
+            </tr>
+            <tr>
+              <td><strong>Interaction</strong></td>
+              <td>Admin review, Verify KB, Verify Evidence, scan renewal, Market Intelligence feedback, and human interpretation of outputs.</td>
+              <td>This is the lightest Diamond capability in the current product; it is not a participatory panel or Delphi process.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Question</th>
+              <th>Scanner Answer</th>
+              <th>Methodological Role</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>What is changing?</strong></td>
+              <td>FP theme signal harvested from authoritative external sources.</td>
+              <td>Horizon scanning.</td>
+            </tr>
+            <tr>
+              <td><strong>How reliable is the signal?</strong></td>
+              <td>Confidence, credibility, URL status, source quote, and claim support.</td>
+              <td>OSINT validation and evidence promotion.</td>
+            </tr>
+            <tr>
+              <td><strong>Where does it hit the company?</strong></td>
+              <td>KB dimension, domain theme, current findings, and archetype-specific impact.</td>
+              <td>Organizational readiness mapping.</td>
+            </tr>
+            <tr>
+              <td><strong>How urgent is it?</strong></td>
+              <td>Timeframe, lifecycle stage, trend momentum, and action timing.</td>
+              <td>Strategic timing analysis.</td>
+            </tr>
+            <tr>
+              <td><strong>How does it cascade?</strong></td>
+              <td>Cross-impact chain and micro-scenarios.</td>
+              <td>Systems thinking and scenario reasoning.</td>
+            </tr>
+            <tr>
+              <td><strong>How are methods mixed?</strong></td>
+              <td>Scanning, source review, signal classification, cross-impact, scenarios, scoring, and renewal functions are combined as one methodological system.</td>
+              <td>Popper-style methods mix.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="favi">
+    <div class="container">
+      <div class="section-tag"><span class="num">08</span><span>FAVI And Market Use</span></div>
+      <h2>Foresight becomes quantitative pressure only after it has been converted into validated foresight links.</h2>
+      <p class="lede">
+        The FAVI layer does not score raw prose. It uses <code>foresight_links</code> extracted from dimension forces,
+        where each link carries theme, dimension, timeframe, force type, credibility, validation status, and priority-dimension metadata.
+      </p>
+
+      <div class="formula">
+        <code>Foresight Pressure Score:
+  signal_strength = geometric_mean(force_weight, timeframe_urgency, credibility_weight)
+  FPS = average(signal_strength across validated priority-dimension links)
+
+Readiness Gap:
+  gap_i = pressure_i * (1 - reality_score_i / 100)
+  readiness_gap can be adjusted upward by current vulnerability signals
+
+FAVI:
+  if sufficient data:
+    FAVI = geometric_mean(FPS, 1 - FAC, readiness_gap, megatrend_exposure_factor) * 100
+  if sparse data:
+    FAVI = additive fallback using pressure, readiness gap, financial capacity,
+           megatrend exposure, and challenge density</code>
+      </div>
+
+      <div class="matrix" aria-label="Foresight and adaptation segments">
+        <div class="quadrant">
+          <div class="card-kicker" style="color:var(--accent)">Trapped</div>
+          <h3>Low adaptation capacity, high future pressure</h3>
+          <p class="small">Validated foresight pressure lands on a company with limited ability to absorb or respond.</p>
+        </div>
+        <div class="quadrant">
+          <div class="card-kicker" style="color:var(--accent-3)">Wealthy Under Pressure</div>
+          <h3>Capacity exists, pressure rising</h3>
+          <p class="small">The company has financial room, but the external pressure may require faster prioritization.</p>
+        </div>
+        <div class="quadrant">
+          <div class="card-kicker" style="color:var(--accent-4)">Mature And Stable</div>
+          <h3>Lower pressure, adequate stability</h3>
+          <p class="small">Foresight signals do not yet create high urgency relative to current capability.</p>
+        </div>
+        <div class="quadrant">
+          <div class="card-kicker" style="color:var(--accent-2)">Future-Ready</div>
+          <h3>Strong capacity, manageable pressure</h3>
+          <p class="small">The company appears better positioned to absorb external forces.</p>
+        </div>
+      </div>
+
+      <div class="boundary blue">
+        <h3>Market Intelligence reuse</h3>
+        <p>
+          At portfolio level, Market Intelligence counts top foresight themes, builds theme-by-dimension cross-impact
+          matrices, computes foresight coverage, ranks opportunity maps, and segments companies by current vulnerability
+          and FAVI. The same company-level <code>foresight_links</code> therefore support both individual reports and the
+          market observatory.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section id="boundaries">
+    <div class="container">
+      <div class="section-tag"><span class="num">09</span><span>Boundaries And Reliability</span></div>
+      <h2>The most important reliability feature is what the foresight system refuses to claim.</h2>
+      <p class="lede">
+        The Scanner can produce forceful strategic implications, but its reliability model explicitly separates
+        external trend context from company-specific evidence. This is why foresight can guide diagnosis without becoming
+        a hallucinated company fact.
+      </p>
+
+      <div class="boundary-grid">
+        <div class="boundary-cell allowed">
+          <h3>What foresight can do</h3>
+          <p class="small">Identify validated external pressures, map them to company readiness dimensions, express timing and momentum, build scenarios, inform AI Diagnosis, and feed FAVI.</p>
+          <div class="pill-row"><span class="pill green">external pressure</span><span class="pill green">scenario context</span><span class="pill green">readiness gap</span></div>
+        </div>
+        <div class="boundary-cell forbidden">
+          <h3>What foresight cannot do</h3>
+          <p class="small">Prove that a company has deployed a capability, is non-compliant, must act by a date, or has a current internal problem unless separate company evidence supports it.</p>
+          <div class="pill-row"><span class="pill red">no deployment proof</span><span class="pill red">no hard obligation</span><span class="pill red">no invented fact</span></div>
+        </div>
+      </div>
+
+      <div class="quality-grid" aria-label="Reliability states">
+        <div class="quality-state">
+          <span class="quality-label">Generated</span>
+          <p class="small">At least three live generation-eligible KB signals exist and synthesis returned structured forces and scenarios.</p>
+        </div>
+        <div class="quality-state">
+          <span class="quality-label">Skipped</span>
+          <p class="small">The KB had too few usable signals, quick re-verification failed, or synthesis could not produce the required structure.</p>
+        </div>
+        <div class="quality-state">
+          <span class="quality-label">Low Trust</span>
+          <p class="small">Legacy/full-search path output can be flagged insufficient when verified primary/source totals miss the quality gate.</p>
+        </div>
+        <div class="quality-state">
+          <span class="quality-label">Display Only</span>
+          <p class="small">A source may remain visible for audit but be blocked from generated prose.</p>
+        </div>
+        <div class="quality-state">
+          <span class="quality-label">Scoped</span>
+          <p class="small">A force may be valid as external context but cannot become a company fact without corroboration.</p>
+        </div>
+        <div class="quality-state">
+          <span class="quality-label">Auditable</span>
+          <p class="small">The saved report retains sources, validation summary, flags, force metadata, and foresight links.</p>
+        </div>
+      </div>
+
+      <div class="boundary">
+        <h3>Bottom line</h3>
+        <p>
+          The Scanner's foresight method is best understood as a layered argument: a verified external signal becomes a
+          classified force; the force is mapped to a company readiness dimension; the dimension pressure is interpreted
+          through current reality and financial capacity; and only then does it influence diagnosis, scenarios, FAVI, and
+          Market Intelligence. In Popper's terms, this is a methods mix with a strong evidence and expertise bias,
+          meaningful creativity in scenarios and weak-signal logic, and a lighter interaction layer through review and
+          renewal. The academic strength of the method is not that it predicts the future. It is that it
+          preserves the distinction between <strong>evidence of change in the world</strong> and <strong>evidence of change inside a company</strong>.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <div class="cta-strip">
+    <a class="cta-button" href="https://appspresentations.staticrun.app/The%20Scanner_Evidence-Governed%20Market%20Intelligence">
+      The Scanner - Evidence-Governed Market Intelligence
+    </a>
+  </div>
+</main>
+
+<footer class="container footer-note">
+  The Scanner - Foresight creation methodology brief. Grounded in backend/foresight_harvester.py, backend/strategic_foresight.py, backend/foresight_guardrails.py, backend/foresight_vulnerability.py, and backend/market_intelligence.py.
+</footer>
+</body>
+</html>
