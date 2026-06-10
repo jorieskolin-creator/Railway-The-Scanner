@@ -3023,7 +3023,7 @@ const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, on
 
         {/* Tab Navigation */}
         <div className="flex items-center gap-1 p-2 bg-black/30 border-b border-white/5 shrink-0 overflow-x-auto">
-          <a href="https://presentations.static2.website/foresight-creation" target="_blank" rel="noopener noreferrer"
+          <a href="https://appspresentations.staticrun.app/The%20Scanner%20-%20Foresight%20Creation%20Methodology#verification" target="_blank" rel="noopener noreferrer"
             className="flex items-center gap-1.5 px-3 py-1.5 rounded text-[10px] font-bold uppercase tracking-wide transition-all whitespace-nowrap text-violet-400 hover:text-violet-200 hover:bg-violet-500/10 border border-violet-500/25">
             <BookOpen size={12} />
             Introduction
