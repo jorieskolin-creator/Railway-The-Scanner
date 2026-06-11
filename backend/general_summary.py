@@ -456,7 +456,7 @@ def _build_prompt(payload: dict, company_name: str) -> str:
 This section differs from nearby report sections:
 - AI Diagnosis owns deeper interpretation, risk framing, recommendations, and projected consequences.
 - Stakeholder List owns people and role details.
-- Future Insight owns forward-looking pressure.
+- Structured Strategic Foresight Evidence owns key forces, scenarios, and cross-impact context.
 - Evidence Trust owns source verification status.
 
 The General Summary should connect evidence into a concise executive snapshot without duplicating those sections.

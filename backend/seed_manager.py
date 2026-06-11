@@ -1373,41 +1373,8 @@ re-introduce any of the false claims listed above."""
                 except Exception as gs_err:
                     print(f"   [{company_name}] ⚠️ [General Summary] Failed: {gs_err} — skipping, scan continues")
 
-            # --- FUTURE INSIGHT ---
-            # Forward-looking narrative based on already-computed strategic foresight.
-            # Non-fatal: store an explicit status so exports can distinguish missing
-            # old data from a skipped/failed generation.
-            has_foresight_for_summary = bool(foresight_data and foresight_data.get("dimension_forces"))
-            if has_foresight_for_summary:
-                _seed_fs_remaining = COMPANY_BUDGET - (time.time() - company_start)
-                if _seed_fs_remaining < 45:
-                    full_data["foresight_summary_status"] = "skipped"
-                    full_data["foresight_summary_skip_reason"] = f"Budget < 45s remaining ({int(_seed_fs_remaining)}s)"
-                    print(f"   [{company_name}] ⏭ [Future Insight] Budget < 45s ({int(_seed_fs_remaining)}s) — skipping")
-                    if company_scan_quality == "complete":
-                        company_scan_quality = "partial_summary"
-                else:
-                    try:
-                        from strategic_foresight import generate_foresight_summary
-                        fs_start = time.time()
-                        fs_text, fs_model = generate_foresight_summary(foresight_data, company_name, company_domain)
-                        if fs_text:
-                            wc = len(fs_text.split())
-                            full_data["foresight_summary"] = fs_text
-                            full_data["foresight_summary_model"] = fs_model
-                            full_data["foresight_summary_status"] = "generated"
-                            print(f"   [{company_name}] ✅ [Future Insight] {wc} words, model={fs_model} ({int((time.time()-fs_start)*1000)}ms)")
-                        else:
-                            full_data["foresight_summary_status"] = "skipped"
-                            full_data["foresight_summary_skip_reason"] = "empty_generation"
-                            print(f"   [{company_name}] ⚠️ [Future Insight] Generation returned empty — skipping field")
-                    except Exception as fs_err:
-                        full_data["foresight_summary_status"] = "skipped"
-                        full_data["foresight_summary_skip_reason"] = f"generation_failed: {str(fs_err)[:160]}"
-                        print(f"   [{company_name}] ⚠️ [Future Insight] Failed: {fs_err} — skipping, scan continues")
-
             # Sync final scan_quality back into full_data before saving. It may have
-            # changed during optional summary/foresight generation.
+            # changed during optional General Summary generation.
             full_data["scan_quality"] = company_scan_quality
 
             # 6. SAVE INDIVIDUAL COMPANY (thread-safe — unique path per company)

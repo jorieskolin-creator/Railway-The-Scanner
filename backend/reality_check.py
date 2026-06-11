@@ -379,8 +379,8 @@ def validate_evidence_admissibility(evidence_links=None):
     return flags
 
 
-def validate_future_insight_language(text: str, report_date=None, section: str = "Future Insight"):
-    """Validate deterministic foresight language and past deadlines in future-facing sections."""
+def validate_forward_looking_language(text: str, report_date=None, section: str = "Generated narrative"):
+    """Validate deterministic foresight language and past deadlines in generated narratives."""
     flags = []
     if not text:
         return flags
@@ -396,6 +396,11 @@ def sanitize_future_insight_language(text: str, report_date=None):
     """Rewrite deterministic foresight language and past deadlines."""
     cleaned, issues = sanitize_future_insight(text or "", report_date)
     return cleaned, issues
+
+
+# Backward-compatible alias for any older maintenance scripts importing the
+# previous helper name. New scan paths call validate_forward_looking_language.
+validate_future_insight_language = validate_forward_looking_language
 
 
 def validate_summary(summary_text, company_name, key_people=None, evidence_links=None, confidence_score=None):
@@ -534,7 +539,7 @@ def validate_summary(summary_text, company_name, key_people=None, evidence_links
     governance_flags.extend(validate_evidence_admissibility(evidence_links))
     governance_flags.extend(validate_scope_inflation(summary_text, evidence_links))
     governance_flags.extend(validate_foresight_presented_as_fact(summary_text, evidence_links))
-    governance_flags.extend(validate_future_insight_language(summary_text, section="Summary/Future Insight"))
+    governance_flags.extend(validate_forward_looking_language(summary_text, section="Generated narrative"))
     if governance_flags:
         flags.extend(governance_flags)
         score += min(35, 10 + 5 * len(governance_flags))

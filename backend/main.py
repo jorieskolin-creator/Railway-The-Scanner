@@ -3864,61 +3864,28 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                             "reason": "GPT/Claude re-synthesis failed",
                         }
 
-        # --- STEP 3.5 & 3.6: GENERAL SUMMARY + FUTURE INSIGHT (parallel) ---
+        # --- STEP 3.5: GENERAL SUMMARY ---
         # General Summary: Plain-language narrative (225-275 words) from already-verified data.
-        # Future Insight: Forward-looking narrative based on foresight data (250-300 words).
-        # Both run in parallel after fact-check so evidence_links are already purged/verified.
+        # Runs after fact-check so evidence_links are already purged/verified.
         # Failure is non-fatal — old records without these fields are handled gracefully.
         gs_text, gs_model = "", ""
-        fs_text, fs_model = "", ""
-        fs_skip_reason = ""
-        has_foresight_for_summary = bool(foresight_data and foresight_data.get("dimension_forces"))
         _gs_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
-        parallel_ms = 0
+        gs_ms = 0
         if _gs_remaining < 45:
-            print(f"   ⏭ [GS+FS] Budget < 45s remaining ({int(_gs_remaining)}s) — skipping General Summary and Future Insight")
-            if has_foresight_for_summary:
-                fs_skip_reason = f"Budget < 45s remaining ({int(_gs_remaining)}s)"
+            print(f"   ⏭ [General Summary] Budget < 45s remaining ({int(_gs_remaining)}s) — skipping")
             if scan_quality == "complete":
                 scan_quality = "partial_summary"
         else:
             try:
-                parallel_start = time.time()
-                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-                    gs_future = pool.submit(generate_general_summary, full_data, companyName)
-
-                    # Future Insight runs in parallel with General Summary
-                    fs_future = None
-                    if has_foresight_for_summary:
-                        from strategic_foresight import generate_foresight_summary
-                        fs_future = pool.submit(generate_foresight_summary, foresight_data, companyName, company_domain)
-
-                    try:
-                        gs_text, gs_model = gs_future.result(timeout=120)
-                    except Exception as gs_err:
-                        print(f"   ⚠️ [General Summary] Failed: {gs_err} — skipping")
-
-                    if fs_future:
-                        try:
-                            fs_text, fs_model = fs_future.result(timeout=120)
-                        except Exception as fs_err:
-                            print(f"   ⚠️ [Future Insight] Failed: {fs_err} — skipping")
-                            fs_skip_reason = f"generation_failed: {str(fs_err)[:160]}"
-
-                parallel_ms = int((time.time() - parallel_start) * 1000)
-            except Exception as parallel_err:
-                print(f"   ⚠️ [Summary+Foresight] Parallel execution failed: {parallel_err}")
-                if has_foresight_for_summary:
-                    fs_skip_reason = f"parallel_execution_failed: {str(parallel_err)[:160]}"
-                # Fallback: try general summary alone
-                try:
-                    gs_text, gs_model = generate_general_summary(full_data, companyName)
-                except Exception:
-                    pass
+                gs_start = time.time()
+                gs_text, gs_model = generate_general_summary(full_data, companyName)
+                gs_ms = int((time.time() - gs_start) * 1000)
+            except Exception as gs_err:
+                print(f"   ⚠️ [General Summary] Failed: {gs_err} — skipping")
 
         if gs_text:
             wc = len(gs_text.split())
-            print(f"   ✅ [General Summary] {wc} words, model={gs_model} ({parallel_ms}ms)")
+            print(f"   ✅ [General Summary] {wc} words, model={gs_model} ({gs_ms}ms)")
 
             # Fact-check General Summary against its own input payload
             gs_check = fact_check_general_summary(gs_text, full_data, companyName)
@@ -3936,23 +3903,11 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
         else:
             print(f"   ⚠️ [General Summary] Generation returned empty — skipping field")
 
-        if fs_text:
-            full_data["foresight_summary"] = fs_text
-            full_data["foresight_summary_model"] = fs_model
-            full_data["foresight_summary_status"] = "generated"
-            wc = len(fs_text.split())
-            print(f"   ✅ [Future Insight] {wc} words, model={fs_model} ({parallel_ms}ms)")
-        else:
-            if has_foresight_for_summary:
-                full_data["foresight_summary_status"] = "skipped"
-                full_data["foresight_summary_skip_reason"] = fs_skip_reason or "empty_generation"
-                print(f"   ⚠️ [Future Insight] Generation returned empty — skipping")
-
-        # --- STEP 3.7: DETAILED FORENSIC REPORT (meta-synthesis) ---
-        # Runs AFTER General Summary and Future Insight so it can synthesize all
+        # --- STEP 3.6: DETAILED FORENSIC REPORT (meta-synthesis) ---
+        # Runs AFTER General Summary so it can synthesize all
         # prior analyses into a unified 800-1200 word diagnostic. No new searches —
         # works entirely from data already in memory (General Summary, AI Diagnosis,
-        # Foresight Insight, Why/What proposals, all metrics and evidence).
+        # structured foresight evidence, Why/What proposals, all metrics and evidence).
         dr_text, dr_model = "", ""
         dr_ms = 0
         _dr_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
@@ -3994,8 +3949,7 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
         else:
             print(f"   ⚠️ [Detailed Report] Generation returned empty — skipping field")
 
-        # Sync final scan quality before save so optional Future Insight skips are
-        # visible in stored records and exported Master Data.
+        # Sync final scan quality before save.
         full_data["scan_quality"] = scan_quality
 
         # --- STEP 4: SAVE ---

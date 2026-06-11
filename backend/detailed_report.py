@@ -37,7 +37,7 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
     """Build a rich evidence payload for the detailed report — more depth than general_summary.
 
     When prior_summaries is provided, the report acts as a meta-synthesis of all
-    previously generated analyses (General Summary, AI Diagnosis, Foresight Insight,
+    previously generated analyses (General Summary, AI Diagnosis, structured foresight evidence,
     metrics, etc.) rather than duplicating analysis from raw evidence.
     """
 

@@ -24,6 +24,7 @@ import concurrent.futures
 from datetime import datetime
 
 import anthropic
+import requests
 from source_quality import HIGH_CREDIBILITY_DOMAINS, LOW_CREDIBILITY_DOMAINS, assess_source_credibility, classify_generation_context, is_generation_eligible_source
 from llm_clients import call_anthropic_text, call_json_model_chain, call_openai_text
 from foresight_guardrails import build_foresight_guardrails, annotate_foresight_signal, annotate_foresight_link, validate_foresight_text, sanitize_foresight_text, sanitize_future_insight, sanitize_foresight_record, sanitize_foresight_collection, sanitize_report_foresight_fields
@@ -851,6 +852,99 @@ THEME_FALLBACK_MAP = {
 }
 
 
+def _sanitize_foresight_data(foresight_data: dict | None, domain: str = "", company_name: str = "") -> dict | None:
+    """Apply the shared foresight sanitizer to structured foresight payloads."""
+    if not isinstance(foresight_data, dict):
+        return foresight_data
+    return sanitize_report_foresight_fields(foresight_data, domain=domain, company_name=company_name)
+
+
+def _verify_foresight_url(url: str, timeout: int = 8) -> bool:
+    """Return True when a foresight source URL resolves to a reachable page."""
+    if not url or not isinstance(url, str) or not url.startswith(("http://", "https://")):
+        return False
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; TheScanner/1.0; +https://the-demand-scanner.up.railway.app/)",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    try:
+        response = requests.head(url, allow_redirects=True, timeout=timeout, headers=headers)
+        if response.status_code in (405, 429) or response.status_code >= 500:
+            response = requests.get(url, allow_redirects=True, timeout=timeout, headers=headers, stream=True)
+        return 200 <= response.status_code < 400 or response.status_code in (401, 403)
+    except Exception:
+        try:
+            response = requests.get(url, allow_redirects=True, timeout=timeout, headers=headers, stream=True)
+            return 200 <= response.status_code < 400 or response.status_code in (401, 403)
+        except Exception:
+            return False
+
+
+def validate_foresight_urls(foresight_data: dict | None) -> tuple[dict | None, int, int]:
+    """
+    Verify primary and supporting source URLs in a structured foresight payload.
+
+    Returns (foresight_data, verified_primary_count, dead_primary_count).
+    """
+    if not isinstance(foresight_data, dict):
+        return foresight_data, 0, 0
+
+    forces = foresight_data.get("dimension_forces") or []
+    if not isinstance(forces, list) or not forces:
+        return _sanitize_foresight_data(foresight_data), 0, 0
+
+    urls: dict[str, None] = {}
+    for force in forces:
+        if not isinstance(force, dict):
+            continue
+        primary = (force.get("source_url") or "").strip()
+        if primary.startswith("http"):
+            urls[primary] = None
+        for src in force.get("supporting_sources") or []:
+            if isinstance(src, dict):
+                src_url = (src.get("url") or "").strip()
+                if src_url.startswith("http"):
+                    urls[src_url] = None
+
+    if urls:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            futures = {pool.submit(_verify_foresight_url, url, 8): url for url in urls}
+            for future in concurrent.futures.as_completed(futures):
+                url = futures[future]
+                try:
+                    urls[url] = bool(future.result())
+                except Exception:
+                    urls[url] = False
+
+    verified_primary = 0
+    dead_primary = 0
+    for force in forces:
+        if not isinstance(force, dict):
+            continue
+        primary = (force.get("source_url") or "").strip()
+        if primary.startswith("http"):
+            force["url_verified"] = bool(urls.get(primary))
+            if force["url_verified"]:
+                verified_primary += 1
+            else:
+                dead_primary += 1
+        else:
+            force["url_verified"] = False
+            dead_primary += 1
+
+        verified_supporting = []
+        for src in _dict_items_only(force.get("supporting_sources") or [], "supporting_sources"):
+            src_url = (src.get("url") or "").strip()
+            src["url_verified"] = bool(urls.get(src_url)) if src_url else False
+            if src["url_verified"]:
+                verified_supporting.append(src)
+        force["verified_supporting_sources"] = verified_supporting
+        force["source_count"] = (1 if force.get("url_verified") else 0) + len(verified_supporting)
+
+    print(f"   🔗 [Foresight URLs] {verified_primary}/{len(forces)} primary URLs verified, {dead_primary} unavailable")
+    return _sanitize_foresight_data(foresight_data), verified_primary, dead_primary
+
+
 def _quick_verify_kb_signals(signals: list[dict], max_workers: int = 8) -> list[dict]:
     """
     Quick URL re-verification of KB signals. Returns only signals whose
@@ -1239,6 +1333,62 @@ def _extract_json_from_text(text: str) -> str | None:
     if start != -1 and end != -1 and end > start:
         return text[start:end + 1]
     return None
+
+
+def generate_foresight(
+    company_name: str,
+    domain: str,
+    archetype: str,
+    reality_score: int,
+    financial_index: int | None = None,
+    top_findings: list[dict] | None = None,
+) -> dict | None:
+    """
+    Generate structured company foresight evidence from the curated Foresight KB.
+
+    This is the public entry point used by live scans and database refreshes.
+    It intentionally returns structured foresight data only (key forces,
+    cross-impact chain, scenarios, climate exposure). The old standalone
+    Future Insight narrative is no longer generated here.
+    """
+    domain_config = DOMAIN_TO_FORESIGHT.get(domain) or DOMAIN_TO_FORESIGHT.get("Other", {})
+    fp_themes = domain_config.get("fp_themes", [])
+    if not fp_themes:
+        print(f"   ⚠️ [Foresight] No theme mapping for domain '{domain}'")
+        return None
+
+    try:
+        from foresight_harvester import get_kb_signals_for_themes
+        kb_signals = get_kb_signals_for_themes(fp_themes)
+    except Exception as err:
+        print(f"   ⚠️ [Foresight KB] Could not load KB signals: {err}")
+        kb_signals = []
+
+    if not kb_signals:
+        print(f"   ⚠️ [Foresight KB] No generation-eligible KB signals for {domain}")
+        return None
+
+    verified_kb_signals = _quick_verify_kb_signals(kb_signals)
+    if len(verified_kb_signals) < _MIN_KB_SIGNALS_FOR_SYNTHESIS:
+        print(
+            f"   ⚠️ [Foresight KB] Insufficient verified KB signals "
+            f"({len(verified_kb_signals)}/{_MIN_KB_SIGNALS_FOR_SYNTHESIS}) for {company_name}"
+        )
+        return None
+
+    foresight_data = _generate_foresight_from_kb(
+        company_name=company_name,
+        domain=domain,
+        archetype=archetype,
+        reality_score=int(reality_score or 0),
+        financial_index=financial_index,
+        top_findings=top_findings or [],
+        domain_config=domain_config,
+        kb_signals=verified_kb_signals[:12],
+    )
+    if not foresight_data:
+        return None
+    return _sanitize_foresight_data(foresight_data, domain=domain, company_name=company_name)
 
 
 def _generate_foresight_from_kb(
@@ -1674,7 +1824,7 @@ Output only the prose text. Nothing else."""
     return "", ""
 
 
-def retry_failed_sources(foresight_data, domain, max_retries=1):
+def retry_failed_sources(foresight_data, domain, max_retries=1, company_name=""):
     """
     Source Retry Loop — re-searches for verifiable sources when initial URLs fail.
 
