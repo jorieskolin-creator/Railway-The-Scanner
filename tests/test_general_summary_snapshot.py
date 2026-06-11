@@ -8,38 +8,10 @@ from __future__ import annotations
 
 import os
 import sys
-import types
 
 _BACKEND = os.path.join(os.path.dirname(__file__), "..", "backend")
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
-
-try:
-    from google import genai as _genai  # noqa: F401
-except Exception:
-    google_stub = sys.modules.get("google") or types.ModuleType("google")
-    genai_stub = types.ModuleType("google.genai")
-
-    class _Client:
-        def __init__(self, *args, **kwargs):
-            pass
-
-    class _GenerateContentConfig:
-        def __init__(self, *args, **kwargs):
-            pass
-
-    class _ThinkingConfig:
-        def __init__(self, *args, **kwargs):
-            pass
-
-    genai_stub.Client = _Client
-    genai_stub.types = types.SimpleNamespace(
-        GenerateContentConfig=_GenerateContentConfig,
-        ThinkingConfig=_ThinkingConfig,
-    )
-    google_stub.genai = genai_stub
-    sys.modules["google"] = google_stub
-    sys.modules["google.genai"] = genai_stub
 
 import general_summary  # noqa: E402
 

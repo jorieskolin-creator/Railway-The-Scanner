@@ -21,8 +21,8 @@ A new full-screen modal (`MarketIntelligenceModal.tsx`) accessible from the main
 
 **1B. TOP10 Root Causes / Methods (Current Demand)**
 - Input: All companies' `why_proposals[]` and `what_proposals[]`
-- Logic: Send all proposals to Gemini 2.5 Pro with a clustering prompt — "Group these into max 10 recurring strategic patterns." Return cluster label + member count + representative examples.
-- Fallback: If Gemini unavailable, use simple keyword frequency counting on proposals.
+- Logic: Send all proposals to Claude Sonnet 4.6 with a clustering prompt — "Group these into max 10 recurring strategic patterns." Return cluster label + member count + representative examples.
+- Fallback: If GPT/Claude unavailable, use simple keyword frequency counting on proposals.
 - Output: `top_causes: [{cluster_label, count, type: "why"|"what", examples}]`
 
 **1C. Gap Pattern Analysis**
@@ -231,7 +231,7 @@ The key insight: **negative residuals from the existing regression analysis** id
 
 3. **Vulnerability Score leverages existing stats** — Directly builds on `analyze_scores.py` regression residuals. No new statistical methods needed.
 
-4. **Gemini clustering for proposals** — Only the TOP10 Root Causes clustering requires an LLM call. Everything else is pure aggregation. Gemini call is optional with keyword-frequency fallback.
+4. **GPT/Claude clustering for proposals** — Only the TOP10 Root Causes clustering requires an LLM call. Everything else is pure aggregation. GPT/Claude call is optional with keyword-frequency fallback.
 
 5. **Progressive enhancement** — Core views (Pareto charts, tables) work with any data size. Advanced views (Radar, Heatmap) need 10+ companies. Show "insufficient data" messages gracefully.
 

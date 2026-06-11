@@ -4,20 +4,17 @@ contradiction_detector.py — Surface contradicting claims across evidence items
 Phase 2 update: returns richer contradiction objects with resolution_rule,
 preferred_wording, confidence and severity. It also includes a deterministic
 fallback for narrow-vs-broad scale conflicts so the most dangerous
-scope-inflation risks are caught even when the Gemini API is unavailable.
+scope-inflation risks are caught even when model verification is unavailable.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import re
 from typing import Any
 
-from gemini_backoff import call_with_503_backoff
-from gemini_client import get_gemini_client
+from llm_clients import call_json_model_chain
 
-_MODEL = "gemini-2.5-flash"
 _MAX_EVIDENCE_ITEMS = 25
 _MAX_SNIPPET_CHARS = 350
 _MAX_CONTRADICTIONS = 6
@@ -63,7 +60,7 @@ def _looks_like_scale_claim(text: str) -> bool:
 
 def _topic_keywords(text: str) -> set[str]:
     topics = {
-        "gen_ai_adoption": ["generative ai", "genai", "gpt", "copilot", "ai adoption", "ai readiness", "weekly users"],
+        "gen_ai_adoption": ["generative ai", "generative-ai", "gpt", "copilot", "ai adoption", "ai readiness", "weekly users"],
         "multi_agent_deployment": ["multi-agent", "agentic", "autonomous agents", "agent systems", "supply chain workflow"],
         "advanced_computing_scope": ["lumi", "supercomputer", "openfoam", "cfd", "thermofluids", "simulation"],
         "operating_model": ["safe", "agile", "silo", "operating model", "scrum", "waterfall"],
@@ -158,7 +155,7 @@ def _detect_scope_tensions_deterministic(evidence_items: list) -> list[dict]:
 
 
 def _build_prompt(evidence_items: list, company_name: str) -> str:
-    """Compact prompt that asks Gemini to surface quantitative disagreements."""
+    """Compact prompt that asks a verifier to surface quantitative disagreements."""
     compact = []
     for i, ev in enumerate(evidence_items[:_MAX_EVIDENCE_ITEMS]):
         if not isinstance(ev, dict):
@@ -220,24 +217,15 @@ def detect_contradictions(evidence_items: list, company_name: str = "") -> list:
         return []
 
     deterministic = _detect_scope_tensions_deterministic(evidence_items)
-    if not (os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")):
-        return [_normalize_contradiction(c) for c in deterministic if _normalize_contradiction(c)][:_MAX_CONTRADICTIONS]
-
-    try:
-        client = get_gemini_client()
-    except Exception as e:
-        print(f"   [Contradictions] Gemini client unavailable: {e}")
-        return [_normalize_contradiction(c) for c in deterministic if _normalize_contradiction(c)][:_MAX_CONTRADICTIONS]
 
     try:
         prompt = _build_prompt(evidence_items, company_name or "the company")
-
-        def _call():
-            return client.models.generate_content(model=_MODEL, contents=prompt)
-
-        response = call_with_503_backoff(_call)
-        text = getattr(response, "text", "") or ""
-        parsed = _extract_json(text)
+        parsed, _model_used = call_json_model_chain(
+            prompt,
+            ("gpt-5.4", "claude-sonnet-4-6"),
+            max_tokens=1800,
+            timeout=45,
+        )
         contradictions = parsed.get("contradictions") if isinstance(parsed, dict) else []
         if not isinstance(contradictions, list):
             contradictions = []

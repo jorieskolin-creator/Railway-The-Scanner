@@ -8,16 +8,10 @@ from __future__ import annotations
 
 import os
 import sys
-import types
 
 _BACKEND = os.path.join(os.path.dirname(__file__), "..", "backend")
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
-
-if "gemini_backoff" not in sys.modules:
-    gemini_backoff_stub = types.ModuleType("gemini_backoff")
-    gemini_backoff_stub.call_with_503_backoff = None
-    sys.modules["gemini_backoff"] = gemini_backoff_stub
 
 from reality_check import validate_summary  # noqa: E402
 

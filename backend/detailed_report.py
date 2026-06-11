@@ -13,10 +13,7 @@ import re
 import time
 
 import anthropic
-from google import genai
-from google.genai import types as genai_types
-from gemini_backoff import call_with_503_backoff
-from gemini_client import get_gemini_client
+from llm_clients import CLAUDE_OPUS_MODEL, call_openai_text
 from source_quality import assess_source_scope, is_generation_eligible_source
 from contradiction_detector import detect_contradictions
 from entity_identity import apply_entity_scope
@@ -182,7 +179,7 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
     # Surface quantitative contradictions across the evidence pool so the
     # prompt can force the model to address both sides instead of silently
     # picking the more dramatic narrow-scope finding. Failure-safe: returns
-    # [] if Gemini is unavailable.
+    # [] if provider calls are unavailable.
     contradictions = detect_contradictions(verified_links + foresight_links, company_name)
     if contradictions:
         result["contradictions"] = contradictions
@@ -365,17 +362,17 @@ def generate_detailed_report(
     analyses rather than duplicating analysis from raw evidence. No new searches
     are performed — it works entirely from data already in memory.
 
-    Model chain: Opus 4.7 → Sonnet 4.6 → Gemini 3.1 Pro → Gemini 2.5 Pro.
+    Model chain: Opus 4.8 → GPT 5.5 → Sonnet 4.6.
     Returns (report_text, model_used).
     Returns ("", "") on failure.
     """
     payload = _build_input_payload(full_data, company_name, foresight_data, prior_summaries)
     prompt = _build_prompt(payload, company_name)
 
-    # --- Attempt 1: Claude Opus 4.7 (accuracy-first primary) ---
+    # --- Attempt 1: Claude Opus 4.8 (accuracy-first primary) ---
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if anthropic_key:
-        OPUS_MODEL = "claude-opus-4-7"
+        OPUS_MODEL = CLAUDE_OPUS_MODEL
         try:
             print(f"   📝 [Detailed Report] Attempting {OPUS_MODEL}...")
             t0 = time.time()
@@ -403,12 +400,40 @@ def generate_detailed_report(
                 print(f"   [Detailed Report] Opus result usable ({wc} words) — below target but acceptable")
                 return text, OPUS_MODEL
             else:
-                print(f"   ⚠️ [Detailed Report] Opus too short ({wc} words) — falling back to Sonnet")
+                print(f"   ⚠️ [Detailed Report] Opus too short ({wc} words) — falling back to GPT 5.5")
         except Exception as e:
             elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
             print(f"   ❌ [Detailed Report] {OPUS_MODEL} failed ({elapsed}ms): {e}")
 
-        # --- Attempt 2: Claude Sonnet 4.6 (same-provider backup) ---
+    # --- Attempt 2: GPT 5.5 (cross-provider backup) ---
+    try:
+        print("   📝 [Detailed Report] Attempting gpt-5.5 fallback...")
+        t0 = time.time()
+        text = call_openai_text(
+            prompt,
+            model="gpt-5.5",
+            max_output_tokens=8000,
+            temperature=0.3,
+            timeout=120,
+        )
+        text = _strip_links((text or "").strip())
+        wc = _word_count(text)
+        elapsed = int((time.time() - t0) * 1000)
+        print(f"   📝 [Detailed Report] gpt-5.5: {wc} words ({elapsed}ms)")
+
+        if text and wc >= _WORD_MIN:
+            return text, "gpt-5.5"
+        if text and wc >= 500:
+            print(f"   [Detailed Report] GPT result usable ({wc} words) — below target but acceptable")
+            return text, "gpt-5.5"
+        print(f"   ⚠️ [Detailed Report] GPT result too short ({wc} words) — falling back to Sonnet")
+    except Exception as e:
+        elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
+        print(f"   ❌ [Detailed Report] gpt-5.5 failed ({elapsed}ms): {e}")
+
+    if anthropic_key:
+        claude_client = anthropic.Anthropic(api_key=anthropic_key)
+        # --- Attempt 3: Claude Sonnet 4.6 ---
         SONNET_MODEL = "claude-sonnet-4-6"
         try:
             print(f"   📝 [Detailed Report] Attempting {SONNET_MODEL} fallback...")
@@ -437,87 +462,9 @@ def generate_detailed_report(
                 print(f"   [Detailed Report] Sonnet result usable ({wc} words) — below target but acceptable")
                 return text, SONNET_MODEL
             else:
-                print(f"   ⚠️ [Detailed Report] Sonnet too short ({wc} words) — falling back to Gemini")
+                print(f"   ⚠️ [Detailed Report] Sonnet too short ({wc} words) — no usable detailed report")
         except Exception as e:
             elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
             print(f"   ❌ [Detailed Report] {SONNET_MODEL} failed ({elapsed}ms): {e}")
-
-    # --- Gemini fallbacks ---
-    try:
-        client = get_gemini_client()
-    except ValueError:
-        print("   ⚠️ [Detailed Report] No GEMINI_API_KEY — skipping Gemini fallbacks")
-        return "", ""
-    GEMINI_PRIMARY = "gemini-3.1-pro-preview"
-
-    FIRST_CONFIG = genai_types.GenerateContentConfig(
-        temperature=0.8,
-        max_output_tokens=8000,
-        thinking_config=genai_types.ThinkingConfig(thinking_budget=3000),
-    )
-    RETRY_CONFIG = genai_types.GenerateContentConfig(
-        temperature=0.8,
-        max_output_tokens=8000,
-        thinking_config=genai_types.ThinkingConfig(thinking_budget=1024),
-    )
-
-    for attempt, config in enumerate([FIRST_CONFIG, RETRY_CONFIG], start=1):
-        try:
-            t0 = time.time()
-            response = call_with_503_backoff(
-                lambda: client.models.generate_content(
-                    model=GEMINI_PRIMARY, contents=prompt, config=config,
-                ),
-                label=f"Detailed Report {GEMINI_PRIMARY}",
-                model=GEMINI_PRIMARY,
-                timeout=120,
-            )
-            text = _strip_links((response.text or "").strip())
-            wc = _word_count(text)
-            elapsed = int((time.time() - t0) * 1000)
-            print(f"   [Detailed Report] {GEMINI_PRIMARY} attempt {attempt}: {wc} words ({elapsed}ms)")
-
-            if _WORD_MIN <= wc <= _WORD_MAX:
-                return text, GEMINI_PRIMARY
-
-            if attempt == 1:
-                print(f"   [Detailed Report] {wc} words outside [{_WORD_MIN}-{_WORD_MAX}] — retrying")
-                continue
-
-            if text and wc >= 500:
-                print(f"   [Detailed Report] Using attempt 2 result ({wc} words) — outside range but usable")
-                return text, GEMINI_PRIMARY
-
-        except Exception as e:
-            print(f"   ❌ [Detailed Report] {GEMINI_PRIMARY} attempt {attempt} failed: {e}")
-            if attempt == 1:
-                continue
-
-    # --- Attempt 4: Gemini 2.5 Pro (second backup) ---
-    GEMINI_BACKUP = "gemini-2.5-pro"
-    try:
-        print(f"   [Detailed Report] Primary models failed — trying {GEMINI_BACKUP}")
-        t0 = time.time()
-        response = call_with_503_backoff(
-            lambda: client.models.generate_content(
-                model=GEMINI_BACKUP, contents=prompt,
-                config=genai_types.GenerateContentConfig(
-                    temperature=0.8,
-                    max_output_tokens=8000,
-                    thinking_config=genai_types.ThinkingConfig(thinking_budget=2048),
-                ),
-            ),
-            label=f"Detailed Report {GEMINI_BACKUP}",
-            model=GEMINI_BACKUP,
-            timeout=120,
-        )
-        text = _strip_links((response.text or "").strip())
-        wc = _word_count(text)
-        elapsed = int((time.time() - t0) * 1000)
-        print(f"   [Detailed Report] {GEMINI_BACKUP}: {wc} words ({elapsed}ms)")
-        if text and wc >= 400:
-            return text, GEMINI_BACKUP
-    except Exception as e:
-        print(f"   ❌ [Detailed Report] {GEMINI_BACKUP} failed: {e}")
 
     return "", ""

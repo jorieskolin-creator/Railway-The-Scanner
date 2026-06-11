@@ -11,11 +11,11 @@
     "total_phases": 9,
     "ai_models_used": [
       "Claude Sonnet 4.6 (Extended Thinking + Brave Web Search) — Primary reality scanner (Scanner 2)",
-      "Claude Opus 4.7 (Extended Thinking, 10K budget) — Primary synthesis engine & final judge",
-      "Gemini 3.1 Pro Preview (Google Search grounding + Thinking) — Forensic search, foresight generation, fact-checker",
-      "Gemini 3-Flash Preview (Google Search grounding) — URL auto-discovery",
-      "Gemini 2.5 Pro (Google Search grounding) — Financial analysis, general summary generation",
-      "Gemini 3 Pro — Fallback synthesis",
+      "Claude Opus 4.8 (Extended Thinking, 10K budget) — Primary synthesis engine & final judge",
+      "Claude Sonnet 4.6 + GPT 5.5 web search (web search grounding + Thinking) — Forensic search, foresight generation, fact-checker",
+      "GPT 5.5 web search (web search grounding) — URL auto-discovery",
+      "Claude Sonnet 4.6 (web search grounding) — Financial analysis, general summary generation",
+      "GPT 5.5 — Fallback synthesis",
       "Mistral Large — Synthesis fallback chain",
       "GLM-5 (web search grounding) — Optional alternative forensic search",
       "Rule-based keyword engine — Intent analysis (no AI model)"
@@ -124,7 +124,7 @@
           "detail": "Harvested signals are stored in the Foresight Knowledge Base for use during company scans. ~15-20 minutes for full harvest."
         }
       ],
-      "ai_model_used": "Gemini 3.1 Pro with Google Search grounding",
+      "ai_model_used": "GPT 5.4/Claude verification with web search grounding",
       "agentic_ai": true,
       "agentic_pattern": "Autonomous harvest agent — iterates 30 themes, searches web, classifies signals, verifies sources, stores results. Runs ~15-20 minutes unattended.",
       "trigger": "Admin-initiated (manual) or scheduled",
@@ -359,7 +359,7 @@
           ]
         }
       ],
-      "ai_model_used": "Claude Sonnet 4.6 with Extended Thinking + Brave Web Search (primary, 10 searches per jury). Gemini 3.1 Pro with Google Search grounding (fallback + fact-check).",
+      "ai_model_used": "Claude Sonnet 4.6 with Extended Thinking + Brave Web Search (primary, 10 searches per jury). GPT 5.4/Claude verification with web search grounding (fallback + fact-check).",
       "agentic_ai": true,
       "agentic_patterns": [
         "5 independent jury-agents searching autonomously",
@@ -459,7 +459,7 @@
       "color": "#a855f7",
       "category": "synthesis",
       "short_description": "Senior AI model reads ALL evidence blindly, scores independently, then cross-verifies against Scanner scores",
-      "what_happens": "This is the 'wisdom layer'. A senior AI model (Claude Opus 4.7) reads ALL collected evidence WITHOUT seeing any Scanner scores. It independently evaluates Reality and Intent. Its blind scores are then compared to Scanner scores, and disagreements are resolved through a blending protocol.",
+      "what_happens": "This is the 'wisdom layer'. A senior AI model (Claude Opus 4.8) reads ALL collected evidence WITHOUT seeing any Scanner scores. It independently evaluates Reality and Intent. Its blind scores are then compared to Scanner scores, and disagreements are resolved through a blending protocol.",
       "question_it_answers": "Do independent AI eyes validate the automated scanners? What is the diagnosis and strategic pitch?",
       "thinking_process": [
         {
@@ -494,12 +494,12 @@
           "constraint": "Proposals MUST be grounded in the company's actual weaknesses, not generic advice"
         }
       ],
-      "ai_model_used": "Claude Opus 4.7 with Extended Thinking (primary, 10K thinking budget)",
+      "ai_model_used": "Claude Opus 4.8 with Extended Thinking (primary, 10K thinking budget)",
       "fallback_chain": [
-        "Claude Opus 4.7 with Extended Thinking (primary)",
-        "Gemini 3.1 Pro (fallback 1)",
-        "Gemini 3 Pro (fallback 2)",
-        "Gemini 2.5 Pro (fallback 3)"
+        "Claude Opus 4.8 with Extended Thinking (primary)",
+        "GPT 5.4/Claude verification (fallback 1)",
+        "GPT 5.5 (fallback 2)",
+        "Claude Sonnet 4.6 (fallback 3)"
       ],
       "why_fallback_chain": "During high API load, any single provider may be unavailable. The 4-model chain ensures synthesis ALWAYS completes.",
       "agentic_ai": true,
@@ -521,7 +521,7 @@
       "color": "#ef4444",
       "category": "quality",
       "short_description": "Independent AI with live web search verifies every claim against reality",
-      "what_happens": "An independent AI model (Gemini 3.1 Pro with Google Search) reads the generated summary and pitch, then independently verifies every factual claim using live web search. This catches EVIDENCE CONTAMINATION — the real problem is not hallucination but wrong evidence feeding correct-looking summaries.",
+      "what_happens": "An independent AI model (GPT 5.4/Claude verification with web search) reads the generated summary and pitch, then independently verifies every factual claim using live web search. This catches EVIDENCE CONTAMINATION — the real problem is not hallucination but wrong evidence feeding correct-looking summaries.",
       "question_it_answers": "Are the claims in the AI-generated summary actually TRUE?",
       "core_insight": "Checking AI output against its own evidence is CIRCULAR. The evidence itself may be wrong. An independent model with live web search must verify against the REAL WORLD.",
       "thinking_process": [
@@ -533,7 +533,7 @@
         {
           "step": 2,
           "action": "AI Fact-Check (Independent Model)",
-          "detail": "Gemini 3.1 Pro with Google Search grounding receives the full summary, pitch, evidence links, and company name. It uses Google Search to independently verify each factual claim. Classifies each claim as verified (true) or false.",
+          "detail": "GPT 5.4/Claude verification with web search grounding receives the full summary, pitch, evidence links, and company name. It uses web search to independently verify each factual claim. Classifies each claim as verified (true) or false.",
           "single_pass_guarantee": "Runs EXACTLY once. No recursive loops. Fixes what it finds in a single pass."
         },
         {
@@ -553,7 +553,7 @@
           ]
         }
       ],
-      "ai_model_used": "Gemini 3.1 Pro with Google Search grounding",
+      "ai_model_used": "GPT 5.4/Claude verification with web search grounding",
       "agentic_ai": true,
       "agentic_pattern": "Independent fact-checking agent with live web access. Acts as a quality gate that can autonomously purge evidence and correct outputs.",
       "outputs": {
@@ -676,7 +676,7 @@
     "reality_check_all": {
       "description": "Re-verify all stored company summaries against live web data",
       "trigger": "Admin-initiated",
-      "ai_model_used": "Gemini 3.1 Pro with Google Search grounding",
+      "ai_model_used": "GPT 5.4/Claude verification with web search grounding",
       "auto_cleaning": "Automatically purges false claims and corrects summaries"
     },
     "stakeholder_enrichment": {
@@ -687,7 +687,7 @@
     "proposal_refresh": {
       "description": "Regenerate WHY/WHAT proposals for companies using latest evidence",
       "trigger": "Admin-initiated (per-company or all)",
-      "ai_model_used": "Same synthesis model chain (Opus -> Gemini fallbacks)"
+      "ai_model_used": "Same synthesis model chain (Opus -> GPT/Claude fallbacks)"
     },
     "statistical_analysis": {
       "description": "Cross-company statistical intelligence — correlations, distributions, rankings",
@@ -740,7 +740,7 @@
         "layer": 4,
         "name": "AI Fact-Check",
         "phase": "PHASE_7",
-        "description": "Independent Gemini model with live Google Search verifies every claim. False claims trigger evidence purging. Single-pass guarantee.",
+        "description": "Independent GPT/Claude model with live web search verifies every claim. False claims trigger evidence purging. Single-pass guarantee.",
         "prevents": "Evidence contamination, circular validation, hallucinated facts"
       },
       {
@@ -773,15 +773,15 @@
     "storage": "Vercel Blob Storage (JSON persistence, versioned — keeps 3 recent versions per company)",
     "hosting": "Railway (containerized Python backend + static React frontend)",
     "ai_providers": [
-      "Anthropic (Claude Opus 4.7, Claude Sonnet 4.6)",
-      "Google (Gemini 3.1 Pro Preview, Gemini 3-Flash Preview, Gemini 2.5 Pro, Gemini 3 Pro)",
+      "Anthropic (Claude Opus 4.8, Claude Sonnet 4.6)",
+      "Google (Claude Sonnet 4.6 + GPT 5.5 web search, GPT 5.5 web search, Claude Sonnet 4.6, GPT 5.5)",
       "Mistral (Mistral Large — synthesis fallback)",
       "GLM-5 (optional alternative web search grounding)"
     ],
-    "search_providers": ["Brave Web Search (via Claude tool use)", "Google Search (via Gemini grounding tools)"],
+    "search_providers": ["Brave Web Search (via Claude tool use)", "web search (via GPT/Claude grounding tools)"],
     "document_processing": "PDF and HTML text extraction for uploaded documents (max 3 files, 10MB each)",
     "resilience": {
-      "retry_strategy": "Exponential backoff for Gemini 503s (3s → 8s → 20s ±30% jitter)",
+      "retry_strategy": "Exponential backoff for GPT/Claude 503s (3s → 8s → 20s ±30% jitter)",
       "circuit_breaker": "Tracks model failures, opens circuit if persistent",
       "fallback_chains": "Every AI phase has 2-4 model fallbacks",
       "graceful_degradation": "Financial failure → reuse previous index. Synthesis failure → reuse previous summary. Never returns null if fallback available."
@@ -792,7 +792,7 @@
     "description": "Complete mapping of which AI model does what, with reasoning and grounding capabilities",
     "models": [
       {
-        "model": "Claude Opus 4.7",
+        "model": "Claude Opus 4.8",
         "role": "Final judge — synthesizes intent + reality into diagnosis",
         "phases": ["PHASE_6 (Synthesis)"],
         "extended_thinking": true,
@@ -801,28 +801,28 @@
         "why_this_model": "Deepest reasoning capability. Extended Thinking allows it to reason through conflicting evidence before committing to scores."
       },
       {
-        "model": "Gemini 3.1 Pro Preview",
+        "model": "Claude Sonnet 4.6 + GPT 5.5 web search",
         "role": "Forensic web search, foresight generation, fact-checking, synthesis fallback",
         "phases": ["PHASE_1 (Foresight Harvest)", "PHASE_4 (Reality Check fallback)", "PHASE_7 (Fact-Check)", "PHASE_6 (Synthesis fallback 1)"],
         "extended_thinking": true,
         "thinking_budget": "2,000-3,000 tokens",
-        "search_grounding": "Google Search grounding (live web access)",
-        "why_this_model": "Best combination of reasoning + live web search. Google Search grounding enables independent fact verification."
+        "search_grounding": "web search grounding (live web access)",
+        "why_this_model": "Best combination of reasoning + live web search. web search grounding enables independent fact verification."
       },
       {
-        "model": "Gemini 2.5 Pro",
+        "model": "Claude Sonnet 4.6",
         "role": "Financial analysis, general summary generation",
         "phases": ["PHASE_4B (Financial Health)", "General Summary generation"],
         "extended_thinking": false,
-        "search_grounding": "Google Search grounding",
+        "search_grounding": "web search grounding",
         "why_this_model": "Cost-effective for structured financial data extraction. Reliable for factual summarization."
       },
       {
-        "model": "Gemini 3-Flash Preview",
+        "model": "GPT 5.5 web search",
         "role": "URL auto-discovery",
         "phases": ["PHASE_2 (URL resolution)"],
         "extended_thinking": false,
-        "search_grounding": "Google Search grounding",
+        "search_grounding": "web search grounding",
         "why_this_model": "Fastest model for simple URL lookup tasks. Low cost per call."
       },
       {
@@ -835,7 +835,7 @@
       },
       {
         "model": "Mistral Large",
-        "role": "Synthesis fallback (last resort before Gemini chain)",
+        "role": "Synthesis fallback (last resort before GPT/Claude chain)",
         "phases": ["PHASE_6 (Synthesis fallback 2)"],
         "extended_thinking": false,
         "search_grounding": "Text analysis only (no live search)",
@@ -844,7 +844,7 @@
       {
         "model": "GLM-5",
         "role": "Optional alternative forensic web search",
-        "phases": ["PHASE_4 (Reality Check — optional substitute for Gemini)"],
+        "phases": ["PHASE_4 (Reality Check — optional substitute for GPT/Claude)"],
         "extended_thinking": true,
         "search_grounding": "Web search grounding",
         "why_this_model": "Provides search diversity — different search index than Google/Brave. Can substitute when primary providers are overloaded."
@@ -876,8 +876,8 @@
       "foresight_harvester.py": "Autonomous KB signal harvesting from 30 FP themes",
       "stakeholder_intel.py": "LinkedIn intelligence enrichment for key people",
       "storage.py": "Vercel Blob persistence (versioned, 3 versions per company)",
-      "gemini_backoff.py": "Exponential backoff retry logic for Gemini API",
-      "gemini_circuit.py": "Circuit breaker for model failure detection",
+      "gpt_claude_backoff.py": "Exponential backoff retry logic for GPT/Claude API",
+      "gpt_claude_circuit.py": "Circuit breaker for model failure detection",
       "domain_classifier.py": "Industry domain inference from company data",
       "finland_list.py": "TOP_100_COMPANIES metadata for Finnish market"
     },
@@ -967,7 +967,7 @@
     "step_by_step": [
       {
         "phase": "PHASE_2 — Input",
-        "what_happens": "User enters 'Example Corp'. System auto-discovers URL via Gemini 3-Flash: https://example-corp.fi"
+        "what_happens": "User enters 'Example Corp'. System auto-discovers URL via GPT/Claude 3-Flash: https://example-corp.fi"
       },
       {
         "phase": "PHASE_3 — Intent Analysis",
@@ -987,11 +987,11 @@
       },
       {
         "phase": "PHASE_6 — Synthesis",
-        "what_happens": "Opus 4.7 reads ALL evidence blindly. Independently scores Reality: 41, Intent: 68. Delta vs Scanner: Reality off by 3 (agreement — keep Scanner score). Generates 200-word diagnosis + 100-word pitch + 2 WHY + 2 WHAT proposals."
+        "what_happens": "Opus 4.8 reads ALL evidence blindly. Independently scores Reality: 41, Intent: 68. Delta vs Scanner: Reality off by 3 (agreement — keep Scanner score). Generates 200-word diagnosis + 100-word pitch + 2 WHY + 2 WHAT proposals."
       },
       {
         "phase": "PHASE_7 — Fact-Check",
-        "what_happens": "Gemini 3.1 Pro verifies claims via Google Search. All claims verified. Summary passes."
+        "what_happens": "GPT 5.4/Claude verification verifies claims via web search. All claims verified. Summary passes."
       },
       {
         "phase": "PHASE_8 — Foresight",

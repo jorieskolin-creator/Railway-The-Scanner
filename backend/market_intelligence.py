@@ -14,8 +14,7 @@ Aggregates cross-company data into strategic intelligence views:
   10. Demand Intensity per KB Dimension
   11. Foresight-Adjusted Vulnerability Index (FAVI)
 
-Uses existing data structures — no new scanning or API calls required
-(except optional Gemini clustering for proposal analysis).
+Uses existing data structures — no new scanning or API calls required.
 """
 
 import json

@@ -9,7 +9,7 @@ injected into per-company foresight generation, avoiding redundant searches.
 Refresh-and-clean strategy:
   1. Load existing KB signals for the theme
   2. Re-verify existing URLs — remove any that have gone dead since last harvest
-  3. Harvest new signals from Gemini
+  3. Harvest new signals from GPT/Claude web-search models
   4. Deduplicate & merge — add new signals not already in the KB
   5. Cap at MAX_SIGNALS_PER_THEME, ranked by confidence + recency
   6. Store the merged result
@@ -18,16 +18,12 @@ This ensures the KB grows over time and a failed harvest never wipes good data.
 """
 
 import json
-import os
 import re
 import time
 import concurrent.futures
 from datetime import datetime, timezone
 
-from google import genai
-from google.genai import types as genai_types
-from gemini_backoff import call_with_503_backoff
-from gemini_client import get_gemini_client
+from llm_clients import call_anthropic_text, call_openai_text
 from source_quality import (
     HIGH_CREDIBILITY_DOMAINS,
     assess_source_credibility,
@@ -318,7 +314,7 @@ def _merge_signals(existing: list[dict], new_signals: list[dict], max_total: int
 
 
 def _build_harvest_prompt(theme: str, search_queries: list[str]) -> str:
-    """Build a Gemini prompt to harvest megatrend signals for one FP theme."""
+    """Build a web-research prompt to harvest megatrend signals for one FP theme."""
 
     queries_text = "\n".join(f"- {q}" for q in search_queries[:8])
 
@@ -387,48 +383,41 @@ RETURN STRICT JSON ONLY:
 }}"""
 
 
-def _harvest_single_theme(theme: str, client, search_queries: list[str]) -> dict | None:
-    """Harvest megatrend signals for one FP theme using Gemini + Google Search."""
+def _harvest_single_theme(theme: str, search_queries: list[str]) -> dict | None:
+    """Harvest megatrend signals for one FP theme using Claude/GPT web search."""
 
     prompt = _build_harvest_prompt(theme, search_queries)
 
-    _safety = [
-        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-    ]
-
     models = [
-        ("gemini-3.1-pro-preview", genai_types.GenerateContentConfig(
-            tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
-            safety_settings=_safety,
-            temperature=0.4,
-            thinking_config=genai_types.ThinkingConfig(thinking_budget=2000),
-            max_output_tokens=6000,
-        ), 90),
-        ("gemini-2.5-pro", genai_types.GenerateContentConfig(
-            tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
-            safety_settings=_safety,
-            temperature=0.4,
-            thinking_config=genai_types.ThinkingConfig(thinking_budget=1024),
-            max_output_tokens=6000,
-        ), 60),
+        ("claude-sonnet-4-6", "anthropic", 120),
+        ("gpt-5.5", "openai", 120),
     ]
 
-    for model_name, config, timeout_sec in models:
+    for model_name, provider, timeout_sec in models:
         try:
             print(f"   🌐 [Harvest] {theme} → {model_name}...")
             t0 = time.time()
-            response = call_with_503_backoff(
-                lambda mn=model_name, cfg=config: client.models.generate_content(
-                    model=mn, contents=prompt, config=cfg,
-                ),
-                label=f"Harvest {theme} {model_name}",
-                model=model_name,
-                timeout=timeout_sec,
-            )
-            text = response.text if hasattr(response, "text") else ""
+            if provider == "anthropic":
+                text = call_anthropic_text(
+                    prompt,
+                    model=model_name,
+                    max_tokens=7000,
+                    temperature=0.2,
+                    timeout=timeout_sec,
+                    web_search=True,
+                    max_searches=10,
+                    thinking_budget=3000,
+                )
+            else:
+                text = call_openai_text(
+                    prompt,
+                    model=model_name,
+                    max_output_tokens=7000,
+                    temperature=0.2,
+                    timeout=timeout_sec,
+                    web_search=True,
+                    search_context_size="medium",
+                )
             elapsed = int((time.time() - t0) * 1000)
 
             if not text or len(text) < 80:
@@ -565,15 +554,11 @@ def harvest_all_themes(
 
     Args:
         themes: List of theme names to harvest. None = all 30.
-        max_concurrent: Max parallel Gemini calls (keep low to avoid rate limits).
+        max_concurrent: Reserved for future parallel harvests; current flow is sequential to avoid provider rate limits.
         progress_callback: Optional fn(theme, index, total, status) for progress tracking.
 
     Returns dict with harvest results and summary.
     """
-    try:
-        client = get_gemini_client()
-    except ValueError:
-        return {"error": "No GEMINI_API_KEY configured", "harvested": 0}
     storage = BlobStorage()
 
     target_themes = themes or FP_THEMES_30
@@ -606,7 +591,7 @@ def harvest_all_themes(
             existing_signals = promoted_existing.get("signals", [])
 
         # Step 2: Harvest new signals
-        data = _harvest_single_theme(theme, client, search_queries)
+        data = _harvest_single_theme(theme, search_queries)
 
         new_validated_signals = []
         if data and data.get("signals"):
@@ -660,7 +645,7 @@ def harvest_all_themes(
 
         print(f"   💾 [Store] {theme}: {n_signals} signals saved to foresight_kb/{slug}")
 
-        # Rate limit courtesy: pause between themes to avoid Gemini quota hits
+        # Rate limit courtesy: pause between themes to avoid web-search provider quota hits
         if i < total - 1:
             time.sleep(2)
 

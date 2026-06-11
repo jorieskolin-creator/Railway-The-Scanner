@@ -2,7 +2,7 @@
 source_claim_validator.py — Validates that sources actually support their claimed evidence.
 
 After URL verification confirms a source is alive, this module fetches the page content
-and uses Gemini Flash to assess whether the source actually supports the specific claim
+and uses GPT/Claude to assess whether the source actually supports the specific claim
 (snippet) it's attached to. Sources that are alive but irrelevant get flagged.
 
 This fills the gap between URL liveness (source exists) and source credibility (domain
@@ -19,11 +19,9 @@ from urllib.parse import urlparse
 
 import requests as http_requests
 from bs4 import BeautifulSoup
-from google.genai import types as genai_types
 
-from gemini_client import get_gemini_client
-from gemini_backoff import call_with_503_backoff
 from entity_identity import assess_entity_match
+from llm_clients import call_json_model_chain
 
 
 # ── Page content extraction ─────────────────────────────────────────────────
@@ -35,8 +33,8 @@ _HEADERS = {
 _MAX_PAGE_CHARS = 3000  # Keep page text compact for the LLM prompt
 _ANALYSIS_SUPPORT_THRESHOLD = 55
 _PARTIAL_SUPPORT_THRESHOLD = 40
-DEFAULT_MODEL_CHAIN = ("gemini-2.0-flash",)
-CLEAN_EVIDENCE_MODEL_CHAIN = ("gpt-5.4", "gemini-2.5-pro", "gemini-3.5-flash")
+DEFAULT_MODEL_CHAIN = ("gpt-5.4", "claude-sonnet-4-6")
+CLEAN_EVIDENCE_MODEL_CHAIN = ("gpt-5.4", "claude-sonnet-4-6", "gpt-5.5")
 
 
 def _fetch_page_text(url: str, timeout: int = 6) -> str:
@@ -284,40 +282,6 @@ def _parse_relevance_json(raw: str) -> dict:
     }
 
 
-def _call_openai_relevance(prompt: str, model: str, timeout: int) -> str:
-    api_key = _clean_env_var(os.environ.get("GPT_API_KEY") or os.environ.get("OPENAI_API_KEY") or "")
-    if not api_key:
-        raise ValueError("No GPT_API_KEY configured")
-    from openai import OpenAI
-    client = OpenAI(api_key=api_key, timeout=timeout)
-    response = client.responses.create(
-        model=model,
-        input=prompt,
-        max_output_tokens=320,
-    )
-    return _get_openai_text(response)
-
-
-def _call_gemini_relevance(prompt: str, model: str, timeout: int):
-    client = get_gemini_client()
-    config_kwargs = {"temperature": 0.0, "max_output_tokens": 320}
-    if model == "gemini-2.5-pro":
-        # Gemini 2.5 Pro rejects a zero thinking budget, so keep a tiny budget
-        # for deterministic classification while avoiding token starvation.
-        config_kwargs["thinking_config"] = genai_types.ThinkingConfig(thinking_budget=256)
-    resp = call_with_503_backoff(
-        lambda: client.models.generate_content(
-            model=model,
-            contents=prompt,
-            config=genai_types.GenerateContentConfig(**config_kwargs),
-        ),
-        label=f"Source-Claim Relevance {model}",
-        model=model,
-        timeout=timeout,
-    )
-    return (resp.text or "").strip()
-
-
 def _score_to_status(score: int) -> tuple[bool, str]:
     if score >= _ANALYSIS_SUPPORT_THRESHOLD:
         return True, "supported"
@@ -338,7 +302,7 @@ def _check_relevance(
     source_item: dict | None = None,
 ) -> dict:
     """
-    Fetch the source page and ask Gemini Flash whether it supports the claim.
+    Fetch the source page and ask GPT/Claude whether it supports the claim.
 
     Returns dict with:
       - relevance_score: 0-100 (how well the source supports the claim)
@@ -395,25 +359,7 @@ def _check_relevance(
     errors = []
     for model in model_chain or DEFAULT_MODEL_CHAIN:
         try:
-            if str(model).startswith("gpt-"):
-                raw = _call_openai_relevance(prompt, model, timeout)
-            elif model == "gemini-2.0-flash" and client is not None:
-                resp = call_with_503_backoff(
-                    lambda: client.models.generate_content(
-                        model=model,
-                        contents=prompt,
-                        config=genai_types.GenerateContentConfig(
-                            temperature=0.0,
-                            max_output_tokens=320,
-                        ),
-                    ),
-                    label="Source-Claim Relevance",
-                    model=model,
-                    timeout=timeout,
-                )
-                raw = (resp.text or "").strip()
-            else:
-                raw = _call_gemini_relevance(prompt, model, timeout)
+            raw, model_used = call_json_model_chain(prompt, (model,), max_tokens=320, timeout=timeout)
 
             parsed = _parse_relevance_json(raw)
             score = parsed["score"]
@@ -446,7 +392,7 @@ def _check_relevance(
                 "content_verified": True,
                 "source_quote": supporting_quote,
                 "reason": reason,
-                "verification_model": model,
+                "verification_model": model_used,
                 "entity_verified": entity_verified,
                 "entity_name_found": parsed.get("entity_name_found") or "",
                 "content_entity_match_status": content_entity_status,
@@ -504,12 +450,6 @@ def validate_source_claims(
     }
     """
     client = None
-    if model_chain is None or "gemini-2.0-flash" in model_chain:
-        try:
-            client = get_gemini_client()
-        except ValueError:
-            if model_chain is None:
-                return {"checked": 0, "irrelevant": 0, "flagged_urls": [], "elapsed_ms": 0}
 
     def _candidate_priority(item: dict) -> tuple:
         cred = str(item.get("source_credibility") or "").lower()
@@ -655,11 +595,6 @@ def validate_foresight_claims(
     if not foresight_data or not foresight_data.get("dimension_forces"):
         return {"checked": 0, "irrelevant": 0, "flagged_urls": [], "elapsed_ms": 0}
 
-    try:
-        client = get_gemini_client()
-    except ValueError:
-        return {"checked": 0, "irrelevant": 0, "flagged_urls": [], "elapsed_ms": 0}
-
     forces = foresight_data["dimension_forces"]
     candidates = []
     for force in forces:
@@ -684,7 +619,7 @@ def validate_foresight_claims(
                 _check_relevance,
                 url,
                 claim,
-                client,
+                None,
                 company_name=company_name,
                 company_domain=company_domain,
                 source_item={

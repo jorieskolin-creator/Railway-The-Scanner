@@ -5,12 +5,9 @@ Used by both main.py and seed_manager.py. Kept separate to avoid circular
 imports (main imports seed_manager; seed_manager must not import main).
 """
 
-import os
 import time
 
-from google.genai import types as genai_types
-from gemini_backoff import call_with_503_backoff
-from gemini_client import get_gemini_client
+from llm_clients import call_json_model_chain
 
 
 KNOWN_DOMAINS = [
@@ -172,7 +169,7 @@ def normalize_domain(raw: str) -> str:
 
 
 def _match_domain(raw: str) -> str | None:
-    """Try to match a raw Gemini response to a known domain.
+    """Try to match a raw model response to a known domain.
     Returns canonical domain name or None."""
     cleaned = raw.strip().strip('"').strip("'").strip(".")
     # Exact match (case-insensitive)
@@ -192,26 +189,14 @@ def _match_domain(raw: str) -> str | None:
     return None
 
 
-def _call_classifier(client, model: str, prompt: str, company_name: str, timeout: int = 30) -> str | None:
+def _call_classifier(model: str, prompt: str, company_name: str, timeout: int = 30) -> str | None:
     """Single classification attempt. Returns domain or None."""
     try:
-        response = call_with_503_backoff(
-            lambda: client.models.generate_content(
-                model=model,
-                contents=prompt,
-                config=genai_types.GenerateContentConfig(
-                    temperature=0.0,
-                    max_output_tokens=30,
-                ),
-            ),
-            label=f"Domain Classification {model}",
-            model=model,
-            timeout=timeout,
-        )
-        result = (response.text or "").strip()
+        result, model_used = call_json_model_chain(prompt, (model,), max_tokens=40, timeout=timeout)
+        result = (result or "").strip()
         matched = _match_domain(result)
         if matched and matched != "Other":
-            print(f"   [Domain] Inferred: '{matched}' for {company_name} (model={model}, raw='{result}')")
+            print(f"   [Domain] Inferred: '{matched}' for {company_name} (model={model_used}, raw='{result}')")
             return matched
         if matched == "Other":
             print(f"   [Domain] Model explicitly returned 'Other' for {company_name}")
@@ -229,10 +214,9 @@ def infer_domain(company_name: str, company_url: str, reality_results: dict, fin
     scan evidence. Only called when the finland_list lookup returned 'Other'.
 
     If cached_domain is a valid known domain (not 'Other'), returns it
-    immediately — saves 1 Gemini API call per re-scan.
+    immediately — saves one model call per re-scan.
 
-    Uses Gemini Flash (no thinking) — pure classification, ~1-3s.
-    Falls back to a second model on failure.
+    Uses GPT-5.4 for deterministic classification and Sonnet 4.6 fallback.
     Non-fatal: returns 'Other' on any failure.
     """
     if cached_domain and cached_domain in KNOWN_DOMAINS and cached_domain != "Other":
@@ -240,12 +224,6 @@ def infer_domain(company_name: str, company_url: str, reality_results: dict, fin
         return cached_domain
 
     try:
-        try:
-            client = get_gemini_client()
-        except ValueError:
-            print("   [Domain] No API key available — skipping classification")
-            return "Other"
-
         # Compact evidence summary
         checklist = reality_results.get("checklist", [])
         findings_text = "\n".join(
@@ -281,14 +259,14 @@ Rules:
 - If genuinely unclear or mixed, output "Other".
 - Do not invent a domain not in the list."""
 
-        # Attempt 1: Flash (fast, cheap, good for classification)
-        domain = _call_classifier(client, "gemini-3.5-flash", prompt, company_name, timeout=15)
+        # Attempt 1: GPT verifier model
+        domain = _call_classifier("gpt-5.4", prompt, company_name, timeout=20)
         if domain:
             return domain
 
-        # Attempt 2: Retry with Pro after brief delay
+        # Attempt 2: independent provider fallback
         time.sleep(1)
-        domain = _call_classifier(client, "gemini-2.5-pro", prompt, company_name, timeout=30)
+        domain = _call_classifier("claude-sonnet-4-6", prompt, company_name, timeout=30)
         if domain:
             return domain
 

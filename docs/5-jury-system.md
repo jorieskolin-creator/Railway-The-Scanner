@@ -30,14 +30,14 @@ Each jury represents a dimension of organizational reality. Defined in `backend/
 ### Step 2: The Forensic Scan (All 5 Juries)
 **File:** `backend/scanner_two.py` -> `x_ray_search()`
 
-- A single LLM call (Claude Sonnet 4.6 or Gemini) performs **web searches across all 5 jury dimensions simultaneously**
+- A single LLM call (Claude Sonnet 4.6 or GPT/Claude) performs **web searches across all 5 jury dimensions simultaneously**
 - This is NOT five separate calls — one comprehensive scan covers all juries
 - Two-pass architecture:
   - **Pass 1 (Search):** Model searches freely, reports findings in relaxed format
   - **Pass 2 (Structure):** Converts findings to standardized JSON schema
 - Each finding includes: `category`, `found` (yes/no), `sentiment` (positive/negative), `snippet` (evidence quote), `url`, `is_recent` (< 12 months old)
 - Also produces: `reality_score_adjustment` (-50 to +50), `confidence_score` (0-100), `washing_flag`
-- Model fallback chain: Claude Sonnet 4.6 + Brave Search -> Gemini 3.1 Pro -> Gemini 2.5 Pro
+- Model fallback chain: Claude Sonnet 4.6 + Brave Search -> GPT 5.4/Claude verification -> Claude Sonnet 4.6
 
 ### Step 3: Weak Jury Detection & Re-Search
 **File:** `backend/scanner_two.py` -> `_identify_weak_juries()` (line 844), `_build_research_prompt()` (line 865)
@@ -117,7 +117,7 @@ Mechanically derived from two scores:
 ### Step 9: Final Synthesis (The Judge)
 **File:** `backend/main.py` (lines 2189-2500+)
 
-- **Claude Opus 4.7** with Extended Thinking (10,000 token budget) receives ALL outputs from previous steps:
+- **Claude Opus 4.8** with Extended Thinking (10,000 token budget) receives ALL outputs from previous steps:
   - Intent Score + Reality Score + Financial Index + all sub-scores
   - All jury findings, verified evidence links, key people
   - Washing flags, foresight data, previous scan context
@@ -125,7 +125,7 @@ Mechanically derived from two scores:
   1. **Score each KB dimension** (0-20) based on evidence
   2. **Write the summary** (~375 words, 3-4 paragraphs) mapping findings to Knowledge Base terms
   3. **Write the executive pitch** (90-110 words for C-level audience) + why/what proposals
-- Fallback chain: Gemini 3.1 Pro -> Mistral Large
+- Fallback chain: GPT 5.4/Claude verification -> Mistral Large
 
 ### Step 10: Hallucination Check & Fact Verification
 **Files:** `backend/reality_check.py`, `backend/general_summary.py`
@@ -138,7 +138,7 @@ Two layers of verification:
    - If unsupported claims found: summary is **automatically re-generated** with explicit corrections
 
 2. **AI-powered reality check** (reality_check.py):
-   - Gemini with Google Search grounding verifies claims against live web data
+   - GPT/Claude with web search grounding verifies claims against live web data
    - Heuristic pattern matching detects obvious fabrications
    - Final output includes `hallucination_score` and `hallucination_flags`
 
@@ -191,7 +191,7 @@ Company Website/Docs
   [Step 8: Foresight]  ──> Strategic Forces + Scenarios
         |
         v
-  [Step 9: Synthesis]  ──> Summary + Pitch + Proposals (by Opus 4.7)
+  [Step 9: Synthesis]  ──> Summary + Pitch + Proposals (by Opus 4.8)
         |
         v
   [Step 10: Fact-Check]  ──> Verified Output + Hallucination Score

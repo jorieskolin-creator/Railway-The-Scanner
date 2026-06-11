@@ -6,20 +6,17 @@ import re
 import requests as http_requests
 import concurrent.futures
 from datetime import date
-from gemini_backoff import call_with_503_backoff
 from urllib.parse import urlparse
-from google import genai
-from google.genai import types
-from gemini_client import get_gemini_client
 import anthropic
 from knowledge_base import get_evolving_framework
 from source_quality import assess_evidence_quality, confidence_quality_penalty, annotate_evidence_links, filter_admissible_sources, evidence_sufficiency_score, classify_generation_context, apply_language_metadata
 from entity_identity import build_entity_context_block, entity_search_terms
+from llm_clients import call_anthropic_text, call_json_model_chain, call_openai_text
 
 # --- HELPER: IMPROVE SEARCH RECALL ---
 def clean_company_name_for_search(name):
     """
-    Removes legal suffixes to ensure Google Search finds natural language discussions.
+    Removes legal suffixes to improve web-search recall.
     """
     clean = name
     suffixes = [" Oyj", " Abp", " Oy", " Ltd", " Plc", " Corporation", " Group", " Inc"]
@@ -839,7 +836,7 @@ def _repair_json_with_sonnet(raw_text, company_name, is_structuring=False, citat
     - Structuring (is_structuring=True): Standard Pass 2 of the two-pass pipeline.
       Sonnet's web search produced free-form evidence; this call converts it to JSON.
       No confidence penalty — this is the designed flow.
-    - Repair (is_structuring=False): Fallback when Gemini returns unstructured text
+    - Repair (is_structuring=False): Fallback when a model returns unstructured text
       instead of JSON. Caps confidence at 70 to signal reduced reliability.
     """
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -942,19 +939,9 @@ Return ONLY valid JSON, no explanation."""
         return None
 
 
-def _structure_with_gemini(raw_text, company_name, model_name):
-    """Structure free-form forensic evidence text into JSON using Gemini (no search tools).
-
-    Used as Pass 2 of the two-pass forensic pipeline.
-    Mirrors the prompt schema of _repair_json_with_sonnet so either model can
-    fulfil the structuring role — temperature 0.0, no thinking, no tools.
-    """
-    try:
-        client = get_gemini_client()
-    except ValueError:
-        return None
-    try:
-        structuring_prompt = f"""The following text is a forensic reality-check analysis for "{company_name}" produced by a web-search-grounded AI model. Your job is to structure this analysis into valid JSON, preserving ALL evidence, scores, and assessments exactly as stated.
+def _structure_with_model(raw_text, company_name, model_name="gpt-5.4"):
+    """Structure free-form forensic evidence text into JSON using GPT/Claude."""
+    structuring_prompt = f"""The following text is a forensic reality-check analysis for "{company_name}" produced by a web-search-grounded AI model. Your job is to structure this analysis into valid JSON, preserving ALL evidence, scores, and assessments exactly as stated.
 
 The expected JSON structure is:
 {{
@@ -970,44 +957,28 @@ The expected JSON structure is:
   "washing_type": <string or null>
 }}
 
-Extract as much data as possible from the text below. Preserve all findings, URLs, and evidence. If a field cannot be determined, use sensible defaults (0 for reality_score_adjustment, empty arrays for lists, false for booleans).
-
-CRITICAL — snippet vs title are DIFFERENT fields:
-- "title" = the source page or article title
-- "snippet" = an actual quote, data point, or substantive excerpt found IN the source
-If you cannot extract a real snippet from the source text, leave snippet as an empty string "".
-Do NOT copy the title into the snippet field. A finding with title-only and no snippet is
-acceptable — the downstream pipeline filters incomplete findings correctly only when snippet
-is honestly empty.
-
-IMPORTANT for confidence_score: Do NOT default to 0. Assess confidence based on the evidence density in the text:
-- Count findings with real URLs and specific quotes → more evidence = higher confidence
-- 0-40: Very few sources, evidence is generic or very old
-- 41-70: Some specific evidence found, but mixed recency or limited sources
-- 71-100: Multiple independent sources confirm findings, evidence is recent and specific
-If the text contains 3+ findings with URLs, confidence should be at least 50.
+Extract as much data as possible from the text below. Preserve all findings, URLs, and evidence. If a field cannot be determined, use sensible defaults.
+Do not copy a page title into snippet. If no real source excerpt exists, leave snippet empty.
 
 TEXT TO PARSE:
 {raw_text[:12000]}
 
 Return ONLY valid JSON, no explanation."""
-        response = client.models.generate_content(
-            model=model_name,
-            contents=structuring_prompt,
-            config={
-                'temperature': 0.0,
-                'max_output_tokens': 8000,
-            }
+    try:
+        text, used_model = call_json_model_chain(
+            structuring_prompt,
+            (model_name, "claude-sonnet-4-6") if model_name.startswith("gpt-") else (model_name, "gpt-5.4"),
+            max_tokens=8000,
+            timeout=90,
         )
-        text = response.text if response.text else ""
         json_payload = extract_json_from_text(text)
         if not json_payload:
             return None
+        print(f"   ✅ [JSON Structure] Structured via {used_model}")
         return json.loads(json_payload, strict=False)
     except Exception as e:
-        print(f"   ❌ [Gemini Structure] {model_name} structuring failed: {e}")
+        print(f"   ❌ [JSON Structure] Structuring failed: {e}")
         return None
-
 
 def _build_previous_context_block(previous_context):
     """
@@ -1178,7 +1149,7 @@ def _build_previous_context_block(previous_context):
 def _build_evidence_anchors(previous_context):
     """
     Extracts concrete URLs and keywords from previous scan data to anchor
-    the current scan. This ensures Gemini re-verifies known sources and
+    the current scan. This ensures the scanner re-verifies known sources and
     searches for the same key terms, reducing URL overlap drift to near-zero.
     Returns empty string if no previous context or no usable anchors.
     """
@@ -1389,7 +1360,7 @@ def _build_research_prompt(search_name, domain_hint, weak_juries, loop_number, i
     Combine queries for related juries into a single search with OR operators.
     After {min(num_weak + 1, 4)} searches, STOP and return what you found.
 
-    URL QUALITY RULE: ONLY include URLs from actual Google Search results.
+    URL QUALITY RULE: ONLY include URLs from actual web search results.
     Do NOT construct or guess URLs. If you cannot find a real URL for a finding,
     set "url" to "" and "found" to false. Never fabricate links.
 
@@ -1549,16 +1520,11 @@ def run_self_analysis(company_name, previous_scan_data, current_scan_data, days_
     SELF-ANALYSIS: Triggered when scanner produces significantly different results
     for the same company within a short timeframe.
 
-    Pre-computes diagnostics from actual data, then asks Gemini 2.5 Pro (with Google
-    Search grounding) to interpret them and select from a constrained set of
-    actionable suggestion types. This keeps Opus free for Synthesis only.
+    Pre-computes diagnostics from actual data, then asks GPT/Claude to interpret
+    them and select from a constrained set of actionable suggestion types.
 
     Returns a dict with analysis results, or None if analysis fails.
     """
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-    if not api_key:
-        return None
-
     prev_reality = previous_scan_data.get("previous_reality", "N/A")
     prev_confidence = previous_scan_data.get("previous_confidence", "N/A")
     prev_findings_raw = previous_scan_data.get("previous_findings", [])
@@ -1611,7 +1577,7 @@ PRE-COMPUTED DIAGNOSTICS (from actual scan data — use these, do NOT invent you
 
 ANALYZE:
 1. CAUSE: Why did the scanner produce different results? Pick the most likely:
-   - search_variance: URL overlap is low — same queries hit different Google results
+   - search_variance: URL overlap is low — same queries hit different web results
    - evidence_gap: One scan found sources the other missed
    - prompt_sensitivity: Model interpreted context differently (same evidence, different conclusion)
    - genuine_change: Real company change (unlikely if < 7 days)
@@ -1655,48 +1621,17 @@ Return STRICT JSON:
 """
 
     try:
-        try:
-            client = get_gemini_client()
-        except ValueError:
-            print("   [Self-Analysis] No GEMINI_API_KEY found. Skipping.")
-            return None
-
         start = time.time()
-
-        # Pro → Flash fallback: both share similar quality for this lightweight task,
-        # but Flash runs on separate infra and succeeds when Pro-tier returns 503.
-        _sa_model_chain = [("gemini-2.5-pro", 60), ("gemini-3.5-flash", 45)]
+        _sa_model_chain = [("gpt-5.4", 60), ("claude-sonnet-4-6", 60)]
         for _sa_model, _sa_timeout in _sa_model_chain:
-            print(f"   [Self-Analysis] Trying {_sa_model} (Google Search grounding)...")
-
-            def _call_self_analysis(m=_sa_model):
-                return client.models.generate_content(
-                    model=m,
-                    contents=prompt,
-                    config={
-                        'tools': [{'google_search': {}}],
-                        'temperature': 0.0,
-                        'safety_settings': [
-                            {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
-                            {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
-                            {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
-                            {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
-                        ]
-                    }
-                )
-
-            call_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-            future = call_pool.submit(_call_self_analysis)
+            print(f"   [Self-Analysis] Trying {_sa_model} on stored diagnostics...")
             try:
-                response = future.result(timeout=_sa_timeout)
-            except concurrent.futures.TimeoutError:
-                call_pool.shutdown(wait=False)
+                text, used_model = call_json_model_chain(prompt, (_sa_model,), max_tokens=2000, timeout=_sa_timeout)
+            except Exception as model_err:
                 elapsed = int((time.time() - start) * 1000)
-                print(f"   ⏰ [Self-Analysis] {_sa_model} timed out after {_sa_timeout}s ({elapsed}ms). Trying next model...")
+                print(f"   ❌ [Self-Analysis] {_sa_model} failed after {elapsed}ms: {model_err}")
                 continue
-            call_pool.shutdown(wait=False)
 
-            text = response.text if response.text else ""
             json_payload = extract_json_from_text(text)
             elapsed = int((time.time() - start) * 1000)
             if json_payload:
@@ -1705,6 +1640,7 @@ Return STRICT JSON:
                 analysis["days_between_scans"] = days_since_last
                 analysis["diagnostics"] = diagnostics
                 analysis["score_delta"] = curr_reality - prev_reality if isinstance(curr_reality, (int, float)) and isinstance(prev_reality, (int, float)) else None
+                analysis["model"] = used_model
 
                 print(f"   [Self-Analysis] Cause: {analysis.get('primary_cause', 'unknown')} | Reliability: {analysis.get('reliability', '?')} ({elapsed}ms)")
                 print(f"   [Self-Analysis] {analysis.get('cause_explanation', '')}")
@@ -1719,10 +1655,8 @@ Return STRICT JSON:
                 analysis["improvement_suggestions"] = [
                     f"[{s.get('type', '?')}] {s.get('detail', '')}" for s in suggestions
                 ]
-
                 return analysis
             print(f"   [Self-Analysis] No parseable JSON from {_sa_model} ({elapsed}ms). Trying next model...")
-
         return None
     except Exception as e:
         print(f"   [Self-Analysis] Failed: {e}")
@@ -1752,10 +1686,6 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     _guard_delta_verify = time_budget - 130  # skip delta verification (leave room for URL validation)
     print(f"   [Scanner 2] Time budget: {time_budget}s (guards: forensic={_guard_forensic}s, research={_guard_research}s, delta={_guard_delta_verify}s)")
 
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-    # Default to the chosen model, or fallback to the reliable 3-pro
-    primary_model = model_id or "gemini-3.1-pro-preview"
-
     search_name = clean_company_name_for_search(company_name)
     entity_terms = entity_search_terms(company_name)
     search_alias_block = ""
@@ -1766,10 +1696,6 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             + "\n"
         )
     domain_hint = get_clean_domain(company_url) if company_url else f"{search_name.lower().replace(' ', '')}.fi"
-
-    if not api_key:
-        print("   [Scanner 2] CRITICAL: No GEMINI_API_KEY found. Using simulation fallback.")
-        return { "score": 60, "checklist": [], "links": [], "key_people": [], "is_simulated": True, "confidence_score": 0, "washing_flag": False }
 
     # --- TIER 2: PRE-FETCH VERIFIED DATA (parallel, non-blocking) ---
     prh_data = None
@@ -1989,7 +1915,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     1. FULL NAMES ONLY: Every name MUST include both first name AND last name. Do NOT include
        a person if you only found their first name. "Pirja" alone is NOT acceptable — you need
        "Pirja Heiskanen" or similar. If you cannot find the full name, DO NOT include that person.
-    2. VERIFIED CONNECTION: Only include people you found through Google Search results that
+    2. VERIFIED CONNECTION: Only include people you found through web search results that
        explicitly connect them to {company_name}. Do NOT guess or infer people from partial mentions.
     3. TARGET 3-6 STAKEHOLDERS: Search actively to find at least 3 verified stakeholders.
        Search for CEO/MD first, then CTO/CIO, then other CxOs, then VPs, then Directors.
@@ -2090,201 +2016,54 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     """
 
     def execute_with_model(target_model_name, custom_prompt=None, call_timeout=150):
-        """Execute a search with the given model. Uses main prompt by default, or a custom one for re-search."""
-        # Elapsed time guard — skip if function has been running too long
-        # Derived from time_budget to leave buffer for URL validation + response
+        """Legacy executor slot retained for call-shape compatibility; inactive."""
+        print(f"   ⏭ [Forensic Scan] Legacy model executor disabled for {target_model_name}")
+        return None
+
+    def execute_with_openai_web(active_prompt):
+        """Fallback web-search path using GPT-5.5 Responses web_search."""
         elapsed_total = time.time() - _fn_start
-        if elapsed_total > _guard_forensic:
-            print(f"   ⏰ [Forensic Scan] Skipping {target_model_name} — elapsed {int(elapsed_total)}s exceeds {_guard_forensic}s guard")
+        if elapsed_total > _guard_anthropic:
+            print(f"   ⏰ [Forensic Scan] Skipping GPT web search — elapsed {int(elapsed_total)}s exceeds {_guard_anthropic}s guard")
             return None
-
-        is_rescan = bool(previous_context and previous_context.get("previous_reality") is not None)
-        active_prompt = custom_prompt if custom_prompt else prompt
-        # Prepend search budget instruction for Gemini models (no native max_uses support)
-        search_budget_prefix = (
-            "IMPORTANT CONSTRAINTS FOR THIS SEARCH:\n"
-            "1. SEARCH LIMIT: Complete your analysis in MAX 6 web searches. After 6 searches, "
-            "STOP searching and synthesize what you have. Do NOT repeat similar queries.\n"
-            "2. URL QUALITY: ONLY include URLs that appear in actual Google Search results. "
-            "Do NOT construct URLs from memory or guess URL patterns. If you did not find a "
-            "URL in a search result, do NOT include it. Three real URLs are worth more than "
-            "ten guessed ones.\n"
-            "3. EFFICIENCY: Combine related queries with OR operators into single searches. "
-            "For example: `\"CompanyName\" technology strategy OR digital transformation OR \"teknologia\"`\n"
-            "4. STOP CONDITION: If after 4 searches you have found 3+ verified findings, "
-            "write your JSON response. Do NOT keep searching for marginal improvements.\n\n"
-        )
-        active_prompt = search_budget_prefix + active_prompt
-
-        # For Gemini 3.1 Pro: two-pass mode.
-        # Pass 1 (this call): relax JSON requirement so the model focuses entirely on
-        # search quality and evidence gathering — no formatting overhead.
-        # Pass 2: _repair_json_with_sonnet(is_structuring=True) converts the free-form
-        # output to JSON, identical to the designed Sonnet path (no confidence penalty).
-        # Removing JSON-formatting pressure saves ~30-40s, fitting safely in 180s.
-        is_two_pass = "3.1" in target_model_name
-        if is_two_pass:
-            active_prompt = re.sub(
-                r'RETURN STRICT JSON[^:]*:',
-                'REPORT YOUR FINDINGS (any clear structured format — JSON, markdown, or text):',
-                active_prompt
-            )
-
-        pass_label = "Pass 1 (Search)" if is_two_pass else "Search+Structure"
-        print(f"   🔄 [Forensic Scan] Attempting {target_model_name} [{pass_label}] for {company_name}...")
-        start = time.time()
         try:
-            client = get_gemini_client()
-
-            # Enforce per-call timeout via thread pool.
-            # Google GenAI SDK's built-in HttpOptions timeout is unreliable
-            # (SDK passes timeout=None internally, overriding client-level timeout).
-            # Gemini 3.x models need temp=1.0 + thinking_config (low temp causes looping)
-            _safety = [
-                {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
-                {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
-                {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
-                {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
-            ]
-            if "gemini-3" in target_model_name:
-                # Gemini 3.1 Pro Preview gets a capped thinking budget.
-                # Use thinking_budget ONLY — the Gemini API rejects requests that set
-                # both thinking_level and thinking_budget simultaneously
-                # ("You can only set only one of thinking budget and thinking level").
-                # A numeric budget implicitly enables thinking at the right intensity
-                # and caps token consumption so the search call fits within the 180s wall.
-                _temperature = 0.5 if "3.1" in target_model_name else 1.0
-                # Rescan: 2000 tokens — model already has prior findings, needs less planning time.
-                # Fresh scan: 3000 tokens — capped at MEDIUM equivalent (2000-3500 range); saves
-                #   ~35-45s vs the previous 8000 budget without degrading result quality.
-                _thinking_budget = (2000 if is_rescan else 3000) if "3.1" in target_model_name else 4000
-                _model_config = {
-                    'tools': [{'google_search': {}}],
-                    'temperature': _temperature,
-                    'thinking_config': types.ThinkingConfig(
-                        thinking_budget=_thinking_budget,
-                    ),
-                    'safety_settings': _safety,
-                    'max_output_tokens': 8000,
-                }
-            else:
-                # gemini-2.5-pro: cap default thinking to prevent token starvation.
-                # Without explicit thinking_config, 2.5-pro defaults to uncapped thinking
-                # mode — thinking tokens share the output pool and can exhaust it on complex
-                # prompts, leaving too few tokens for the actual JSON.
-                # Budget: 2048 tokens balances quality (enough reasoning for a full forensic
-                # scan) vs speed (~40-50s). Previous 1024 was too tight when 2.5-pro is the
-                # primary scanner (fallback from 3.1), producing shallow findings.
-                # reality_check.py can stay at 1024 — its task is simpler (score adjustment).
-                _model_config = {
-                    'tools': [{'google_search': {}}],
-                    'temperature': 0.0,
-                    'thinking_config': types.ThinkingConfig(thinking_budget=2048),
-                    'max_output_tokens': 8000,
-                    'safety_settings': _safety,
-                }
-
-            # 3.1 Pro uses streaming so that partial output can be salvaged on timeout.
-            # Other Gemini models use blocking — they're faster and rarely time out.
-            partial_result = []  # accumulates streamed chunks; read on soft timeout
-            if is_two_pass:
-                def _call_gemini():
-                    for chunk in client.models.generate_content_stream(
-                        model=target_model_name,
-                        contents=active_prompt,
-                        config=_model_config,
-                    ):
-                        if chunk.text:
-                            partial_result.append(chunk.text)
-                    return "".join(partial_result)
-            else:
-                def _call_gemini():
-                    resp = client.models.generate_content(
-                        model=target_model_name,
-                        contents=active_prompt,
-                        config=_model_config,
-                    )
-                    if not resp.text:
-                        # Raise rather than returning "" so the exception handler logs
-                        # the real cause (e.g. finish_reason=SAFETY/MAX_TOKENS/OTHER)
-                        # instead of the generic "no parseable JSON" message.
-                        finish = (resp.candidates[0].finish_reason
-                                  if resp.candidates else "NO_CANDIDATES")
-                        raise ValueError(f"empty response (finish_reason={finish})")
-                    return resp.text
-
-            call_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-            future = call_pool.submit(_call_gemini)
-            text_content = ""
-            try:
-                text_content = future.result(timeout=call_timeout) or ""
-            except concurrent.futures.TimeoutError:
-                call_pool.shutdown(wait=False)
-                elapsed = int((time.time() - start) * 1000)
-                salvaged = "".join(partial_result)
-                if is_two_pass and len(salvaged) > 200:
-                    text_content = salvaged
-                    print(f"   ⏰ [Forensic Scan] {target_model_name} soft-timed out after {call_timeout}s ({elapsed}ms). Salvaging {len(salvaged)} chars for Pass 2...")
-                else:
-                    print(f"   ⏰ [Forensic Scan] {target_model_name} timed out after {call_timeout}s ({elapsed}ms). Skipping to next model.")
-                    return None
-            call_pool.shutdown(wait=False)
-
-            json_payload = extract_json_from_text(text_content)
-
+            print(f"   🔄 [Forensic Scan] Attempting gpt-5.5 + web_search for {company_name}...")
+            start = time.time()
+            relaxed_prompt = re.sub(
+                r'RETURN STRICT JSON[^:]*:',
+                'REPORT YOUR FINDINGS (valid JSON preferred; clear structured text acceptable):',
+                active_prompt,
+            )
+            text_content = call_openai_text(
+                relaxed_prompt,
+                model="gpt-5.5",
+                max_output_tokens=14000,
+                timeout=240,
+                web_search=True,
+                search_context_size="medium",
+            )
             elapsed = int((time.time() - start) * 1000)
+            json_payload = extract_json_from_text(text_content)
             if json_payload:
                 try:
                     parsed = json.loads(json_payload, strict=False)
-                    print(f"   ✅ [Forensic Scan] {target_model_name} succeeded in {elapsed}ms")
+                    parsed["_web_grounded"] = True
+                    parsed["_search_provider"] = "openai-web-search"
+                    print(f"   ✅ [Forensic Scan] GPT web search returned JSON ({elapsed}ms)")
                     return parsed
                 except json.JSONDecodeError as je:
-                    print(f"   ⚠️ [Forensic Scan] {target_model_name} JSON parse failed: {je}")
-                    # Fall through to Sonnet repair gate
-
-            # --- STRUCTURING GATE ---
-            # Two-pass mode threshold is lower (20 chars) because Pass 1 output
-            # is free-form by design — even short search summaries can be structured.
-            # Single-pass threshold stays at 100 chars (unexpected unstructured output).
-            structuring_threshold = 20 if is_two_pass else 100
-            if text_content and len(text_content) > structuring_threshold:
-                # Two-pass mode (3.1 Pro): free-form output is the designed flow.
-                #   Structuring fallback chain: 3.1 Pro → Sonnet 4.6 → 2.5 Pro.
-                #   is_structuring=True for Sonnet (no confidence penalty).
-                # Other models: unexpected unstructured output → Sonnet repair only
-                #   (caps confidence at 70 to signal reduced reliability).
-                gate_label = "Pass 2 (Structure)" if is_two_pass else "JSON Repair"
-                print(f"   🔄 [{gate_label}] {target_model_name} returned {len(text_content)} chars ({elapsed}ms). Structuring into JSON...")
-                repaired = None
-                if is_two_pass:
-                    repaired = _structure_with_gemini(text_content, company_name, "gemini-3.1-pro-preview")
-                    if not repaired:
-                        print(f"   ⚠️ [Pass 2] Gemini 3.1 Pro structuring failed. Trying Sonnet 4.6...")
-                        repaired = _repair_json_with_sonnet(text_content, company_name, is_structuring=True)
-                    if not repaired:
-                        print(f"   ⚠️ [Pass 2] Sonnet 4.6 structuring failed. Trying Gemini 2.5 Pro...")
-                        repaired = _structure_with_gemini(text_content, company_name, "gemini-2.5-pro")
-                else:
-                    repaired = _repair_json_with_sonnet(text_content, company_name, is_structuring=False)
-                    if not repaired:
-                        print(f"   ⚠️ [JSON Repair] Sonnet unavailable. Trying Gemini 2.5 Pro...")
-                        repaired = _structure_with_gemini(text_content, company_name, "gemini-2.5-pro")
-                if repaired:
-                    repair_elapsed = int((time.time() - start) * 1000)
-                    print(f"   ✅ [{gate_label}] Structured data from {target_model_name} ({repair_elapsed}ms total)")
-                    return repaired
-                else:
-                    print(f"   ⚠️ [{gate_label}] Could not structure output from {target_model_name}")
-                    return None
-            else:
-                text_len = len(text_content) if text_content else 0
-                preview = repr(text_content[:120]) if text_content else "(empty)"
-                print(f"   ⚠️ [Forensic Scan] {target_model_name} returned no parseable JSON ({elapsed}ms, {text_len} chars raw)")
-                print(f"   📋 [Forensic Scan] Response preview: {preview}")
-                return None
+                    print(f"   ⚠️ [Forensic Scan] GPT web JSON parse failed: {je}")
+            if text_content and len(text_content) > 100:
+                structured = _repair_json_with_sonnet(text_content, company_name, is_structuring=True)
+                if structured:
+                    structured["_web_grounded"] = True
+                    structured["_search_provider"] = "openai-web-search"
+                    print(f"   ✅ [Forensic Scan] GPT web output structured ({elapsed}ms)")
+                    return structured
+            print(f"   ⚠️ [Forensic Scan] GPT web search returned no usable evidence ({elapsed}ms)")
+            return None
         except Exception as e:
-            elapsed = int((time.time() - start) * 1000)
-            print(f"   ❌ [Forensic Scan] {target_model_name} failed in {elapsed}ms: {e}")
+            print(f"   ❌ [Forensic Scan] GPT web search failed: {e}")
             return None
 
     def execute_with_anthropic(active_prompt):
@@ -2481,28 +2260,17 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             print(f"   ❌ [Forensic Scan] claude-sonnet-4-6 + Web Search failed in {elapsed}ms: {e}")
             return None
 
-    # --- SEQUENTIAL: Gemini 2.5 Pro → Gemini 3.1 Pro Preview → Gemini 3.5 Flash ---
-    # 2.5 Pro is PRIMARY for frequent web-discovery scans to reduce 3.1 quota pressure.
-    # 3.1 Pro Preview is ESCALATION: native Google Search for hard/low-yield cases.
-    # 3.5 Flash is ESCAPE HATCH: runs on different infra — succeeds when Pro tier is 503ing.
+    # --- SEQUENTIAL: Claude Sonnet web search → GPT-5.5 web search ---
     data = None
 
-    print(f"   🔍 [Forensic Scan] Starting sequential scan for {company_name}: 2.5 Pro → 3.1 Pro → 3.5 Flash")
+    print(f"   🔍 [Forensic Scan] Starting scan for {company_name}: Sonnet web search → GPT-5.5 web search")
 
-    # --- PRIMARY: Gemini 2.5 Pro (separate rate-limit bucket from 3.x family) ---
     if not data:
-        data = execute_with_model("gemini-2.5-pro", call_timeout=120)
+        data = execute_with_anthropic(prompt)
 
-    # --- ESCALATION: Gemini 3.1 Pro Preview — two-pass mode ---
     if not data:
-        print(f"   ⚠️ [Forensic Scan] Gemini 2.5 Pro returned no data. Escalating to Gemini 3.1 Pro Preview...")
-        _forensic_per_model = min(150, max(60, time_budget // 3))
-        data = execute_with_model("gemini-3.1-pro-preview", None, _forensic_per_model)
-
-    # --- ESCAPE HATCH: Gemini 3.5 Flash (different infra; succeeds when Pro tier is fully down) ---
-    if not data:
-        print(f"   ⚠️ [Forensic Scan] Gemini 3.1 Pro also returned no data. Trying Gemini 3.5 Flash escape hatch...")
-        data = execute_with_model("gemini-3.5-flash", call_timeout=90)
+        print(f"   ⚠️ [Forensic Scan] Sonnet web search returned no data. Trying GPT-5.5 web search...")
+        data = execute_with_openai_web(prompt)
 
     # --- CONFIDENCE FLOOR (two-pass structuring safety net) ---
     # When the structuring model (Pass 2) cannot determine confidence from
@@ -2530,7 +2298,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         # Trigger conditions:
         #   1. confidence < 45 AND fewer than 3 real evidence links, OR
         #   2. fewer than 2 evidence links regardless of confidence (e.g. JSON-repaired
-        #      Gemini 2.5 Pro responses that claim high confidence but provide no sources)
+        #      model responses that claim high confidence but provide no sources)
         if (initial_confidence < 45 and initial_evidence_count < 3) or initial_evidence_count < 2:
             print(f"   [Re-Search] Low confidence detected: {initial_confidence}/100 with {initial_evidence_count} evidence links.")
 
@@ -2561,11 +2329,9 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     break
 
                 # Re-search: Pro → Flash escape hatch (same infra logic as main chain)
-                research_data = execute_with_model("gemini-3.1-pro-preview", custom_prompt=research_prompt)
+                research_data = execute_with_anthropic(research_prompt)
                 if not research_data:
-                    research_data = execute_with_model("gemini-2.5-pro", custom_prompt=research_prompt)
-                if not research_data:
-                    research_data = execute_with_model("gemini-3.5-flash", custom_prompt=research_prompt)
+                    research_data = execute_with_openai_web(research_prompt)
 
                 if not research_data:
                     print(f"   [Re-Search] Loop {loop} returned no parseable data. Stopping.")
@@ -2734,17 +2500,9 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     print(f"   ⏰ [Delta Verification] Skipping — elapsed {int(elapsed_total)}s exceeds {_guard_delta_verify}s guard. Keeping score {final_score}.")
                 else:
                     print(f"   [Delta Verification] Large score change detected: {prev_reality} → {final_score} (delta {delta}). Running verification re-scan (same methodology)...")
-                    if batch_mode:
-                        verify_data = execute_with_model(primary_model)
-                    else:
-                        # Use the SAME model (Sonnet) for verification.
-                        # Old scores were often from Gemini — verifying with Gemini
-                        # just reproduces the old bias. Same-model consistency is
-                        # the correct test: if Sonnet says 85 twice, the delta is real.
-                        verify_data = execute_with_anthropic(prompt)
-                        if not verify_data:
-                            # Sonnet unavailable — fall back to Gemini as last resort
-                            verify_data = execute_with_model(primary_model)
+                    verify_data = execute_with_anthropic(prompt)
+                    if not verify_data:
+                        verify_data = execute_with_openai_web(prompt)
 
                     if verify_data:
                         verify_adjustment = verify_data.get("reality_score_adjustment", 0)
@@ -2829,7 +2587,7 @@ Your task: Find REAL, VERIFIABLE evidence about this company's modernization and
 Focus on these areas where evidence was weak: {', '.join(dead_cat_list)}
 
 CRITICAL RULES:
-- ONLY include URLs you find through actual Google Search results
+- ONLY include URLs you find through actual web search results
 - Do NOT invent or guess URLs — every URL must come from a real search result
 - Prefer well-known sources: LinkedIn, news sites, industry reports, company press releases
 - Quality over quantity — 3 real URLs beats 10 fake ones
@@ -2855,16 +2613,9 @@ RETURN STRICT JSON:
     "washing_type": null
 }}"""
 
-            if batch_mode:
-                recovery_data = execute_with_model(primary_model, custom_prompt=recovery_prompt)
-            else:
-                # Use the SAME model (Sonnet) that did the original scan for recovery.
-                # Same-model consistency: if Sonnet's URLs are dead, Sonnet's web search
-                # is the best tool to find real replacements (live Brave Search grounding).
-                recovery_data = execute_with_anthropic(recovery_prompt)
-                if not recovery_data:
-                    # Sonnet unavailable — fall back to Gemini as last resort
-                    recovery_data = execute_with_model(primary_model, custom_prompt=recovery_prompt)
+            recovery_data = execute_with_anthropic(recovery_prompt)
+            if not recovery_data:
+                recovery_data = execute_with_openai_web(recovery_prompt)
 
             if recovery_data:
                 new_findings = recovery_data.get("findings", [])
@@ -2987,33 +2738,32 @@ RETURN STRICT JSON:
 # FINANCIAL HEALTH INDEX — Separate from 5-jury reality check
 # ==============================================================================
 
-def _execute_financial_search(api_key, model_name, prompt, company_name, timeout=90):
-    """Execute a single Gemini search for financial data. Returns parsed dict or None."""
+def _execute_financial_search(model_name, prompt, company_name, timeout=120):
+    """Execute a GPT/Claude web-search financial data request. Returns parsed dict or None."""
     try:
         print(f"   [Financial Health] Attempting {model_name} for {company_name} (timeout={timeout}s)...")
         start = time.time()
-        response = call_with_503_backoff(
-            lambda: get_gemini_client().models.generate_content(
+        if model_name.startswith("claude-"):
+            text_content = call_anthropic_text(
+                prompt,
                 model=model_name,
-                contents=prompt,
-                config={
-                    'tools': [{'google_search': {}}],
-                    'temperature': 0.0,
-                    'safety_settings': [
-                        {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
-                        {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
-                        {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
-                        {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
-                    ]
-                }
-            ),
-            label=f"Financial Health {model_name}",
-            timeout=timeout,
-        )
-        text_content = response.text if response.text else ""
+                max_tokens=10000,
+                timeout=timeout,
+                web_search=True,
+                max_searches=8,
+                thinking_budget=3000,
+            )
+        else:
+            text_content = call_openai_text(
+                prompt,
+                model=model_name,
+                max_output_tokens=10000,
+                timeout=timeout,
+                web_search=True,
+                search_context_size="medium",
+            )
         json_payload = extract_json_from_text(text_content)
         elapsed = int((time.time() - start) * 1000)
-
         if json_payload:
             try:
                 parsed = json.loads(json_payload, strict=False)
@@ -3021,20 +2771,16 @@ def _execute_financial_search(api_key, model_name, prompt, company_name, timeout
                 return parsed
             except json.JSONDecodeError as je:
                 print(f"   [Financial Health] {model_name} JSON parse failed: {je}")
-                # Fall through to Sonnet repair gate
-
         if text_content and len(text_content) > 100:
             repaired = _repair_json_with_sonnet(text_content, company_name)
             if repaired:
                 print(f"   [Financial Health] JSON repair recovered data from {model_name}")
                 return repaired
-
         print(f"   [Financial Health] {model_name} returned no parseable JSON ({elapsed}ms)")
         return None
     except Exception as e:
         print(f"   [Financial Health] {model_name} failed: {e}")
         return None
-
 
 def migrate_financial_sub_scores(sub_scores: dict) -> dict:
     """Rename legacy 'efficiency' key to 'financial_stability' in stored sub_scores."""
@@ -3097,11 +2843,10 @@ def compute_financial_index(sub_scores: dict) -> int:
 def financial_health_search(company_name: str, company_url: str = None, model_id: str = None) -> dict:
     """
     FINANCIAL HEALTH INDEX: Separate from the 5-jury reality check.
-    Uses Gemini with Google Search grounding to find financial data.
+    Uses Claude/OpenAI web search to find financial data.
     Returns a 0-100 composite score with 4 sub-dimensions (0-25 each).
     """
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-    primary_model = model_id or "gemini-3.5-flash"
+    primary_model = model_id or "claude-sonnet-4-6"
     _fh_start = time.time()
     _FH_BUDGET = 180  # seconds — abort remaining attempts if cumulative elapsed exceeds this
 
@@ -3125,10 +2870,6 @@ def financial_health_search(company_name: str, company_url: str = None, model_id
         "financial_confidence": 0,
         "is_simulated": True
     }
-
-    if not api_key:
-        print(f"   [Financial Health] No GEMINI_API_KEY. Skipping financial analysis.")
-        return DEFAULT_RESULT
 
     prompt = f"""Perform a FINANCIAL HEALTH ASSESSMENT on "{search_name}" (Domain: {domain_hint}).
 
@@ -3237,25 +2978,25 @@ CONFIDENCE GUIDE:
 """
 
     # Attempt 1: Primary model with one retry
-    data = _execute_financial_search(api_key, primary_model, prompt, company_name, timeout=90)
+    data = _execute_financial_search(primary_model, prompt, company_name, timeout=120)
     if not data:
         if (time.time() - _fh_start) > _FH_BUDGET:
             print(f"   ⏭ [Financial Health] Budget exceeded after attempt 1. Aborting.")
         else:
             print(f"   [Financial Health] Primary model failed, retrying in 2s...")
             time.sleep(2)
-            data = _execute_financial_search(api_key, primary_model, prompt, company_name, timeout=90)
+            data = _execute_financial_search(primary_model, prompt, company_name, timeout=120)
 
-    # Attempt 2: Fallback to Gemini 2.5 Pro with one retry
+    # Attempt 2: Fallback to GPT-5.5 web search with one retry
     if not data:
         if (time.time() - _fh_start) > _FH_BUDGET:
             print(f"   ⏭ [Financial Health] Budget exceeded before fallback. Aborting.")
         else:
-            print(f"   [Financial Health] Primary exhausted. Falling back to Gemini 2.5 Pro...")
-            data = _execute_financial_search(api_key, "gemini-2.5-pro", prompt, company_name, timeout=90)
+            print(f"   [Financial Health] Primary exhausted. Falling back to GPT-5.5 web search...")
+            data = _execute_financial_search("gpt-5.5", prompt, company_name, timeout=120)
     if not data and (time.time() - _fh_start) <= _FH_BUDGET:
         time.sleep(2)
-        data = _execute_financial_search(api_key, "gemini-2.5-pro", prompt, company_name, timeout=90)
+        data = _execute_financial_search("gpt-5.5", prompt, company_name, timeout=120)
 
     # Abort: all attempts exhausted — return explicit no-data result
     if not data:

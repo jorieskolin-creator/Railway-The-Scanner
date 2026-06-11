@@ -8,7 +8,7 @@ Synthesizes existing Scanner data into macro-level strategic intelligence:
 
 Model pipeline:
   - Sonnet 4.6: Primary generation (narrative synthesis)
-  - Gemini 3.1 Pro: Verification (fact-check, framing compliance, structure)
+  - GPT 5.4 / Sonnet 4.6: Verification (fact-check, framing compliance, structure)
 
 All data comes from existing DB — no new scanning or web search required.
 """
@@ -22,10 +22,8 @@ from collections import Counter, defaultdict
 from datetime import datetime
 
 import anthropic
-from google.genai import types as genai_types
 
-from gemini_client import get_gemini_client
-from gemini_backoff import call_with_503_backoff
+from llm_clients import call_json_model_chain
 from foresight_guardrails import build_foresight_guardrails, sanitize_foresight_text, validate_foresight_text, sanitize_future_insight
 from storage import BlobStorage
 from market_intelligence import (
@@ -803,7 +801,7 @@ def _generate_sonnet(prompt: str, max_tokens: int = 5000) -> tuple[str, int]:
 
 
 def _generate_opus(prompt: str, max_tokens: int = 16000) -> tuple[str, int]:
-    """Generate text via Opus 4.7. Returns (text, word_count).
+    """Generate text via Opus 4.8. Returns (text, word_count).
     Used for Domain Dossiers (Layer 3) where analytical depth matters most."""
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not anthropic_key:
@@ -813,7 +811,7 @@ def _generate_opus(prompt: str, max_tokens: int = 16000) -> tuple[str, int]:
     t0 = time.time()
 
     response = client.messages.create(
-        model="claude-opus-4-7",
+        model="claude-opus-4-8",
         max_tokens=max_tokens,
         thinking={"type": "adaptive"},
         extra_body={"output_config": {"effort": "xhigh"}},
@@ -831,12 +829,12 @@ def _generate_opus(prompt: str, max_tokens: int = 16000) -> tuple[str, int]:
 
     wc = len(text.split())
     elapsed = int((time.time() - t0) * 1000)
-    print(f"   [Observatory] Opus 4.7: {wc} words ({elapsed}ms)")
+    print(f"   [Observatory] Opus 4.8: {wc} words ({elapsed}ms)")
     return text, wc
 
 
-def _verify_gemini(essay: str, source_data_summary: str, output_type: str, signal_evidence: str = "") -> dict:
-    """Verify essay via Gemini 3.1 Pro. Returns verification result.
+def _verify_with_models(essay: str, source_data_summary: str, output_type: str, signal_evidence: str = "") -> dict:
+    """Verify essay via GPT/Claude. Returns verification result.
 
     When signal_evidence is provided, adds a claim-level cross-validation check:
     verifies that narrative claims trace back to actual KB signals rather than
@@ -878,44 +876,24 @@ RESPOND IN JSON FORMAT ONLY:
 {{"passed": true/false, "word_count_estimate": N, "issues": ["issue 1", ...], "tech_framing_violations": ["sentence 1", ...], "data_mismatches": ["mismatch 1", ...]{signal_response_fields}}}"""
 
     try:
-        client = get_gemini_client()
-        response = call_with_503_backoff(
-            lambda: client.models.generate_content(
-                model="gemini-3.1-pro-preview",
-                contents=prompt,
-                config=genai_types.GenerateContentConfig(
-                    temperature=0.0,
-                    max_output_tokens=2000,
-                    thinking_config=genai_types.ThinkingConfig(thinking_budget=2048),
-                ),
-            ),
-            label=f"Observatory Verify {output_type}",
-            timeout=60,
-            model="gemini-3.1-pro-preview",
+        result, model_used = call_json_model_chain(
+            prompt,
+            ("gpt-5.4", "claude-sonnet-4-6"),
+            max_tokens=2200,
+            timeout=75,
         )
-
-        # Extract text from response
-        text = ""
-        if hasattr(response, "candidates") and response.candidates:
-            for part in response.candidates[0].content.parts:
-                if hasattr(part, "text") and part.text:
-                    text += part.text
-
-        # Parse JSON from response
-        json_match = re.search(r'\{[\s\S]*\}', text)
-        if json_match:
-            return json.loads(json_match.group())
-
-        return {"passed": True, "issues": [], "note": "Could not parse verification response"}
-
+        if isinstance(result, dict):
+            result.setdefault("verification_model", model_used)
+            return result
+        return {"passed": True, "issues": [], "note": "Could not parse verification response", "verification_model": model_used}
     except Exception as e:
         print(f"   [Observatory] Verification failed (non-blocking): {e}")
         return {"passed": True, "issues": [], "error": str(e)}
 
 
 def _generate_with_verification(prompt: str, source_summary: str, output_type: str, use_opus: bool = False, signal_evidence: str = "") -> tuple[str, dict]:
-    """Generate via Claude, then verify via Gemini. Returns (text, verification).
-    use_opus=True uses Opus 4.7 for deeper analytical reasoning (Layer 3).
+    """Generate via Claude, then verify via GPT/Claude. Returns (text, verification).
+    use_opus=True uses Opus 4.8 for deeper analytical reasoning (Layer 3).
     signal_evidence: when provided, enables claim-level cross-validation against KB signals."""
     generate_fn = _generate_opus if use_opus else _generate_sonnet
     text, wc = generate_fn(prompt)
@@ -923,7 +901,7 @@ def _generate_with_verification(prompt: str, source_summary: str, output_type: s
     if wc < 50:
         raise ValueError(f"Generation too short: {wc} words")
 
-    verification = _verify_gemini(text, source_summary, output_type, signal_evidence=signal_evidence)
+    verification = _verify_with_models(text, source_summary, output_type, signal_evidence=signal_evidence)
 
     # Log cross-validation results if signal evidence was checked
     if signal_evidence and verification.get("unsupported_claims"):
@@ -951,7 +929,7 @@ def _generate_with_verification(prompt: str, source_summary: str, output_type: s
     if needs_regen:
         correction = "\n\nCRITICAL CORRECTION: " + " ".join(correction_parts)
         text, wc = generate_fn(prompt + correction)
-        verification = _verify_gemini(text, source_summary, output_type, signal_evidence=signal_evidence)
+        verification = _verify_with_models(text, source_summary, output_type, signal_evidence=signal_evidence)
 
     return text, verification
 
@@ -1117,8 +1095,8 @@ def generate_observatory(progress_callback=None):
     # --- Assemble final result ---
     result = {
         "generated_at": datetime.utcnow().isoformat(),
-        "model": "claude-sonnet-4-6 (L1-L2) + claude-opus-4-7 (L3)",
-        "verification_model": "gemini-3.1-pro-preview",
+        "model": "claude-sonnet-4-6 (L1-L2) + claude-opus-4-8 (L3)",
+        "verification_model": "gpt-5.4 / claude-sonnet-4-6",
         "company_count": len(data["dashboard_data"]),
         "domain_count": len(active_domains),
         "global_analysis": global_analysis,

@@ -2,7 +2,7 @@
 strategic_foresight.py — Strategic Foresight module for forward-looking analysis.
 
 Generates per-dimension industry forces, cross-impact chains, micro-scenarios,
-and optional climate exposure assessment. Uses Gemini + Google Search grounding.
+and optional climate exposure assessment. Uses pre-validated KB signals plus GPT/Claude synthesis.
 
 Includes post-generation validation:
 - URL verification (HEAD/GET probe) for all source_url fields
@@ -24,11 +24,8 @@ import concurrent.futures
 from datetime import datetime
 
 import anthropic
-from google import genai
-from google.genai import types as genai_types
-from gemini_backoff import call_with_503_backoff
-from gemini_client import get_gemini_client
 from source_quality import HIGH_CREDIBILITY_DOMAINS, LOW_CREDIBILITY_DOMAINS, assess_source_credibility, classify_generation_context, is_generation_eligible_source
+from llm_clients import call_anthropic_text, call_json_model_chain, call_openai_text
 from foresight_guardrails import build_foresight_guardrails, annotate_foresight_signal, annotate_foresight_link, validate_foresight_text, sanitize_foresight_text, sanitize_future_insight, sanitize_foresight_record, sanitize_foresight_collection, sanitize_report_foresight_fields
 
 
@@ -791,7 +788,7 @@ _MIN_KB_SIGNALS_FOR_SYNTHESIS = 3  # Need at least 3 KB signals for synthesis
 # THEME FALLBACK MAP — Near-fit substitution for missing KB themes
 #
 # When a requested FP theme has no data in the Foresight KB, substitute signals
-# from a semantically related theme instead of triggering a live Google Search.
+# from a semantically related theme instead of triggering live web search.
 # This eliminates hallucination risk: all foresight data flows through the
 # harvester's controlled pipeline (URL verification + credibility checks).
 #
@@ -908,7 +905,7 @@ def _build_kb_synthesis_prompt(
 ) -> str:
     """
     Build a synthesis-only prompt that uses pre-validated KB signals as evidence.
-    No Google Search needed — all evidence is already verified.
+    No live web search needed — all evidence is already verified.
     """
     priority_dims = ", ".join(domain_config["priority_dimensions"])
     fp_themes = ", ".join(domain_config["fp_themes"])
@@ -1253,11 +1250,10 @@ def _generate_foresight_from_kb(
     top_findings: list[dict],
     domain_config: dict,
     kb_signals: list[dict],
-    gemini_key: str,
 ) -> dict | None:
     """
     KB-first foresight generation: synthesize company-specific implications
-    from pre-validated KB signals WITHOUT Google Search grounding.
+    from pre-validated KB signals without live web search.
 
     This is faster, cheaper, and more reliable than the full search path.
     Signals have already been URL-verified by the caller.
@@ -1268,68 +1264,33 @@ def _generate_foresight_from_kb(
         financial_index, top_findings, domain_config, kb_signals,
     )
 
-    client = get_gemini_client()
+    # Synthesis only from pre-validated evidence.  GPT-5.5 is primary for
+    # reasoning over the KB payload; Sonnet is the independent-provider fallback.
+    models = [("gpt-5.5", 120), ("claude-sonnet-4-6", 120)]
 
-    _safety = [
-        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-    ]
-
-    # No Google Search tool — synthesis only from pre-validated evidence
-    models = [
-        ("gemini-3.1-pro-preview", genai_types.GenerateContentConfig(
-            safety_settings=_safety,
-            temperature=0.5,
-            thinking_config=genai_types.ThinkingConfig(thinking_budget=3000),
-            max_output_tokens=8000,
-        ), 90),
-        ("gemini-2.5-pro", genai_types.GenerateContentConfig(
-            safety_settings=_safety,
-            temperature=0.5,
-            thinking_config=genai_types.ThinkingConfig(thinking_budget=2048),
-            max_output_tokens=8000,
-        ), 45),
-    ]
-
-    for model_name, config, timeout_sec in models:
+    for model_name, timeout_sec in models:
         try:
             print(f"   📚 [KB Synthesis] Attempting {model_name} for {company_name} (no search)...")
             t0 = time.time()
-            response = call_with_503_backoff(
-                lambda mn=model_name, cfg=config: client.models.generate_content(
-                    model=mn, contents=prompt, config=cfg,
-                ),
-                label=f"KB Synthesis {company_name} {model_name}",
-                model=model_name,
-                timeout=timeout_sec,
-            )
-            text = response.text if hasattr(response, "text") else ""
+            text, used_model = call_json_model_chain(prompt, (model_name,), max_tokens=9000, timeout=timeout_sec)
             elapsed = int((time.time() - t0) * 1000)
-
             if not text or len(text) < 100:
-                print(f"   ⚠️ [KB Synthesis] {model_name} returned insufficient data ({len(text) if text else 0} chars, {elapsed}ms)")
+                print(f"   ⚠️ [KB Synthesis] {used_model} returned insufficient data ({len(text) if text else 0} chars, {elapsed}ms)")
                 continue
-
             json_str = _extract_json_from_text(text)
             if not json_str:
-                print(f"   ⚠️ [KB Synthesis] Could not extract JSON from {model_name} response ({elapsed}ms)")
+                print(f"   ⚠️ [KB Synthesis] Could not extract JSON from {used_model} response ({elapsed}ms)")
                 continue
-
             data = json.loads(json_str, strict=False)
-
             if not data.get("dimension_forces") or not data.get("scenarios"):
-                print(f"   ⚠️ [KB Synthesis] {model_name} returned incomplete structure ({elapsed}ms)")
+                print(f"   ⚠️ [KB Synthesis] {used_model} returned incomplete structure ({elapsed}ms)")
                 continue
 
-            # Re-verify KB source URLs before trusting them (they may have gone stale)
             _kb_urls_to_check = set()
             for force in data["dimension_forces"]:
                 _url = (force.get("source_url") or "").strip()
                 if _url and _url.startswith("http"):
                     _kb_urls_to_check.add(_url)
-            # Also collect supporting source URLs from KB signals
             for sig in kb_signals:
                 for ss in sig.get("supporting_sources", []):
                     _ss_url = (ss.get("url") or "").strip()
@@ -1341,10 +1302,7 @@ def _generate_foresight_from_kb(
                 print(f"   🔍 [KB Re-verify] Checking {len(_kb_urls_to_check)} KB URLs for {company_name}...")
                 _rv_t0 = time.time()
                 with concurrent.futures.ThreadPoolExecutor(max_workers=6) as _rv_pool:
-                    _rv_futures = {
-                        _rv_pool.submit(_verify_foresight_url, u, 6): u
-                        for u in _kb_urls_to_check
-                    }
+                    _rv_futures = {_rv_pool.submit(_verify_foresight_url, u, 6): u for u in _kb_urls_to_check}
                     for fut in concurrent.futures.as_completed(_rv_futures):
                         _u = _rv_futures[fut]
                         try:
@@ -1355,16 +1313,11 @@ def _generate_foresight_from_kb(
                 _dead = len(_kb_url_status) - _alive
                 print(f"   🔍 [KB Re-verify] {_alive} alive, {_dead} dead ({int((time.time()-_rv_t0)*1000)}ms)")
 
-            # Enrich forces with KB data and apply real verification status
             for force in data["dimension_forces"]:
                 force["_from_kb"] = True
                 force["validated"] = True
-
                 source_url = (force.get("source_url") or "").strip()
-                # Use real verification result instead of blindly trusting
                 force["url_verified"] = _kb_url_status.get(source_url, False) if source_url else False
-
-                # Match force to KB signal — try source_url first, then title
                 force_title = (force.get("trend") or "").strip().lower()
                 matched_sig = None
                 for sig in kb_signals:
@@ -1376,17 +1329,14 @@ def _generate_foresight_from_kb(
                         sig_title = (sig.get("title") or "").strip().lower()
                         if sig_title and (sig_title in force_title or force_title in sig_title):
                             matched_sig = sig
-                            # Also fix the source_url to use the verified KB URL
                             if sig.get("source_url"):
                                 force["source_url"] = sig["source_url"]
                                 force["url_verified"] = _kb_url_status.get(sig["source_url"], False)
                             break
-
                 if matched_sig:
                     kb_supporting = matched_sig.get("supporting_sources", [])
                     if kb_supporting and not force.get("supporting_sources"):
                         force["supporting_sources"] = kb_supporting
-                    # Set verified_supporting_sources with real verification status
                     force["verified_supporting_sources"] = [
                         {**ss, "url_verified": _kb_url_status.get((ss.get("url") or "").strip(), False)}
                         for ss in (force.get("supporting_sources") or kb_supporting)
@@ -1395,7 +1345,6 @@ def _generate_foresight_from_kb(
                     force["source_count"] = 1 + len(force["verified_supporting_sources"])
                     if matched_sig.get("description"):
                         force["_kb_description"] = matched_sig["description"]
-                    # Carry over lifecycle fields from KB signal if force lacks them
                     for lc_field in ("lifecycle_stage", "trend_momentum", "action_timing"):
                         if matched_sig.get(lc_field) and not force.get(lc_field):
                             force[lc_field] = matched_sig[lc_field]
@@ -1404,259 +1353,25 @@ def _generate_foresight_from_kb(
                     force["source_count"] = 1
                     force["verified_supporting_sources"] = []
 
-            # Drop forces whose primary URL is dead (keep forces with no URL — they may be valid synthesized insights)
             _original_count = len(data["dimension_forces"])
-            data["dimension_forces"] = [
-                f for f in data["dimension_forces"]
-                if f.get("url_verified") is True or not (f.get("source_url") or "").strip()
-            ]
+            data["dimension_forces"] = [f for f in data["dimension_forces"] if f.get("url_verified") is True or not (f.get("source_url") or "").strip()]
             _dropped = _original_count - len(data["dimension_forces"])
             if _dropped:
                 print(f"   🗑️ [KB Synthesis] Dropped {_dropped} forces with dead primary URLs")
 
-            # Add metadata
             data["fp_themes_used"] = domain_config["fp_themes"]
-            data["model"] = model_name
+            data["model"] = used_model
             data["time_ms"] = elapsed
             data["domain"] = domain
-            data["kb_first"] = True  # Flag: this came from KB-first path
+            data["kb_first"] = True
             data["kb_signals_used"] = len(kb_signals)
-
-            n_forces = len(data.get("dimension_forces", []))
-            print(f"   📚 [KB Synthesis] {model_name} succeeded: {n_forces} forces from {len(kb_signals)} KB signals "
-                  f"({'climate' if data.get('climate_exposure') else 'no climate'}) ({elapsed}ms)")
+            print(f"   📚 [KB Synthesis] {used_model} succeeded: {len(data.get('dimension_forces', []))} forces from {len(kb_signals)} KB signals ({elapsed}ms)")
             return data
-
-        except json.JSONDecodeError as je:
-            elapsed = int((time.time() - t0) * 1000)
-            print(f"   ⚠️ [KB Synthesis] {model_name} JSON parse failed ({elapsed}ms): {je}")
-            continue
         except Exception as e:
             elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
             print(f"   ❌ [KB Synthesis] {model_name} failed ({elapsed}ms): {e}")
             continue
 
-    # Attempt 3: Claude Sonnet 4.6 backup (independent provider — survives Google quota)
-    anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if anthropic_key:
-        try:
-            SONNET_MODEL = "claude-sonnet-4-6"
-            print(f"   📚 [KB Synthesis] Gemini models exhausted — trying backup {SONNET_MODEL} for {company_name}...")
-            t0 = time.time()
-            claude_client = anthropic.Anthropic(api_key=anthropic_key)
-            response = claude_client.messages.create(
-                model=SONNET_MODEL,
-                max_tokens=8000,
-                thinking={
-                    "type": "enabled",
-                    "budget_tokens": 3000,
-                },
-                messages=[{"role": "user", "content": prompt}],
-            )
-            text_parts = []
-            for block in response.content:
-                if block.type == "text":
-                    text_parts.append(block.text)
-            text = "\n".join(text_parts).strip()
-            elapsed = int((time.time() - t0) * 1000)
-
-            if not text or len(text) < 100:
-                print(f"   ⚠️ [KB Synthesis] {SONNET_MODEL} returned insufficient data ({len(text) if text else 0} chars, {elapsed}ms)")
-            else:
-                json_str = _extract_json_from_text(text)
-                if not json_str:
-                    print(f"   ⚠️ [KB Synthesis] Could not extract JSON from {SONNET_MODEL} response ({elapsed}ms)")
-                else:
-                    data = json.loads(json_str, strict=False)
-                    if not data.get("dimension_forces") or not data.get("scenarios"):
-                        print(f"   ⚠️ [KB Synthesis] {SONNET_MODEL} returned incomplete structure ({elapsed}ms)")
-                    else:
-                        # Re-verify KB source URLs
-                        _kb_urls_to_check = set()
-                        for force in data["dimension_forces"]:
-                            _url = (force.get("source_url") or "").strip()
-                            if _url and _url.startswith("http"):
-                                _kb_urls_to_check.add(_url)
-                        for sig in kb_signals:
-                            for ss in sig.get("supporting_sources", []):
-                                _ss_url = (ss.get("url") or "").strip()
-                                if _ss_url and _ss_url.startswith("http"):
-                                    _kb_urls_to_check.add(_ss_url)
-
-                        _kb_url_status = {}
-                        if _kb_urls_to_check:
-                            print(f"   🔍 [KB Re-verify] Checking {len(_kb_urls_to_check)} KB URLs for {company_name}...")
-                            _rv_t0 = time.time()
-                            with concurrent.futures.ThreadPoolExecutor(max_workers=6) as _rv_pool:
-                                _rv_futures = {
-                                    _rv_pool.submit(_verify_foresight_url, u, 6): u
-                                    for u in _kb_urls_to_check
-                                }
-                                for fut in concurrent.futures.as_completed(_rv_futures):
-                                    _u = _rv_futures[fut]
-                                    try:
-                                        _kb_url_status[_u] = fut.result()
-                                    except Exception:
-                                        _kb_url_status[_u] = False
-                            _alive = sum(1 for v in _kb_url_status.values() if v)
-                            _dead = len(_kb_url_status) - _alive
-                            print(f"   🔍 [KB Re-verify] {_alive} alive, {_dead} dead ({int((time.time()-_rv_t0)*1000)}ms)")
-
-                        # Enrich forces with KB data and apply real verification status
-                        for force in data["dimension_forces"]:
-                            force["_from_kb"] = True
-                            _f_url = (force.get("source_url") or "").strip()
-                            if _f_url in _kb_url_status:
-                                force["url_verified"] = _kb_url_status[_f_url]
-
-                        # Drop forces whose primary URL is confirmed dead
-                        orig_count = len(data["dimension_forces"])
-                        data["dimension_forces"] = [
-                            f for f in data["dimension_forces"]
-                            if f.get("url_verified", True) is not False
-                        ]
-                        _dropped = orig_count - len(data["dimension_forces"])
-                        if _dropped:
-                            print(f"   🗑️ [KB Synthesis] Dropped {_dropped} forces with dead primary URLs")
-
-                        n_forces = len(data["dimension_forces"])
-                        n_scenarios = len(data.get("scenarios", []))
-                        print(f"   📚 [KB Synthesis] {SONNET_MODEL} succeeded: {n_forces} forces from {len(kb_signals)} KB signals "
-                              f"+ {n_scenarios} scenarios ({elapsed}ms)")
-                        return data
-        except json.JSONDecodeError as je:
-            elapsed = int((time.time() - t0) * 1000)
-            print(f"   ⚠️ [KB Synthesis] {SONNET_MODEL} JSON parse failed ({elapsed}ms): {je}")
-        except Exception as e:
-            elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
-            print(f"   ❌ [KB Synthesis] {SONNET_MODEL} failed ({elapsed}ms): {e}")
-
-    return None
-
-
-
-
-def _soften_generated_foresight_language(text: str) -> str:
-    """Downgrade deterministic foresight wording in generated force-card fields."""
-    if not isinstance(text, str):
-        return text
-    replacements = [
-        (r"\bmust\s+act\s+now\b", "should evaluate whether near-term action is warranted"),
-        (r"\bmust\b", "should evaluate whether it needs to"),
-        (r"\bwill\s+need\s+to\b", "may need to"),
-        (r"\bwill\s+force\b", "may increase pressure to evaluate"),
-        (r"\bforces?\b", "may increase pressure on"),
-        (r"\brequires?\s+([^\.]{0,80})\s+to\b", r"may require \1 to assess whether it needs to"),
-        (r"\bnot\s+optional\b", "should be evaluated as a potential priority"),
-        (r"\bexistential\s+requirements?\b", "potentially material requirements if in scope"),
-        (r"\blast[-\s]?chance\s+window\b", "near-term evaluation window"),
-    ]
-    out = text
-    for pat, repl in replacements:
-        out = re.sub(pat, repl, out, flags=re.I)
-    return re.sub(r"\s{2,}", " ", out).strip()
-def _sanitize_foresight_data(foresight_data: dict, domain: str = "", company_name: str = "") -> dict:
-    """Sanitize generated foresight data before report rendering/storage.
-
-    New scans and refreshes must be clean-by-construction. This function is part
-    of the normal generation path, not the legacy database Sanitizer.
-    """
-    if not isinstance(foresight_data, dict):
-        return foresight_data
-    cleaned = dict(foresight_data)
-
-    # Classify and sanitize source-card-like lists.
-    for field in ["dimension_forces", "future_insights", "foresight_links", "foresight_evidence", "source_cards"]:
-        if isinstance(cleaned.get(field), list):
-            cleaned[field] = [classify_generation_context(x) if isinstance(x, dict) else x for x in cleaned[field]]
-            cleaned[field] = sanitize_foresight_collection(cleaned[field], domain=domain, company_name=company_name)
-            for item in cleaned[field]:
-                if isinstance(item, dict):
-                    for key in ["impact_on_company", "proposal_angle", "possible_relevance", "insight", "recommended_action", "assessment"]:
-                        if isinstance(item.get(key), str):
-                            item[key] = _soften_generated_foresight_language(item[key])
-
-    # Future Insight and narrative foresight fields must be modal/conditional.
-    for field in ["future_insight", "future_insights_text", "climate_exposure", "cross_impact_chain"]:
-        if isinstance(cleaned.get(field), str):
-            cleaned[field], _issues = sanitize_future_insight(cleaned[field])
-
-    # Whole-record pass to catch nested source_says/possible_relevance and deadline issues.
-    cleaned = sanitize_report_foresight_fields(cleaned, domain=domain, company_name=company_name)
-    cleaned["foresight_sanitized"] = True
-    cleaned["clean_by_construction"] = True
-    return cleaned
-
-
-def generate_foresight(
-    company_name: str,
-    domain: str,
-    archetype: str,
-    reality_score: int,
-    financial_index: int | None,
-    top_findings: list[dict],
-    kb_dimension_scores: dict | None = None,
-) -> dict | None:
-    """
-    Generate strategic foresight overlay for a company scan.
-
-    KB-only approach: All foresight data comes from the pre-validated Foresight KB.
-    No live Google Search is performed during per-company analysis — this eliminates
-    hallucination risk. New data enters the system only through the harvester's
-    controlled pipeline (URL verification + credibility checks + deduplication).
-
-    When a theme has no KB data, get_kb_signals_for_themes() automatically
-    substitutes signals from the nearest related theme (THEME_FALLBACK_MAP).
-    """
-    gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-    if not gemini_key:
-        print("   ⚠️ [Foresight] No GEMINI_API_KEY — skipping")
-        return None
-
-    domain_config = DOMAIN_TO_FORESIGHT.get(domain, DOMAIN_TO_FORESIGHT["Other"])
-
-    # --- FORESIGHT KB-ONLY PATH ---
-    # All foresight data comes from the pre-validated KB (with near-fit fallback).
-    # No live Google Search — searches happen only at harvest time.
-    kb_signals = []
-    try:
-        from foresight_harvester import get_kb_signals_for_themes
-        kb_signals = get_kb_signals_for_themes(domain_config["fp_themes"])
-    except Exception as kb_err:
-        print(f"   ⚠️ [Foresight KB] Could not load KB signals: {kb_err}")
-
-    if len(kb_signals) < _MIN_KB_SIGNALS_FOR_SYNTHESIS:
-        print(f"   ⚠️ [Foresight KB-Only] Only {len(kb_signals)} KB signals available "
-              f"(need {_MIN_KB_SIGNALS_FOR_SYNTHESIS}) — foresight skipped. "
-              f"Run the harvester to populate the Foresight KB.")
-        return None
-
-    # Log near-fit substitutions for transparency
-    fallback_count = sum(1 for s in kb_signals if s.get("_kb_fallback_from"))
-    if fallback_count:
-        print(f"   📚 [Foresight KB-Only] {len(kb_signals)} KB signals "
-              f"({fallback_count} from near-fit themes) — synthesis-only path")
-    else:
-        print(f"   📚 [Foresight KB-Only] {len(kb_signals)} KB signals available — synthesis-only path")
-
-    # Quick-verify KB signal URLs are still alive
-    verified_signals = _quick_verify_kb_signals(kb_signals)
-
-    if len(verified_signals) < _MIN_KB_SIGNALS_FOR_SYNTHESIS:
-        print(f"   ⚠️ [Foresight KB-Only] Only {len(verified_signals)} signals alive "
-              f"(need {_MIN_KB_SIGNALS_FOR_SYNTHESIS}) — foresight skipped. "
-              f"Run the harvester to refresh stale KB data.")
-        return None
-
-    kb_result = _generate_foresight_from_kb(
-        company_name, domain, archetype, reality_score,
-        financial_index, top_findings, domain_config,
-        verified_signals, gemini_key,
-    )
-    if kb_result:
-        return kb_result
-
-    print(f"   ❌ [Foresight KB-Only] Synthesis failed for {company_name} — foresight skipped")
     return None
 
 
@@ -1796,7 +1511,7 @@ def generate_foresight_summary(
     """
     Generate a 250-300 word "Future Insight" narrative from foresight data.
 
-    Model chain: Sonnet 4.6 → Gemini 3.1 Pro → Gemini 2.5 Pro.
+    Model chain: Sonnet 4.6 → GPT-5.5 fallback.
     Returns (summary_text, model_used).
     Returns ("", "") on failure.
     """
@@ -1935,300 +1650,35 @@ Output only the prose text. Nothing else."""
                     text += "\n\n" + _basis_line
                 return text, SONNET_MODEL
 
-            print(f"   ⚠️ [Future Insight] Sonnet too short ({wc} words) — falling back to Gemini")
+            print(f"   ⚠️ [Future Insight] Sonnet too short ({wc} words) — falling back to GPT-5.5")
         except Exception as e:
             elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
             print(f"   ❌ [Future Insight] {SONNET_MODEL} failed ({elapsed}ms): {e}")
 
-    # --- Attempt 2-3: Gemini fallbacks ---
+    # --- Attempt 2: GPT-5.5 fallback ---
     try:
-        client = get_gemini_client()
-    except ValueError:
-        print("   ⚠️ [Future Insight] No GEMINI_API_KEY — skipping Gemini fallbacks")
-        return "", ""
-
-    gemini_models = [
-        ("gemini-3.1-pro-preview", genai_types.GenerateContentConfig(
-            temperature=0.8,
-            max_output_tokens=4000,
-            thinking_config=genai_types.ThinkingConfig(thinking_budget=2048),
-        ), 90),
-        ("gemini-2.5-pro", genai_types.GenerateContentConfig(
-            temperature=0.8,
-            max_output_tokens=4000,
-            thinking_config=genai_types.ThinkingConfig(thinking_budget=1024),
-        ), 60),
-    ]
-
-    for model_name, config, timeout_sec in gemini_models:
-        try:
-            t0 = time.time()
-            response = call_with_503_backoff(
-                lambda mn=model_name, cfg=config: client.models.generate_content(
-                    model=mn, contents=prompt, config=cfg,
-                ),
-                label=f"Future Insight {model_name}",
-                model=model_name,
-                timeout=timeout_sec,
-            )
-            text = (response.text or "").strip()
-            text = re.sub(r'\[([^\]]+)\]\(https?://[^)]+\)', r'\1', text)
-            wc = len(text.split())
-            elapsed = int((time.time() - t0) * 1000)
-            print(f"   [Future Insight] {model_name}: {wc} words ({elapsed}ms)")
-
-            if text and wc >= 100:
-                if _basis_line:
-                    text += "\n\n" + _basis_line
-                return text, model_name
-
-            print(f"   ⚠️ [Future Insight] {model_name} too short ({wc} words) — trying next")
-        except Exception as e:
-            elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
-            print(f"   ❌ [Future Insight] {model_name} failed ({elapsed}ms): {e}")
-            continue
+        t0 = time.time()
+        text = call_openai_text(prompt, model="gpt-5.5", max_output_tokens=4000, timeout=90)
+        text = re.sub(r'\[([^\]]+)\]\(https?://[^)]+\)', r'\1', text).strip()
+        wc = len(text.split())
+        elapsed = int((time.time() - t0) * 1000)
+        print(f"   [Future Insight] gpt-5.5: {wc} words ({elapsed}ms)")
+        if text and wc >= 100:
+            if _basis_line:
+                text += "\n\n" + _basis_line
+            return text, "gpt-5.5"
+    except Exception as e:
+        elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
+        print(f"   ❌ [Future Insight] gpt-5.5 failed ({elapsed}ms): {e}")
 
     return "", ""
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# FORESIGHT VALIDATION — URL verification + reality-check pass
-# ═══════════════════════════════════════════════════════════════════════════════
-
-# Valid source types that the SIFT protocol considers credible
-_CREDIBLE_SOURCE_TYPES = {"academic", "think_tank", "industry_analyst", "government", "news"}
-
-# Domain credibility lists — imported from shared source_quality module
-_HIGH_CREDIBILITY_DOMAINS = HIGH_CREDIBILITY_DOMAINS
-_LOW_CREDIBILITY_DOMAINS = LOW_CREDIBILITY_DOMAINS
-
-
-_BROWSER_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/131.0.0.0 Safari/537.36"
-)
-
-# Domains that return 403 for automated requests but the URL is still real.
-# These are behind paywalls, Cloudflare, or aggressive bot protection.
-_PAYWALL_DOMAINS = {
-    "ft.com", "wsj.com", "economist.com", "bloomberg.com", "nytimes.com",
-    "gartner.com", "forrester.com", "idc.com", "hbr.org",
-    "mckinsey.com", "bcg.com", "bain.com", "deloitte.com",
-    "pwc.com", "ey.com", "kpmg.com", "accenture.com",
-    "sciencedirect.com", "nature.com", "ieee.org", "acm.org",
-    "pitchbook.com", "kauppalehti.fi", "talouselama.fi",
-    "cnbc.com", "di.se", "e24.no",
-}
-
-
-def _is_paywall_domain(url):
-    """Check if a URL belongs to a known paywalled/bot-blocking domain."""
-    try:
-        from urllib.parse import urlparse
-        domain = urlparse(url).netloc.lower().replace("www.", "")
-        return any(domain == d or domain.endswith("." + d) for d in _PAYWALL_DOMAINS)
-    except Exception:
-        return False
-
-
-_FORESIGHT_SOFT_404_RE = re.compile(
-    r'page\s*not\s*found|'
-    r'404\s*(error|not\s*found)|'
-    r'not\s*found\s*error|'
-    r'could\s*n.?t\s*(find|locate)\s*(this|that|the)?\s*page|'
-    r'no\s*longer\s*(available|exists)|'
-    r'has\s*been\s*(removed|deleted|moved)|'
-    r'this\s*page\s*(does\s*n.?t|doesn.?t)\s*exist|'
-    r'requested\s*page\s*(was|is)\s*not\s*found',
-    re.IGNORECASE
-)
-
-
-def _verify_foresight_url(url, timeout=8):
-    """
-    Verify a single foresight URL exists via HTTP GET request.
-    Detects soft 404s (pages returning HTTP 200 but showing 'not found' content).
-    Returns True for 403 on known paywalled domains (URL exists but is gated).
-    Returns False for 404, 5xx, soft 404s, timeouts, or connection errors.
-    """
-    if not url or not url.startswith("http"):
-        return False
-    paywall = _is_paywall_domain(url)
-    try:
-        import requests as http_requests
-        resp = http_requests.get(
-            url, timeout=timeout, allow_redirects=True, stream=True,
-            headers={"User-Agent": _BROWSER_UA},
-        )
-
-        if resp.status_code >= 400:
-            resp.close()
-            if paywall and resp.status_code == 403:
-                return True
-            return False
-
-        # Read first 10KB for soft 404 detection
-        body_chunk = ""
-        try:
-            raw = resp.raw.read(10240)
-            body_chunk = raw.decode("utf-8", errors="ignore").lower()
-        except Exception:
-            pass
-        resp.close()
-
-        # Soft 404 check
-        if body_chunk and _FORESIGHT_SOFT_404_RE.search(body_chunk):
-            return False
-
-        return True
-    except Exception:
-        return False
-
-
-def _get_url_domain(url):
-    """Extract the domain from a URL, stripping www. prefix."""
-    if not url:
-        return ""
-    try:
-        from urllib.parse import urlparse
-        parsed = urlparse(url)
-        domain = parsed.netloc
-        if domain.startswith("www."):
-            domain = domain[4:]
-        return domain.lower()
-    except Exception:
-        return ""
-
-
-def validate_foresight_urls(foresight_data, max_workers=6):
-    """
-    URL Validation Gate for foresight signals.
-
-    Verifies source_url in each dimension_force via parallel HEAD/GET probes.
-    Adds 'url_verified' field (True/False) to each force.
-    Returns (foresight_data, verified_count, dead_count).
-    """
-    if not foresight_data or not foresight_data.get("dimension_forces"):
-        return _sanitize_foresight_data(foresight_data, domain=domain, company_name=company_name), 0, 0
-
-    start = time.time()
-    forces = foresight_data["dimension_forces"]
-
-    # Collect unique URLs to check
-    url_map = {}
-    for force in forces:
-        url = (force.get("source_url") or "").strip()
-        if url and url.startswith("http") and url not in url_map:
-            url_map[url] = None
-
-    # Also collect supporting source URLs
-    for force in forces:
-        for ss in _dict_items_only(force.get("supporting_sources", []), "supporting_sources"):
-            ss_url = (ss.get("url") or "").strip()
-            if ss_url and ss_url.startswith("http") and ss_url not in url_map:
-                url_map[ss_url] = None
-
-    if not url_map:
-        for force in forces:
-            force["url_verified"] = False
-        return _sanitize_foresight_data(foresight_data, domain=domain, company_name=company_name), 0, 0
-
-    # Verify in parallel
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_url = {executor.submit(_verify_foresight_url, url): url for url in url_map}
-        for future in concurrent.futures.as_completed(future_to_url):
-            url = future_to_url[future]
-            try:
-                url_map[url] = future.result()
-            except Exception:
-                url_map[url] = False
-
-    # Apply results to forces (primary URL)
-    verified_count = 0
-    dead_count = 0
-    for force in forces:
-        url = (force.get("source_url") or "").strip()
-        if url and url in url_map:
-            force["url_verified"] = url_map[url]
-            if url_map[url]:
-                verified_count += 1
-            else:
-                dead_count += 1
-        else:
-            force["url_verified"] = False
-
-        # Apply results to supporting sources
-        verified_supporting = []
-        for ss in _dict_items_only(force.get("supporting_sources", []), "supporting_sources"):
-            ss_url = (ss.get("url") or "").strip()
-            if ss_url and ss_url in url_map:
-                ss["url_verified"] = url_map[ss_url]
-                if url_map[ss_url]:
-                    verified_supporting.append(ss)
-            else:
-                ss["url_verified"] = False
-        force["verified_supporting_sources"] = verified_supporting
-
-    elapsed = int((time.time() - start) * 1000)
-    total = verified_count + dead_count
-    total_supporting = sum(len(f.get("verified_supporting_sources", [])) for f in forces)
-    print(f"   🔗 [Foresight URL Validation] {verified_count}/{total} primary URLs verified, "
-          f"{total_supporting} supporting URLs verified, {dead_count} dead/unreachable ({elapsed}ms)")
-
-    return _sanitize_foresight_data(foresight_data, domain=domain, company_name=company_name), verified_count, dead_count
-
-
-def _build_source_retry_prompt(failed_forces, domain):
-    """Build a targeted prompt to find real, verifiable sources for forces that failed URL validation."""
-    forces_desc = ""
-    for i, force in enumerate(failed_forces, 1):
-        forces_desc += (
-            f"{i}. Trend: \"{force.get('trend', '?')}\"\n"
-            f"   KB Dimension: {force.get('kb_dimension', '?')}\n"
-            f"   FP Theme: {force.get('fp_theme', '?')}\n"
-            f"   Original (failed) URL: {force.get('source_url', 'none')}\n\n"
-        )
-
-    return f"""You are a research assistant. Your ONLY task is to find REAL, VERIFIABLE URLs for the following industry trends/forces in the {domain} sector.
-
-The original analysis identified these forces but the source URLs could not be verified (they returned 404 or were unreachable). You must find REAL sources that confirm these trends exist.
-
-FORCES NEEDING VERIFIED SOURCES:
-{forces_desc}
-
-RULES:
-- Use web search to find REAL articles, reports, or publications that discuss each trend.
-- Each source MUST be a real, currently accessible URL — not fabricated or guessed.
-- ONLY use authoritative sources from these domains: gartner.com, forrester.com, mckinsey.com, bcg.com, deloitte.com, pwc.com, ey.com, kpmg.com, accenture.com, hbr.org, weforum.org, idc.com, reuters.com, ft.com, bloomberg.com, economist.com, oecd.org, imf.org, worldbank.org, ec.europa.eu, nature.com, sciencedirect.com, arxiv.org, ieee.org, and established sector-specific analyst firms.
-- Do NOT use blogs, press releases, regional tech news sites, content farms, outsourcing directories, or marketing sites.
-- For EACH force, provide the primary source URL plus 2 additional corroborating sources from different organizations.
-- If you genuinely cannot find a verifiable source from an authoritative domain, set "found": false for that entry.
-
-RETURN STRICT JSON ONLY:
-{{
-  "retry_results": [
-    {{
-      "trend": "exact trend name from above",
-      "found": true,
-      "source_url": "https://real-verified-url...",
-      "source_type": "academic|think_tank|industry_analyst|government|news",
-      "supporting_sources": [
-        {{"url": "https://...", "source_type": "...", "title": "Brief description"}},
-        {{"url": "https://...", "source_type": "...", "title": "Brief description"}}
-      ],
-      "osint_validation": "How you verified this (reference specific source names)"
-    }}
-  ]
-}}"""
 
 
 def retry_failed_sources(foresight_data, domain, max_retries=1):
     """
     Source Retry Loop — re-searches for verifiable sources when initial URLs fail.
 
-    For each dimension_force where url_verified=False, makes a targeted Gemini call
-    with Google Search grounding to find real, accessible URLs for the same trend.
+    For each dimension_force where url_verified=False, makes targeted GPT/Claude web-search calls to find real, accessible URLs for the same trend.
 
     Updates forces in-place with new URLs and re-verifies them.
     Returns (foresight_data, newly_verified_count).
@@ -2243,57 +1693,20 @@ def retry_failed_sources(foresight_data, domain, max_retries=1):
         print("   [Source Retry] All sources already verified — no retry needed")
         return _sanitize_foresight_data(foresight_data, domain=domain, company_name=company_name), 0
 
-    try:
-        client = get_gemini_client()
-    except ValueError:
-        return _sanitize_foresight_data(foresight_data, domain=domain, company_name=company_name), 0
-
     print(f"   🔄 [Source Retry] {len(failed_forces)}/{len(forces)} forces have unverified sources — attempting re-search...")
-    _safety = [
-        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-    ]
-
     prompt = _build_source_retry_prompt(failed_forces, domain)
-
-    models = [
-        ("gemini-3.1-pro-preview", genai_types.GenerateContentConfig(
-            tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
-            safety_settings=_safety,
-            temperature=0.3,
-            thinking_config=genai_types.ThinkingConfig(thinking_budget=2048),
-            max_output_tokens=6000,
-        ), 90),
-        ("gemini-2.5-pro", genai_types.GenerateContentConfig(
-            tools=[genai_types.Tool(google_search=genai_types.GoogleSearch())],
-            safety_settings=_safety,
-            temperature=0.3,
-            thinking_config=genai_types.ThinkingConfig(thinking_budget=1024),
-            max_output_tokens=6000,
-        ), 60),
-    ]
-
     retry_data = None
-    for model_name, config, timeout_sec in models:
+    for model_name, provider, timeout_sec in (("claude-sonnet-4-6", "anthropic", 90), ("gpt-5.5", "openai", 90)):
         try:
             t0 = time.time()
-            response = call_with_503_backoff(
-                lambda mn=model_name, cfg=config: client.models.generate_content(
-                    model=mn, contents=prompt, config=cfg,
-                ),
-                label=f"Source Retry {model_name}",
-                model=model_name,
-                timeout=timeout_sec,
-            )
-            text = response.text if hasattr(response, "text") else ""
+            if provider == "anthropic":
+                text = call_anthropic_text(prompt, model=model_name, max_tokens=6000, timeout=timeout_sec, web_search=True, max_searches=6, thinking_budget=2000)
+            else:
+                text = call_openai_text(prompt, model=model_name, max_output_tokens=6000, timeout=timeout_sec, web_search=True, search_context_size="medium")
             elapsed = int((time.time() - t0) * 1000)
-
             if not text or len(text) < 50:
                 print(f"   ⚠️ [Source Retry] {model_name} returned insufficient data ({elapsed}ms)")
                 continue
-
             json_str = _extract_json_from_text(text)
             if json_str:
                 retry_data = json.loads(json_str, strict=False)

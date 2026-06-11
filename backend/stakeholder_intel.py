@@ -1,7 +1,7 @@
 """
 stakeholder_intel.py — Enrich key_people with publicly available LinkedIn insights.
 
-Uses Gemini with Google Search grounding to find what key stakeholders have
+Uses GPT/Claude web search to find what key stakeholders have
 publicly shared on LinkedIn (profile summaries, posts, articles, career history).
 
 CRITICAL GUARDRAILS:
@@ -12,16 +12,15 @@ CRITICAL GUARDRAILS:
 """
 
 import json
-import os
 import re
 import time
 
-from gemini_backoff import call_with_503_backoff
+from llm_clients import call_anthropic_text, call_openai_text
 
 
 def _extract_json(text: str) -> dict | None:
     """
-    Robustly extract a JSON object from Gemini's response.
+    Robustly extract a JSON object from a model response.
 
     Handles:
       - Pure JSON response
@@ -69,6 +68,47 @@ def _extract_json(text: str) -> dict | None:
                     continue
 
     return None
+
+
+def _run_stakeholder_search(prompt: str, label: str, max_tokens: int, timeout: int) -> tuple[str, str]:
+    """Run stakeholder web research with Claude first, GPT fallback."""
+    models = (
+        ("claude-sonnet-4-6", "anthropic", timeout),
+        ("gpt-5.5", "openai", timeout),
+    )
+    last_error = None
+    for model_name, provider, model_timeout in models:
+        try:
+            print(f"      🔍 [Stakeholder Intel] {label} via {model_name}...")
+            if provider == "anthropic":
+                text = call_anthropic_text(
+                    prompt,
+                    model=model_name,
+                    max_tokens=max_tokens,
+                    temperature=0.0,
+                    timeout=model_timeout,
+                    web_search=True,
+                    max_searches=8,
+                    thinking_budget=1500,
+                )
+            else:
+                text = call_openai_text(
+                    prompt,
+                    model=model_name,
+                    max_output_tokens=max_tokens,
+                    temperature=0.0,
+                    timeout=model_timeout,
+                    web_search=True,
+                    search_context_size="medium",
+                )
+            if text:
+                return text, model_name
+        except Exception as exc:
+            last_error = exc
+            print(f"      ❌ [Stakeholder Intel] {model_name} failed for {label}: {exc}")
+    if last_error:
+        print(f"      ❌ [Stakeholder Intel] All models failed for {label}: {last_error}")
+    return "", ""
 
 
 def _build_batch_prompt(people: list[dict], company_name: str) -> str:
@@ -217,14 +257,11 @@ If NOTHING was found or identity could not be verified, respond with ONLY:
 {{"found": false, "headline": null, "verified_role": null, "still_at_company": null, "summary": "No public professional insights found for this person.", "career_moves": [], "topics": [], "notable_posts": []}}"""
 
 
-def enrich_single_person(person: dict, company_name: str, gemini_key: str) -> dict:
+def enrich_single_person(person: dict, company_name: str) -> dict:
     """
     Enrich a single key_person dict with LinkedIn insights.
     Returns the person dict with an added 'linkedin_insights' field.
     """
-    from google.genai import types
-    from gemini_client import get_gemini_client
-
     name = person.get("name", "")
     role = person.get("role", "")
     if not name:
@@ -236,91 +273,12 @@ def enrich_single_person(person: dict, company_name: str, gemini_key: str) -> di
 
     prompt = _build_person_prompt(name, role, company_name)
 
-    response_text = ""
-    model_used = ""
-
-    # Primary: Gemini 2.5 Pro with Google Search grounding.
-    if not response_text:
-        _safety = [
-            {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
-            {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
-            {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
-            {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
-        ]
-        try:
-            print(f"      🔍 [Stakeholder Intel] Searching for {name} ({role}) via gemini-2.5-pro...")
-            client = get_gemini_client()
-            resp = call_with_503_backoff(
-                lambda: client.models.generate_content(
-                    model="gemini-2.5-pro",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        tools=[{'google_search': {}}],
-                        temperature=0.0,
-                        thinking_config=types.ThinkingConfig(thinking_budget=1024),
-                        max_output_tokens=4000,
-                        safety_settings=_safety,
-                    )
-                ),
-                label=f"Stakeholder Intel {name} gemini-2.5-pro",
-                model="gemini-2.5-pro",
-                timeout=60,
-            )
-            response_text = resp.text or ""
-            model_used = "gemini-2.5-pro"
-        except Exception as g25_err:
-            print(f"      ❌ [Stakeholder Intel] Gemini 2.5 Pro failed for {name}: {g25_err}")
-
-    # Escalation: Gemini 3.1 Pro with Google Search for hard/ambiguous cases.
-    if not response_text:
-        try:
-            print(f"      🔄 [Stakeholder Intel] Escalating to gemini-3.1-pro-preview for {name}...")
-            client = get_gemini_client()
-            resp = call_with_503_backoff(
-                lambda: client.models.generate_content(
-                    model="gemini-3.1-pro-preview",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        tools=[{'google_search': {}}],
-                        temperature=0.1,
-                        thinking_config=types.ThinkingConfig(thinking_budget=1024),
-                        max_output_tokens=4000,
-                        safety_settings=_safety,
-                    )
-                ),
-                label=f"Stakeholder Intel {name} gemini-3.1-pro-preview",
-                model="gemini-3.1-pro-preview",
-                timeout=60,
-            )
-            response_text = resp.text or ""
-            model_used = "gemini-3.1-pro-preview"
-        except Exception as g31_err:
-            print(f"      ❌ [Stakeholder Intel] Gemini 3.1 Pro failed for {name}: {g31_err}")
-
-    # Escape hatch: Gemini 3.5 Flash
-    if not response_text:
-        try:
-            print(f"      🔄 [Stakeholder Intel] Trying gemini-3.5-flash escape hatch for {name}...")
-            client = get_gemini_client()
-            resp = call_with_503_backoff(
-                lambda: client.models.generate_content(
-                    model="gemini-3.5-flash",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        tools=[{'google_search': {}}],
-                        temperature=0.0,
-                        max_output_tokens=4000,
-                        safety_settings=_safety,
-                    )
-                ),
-                label=f"Stakeholder Intel {name} gemini-3.5-flash",
-                model="gemini-3.5-flash",
-                timeout=45,
-            )
-            response_text = resp.text or ""
-            model_used = "gemini-3.5-flash"
-        except Exception as flash_err:
-            print(f"      ❌ [Stakeholder Intel] All models failed for {name}: {flash_err}")
+    response_text, model_used = _run_stakeholder_search(
+        prompt,
+        f"Searching for {name} ({role})",
+        max_tokens=4000,
+        timeout=75,
+    )
 
     # Parse response
     if not response_text:
@@ -400,104 +358,22 @@ def enrich_single_person(person: dict, company_name: str, gemini_key: str) -> di
     return person
 
 
-def _enrich_batch(people_with_names: list[dict], company_name: str, gemini_key: str) -> bool:
+def _enrich_batch(people_with_names: list[dict], company_name: str) -> bool:
     """
-    Enrich multiple people in a SINGLE Gemini API call (batched).
+    Enrich multiple people in a single web-search model call (batched).
 
     Returns True if batch succeeded and all people were enriched,
     False if batch failed (caller should fall back to per-person calls).
     """
-    from google.genai import types
-    from gemini_client import get_gemini_client
-
     prompt = _build_batch_prompt(people_with_names, company_name)
     names_str = ", ".join(p.get("name", "?") for p in people_with_names)
 
-    response_text = ""
-    model_used = ""
-
-    # Primary: Gemini 2.5 Pro with Google Search grounding.
-    if not response_text:
-        _safety = [
-            {'category': 'HARM_CATEGORY_HARASSMENT', 'threshold': 'BLOCK_NONE'},
-            {'category': 'HARM_CATEGORY_HATE_SPEECH', 'threshold': 'BLOCK_NONE'},
-            {'category': 'HARM_CATEGORY_SEXUALLY_EXPLICIT', 'threshold': 'BLOCK_NONE'},
-            {'category': 'HARM_CATEGORY_DANGEROUS_CONTENT', 'threshold': 'BLOCK_NONE'}
-        ]
-        try:
-            print(f"      🔍 [Stakeholder Intel] Batched search for {len(people_with_names)} people ({names_str}) via gemini-2.5-pro...")
-            client = get_gemini_client()
-            resp = call_with_503_backoff(
-                lambda: client.models.generate_content(
-                    model="gemini-2.5-pro",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        tools=[{'google_search': {}}],
-                        temperature=0.0,
-                        thinking_config=types.ThinkingConfig(thinking_budget=1024),
-                        max_output_tokens=8000,
-                        safety_settings=_safety,
-                    )
-                ),
-                label=f"Stakeholder Intel batch gemini-2.5-pro",
-                model="gemini-2.5-pro",
-                timeout=90,
-            )
-            response_text = resp.text or ""
-            model_used = "gemini-2.5-pro"
-        except Exception as g25_err:
-            print(f"      ❌ [Stakeholder Intel] Batch Gemini 2.5 Pro failed: {g25_err}")
-
-    # Escalation: Gemini 3.1 Pro
-    if not response_text:
-        try:
-            print(f"      🔄 [Stakeholder Intel] Batch escalating to gemini-3.1-pro-preview...")
-            client = get_gemini_client()
-            resp = call_with_503_backoff(
-                lambda: client.models.generate_content(
-                    model="gemini-3.1-pro-preview",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        tools=[{'google_search': {}}],
-                        temperature=0.1,
-                        thinking_config=types.ThinkingConfig(thinking_budget=1024),
-                        max_output_tokens=8000,
-                        safety_settings=_safety,
-                    )
-                ),
-                label=f"Stakeholder Intel batch gemini-3.1-pro-preview",
-                model="gemini-3.1-pro-preview",
-                timeout=90,
-            )
-            response_text = resp.text or ""
-            model_used = "gemini-3.1-pro-preview"
-        except Exception as g31_err:
-            print(f"      ❌ [Stakeholder Intel] Batch Gemini 3.1 Pro failed: {g31_err}")
-
-    # Escape hatch: Gemini 3.5 Flash
-    if not response_text:
-        try:
-            print(f"      🔄 [Stakeholder Intel] Batch trying gemini-3.5-flash escape hatch...")
-            client = get_gemini_client()
-            resp = call_with_503_backoff(
-                lambda: client.models.generate_content(
-                    model="gemini-3.5-flash",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        tools=[{'google_search': {}}],
-                        temperature=0.0,
-                        max_output_tokens=8000,
-                        safety_settings=_safety,
-                    )
-                ),
-                label=f"Stakeholder Intel batch gemini-3.5-flash",
-                model="gemini-3.5-flash",
-                timeout=60,
-            )
-            response_text = resp.text or ""
-            model_used = "gemini-3.5-flash"
-        except Exception as flash_err:
-            print(f"      ❌ [Stakeholder Intel] Batch all models failed: {flash_err}")
+    response_text, model_used = _run_stakeholder_search(
+        prompt,
+        f"Batched search for {len(people_with_names)} people ({names_str})",
+        max_tokens=8000,
+        timeout=105,
+    )
 
     if not response_text:
         return False
@@ -560,34 +436,22 @@ def _enrich_batch(people_with_names: list[dict], company_name: str, gemini_key: 
     return True
 
 
-def enrich_key_people(company_name: str, key_people: list, gemini_key: str = None) -> list:
+def enrich_key_people(company_name: str, key_people: list, provider_key: str = None) -> list:
     """
     Enrich all key_people with LinkedIn insights.
 
-    Uses a BATCHED approach: all people are searched in a single Gemini API call
+    Uses a BATCHED approach: all people are searched in a single model call
     instead of one call per person. Falls back to per-person calls if batch fails.
 
     Args:
         company_name: The company name for search context
         key_people: List of dicts with name, role, relevance
-        gemini_key: Gemini API key (falls back to env vars if None)
+        provider_key: Deprecated compatibility parameter; API keys are read by the provider clients.
 
     Returns:
         The same list with 'linkedin_insights' added to each person
     """
     if not key_people:
-        return key_people
-
-    if not gemini_key:
-        gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("API_KEY")
-
-    if not gemini_key:
-        print(f"   ⚠️ [Stakeholder Intel] No Gemini API key — skipping LinkedIn enrichment")
-        for person in key_people:
-            person["linkedin_insights"] = {
-                "found": False,
-                "summary": "LinkedIn enrichment unavailable — no API key configured.",
-            }
         return key_people
 
     start = time.time()
@@ -616,7 +480,7 @@ def enrich_key_people(company_name: str, key_people: list, gemini_key: str = Non
 
     # Try batched approach first (1 API call for all people)
     if len(people_with_names) >= 2:
-        batch_ok = _enrich_batch(people_with_names, company_name, gemini_key)
+        batch_ok = _enrich_batch(people_with_names, company_name)
         if batch_ok:
             ms = int((time.time() - start) * 1000)
             found_count = sum(1 for p in key_people if p.get("linkedin_insights", {}).get("found"))
@@ -628,7 +492,7 @@ def enrich_key_people(company_name: str, key_people: list, gemini_key: str = Non
     # Fallback: per-person calls (also used when only 1 person)
     for person in people_with_names:
         if not person.get("linkedin_insights"):
-            enrich_single_person(person, company_name, gemini_key)
+            enrich_single_person(person, company_name)
 
     ms = int((time.time() - start) * 1000)
     found_count = sum(1 for p in key_people if p.get("linkedin_insights", {}).get("found"))

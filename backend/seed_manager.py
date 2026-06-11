@@ -11,7 +11,6 @@ import concurrent.futures
 from bs4 import BeautifulSoup
 from datetime import datetime
 from finland_list import TOP_100_COMPANIES, get_company_metadata
-from gemini_backoff import call_with_503_backoff
 from scanner_one import analyze_intent
 from scanner_two import x_ray_search, extract_json_from_text, run_self_analysis, financial_health_search, migrate_financial_sub_scores, _validate_key_people
 from knowledge_base import get_evolving_framework
@@ -20,10 +19,7 @@ from reality_check import validate_summary, validate_pitch, ai_fact_check_summar
 from general_summary import generate_general_summary, fact_check_general_summary
 from source_quality import manage_evidence_sources
 from prompts import PROMPT_VERSION, build_shared_guardrails
-from google import genai
-from google.genai import types
 import anthropic
-from gemini_client import get_gemini_client
 
 
 def _strip_tac_codes(text: str) -> str:
@@ -92,7 +88,6 @@ def scrape_strategic_content(base_url: str, company_name: str = "Unknown", subsi
         print(f"   [Scanner 1] ⛔ SCRAPING BLOCKED/FAILED for {base_url}.")
         print(f"   [Scanner 1] 🔄 Initiating AI Context Retrieval (Fallback) for '{company_name}'...")
         
-        api_key = clean_env_var(os.environ.get("API_KEY") or os.environ.get("GEMINI_API_KEY"))
         fallback_guardrails = _shared_prompt_guardrails(include_diagnostic=False, include_foresight=False)
         fallback_prompt = f"""
                 Write a cautious, clearly labelled fallback context summary for '{company_name}' (Domain: {base_url}).
@@ -111,16 +106,6 @@ def scrape_strategic_content(base_url: str, company_name: str = "Unknown", subsi
 
                 Output plain text only.
                 """
-        if api_key:
-             try:
-                client = get_gemini_client()
-                resp = client.models.generate_content(model='gemini-3.5-flash', contents=fallback_prompt)
-                if resp.text:
-                    print(f"   [Scanner 1] ✅ AI Successfully retrieved strategic context for {company_name}.")
-                    return f"--- AI GENERATED CONTEXT FOR {company_name} (SCRAPE FALLBACK — NOT VERIFIED EVIDENCE) ---\n{resp.text}"
-             except Exception as e:
-                print(f"   [Scanner 1] ⚠️ Gemini fallback failed: {e}. Trying Sonnet 4.6...")
-
         # Sonnet 4.6 fallback for AI context retrieval
         try:
             anthropic_key = clean_env_var(os.environ.get("ANTHROPIC_API_KEY", ""))
@@ -137,7 +122,14 @@ def scrape_strategic_content(base_url: str, company_name: str = "Unknown", subsi
                     print(f"   [Scanner 1] ✅ AI Context via Sonnet 4.6 for {company_name}.")
                     return f"--- AI GENERATED CONTEXT FOR {company_name} (SONNET FALLBACK) ---\n{text}"
         except Exception as e2:
-            print(f"   [Scanner 1] ❌ Sonnet fallback also failed: {e2}")
+            print(f"   [Scanner 1] ❌ Sonnet fallback failed: {e2}")
+        try:
+            text = _call_openai_text(fallback_prompt, model="gpt-5.5", max_output_tokens=2048, timeout=45)
+            if text:
+                print(f"   [Scanner 1] ✅ AI Context via GPT 5.5 for {company_name}.")
+                return f"--- AI GENERATED CONTEXT FOR {company_name} (GPT FALLBACK — NOT VERIFIED EVIDENCE) ---\n{text}"
+        except Exception as e3:
+            print(f"   [Scanner 1] ❌ GPT fallback also failed: {e3}")
 
         return f"Automatic scraping failed for {base_url}. Analyzing {company_name} based on general market knowledge."
 
@@ -325,7 +317,7 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as sub_executor:
                 reality_future = sub_executor.submit(
                     x_ray_search, company_name, company["url"],
-                    model_id="gemini-3.1-pro-preview", intent_score=intent_results["score"],
+                    model_id=None, intent_score=intent_results["score"],
                     previous_context=previous_context, max_research_loops=2,
                     subsidiaries=company.get("subsidiaries"),
                     time_budget=340,
@@ -530,7 +522,7 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
             else:
                 foresight_links = [l for l in foresight_links if isinstance(l, dict)]
 
-            # 4. SYNTHESIS (Claude Opus 4.7)
+            # 4. SYNTHESIS (Claude Opus 4.8 / GPT / Sonnet)
             summary_text = "Automated Analysis Complete."
             pitch_text = "Pitch unavailable."
             why_proposals = []
@@ -763,9 +755,7 @@ Respond with valid JSON only. Six fields required:
 Note: the summary value must contain \\n\\n between paragraphs (3-4 core paragraphs plus one optional final foresight implication paragraph). The pitch value must also contain \\n\\n between its 3 paragraphs.
 Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2."""
 
-                    # --- Synthesis with fallback chain: Gemini 3.1 Pro → Opus 4.7 → Sonnet 4.6 ---
-                    # Gemini 3.1 Pro is primary for batch refresh (fast, cost-effective at scale).
-                    # Opus 4.7 with Extended Thinking is fallback (used for individual scans).
+                    # --- Synthesis with fallback chain: Opus 4.8 → GPT 5.5 → Sonnet 4.6 ---
                     response_text = ""
                     _seed_elapsed = time.time() - company_start
                     _seed_synth_remaining = COMPANY_BUDGET - _seed_elapsed
@@ -777,35 +767,13 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                         company_scan_quality = "partial_synthesis"
                         print(f"   [{company_name}] ⏭ [Synthesis] Budget < 90s — skipping synthesis chain")
                     else:
-                        # Primary: Gemini 3.1 Pro Preview
-                        try:
-                            print(f"   [{company_name}] 🔄 [Synthesis] Attempting Gemini 3.1 Pro Preview...")
-                            g_start = time.time()
-                            gemini_resp = call_with_503_backoff(
-                                lambda: get_gemini_client().models.generate_content(
-                                    model="gemini-3.1-pro-preview",
-                                    contents=synthesis_prompt,
-                                    config=types.GenerateContentConfig(
-                                        temperature=0.5,
-                                        thinking_config=types.ThinkingConfig(thinking_budget=3000),  # MEDIUM = 2000-3500 tokens; explicit cap
-                                        max_output_tokens=4000
-                                    )
-                                ),
-                                label=f"Seed Synthesis gemini-3.1-pro-preview [{company_name}]",
-                                timeout=_SEED_SYNTH_TIMEOUT,
-                            )
-                            response_text = gemini_resp.text or ""
-                            print(f"   [{company_name}] ✅ [Synthesis] Gemini 3.1 Pro Preview succeeded in {int((time.time() - g_start) * 1000)}ms")
-                        except Exception as gemini31_err:
-                            print(f"   [{company_name}] ❌ [Synthesis] Gemini 3.1 Pro Preview failed: {gemini31_err}")
-
-                        # Fallback 1: Opus 4.7 with Extended Thinking
+                        # Primary: Opus 4.8 with Extended Thinking
                         if not response_text and (COMPANY_BUDGET - (time.time() - company_start)) > 60:
                             try:
-                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to claude-opus-4-7 with Extended Thinking...")
+                                print(f"   [{company_name}] 🔄 [Synthesis] Attempting claude-opus-4-8 with Extended Thinking...")
                                 synth_start = time.time()
                                 resp = claude_client.messages.create(
-                                    model="claude-opus-4-7",
+                                    model="claude-opus-4-8",
                                     max_tokens=16000,
                                     thinking={"type": "adaptive"},
                                     extra_body={"output_config": {"effort": "xhigh"}},
@@ -816,11 +784,26 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                                         if getattr(block, 'type', None) == 'text':
                                             response_text = block.text
                                             break
-                                print(f"   [{company_name}] ✅ [Synthesis] claude-opus-4-7 + Extended Thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
+                                print(f"   [{company_name}] ✅ [Synthesis] claude-opus-4-8 + Extended Thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
                             except Exception as opus_err:
-                                print(f"   [{company_name}] ❌ [Synthesis] Opus 4.7 failed: {opus_err}")
+                                print(f"   [{company_name}] ❌ [Synthesis] Opus 4.8 failed: {opus_err}")
 
-                        # Fallback 2: Claude Sonnet 4.6 (independent provider — survives Google outages)
+                        # Fallback 1: GPT 5.5
+                        if not response_text and (COMPANY_BUDGET - (time.time() - company_start)) > 60:
+                            try:
+                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to GPT 5.5...")
+                                m_start = time.time()
+                                response_text = _call_openai_text(
+                                    synthesis_prompt,
+                                    model="gpt-5.5",
+                                    max_output_tokens=4000,
+                                    timeout=_SEED_SYNTH_TIMEOUT,
+                                )
+                                print(f"   [{company_name}] ✅ [Synthesis] GPT 5.5 succeeded in {int((time.time() - m_start) * 1000)}ms")
+                            except Exception as gpt_err:
+                                print(f"   [{company_name}] ❌ [Synthesis] GPT 5.5 failed: {gpt_err}")
+
+                        # Fallback 2: Claude Sonnet 4.6
                         if not response_text and (COMPANY_BUDGET - (time.time() - company_start)) > 60:
                             try:
                                 print(f"   [{company_name}] 🔄 [Synthesis] Falling back to Claude Sonnet 4.6...")
@@ -1018,7 +1001,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                 print(f"   [{company_name}] ✅ [Reality Check] Summary OK (score {summary_check['score']}/100)")
 
             # --- AI FACT-CHECK: Same single-pass pipeline as Deep Scanning ---
-            # Gemini 3.1 Pro + Google Search verifies claims against live web data.
+            # Independent GPT/Claude verification checks claims against promoted evidence.
             # Single-pass: fact-check once → if false claims → apply correction → DONE.
             # Wrapped in try/except: fact-check failure must NOT crash the pipeline —
             # if it fails, the original synthesis is saved as UNVERIFIED and pipeline
@@ -1039,7 +1022,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                 if company_scan_quality == "complete":
                     company_scan_quality = "unverified"
             else:
-                print(f"   [{company_name}] 🔄 [Fact-Check] Gemini 3.1 Pro fact-check against live web data ({int(_seed_fc_remaining)}s remaining)...")
+                print(f"   [{company_name}] 🔄 [Fact-Check] Independent GPT/Claude fact-check ({int(_seed_fc_remaining)}s remaining)...")
                 try:
                     fact_check = ai_fact_check_summary(
                         summary_text=full_data["summary_text"],
@@ -1113,7 +1096,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                     }
                     full_data["ai_verification"]["verified"] = True
                     full_data["ai_verification"]["false_claims"] = []
-                    full_data["ai_verification"]["note"] = "Corrected by Gemini 3.1 Pro fact-checker in single pass (fact-check + fix)"
+                    full_data["ai_verification"]["note"] = "Corrected by independent GPT/Claude fact-checker in single pass (fact-check + fix)"
                     full_data["washing_flag"] = False
                     full_data["washing_type"] = None
                     washing_flag = False
@@ -1132,7 +1115,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                 else:
                     # --- Separate re-synthesis fallback ---
                     print(f"   [{company_name}] ⚠️ [Fact-Check] No inline correction — falling back to separate re-synthesis")
-                    print(f"   [{company_name}] 🔄 [Re-Synthesis] Gemini full re-synthesis from cleaned evidence...")
+                    print(f"   [{company_name}] 🔄 [Re-Synthesis] Full re-synthesis from cleaned evidence...")
                     resynth_start = time.time()
 
                     # Build re-synthesis prompt from full_data (same approach as _clean_company_data)
@@ -1235,7 +1218,7 @@ Respond with valid JSON only. Six fields required:
 {{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "intent_score": <int 0-100>, "why_proposals": ["...", "..."], "what_proposals": ["...", "..."]}}
 
 ### CRITICAL CONTEXT — FACT-CHECK CORRECTIONS
-The previous synthesis contained false claims detected by an independent fact-checker (Gemini 3.1 Pro with Google Search).
+The previous synthesis contained false claims detected by an independent fact-checker.
 The following claims were FALSE and must NOT appear in your output:
 {removed_claims_note}
 
@@ -1257,7 +1240,7 @@ re-introduce any of the false claims listed above."""
                     except Exception as gpt_err:
                         print(f"   [{company_name}] ❌ [Re-Synthesis] GPT 5.5 failed: {gpt_err}")
 
-                    # Fallback: Claude Sonnet 4.6 (independent provider — survives Google outages)
+                    # Fallback: Claude Sonnet 4.6
                     if not resynth_text:
                         try:
                             print(f"   [{company_name}] 🔄 [Re-Synthesis] Falling back to Claude Sonnet 4.6...")
@@ -1278,31 +1261,9 @@ re-introduce any of the false claims listed above."""
                             resynth_ms = int((time.time() - resynth_start) * 1000)
                             print(f"   [{company_name}] ❌ [Re-Synthesis] Claude Sonnet 4.6 failed: {sonnet_err} ({resynth_ms}ms)")
 
-                    # Last resort: Gemini 3.1 Pro Preview
                     if not resynth_text:
-                        try:
-                            print(f"   [{company_name}] 🔄 [Re-Synthesis] Trying gemini-3.1-pro-preview last resort...")
-                            resynth_response = call_with_503_backoff(
-                                lambda: get_gemini_client().models.generate_content(
-                                    model="gemini-3.1-pro-preview",
-                                    contents=resynth_prompt,
-                                    config=types.GenerateContentConfig(
-                                        temperature=0.5,
-                                        thinking_config=types.ThinkingConfig(thinking_budget=3000),
-                                        max_output_tokens=12000
-                                    )
-                                ),
-                                label=f"Re-Synthesis gemini-3.1-pro-preview [{company_name}]",
-                                model="gemini-3.1-pro-preview",
-                                timeout=120,
-                            )
-                            resynth_text = resynth_response.text or ""
-                            resynth_model_used = "gemini-3.1-pro-preview"
-                            resynth_ms = int((time.time() - resynth_start) * 1000)
-                            print(f"   [{company_name}] ✅ [Re-Synthesis] Gemini 3.1 Pro complete ({resynth_ms}ms)")
-                        except Exception as g31_err:
-                            resynth_ms = int((time.time() - resynth_start) * 1000)
-                            print(f"   [{company_name}] ❌ [Re-Synthesis] All models failed. Last error: {g31_err} ({resynth_ms}ms)")
+                        resynth_ms = int((time.time() - resynth_start) * 1000)
+                        print(f"   [{company_name}] ❌ [Re-Synthesis] All models failed ({resynth_ms}ms)")
 
                     if resynth_text:
                         resynth_payload = extract_json_from_text(resynth_text)
@@ -1322,7 +1283,7 @@ re-introduce any of the false claims listed above."""
                             if new_what and isinstance(new_what, list):
                                 full_data["what_proposals"] = new_what
 
-                            # Update reality score if Gemini re-evaluated it
+                            # Update reality score if re-synthesis re-evaluated it
                             resynth_reality = resynth_json.get("reality_score")
                             if resynth_reality is not None and isinstance(resynth_reality, (int, float)):
                                 resynth_reality = max(0, min(100, int(resynth_reality)))
@@ -1373,7 +1334,7 @@ re-introduce any of the false claims listed above."""
                             "was_resynthesized": False,
                             "false_claims_found": fact_check["false_claims"],
                             "evidence_purged": purge_result,
-                            "reason": "Gemini re-synthesis failed",
+                            "reason": "re-synthesis failed",
                         }
 
             # --- GENERAL SUMMARY ---
@@ -1508,7 +1469,7 @@ re-introduce any of the false claims listed above."""
                 break
             future = executor.submit(process_company, i, company)
             futures[future] = company['name']
-            time.sleep(0.5)  # Stagger starts to avoid simultaneous Gemini hits
+            time.sleep(0.5)  # Stagger starts to avoid simultaneous provider hits
 
         # Wait for all to complete and catch any unhandled errors
         for future in concurrent.futures.as_completed(futures):

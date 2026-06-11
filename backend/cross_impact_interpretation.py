@@ -9,7 +9,7 @@ Produces three views in section-marker format:
   - HORIZONTAL: convergence points (top 3 highest-density cells)
   - FOCUSED: structural pattern (cross-analysis + conspicuous absences)
 
-Reuses the LLM + Gemini verification pipeline from foresight_observatory.
+Reuses the LLM + GPT/Claude verification pipeline from foresight_observatory.
 Adds a deterministic post-hoc numeric verifier that checks every cited density
 against the matrix payload to catch fabricated numbers.
 """
@@ -367,7 +367,7 @@ def generate_cross_impact_interpretation(
     Returns:
       {
         text: str,                   # raw model output with section markers
-        verification: dict,          # Gemini verification result
+        verification: dict,          # verification result
         numeric_check: dict,         # post-hoc numeric verifier result
         sources_used: list[str],
         matrix_snapshot: list,       # the shaped matrix the prompt actually saw
@@ -375,7 +375,7 @@ def generate_cross_impact_interpretation(
         model: str,
       }
     """
-    # Lazy import to avoid pulling Anthropic/Gemini deps at module load.
+    # Lazy import to avoid pulling provider clients at module load.
     from foresight_observatory import (
         _generate_with_verification,
         _aggregate_stakeholder_dynamics,
@@ -399,7 +399,7 @@ def generate_cross_impact_interpretation(
         archetype_distribution=archetype_distribution,
     )
 
-    # 2. Build prompt + run generation with Gemini verification.
+    # 2. Build prompt + run generation with independent verification.
     prompt = _build_prompt(
         matrix_data=matrix_data,
         theme_descriptions=theme_descriptions,
@@ -424,7 +424,7 @@ def generate_cross_impact_interpretation(
     #    regenerate once with a correction prompt.
     numeric_check = verify_numeric_claims(text, matrix_data)
     if not numeric_check["passed"]:
-        from foresight_observatory import _generate_opus, _verify_gemini
+        from foresight_observatory import _generate_opus, _verify_with_models
         correction = (
             "\n\nCRITICAL CORRECTION: Your previous attempt cited density values "
             f"that do not appear in the matrix payload: {numeric_check['fabricated']}. "
@@ -433,7 +433,7 @@ def generate_cross_impact_interpretation(
             "appear in the matrix."
         )
         text, _wc = _generate_opus(prompt + correction)
-        verification = _verify_gemini(text, source_summary, "Cross-Impact Matrix Interpretation")
+        verification = _verify_with_models(text, source_summary, "Cross-Impact Matrix Interpretation")
         numeric_check = verify_numeric_claims(text, matrix_data)
 
     return {
@@ -443,5 +443,5 @@ def generate_cross_impact_interpretation(
         "sources_used": available_sources,
         "matrix_snapshot": matrix_data,
         "generated_at": datetime.utcnow().isoformat() + "Z",
-        "model": "claude-opus-4-7 + gemini-3.1-pro verification",
+        "model": "claude-opus-4-8 + gpt/claude verification",
     }

@@ -194,7 +194,7 @@
         "Evidence persistence prevents lucky re-scans from hiding real problems",
         "Recency weighting ensures stale evidence doesn't dominate"
       ],
-      "model_used": "Sonnet 4.6 with Extended Thinking + Brave Web Search (primary, 10 searches), Gemini 3.1 Pro with Google Search grounding (fallback, fact-check + inline correction)"
+      "model_used": "Sonnet 4.6 with Extended Thinking + Brave Web Search (primary, 10 searches), GPT 5.4/Claude verification with web search grounding (fallback, fact-check + inline correction)"
     },
 
     "phase_2b_financial_health": {
@@ -263,10 +263,10 @@
         }
       },
       "fallback_chain": [
-        "Claude Opus 4.7 with Extended Thinking (primary, 10K thinking budget)",
-        "Gemini 3.1 Pro (fallback 1)",
-        "Gemini 3 Pro (fallback 2)",
-        "Gemini 2.5 Pro (fallback 3)"
+        "Claude Opus 4.8 with Extended Thinking (primary, 10K thinking budget)",
+        "GPT 5.4/Claude verification (fallback 1)",
+        "GPT 5.5 (fallback 2)",
+        "Claude Sonnet 4.6 (fallback 3)"
       ],
       "accuracy_safeguards": [
         "Extended Thinking: Opus reasons through conflicting evidence before scoring",
@@ -294,11 +294,11 @@
           "output": "Hallucination risk score (0-100) + specific flags. Diagnostic only — does NOT block the pipeline."
         },
         "step_2_ai_fact_check": {
-          "description": "Gemini 3.1 Pro with Google Search grounding independently verifies every factual claim in the summary and pitch against live web data",
-          "model": "Gemini 3.1 Pro with Google Search grounding",
+          "description": "GPT 5.4/Claude verification with web search grounding independently verifies every factual claim in the summary and pitch against live web data",
+          "model": "GPT 5.4/Claude verification with web search grounding",
           "process": [
             "Receives the full summary text, pitch text, evidence links, and company name",
-            "Uses Google Search to independently verify each factual claim",
+            "Uses web search to independently verify each factual claim",
             "Classifies each claim as verified (true) or false",
             "If false claims found: produces a corrected summary and pitch in the same call (inline correction)"
           ],
@@ -312,7 +312,7 @@
           "sub_steps": {
             "a_evidence_purging": "Remove contaminated evidence sources that supported the false claims from stored data (links, checklist items)",
             "b_apply_corrected_summary": "Use the corrected summary/pitch produced by the fact-checker (preferred path — inline correction)",
-            "c_fallback_re_synthesis": "If the fact-checker did not produce a corrected summary, trigger a separate full re-synthesis from cleaned evidence using the Gemini model chain. The re-synthesis prompt explicitly lists the false claims to avoid.",
+            "c_fallback_re_synthesis": "If the fact-checker did not produce a corrected summary, trigger a separate full re-synthesis from cleaned evidence using the GPT/Claude model chain. The re-synthesis prompt explicitly lists the false claims to avoid.",
             "d_clear_stale_flags": "Remove washing flags that may have been based on now-purged false claims"
           }
         }
@@ -328,7 +328,7 @@
         "evidence_purged": "Count and details of removed contaminated evidence sources"
       },
       "accuracy_safeguards": [
-        "Independent model (Gemini) with live web search — not checking summary against its own evidence (avoids circular validation)",
+        "Independent model (GPT/Claude) with live web search — not checking summary against its own evidence (avoids circular validation)",
         "Single-pass guarantee prevents infinite fact-check loops",
         "Evidence purging removes the root cause (contaminated sources), not just the symptom (bad text)",
         "Inline correction by the same model that found the errors ensures consistency",
@@ -406,7 +406,7 @@
       },
       {
         "name": "AI Fact-Check (Post-Synthesis)",
-        "description": "Gemini 3.1 Pro with Google Search independently verifies every claim in the summary against live web data. False claims trigger evidence purging and corrected summary. Single-pass guarantee prevents recursive loops."
+        "description": "GPT 5.4/Claude verification with web search independently verifies every claim in the summary against live web data. False claims trigger evidence purging and corrected summary. Single-pass guarantee prevents recursive loops."
       },
       {
         "name": "Score Drift Guard",

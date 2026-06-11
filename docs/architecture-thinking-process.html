@@ -500,7 +500,7 @@
     <div class="mini-arrow"></div>
     <div class="flow-step purple">Phase 3: Synthesis &mdash; Cross-verify scores + generate narrative &amp; pitch</div>
     <div class="mini-arrow"></div>
-    <div class="flow-step green">Phase 3b: Fact-Check &mdash; Gemini verifies claims against live web data</div>
+    <div class="flow-step green">Phase 3b: Fact-Check &mdash; GPT/Claude verifies claims against live web data</div>
     <div class="mini-arrow"></div>
     <div class="flow-step purple">Phase 4: Archetype Classification (Thriving / Modernizing / Cash Cow / At Risk)</div>
     <div class="mini-arrow"></div>
@@ -896,7 +896,7 @@
       <h4>Fallback Chain (Resilience)</h4>
       <p>If the primary model fails (rate limit, timeout, server error), the system cascades through fallback models:</p>
       <ul>
-        <li>Claude Opus 4.7 (primary) &rarr; Gemini 3.1 Pro &rarr; Gemini 3 Pro &rarr; Sonnet 4.5</li>
+        <li>Claude Opus 4.8 (primary) &rarr; GPT 5.4/Claude verification &rarr; GPT 5.5 &rarr; Sonnet 4.5</li>
         <li>All three must fail before diagnosis/pitch stay as defaults</li>
       </ul>
     </div>
@@ -949,11 +949,11 @@
     </div>
 
     <div class="subsection">
-      <h4>Step 2: AI Fact-Check (Gemini 3.1 Pro + Google Search Grounding)</h4>
+      <h4>Step 2: AI Fact-Check (GPT 5.4/Claude verification + web search Grounding)</h4>
       <p>An independent AI model with live web search verifies every factual claim in the summary and pitch:</p>
       <ul>
         <li>Receives the full summary, pitch, evidence links, and company name</li>
-        <li>Uses <strong>Google Search</strong> to independently verify each factual claim against live web data</li>
+        <li>Uses <strong>web search</strong> to independently verify each factual claim against live web data</li>
         <li>Classifies each claim as <strong>verified</strong> (true) or <strong>false</strong></li>
         <li>If false claims found: produces a <strong>corrected summary and pitch</strong> in the same call (inline correction)</li>
       </ul>
@@ -989,7 +989,7 @@
     <div class="verification-box">
       <h4>Accuracy Safeguards</h4>
       <ul>
-        <li>Independent model (Gemini) with live web search &mdash; avoids circular validation against stored evidence</li>
+        <li>Independent model (GPT/Claude) with live web search &mdash; avoids circular validation against stored evidence</li>
         <li>Single-pass guarantee prevents infinite fact-check loops</li>
         <li>Evidence purging removes the root cause (contaminated sources), not just the symptom (bad text)</li>
         <li>Inline correction by the same model that found the errors ensures consistency</li>
@@ -1156,7 +1156,7 @@
       </div>
       <div>
         <p style="color: var(--accent-green); font-weight: 600; margin-bottom: 0.3rem;">4. AI Fact-Check (Post-Synthesis)</p>
-        <p style="font-size: 0.85rem;">Gemini 3.1 Pro with Google Search independently verifies every claim against live web data. False claims trigger evidence purging and corrected summary. Single-pass guarantee.</p>
+        <p style="font-size: 0.85rem;">GPT 5.4/Claude verification with web search independently verifies every claim against live web data. False claims trigger evidence purging and corrected summary. Single-pass guarantee.</p>
       </div>
       <div>
         <p style="color: var(--accent-purple); font-weight: 600; margin-bottom: 0.3rem;">5. Score Drift Guard</p>

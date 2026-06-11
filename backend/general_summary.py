@@ -17,10 +17,6 @@ import os
 import re
 import time
 
-from google import genai
-from gemini_client import get_gemini_client
-from google.genai import types as genai_types
-from gemini_backoff import call_with_503_backoff
 from source_quality import (
     assess_source_scope, infer_source_type, compute_claim_tier, describe_source,
     is_boilerplate_snippet, is_title_echo, tier_snippet_bounds,
@@ -427,7 +423,7 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
     # source says "9% of HR personnel use Tool X", another says "thousands
     # of weekly users"). When present, the prompt instructs the model to
     # cite both sides with their scope rather than silently picking one.
-    # Failure-safe: returns [] if Gemini is unavailable.
+    # Failure-safe: returns [] if verification is unavailable.
     contradictions = detect_contradictions(verified_links, company_name)
 
     result: dict = {
@@ -628,113 +624,7 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
     except Exception as e:
         print(f"   ❌ [General Summary] Sonnet backup failed: {e}")
 
-    # Backup 2: Gemini 3.1 Pro (last resort for this test)
-    try:
-        client = get_gemini_client()
-    except ValueError:
-        print("   ⚠️ [General Summary] No GEMINI_API_KEY — skipping Gemini backup")
-        return "", ""
-
-    try:
-        BACKUP_MODEL = "gemini-3.1-pro-preview"
-        print(f"   [General Summary] GPT/Sonnet exhausted — trying backup {BACKUP_MODEL}")
-        t0 = time.time()
-        backup_config = genai_types.GenerateContentConfig(
-            temperature=1.0,
-            max_output_tokens=6000,
-            thinking_config=genai_types.ThinkingConfig(thinking_budget=1024),
-        )
-        backup_resp = call_with_503_backoff(
-            lambda: client.models.generate_content(
-                model=BACKUP_MODEL,
-                contents=prompt,
-                config=backup_config,
-            ),
-            label=f"General Summary backup {BACKUP_MODEL}",
-            model=BACKUP_MODEL,
-            timeout=90,
-        )
-        text = _strip_links((backup_resp.text or "").strip())
-        wc = _word_count(text)
-        elapsed = int((time.time() - t0) * 1000)
-        print(f"   [General Summary] {BACKUP_MODEL} backup: {wc} words ({elapsed}ms)")
-        if text:
-            return text, BACKUP_MODEL
-    except Exception as e:
-        print(f"   ❌ [General Summary] {BACKUP_MODEL} backup failed: {e}")
-
     return "", ""
-
-
-# ── Payload-based fact-check for General Summary ─────────────────────────────
-# Unlike the AI Diagnosis fact-check (which uses Google Search grounding),
-# this checks the General Summary against its OWN input payload. The Summary
-# should contain ONLY claims traceable to the payload — anything else is
-# hallucination or training-data leakage.
-
-def _build_fact_check_prompt(summary_text: str, payload: dict, company_name: str) -> str:
-    fact_check_guardrails = _general_summary_guardrails()
-    return f"""You are a precision fact-checker. Your job is to verify that EVERY factual claim in the General Summary below is directly supported by the provided evidence payload AND that narrow-scope findings are not silently elevated into company-wide claims. The Summary should contain ONLY information from the payload — nothing else.
-
-SHARED FACT-DISCIPLINE / FORESIGHT GUARDRAILS:
-{fact_check_guardrails}
-
-COMPANY: {company_name}
-
-GENERAL SUMMARY TO VERIFY:
-{summary_text}
-
-EVIDENCE PAYLOAD (the only data the summary was allowed to use):
-{json.dumps(payload, ensure_ascii=False, indent=2)}
-
-INSTRUCTIONS:
-1. Extract every factual claim from the summary: numbers, dates, company names, revenue figures, percentages, product names, people names, strategic initiatives, regulatory references, market statistics.
-2. For each claim, check if it can be traced to a specific item in the evidence payload above.
-3. Flag a claim as UNSUPPORTED if:
-   A. It states a specific fact (metric, event, figure, statistic) that does NOT appear anywhere in the payload.
-   B. It significantly exaggerates or distorts something from the payload.
-   C. It introduces market statistics, industry benchmarks, or regulatory details not present in the payload — these are likely hallucinated from the model's training data.
-   F. It refers to {company_name} using a country-specific legal entity suffix (e.g., "{company_name} Limited", "{company_name} Oy", "{company_name} GmbH", "{company_name} Ltd", "{company_name} s.r.o.", "{company_name} AB", "{company_name} AS") as if it were a distinct, separately noteworthy organisation. The summary must use the primary brand name "{company_name}" consistently.
-   H. It includes a named stakeholder, stakeholder inventory, or generic people/role detail without a material leadership, ownership, acquisition, carve-out, or governance event supported by the payload. People lists belong in the Stakeholder List section, not the General Summary.
-4. SCOPE INFLATION CHECK — Each evidence_links item has a "scope" field ("broad" or "narrow"). For each numeric or scale claim in the summary, identify which evidence item it traces back to. Flag the claim as UNSUPPORTED if:
-   D. The claim is derived from a "narrow"-scope source AND is presented as a company-wide fact without a scope qualifier in the same sentence (qualifier examples: "in a survey of HR personnel", "in a 100-respondent study", "in a Vaasa-based pilot", "according to a master's thesis"). For example, "9% of personnel use Tool X" lifted from a narrow HR-only thesis without saying "in HR" is scope inflation.
-   E. The payload has a top-level "contradictions" array, the summary cites one side but does NOT acknowledge the other side at all. Both sides of a listed contradiction must appear in the prose.
-   G. The claim is derived from an item with entity_scope="local_legal_entity", "subsidiary", "former_name", or "parent_owner" and is presented as an unqualified {company_name}-wide fact. Local legal-entity financial figures must be qualified as local/legal-entity data; parent_owner evidence must only support ownership/acquisition context.
-5. Do NOT flag:
-   - Reasonable connecting language between evidence points (e.g., "meanwhile," "in parallel")
-   - Direct restatements of payload data, even if paraphrased
-   - The opening trend sentence if it accurately reflects the delta data
-   - Claims from narrow-scope sources THAT ARE properly qualified in the same sentence
-   - A country-specific legal entity name when it is used only to qualify a local legal-entity financial figure supported by entity_scope="local_legal_entity"
-   - A named leader only when the same sentence is about a material leadership, ownership, acquisition, carve-out, or governance event that is directly supported by the payload
-
-OUTPUT FORMAT — valid JSON only:
-
-If all claims are supported:
-{{"unsupported_claims": [], "verified": true}}
-
-If unsupported claims found:
-{{"unsupported_claims": [{{"claim": "The exact quote or close paraphrase from the summary", "reason": "Brief explanation of why this is not in the payload OR which scope-inflation rule (4D / 4E) it violates"}}], "verified": false}}"""
-
-
-def _build_regen_prompt(payload: dict, company_name: str, original_text: str, false_claims: list) -> str:
-    """Build a re-generation prompt that incorporates the false claims as explicit warnings."""
-    regen_guardrails = _general_summary_guardrails()
-    claims_list = "\n".join(f"- {fc['claim']}: {fc['reason']}" for fc in false_claims)
-    base_prompt = _build_prompt(payload, company_name)
-    return f"""{base_prompt}
-
-CRITICAL CORRECTION — THE PREVIOUS ATTEMPT CONTAINED THESE UNSUPPORTED CLAIMS:
-{claims_list}
-
-SHARED FACT-DISCIPLINE / FORESIGHT GUARDRAILS:
-{regen_guardrails}
-
-The previous attempt:
-{original_text}
-
-You MUST NOT include any of these claims or similar unsupported information. Write a completely new summary using ONLY the evidence payload. Every sentence must trace to a specific payload item."""
-
 
 def fact_check_general_summary(
     summary_text: str,
@@ -744,8 +634,8 @@ def fact_check_general_summary(
     """
     Verify the General Summary against its own input payload.
 
-    Stage 1: Gemini 2.5 Pro detects unsupported claims.
-    Stage 2: If false claims found, re-generates with Gemini 3.1 Pro.
+    Stage 1: Claude Sonnet 4.6 / GPT-5.4 detects unsupported claims.
+    Stage 2: If false claims are found, GPT-5.5 re-generates cleanly.
 
     Returns:
         dict with:
@@ -759,30 +649,17 @@ def fact_check_general_summary(
         return {"verified": True, "false_claims": [], "corrected_summary": "",
                 "corrected_model": "", "check_time_ms": 0}
 
-    try:
-        client = get_gemini_client()
-    except ValueError:
-        print("   ⚠️ [GS Fact-Check] No GEMINI_API_KEY — skipping")
-        return {"verified": True, "false_claims": [], "corrected_summary": "",
-                "corrected_model": "", "check_time_ms": 0}
-
     payload = _build_input_payload(full_data, company_name)
     check_prompt = _build_fact_check_prompt(summary_text, payload, company_name)
 
     t0 = time.time()
 
     # Stage 1: Detect unsupported claims
-    # Primary: Gemini 2.5 Pro | Backup 1: Sonnet 4.6 | Backup 2: Gemini 3.1 Pro.
-    # General Summary is normally GPT-generated, so the fact-checker stays outside
-    # the GPT family unless a later regeneration step is explicitly needed.
-    # Gemini 2.5 Pro REQUIRES non-zero thinking_budget (the API rejects 0 with
-    # "Budget 0 is invalid. This model only works in thinking mode."). We pass a
-    # small budget (512) and rely on the part-extraction logic below to filter
-    # out the thought parts so only text parts feed the JSON parser.
+    # General Summary is normally GPT-generated, so Sonnet checks first. GPT-5.4
+    # remains as fallback for provider availability and manual regeneration cases.
     CHECK_MODELS = [
-        ("gemini-2.5-pro", "gemini"),
         ("claude-sonnet-4-6", "anthropic"),
-        ("gemini-3.1-pro-preview", "gemini"),
+        ("gpt-5.4", "openai"),
     ]
     false_claims = []
     detection_succeeded = False
@@ -790,79 +667,31 @@ def fact_check_general_summary(
     for model_id, provider in CHECK_MODELS:
         if detection_succeeded:
             break
-
         try:
             print(f"   🔍 [GS Fact-Check] {model_id} checking claims against payload...")
-
-            if provider == "gemini":
-                # gemini-2.5-pro requires a non-zero thinking_budget — the API rejects 0
-                # with INVALID_ARGUMENT. Use a small budget (512) so it thinks briefly;
-                # the part-extraction logic below discards thought parts and keeps text.
-                thinking_cfg = None
-                if "2.5" in model_id:
-                    thinking_cfg = genai_types.ThinkingConfig(thinking_budget=512)
-                # max_output_tokens covers BOTH thinking tokens and text tokens for
-                # thinking-capable models. 2000 was too tight: thinking consumed most
-                # of it, leaving ~300 chars of text — not enough for a valid JSON
-                # response. 4096 leaves comfortable headroom for both.
-                resp = call_with_503_backoff(
-                    lambda m=model_id, tc=thinking_cfg: client.models.generate_content(
-                        model=m,
-                        contents=check_prompt,
-                        config=genai_types.GenerateContentConfig(
-                            temperature=0.0,
-                            max_output_tokens=4096,
-                            thinking_config=tc,
-                        ),
-                    ),
-                    label="GS Fact-Check",
-                    model=model_id,
-                    timeout=60,
-                )
-                # Extract text robustly — thinking models (2.5 Pro) return
-                # thinking parts that make resp.text empty or unreliable.
-                raw = ""
-                try:
-                    raw = (resp.text or "").strip()
-                except Exception:
-                    pass
-                if not raw:
-                    candidates = getattr(resp, 'candidates', None)
-                    if candidates:
-                        content = getattr(candidates[0], 'content', None)
-                        parts = getattr(content, 'parts', None) if content else None
-                        if parts:
-                            raw = "".join(
-                                p.text for p in parts
-                                if p and getattr(p, 'text', None) and not getattr(p, 'thought', False)
-                            ).strip()
-
-            elif provider == "anthropic":
+            if provider == "anthropic":
                 import anthropic
-                anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
+                anthropic_key = _clean_env_var(os.environ.get("ANTHROPIC_API_KEY", ""))
                 if not anthropic_key:
                     print(f"   ⚠️ [GS Fact-Check] No ANTHROPIC_API_KEY — skipping {model_id}")
                     continue
                 claude_client = anthropic.Anthropic(api_key=anthropic_key)
                 claude_resp = claude_client.messages.create(
                     model=model_id,
-                    max_tokens=2000,
+                    max_tokens=2200,
                     messages=[{"role": "user", "content": check_prompt}],
                 )
                 raw = (claude_resp.content[0].text or "").strip()
+            else:
+                raw = _call_openai_summary(check_prompt, model=model_id, timeout=60)
 
             if raw.startswith("```"):
                 raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-
-            # Robust JSON extraction — models often wrap JSON in markdown,
-            # add explanations before/after, or return thinking + JSON.
-            # Find the outermost JSON object regardless of surrounding text.
             result = _extract_json(raw)
             if result is None:
                 raise ValueError(f"No valid JSON object found in response ({len(raw)} chars)")
             false_claims = result.get("unsupported_claims", [])
             detection_succeeded = True
-
         except Exception as e:
             remaining = [m for m, _ in CHECK_MODELS if m != model_id and not detection_succeeded]
             next_info = f" — trying {remaining[0]}" if remaining else ""

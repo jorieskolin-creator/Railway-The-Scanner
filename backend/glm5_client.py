@@ -10,11 +10,11 @@ GLM-5 supports:
     or response.choices[0].message.reasoning_content (blocking).
     Default: enabled. Can be disabled with {"type": "disabled"}.
   - Temperature: 0.6 recommended for general use, 1.0 for benchmarks.
-    Note: thinking mode may override low temperatures (like Gemini 3.x).
+    Note: thinking mode may override low temperatures.
   - do_sample: false for greedy/deterministic output (factual tasks),
     true (default) for creative/diverse output. Passed via extra_body.
 
-This module provides drop-in replacements for Gemini calls in:
+This module provides optional OpenAI-compatible web-search calls for:
   - Stakeholder Intel (person enrichment)
   - Forensic Scan (x_ray_search)
 
