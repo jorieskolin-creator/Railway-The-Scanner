@@ -12,6 +12,8 @@ If unsupported claims are found, the summary is re-generated with explicit
 warnings about the false claims.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -626,6 +628,56 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
 
     return "", ""
 
+
+def _build_fact_check_prompt(summary_text: str, payload: dict, company_name: str) -> str:
+    """Build the payload-only claim verification prompt for General Summary."""
+    return f"""You are verifying the General Summary for {company_name}.
+
+Your task is narrow: compare the SUMMARY against the PAYLOAD and identify factual claims that are not supported by the payload.
+
+Rules:
+- Use ONLY the PAYLOAD as source material. Do not use outside knowledge.
+- A claim is supported when it can be traced to a specific payload item, financial finding, contradiction, delta, or evidence snippet.
+- Do not flag wording differences, harmless synthesis, or cautious interpretation that is directly grounded in the payload.
+- Do flag invented events, invented people, invented figures, wrong entity claims, unqualified local-entity claims, and future claims presented as facts.
+- If the summary says something broader than the payload supports, flag it and explain the scope problem.
+
+PAYLOAD:
+{json.dumps(payload, ensure_ascii=False, indent=2)}
+
+SUMMARY:
+{summary_text}
+
+Return STRICT JSON only:
+{{
+  "unsupported_claims": [
+    {{
+      "claim": "exact unsupported or over-scoped claim from the summary",
+      "reason": "brief explanation of why the payload does not support it"
+    }}
+  ]
+}}
+
+If all claims are supported, return exactly:
+{{"unsupported_claims": []}}"""
+
+
+def _build_regen_prompt(payload: dict, company_name: str, previous_summary: str, false_claims: list) -> str:
+    """Build a corrective General Summary prompt after payload fact-checking."""
+    false_claim_text = json.dumps(false_claims or [], ensure_ascii=False, indent=2)
+    base_prompt = _build_prompt(payload, company_name)
+    return f"""{base_prompt}
+
+ADDITIONAL FACT-CHECK CORRECTION CONTEXT:
+The previous General Summary was rejected by payload verification. Do not repeat, paraphrase, or imply these unsupported claims:
+{false_claim_text}
+
+Previous rejected summary for context only, not as evidence:
+{previous_summary}
+
+Regenerate the General Summary from the PAYLOAD in the prompt above. Use only payload-supported facts and keep the same output format: plain prose only."""
+
+
 def fact_check_general_summary(
     summary_text: str,
     full_data: dict,
@@ -649,8 +701,14 @@ def fact_check_general_summary(
         return {"verified": True, "false_claims": [], "corrected_summary": "",
                 "corrected_model": "", "check_time_ms": 0}
 
-    payload = _build_input_payload(full_data, company_name)
-    check_prompt = _build_fact_check_prompt(summary_text, payload, company_name)
+    try:
+        payload = _build_input_payload(full_data, company_name)
+        check_prompt = _build_fact_check_prompt(summary_text, payload, company_name)
+    except Exception as e:
+        print(f"   ⚠️ [GS Fact-Check] Prompt preparation failed — treating as unverified: {e}")
+        return {"verified": False, "false_claims": [], "corrected_summary": "",
+                "corrected_model": "", "check_time_ms": 0,
+                "fact_check_skipped": True, "error": str(e)}
 
     t0 = time.time()
 

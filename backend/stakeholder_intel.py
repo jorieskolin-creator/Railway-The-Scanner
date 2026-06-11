@@ -11,6 +11,8 @@ CRITICAL GUARDRAILS:
   - Each person is searched independently with a dedicated prompt.
 """
 
+from __future__ import annotations
+
 import json
 import re
 import time
@@ -85,7 +87,6 @@ def _run_stakeholder_search(prompt: str, label: str, max_tokens: int, timeout: i
                     prompt,
                     model=model_name,
                     max_tokens=max_tokens,
-                    temperature=0.0,
                     timeout=model_timeout,
                     web_search=True,
                     max_searches=8,
@@ -96,7 +97,6 @@ def _run_stakeholder_search(prompt: str, label: str, max_tokens: int, timeout: i
                     prompt,
                     model=model_name,
                     max_output_tokens=max_tokens,
-                    temperature=0.0,
                     timeout=model_timeout,
                     web_search=True,
                     search_context_size="medium",
