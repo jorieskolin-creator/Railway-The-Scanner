@@ -492,7 +492,7 @@ def health_check():
 async def find_company_url(name: str):
     """Find the official homepage URL using GPT/Claude web search."""
     prompt = f"What is the official website homepage URL for the organization '{name}'? Return ONLY the URL string (e.g. https://www.example.com). Do not include markdown or explanations."
-    for model_name, provider in (("claude-sonnet-4-6", "anthropic"), ("gpt-5.5", "openai")):
+    for model_name, provider in (("gpt-5.5", "openai"), ("claude-sonnet-4-6", "anthropic")):
         try:
             if provider == "anthropic":
                 text = call_anthropic_text(prompt, model=model_name, max_tokens=120, timeout=45, web_search=True, max_searches=2)
@@ -3373,12 +3373,24 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                         try:
                             print(f"   🔄 [Synthesis] Falling back to GPT 5.5 (timeout: {SYNTH_TIMEOUT}s)...")
                             gpt_start = time.time()
-                            response_text = _call_openai_text(
-                                synthesis_prompt,
-                                model="gpt-5.5",
-                                max_output_tokens=12000,
-                                timeout=SYNTH_TIMEOUT,
-                            )
+
+                            def _synth_gpt():
+                                return _call_openai_text(
+                                    synthesis_prompt,
+                                    model="gpt-5.5",
+                                    max_output_tokens=12000,
+                                    timeout=SYNTH_TIMEOUT,
+                                )
+
+                            gpt_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                            gpt_future = gpt_pool.submit(_synth_gpt)
+                            try:
+                                response_text = gpt_future.result(timeout=SYNTH_TIMEOUT)
+                            except concurrent.futures.TimeoutError:
+                                gpt_pool.shutdown(wait=False)
+                                print(f"   ⏰ [Synthesis] GPT 5.5 timed out after {SYNTH_TIMEOUT}s")
+                                raise Exception(f"GPT 5.5 timeout after {SYNTH_TIMEOUT}s")
+                            gpt_pool.shutdown(wait=False)
                             print(f"   ✅ [Synthesis] GPT 5.5 succeeded in {int((time.time() - gpt_start) * 1000)}ms")
                         except Exception as gpt_err:
                             print(f"   ❌ [Synthesis] GPT 5.5 failed: {gpt_err}")

@@ -2021,13 +2021,13 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         return None
 
     def execute_with_openai_web(active_prompt):
-        """Fallback web-search path using GPT-5.5 Responses web_search."""
+        """Primary web-search path using GPT-5.5 Responses web_search."""
         elapsed_total = time.time() - _fn_start
         if elapsed_total > _guard_anthropic:
             print(f"   ⏰ [Forensic Scan] Skipping GPT web search — elapsed {int(elapsed_total)}s exceeds {_guard_anthropic}s guard")
             return None
         try:
-            print(f"   🔄 [Forensic Scan] Attempting gpt-5.5 + web_search for {company_name}...")
+            print(f"   🔄 [Forensic Scan] Attempting primary gpt-5.5 + web_search for {company_name}...")
             start = time.time()
             relaxed_prompt = re.sub(
                 r'RETURN STRICT JSON[^:]*:',
@@ -2038,7 +2038,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 relaxed_prompt,
                 model="gpt-5.5",
                 max_output_tokens=14000,
-                timeout=240,
+                timeout=150,
                 web_search=True,
                 search_context_size="medium",
             )
@@ -2068,7 +2068,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
     def execute_with_anthropic(active_prompt):
         """
-        PRIMARY: Two-pass pipeline using Sonnet 4.6 + Brave Web Search.
+        BOUNDED FALLBACK / CHALLENGER: Two-pass pipeline using Sonnet 4.6 + Web Search.
 
         Pass 1 (Search): Sonnet searches the web and reports findings freely.
                          Format requirements are relaxed so the model can focus
@@ -2094,14 +2094,15 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             print("   [Scanner 2] No ANTHROPIC_API_KEY for Sonnet + Web Search.")
             return None
         try:
-            print(f"   🔄 [Forensic Scan] Attempting claude-sonnet-4-6 + Web Search (two-pass) for {company_name}...")
+            print(f"   🔄 [Forensic Scan] Attempting bounded claude-sonnet-4-6 + Web Search challenger for {company_name}...")
             start = time.time()
             claude_client = anthropic.Anthropic(api_key=anthropic_key)
 
-            # Rescan: 8 searches (3 verification + 5 jury) — reduced from 10 to lower pause_turn risk.
-            # First scan: 10 searches (2 per jury) — full coverage needed without prior context.
+            # Sonnet is no longer the default evidence scout. Keep this path
+            # bounded so it can challenge low-coverage GPT results without
+            # consuming the synthesis budget.
             is_rescan = bool(previous_context and previous_context.get("previous_reality") is not None)
-            search_budget = 8 if is_rescan else 10
+            search_budget = 5 if is_rescan else 7
             if is_rescan:
                 print(f"   📊 [Forensic Scan] RESCAN: search budget = {search_budget} (3 verification + 5 jury)")
             else:
@@ -2125,15 +2126,14 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 f"Incomplete coverage is acceptable. An incomplete response that cuts off is not.\n\n"
             ) + sonnet_prompt
 
-            # Enforce 240s per-call timeout via thread pool (Sonnet + web search + thinking typically 60-150s)
-            # Extended Thinking: Sonnet reasons through evidence before scoring,
-            # helping it weigh conflicting signals more carefully.
+            # Enforce a short per-call timeout via thread pool. Heavy thinking
+            # belongs in synthesis; this stage is only evidence acquisition.
             def _call_sonnet_web():
                 return claude_client.messages.create(
                     model="claude-sonnet-4-6",
                     max_tokens=16000,
                     thinking={"type": "adaptive"},
-                    extra_body={"output_config": {"effort": "high" if is_rescan else "xhigh"}},
+                    extra_body={"output_config": {"effort": "low" if is_rescan else "medium"}},
                     tools=[{
                         "type": "web_search_20250305",
                         "name": "web_search",
@@ -2145,11 +2145,11 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             call_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             future = call_pool.submit(_call_sonnet_web)
             try:
-                response = future.result(timeout=240)
+                response = future.result(timeout=120)
             except concurrent.futures.TimeoutError:
                 call_pool.shutdown(wait=False)
                 elapsed = int((time.time() - start) * 1000)
-                print(f"   ⏰ [Forensic Scan] claude-sonnet-4-6 + Web Search timed out after 240s ({elapsed}ms). Skipping to next model.")
+                print(f"   ⏰ [Forensic Scan] claude-sonnet-4-6 + Web Search timed out after 120s ({elapsed}ms). Keeping GPT scout result if available.")
                 return None
             call_pool.shutdown(wait=False)
 
@@ -2258,17 +2258,58 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             print(f"   ❌ [Forensic Scan] claude-sonnet-4-6 + Web Search failed in {elapsed}ms: {e}")
             return None
 
-    # --- SEQUENTIAL: Claude Sonnet web search → GPT-5.5 web search ---
+    # --- SEQUENTIAL: GPT-5.5 evidence scout → short Sonnet challenger/fallback ---
     data = None
 
-    print(f"   🔍 [Forensic Scan] Starting scan for {company_name}: Sonnet web search → GPT-5.5 web search")
+    print(f"   🔍 [Forensic Scan] Starting scan for {company_name}: GPT-5.5 evidence scout → short Sonnet challenger")
 
     if not data:
-        data = execute_with_anthropic(prompt)
-
-    if not data:
-        print(f"   ⚠️ [Forensic Scan] Sonnet web search returned no data. Trying GPT-5.5 web search...")
         data = execute_with_openai_web(prompt)
+
+    if not data:
+        print(f"   ⚠️ [Forensic Scan] GPT-5.5 web search returned no data. Trying bounded Sonnet challenger...")
+        data = execute_with_anthropic(prompt)
+    else:
+        scout_confidence = data.get("confidence_score", 0) or 0
+        scout_evidence_count = len([
+            f for f in data.get("findings", [])
+            if f.get("found") and f.get("url")
+        ])
+        if scout_confidence < 45 or scout_evidence_count < 3:
+            print(
+                f"   🔎 [Forensic Scan] GPT scout coverage weak "
+                f"({scout_confidence}/100, {scout_evidence_count} linked findings). "
+                f"Trying bounded Sonnet challenger..."
+            )
+            challenger_data = execute_with_anthropic(prompt)
+            if challenger_data:
+                challenger_findings = challenger_data.get("findings", [])
+                merged_findings, new_unique_count = _merge_findings(
+                    data.get("findings", []), challenger_findings
+                )
+                data["findings"] = merged_findings
+                if challenger_data.get("key_people"):
+                    existing_names = {
+                        (p.get("name") or "").lower()
+                        for p in data.get("key_people", [])
+                    }
+                    for person in challenger_data.get("key_people", []):
+                        name_key = (person.get("name") or "").lower()
+                        if name_key and name_key not in existing_names:
+                            data.setdefault("key_people", []).append(person)
+                            existing_names.add(name_key)
+                data["confidence_score"] = max(
+                    data.get("confidence_score", 0) or 0,
+                    challenger_data.get("confidence_score", 0) or 0,
+                )
+                data["_search_provider"] = "openai-web-search+sonnet-challenger"
+                print(
+                    f"   ✅ [Forensic Scan] Sonnet challenger added "
+                    f"{new_unique_count} unique finding(s); confidence now "
+                    f"{data.get('confidence_score', 0)}/100"
+                )
+            else:
+                print("   ⏭ [Forensic Scan] Sonnet challenger produced no usable addition.")
 
     # --- CONFIDENCE FLOOR (two-pass structuring safety net) ---
     # When the structuring model (Pass 2) cannot determine confidence from
@@ -2326,10 +2367,11 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 if not research_prompt:
                     break
 
-                # Re-search: Pro → Flash escape hatch (same infra logic as main chain)
-                research_data = execute_with_anthropic(research_prompt)
+                # Re-search follows the same model split: GPT scouts first,
+                # Sonnet challenges only if GPT cannot return usable data.
+                research_data = execute_with_openai_web(research_prompt)
                 if not research_data:
-                    research_data = execute_with_openai_web(research_prompt)
+                    research_data = execute_with_anthropic(research_prompt)
 
                 if not research_data:
                     print(f"   [Re-Search] Loop {loop} returned no parseable data. Stopping.")

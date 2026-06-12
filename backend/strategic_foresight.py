@@ -22,12 +22,26 @@ import re
 import time
 import concurrent.futures
 from datetime import datetime
+from urllib.parse import urlparse
 
 import anthropic
 import requests
 from source_quality import HIGH_CREDIBILITY_DOMAINS, LOW_CREDIBILITY_DOMAINS, assess_source_credibility, classify_generation_context, is_generation_eligible_source
 from llm_clients import call_anthropic_text, call_json_model_chain, call_openai_text
 from foresight_guardrails import build_foresight_guardrails, annotate_foresight_signal, annotate_foresight_link, validate_foresight_text, sanitize_foresight_text, sanitize_future_insight, sanitize_foresight_record, sanitize_foresight_collection, sanitize_report_foresight_fields
+
+
+def _get_url_domain(url: str) -> str:
+    """Return a normalized hostname for source-quality checks."""
+    if not url:
+        return ""
+    try:
+        candidate = url if "://" in url else f"https://{url}"
+        parsed = urlparse(candidate)
+        host = parsed.netloc or parsed.path.split("/", 1)[0]
+        return host.lower().replace("www.", "").strip()
+    except Exception:
+        return ""
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1844,11 +1858,11 @@ def retry_failed_sources(foresight_data, domain, max_retries=1, company_name="")
     print(f"   🔄 [Source Retry] {len(failed_forces)}/{len(forces)} forces have unverified sources — attempting re-search...")
     prompt = _build_source_retry_prompt(failed_forces, domain)
     retry_data = None
-    for model_name, provider, timeout_sec in (("claude-sonnet-4-6", "anthropic", 90), ("gpt-5.5", "openai", 90)):
+    for model_name, provider, timeout_sec in (("gpt-5.5", "openai", 90), ("claude-sonnet-4-6", "anthropic", 75)):
         try:
             t0 = time.time()
             if provider == "anthropic":
-                text = call_anthropic_text(prompt, model=model_name, max_tokens=6000, timeout=timeout_sec, web_search=True, max_searches=6, thinking_budget=2000)
+                text = call_anthropic_text(prompt, model=model_name, max_tokens=6000, timeout=timeout_sec, web_search=True, max_searches=5, thinking_budget=800)
             else:
                 text = call_openai_text(prompt, model=model_name, max_output_tokens=6000, timeout=timeout_sec, web_search=True, search_context_size="medium")
             elapsed = int((time.time() - t0) * 1000)

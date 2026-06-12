@@ -73,10 +73,10 @@ def _extract_json(text: str) -> dict | None:
 
 
 def _run_stakeholder_search(prompt: str, label: str, max_tokens: int, timeout: int) -> tuple[str, str]:
-    """Run stakeholder web research with Claude first, GPT fallback."""
+    """Run stakeholder web research with GPT as evidence scout, Claude fallback."""
     models = (
-        ("claude-sonnet-4-6", "anthropic", timeout),
         ("gpt-5.5", "openai", timeout),
+        ("claude-sonnet-4-6", "anthropic", min(timeout, 75)),
     )
     last_error = None
     for model_name, provider, model_timeout in models:
@@ -89,8 +89,8 @@ def _run_stakeholder_search(prompt: str, label: str, max_tokens: int, timeout: i
                     max_tokens=max_tokens,
                     timeout=model_timeout,
                     web_search=True,
-                    max_searches=8,
-                    thinking_budget=1500,
+                    max_searches=5,
+                    thinking_budget=800,
                 )
             else:
                 text = call_openai_text(
