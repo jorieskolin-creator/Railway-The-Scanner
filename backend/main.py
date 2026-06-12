@@ -1588,6 +1588,16 @@ def _clean_company_data(company_name: str, data: dict) -> dict:
     if uploaded_doc_names:
         doc_context = f"NOTE: Analysis includes confidential internal documents: {', '.join(uploaded_doc_names)}. Treat this as high-fidelity intent data."
 
+    foresight_context = ""
+    stored_foresight = data.get("strategic_foresight") or {}
+    if stored_foresight:
+        try:
+            from strategic_foresight import format_foresight_for_synthesis
+            company_domain = (data.get("domain") or data.get("industry") or "").strip()
+            foresight_context = format_foresight_for_synthesis(stored_foresight, company_name, company_domain)
+        except Exception as fs_err:
+            print(f"   ⚠️ [Clean Re-Synthesis] Foresight context unavailable: {fs_err}")
+
     # Build false claims text with verified corrections for the re-synthesis prompt
     _detail_map = {}
     for dc in detailed_claims:
@@ -1646,6 +1656,7 @@ Intent Data: {intent_narrative}
 {doc_context}
 {washing_context}
 {financial_context}
+{foresight_context}
 
 {contradictions_block}
 ### ANALYSIS PROTOCOL
