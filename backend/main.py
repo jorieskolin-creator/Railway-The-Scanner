@@ -135,6 +135,67 @@ def _analysis_evidence_links(links: list) -> list:
     return [l for l in (links or []) if is_generation_eligible_source(l)]
 
 
+def _build_fact_check_scan_payload(data: dict) -> dict:
+    """Compact internal scan payload used to verify scanner-process observations."""
+    data = data or {}
+    evidence_links = data.get("evidence_links") or []
+    checklist = data.get("reality_checklist") or []
+    dimensions = {}
+    for item in checklist[:80]:
+        if not isinstance(item, dict):
+            continue
+        dim = item.get("category") or item.get("dimension") or "Unknown"
+        entry = dimensions.setdefault(dim, {"found": 0, "not_found": 0, "negative": 0, "generation_eligible": 0})
+        if item.get("found") is True:
+            entry["found"] += 1
+        elif item.get("found") is False:
+            entry["not_found"] += 1
+        if item.get("sentiment") == "negative":
+            entry["negative"] += 1
+        if is_generation_eligible_source(item):
+            entry["generation_eligible"] += 1
+
+    evidence_counts = {
+        "total": len(evidence_links),
+        "generation_eligible": sum(1 for item in evidence_links if is_generation_eligible_source(item)),
+        "analysis_verified": sum(1 for item in evidence_links if item.get("analysis_verified") is True),
+        "display_only": sum(1 for item in evidence_links if item.get("promotion_status") == "display_only"),
+        "excluded": sum(1 for item in evidence_links if item.get("promotion_status") == "excluded"),
+        "wrong_entity": sum(1 for item in evidence_links if item.get("wrong_entity") is True or item.get("entity_match_status") == "wrong"),
+        "unknown_entity": sum(1 for item in evidence_links if item.get("entity_match_status") in {"unknown", "weak"}),
+    }
+
+    sample_findings = []
+    for item in checklist[:30]:
+        if not isinstance(item, dict):
+            continue
+        sample_findings.append({
+            "category": item.get("category") or item.get("dimension"),
+            "finding": item.get("query") or item.get("name") or item.get("title") or item.get("finding"),
+            "found": item.get("found"),
+            "sentiment": item.get("sentiment"),
+            "source_type": item.get("source_type"),
+            "promotion_status": item.get("promotion_status"),
+            "analysis_verified": item.get("analysis_verified"),
+            "generation_eligible": is_generation_eligible_source(item),
+        })
+
+    return {
+        "companyName": data.get("companyName"),
+        "intent_score": data.get("intent_score"),
+        "reality_score": data.get("reality_score"),
+        "reality_gap": data.get("reality_gap"),
+        "confidence_score": data.get("confidence_score"),
+        "archetype": data.get("archetype"),
+        "washing_flag": data.get("washing_flag"),
+        "washing_type": data.get("washing_type"),
+        "evidence_counts": evidence_counts,
+        "dimension_evidence_counts": dimensions,
+        "evidence_based_risks": data.get("evidence_based_risks") or [],
+        "sample_reality_findings": sample_findings,
+    }
+
+
 def _shared_prompt_guardrails(include_diagnostic: bool = True, include_foresight: bool = True, include_claim_tier: bool = False) -> str:
     """Shared evidence/diagnosis/foresight guardrails injected into main.py prompts."""
     return build_shared_guardrails(include_diagnostic=include_diagnostic, include_foresight=include_foresight, include_claim_tier=include_claim_tier)
@@ -854,6 +915,7 @@ def _recheck_company_data(company_name: str, data: dict) -> dict:
         evidence_links=data.get("evidence_links", []),
         company_name=company_name,
         pitch_text=data.get("pitch_text", ""),
+        scan_payload=_build_fact_check_scan_payload(data),
     )
 
     # Step 3: Persist AI verification result back to stored data
@@ -1637,6 +1699,13 @@ If evidence is thin, say so — a short honest analysis beats a long fabricated 
    - If a narrow-scope independent source contradicts a broad self-reported metric on the same topic, briefly state both side-by-side (e.g., "While the company reports thousands of weekly users on its internal AI tool, a departmental survey of HR personnel found only 9% report frequent use").
    - PROPORTIONALITY: You are diagnosing a multi-billion euro enterprise. Keep narrow departmental statistics confined to a single contextualised sentence within the relevant section. Do not let a single departmental survey dominate the technology, AI Readiness, or operational narrative of a global firm. Address the contradiction factually, weight it against company-wide evidence, and move on.
 7. ANTI-EXTRAPOLATION ENFORCEMENT — Reject any sentence that takes a finding from a narrow-scope source (single department, single region, study of N participants, master's thesis) and uses generalising language to apply it to the company as a whole. Generalising language includes phrases that turn the finding into a corporate-wide diagnosis: any wording that expands the population beyond what the source covers. The conceptual rule overrides any specific phrase list.
+8. PRECISION CLAIM GATE — CRITICAL:
+   - Do NOT write exact financial numbers, order backlog, revenue, margin, guidance, growth %, order value, ownership %, headcount, customer count, or investment amount unless that exact value appears in generation-eligible evidence above or in the explicit financial context.
+   - Do NOT name partnerships, joint ventures, named customers/suppliers, technology cooperation partners, product launches, or acquisition details unless the source title or source quote explicitly contains the named parties.
+   - Do NOT write future dates, launch dates, deadlines, roadmap dates, or "announced in <month/year>" unless the source quote contains the same date or year.
+   - Ownership percentages require official registry, company, investor, stock-exchange, or audited financial-report evidence. Otherwise write only broad ownership context.
+   - Never use prior knowledge, training data, or plausible industry memory to add precision. If the evidence packet lacks the value/name/date, omit it.
+   - When evidence is sparse, write "public evidence is limited" or "insufficient verified public evidence" instead of filling the gap with precise-sounding claims.
 
 ### PRIMARY FRAMEWORK (KNOWLEDGE BASE — MANDATORY)
 {knowledge_context}
@@ -1700,6 +1769,7 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
   - If washing detected, name it: "{washing_type or 'Modernization Washing'}" with the specific gap.
   - Do NOT cite numeric scores in the text — scores display separately in the UI.
   - Do NOT fabricate findings. If evidence is sparse, acknowledge gaps rather than inventing patterns.
+  - PRECISION CLAIMS: exact euro amounts, percentages, order books, dates, named partnerships, named product launches, named customers/suppliers, and ownership shares are allowed only when the same value/name/date appears in generation-eligible evidence or explicit financial context above. If not, use cautious non-specific wording or state that public evidence is limited.
   - TEMPORAL PRECISION: When evidence contains the same metric for different periods (e.g. Q1 vs full-year, 2024 vs 2025), always use the most recent FULL-YEAR / ANNUAL figure — not interim or quarterly snapshots. If only a quarterly figure is available, label it explicitly (e.g. "as of Q1 2025"). Never present a quarterly number as if it were the annual result.
   - ORGANIZATIONAL CLAIMS PROHIBITION: NEVER claim or imply leadership gaps, unfilled executive roles, succession planning issues, management vacancies, or organizational restructuring unless the evidence EXPLICITLY states this. The absence of a person in scanner results does NOT mean the role is vacant — it means the scanner didn't find them. Do NOT invent risk factors about people, roles, or organizational structure to add analytical depth. If the evidence doesn't mention an organizational problem, the problem does not exist for this analysis.
   - Use ONLY the four archetype labels: Thriving, Modernizing, Cash Cow, At Risk.
@@ -1745,6 +1815,7 @@ Rules:
 ### GUARDRAILS
 - NEVER fabricate evidence, people, events, partnerships, or metrics not present in the scan data.
 - NEVER invent temporal claims ("recently announced", "just launched", "this quarter").
+- NEVER add precise figures, dates, product names, ownership percentages, or partner names from model memory. The evidence packet must contain them.
 - NEVER extrapolate small signals into sweeping assessments (e.g., a tool mentioned in a job ad does NOT reveal corporate strategy).
 - If a KB dimension has no supporting evidence, score it neutrally and acknowledge the gap — do not speculate.
 - Every factual claim in the summary must be traceable to a specific piece of evidence above.
@@ -1870,6 +1941,7 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                 summary_text=data["summary_text"],
                 evidence_links=data.get("evidence_links", []),
                 company_name=company_name,
+                scan_payload=_build_fact_check_scan_payload(data),
             )
 
             data["ai_verification"] = {
@@ -3803,6 +3875,7 @@ Respond with valid JSON only:
                 evidence_links=reality_results.get("links", []),
                 company_name=companyName,
                 pitch_text=full_data.get("pitch_text", ""),
+                scan_payload=_build_fact_check_scan_payload(full_data),
             )
         full_data["ai_verification"] = {
             "verified": fact_check["verified"],

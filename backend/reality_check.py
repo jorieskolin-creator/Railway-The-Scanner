@@ -83,6 +83,22 @@ _SCAN_HISTORY_RE = re.compile(
 )
 
 
+_INTERNAL_SCAN_OBSERVATION_RE = re.compile(
+    r'\b(?:scan|scanner|evidence\s+packet|stored\s+evidence|source\s+manager|source\s+gate'
+    r'|reality\s+check|intent\s+score|reality\s+score|confidence\s+score|summary\s+confidence|archetype'
+    r'|dimension\s+(?:returns?|shows?|has|lacks?|contains?)'
+    r'|no\s+company-specific\s+evidence|single\s+weak\s+signal|weak\s+(?:signal|evidence)'
+    r'|public\s+evidence\s+is\s+limited|limited\s+public\s+evidence|evidence\s+is\s+sparse'
+    r'|generation-eligible|analysis-verified|display-only|wrong-entity)\b',
+    re.IGNORECASE,
+)
+
+
+def _is_internal_scanner_observation(text: str) -> bool:
+    """Return true for claims about Scanner outputs rather than external company facts."""
+    return bool(text and _INTERNAL_SCAN_OBSERVATION_RE.search(text))
+
+
 def _strip_code_fences(text):
     """Strip markdown code fences (```json ... ```) from LLM responses."""
     if not text:
@@ -625,7 +641,7 @@ def _get_anthropic_key(anthropic_key=None):
     return api_key
 
 
-def _provider_fact_check(summary_text, company_name, evidence_links=None, pitch_text=None):
+def _provider_fact_check(summary_text, company_name, evidence_links=None, pitch_text=None, scan_payload=None):
     """Two-stage GPT/Claude fact-check pipeline."""
     verified_links = []
     evidence_ref = ""
@@ -671,6 +687,16 @@ STORED EVIDENCE SOURCES (these were used to generate the summary):
 AI-GENERATED PITCH TO VERIFY:
 {pitch_text}
 """ if pitch_text else ""
+    scan_payload_section = ""
+    if scan_payload:
+        try:
+            payload_text = json.dumps(scan_payload, ensure_ascii=False, indent=2)
+        except Exception:
+            payload_text = str(scan_payload)
+        scan_payload_section = f"""
+SCAN PAYLOAD FOR INTERNAL SCANNER OBSERVATIONS:
+{payload_text[:9000]}
+"""
 
     stage1_prompt = f"""You are an uncompromising Data Auditor. Evaluate the faithfulness and factual accuracy of an AI-generated company summary.
 
@@ -678,18 +704,22 @@ COMPANY: {company_name}
 
 AI-GENERATED SUMMARY TO VERIFY:
 {summary_text}
-{pitch_section}{evidence_section}
+{pitch_section}{evidence_section}{scan_payload_section}
 INSTRUCTIONS:
 1. Extract definitive claims from the summary and pitch.
-2. Cross-reference each claim strictly against the stored evidence.
-3. Use only verified, generation-eligible evidence as authoritative. Do not accept display-only, unsupported, wrong-entity, or weak evidence.
-4. If the stored evidence is insufficient, use cautious external verification through your own provider tools/knowledge, but do not invent corrections.
-5. A company website is self-reported. It cannot by itself refute analytical observations about internal operating reality unless it contains concrete, specific operational metrics.
-6. Foresight/regulatory context cannot prove present-tense company behavior.
+2. Classify each claim before judging it:
+   - EXTERNAL COMPANY FACT: company events, partnerships, products, customers, financial values, ownership, people, dates, operations, present-tense capabilities.
+   - INTERNAL SCANNER OBSERVATION: statements about what the scan found or did not find, evidence counts, weak/no evidence by dimension, source quality, scores, confidence, archetype, evidence packet, or Scanner process state.
+3. For EXTERNAL COMPANY FACTS, cross-reference strictly against stored evidence. Use only verified, generation-eligible evidence as authoritative. Do not accept display-only, unsupported, wrong-entity, or weak evidence.
+4. For INTERNAL SCANNER OBSERVATIONS, verify against the SCAN PAYLOAD above, not external web sources. Do not flag an internal observation merely because no public webpage says it. Flag it only if it contradicts the scan payload or invents a Scanner result that is not present.
+5. If stored evidence is insufficient for an external company fact, use cautious external verification through your own provider tools/knowledge, but do not invent corrections.
+6. A company website is self-reported. It cannot by itself refute analytical observations about internal operating reality unless it contains concrete, specific operational metrics.
+7. Foresight/regulatory context cannot prove present-tense company behavior.
+8. Use "Internal Scan Mismatch" only for scanner-process statements that contradict the scan payload. Use Fabrication/Contradiction/Misattribution/Organizational Fabrication for external company facts.
 
 OUTPUT FORMAT — valid JSON only:
 If accurate: {{"false_claims": [], "summary_accurate": true}}
-If false claims found: {{"false_claims": [{{"claim": "Exact quote or close paraphrase", "error_type": "Fabrication OR Contradiction OR Misattribution OR Organizational Fabrication", "reasoning": "Brief reason", "correction": "Verified replacement or empty string", "wrong_value": "", "correct_value": "", "source_indices": [1]}}], "summary_accurate": false}}
+If false claims found: {{"false_claims": [{{"claim": "Exact quote or close paraphrase", "error_type": "Fabrication OR Contradiction OR Misattribution OR Organizational Fabrication OR Internal Scan Mismatch", "reasoning": "Brief reason", "correction": "Verified replacement or empty string", "wrong_value": "", "correct_value": "", "source_indices": [1]}}], "summary_accurate": false}}
 """
 
     stage1_false_claims = None
@@ -834,7 +864,7 @@ Rules:
         "time_ms": stage1_time_ms + elapsed2,
     }
 
-def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text=None):
+def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text=None, scan_payload=None):
     """
     AI-powered fact-check — two-stage pipeline:
       Stage 1: GPT-5.4 → Claude Sonnet 4.6 — detects false claims.
@@ -872,7 +902,13 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
     total_start = time.time()
 
     print(f"   🔍 [Fact-Check] GPT/Claude fact-check against generation-eligible evidence...")
-    result = _provider_fact_check(summary_text, company_name, evidence_links=evidence_links, pitch_text=pitch_text)
+    result = _provider_fact_check(
+        summary_text,
+        company_name,
+        evidence_links=evidence_links,
+        pitch_text=pitch_text,
+        scan_payload=scan_payload,
+    )
 
     all_claims = []
     all_claims_detailed = []
@@ -896,6 +932,25 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
             if not source_indices and _SCAN_HISTORY_RE.search(claim_text):
                 print(f"      [Fact-Check] Skipping internal scan history claim (not externally verifiable): {claim_text[:70]}...")
                 continue
+
+            # Scanner-process observations are checked against the internal
+            # scan payload, not public web sources. If the model labels one as
+            # a generic fabrication with no payload mismatch, suppress it so
+            # audit/process language does not become a misleading external
+            # "false company claim" warning.
+            if not source_indices and _is_internal_scanner_observation(claim_text):
+                _error_lower = error_type.lower()
+                _reason_lower = reasoning.lower()
+                _is_payload_mismatch = (
+                    "internal" in _error_lower
+                    or "payload" in _error_lower
+                    or "scan mismatch" in _error_lower
+                    or "contradicts the scan payload" in _reason_lower
+                    or "not present in the scan payload" in _reason_lower
+                )
+                if not _is_payload_mismatch:
+                    print(f"      [Fact-Check] Skipping scanner-internal observation (checked against payload, not web): {claim_text[:70]}...")
+                    continue
 
             # ── Self-referential source filter ────────────────────────────
             # Detect when the fact-checker used only the company's own website
