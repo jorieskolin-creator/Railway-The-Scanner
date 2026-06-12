@@ -112,9 +112,9 @@ HIGH_CREDIBILITY_DOMAINS = {
     "zdnet.com", "infoworld.com", "computerworld.com",
     # Verified company data
     "linkedin.com", "github.com", "glassdoor.com", "stackshare.io",
-    "crunchbase.com", "pitchbook.com",
+    "gitlab.com", "postman.com", "crunchbase.com", "pitchbook.com",
     # Finnish institutional
-    "hankintailmoitukset.fi", "prh.fi", "vtt.fi", "aalto.fi",
+    "hankintailmoitukset.fi", "prh.fi", "virre.prh.fi", "vtt.fi", "aalto.fi",
     "theseus.fi",
     # Finnish institutional — extended coverage
     "greatplacetowork.fi",  # Great Place to Work Finland — employee trust surveys
@@ -122,10 +122,25 @@ HIGH_CREDIBILITY_DOMAINS = {
     "finder.fi",            # Finder.fi — official Finnish company financial data
     "openprocurement.fi",   # Finnish public procurement transparency data
     "tutkihankintoja.fi",   # Tutki Hankintoja — public procurement spending data
+    "ted.europa.eu",        # EU Tenders Electronic Daily
+    "hansel.fi",            # Finnish central government procurement
+    "cloudia.com",          # Nordic procurement/tendering platform
     "espacenet.com",        # European Patent Office — patent database
+    "worldwide.espacenet.com", # European Patent Office global patent search
     "stat.fi",              # Statistics Finland — national statistics authority
     "oikotie.fi",           # Oikotie — major Finnish job/services platform (Sanoma)
+    "duunitori.fi",         # Finnish job platform — useful for current hiring evidence
+    "mimmitkoodaa.fi",      # Finnish inclusion/community technology program
     "avoimuusrekisteri.fi",  # Finnish Transparency Register — lobbying disclosures
+    # Vendor/customer proof of actual implementation
+    "amazon.com",            # AWS case studies and customer stories
+    "microsoft.com",         # Microsoft customer stories
+    "google.com",            # Google Cloud customer stories
+    "sap.com", "salesforce.com", "servicenow.com",
+    "databricks.com", "snowflake.com", "atlassian.com",
+    "huggingface.co",        # Published AI models/datasets
+    "apple.com",             # App Store ratings/reviews
+    "trustpilot.com",        # Independent customer reviews
     # Strategic foresight organizations
     "millennium-project.org",   # Global Futures Intelligence System, Delphi methodology
     "iftf.org",                 # Institute for the Future — ex-RAND, 50+ year track record

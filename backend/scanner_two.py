@@ -37,6 +37,184 @@ def get_clean_domain(url):
         return ""
 
 
+# Candidate acquisition registry for Scanner 2. These are search targets, not
+# promoted evidence. Promotion still requires URL, content, entity, and claim
+# verification downstream.
+JURY_SOURCE_TARGETS = {
+    "ARCHITECTURAL JURY (Engineering Reality)": [
+        {
+            "label": "Public code, APIs, developer portals",
+            "query": 'site:github.com "{search_name}" OR site:gitlab.com "{search_name}" OR site:postman.com "{search_name}" OR site:{domain_hint} ("developers" OR "API" OR "docs")',
+            "source_type": "technical_artifact",
+            "credibility": "medium/high when entity-matched",
+            "company_claims": "yes, only when org/repo/domain clearly matches target",
+            "confirmation": "requires entity match; public repos with same-name ambiguity are display-only",
+        },
+        {
+            "label": "Engineering blog and design system",
+            "query": 'site:{domain_hint} ("engineering blog" OR "tech blog" OR "developers" OR "teknologiablogi" OR "kehittäjät" OR "Design System" OR "UI Kit" OR "suunnittelujärjestelmä")',
+            "source_type": "official_operating_evidence",
+            "credibility": "medium",
+            "company_claims": "yes, company-authored operational evidence",
+            "confirmation": "do not treat generic marketing pages as engineering proof",
+        },
+        {
+            "label": "Job ads and real tech stack",
+            "query": 'site:linkedin.com/jobs "{search_name}" OR site:duunitori.fi "{search_name}" OR site:oikotie.fi "{search_name}" OR site:indeed.fi "{search_name}" OR site:thehub.io "{search_name}" OR "{search_name}" ("developer" OR "kehittäjä" OR "architect" OR "arkkitehti" OR "engineer" OR "job description")',
+            "source_type": "job_ad_tech_stack",
+            "credibility": "medium",
+            "company_claims": "yes for hiring/stack signals, not proof of deployed production systems",
+            "confirmation": "prefer current ads; record date/source and exact tools mentioned",
+        },
+    ],
+    "STRATEGIC JURY (Business Model, Procurement & Customer Experience)": [
+        {
+            "label": "Legal, filings, ownership, investor facts",
+            "query": 'site:prh.fi "{search_name}" OR site:virre.prh.fi "{search_name}" OR site:{domain_hint} ("annual report" OR "vuosikertomus" OR "investors" OR "sijoittajat" OR "stock exchange release" OR "pörssitiedote") OR site:nasdaqomxnordic.com "{search_name}"',
+            "source_type": "legal_financial_filing",
+            "credibility": "high",
+            "company_claims": "yes for legal/ownership/filing facts",
+            "confirmation": "official filing or company/investor page required for precise ownership or guidance claims",
+        },
+        {
+            "label": "Financial databases",
+            "query": 'site:finder.fi "{search_name}" OR site:asiakastieto.fi "{search_name}" OR site:kauppalehti.fi "{search_name}" liikevaihto OR site:talouselama.fi "{search_name}"',
+            "source_type": "third_party_financial",
+            "credibility": "high",
+            "company_claims": "scoped financial facts only",
+            "confirmation": "local legal-entity data cannot become unqualified group performance",
+        },
+        {
+            "label": "Procurement and public delivery",
+            "query": 'site:hankintailmoitukset.fi "{search_name}" OR site:ted.europa.eu "{search_name}" OR site:hansel.fi "{search_name}" OR site:cloudia.com "{search_name}" OR site:tutkihankintoja.fi "{search_name}"',
+            "source_type": "procurement_record",
+            "credibility": "high",
+            "company_claims": "yes for awarded tenders/contracts when target entity is named",
+            "confirmation": "contracting party and award/service category must be explicit",
+        },
+        {
+            "label": "Independent business news and sector context",
+            "query": 'site:reuters.com "{search_name}" OR site:kauppalehti.fi "{search_name}" OR site:talouselama.fi "{search_name}" OR site:etla.fi "{search_name}" OR site:etla.fi "{domain_hint}" OR site:sitra.fi "{search_name}"',
+            "source_type": "editorial_or_research",
+            "credibility": "medium/high",
+            "company_claims": "company-specific only when company is explicitly discussed; otherwise context-only",
+            "confirmation": "sector research may inform context, not company facts",
+        },
+        {
+            "label": "Independent CX evidence",
+            "query": 'site:trustpilot.com "{search_name}" OR site:apps.apple.com "{search_name}" OR site:play.google.com "{search_name}" OR "{search_name}" ("EPSI" OR "NPS" OR "Net Promoter" OR "customer satisfaction" OR "asiakastyytyväisyys" OR "CXPA")',
+            "source_type": "independent_customer_experience",
+            "credibility": "medium/high",
+            "company_claims": "yes for independent ratings/metrics only",
+            "confirmation": "company-published NPS/CSAT remains intent unless independently verified",
+        },
+    ],
+    "CULTURAL JURY (Talent & Psychological Safety)": [
+        {
+            "label": "Careers and hiring transparency",
+            "query": 'site:{domain_hint} ("careers" OR "ura" OR "avoimet työpaikat" OR "open positions" OR "hiring process" OR "rekrytointiprosessi")',
+            "source_type": "official_careers",
+            "credibility": "medium",
+            "company_claims": "yes for stated work model/benefits/hiring process; culture claims are intent unless evidenced",
+            "confirmation": "prefer concrete policies, process steps, and open role details",
+        },
+        {
+            "label": "Certified employee trust and workforce metrics",
+            "query": 'site:greatplacetowork.fi "{search_name}" OR site:{domain_hint} ("sustainability report" OR "vastuullisuusraportti" OR "CSRD" OR "ESRS" OR "S1 own workforce")',
+            "source_type": "workforce_metric",
+            "credibility": "high",
+            "company_claims": "yes for survey/list presence and audited workforce metrics",
+            "confirmation": "record year, size category, metric, and scope",
+        },
+        {
+            "label": "Inclusion, community, employee voice",
+            "query": 'site:mimmitkoodaa.fi "{search_name}" OR "Women in Tech Finland" "{search_name}" OR site:meetup.com "{search_name}" OR site:glassdoor.com "{search_name}" OR site:teamblind.com "{search_name}" OR "{search_name}" ("työntekijäkokemus" OR "työpaikka-arvio" OR "työkulttuuri" OR "returned to" OR "rejoined" OR "palasi takaisin")',
+            "source_type": "culture_signal",
+            "credibility": "low/medium",
+            "company_claims": "display-only unless corroborated by stronger evidence",
+            "confirmation": "do not use anonymous reviews as hard facts; no Reddit",
+        },
+    ],
+    "AI & DATA JURY (Future Readiness)": [
+        {
+            "label": "Cloud/vendor customer stories and partner directories",
+            "query": 'site:aws.amazon.com "{search_name}" ("case study" OR "case studies") OR site:customers.microsoft.com "{search_name}" OR site:cloud.google.com "{search_name}" OR site:sap.com "{search_name}" OR site:salesforce.com "{search_name}" OR site:servicenow.com "{search_name}" OR site:databricks.com "{search_name}" OR site:snowflake.com "{search_name}" OR site:atlassian.com "{search_name}"',
+            "source_type": "vendor_case_study",
+            "credibility": "high/medium",
+            "company_claims": "yes for named implementation/vendor relationship",
+            "confirmation": "source title/quote must name target and technology/vendor",
+        },
+        {
+            "label": "Models, tech-stack, patents, research",
+            "query": 'site:huggingface.co "{search_name}" OR site:stackshare.io "{search_name}" OR site:worldwide.espacenet.com "{search_name}" OR site:espacenet.com "{search_name}" OR site:theseus.fi "{search_name}" OR site:vtt.fi "{search_name}" OR site:tuni.fi "{search_name}" OR site:aalto.fi "{search_name}" OR site:research.aalto.fi "{search_name}"',
+            "source_type": "ai_data_research_artifact",
+            "credibility": "medium/high",
+            "company_claims": "yes when target entity/inventor/applicant relationship is explicit",
+            "confirmation": "patents and research must identify applicant/company or clear affiliation",
+        },
+        {
+            "label": "AI/data economy context",
+            "query": 'site:sitra.fi "{search_name}" ("tekoäly" OR "artificial intelligence" OR "datatalous" OR "data economy") OR site:sitra.fi ("tekoäly" OR "datatalous" OR "data economy")',
+            "source_type": "innovation_context",
+            "credibility": "high",
+            "company_claims": "company-specific only if target is named; otherwise context-only",
+            "confirmation": "do not promote national/sector context into company adoption claims",
+        },
+    ],
+    "SERVICE PORTFOLIO JURY (Delivery Reality)": [
+        {
+            "label": "Official services, references, customer stories",
+            "query": 'site:{domain_hint} ("services" OR "palvelut" OR "solutions" OR "ratkaisut" OR "case study" OR "reference" OR "asiakastarina" OR "referenssi" OR "customers")',
+            "source_type": "official_service_evidence",
+            "credibility": "medium",
+            "company_claims": "yes for offered services and named references, but promotional tone requires caution",
+            "confirmation": "look for concrete platform names, delivery methods, and named customer outcomes",
+        },
+        {
+            "label": "Customer-side proof and analyst coverage",
+            "query": '"{search_name}" ("case study" OR "customer story" OR "asiakastarina" OR "reference" OR "referenssi" OR Gartner OR Forrester OR ISG OR "Magic Quadrant")',
+            "source_type": "third_party_service_evidence",
+            "credibility": "medium/high",
+            "company_claims": "yes when customer/analyst explicitly names target and service",
+            "confirmation": "customer-side pages are stronger than supplier-authored references",
+        },
+        {
+            "label": "Procurement delivery track record",
+            "query": 'site:openprocurement.fi "{search_name}" OR site:tutkihankintoja.fi "{search_name}" OR site:hankintailmoitukset.fi "{search_name}"',
+            "source_type": "procurement_record",
+            "credibility": "high",
+            "company_claims": "yes for public-sector delivery capability",
+            "confirmation": "record buyer, category, value, and recency when available",
+        },
+    ],
+}
+
+
+def _build_jury_source_registry_block(search_name: str, domain_hint: str) -> str:
+    """Render source targets as a compact acquisition registry for the web-search prompt."""
+    lines = [
+        "SOURCE TARGET REGISTRY (candidate acquisition only — not automatic evidence):",
+        "Search broadly, store more, promote narrowly. A source is allowed for analysis only after URL, content, target-entity, and claim-support verification pass.",
+        "Do not increase search count because the registry is larger; combine adjacent targets and prioritize the highest-trust route for each jury.",
+    ]
+    for jury_name, targets in JURY_SOURCE_TARGETS.items():
+        lines.append(f"\n    {jury_name}")
+        for target in targets:
+            query = target["query"].format(search_name=search_name, domain_hint=domain_hint)
+            lines.append(
+                "       - {label}: `{query}` | type={source_type}; default trust={credibility}; "
+                "company claims={company_claims}; confirmation={confirmation}".format(
+                    label=target["label"],
+                    query=query,
+                    source_type=target["source_type"],
+                    credibility=target["credibility"],
+                    company_claims=target["company_claims"],
+                    confirmation=target["confirmation"],
+                )
+            )
+    return "\n".join(lines)
+
+
 # --- PRH OPEN DATA PRE-FETCH ---
 
 def _fetch_prh_company_data(company_name: str, timeout: int = 8) -> dict | None:
@@ -1801,6 +1979,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     else:
         _size_block = ""
 
+    source_target_block = _build_jury_source_registry_block(search_name, domain_hint)
+
     # --- DEFINING THE PROMPT ONCE ---
     prompt = f"""
     Perform a FORENSIC INVESTIGATION on "{search_name}" (Domain: {domain_hint}).
@@ -1822,79 +2002,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     CRITICAL: You must execute searches for ALL 5 JURIES. Do not skip any.
     NOTE: Target companies are primarily Finnish. Use BOTH English and Finnish search terms.
 
-    1. THE ARCHITECTURAL JURY (Engineering Reality)
-       - Public Code & APIs: `site:github.com "{search_name}" OR site:postman.com "{search_name}"`
-       - Engineering Culture: `site:{domain_hint} "engineering blog" OR "tech blog" OR "developers" OR "teknologiablogi" OR "kehittäjät"`
-       - Design Systems: `site:{domain_hint} "Design System" OR "UI Kit" OR "suunnittelujärjestelmä"`
-       - Job Ads Tech Stack (CRITICAL): `site:linkedin.com/jobs "{search_name}" OR site:duunitori.fi "{search_name}" OR site:indeed.fi "{search_name}"`
-         ANALYZE what technologies/tools/methodologies appear in their job postings.
-         Job ads reveal the REAL tech stack, not marketing claims.
-       - Oikotie Job Ads (Finnish): `site:oikotie.fi "{search_name}" "developer" OR "kehittäjä" OR "architect" OR "arkkitehti" OR "engineer"`
-         Oikotie is Finland's second-largest job platform. Check for tech stack, team structure, and methodology mentions.
-       - Job Descriptions Detail: `"{search_name}" job description "engineer" OR "developer" OR "kehittäjä" OR "arkkitehti"`
-
-    2. THE STRATEGIC JURY (Business Model, Procurement & Customer Experience)
-       - Cloud Sourcing (Finland): `site:hankintailmoitukset.fi "{search_name}" AND ("Cloud" OR "Pilvi" OR "SaaS" OR "pilvipalvelu")`
-       - Recurring Revenue Evidence: `site:{domain_hint} filetype:pdf "Recurring Revenue" OR "ARR" OR "Jatkuva laskutus" OR "vuosiliikevaihto"`
-       - Modern Tech Investments: `site:crunchbase.com "{search_name}" "Acquisitions" OR "Yrityskaupat"`
-       - Leadership Thought Leadership: `site:medium.com "{search_name}" OR site:substack.com "{search_name}"`
-       - Finnish Business News: `site:kauppalehti.fi "{search_name}" OR site:talouselama.fi "{search_name}" "strategia" OR "digitalisaatio"`
-       - Finnish Company Financials: `site:finder.fi "{search_name}"` — verify revenue trend, profit margin, employee count from official register data.
-       - Industry Research (ETLA): `site:etla.fi "{search_name}" OR site:etla.fi "{domain_hint}" "digitalisaatio" OR "tuottavuus" OR "kilpailukyky"`
-         ETLA is Finland's research institute for the economy. Their industry reports reveal whether this company's sector is growing, digitalizing, or facing structural challenges.
-       - Sitra Innovation Insights: `site:sitra.fi "{search_name}" OR site:sitra.fi "data economy" OR "kiertotalous" OR "circular economy"`
-         If the company appears in Sitra case studies, this is a strong innovation signal. Sitra is Finland's national innovation fund.
-       - Customer Experience (INDEPENDENT sources only): `site:trustpilot.com "{search_name}" OR site:trustpilot.com "{domain_hint}"`
-       - CX Metrics & Recognition: `"{search_name}" "NPS" OR "Net Promoter" OR "customer satisfaction" OR "asiakastyytyväisyys" OR EPSI OR CXPA`
-       - App/Service Reviews: `site:apps.apple.com "{search_name}" OR site:play.google.com "{search_name}"`
-         IMPORTANT: For CX evidence, ONLY accept metrics from INDEPENDENT sources (Trustpilot,
-         EPSI, app store ratings, analyst reports). Company-published NPS/CSAT scores on their
-         own website are INTENT, not reality — do NOT count them as verified CX evidence.
-
-    3. THE CULTURAL JURY (Talent & Psychological Safety)
-       - Boomerang Employees (High Trust): `site:linkedin.com "{search_name}" AND ("returned to" OR "rejoined" OR "palasi takaisin")`
-       - Inclusion Artifacts: `site:mimmitkoodaa.fi "{search_name}" OR "Women in Tech Finland" "{search_name}"`
-       - Community Hosting: `site:meetup.com "{search_name}" AND ("Host" OR "Sponsor" OR "kumppani")`
-       - Employee Voice: `site:glassdoor.com "{search_name}" OR site:teamblind.com "{search_name}"` (NO REDDIT)
-       - Finnish Employee Discussion: `"{search_name}" "työntekijäkokemus" OR "työpaikka-arvio" OR "työkulttuuri"`
-       - Great Place to Work: `site:greatplacetowork.fi "{search_name}"`
-         Check if the company appears on Finland's Best Workplaces list. Presence means independently verified
-         high employee trust (survey-based methodology covering credibility, respect, fairness, pride, camaraderie).
-         Note the year and size category if found. This is a HIGH-TRUST culture signal.
-       - CSRD Sustainability Report (Social Metrics): `site:{domain_hint} "sustainability report" OR "vastuullisuusraportti" OR "CSRD" OR "ESRS"`
-         Large Finnish companies (250+ employees) must now publish ESRS-compliant reports. Look for S1 (own workforce)
-         metrics: employee turnover, training hours, diversity statistics, work-life balance policies, collective
-         bargaining coverage. These are AUDITED numbers — more reliable than marketing claims about culture.
-       - Careers Page Culture Signals (CRITICAL): `site:{domain_hint} "careers" OR "ura" OR "avoimet työpaikat" OR "open positions"`
-         ANALYZE the careers page for: team structure, benefits, work models (remote/hybrid),
-         values in action, hiring process transparency. These reveal real culture, not marketing.
-
-    4. THE AI & DATA JURY (Future Readiness)
-       - Real AI Models: `site:huggingface.co "{search_name}"`
-       - Tech Stack Verification: `site:stackshare.io "{search_name}"`
-       - Cloud Case Studies: `site:aws.amazon.com "Case Studies" "{search_name}" OR site:customers.microsoft.com "{search_name}"`
-       - Deep Academic Audits: `site:theseus.fi "{search_name}" OR site:research.aalto.fi "{search_name}"`
-       - Finnish Tech Research: `site:vtt.fi "{search_name}" OR site:tuni.fi "{search_name}" OR site:aalto.fi "{search_name}"`
-       - Patent & R&D Activity: `site:espacenet.com "{search_name}" OR "worldwide.espacenet.com" "{search_name}"`
-         Patent filings are CONCRETE evidence of R&D investment — harder to fake than marketing claims.
-         Look for: number of recent patents (last 3 years), technology focus areas (AI, ML, data processing,
-         IoT). Even 1-2 patents in relevant tech domains suggest genuine technical capability.
-       - Sitra AI & Data Economy: `site:sitra.fi "{search_name}" "tekoäly" OR "artificial intelligence" OR "datatalous" OR "data economy"`
-         Sitra is Finland's national innovation fund. If the company appears in their AI/data research, this is
-         a strong signal of actual AI/data maturity at national level.
-
-    5. THE SERVICE PORTFOLIO JURY (Delivery Reality — NEW)
-       - Service Pages: `site:{domain_hint} "services" OR "palvelut" OR "solutions" OR "ratkaisut"`
-         ANALYZE what they actually DELIVER vs. what they claim. Look for specifics:
-         platform names, technology mentions, methodology references, case studies.
-       - Client References: `site:{domain_hint} "case study" OR "reference" OR "asiakastarina" OR "referenssi"`
-       - External Reviews: `"{search_name}" review OR "arvostelu" service quality OR "palvelun laatu"`
-       - Analyst Reports: `"{search_name}" Gartner OR Forrester OR ISG OR "Magic Quadrant"`
-       - Public Procurement Track Record: `site:openprocurement.fi "{search_name}" OR site:tutkihankintoja.fi "{search_name}"`
-         Finnish public procurement data shows VERIFIED delivery — the company won competitive tenders and
-         delivered services to government. Look for: number of contracts, total value, which agencies they serve,
-         service categories (IT, consulting, infrastructure), and whether activity is recent. This is the STRONGEST
-         possible evidence of real service delivery capability.
+    {source_target_block}
 
     IDENTIFY KEY MODERNIZATION STAKEHOLDERS (include in JSON output):
     Search for real, VERIFIED names of current executives/leaders relevant to modernization.
@@ -2104,9 +2212,9 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             is_rescan = bool(previous_context and previous_context.get("previous_reality") is not None)
             search_budget = 5 if is_rescan else 7
             if is_rescan:
-                print(f"   📊 [Forensic Scan] RESCAN: search budget = {search_budget} (3 verification + 5 jury)")
+                print(f"   📊 [Forensic Scan] RESCAN: Sonnet challenger search budget = {search_budget} (verification + weak-jury challenge)")
             else:
-                print(f"   📊 [Forensic Scan] FIRST SCAN: search budget = {search_budget} (2 per jury)")
+                print(f"   📊 [Forensic Scan] FIRST SCAN: Sonnet challenger search budget = {search_budget} (combine targets across juries)")
 
             # --- PASS 1: Web Search (format-relaxed) ---
             # Replace strict JSON requirement with flexible format instruction.
