@@ -3235,47 +3235,11 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
   - Use ONLY the four archetype labels: Thriving, Modernizing, Cash Cow, At Risk.
   - CRITICAL SEPARATION: This section is strictly neutral diagnosis. Do NOT use sales language, calls-to-action, persuasion, or proposal framing here.
 
-STEP 4 — PITCH (90-110 words):
-A direct cold-outreach message to a C-level executive at {companyName}:
-  - Open with a specific insight from the analysis that would make them stop and read.
-  - Derive 1-2 CONCRETE PROPOSALS targeting the company's weakest KB dimensions.
-    Each proposal must name the dimension and suggest a specific transformation direction
-    (e.g., "Shift from Digital Taylorism toward Flow Efficiency by restructuring around
-    stream-aligned teams with end-to-end ownership").
-  - The proposals must feel specific to THIS company's situation, not generic consulting templates.
-  - Do NOT use "Forensic Modernization Audit" or any generic service names.
-  - Tone: Professional, direct, evidence-led. Every claim in the pitch must be verifiable from the scan data. The recipient should feel understood, not sold to.
-  - Structure as exactly 3 short paragraphs separated by \n\n (opening hook / proposals / closing CTA).
-
-STEP 5 — EVIDENCE-BASED RISKS:
+STEP 4 — EVIDENCE-BASED RISKS:
 Generate 2-4 neutral risk bullets in a JSON array named evidence_based_risks.
   - Each risk must be diagnostic, evidence-backed, and free of sales/promotional language.
   - No solutions or CTA in this section; just what risk exists and why.
-
-STEP 6 — IMPACT PROPOSALS (derived from Steps 1-4):
-Generate 1-2 WHY statements and 1-2 WHAT statements (matching count).
-If evidence strongly supports 2 distinct weaknesses, produce 2 pairs. If evidence is limited, produce 1 pair. One strong evidence-based proposal beats two fabricated ones.
-
-WHY (Desired Impact) — the strategic reason to act:
-  - Each WHY must connect a specific weakness found in Step 1 to a business-level consequence the C-suite cares about.
-  - Frame as: "What happens if this stays unfixed?" → strategic risk or missed opportunity.
-  - Tone: Executive-level, outcome-oriented. Not technical jargon.
-  - Length: 1-2 sentences each.
-  - Example: "Reduce time-to-market for digital services from months to weeks by dissolving project-based handoffs that currently bottleneck every release."
-
-WHAT (Desired Effect) — the measurable business outcome:
-  - Each WHAT must propose a concrete, observable change that would prove progress on the corresponding WHY.
-  - Frame as: "What would be different in 12 months if we succeed?"
-  - Must be specific enough to verify, but not a made-up KPI number.
-  - Tone: Tangible, verifiable, grounded in this company's context.
-  - Length: 1-2 sentences each.
-  - Example: "Cross-functional teams own services end-to-end, eliminating the current approval chain that delays every deployment."
-
-Rules:
-  - WHY1 pairs with WHAT1 (same theme). If 2 pairs: WHY2 pairs with WHAT2 (different theme).
-  - Draw ONLY from the weakest KB dimensions scored in Step 1 that have ACTUAL EVIDENCE.
-  - Never generic — each must reference something specific from the evidence or diagnosis.
-  - These are proposals, not promises — frame as "potential impact" and "potential effect".
+  - These risks become the locked input contract for the later Strategic Activation call.
 
 ### GUARDRAILS
 - NEVER fabricate evidence, people, events, partnerships, or metrics not present in the scan data.
@@ -3286,11 +3250,11 @@ Rules:
 
 ### OUTPUT
 Respond with valid JSON only. Required fields:
-{{"diagnostic_summary": "...", "evidence_based_risks": ["..."], "commercial_pitch": "...", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."], "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
-Note: diagnostic_summary must contain \n\n between paragraphs (3-4 core paragraphs plus one optional final foresight implication paragraph). commercial_pitch must also contain \n\n between its 3 paragraphs.
-Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2."""
+{{"diagnostic_summary": "...", "evidence_based_risks": ["..."], "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
+Note: diagnostic_summary must contain \n\n between paragraphs (3-4 core paragraphs plus one optional final foresight implication paragraph).
+Do NOT generate commercial_pitch, why_proposals, or what_proposals in this call. Those are generated later from the locked diagnosis and Knowledge Base."""
 
-                # --- Synthesis with fallback chain: Opus 4.8 → GPT 5.5 → Sonnet 4.6 ---
+                # --- Diagnosis synthesis with fallback chain: Opus 4.8 → GPT 5.5 → Sonnet 4.6 ---
                 # Opus is the judge — it does ONE thing: synthesize. Fallbacks degrade gracefully.
                 # Opus uses Extended Thinking to reason through conflicting intent vs. reality
                 # evidence before generating the synthesis — exactly what a "judge" model should do.
@@ -3547,6 +3511,136 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                                  summary = summary.replace(wrong_label.upper(), expected_archetype.upper())
                          elif opus_archetype:
                              print(f"   ✅ [Archetype Verify] Opus archetype '{opus_archetype}' matches score-derived '{expected_archetype}'")
+
+                         # --- STRATEGIC ACTIVATION (WHY / WHAT / PITCH) ---
+                         # This is deliberately split from diagnosis. The first
+                         # call is the strategic judge; this second call activates
+                         # only the locked diagnosis, risks, evidence, and KB.
+                         _activation_left = _synthesis_budget_left()
+                         if summary and _activation_left > 45:
+                             activation_prompt = f"""You are writing the Strategic Activation layer for {companyName}.
+The AI Diagnosis below is LOCKED. The Knowledge Base is the mandatory baseline. You may turn the diagnosis into WHY/WHAT proposals and a concise pitch, but you may not introduce new facts.
+
+### KNOWLEDGE BASE BASELINE — MANDATORY
+{knowledge_context}
+
+### LOCKED DIAGNOSTIC CONTRACT
+Archetype: {expected_archetype}
+Reality score: {reality_results["score"]}
+Intent score: {intent_results["score"]}
+Financial context: {financial_context or "No financial interpretation available."}
+Washing / contradiction context: {washing_context or "No washing flag detected."}
+
+Diagnosis:
+{summary}
+
+Evidence-based risks:
+{json.dumps(evidence_based_risks, ensure_ascii=False)}
+
+### GENERATION-ELIGIBLE EVIDENCE PACKET
+{evidence_list}
+{negative_findings_context}
+{foresight_context}
+
+### ACTIVATION RULES
+1. Use the Knowledge Base terminology and proposal logic as the baseline.
+2. Ground every WHY/WHAT/Pitch claim in the locked diagnosis, risks, or evidence packet above.
+3. Do NOT add new facts, people, metrics, events, client names, partnerships, or timelines.
+4. If evidence is thin, produce one strong pair instead of two weak pairs.
+5. WHY1 must pair with WHAT1. If you produce WHY2, produce WHAT2 for the same theme.
+6. Keep activation suggestive but evidence-bound: proposals, not promises.
+
+### PITCH
+Write a direct cold-outreach message to a C-level executive at {companyName}.
+- 90-110 words.
+- Exactly 3 short paragraphs separated by \\n\\n.
+- Opening hook / concrete proposal / closing CTA.
+- No generic service names.
+
+### WHY / WHAT
+Generate 1-2 WHY statements and 1-2 WHAT statements.
+- WHY = the strategic reason to act, tied to a diagnosed weakness and business consequence.
+- WHAT = the observable business effect that would prove progress.
+- Each statement: 1-2 sentences.
+
+### OUTPUT
+Respond with valid JSON only:
+{{"commercial_pitch": "...", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."]}}"""
+
+                             activation_text = ""
+                             activation_timeout = min(75, max(35, _activation_left - 20))
+                             try:
+                                 print(f"   🔄 [Activation] Generating WHY/WHAT/Pitch from locked diagnosis via gpt-5.5 (timeout: {activation_timeout}s)...")
+                                 act_start = time.time()
+
+                                 def _activation_gpt():
+                                     return _call_openai_text(
+                                         activation_prompt,
+                                         model="gpt-5.5",
+                                         max_output_tokens=3500,
+                                         timeout=activation_timeout,
+                                     )
+
+                                 act_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                                 act_future = act_pool.submit(_activation_gpt)
+                                 try:
+                                     activation_text = act_future.result(timeout=activation_timeout)
+                                 except concurrent.futures.TimeoutError:
+                                     act_pool.shutdown(wait=False)
+                                     print(f"   ⏰ [Activation] GPT 5.5 timed out after {activation_timeout}s")
+                                     raise Exception(f"GPT activation timeout after {activation_timeout}s")
+                                 act_pool.shutdown(wait=False)
+                                 print(f"   ✅ [Activation] GPT 5.5 complete ({int((time.time() - act_start) * 1000)}ms)")
+                             except Exception as act_gpt_err:
+                                 print(f"   ❌ [Activation] GPT 5.5 failed: {act_gpt_err}")
+
+                             if not activation_text and _synthesis_budget_left() > 35:
+                                 sonnet_activation_timeout = min(60, max(30, _synthesis_budget_left() - 15))
+                                 try:
+                                     print(f"   🔄 [Activation] Falling back to Claude Sonnet 4.6 (timeout: {sonnet_activation_timeout}s)...")
+                                     act_start = time.time()
+
+                                     def _activation_sonnet():
+                                         return claude_client.messages.create(
+                                             model="claude-sonnet-4-6",
+                                             max_tokens=3000,
+                                             system="You are a conservative activation writer. Use only the locked diagnosis, evidence packet, and Knowledge Base. Return JSON only.",
+                                             messages=[{"role": "user", "content": activation_prompt}],
+                                         )
+
+                                     act_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                                     act_future = act_pool.submit(_activation_sonnet)
+                                     try:
+                                         sonnet_resp = act_future.result(timeout=sonnet_activation_timeout)
+                                         for block in sonnet_resp.content:
+                                             if getattr(block, 'type', None) == 'text':
+                                                 activation_text = block.text
+                                                 break
+                                     except concurrent.futures.TimeoutError:
+                                         act_pool.shutdown(wait=False)
+                                         print(f"   ⏰ [Activation] Claude Sonnet 4.6 timed out after {sonnet_activation_timeout}s")
+                                     act_pool.shutdown(wait=False)
+                                     if activation_text:
+                                         print(f"   ✅ [Activation] Claude Sonnet 4.6 complete ({int((time.time() - act_start) * 1000)}ms)")
+                                 except Exception as act_sonnet_err:
+                                     print(f"   ❌ [Activation] Claude Sonnet 4.6 failed: {act_sonnet_err}")
+
+                             if activation_text:
+                                 activation_payload = extract_json_from_text(activation_text)
+                                 if activation_payload:
+                                     activation_json = json.loads(activation_payload, strict=False)
+                                     pitch = activation_json.get("commercial_pitch", activation_json.get("pitch", pitch)) or pitch
+                                     why_proposals = activation_json.get("why_proposals", why_proposals) or why_proposals
+                                     what_proposals = activation_json.get("what_proposals", what_proposals) or what_proposals
+                                     if pitch or why_proposals or what_proposals:
+                                         print(
+                                             f"   ✅ [Activation] Grounded activation complete "
+                                             f"(why={len(why_proposals)}, what={len(what_proposals)}, pitch={'yes' if pitch else 'no'})"
+                                         )
+                                 else:
+                                     print("   ⚠️ [Activation] Could not parse activation JSON — leaving WHY/WHAT/Pitch empty")
+                         elif summary:
+                             print(f"   ⏭ [Activation] Budget < 45s before final reserve ({_activation_left}s) — skipping WHY/WHAT/Pitch")
 
                     else:
                          summary = response_text
