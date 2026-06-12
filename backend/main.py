@@ -2577,17 +2577,19 @@ def _execute_scan_pipeline(
         # Global scan time budget (seconds). All phases must fit within this window.
         # Live scans run as background jobs, so the internal budget can be
         # longer than a request/response timeout. Keep a protected reserve for
-        # final outputs so difficult scans do not starve General Summary,
-        # Detailed Report, and storage.
+        # final outputs so difficult scans do not starve AI Diagnosis,
+        # WHY/WHAT, Strategic Pitch, General Summary, and storage.
         # Budget allocation:
-        #   Reality check: budget - 180s (reserves time for synthesis + post-processing)
+        #   Reality check: capped so it cannot consume the core synthesis slot
         #   Financial:     120s (parallel with reality, non-blocking)
         #   Self-analysis: only if remaining > 120s
-        #   Synthesis:     adaptive per model call (with fallback chain)
+        #   Synthesis:     protected core budget with adaptive fallback chain
         #   Final outputs: protected reserve for fact-check, General Summary,
-        #                  Detailed Report, save/index.
-        SCAN_TOTAL_BUDGET = 720
-        FINAL_OUTPUT_RESERVE = 150
+        #                  save/index; Detailed Report is optional when time is tight.
+        SCAN_TOTAL_BUDGET = 900
+        CORE_SYNTHESIS_RESERVE = 180
+        FINAL_OUTPUT_RESERVE = 120
+        REALITY_PHASE_MAX_BUDGET = 420
         DETAIL_REPORT_FULL_MIN = 120
         DETAIL_REPORT_COMPACT_MIN = 75
         print(f"🚀 --- LIVE SCAN INITIATED FOR: {companyName} (budget: {SCAN_TOTAL_BUDGET}s) ---")
@@ -2680,15 +2682,27 @@ def _execute_scan_pipeline(
         if job_id:
             _update_scan_job(job_id, phase="reality_and_financial", progress=45)
             _append_scan_log(job_id, "Running reality and financial analysis")
-        # Allocate time: reserve 150s for synthesis + self-analysis + post-processing
+        # Allocate time: reserve protected time for core synthesis and final outputs.
+        # Without this cap, difficult evidence searches can consume the entire live
+        # scan budget and force AI Diagnosis / WHY-WHAT / Pitch to be skipped.
         elapsed_so_far = time.time() - scan_start
-        reality_budget = max(180, int(SCAN_TOTAL_BUDGET - elapsed_so_far - FINAL_OUTPUT_RESERVE))
+        reality_budget = int(
+            SCAN_TOTAL_BUDGET
+            - elapsed_so_far
+            - CORE_SYNTHESIS_RESERVE
+            - FINAL_OUTPUT_RESERVE
+        )
+        reality_budget = max(180, min(REALITY_PHASE_MAX_BUDGET, reality_budget))
         reality_outer_timeout = reality_budget + 10  # small buffer over internal budget
         # Get employee count for stakeholder seniority filtering
         _scan_meta = get_company_metadata(companyName) or {}
         _employee_count = _scan_meta.get("employees")
 
-        print(f"   🔄 [Scanner 2 + Financial] Starting parallel execution for {companyName} (reality budget: {reality_budget}s)...")
+        print(
+            f"   🔄 [Scanner 2 + Financial] Starting parallel execution for {companyName} "
+            f"(reality budget: {reality_budget}s; core synthesis reserve: {CORE_SYNTHESIS_RESERVE}s; "
+            f"final reserve: {FINAL_OUTPUT_RESERVE}s)..."
+        )
         s2_start = time.time()
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
@@ -3285,16 +3299,31 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                 synth_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
                 # Dynamic per-attempt timeout: share remaining budget across
                 # fallback attempts while protecting final report/export phases.
-                _synth_available = int(synth_remaining) - FINAL_OUTPUT_RESERVE
-                _synth_chain_budget = min(240, max(60, _synth_available))
-                SYNTH_TIMEOUT = max(30, _synth_chain_budget // 3)
+                _synth_available = max(0, int(synth_remaining) - FINAL_OUTPUT_RESERVE)
+                _synth_chain_budget = min(240, _synth_available)
+                if _synth_available >= 180:
+                    SYNTH_TIMEOUT = 60
+                elif _synth_available >= 120:
+                    SYNTH_TIMEOUT = 45
+                elif _synth_available >= 75:
+                    SYNTH_TIMEOUT = 40
+                else:
+                    SYNTH_TIMEOUT = max(25, min(35, _synth_available - 5))
+                _use_opus = _synth_available >= 120
+                _use_gpt = _synth_available >= 75
+                _use_sonnet = _synth_available >= 30
+
+                def _synthesis_budget_left() -> int:
+                    return max(0, int(SCAN_TOTAL_BUDGET - (time.time() - scan_start) - FINAL_OUTPUT_RESERVE))
+
                 print(
                     f"   [Synthesis] Time remaining: {int(synth_remaining)}s | "
                     f"protected reserve: {FINAL_OUTPUT_RESERVE}s | "
-                    f"chain budget: {_synth_chain_budget}s | per-attempt: {SYNTH_TIMEOUT}s"
+                    f"chain budget: {_synth_chain_budget}s | per-attempt: {SYNTH_TIMEOUT}s | "
+                    f"mode: {'full' if _use_opus else 'gpt/sonnet' if _use_gpt else 'sonnet-only' if _use_sonnet else 'skip'}"
                 )
 
-                if _synth_available < 45:
+                if not _use_sonnet:
                     scan_quality = "partial_synthesis"
                     print(
                         f"   ⏭ [Synthesis] Only {_synth_available}s available before final-output reserve "
@@ -3310,81 +3339,90 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                             messages=[{"role": "user", "content": synthesis_prompt}]
                         )
 
-                    try:
-                        print(f"   🔄 [Synthesis] Attempting claude-opus-4-8 with Extended Thinking (timeout: {SYNTH_TIMEOUT}s)...")
-                        synth_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                        synth_future = synth_pool.submit(_synth_opus)
+                    if _use_opus:
                         try:
-                            response = synth_future.result(timeout=SYNTH_TIMEOUT)
-                            # Extended thinking response: [ThinkingBlock, TextBlock]
-                            # Extract the text block (skip thinking blocks)
-                            response_text = ""
-                            if response.content:
-                                for block in response.content:
-                                    if getattr(block, 'type', None) == 'text':
-                                        response_text = block.text
-                                        break
-                            print(f"   ✅ [Synthesis] claude-opus-4-8 + Extended Thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
-                        except concurrent.futures.TimeoutError:
-                            synth_pool.shutdown(wait=False)
-                            print(f"   ⏰ [Synthesis] claude-opus-4-8 timed out after {SYNTH_TIMEOUT}s")
-                            raise Exception(f"Opus timeout after {SYNTH_TIMEOUT}s")
-                        synth_pool.shutdown(wait=False)
-                    except Exception as opus_err:
-                        print(f"   ❌ [Synthesis] Opus 4.8 failed: {opus_err}")
-
-                        # Fallback 1: GPT 5.5 (text-only synthesis from verified evidence)
-                        if not response_text and (SCAN_TOTAL_BUDGET - (time.time() - scan_start) - FINAL_OUTPUT_RESERVE) > 30:
+                            print(f"   🔄 [Synthesis] Attempting claude-opus-4-8 with Extended Thinking (timeout: {SYNTH_TIMEOUT}s)...")
+                            synth_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                            synth_future = synth_pool.submit(_synth_opus)
                             try:
-                                print(f"   🔄 [Synthesis] Falling back to GPT 5.5 (timeout: {SYNTH_TIMEOUT}s)...")
-                                gpt_start = time.time()
-                                response_text = _call_openai_text(
-                                    synthesis_prompt,
-                                    model="gpt-5.5",
-                                    max_output_tokens=12000,
-                                    timeout=SYNTH_TIMEOUT,
-                                )
-                                print(f"   ✅ [Synthesis] GPT 5.5 succeeded in {int((time.time() - gpt_start) * 1000)}ms")
-                            except Exception as gpt_err:
-                                print(f"   ❌ [Synthesis] GPT 5.5 failed: {gpt_err}")
-
-                        # Fallback 2: Claude Sonnet 4.6 (independent provider — survives OpenAI outages)
-                        if not response_text and (SCAN_TOTAL_BUDGET - (time.time() - scan_start) - FINAL_OUTPUT_RESERVE) > 30:
-                            try:
-                                print(f"   🔄 [Synthesis] Falling back to Claude Sonnet 4.6 (timeout: {SYNTH_TIMEOUT}s)...")
-                                m_start = time.time()
-
-                                _sonnet_system = (
-                                    "CRITICAL: You are a CONSERVATIVE analyst. When in doubt, say 'insufficient evidence.' "
-                                    "Do NOT extrapolate. Do NOT infer organizational problems. Do NOT sound deeper than "
-                                    "your evidence supports. A boring, accurate summary beats an impressive, fabricated one. "
-                                    "NEVER invent leadership gaps, morale issues, succession problems, or strategic conclusions "
-                                    "from minor details like tool names in job ads."
-                                )
-
-                                def _synth_sonnet():
-                                    return claude_client.messages.create(
-                                        model="claude-sonnet-4-6",
-                                        max_tokens=4000,
-                                        system=_sonnet_system,
-                                        messages=[{"role": "user", "content": synthesis_prompt}],
-                                    )
-
-                                m_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                                m_future = m_pool.submit(_synth_sonnet)
-                                try:
-                                    sonnet_resp = m_future.result(timeout=SYNTH_TIMEOUT)
-                                    for block in sonnet_resp.content:
+                                response = synth_future.result(timeout=SYNTH_TIMEOUT)
+                                # Extended thinking response: [ThinkingBlock, TextBlock]
+                                # Extract the text block (skip thinking blocks)
+                                response_text = ""
+                                if response.content:
+                                    for block in response.content:
                                         if getattr(block, 'type', None) == 'text':
                                             response_text = block.text
                                             break
-                                    print(f"   ✅ [Synthesis] Claude Sonnet 4.6 succeeded in {int((time.time() - m_start) * 1000)}ms")
-                                except concurrent.futures.TimeoutError:
-                                    m_pool.shutdown(wait=False)
-                                    print(f"   ⏰ [Synthesis] Claude Sonnet 4.6 timed out after {SYNTH_TIMEOUT}s")
+                                print(f"   ✅ [Synthesis] claude-opus-4-8 + Extended Thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
+                            except concurrent.futures.TimeoutError:
+                                synth_pool.shutdown(wait=False)
+                                print(f"   ⏰ [Synthesis] claude-opus-4-8 timed out after {SYNTH_TIMEOUT}s")
+                                raise Exception(f"Opus timeout after {SYNTH_TIMEOUT}s")
+                            synth_pool.shutdown(wait=False)
+                        except Exception as opus_err:
+                            print(f"   ❌ [Synthesis] Opus 4.8 failed: {opus_err}")
+                    else:
+                        print(
+                            f"   ⏭ [Synthesis] Skipping Opus 4.8 — {_synth_available}s synthesis budget "
+                            f"reserved for shorter fallback path"
+                        )
+
+                    # Fallback 1: GPT 5.5 (text-only synthesis from verified evidence)
+                    if not response_text and _use_gpt and _synthesis_budget_left() > 30:
+                        try:
+                            print(f"   🔄 [Synthesis] Falling back to GPT 5.5 (timeout: {SYNTH_TIMEOUT}s)...")
+                            gpt_start = time.time()
+                            response_text = _call_openai_text(
+                                synthesis_prompt,
+                                model="gpt-5.5",
+                                max_output_tokens=12000,
+                                timeout=SYNTH_TIMEOUT,
+                            )
+                            print(f"   ✅ [Synthesis] GPT 5.5 succeeded in {int((time.time() - gpt_start) * 1000)}ms")
+                        except Exception as gpt_err:
+                            print(f"   ❌ [Synthesis] GPT 5.5 failed: {gpt_err}")
+
+                    # Fallback 2: Claude Sonnet 4.6 (independent provider — survives OpenAI outages)
+                    if not response_text and _use_sonnet and _synthesis_budget_left() > 20:
+                        try:
+                            print(f"   🔄 [Synthesis] Falling back to Claude Sonnet 4.6 (timeout: {SYNTH_TIMEOUT}s)...")
+                            m_start = time.time()
+
+                            _sonnet_system = (
+                                "CRITICAL: You are a CONSERVATIVE analyst. When in doubt, say 'insufficient evidence.' "
+                                "Do NOT extrapolate. Do NOT infer organizational problems. Do NOT sound deeper than "
+                                "your evidence supports. A boring, accurate summary beats an impressive, fabricated one. "
+                                "NEVER invent leadership gaps, morale issues, succession problems, or strategic conclusions "
+                                "from minor details like tool names in job ads."
+                            )
+
+                            def _synth_sonnet():
+                                return claude_client.messages.create(
+                                    model="claude-sonnet-4-6",
+                                    max_tokens=4000,
+                                    system=_sonnet_system,
+                                    messages=[{"role": "user", "content": synthesis_prompt}],
+                                )
+
+                            m_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                            m_future = m_pool.submit(_synth_sonnet)
+                            try:
+                                sonnet_resp = m_future.result(timeout=SYNTH_TIMEOUT)
+                                for block in sonnet_resp.content:
+                                    if getattr(block, 'type', None) == 'text':
+                                        response_text = block.text
+                                        break
+                                print(f"   ✅ [Synthesis] Claude Sonnet 4.6 succeeded in {int((time.time() - m_start) * 1000)}ms")
+                            except concurrent.futures.TimeoutError:
                                 m_pool.shutdown(wait=False)
-                            except Exception as sonnet_err:
-                                print(f"   ❌ [Synthesis] All models failed. Last error: {sonnet_err}")
+                                print(f"   ⏰ [Synthesis] Claude Sonnet 4.6 timed out after {SYNTH_TIMEOUT}s")
+                            m_pool.shutdown(wait=False)
+                        except Exception as sonnet_err:
+                            print(f"   ❌ [Synthesis] All models failed. Last error: {sonnet_err}")
+
+                if not response_text and scan_quality == "complete":
+                    scan_quality = "partial_synthesis"
 
                 if response_text:
                     payload = extract_json_from_text(response_text)
