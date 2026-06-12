@@ -241,6 +241,9 @@ const isForesightContext = (link) => {
   const claimSupportedCount = evidenceTrustPool.filter((link) => isClaimSupported(link)).length;
   const analysisVerifiedCount = evidenceTrustPool.filter((link) => isAnalysisVerified(link)).length;
   const generationEligibleCount = evidenceTrustPool.filter((link) => isAnalysisVerified(link) && link.generation_eligible === true).length;
+  const evidenceSufficiency = typeof data.evidence_sufficiency === 'object' && data.evidence_sufficiency !== null ? data.evidence_sufficiency : null;
+  const lowEvidenceLabel = data.low_evidence_label || evidenceSufficiency?.label || '';
+  const isLowEvidenceMode = data.low_evidence_mode === true || !!lowEvidenceLabel;
   const displayOnlyCount = evidenceTrustPool.filter((link) => link.promotion_status === 'display_only' || link.claim_support_status === 'unsupported').length;
   const verificationConflictCount = evidenceTrustPool.filter((link) => isVerificationConflict(link)).length;
   const wrongEntityCount = evidenceTrustPool.filter((link) => isWrongEntity(link)).length;
@@ -539,6 +542,9 @@ const isForesightContext = (link) => {
         var entityVerifiedSources = evidencePool.filter(function(link) { return isEntitySafe(link) && !isWrongEntity(link); }).length;
         var claimSupportedSources = evidencePool.filter(isClaimSupported).length;
         var generationEligibleSources = evidencePool.filter(function(link) { return isAnalysisSafe(link) && link.generation_eligible === true; }).length;
+        var evidenceSufficiency = exportData.evidence_sufficiency && typeof exportData.evidence_sufficiency === 'object' ? exportData.evidence_sufficiency : null;
+        var lowEvidenceLabel = exportData.low_evidence_label || (evidenceSufficiency && evidenceSufficiency.label) || '';
+        var isLowEvidenceMode = exportData.low_evidence_mode === true || !!lowEvidenceLabel;
         var verificationConflictSources = evidencePool.filter(isVerificationConflict).length;
         var displayOnlySources = evidencePool.filter(function(link) {
             return link && (link.promotion_status === 'display_only' || link.claim_support_status === 'unsupported');
@@ -611,6 +617,7 @@ const isForesightContext = (link) => {
             renderMetric('Target Entity Verified', entityVerifiedSources, 'right company/scope'),
             renderMetric('Claim Supported', claimSupportedSources, 'source backs claim'),
             renderMetric('Generation Eligible', generationEligibleSources, 'safe for prose'),
+            renderMetric('Source Register', isLowEvidenceMode ? (lowEvidenceLabel || 'Low evidence') : 'Complete', isLowEvidenceMode ? 'cautious prose mode' : 'promoted evidence available'),
             renderMetric('Display / Unsupported', displayOnlySources, 'audit only'),
             renderMetric('Wrong Entity', wrongEntitySources, 'blocked sources'),
             renderMetric('Unknown Entity', unknownEntitySources, 'not promoted'),
@@ -656,6 +663,7 @@ const isForesightContext = (link) => {
             + renderMetric('Target Entity Verified', entityVerifiedSources, 'right company or explicit scope')
             + renderMetric('Claim Supported', claimSupportedSources, 'source content backs claim')
             + renderMetric('Generation Eligible', generationEligibleSources, 'safe for prose')
+            + renderMetric('Source Register', isLowEvidenceMode ? (lowEvidenceLabel || 'Low evidence') : 'Complete', isLowEvidenceMode ? 'cautious prose mode' : 'promoted evidence available')
             + renderMetric('Display / Unsupported', displayOnlySources, 'audit only')
             + renderMetric('Wrong Entity', wrongEntitySources, 'blocked sources')
             + renderMetric('Unknown Entity', unknownEntitySources, 'not promoted')
@@ -667,6 +675,7 @@ const isForesightContext = (link) => {
             + renderMetric('Unsupported Flags', hallucinationWarnings.length || 'None', 'hallucination checks')
             + renderMetric('Quality Notes', qualityNotes.length || 'None', 'format/style checks')
             + '</div>'
+            + (isLowEvidenceMode ? '<div class="callout amber"><h3>' + escapeHTML(lowEvidenceLabel || 'Low promoted evidence') + '</h3><p>Promoted source-register evidence is limited. The report may still use verified structured financial findings and internal scanner observations, but precise external company claims require source-backed support.</p></div>' : '')
             + (contradictionWarnings.length ? '<div class="callout amber"><h3>Contradiction Warnings</h3>' + renderList(contradictionWarnings) + '</div>' : '<p class="muted">No contradiction warnings detected.</p>')
             + (wrongEntityWarnings.length ? '<div class="callout"><h3>Wrong-Entity Warnings</h3>' + renderList(wrongEntityWarnings) + '</div>' : '<p class="muted">No wrong-entity evidence detected.</p>')
             + (hallucinationWarnings.length ? '<div class="callout"><h3>Hallucination / Unsupported-Claim Flags</h3>' + renderList(hallucinationWarnings) + '</div>' : '<p class="muted">No hallucination or unsupported-claim flags detected.</p>')
@@ -978,6 +987,9 @@ const isForesightContext = (link) => {
             + (Array.isArray(exportData.ai_verification?.false_claims) ? exportData.ai_verification.false_claims.length : 0)
             + (Array.isArray(exportData.ai_verification?.unsupported_claims) ? exportData.ai_verification.unsupported_claims.length : 0)
             + (Array.isArray(exportData.general_summary_false_claims) ? exportData.general_summary_false_claims.length : 0);
+        const evidenceSufficiency = exportData.evidence_sufficiency && typeof exportData.evidence_sufficiency === 'object' ? exportData.evidence_sufficiency : null;
+        const lowEvidenceLabel = exportData.low_evidence_label || (evidenceSufficiency && evidenceSufficiency.label) || '';
+        const isLowEvidenceMode = exportData.low_evidence_mode === true || !!lowEvidenceLabel;
 
         const metrics = [
             renderMetric('Ambition Score', formatScore(exportData.intent_score, '/100'), 'Narrative clarity'),
@@ -988,6 +1000,7 @@ const isForesightContext = (link) => {
             renderMetric('URL Verified Sources', verifiedSources, weakSources + ' weak/unverified'),
             renderMetric('Analysis Verified', analysisVerifiedSources, 'content supports claim'),
             renderMetric('Generation Eligible', generationEligibleSources, 'safe for prose'),
+            renderMetric('Source Register', isLowEvidenceMode ? (lowEvidenceLabel || 'Low evidence') : 'Complete', isLowEvidenceMode ? 'cautious prose mode' : 'promoted evidence available'),
             renderMetric('Display / Unsupported', displayOnlySources, 'audit only'),
             renderMetric('Wrong Entity', wrongEntitySources, 'blocked sources'),
             renderMetric('Unknown Entity', unknownEntitySources, 'not promoted'),
@@ -1069,6 +1082,7 @@ const isForesightContext = (link) => {
             + '*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Arial,sans-serif;line-height:1.55}main{max-width:1120px;margin:0 auto;padding:40px 28px 56px}.hero{border:1px solid var(--line);background:linear-gradient(135deg,#172033,#0f172a);border-radius:8px;padding:30px;margin-bottom:20px}.kicker{color:var(--cyan);font-size:11px;font-weight:800;letter-spacing:.16em;text-transform:uppercase}.hero h1{margin:8px 0 10px;font-size:34px;line-height:1.1}.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.meta span,.chips span{border:1px solid rgba(148,163,184,.28);background:rgba(15,23,42,.62);border-radius:999px;padding:5px 9px;color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:20px 0}.metric{border:1px solid rgba(148,163,184,.22);background:rgba(15,23,42,.72);border-radius:8px;padding:14px}.metric span{display:block;color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em}.metric strong{display:block;margin-top:4px;font-size:24px;color:white}.metric em{display:block;margin-top:3px;color:var(--muted);font-size:11px;font-style:normal}.section{border:1px solid rgba(148,163,184,.22);background:rgba(17,24,39,.78);border-radius:8px;padding:24px;margin-top:16px}.section h2{margin:0 0 14px;color:white;font-size:20px}.section h3{margin:20px 0 8px;color:var(--cyan);font-size:14px;text-transform:uppercase;letter-spacing:.08em}.section h4{margin:16px 0 6px;color:white;font-size:14px}.section p{margin:0 0 13px;color:#dbe4f0}.eyebrow{margin-bottom:6px;color:var(--muted);font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}.two-col{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px}.two-col h3{color:var(--amber)}ul{margin:0;padding-left:20px}li{margin:8px 0}.callout{margin-top:18px;border-left:3px solid var(--rose);background:rgba(244,63,94,.08);padding:14px 16px}.stakeholders{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.stakeholders article{border:1px solid rgba(148,163,184,.18);background:rgba(15,23,42,.55);border-radius:8px;padding:15px}.stakeholders h3{margin:0;color:white;text-transform:none;letter-spacing:0;font-size:15px}.role{color:var(--green);font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin:4px 0 8px}.stakeholders small{display:block;margin-top:10px;color:var(--muted);font-size:11px}.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}.table-wrap{overflow-x:auto;margin-top:10px;margin-bottom:18px;border:1px solid rgba(148,163,184,.18);border-radius:8px}table{width:100%;border-collapse:collapse;font-size:11px;min-width:820px}th,td{padding:8px 10px;text-align:left;border-bottom:1px solid rgba(148,163,184,.14)}th{color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.08em;background:rgba(15,23,42,.68)}td{color:#dbe4f0}td:nth-child(4){color:var(--rose);font-weight:800}.scanner-link{display:inline-block;border:1px solid rgba(103,232,249,.38);background:rgba(8,145,178,.18);color:var(--cyan);border-radius:8px;padding:10px 14px;font-weight:800;text-decoration:none}.scanner-link:hover{background:rgba(8,145,178,.28);color:white}.formula{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}.muted{color:var(--muted)!important}strong{color:white}hr{border:0;border-top:1px solid var(--line);margin:20px 0}.footer{margin-top:28px;color:#64748b;font-size:11px;text-align:center}.page-note{color:var(--muted);max-width:820px;margin:0}\n'
             + '</style>\n</head>\n<body>\n<main>\n'
             + '<header class="hero"><div class="kicker">Executive Summary HTML Export</div><h1>' + escapeHTML(companyName) + '</h1><p class="page-note">Compact context package for leadership review and upload workflows. This file intentionally excludes the full raw JSON payload.</p><div class="meta">' + headerMeta + '<span>Generated ' + escapeHTML(generatedDate) + '</span></div></header>\n'
+            + (isLowEvidenceMode ? '<section class="section"><div class="eyebrow">Evidence status</div><h2>' + escapeHTML(lowEvidenceLabel || 'Low promoted evidence') + '</h2><p class="muted">Promoted source-register evidence is limited. The summary remains usable, but precise external company claims require source-backed support.</p></section>' : '')
             + renderSection('General Summary', 'Executive context', renderParagraphs(exportData.general_summary))
             + renderSection('AI Diagnosis', 'Interpretation and risks', diagnosisHTML)
             + renderSection('Core Metrics', 'Scorecard', '<div class="metrics">' + metrics.join('') + '</div>')
@@ -1359,6 +1373,11 @@ const isForesightContext = (link) => {
                     </p>
                 </div>
                 <div className="flex items-center gap-2 text-[10px] font-mono">
+                    {isLowEvidenceMode && (
+                        <span className="px-2 py-1 rounded border bg-amber-500/10 text-amber-300 border-amber-500/30">
+                            {lowEvidenceLabel || 'Low promoted evidence'}
+                        </span>
+                    )}
                     <span className={`px-2 py-1 rounded border ${previousScanCarriedForward ? 'bg-amber-500/10 text-amber-300 border-amber-500/30' : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'}`}>
                         Carried forward: {previousScanCarriedForward ? 'Yes' : 'No'}
                     </span>

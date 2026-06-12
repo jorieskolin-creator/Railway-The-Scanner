@@ -29,7 +29,15 @@ from market_intelligence import compute_market_intelligence
 from knowledge_base import get_evolving_framework
 from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, clean_summary, purge_false_evidence, _call_openai_text
 from general_summary import generate_general_summary, fact_check_general_summary
-from source_quality import manage_evidence_sources, assess_source_scope, annotate_evidence_links, is_generation_eligible_source
+from source_quality import (
+    manage_evidence_sources,
+    assess_source_scope,
+    annotate_evidence_links,
+    is_generation_eligible_source,
+    infer_source_type,
+    assess_source_credibility,
+    compute_claim_tier,
+)
 from contradiction_detector import detect_contradictions
 from prompts import PROMPT_VERSION, build_shared_guardrails
 from database_sanitizer import sanitize_database
@@ -133,6 +141,82 @@ def _build_contradictions_block(verified_links: list, company_name: str) -> str:
 def _analysis_evidence_links(links: list) -> list:
     """Sources allowed to feed generated analysis, not merely live URLs."""
     return [l for l in (links or []) if is_generation_eligible_source(l)]
+
+
+def _financial_findings_to_evidence_links(financial_findings: list, company_name: str, company_domain: str = "") -> list:
+    """Convert source-bearing financial findings into evidence-ledger candidates."""
+    candidates = []
+    seen = set()
+    for finding in financial_findings or []:
+        if not isinstance(finding, dict):
+            continue
+        url = (finding.get("source_url") or "").strip()
+        snippet = (finding.get("evidence_snippet") or "").strip()
+        if not (url.startswith("http") and snippet and len(snippet) > 20):
+            continue
+        key = url.rstrip("/").lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        title = (finding.get("source_title") or finding.get("dimension") or "Financial source").strip()
+        source_type = infer_source_type(url, title, snippet)
+        credibility = assess_source_credibility(url, source_type, company_domain)
+        link = {
+            "title": title,
+            "url": url,
+            "snippet": snippet,
+            "source_quote": snippet[:420],
+            "verified": True,
+            "url_verified": True,
+            "is_recent": True,
+            "source_type": source_type,
+            "source_credibility": credibility,
+            "origin": "financial_findings",
+            "claim_type": "financial_fact",
+            "financial_dimension": finding.get("dimension"),
+            "financial_assessment": finding.get("assessment"),
+            "entity_scope": finding.get("entity_scope") or "unknown",
+            "canonical_company": company_name,
+        }
+        link["claim_tier"] = compute_claim_tier(link)
+        candidates.append(link)
+    return candidates
+
+
+def _evidence_sufficiency_state(evidence_links: list, financial_links: list) -> dict:
+    """Summarize whether the source register is strong enough for normal prose."""
+    financial_urls = {
+        (link.get("url") or link.get("source_url") or "").rstrip("/").lower()
+        for link in financial_links or []
+        if isinstance(link, dict)
+    }
+    promoted_total = sum(1 for link in evidence_links or [] if is_generation_eligible_source(link))
+    promoted_financial = sum(1 for link in financial_links or [] if is_generation_eligible_source(link))
+    promoted_nonfinancial = sum(
+        1
+        for link in evidence_links or []
+        if is_generation_eligible_source(link)
+        and (link.get("url") or link.get("source_url") or "").rstrip("/").lower() not in financial_urls
+    )
+    label = ""
+    status = "complete"
+    if promoted_total == 0 and promoted_financial == 0:
+        status = "insufficient"
+        label = "Insufficient promoted evidence"
+    elif promoted_total < 3:
+        status = "low_promoted_evidence"
+        label = "Low promoted evidence"
+    elif promoted_total < 5:
+        status = "source_register_incomplete"
+        label = "Source-register incomplete"
+    return {
+        "status": status,
+        "label": label,
+        "promoted_company_sources": promoted_total,
+        "promoted_nonfinancial_sources": promoted_nonfinancial,
+        "promoted_financial_sources": promoted_financial,
+        "promoted_total_sources": promoted_total,
+    }
 
 
 def _build_fact_check_scan_payload(data: dict) -> dict:
@@ -3059,6 +3143,27 @@ def _execute_scan_pipeline(
 
         foresight_links = sanitize_foresight_collection(foresight_links, domain=company_domain)  # final foresight card sanitation
 
+        from scanner_two import get_clean_domain as _get_clean_domain
+        _company_site_domain = _get_clean_domain(target_url) if target_url else ""
+        financial_evidence_links = _financial_findings_to_evidence_links(
+            financial_results.get("financial_findings", []),
+            companyName,
+            _company_site_domain,
+        )
+        if financial_evidence_links:
+            try:
+                from source_claim_validator import validate_source_claims
+                validate_source_claims(
+                    financial_evidence_links,
+                    max_checks=min(4, len(financial_evidence_links)),
+                    max_workers=2,
+                    company_name=companyName,
+                    company_domain=_company_site_domain,
+                )
+            except Exception as fin_ev_err:
+                print(f"   ⚠️ [Financial Evidence] Source validation skipped: {fin_ev_err}")
+            financial_evidence_links = annotate_evidence_links(financial_evidence_links, _company_site_domain, companyName)
+
         # --- STEP 3: SYNTHESIS ---
         if job_id:
             _update_scan_job(job_id, phase="synthesis", progress=75)
@@ -3076,7 +3181,8 @@ def _execute_scan_pipeline(
             try:
                 claude_client = anthropic.Anthropic(api_key=anthropic_key) if anthropic_key else None
                 intent_narrative = json.dumps(intent_results["breakdown"])
-                verified_links = _analysis_evidence_links(reality_results['links'])
+                synthesis_source_pool = (reality_results.get("links") or []) + financial_evidence_links
+                verified_links = _analysis_evidence_links(synthesis_source_pool)
 
                 def _fmt_evidence_link(l):
                     tier = l.get('claim_tier', 'D')
@@ -3086,6 +3192,17 @@ def _execute_scan_pipeline(
                     return f"{prefix} {l.get('title', 'Unknown')}: {l.get('source_quote') or l.get('snippet', '')}"
 
                 evidence_list = '\n'.join([_fmt_evidence_link(l) for l in verified_links[:20]])
+                low_evidence_context = ""
+                _sufficiency_preview = _evidence_sufficiency_state(synthesis_source_pool, financial_evidence_links)
+                if _sufficiency_preview.get("status") != "complete":
+                    low_evidence_context = (
+                        f"LOW-EVIDENCE MODE: {_sufficiency_preview['label']}. "
+                        f"Promoted source-register evidence is limited "
+                        f"({_sufficiency_preview['promoted_company_sources']} source(s); "
+                        f"{_sufficiency_preview['promoted_financial_sources']} financial source(s)). "
+                        "You may use verified structured financial findings, but must state that public evidence is limited "
+                        "and avoid precise company claims unless explicitly supported by the source text."
+                    )
                 # Run contradiction detection on the same evidence pool. Block
                 # is empty when no quantitative disagreements are found, so the
                 # injected slot stays harmless on clean cases.
@@ -3252,6 +3369,7 @@ Intent Data: {intent_narrative}
 {doc_context}
 {washing_context}
 {financial_context}
+{low_evidence_context}
 {trend_context}
 {foresight_context}
 {negative_findings_context}
@@ -3767,17 +3885,16 @@ Respond with valid JSON only:
         else:
             archetype = "Cash Cow" if fin_for_archetype >= 50 else "At Risk"
 
-        # --- SOURCE MANAGEMENT: Merge new evidence with existing, cap at 15 ---
+        # --- SOURCE MANAGEMENT: Merge new evidence with existing, cap at 30 ---
         existing_evidence = existing_data.get("evidence_links", []) if existing_data else []
-        from scanner_two import get_clean_domain as _get_clean_domain
-        _company_site_domain = _get_clean_domain(target_url) if target_url else ""
         source_mgmt = manage_evidence_sources(
             existing_links=existing_evidence,
-            new_links=reality_results["links"],
+            new_links=(reality_results.get("links") or []) + financial_evidence_links,
             company_domain=_company_site_domain,
             company_name=companyName,
         )
         managed_evidence_links = source_mgmt["links"]
+        evidence_sufficiency = _evidence_sufficiency_state(managed_evidence_links, financial_evidence_links)
 
         full_data = {
             "id": result_id,
@@ -3800,6 +3917,9 @@ Respond with valid JSON only:
             "reality_checklist": reality_results["checklist"],
             "evidence_links": managed_evidence_links,
             "evidence_gold_standard": source_mgmt["gold_standard"],
+            "evidence_sufficiency": evidence_sufficiency,
+            "low_evidence_mode": evidence_sufficiency.get("status") != "complete",
+            "low_evidence_label": evidence_sufficiency.get("label", ""),
             "key_people": key_people,
             "summary_text": _strip_tac_codes(summary),
             "pitch_text": pitch,
@@ -3827,7 +3947,7 @@ Respond with valid JSON only:
             summary_text=summary,
             company_name=companyName,
             key_people=key_people,
-            evidence_links=reality_results.get("links", []),
+            evidence_links=managed_evidence_links,
             confidence_score=confidence,
         )
         pitch_check = validate_pitch(pitch_text=pitch, company_name=companyName)
@@ -3872,7 +3992,7 @@ Respond with valid JSON only:
             print(f"   🔄 [Fact-Check] Independent GPT/Claude fact-check ({int(_fc_remaining)}s remaining)...")
             fact_check = ai_fact_check_summary(
                 summary_text=full_data["summary_text"],
-                evidence_links=reality_results.get("links", []),
+                evidence_links=managed_evidence_links,
                 company_name=companyName,
                 pitch_text=full_data.get("pitch_text", ""),
                 scan_payload=_build_fact_check_scan_payload(full_data),

@@ -9,8 +9,8 @@ Key distinction:
 - "source_credibility" = domain authority assessment — high/medium/low/unknown
 
 Source Management (manage_evidence_sources):
-- Caps evidence at MAX_EVIDENCE_SOURCES (15) with credibility-tiered eviction.
-- "Gold Standard" detection: 15 high-credibility verified sources → skip new search.
+- Caps evidence at MAX_EVIDENCE_SOURCES (30) with credibility-tiered eviction.
+- "Gold Standard" detection: 30 high-credibility verified sources → skip new search.
 """
 
 import re
@@ -1177,7 +1177,7 @@ def confidence_quality_penalty(confidence: float, links: list, company_domain: s
 
 # === SOURCE CAP & EVICTION ===
 
-MAX_EVIDENCE_SOURCES = 15
+MAX_EVIDENCE_SOURCES = 30
 
 # Eviction priority: lower value = evicted first
 _EVICTION_RANK = {
@@ -1222,8 +1222,8 @@ def manage_evidence_sources(
 
     Returns dict:
     {
-        "links": [...],              # final merged evidence list (max 15)
-        "gold_standard": bool,       # True if all 15 are high+verified
+        "links": [...],              # final merged evidence list (max 30)
+        "gold_standard": bool,       # True if all 30 are high+verified
         "skipped_search": bool,      # True if gold_standard (caller should skip new search)
         "added": int,                # how many new sources were added
         "evicted": int,              # how many old sources were replaced
@@ -1291,8 +1291,40 @@ def manage_evidence_sources(
             for existing in pool:
                 existing_url = (existing.get("url") or existing.get("source_url") or "").strip()
                 if existing_url == new_url:
-                    # Update metadata fields (snippet, title, verified, etc.)
-                    for key in ("snippet", "title", "verified", "is_recent", "source_type"):
+                    # Update trust/promotion metadata when a richer duplicate source is found.
+                    for key in (
+                        "snippet",
+                        "source_quote",
+                        "title",
+                        "verified",
+                        "url_verified",
+                        "is_recent",
+                        "source_type",
+                        "source_credibility",
+                        "claim_type",
+                        "claim_tier",
+                        "origin",
+                        "financial_dimension",
+                        "financial_assessment",
+                        "claim_support_status",
+                        "content_verified",
+                        "content_relevance_score",
+                        "content_verification_reason",
+                        "verification_model",
+                        "primary_verification_model",
+                        "secondary_verification_model",
+                        "entity_match_status",
+                        "content_entity_match_status",
+                        "entity_match_reason",
+                        "content_entity_match_reason",
+                        "entity_verified",
+                        "entity_scope",
+                        "promotion_status",
+                        "generation_eligible",
+                        "analysis_verified",
+                        "verification_reason",
+                        "analysis_verified_at",
+                    ):
                         if new_link.get(key) is not None:
                             existing[key] = new_link[key]
                     break

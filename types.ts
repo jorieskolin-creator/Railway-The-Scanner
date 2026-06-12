@@ -145,6 +145,12 @@ interface ScanQuality {
 
 interface EvidenceSufficiency {
   score?: number;
+  status?: string;
+  label?: string;
+  promoted_company_sources?: number;
+  promoted_nonfinancial_sources?: number;
+  promoted_financial_sources?: number;
+  promoted_total_sources?: number;
   [key: string]: any;
 }
 
@@ -187,6 +193,8 @@ interface AnalysisResult {
   hallucination_score?: number;
   scan_quality?: ScanQuality;
   evidence_sufficiency?: EvidenceSufficiency | number;
+  low_evidence_mode?: boolean;
+  low_evidence_label?: string;
   contradictions?: any[];
   contradiction_warnings?: any[];
   general_summary_false_claims?: string[];

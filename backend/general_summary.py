@@ -440,6 +440,9 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
         "evidence_links": verified_links,
         "financial_findings": fin_findings,
         "financial_index": full_data.get("financial_index"),
+        "evidence_sufficiency": full_data.get("evidence_sufficiency") or {},
+        "low_evidence_mode": bool(full_data.get("low_evidence_mode")),
+        "low_evidence_label": full_data.get("low_evidence_label", ""),
     }
     if contradictions:
         result["contradictions"] = contradictions
@@ -482,6 +485,7 @@ MANDATORY RULES:
 
 2. FACTUAL DISCIPLINE — CRITICAL:
    - EVIDENCE-ONLY: Every factual claim must be directly traceable to a specific item in the EVIDENCE above. If you cannot point to the specific evidence item that supports a statement, do not write it. Never supplement with knowledge from outside the provided data.
+   - LOW-EVIDENCE MODE: If low_evidence_mode=true or low_evidence_label is present, explicitly acknowledge limited promoted public evidence and keep all claims cautious. Do not let structured checklist findings substitute for source-backed company facts.
    - Only write about things that actually happened or currently exist. Do not present hypothetical, conditional, or future-tense scenarios as facts.
    - Terms of Service, legal disclaimers, and privacy policies describe hypothetical situations ("if X happens, Y occurs") — these are NOT evidence of real events. If a snippet sounds like a legal clause, ignore it entirely.
    - Do not infer events from the absence of evidence. If something is not clearly documented as having occurred, do not write that it occurred.
@@ -501,6 +505,7 @@ MANDATORY RULES:
      - "assessment_note": "model-interpreted summary, NOT a direct source quote" — meaning the assessment text was written by an analysis model, not lifted verbatim from the source
      - "claim_tier": A/B/C/D for calibration (internal — never write tier codes in output)
    When you cite a financial figure:
+     - The exact value must appear in the evidence_snippet or source_title for that financial finding. If the value appears only in assessment, do not cite it as a fact.
      - If source_label = "Third-party financial database" → write "according to Finnish business database [source_title]" or "third-party financial data shows" — NEVER "according to the company's annual report"
      - If source_label = "Company filing / investor relations" → write "the company's annual report shows" or "filed accounts disclose"
      - If source_label = "Independent news / analyst" → write "[source_title] reported"
