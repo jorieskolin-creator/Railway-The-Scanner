@@ -1779,10 +1779,8 @@ Output only the prose text. Nothing else."""
             response = claude_client.messages.create(
                 model=SONNET_MODEL,
                 max_tokens=4000,
-                thinking={
-                    "type": "enabled",
-                    "budget_tokens": 3000,
-                },
+                thinking={"type": "adaptive"},
+                extra_body={"output_config": {"effort": "medium"}},
                 messages=[{"role": "user", "content": prompt}],
             )
             text_parts = []

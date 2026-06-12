@@ -2132,10 +2132,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 return claude_client.messages.create(
                     model="claude-sonnet-4-6",
                     max_tokens=16000,
-                    thinking={
-                        "type": "enabled",
-                        "budget_tokens": 5000 if is_rescan else 8000
-                    },
+                    thinking={"type": "adaptive"},
+                    extra_body={"output_config": {"effort": "high" if is_rescan else "xhigh"}},
                     tools=[{
                         "type": "web_search_20250305",
                         "name": "web_search",

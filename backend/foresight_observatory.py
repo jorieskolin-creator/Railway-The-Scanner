@@ -781,7 +781,8 @@ def _generate_sonnet(prompt: str, max_tokens: int = 5000) -> tuple[str, int]:
     response = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=max_tokens,
-        thinking={"type": "enabled", "budget_tokens": 3000},
+        thinking={"type": "adaptive"},
+        extra_body={"output_config": {"effort": "medium"}},
         messages=[{"role": "user", "content": prompt}],
     )
 

@@ -114,10 +114,8 @@ def call_anthropic_text(
             "max_uses": max_searches,
         }]
     if thinking_budget:
-        kwargs["thinking"] = {
-            "type": "enabled",
-            "budget_tokens": thinking_budget,
-        }
+        kwargs["thinking"] = {"type": "adaptive"}
+        kwargs["extra_body"] = {"output_config": {"effort": "medium"}}
     response = client.messages.create(**kwargs)
     return extract_anthropic_text(response)
 
