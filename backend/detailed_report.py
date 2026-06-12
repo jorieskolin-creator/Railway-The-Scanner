@@ -353,9 +353,12 @@ def generate_detailed_report(
     company_name: str,
     foresight_data: dict | None = None,
     prior_summaries: dict | None = None,
+    compact: bool = False,
+    time_budget_seconds: int | None = None,
 ) -> tuple[str, str]:
     """
-    Generate an 800-1200 word detailed diagnostic report.
+    Generate an 800-1200 word detailed diagnostic report, or a compact
+    500-750 word report when compact=True and scan budget is constrained.
 
     When prior_summaries is provided (general_summary, ai_summary, why_what),
     the report acts as a meta-synthesis of all previously generated
@@ -368,6 +371,16 @@ def generate_detailed_report(
     """
     payload = _build_input_payload(full_data, company_name, foresight_data, prior_summaries)
     prompt = _build_prompt(payload, company_name)
+    if compact:
+        prompt += (
+            "\n\nCOMPACT MODE: The scan is near its final budget reserve. Produce a complete but "
+            "shorter Detailed Report of 500-750 words. Keep the same evidence discipline, headings, "
+            "and proportionality rules. Do not omit major verified contradictions or material risks."
+        )
+    target_min = 450 if compact else _WORD_MIN
+    usable_min = 350 if compact else 500
+    token_budget = 5000 if compact else 8000
+    model_timeout = max(35, min(120, int(time_budget_seconds or (85 if compact else 120))))
 
     # --- Attempt 1: Claude Opus 4.8 (accuracy-first primary) ---
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
@@ -376,10 +389,10 @@ def generate_detailed_report(
         try:
             print(f"   📝 [Detailed Report] Attempting {OPUS_MODEL}...")
             t0 = time.time()
-            claude_client = anthropic.Anthropic(api_key=anthropic_key)
+            claude_client = anthropic.Anthropic(api_key=anthropic_key, timeout=model_timeout)
             response = claude_client.messages.create(
                 model=OPUS_MODEL,
-                max_tokens=8000,
+                max_tokens=token_budget,
                 thinking={"type": "adaptive"},
                 extra_body={"output_config": {"effort": "xhigh"}},
                 messages=[{"role": "user", "content": prompt}],
@@ -394,9 +407,9 @@ def generate_detailed_report(
             elapsed = int((time.time() - t0) * 1000)
             print(f"   📝 [Detailed Report] {OPUS_MODEL}: {wc} words ({elapsed}ms)")
 
-            if text and wc >= _WORD_MIN:
+            if text and wc >= target_min:
                 return text, OPUS_MODEL
-            elif text and wc >= 500:
+            elif text and wc >= usable_min:
                 print(f"   [Detailed Report] Opus result usable ({wc} words) — below target but acceptable")
                 return text, OPUS_MODEL
             else:
@@ -412,18 +425,17 @@ def generate_detailed_report(
         text = call_openai_text(
             prompt,
             model="gpt-5.5",
-            max_output_tokens=8000,
-            temperature=0.3,
-            timeout=120,
+            max_output_tokens=token_budget,
+            timeout=model_timeout,
         )
         text = _strip_links((text or "").strip())
         wc = _word_count(text)
         elapsed = int((time.time() - t0) * 1000)
         print(f"   📝 [Detailed Report] gpt-5.5: {wc} words ({elapsed}ms)")
 
-        if text and wc >= _WORD_MIN:
+        if text and wc >= target_min:
             return text, "gpt-5.5"
-        if text and wc >= 500:
+        if text and wc >= usable_min:
             print(f"   [Detailed Report] GPT result usable ({wc} words) — below target but acceptable")
             return text, "gpt-5.5"
         print(f"   ⚠️ [Detailed Report] GPT result too short ({wc} words) — falling back to Sonnet")
@@ -432,7 +444,7 @@ def generate_detailed_report(
         print(f"   ❌ [Detailed Report] gpt-5.5 failed ({elapsed}ms): {e}")
 
     if anthropic_key:
-        claude_client = anthropic.Anthropic(api_key=anthropic_key)
+        claude_client = anthropic.Anthropic(api_key=anthropic_key, timeout=model_timeout)
         # --- Attempt 3: Claude Sonnet 4.6 ---
         SONNET_MODEL = "claude-sonnet-4-6"
         try:
@@ -440,11 +452,7 @@ def generate_detailed_report(
             t0 = time.time()
             response = claude_client.messages.create(
                 model=SONNET_MODEL,
-                max_tokens=8000,
-                thinking={
-                    "type": "enabled",
-                    "budget_tokens": 5000,
-                },
+                max_tokens=token_budget,
                 messages=[{"role": "user", "content": prompt}],
             )
             text_parts = []
@@ -456,9 +464,9 @@ def generate_detailed_report(
             elapsed = int((time.time() - t0) * 1000)
             print(f"   📝 [Detailed Report] {SONNET_MODEL}: {wc} words ({elapsed}ms)")
 
-            if text and wc >= _WORD_MIN:
+            if text and wc >= target_min:
                 return text, SONNET_MODEL
-            elif text and wc >= 500:
+            elif text and wc >= usable_min:
                 print(f"   [Detailed Report] Sonnet result usable ({wc} words) — below target but acceptable")
                 return text, SONNET_MODEL
             else:

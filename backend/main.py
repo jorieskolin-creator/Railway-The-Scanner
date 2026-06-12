@@ -2564,13 +2564,21 @@ def _execute_scan_pipeline(
     try:
         scan_start = time.time()
         # Global scan time budget (seconds). All phases must fit within this window.
-        # Railway proxy timeout is typically 300-600s; 540s (9 min) keeps us safely under.
+        # Live scans run as background jobs, so the internal budget can be
+        # longer than a request/response timeout. Keep a protected reserve for
+        # final outputs so difficult scans do not starve General Summary,
+        # Detailed Report, and storage.
         # Budget allocation:
-        #   Reality check: budget - 150s (reserves time for synthesis + post-processing)
+        #   Reality check: budget - 180s (reserves time for synthesis + post-processing)
         #   Financial:     120s (parallel with reality, non-blocking)
         #   Self-analysis: only if remaining > 120s
-        #   Synthesis:     60s per model call (with fallback chain)
-        SCAN_TOTAL_BUDGET = 540
+        #   Synthesis:     adaptive per model call (with fallback chain)
+        #   Final outputs: protected reserve for fact-check, General Summary,
+        #                  Detailed Report, save/index.
+        SCAN_TOTAL_BUDGET = 720
+        FINAL_OUTPUT_RESERVE = 150
+        DETAIL_REPORT_FULL_MIN = 120
+        DETAIL_REPORT_COMPACT_MIN = 75
         print(f"🚀 --- LIVE SCAN INITIATED FOR: {companyName} (budget: {SCAN_TOTAL_BUDGET}s) ---")
         if job_id:
             _update_scan_job(job_id, phase="initializing", progress=5)
@@ -2663,7 +2671,7 @@ def _execute_scan_pipeline(
             _append_scan_log(job_id, "Running reality and financial analysis")
         # Allocate time: reserve 150s for synthesis + self-analysis + post-processing
         elapsed_so_far = time.time() - scan_start
-        reality_budget = max(180, int(SCAN_TOTAL_BUDGET - elapsed_so_far - 150))
+        reality_budget = max(180, int(SCAN_TOTAL_BUDGET - elapsed_so_far - FINAL_OUTPUT_RESERVE))
         reality_outer_timeout = reality_budget + 10  # small buffer over internal budget
         # Get employee count for stakeholder seniority filtering
         _scan_meta = get_company_metadata(companyName) or {}
@@ -3264,15 +3272,23 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                 response_text = ""
                 synth_start = time.time()
                 synth_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
-                # Dynamic per-attempt timeout: share remaining budget across fallback attempts.
-                # Reserve 60s for post-synthesis phases (fact-check, GS, Detailed Report, save).
-                _synth_chain_budget = min(240, max(90, int(synth_remaining) - 60))
+                # Dynamic per-attempt timeout: share remaining budget across
+                # fallback attempts while protecting final report/export phases.
+                _synth_available = int(synth_remaining) - FINAL_OUTPUT_RESERVE
+                _synth_chain_budget = min(240, max(60, _synth_available))
                 SYNTH_TIMEOUT = max(30, _synth_chain_budget // 3)
-                print(f"   [Synthesis] Time remaining: {int(synth_remaining)}s | chain budget: {_synth_chain_budget}s | per-attempt: {SYNTH_TIMEOUT}s")
+                print(
+                    f"   [Synthesis] Time remaining: {int(synth_remaining)}s | "
+                    f"protected reserve: {FINAL_OUTPUT_RESERVE}s | "
+                    f"chain budget: {_synth_chain_budget}s | per-attempt: {SYNTH_TIMEOUT}s"
+                )
 
-                if synth_remaining < 90:
+                if _synth_available < 45:
                     scan_quality = "partial_synthesis"
-                    print(f"   ⏭ [Synthesis] Budget < 90s — skipping all synthesis models, scan stored as partial")
+                    print(
+                        f"   ⏭ [Synthesis] Only {_synth_available}s available before final-output reserve "
+                        f"— skipping all synthesis models, scan stored as partial"
+                    )
                 else:
                     def _synth_opus():
                         return claude_client.messages.create(
@@ -3307,7 +3323,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                         print(f"   ❌ [Synthesis] Opus 4.8 failed: {opus_err}")
 
                         # Fallback 1: GPT 5.5 (text-only synthesis from verified evidence)
-                        if not response_text and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 60:
+                        if not response_text and (SCAN_TOTAL_BUDGET - (time.time() - scan_start) - FINAL_OUTPUT_RESERVE) > 30:
                             try:
                                 print(f"   🔄 [Synthesis] Falling back to GPT 5.5 (timeout: {SYNTH_TIMEOUT}s)...")
                                 gpt_start = time.time()
@@ -3322,7 +3338,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                                 print(f"   ❌ [Synthesis] GPT 5.5 failed: {gpt_err}")
 
                         # Fallback 2: Claude Sonnet 4.6 (independent provider — survives OpenAI outages)
-                        if not response_text and (SCAN_TOTAL_BUDGET - (time.time() - scan_start)) > 60:
+                        if not response_text and (SCAN_TOTAL_BUDGET - (time.time() - scan_start) - FINAL_OUTPUT_RESERVE) > 30:
                             try:
                                 print(f"   🔄 [Synthesis] Falling back to Claude Sonnet 4.6 (timeout: {SYNTH_TIMEOUT}s)...")
                                 m_start = time.time()
@@ -3911,12 +3927,32 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
         dr_text, dr_model = "", ""
         dr_ms = 0
         _dr_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
-        if _dr_remaining < 30:
-            print(f"   ⏭ [Detailed Report] Budget < 30s remaining ({int(_dr_remaining)}s) — skipping")
+        full_data["detailed_report_status"] = "pending"
+        if _dr_remaining < DETAIL_REPORT_COMPACT_MIN:
+            full_data["detailed_report_status"] = "skipped"
+            full_data["detailed_report_skip_reason"] = "detailed_report_skipped_budget"
+            print(
+                f"   ⏭ [Detailed Report] Budget < {DETAIL_REPORT_COMPACT_MIN}s remaining "
+                f"({int(_dr_remaining)}s) — skipping"
+            )
+            if scan_quality == "complete":
+                scan_quality = "partial_report"
         else:
             try:
                 from detailed_report import generate_detailed_report
                 dr_start = time.time()
+                dr_compact = _dr_remaining < DETAIL_REPORT_FULL_MIN
+                dr_time_budget = max(45, min(140, int(_dr_remaining) - 10))
+                if dr_compact:
+                    print(
+                        f"   📝 [Detailed Report] Moderate budget ({int(_dr_remaining)}s) "
+                        f"— attempting compact report"
+                    )
+                else:
+                    print(
+                        f"   📝 [Detailed Report] Full budget available ({int(_dr_remaining)}s) "
+                        f"— attempting full report"
+                    )
 
                 # Collect all prior analyses for meta-synthesis
                 prior_summaries = {}
@@ -3935,18 +3971,29 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                 dr_text, dr_model = generate_detailed_report(
                     full_data, companyName, foresight_data,
                     prior_summaries=prior_summaries if prior_summaries else None,
+                    compact=dr_compact,
+                    time_budget_seconds=dr_time_budget,
                 )
                 dr_ms = int((time.time() - dr_start) * 1000)
             except Exception as dr_err:
                 dr_ms = 0
+                full_data["detailed_report_status"] = "failed"
+                full_data["detailed_report_skip_reason"] = str(dr_err)[:240]
                 print(f"   ⚠️ [Detailed Report] Failed: {dr_err} — skipping")
 
         if dr_text:
             full_data["detailed_report"] = dr_text
             full_data["detailed_report_model"] = dr_model
+            full_data["detailed_report_status"] = "generated"
+            full_data.pop("detailed_report_skip_reason", None)
             wc = len(dr_text.split())
             print(f"   ✅ [Detailed Report] {wc} words, model={dr_model} ({dr_ms}ms)")
         else:
+            if full_data.get("detailed_report_status") == "pending":
+                full_data["detailed_report_status"] = "empty"
+                full_data["detailed_report_skip_reason"] = "detailed_report_empty"
+                if scan_quality == "complete":
+                    scan_quality = "partial_report"
             print(f"   ⚠️ [Detailed Report] Generation returned empty — skipping field")
 
         # Sync final scan quality before save.
