@@ -10,6 +10,8 @@ authority) — a source can be alive, high-credibility, and still say nothing re
 the claim it's attached to.
 """
 
+from __future__ import annotations
+
 import concurrent.futures
 import json
 import os
@@ -31,13 +33,14 @@ _HEADERS = {
 }
 
 _MAX_PAGE_CHARS = 3000  # Keep page text compact for the LLM prompt
+_DEFAULT_FETCH_TIMEOUT = 12
 _ANALYSIS_SUPPORT_THRESHOLD = 55
 _PARTIAL_SUPPORT_THRESHOLD = 40
 DEFAULT_MODEL_CHAIN = ("gpt-5.4", "claude-sonnet-4-6")
 CLEAN_EVIDENCE_MODEL_CHAIN = ("gpt-5.4", "claude-sonnet-4-6", "gpt-5.5")
 
 
-def _fetch_page_text(url: str, timeout: int = 6) -> str:
+def _fetch_page_text(url: str, timeout: int = _DEFAULT_FETCH_TIMEOUT) -> str:
     """Fetch a URL and extract readable text content. Returns empty string on failure."""
     try:
         resp = http_requests.get(url, headers=_HEADERS, timeout=timeout,
@@ -141,6 +144,46 @@ def _host_only_url(url: str) -> str:
     return url
 
 
+def _domain_from_any(value: str) -> str:
+    raw = (value or "").strip().lower()
+    if not raw:
+        return ""
+    try:
+        parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+        host = parsed.netloc or parsed.path.split("/", 1)[0]
+        return host.replace("www.", "").strip()
+    except Exception:
+        return raw.replace("www.", "").split("/", 1)[0].strip()
+
+
+def _is_target_domain(url: str, company_domain: str) -> bool:
+    source_host = _domain_from_any(url)
+    target_host = _domain_from_any(company_domain)
+    if not source_host or not target_host:
+        return False
+    return source_host == target_host or source_host.endswith(f".{target_host}")
+
+
+def _is_high_value_source(source_item: dict | None, url: str, company_domain: str) -> bool:
+    if not isinstance(source_item, dict):
+        return _is_target_domain(url, company_domain)
+    credibility = str(source_item.get("source_credibility") or "").lower()
+    tier = str(source_item.get("claim_tier") or "").upper()
+    source_type = str(source_item.get("source_type") or source_item.get("origin") or "").lower()
+    official_types = {
+        "company_report", "annual_report", "financial_report", "quarterly_report",
+        "company_press_release", "investor_report", "company_website",
+        "company_news", "company_filing", "official_company_source",
+        "financial_data_aggregator",
+    }
+    return (
+        credibility == "high"
+        or tier in {"A", "B", "C"}
+        or source_type in official_types
+        or _is_target_domain(url, company_domain)
+    )
+
+
 def _content_entity_match(url: str, page_text: str, company_name: str, company_domain: str) -> dict:
     """Assess target-entity evidence using only resolved host + extracted page text.
 
@@ -198,6 +241,10 @@ def _quote_value_overlap(claim: str, quote: str, page_text: str) -> bool:
         return False
     required = 1 if len(claim_numbers) <= 2 else 2
     return len(claim_numbers & source_numbers) >= required
+
+
+def _claim_has_numeric_values(claim: str) -> bool:
+    return bool(_numeric_tokens(claim))
 
 
 def _is_context_only_source(source_item: dict | None) -> bool:
@@ -290,6 +337,154 @@ def _score_to_status(score: int) -> tuple[bool, str]:
     return False, "unsupported"
 
 
+def _evaluate_parsed_relevance(
+    parsed: dict,
+    *,
+    model_used: str,
+    claim: str,
+    page_text: str,
+    content_entity_match: dict,
+    content_entity_status: str,
+    display_entity_match: dict,
+    context_only: bool,
+) -> dict:
+    score = parsed["score"]
+    reason = parsed["reason"]
+    relevant, support_status = _score_to_status(score)
+    model_support_status = support_status
+    model_supporting_quote = parsed.get("supporting_quote") or ""
+    supporting_quote = model_supporting_quote or _best_source_quote(page_text, claim)
+    entity_verified = content_entity_status in {"exact", "scoped"} or context_only
+    model_claim_supported = parsed.get("claim_supported")
+    if model_claim_supported is False:
+        support_status = "unsupported"
+        relevant = False
+
+    conflict_reason = reason or parsed.get("unsupported_reason", "")
+    verification_conflict = _reason_indicates_no_support(conflict_reason)
+    quote_mismatch = not _quote_value_overlap(claim, supporting_quote, page_text)
+    if (not entity_verified and not context_only) or verification_conflict or quote_mismatch:
+        support_status = "unsupported"
+        relevant = False
+        if not reason:
+            reason = "Source content did not safely verify the target entity and claim."
+        if not entity_verified and not context_only:
+            reason = f"Target entity not verified in extracted source content: {content_entity_match.get('entity_match_reason', 'target entity not detected')}"
+        elif quote_mismatch:
+            reason = "Supporting quote/source content does not contain the target entity or claimed values."
+
+    return {
+        "relevance_score": score,
+        "relevant": relevant,
+        "claim_support_status": support_status,
+        "model_claim_support_status": model_support_status,
+        "model_claim_supported": model_claim_supported,
+        "content_verified": True,
+        "source_quote": supporting_quote,
+        "model_supporting_quote": model_supporting_quote,
+        "reason": reason,
+        "verification_model": model_used,
+        "entity_verified": entity_verified,
+        "entity_name_found": parsed.get("entity_name_found") or "",
+        "content_entity_match_status": content_entity_status,
+        "content_entity_match_reason": content_entity_match.get("entity_match_reason", ""),
+        "verification_conflict": verification_conflict,
+        "quote_mismatch": quote_mismatch,
+        **display_entity_match,
+    }
+
+
+def _deterministic_support_safe(result: dict, claim: str, page_text: str, context_only: bool) -> bool:
+    if not result or result.get("wrong_entity") is True:
+        return False
+    if result.get("verification_conflict") is True or result.get("quote_mismatch") is True:
+        return False
+    quote = result.get("source_quote") or ""
+    if not quote.strip():
+        return False
+    if _claim_has_numeric_values(claim) and not _quote_value_overlap(claim, quote, page_text):
+        return False
+    content_entity_status = str(result.get("content_entity_match_status") or "").lower()
+    if context_only:
+        return content_entity_status != "wrong"
+    return result.get("entity_verified") is True and content_entity_status in {"exact", "scoped"}
+
+
+def _needs_second_opinion(
+    result: dict,
+    *,
+    source_item: dict | None,
+    url: str,
+    company_domain: str,
+    context_only: bool,
+) -> tuple[bool, str]:
+    model = str(result.get("verification_model") or "")
+    if not model.startswith("gpt-"):
+        return False, ""
+
+    content_entity_status = str(result.get("content_entity_match_status") or "").lower()
+    model_supported = (
+        result.get("model_claim_support_status") == "supported"
+        or result.get("model_claim_supported") is True
+    )
+    suspicious_supported = model_supported and (
+        not (result.get("model_supporting_quote") or "").strip()
+        or result.get("quote_mismatch") is True
+        or result.get("verification_conflict") is True
+        or (content_entity_status in {"", "unknown", "weak"} and not context_only)
+    )
+    if suspicious_supported:
+        return True, "gpt_supported_but_evidence_controls_are_weak"
+
+    support_status = str(result.get("claim_support_status") or "").lower()
+    high_value = _is_high_value_source(source_item, url, company_domain)
+    if high_value and result.get("content_verified") is True and support_status in {"unsupported", "unavailable", "unchecked"}:
+        return True, "high_value_source_not_supported_by_primary"
+
+    return False, ""
+
+
+def _merge_second_opinion(
+    primary: dict,
+    secondary: dict,
+    *,
+    review_reason: str,
+    claim: str,
+    page_text: str,
+    context_only: bool,
+) -> dict:
+    primary_supported = primary.get("claim_support_status") == "supported"
+    secondary_supported = secondary.get("claim_support_status") == "supported"
+    deterministic_primary = _deterministic_support_safe(primary, claim, page_text, context_only)
+    deterministic_secondary = _deterministic_support_safe(secondary, claim, page_text, context_only)
+    disagreement = primary_supported != secondary_supported
+
+    if primary_supported and secondary_supported and deterministic_primary:
+        merged = dict(primary)
+    elif secondary_supported and deterministic_secondary:
+        merged = dict(secondary)
+    elif primary_supported and deterministic_primary and not disagreement:
+        merged = dict(primary)
+    else:
+        merged = dict(primary)
+        merged["claim_support_status"] = "unsupported"
+        merged["relevant"] = False
+        if disagreement:
+            merged["reason"] = (
+                "Verifier disagreement; source kept display-only unless deterministic "
+                "entity, quote, and claim checks prove support."
+            )
+
+    merged["verification_reviewed_by"] = secondary.get("verification_model")
+    merged["verification_review_reason"] = review_reason
+    merged["verification_disagreement"] = disagreement
+    merged["primary_verification_model"] = primary.get("verification_model")
+    merged["secondary_verification_model"] = secondary.get("verification_model")
+    if secondary.get("source_quote") and not merged.get("source_quote"):
+        merged["source_quote"] = secondary["source_quote"]
+    return merged
+
+
 def _check_relevance(
     url: str,
     claim: str,
@@ -357,50 +552,64 @@ def _check_relevance(
 
     prompt = _build_relevance_prompt(claim, page_text, company_name, company_domain, context_only)
     errors = []
+    primary_result = None
     for model in model_chain or DEFAULT_MODEL_CHAIN:
         try:
             raw, model_used = call_json_model_chain(prompt, (model,), max_tokens=320, timeout=timeout)
 
             parsed = _parse_relevance_json(raw)
-            score = parsed["score"]
-            reason = parsed["reason"]
-            relevant, support_status = _score_to_status(score)
-            supporting_quote = parsed.get("supporting_quote") or _best_source_quote(page_text, claim)
-            entity_verified = content_entity_status in {"exact", "scoped"} or context_only
-            model_claim_supported = parsed.get("claim_supported")
-            if model_claim_supported is False:
-                support_status = "unsupported"
-                relevant = False
+            primary_result = _evaluate_parsed_relevance(
+                parsed,
+                model_used=model_used,
+                claim=claim,
+                page_text=page_text,
+                content_entity_match=content_entity_match,
+                content_entity_status=content_entity_status,
+                display_entity_match=display_entity_match,
+                context_only=context_only,
+            )
+            review_needed, review_reason = _needs_second_opinion(
+                primary_result,
+                source_item=source_item,
+                url=url,
+                company_domain=company_domain,
+                context_only=context_only,
+            )
+            if review_needed and model_used != "claude-sonnet-4-6":
+                try:
+                    raw2, model_used2 = call_json_model_chain(
+                        prompt,
+                        ("claude-sonnet-4-6",),
+                        max_tokens=320,
+                        timeout=timeout,
+                    )
+                    parsed2 = _parse_relevance_json(raw2)
+                    secondary_result = _evaluate_parsed_relevance(
+                        parsed2,
+                        model_used=model_used2,
+                        claim=claim,
+                        page_text=page_text,
+                        content_entity_match=content_entity_match,
+                        content_entity_status=content_entity_status,
+                        display_entity_match=display_entity_match,
+                        context_only=context_only,
+                    )
+                    return _merge_second_opinion(
+                        primary_result,
+                        secondary_result,
+                        review_reason=review_reason,
+                        claim=claim,
+                        page_text=page_text,
+                        context_only=context_only,
+                    )
+                except Exception as review_exc:
+                    primary_result["verification_review_reason"] = review_reason
+                    primary_result["verification_review_error"] = str(review_exc)[:160]
+                    primary_result["primary_verification_model"] = model_used
+                    return primary_result
 
-            conflict_reason = reason or parsed.get("unsupported_reason", "")
-            verification_conflict = _reason_indicates_no_support(conflict_reason)
-            quote_mismatch = not _quote_value_overlap(claim, supporting_quote, page_text)
-            if (not entity_verified and not context_only) or verification_conflict or quote_mismatch:
-                support_status = "unsupported"
-                relevant = False
-                if not reason:
-                    reason = "Source content did not safely verify the target entity and claim."
-                if not entity_verified and not context_only:
-                    reason = f"Target entity not verified in extracted source content: {content_entity_match.get('entity_match_reason', 'target entity not detected')}"
-                elif quote_mismatch:
-                    reason = "Supporting quote/source content does not contain the target entity or claimed values."
-
-            return {
-                "relevance_score": score,
-                "relevant": relevant,
-                "claim_support_status": support_status,
-                "content_verified": True,
-                "source_quote": supporting_quote,
-                "reason": reason,
-                "verification_model": model_used,
-                "entity_verified": entity_verified,
-                "entity_name_found": parsed.get("entity_name_found") or "",
-                "content_entity_match_status": content_entity_status,
-                "content_entity_match_reason": content_entity_match.get("entity_match_reason", ""),
-                "verification_conflict": verification_conflict,
-                "quote_mismatch": quote_mismatch,
-                **display_entity_match,
-            }
+            primary_result["primary_verification_model"] = model_used
+            return primary_result
         except Exception as e:
             errors.append(f"{model}: {str(e)[:80]}")
 
@@ -515,7 +724,9 @@ def validate_source_claims(
                 "entity_match_status", "entity_match_reason", "canonical_source_host",
                 "content_entity_match_status", "content_entity_match_reason",
                 "entity_verified", "entity_name_found", "verification_conflict",
-                "quote_mismatch",
+                "quote_mismatch", "verification_reviewed_by", "verification_review_reason",
+                "verification_disagreement", "primary_verification_model",
+                "secondary_verification_model", "verification_review_error",
             ):
                 if key in result and result.get(key) not in (None, ""):
                     item[key] = result[key]
@@ -654,7 +865,9 @@ def validate_foresight_claims(
                 "entity_match_status", "entity_match_reason", "canonical_source_host",
                 "content_entity_match_status", "content_entity_match_reason",
                 "entity_verified", "entity_name_found", "verification_conflict",
-                "quote_mismatch",
+                "quote_mismatch", "verification_reviewed_by", "verification_review_reason",
+                "verification_disagreement", "primary_verification_model",
+                "secondary_verification_model", "verification_review_error",
             ):
                 if key in result and result.get(key) not in (None, ""):
                     force[key] = result[key]
