@@ -3300,18 +3300,38 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                 # Dynamic per-attempt timeout: share remaining budget across
                 # fallback attempts while protecting final report/export phases.
                 _synth_available = max(0, int(synth_remaining) - FINAL_OUTPUT_RESERVE)
-                _synth_chain_budget = min(240, _synth_available)
-                if _synth_available >= 180:
-                    SYNTH_TIMEOUT = 60
+                if _synth_available >= 360:
+                    OPUS_SYNTH_TIMEOUT = 120
+                    GPT_SYNTH_TIMEOUT = 120
+                    SONNET_SYNTH_TIMEOUT = 90
+                elif _synth_available >= 240:
+                    OPUS_SYNTH_TIMEOUT = 90
+                    GPT_SYNTH_TIMEOUT = 90
+                    SONNET_SYNTH_TIMEOUT = 60
+                elif _synth_available >= 180:
+                    OPUS_SYNTH_TIMEOUT = 75
+                    GPT_SYNTH_TIMEOUT = 75
+                    SONNET_SYNTH_TIMEOUT = 50
                 elif _synth_available >= 120:
-                    SYNTH_TIMEOUT = 45
+                    OPUS_SYNTH_TIMEOUT = 60
+                    GPT_SYNTH_TIMEOUT = 45
+                    SONNET_SYNTH_TIMEOUT = 40
                 elif _synth_available >= 75:
-                    SYNTH_TIMEOUT = 40
+                    OPUS_SYNTH_TIMEOUT = 0
+                    GPT_SYNTH_TIMEOUT = 45
+                    SONNET_SYNTH_TIMEOUT = 35
                 else:
-                    SYNTH_TIMEOUT = max(25, min(35, _synth_available - 5))
-                _use_opus = _synth_available >= 120
-                _use_gpt = _synth_available >= 75
-                _use_sonnet = _synth_available >= 30
+                    OPUS_SYNTH_TIMEOUT = 0
+                    GPT_SYNTH_TIMEOUT = 0
+                    SONNET_SYNTH_TIMEOUT = max(25, min(35, _synth_available - 5))
+
+                _use_opus = OPUS_SYNTH_TIMEOUT > 0
+                _use_gpt = GPT_SYNTH_TIMEOUT > 0
+                _use_sonnet = SONNET_SYNTH_TIMEOUT > 0
+                _synth_chain_budget = min(
+                    _synth_available,
+                    OPUS_SYNTH_TIMEOUT + GPT_SYNTH_TIMEOUT + SONNET_SYNTH_TIMEOUT,
+                )
 
                 def _synthesis_budget_left() -> int:
                     return max(0, int(SCAN_TOTAL_BUDGET - (time.time() - scan_start) - FINAL_OUTPUT_RESERVE))
@@ -3319,7 +3339,8 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                 print(
                     f"   [Synthesis] Time remaining: {int(synth_remaining)}s | "
                     f"protected reserve: {FINAL_OUTPUT_RESERVE}s | "
-                    f"chain budget: {_synth_chain_budget}s | per-attempt: {SYNTH_TIMEOUT}s | "
+                    f"chain budget: {_synth_chain_budget}s | "
+                    f"timeouts: opus={OPUS_SYNTH_TIMEOUT}s,gpt={GPT_SYNTH_TIMEOUT}s,sonnet={SONNET_SYNTH_TIMEOUT}s | "
                     f"mode: {'full' if _use_opus else 'gpt/sonnet' if _use_gpt else 'sonnet-only' if _use_sonnet else 'skip'}"
                 )
 
@@ -3341,11 +3362,15 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
 
                     if _use_opus:
                         try:
-                            print(f"   🔄 [Synthesis] Attempting claude-opus-4-8 with Extended Thinking (timeout: {SYNTH_TIMEOUT}s)...")
+                            _opus_timeout = min(
+                                OPUS_SYNTH_TIMEOUT,
+                                max(30, _synthesis_budget_left() - 10),
+                            )
+                            print(f"   🔄 [Synthesis] Attempting claude-opus-4-8 with Extended Thinking (timeout: {_opus_timeout}s)...")
                             synth_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
                             synth_future = synth_pool.submit(_synth_opus)
                             try:
-                                response = synth_future.result(timeout=SYNTH_TIMEOUT)
+                                response = synth_future.result(timeout=_opus_timeout)
                                 # Extended thinking response: [ThinkingBlock, TextBlock]
                                 # Extract the text block (skip thinking blocks)
                                 response_text = ""
@@ -3357,8 +3382,8 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                                 print(f"   ✅ [Synthesis] claude-opus-4-8 + Extended Thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
                             except concurrent.futures.TimeoutError:
                                 synth_pool.shutdown(wait=False)
-                                print(f"   ⏰ [Synthesis] claude-opus-4-8 timed out after {SYNTH_TIMEOUT}s")
-                                raise Exception(f"Opus timeout after {SYNTH_TIMEOUT}s")
+                                print(f"   ⏰ [Synthesis] claude-opus-4-8 timed out after {_opus_timeout}s")
+                                raise Exception(f"Opus timeout after {_opus_timeout}s")
                             synth_pool.shutdown(wait=False)
                         except Exception as opus_err:
                             print(f"   ❌ [Synthesis] Opus 4.8 failed: {opus_err}")
@@ -3371,7 +3396,11 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                     # Fallback 1: GPT 5.5 (text-only synthesis from verified evidence)
                     if not response_text and _use_gpt and _synthesis_budget_left() > 30:
                         try:
-                            print(f"   🔄 [Synthesis] Falling back to GPT 5.5 (timeout: {SYNTH_TIMEOUT}s)...")
+                            _gpt_timeout = min(
+                                GPT_SYNTH_TIMEOUT,
+                                max(30, _synthesis_budget_left() - 10),
+                            )
+                            print(f"   🔄 [Synthesis] Falling back to GPT 5.5 (timeout: {_gpt_timeout}s)...")
                             gpt_start = time.time()
 
                             def _synth_gpt():
@@ -3379,17 +3408,17 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                                     synthesis_prompt,
                                     model="gpt-5.5",
                                     max_output_tokens=12000,
-                                    timeout=SYNTH_TIMEOUT,
+                                    timeout=_gpt_timeout,
                                 )
 
                             gpt_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
                             gpt_future = gpt_pool.submit(_synth_gpt)
                             try:
-                                response_text = gpt_future.result(timeout=SYNTH_TIMEOUT)
+                                response_text = gpt_future.result(timeout=_gpt_timeout)
                             except concurrent.futures.TimeoutError:
                                 gpt_pool.shutdown(wait=False)
-                                print(f"   ⏰ [Synthesis] GPT 5.5 timed out after {SYNTH_TIMEOUT}s")
-                                raise Exception(f"GPT 5.5 timeout after {SYNTH_TIMEOUT}s")
+                                print(f"   ⏰ [Synthesis] GPT 5.5 timed out after {_gpt_timeout}s")
+                                raise Exception(f"GPT 5.5 timeout after {_gpt_timeout}s")
                             gpt_pool.shutdown(wait=False)
                             print(f"   ✅ [Synthesis] GPT 5.5 succeeded in {int((time.time() - gpt_start) * 1000)}ms")
                         except Exception as gpt_err:
@@ -3398,7 +3427,11 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                     # Fallback 2: Claude Sonnet 4.6 (independent provider — survives OpenAI outages)
                     if not response_text and _use_sonnet and _synthesis_budget_left() > 20:
                         try:
-                            print(f"   🔄 [Synthesis] Falling back to Claude Sonnet 4.6 (timeout: {SYNTH_TIMEOUT}s)...")
+                            _sonnet_timeout = min(
+                                SONNET_SYNTH_TIMEOUT,
+                                max(25, _synthesis_budget_left() - 10),
+                            )
+                            print(f"   🔄 [Synthesis] Falling back to Claude Sonnet 4.6 (timeout: {_sonnet_timeout}s)...")
                             m_start = time.time()
 
                             _sonnet_system = (
@@ -3420,7 +3453,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                             m_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
                             m_future = m_pool.submit(_synth_sonnet)
                             try:
-                                sonnet_resp = m_future.result(timeout=SYNTH_TIMEOUT)
+                                sonnet_resp = m_future.result(timeout=_sonnet_timeout)
                                 for block in sonnet_resp.content:
                                     if getattr(block, 'type', None) == 'text':
                                         response_text = block.text
@@ -3428,7 +3461,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                                 print(f"   ✅ [Synthesis] Claude Sonnet 4.6 succeeded in {int((time.time() - m_start) * 1000)}ms")
                             except concurrent.futures.TimeoutError:
                                 m_pool.shutdown(wait=False)
-                                print(f"   ⏰ [Synthesis] Claude Sonnet 4.6 timed out after {SYNTH_TIMEOUT}s")
+                                print(f"   ⏰ [Synthesis] Claude Sonnet 4.6 timed out after {_sonnet_timeout}s")
                             m_pool.shutdown(wait=False)
                         except Exception as sonnet_err:
                             print(f"   ❌ [Synthesis] All models failed. Last error: {sonnet_err}")
