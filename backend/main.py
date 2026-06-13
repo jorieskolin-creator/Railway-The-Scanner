@@ -45,6 +45,7 @@ from foresight_guardrails import sanitize_foresight_collection, sanitize_report_
 from domain_classifier import infer_domain
 from evidence_cleaner import CLEAN_EVIDENCE_MODEL_CHAIN, clean_company_evidence
 from llm_clients import call_anthropic_text, call_json_model_chain, call_openai_text
+from buying_potential import BuyingPotentialError, generate_buying_potential_report, load_service_portfolio_kb
 
 # VERIFICATION LOG: v5.4.0 - Extended Thinking + Search Budget Upgrade
 print("Starting Adaptability Scanner Backend (v5.4.0 - Extended Thinking + Search Budget Upgrade)...", flush=True)
@@ -927,6 +928,51 @@ async def review_data(request: Request):
     verify_admin(request)
     companies = storage.get_all_companies_summary()
     return {"companies": companies, "total": len(companies)}
+
+@app.post("/admin/buying-potential/{company_name}")
+async def create_buying_potential(company_name: str, request: Request):
+    """Create or regenerate a separate sales-facing Buying Potential report."""
+    verify_admin(request)
+    company_data = storage.get_company_data(company_name)
+    if not company_data:
+        raise HTTPException(status_code=404, detail=f"Company '{company_name}' not found in database.")
+    try:
+        service_kb = load_service_portfolio_kb(storage)
+        report_json, html_report = generate_buying_potential_report(company_data, service_kb)
+        metadata = storage.save_buying_potential_report(
+            company_data.get("companyName") or company_name,
+            report_json,
+            html_report,
+        )
+        if not metadata:
+            raise HTTPException(status_code=500, detail="Buying Potential report generated but could not be saved.")
+        return {
+            "status": "created",
+            "company": company_data.get("companyName") or company_name,
+            "metadata": metadata,
+            "confidence": report_json.get("overall_confidence"),
+            "missing_input_warnings": report_json.get("missing_input_warnings", []),
+            "source_counts": report_json.get("source_counts", {}),
+        }
+    except BuyingPotentialError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        print(f"   ❌ [Buying Potential] {company_name}: {exc}")
+        raise HTTPException(status_code=500, detail=f"Buying Potential generation failed: {str(exc)[:240]}")
+
+@app.get("/admin/buying-potential/{company_name}")
+async def get_buying_potential(company_name: str, request: Request):
+    """Return stored Buying Potential metadata/report for one company, if available."""
+    verify_admin(request)
+    return storage.get_buying_potential_report(company_name)
+
+@app.get("/admin/buying-potential-index")
+async def buying_potential_index(request: Request):
+    """Return the Buying Potential artifact index for Admin review."""
+    verify_admin(request)
+    return {"reports": storage.get_buying_potential_index()}
 
 
 _evidence_clean_state = {

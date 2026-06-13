@@ -138,6 +138,20 @@ class BlobStorage:
             print(f"   [Storage Exception] _put failed: {e}")
             return None
 
+    def _put_text(self, pathname, text, content_type="text/plain; charset=utf-8"):
+        try:
+            response = requests.put(
+                f"{self.api_url}/{pathname}",
+                headers={**self._get_headers(), "Content-Type": content_type},
+                data=text.encode("utf-8") if isinstance(text, str) else text,
+            )
+            if response.status_code == 200:
+                return response.json().get("url")
+            print(f"   [Storage Error] Text upload status {response.status_code}: {response.text}")
+        except Exception as e:
+            print(f"   [Storage Exception] _put_text failed: {e}")
+        return None
+
     def _get(self, url):
         try:
             # Always add cache buster to ensure fresh data
@@ -436,6 +450,95 @@ class BlobStorage:
         
         # 3. Fetch content
         return self._get(latest_url)
+
+    def get_buying_potential_index(self):
+        data = self.retrieve_latest_data("index/buying_potential")
+        return data if isinstance(data, list) else []
+
+    def _update_buying_potential_index(self, metadata):
+        with BlobStorage._index_lock:
+            index = self.get_buying_potential_index()
+            company_key = (metadata.get("company_slug") or "").lower()
+            updated = False
+            for idx, item in enumerate(index):
+                if (item.get("company_slug") or "").lower() == company_key:
+                    index[idx] = metadata
+                    updated = True
+                    break
+            if not updated:
+                index.append(metadata)
+            new_url = self._put("index/buying_potential.json", index)
+            if new_url:
+                self._prune_old_versions("index/buying_potential", keep=3)
+            return new_url
+
+    def save_buying_potential_report(self, company_name, report_json, html_report):
+        clean_name = self.sanitize_filename(company_name)
+        prefix = f"buying_potential/{clean_name}"
+        generated_at = report_json.get("generated_at") or datetime.utcnow().isoformat()
+        report_json["generated_at"] = generated_at
+        report_json["company_name"] = report_json.get("company_name") or company_name
+        report_json["company_slug"] = clean_name
+
+        html_url = self._put_text(f"{prefix}.html", html_report, "text/html; charset=utf-8")
+        if not html_url:
+            return None
+        json_payload = {
+            **report_json,
+            "html_url": html_url,
+        }
+        json_url = self._put(f"{prefix}.json", json_payload)
+        if not json_url:
+            return None
+
+        self._prune_old_versions(prefix, keep=6)
+        metadata = {
+            "companyName": company_name,
+            "company_slug": clean_name,
+            "updated_at": generated_at,
+            "json_url": json_url,
+            "html_url": html_url,
+            "confidence": report_json.get("overall_confidence"),
+            "status": report_json.get("status", "ready"),
+            "missing_input_warnings": report_json.get("missing_input_warnings", []),
+            "source_counts": report_json.get("source_counts", {}),
+        }
+        self._update_buying_potential_index(metadata)
+        self.update_global_index_fields(company_name, {
+            "buying_potential_available": True,
+            "buying_potential_updated_at": generated_at,
+            "buying_potential_confidence": report_json.get("overall_confidence"),
+        })
+        return metadata
+
+    def get_buying_potential_report(self, company_name):
+        clean_name = self.sanitize_filename(company_name)
+        prefix = f"buying_potential/{clean_name}"
+        blobs = self._list(prefix=prefix, limit=20)
+        json_blobs = [b for b in blobs if str(b.get("pathname", "")).endswith(".json")]
+        if not json_blobs:
+            return {"exists": False, "companyName": company_name}
+        json_blobs.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
+        latest_json_url = json_blobs[0].get("url")
+        report = self._get(latest_json_url)
+        if not report:
+            return {"exists": False, "companyName": company_name}
+        return {
+            "exists": True,
+            "companyName": report.get("company_name") or company_name,
+            "metadata": {
+                "companyName": report.get("company_name") or company_name,
+                "company_slug": clean_name,
+                "updated_at": report.get("generated_at"),
+                "json_url": latest_json_url,
+                "html_url": report.get("html_url"),
+                "confidence": report.get("overall_confidence"),
+                "status": report.get("status", "ready"),
+                "missing_input_warnings": report.get("missing_input_warnings", []),
+                "source_counts": report.get("source_counts", {}),
+            },
+            "report": report,
+        }
         
     def delete_company(self, company_name):
         """

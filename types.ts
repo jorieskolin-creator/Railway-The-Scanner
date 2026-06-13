@@ -209,6 +209,9 @@ interface AnalysisResult {
   contradictions?: any[];
   contradiction_warnings?: any[];
   general_summary_false_claims?: string[];
+  buying_potential_available?: boolean;
+  buying_potential_updated_at?: string;
+  buying_potential_confidence?: number;
 }
 
 // Market Intelligence Data (from /api/market-intelligence endpoint)

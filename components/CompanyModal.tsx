@@ -184,7 +184,13 @@ const CompanyModal = ({ company, isOpen, onClose, onUpdate, isLoading, marketInt
                </div>
            ) : (
                <>
-                  <CompanySummary data={company} faviData={enrichedFaviData} observatoryData={observatoryData} />
+                  <CompanySummary
+                    data={company}
+                    faviData={enrichedFaviData}
+                    observatoryData={observatoryData}
+                    isAdmin={isAdmin}
+                    authToken={authToken}
+                  />
                </>
            )}
         </div>

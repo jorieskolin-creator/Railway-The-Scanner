@@ -1,0 +1,33 @@
+{
+  "version": "example",
+  "owner": "Vivicta",
+  "services": [
+    {
+      "name": "Example Service Name",
+      "category": "Example Category",
+      "buyer_personas": ["CIO", "Chief Digital Officer", "Head of Operations"],
+      "pain_triggers": [
+        "Verified operating-model bottleneck",
+        "Modernization pressure",
+        "AI readiness gap"
+      ],
+      "evidence_patterns": [
+        "Scanner diagnosis mentions slow delivery flow",
+        "Foresight forces indicate near-term AI or data pressure"
+      ],
+      "proof_points": [
+        "Replace with approved Vivicta proof point"
+      ],
+      "safe_wording": [
+        "This may be relevant if the current pressure is a leadership priority."
+      ],
+      "do_not_claim": [
+        "Do not claim confirmed buying intent without explicit evidence."
+      ],
+      "disqualifiers": [
+        "No verified business pressure",
+        "Source-register evidence too weak for external-facing framing"
+      ]
+    }
+  ]
+}

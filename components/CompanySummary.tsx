@@ -2,7 +2,7 @@
 const { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Tooltip: RechartsTooltip, LineChart, Line, XAxis, YAxis, CartesianGrid, ReferenceLine } = (window as any).Recharts;
 const { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash, RefreshCw, XCircle, Search, Zap, Scale, Activity, Download, Copy, FileJson, FileCode, Check, Eye, AlertOctagon, Info, Users, Sparkles, TrendingUp } = (window as any).Lucide;
 const React = (window as any).React;
-const { useRef, useState } = React;
+const { useRef, useState, useEffect } = React;
 
 const HighlightText = ({ text }) => {
   if (!text) return null;
@@ -78,12 +78,35 @@ const getAdaptationSegment = (company, faviCutoff = 50, facCutoff = 50) => {
   return "Future-Ready";
 };
 
-const CompanySummary = ({ data, faviData, observatoryData = null }) => {
+const CompanySummary = ({ data, faviData, observatoryData = null, isAdmin = false, authToken = '' }) => {
   const summaryRef = useRef(null);
   const [copied, setCopied] = useState(false);
   const [pitchCopied, setPitchCopied] = useState(false);
   const [whyWhatCopied, setWhyWhatCopied] = useState(false);
   const [activeTab, setActiveTab] = useState("diagnosis");
+  const [buyingInsightMeta, setBuyingInsightMeta] = useState(null);
+  const companyDisplayName = data?.companyName || data?.company_name || data?.name || '';
+
+  useEffect(() => {
+    if (!isAdmin || !authToken || !companyDisplayName) {
+      setBuyingInsightMeta(null);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/admin/buying-potential/${encodeURIComponent(companyDisplayName)}`, {
+      headers: { Authorization: `Bearer ${authToken}` }
+    })
+      .then(res => res.ok ? res.json() : null)
+      .then(json => {
+        if (cancelled) return;
+        const meta = json?.exists ? json.metadata : null;
+        setBuyingInsightMeta(meta?.html_url ? meta : null);
+      })
+      .catch(() => {
+        if (!cancelled) setBuyingInsightMeta(null);
+      });
+    return () => { cancelled = true; };
+  }, [isAdmin, authToken, companyDisplayName, data?.lastUpdated]);
 
   
   const isCompanySpecificEvidence = (link) => {
@@ -1128,6 +1151,18 @@ const isForesightContext = (link) => {
         });
   };
 
+  const handleDownloadBuyingInsight = () => {
+    if (!buyingInsightMeta?.html_url) return;
+    const generatedDate = new Date().toISOString().split('T')[0];
+    const safeName = String(companyDisplayName || 'Company').replace(/\s+/g, '_');
+    const a = document.createElement('a');
+    a.href = buyingInsightMeta.html_url;
+    a.download = safeName + '_Buying_Insight_Scanner_' + generatedDate + '.html';
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.click();
+  };
+
   return (
     <div className="space-y-4">
       {/* TOOLBAR */}
@@ -1148,6 +1183,16 @@ const isForesightContext = (link) => {
             <Download size={14} />
             EXEC SUMMARY
         </button>
+        {isAdmin && buyingInsightMeta?.html_url && (
+        <button
+            onClick={handleDownloadBuyingInsight}
+            className="flex items-center gap-2 px-3 py-1.5 rounded bg-emerald-600/80 hover:bg-emerald-500 border border-emerald-300/30 text-xs font-bold text-white transition-all shadow-lg shadow-emerald-900/20"
+            title="Download stored Buying Potential & Insight HTML"
+        >
+            <Download size={14} />
+            BUYING INSIGHT
+        </button>
+        )}
         <button 
             onClick={handleDownloadHTML}
             className="flex items-center gap-2 px-3 py-1.5 rounded bg-indigo-600/80 hover:bg-indigo-500 border border-indigo-400/30 text-xs font-bold text-white transition-all shadow-lg shadow-indigo-900/20"

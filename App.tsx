@@ -156,6 +156,7 @@ const App = () => {
  const [evidenceCleanLoading, setEvidenceCleanLoading] = useState(false);
  const [evidenceCleanStatus, setEvidenceCleanStatus] = useState(null);
  const [cleaningEvidenceCompany, setCleaningEvidenceCompany] = useState(null);
+ const [buyingInsightCompany, setBuyingInsightCompany] = useState(null);
 
   // MANUAL EDIT STATE
   const [editingCompany, setEditingCompany] = useState(null);  // company name being edited
@@ -873,6 +874,41 @@ const App = () => {
  alert('Clean Evidence failed: ' + (e?.message || e));
  } finally {
  setCleaningEvidenceCompany(null);
+ }
+ };
+
+ const handleCreateBuyingInsight = async (companyName) => {
+ if (!isAdmin) return;
+ setBuyingInsightCompany(companyName);
+ try {
+ const res = await fetch(`/admin/buying-potential/${encodeURIComponent(companyName)}`, {
+ method: 'POST',
+ headers: authHeaders()
+ });
+ if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return; }
+ const raw = await res.text();
+ let json: any = {};
+ try { json = raw ? JSON.parse(raw) : {}; } catch (_) { json = {}; }
+ if (!res.ok) {
+ const detail = json.detail || json.message || raw || 'Unknown error';
+ alert('Buying Insight failed: ' + detail);
+ return;
+ }
+ const counts = json.source_counts || {};
+ const warnings = (json.missing_input_warnings || []).slice(0, 5);
+ alert(
+ `Buying Insight created for "${companyName}".\n\n` +
+ `Confidence: ${json.confidence ?? 'n/a'}\n` +
+ `Allowed fact evidence: ${counts.allowed_fact_evidence ?? 0}\n` +
+ `Hypothesis inputs: ${counts.hypothesis_inputs ?? 0}` +
+ (warnings.length ? `\n\nWarnings:\n- ${warnings.join('\n- ')}` : '')
+ );
+ await refreshReviewAfterAdminAction();
+ } catch (e) {
+ console.error(e);
+ alert('Buying Insight failed: ' + (e?.message || e));
+ } finally {
+ setBuyingInsightCompany(null);
  }
  };
 
@@ -2186,6 +2222,18 @@ const App = () => {
                               </button>
                               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block z-50 pointer-events-none">
                                 <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 w-64 whitespace-normal shadow-xl">Verify Evidence<br/><span className="text-slate-500">Verify this company's evidence links and content support. Does not regenerate summaries.</span></div>
+                              </div>
+                            </div>
+                            <div className="relative group/tip">
+                              <button
+                                onClick={() => handleCreateBuyingInsight(item.companyName)}
+                                disabled={buyingInsightCompany === item.companyName}
+                                className="text-slate-500 hover:text-fuchsia-300 p-1.5 rounded hover:bg-fuchsia-500/10 transition-all disabled:opacity-50"
+                              >
+                                {buyingInsightCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                              </button>
+                              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block z-50 pointer-events-none">
+                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 w-72 whitespace-normal shadow-xl">Buying Insight<br/><span className="text-slate-500">Create sales-facing buying potential insight from existing Scanner evidence and service portfolio KB. Does not rescan or modify company data.</span></div>
                               </div>
                             </div>
                             <div className="relative group/tip">
