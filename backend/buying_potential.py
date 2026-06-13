@@ -168,6 +168,127 @@ PDF text:
 """.strip()
 
 
+def _service_kb_repair_prompt(raw_json: str, pdf_text: str) -> str:
+    return f"""
+Repair this malformed Service Portfolio KB JSON.
+
+Return ONLY valid JSON matching this schema:
+{{
+  "version": "pdf-extracted",
+  "owner": "Vivicta",
+  "services": [
+    {{
+      "name": "...",
+      "category": "...",
+      "buyer_personas": [],
+      "pain_triggers": [],
+      "evidence_patterns": [],
+      "proof_points": [],
+      "safe_wording": [],
+      "do_not_claim": [],
+      "disqualifiers": []
+    }}
+  ],
+  "extraction_notes": []
+}}
+
+Rules:
+- Preserve only services and wording supported by the PDF/source JSON.
+- Fix missing commas, quotes, dangling text, markdown fences, and trailing comments.
+- Do not add new services or claims.
+
+Malformed JSON:
+{raw_json[:35000]}
+
+PDF excerpt for missing context:
+{pdf_text[:18000]}
+""".strip()
+
+
+SERVICE_SECTION_LABELS = [
+    "Service name",
+    "Service category",
+    "Buyer personas",
+    "Pain triggers",
+    "Evidence patterns that make it relevant",
+    "Why",
+    "What",
+    "How",
+    "Prerequisites",
+    "Needed customer roles",
+    "Needed Vivicta/provider roles",
+    "Key value promises",
+    "Proof points",
+    "Safe wording",
+    "Do-not-claim rules",
+    "Disqualifiers",
+]
+
+
+def _extract_labeled_block(section: str, label: str) -> str:
+    labels = "|".join(re.escape(item) for item in SERVICE_SECTION_LABELS)
+    pattern = rf"(?ims)^{re.escape(label)}\s*$\s*(.*?)(?=^(?:{labels})\s*$|^5\.\d+\s+|\Z)"
+    match = re.search(pattern, section)
+    return (match.group(1) if match else "").strip()
+
+
+def _split_kb_items(value: str, limit: int = 10) -> list[str]:
+    if not value:
+        return []
+    items: list[str] = []
+    current = ""
+    for raw_line in value.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        bullet_match = re.match(r"^[•\-]\s*(.+)$", line)
+        if bullet_match:
+            if current:
+                items.append(_clip(current, 280))
+            current = bullet_match.group(1).strip()
+            continue
+        if current:
+            current += " " + line
+        else:
+            current = line
+    if current:
+        items.append(_clip(current, 280))
+    if len(items) <= 1 and "\n" not in value:
+        sentences = re.split(r"(?<=[.!?])\s+", value.strip())
+        items = [_clip(sentence, 280) for sentence in sentences if sentence.strip()]
+    return [item for item in items if item][:limit]
+
+
+def _fallback_service_kb_from_pdf(pdf_text: str) -> dict:
+    parts = re.split(r"(?m)^5\.\d+\s+(.+?)\s*$", pdf_text)
+    services = []
+    for idx in range(1, len(parts), 2):
+        section_title = _clip(parts[idx], 180)
+        section = parts[idx + 1] if idx + 1 < len(parts) else ""
+        name_block = _extract_labeled_block(section, "Service name")
+        category_block = _extract_labeled_block(section, "Service category")
+        name = _split_kb_items(name_block, 1)[0] if _split_kb_items(name_block, 1) else section_title
+        category_items = _split_kb_items(category_block, 2)
+        services.append({
+            "name": name,
+            "category": category_items[0] if category_items else "",
+            "buyer_personas": _split_kb_items(_extract_labeled_block(section, "Buyer personas"), 12),
+            "pain_triggers": _split_kb_items(_extract_labeled_block(section, "Pain triggers"), 12),
+            "evidence_patterns": _split_kb_items(_extract_labeled_block(section, "Evidence patterns that make it relevant"), 12),
+            "proof_points": _split_kb_items(_extract_labeled_block(section, "Proof points"), 10),
+            "safe_wording": _split_kb_items(_extract_labeled_block(section, "Safe wording"), 8),
+            "do_not_claim": _split_kb_items(_extract_labeled_block(section, "Do-not-claim rules"), 8),
+            "disqualifiers": _split_kb_items(_extract_labeled_block(section, "Disqualifiers"), 8),
+        })
+    kb = {
+        "version": "pdf-deterministic-fallback",
+        "owner": "Vivicta",
+        "services": services,
+        "extraction_notes": ["Structured deterministically from labeled PDF sections after model JSON parse failed."],
+    }
+    return _validate_service_kb(kb)
+
+
 def _validate_service_kb(kb: Any) -> dict:
     if not isinstance(kb, dict):
         raise BuyingPotentialError("Service Portfolio KB is not a JSON object.", 409)
@@ -189,10 +310,26 @@ def _structure_service_kb_from_pdf(storage, pdf_blob: dict, pdf_text: str) -> di
     raw, model_used = call_json_model_chain(
         _service_kb_extraction_prompt(pdf_text),
         SERVICE_KB_EXTRACTION_CHAIN,
-        max_tokens=5200,
+        max_tokens=12000,
         timeout=120,
     )
-    kb = _validate_service_kb(parse_json_object(raw))
+    try:
+        kb = _validate_service_kb(parse_json_object(raw))
+    except Exception as parse_exc:
+        print(f"   ⚠️ [Buying Potential] Service KB model JSON parse failed; attempting repair: {parse_exc}")
+        try:
+            repair_raw, repair_model = call_json_model_chain(
+                _service_kb_repair_prompt(raw, pdf_text),
+                (GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL),
+                max_tokens=12000,
+                timeout=90,
+            )
+            kb = _validate_service_kb(parse_json_object(repair_raw))
+            model_used = f"{model_used} -> repaired by {repair_model}"
+        except Exception as repair_exc:
+            print(f"   ⚠️ [Buying Potential] Service KB repair failed; using deterministic PDF fallback: {repair_exc}")
+            kb = _fallback_service_kb_from_pdf(pdf_text)
+            model_used = f"{model_used} -> deterministic_pdf_fallback"
     kb["source_pdf_pathname"] = pdf_blob.get("pathname")
     kb["source_pdf_url"] = pdf_blob.get("url")
     kb["source_pdf_uploaded_at"] = pdf_blob.get("uploadedAt")
