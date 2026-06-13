@@ -195,6 +195,17 @@ interface AnalysisResult {
   evidence_sufficiency?: EvidenceSufficiency | number;
   low_evidence_mode?: boolean;
   low_evidence_label?: string;
+  ai_readiness_evidence_note?: string;
+  dimension_evidence_notes?: {
+    ai_readiness?: {
+      dimension?: string;
+      intent_score?: number | null;
+      promoted_evidence_count?: number;
+      status?: string;
+      warning?: string;
+    };
+    [key: string]: any;
+  };
   contradictions?: any[];
   contradiction_warnings?: any[];
   general_summary_false_claims?: string[];

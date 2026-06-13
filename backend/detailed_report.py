@@ -333,7 +333,7 @@ MANDATORY RULES:
    - PROPORTIONALITY: You are diagnosing a multi-billion euro enterprise. Keep narrow departmental statistics confined to a single contextualised sentence within the relevant section. Do not let a single departmental survey dominate the technology, AI Readiness, or operational narrative of a global firm. Address the contradiction factually, weight it against company-wide evidence, and move on.
 9. PARAGRAPHS: Separate with \\n\\n. Required for rendering.
 10. FORMAT: Prose with section headings only. Each section starts with "## Heading" on its own line followed by \\n\\n then the paragraph body. No bullet points, no other markdown, no links.
-11. TEMPORAL PRECISION: Use the most recent annual figures, not quarterly snapshots presented as annual results.
+11. TEMPORAL PRECISION: Use the most recent annual figures, not quarterly snapshots presented as annual results. Do not state that a financial metric is unpublished or unavailable if the payload contains that metric for the latest annual period.
 12. ORGANIZATIONAL CLAIMS: NEVER claim leadership gaps, unfilled roles, or organizational problems unless the evidence explicitly states them.
 
 Output only the prose text. Nothing else."""

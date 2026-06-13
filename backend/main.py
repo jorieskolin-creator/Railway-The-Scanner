@@ -219,6 +219,106 @@ def _evidence_sufficiency_state(evidence_links: list, financial_links: list) -> 
     }
 
 
+_AI_READINESS_TERMS = (
+    "ai readiness",
+    "artificial intelligence",
+    "machine learning",
+    "ml",
+    "generative ai",
+    "genai",
+    "data platform",
+    "data governance",
+    "developer portal",
+    "api",
+    "cloud",
+    "automation",
+    "autonomous",
+)
+
+
+def _intent_dimension_score(intent_breakdown: list, dimension_name: str) -> Optional[int]:
+    """Return the Scanner 1 ambition/intent score for a named KB dimension."""
+    target = (dimension_name or "").strip().lower()
+    for item in intent_breakdown or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or item.get("dimension") or item.get("category") or "").strip().lower()
+        if name == target:
+            try:
+                return int(round(float(item.get("score"))))
+            except Exception:
+                return None
+    return None
+
+
+def _is_ai_readiness_evidence_item(item: dict) -> bool:
+    if not isinstance(item, dict):
+        return False
+    haystack = " ".join(
+        str(item.get(k) or "")
+        for k in (
+            "name", "dimension", "category", "kb_dimension", "query", "title",
+            "snippet", "source_quote", "description", "claim_type",
+        )
+    ).lower()
+    return any(term in haystack for term in _AI_READINESS_TERMS)
+
+
+def _ai_readiness_evidence_state(intent_breakdown: list, evidence_links: list, checklist: list) -> dict:
+    """Detect high AI ambition without enough promoted AI capability evidence.
+
+    This does not override scores. It gives prompts and reports a provenance note
+    so ambition/readiness numbers are not mistaken for externally verified AI
+    capability when the source register is thin.
+    """
+    ai_intent_score = _intent_dimension_score(intent_breakdown, "AI Readiness")
+    promoted_ai_sources = [
+        link for link in evidence_links or []
+        if is_generation_eligible_source(link) and _is_ai_readiness_evidence_item(link)
+    ]
+    promoted_ai_markers = [
+        item for item in checklist or []
+        if is_generation_eligible_source(item) and _is_ai_readiness_evidence_item(item)
+    ]
+    promoted_count = len(promoted_ai_sources) + len(promoted_ai_markers)
+    warning = ""
+    status = "not_applicable"
+    if ai_intent_score is not None:
+        status = "supported" if promoted_count >= 2 else "lightly_supported" if promoted_count == 1 else "thin"
+        if ai_intent_score >= 80 and promoted_count == 0:
+            warning = (
+                f"AI Readiness ambition is high ({ai_intent_score}/100), but no generation-eligible "
+                "AI capability evidence was found. Treat this as narrative/intent unless source-backed "
+                "evidence proves deployed AI, data-platform, API, automation, or ML capability."
+            )
+        elif ai_intent_score >= 80 and promoted_count == 1:
+            warning = (
+                f"AI Readiness ambition is high ({ai_intent_score}/100), but promoted AI capability "
+                "evidence is light. Use cautious wording and distinguish autonomy/R&D signals from "
+                "deployed enterprise AI capability."
+            )
+    return {
+        "dimension": "AI Readiness",
+        "intent_score": ai_intent_score,
+        "promoted_evidence_count": promoted_count,
+        "status": status,
+        "warning": warning,
+    }
+
+
+def _ai_readiness_prompt_note(state: dict) -> str:
+    warning = (state or {}).get("warning")
+    if not warning:
+        return ""
+    return (
+        "AI READINESS EVIDENCE NOTE:\n"
+        f"{warning}\n"
+        "Do not describe AI Readiness as confirmed capability unless the evidence packet contains "
+        "generation-eligible proof. Autonomy-adjacent partnerships or R&D signals may be discussed "
+        "only as scoped signals, not as proof of deployed enterprise AI."
+    )
+
+
 def _build_fact_check_scan_payload(data: dict) -> dict:
     """Compact internal scan payload used to verify scanner-process observations."""
     data = data or {}
@@ -1854,7 +1954,7 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
   - Do NOT cite numeric scores in the text — scores display separately in the UI.
   - Do NOT fabricate findings. If evidence is sparse, acknowledge gaps rather than inventing patterns.
   - PRECISION CLAIMS: exact euro amounts, percentages, order books, dates, named partnerships, named product launches, named customers/suppliers, and ownership shares are allowed only when the same value/name/date appears in generation-eligible evidence or explicit financial context above. If not, use cautious non-specific wording or state that public evidence is limited.
-  - TEMPORAL PRECISION: When evidence contains the same metric for different periods (e.g. Q1 vs full-year, 2024 vs 2025), always use the most recent FULL-YEAR / ANNUAL figure — not interim or quarterly snapshots. If only a quarterly figure is available, label it explicitly (e.g. "as of Q1 2025"). Never present a quarterly number as if it were the annual result.
+  - TEMPORAL PRECISION: When evidence contains the same metric for different periods (e.g. Q1 vs full-year, 2024 vs 2025), always use the most recent FULL-YEAR / ANNUAL figure — not interim or quarterly snapshots. If only a quarterly figure is available, label it explicitly (e.g. "as of Q1 2025"). Never present a quarterly number as if it were the annual result. Do not write that a metric is unpublished or unavailable if the evidence or financial context contains that metric for the latest annual period.
   - ORGANIZATIONAL CLAIMS PROHIBITION: NEVER claim or imply leadership gaps, unfilled executive roles, succession planning issues, management vacancies, or organizational restructuring unless the evidence EXPLICITLY states this. The absence of a person in scanner results does NOT mean the role is vacant — it means the scanner didn't find them. Do NOT invent risk factors about people, roles, or organizational structure to add analytical depth. If the evidence doesn't mention an organizational problem, the problem does not exist for this analysis.
   - Use ONLY the four archetype labels: Thriving, Modernizing, Cash Cow, At Risk.
   - CRITICAL SEPARATION: This section is strictly neutral diagnosis. Do NOT use sales language, calls-to-action, persuasion, or proposal framing here.
@@ -3203,6 +3303,12 @@ def _execute_scan_pipeline(
                         "You may use verified structured financial findings, but must state that public evidence is limited "
                         "and avoid precise company claims unless explicitly supported by the source text."
                     )
+                ai_readiness_evidence = _ai_readiness_evidence_state(
+                    intent_results.get("breakdown", []),
+                    synthesis_source_pool,
+                    reality_results.get("checklist", []),
+                )
+                ai_readiness_context = _ai_readiness_prompt_note(ai_readiness_evidence)
                 # Run contradiction detection on the same evidence pool. Block
                 # is empty when no quantitative disagreements are found, so the
                 # injected slot stays harmless on clean cases.
@@ -3370,6 +3476,7 @@ Intent Data: {intent_narrative}
 {washing_context}
 {financial_context}
 {low_evidence_context}
+{ai_readiness_context}
 {trend_context}
 {foresight_context}
 {negative_findings_context}
@@ -3420,7 +3527,7 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
   - If washing detected, name it: "{washing_type or 'Modernization Washing'}" with the specific gap.
   - Do NOT cite numeric scores in the text — scores display separately in the UI.
   - Do NOT fabricate findings. If evidence is sparse, acknowledge gaps rather than inventing patterns.
-  - TEMPORAL PRECISION: When evidence contains the same metric for different periods (e.g. Q1 vs full-year, 2024 vs 2025), always use the most recent FULL-YEAR / ANNUAL figure — not interim or quarterly snapshots. If only a quarterly figure is available, label it explicitly (e.g. "as of Q1 2025"). Never present a quarterly number as if it were the annual result.
+  - TEMPORAL PRECISION: When evidence contains the same metric for different periods (e.g. Q1 vs full-year, 2024 vs 2025), always use the most recent FULL-YEAR / ANNUAL figure — not interim or quarterly snapshots. If only a quarterly figure is available, label it explicitly (e.g. "as of Q1 2025"). Never present a quarterly number as if it were the annual result. Do not write that a metric is unpublished or unavailable if the evidence or financial context contains that metric for the latest annual period.
   - ORGANIZATIONAL CLAIMS PROHIBITION: NEVER claim or imply leadership gaps, unfilled executive roles, succession planning issues, management vacancies, or organizational restructuring unless the evidence EXPLICITLY states this. The absence of a person in scanner results does NOT mean the role is vacant — it means the scanner didn't find them. Do NOT invent risk factors about people, roles, or organizational structure to add analytical depth. If the evidence doesn't mention an organizational problem, the problem does not exist for this analysis.
   - Use ONLY the four archetype labels: Thriving, Modernizing, Cash Cow, At Risk.
   - CRITICAL SEPARATION: This section is strictly neutral diagnosis. Do NOT use sales language, calls-to-action, persuasion, or proposal framing here.
@@ -3895,6 +4002,11 @@ Respond with valid JSON only:
         )
         managed_evidence_links = source_mgmt["links"]
         evidence_sufficiency = _evidence_sufficiency_state(managed_evidence_links, financial_evidence_links)
+        ai_readiness_evidence = _ai_readiness_evidence_state(
+            intent_results.get("breakdown", []),
+            managed_evidence_links,
+            reality_results.get("checklist", []),
+        )
 
         full_data = {
             "id": result_id,
@@ -3920,6 +4032,10 @@ Respond with valid JSON only:
             "evidence_sufficiency": evidence_sufficiency,
             "low_evidence_mode": evidence_sufficiency.get("status") != "complete",
             "low_evidence_label": evidence_sufficiency.get("label", ""),
+            "dimension_evidence_notes": {
+                "ai_readiness": ai_readiness_evidence,
+            },
+            "ai_readiness_evidence_note": ai_readiness_evidence.get("warning", ""),
             "key_people": key_people,
             "summary_text": _strip_tac_codes(summary),
             "pitch_text": pitch,

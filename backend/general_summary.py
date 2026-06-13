@@ -509,6 +509,7 @@ MANDATORY RULES:
      - If source_label = "Third-party financial database" → write "according to Finnish business database [source_title]" or "third-party financial data shows" — NEVER "according to the company's annual report"
      - If source_label = "Company filing / investor relations" → write "the company's annual report shows" or "filed accounts disclose"
      - If source_label = "Independent news / analyst" → write "[source_title] reported"
+     - Do not write that a financial metric is unpublished, unavailable, or not yet reported if any financial_findings or evidence item contains that metric for the latest annual period. Use the latest annual value and source attribution instead.
    The "assessment" text is interpretation, not a quote. Use the underlying figure (revenue, margin, ratio) but rephrase in your own words; never present the model's interpretive language as if it were a source quote.
    Financial paragraph goal: do not list figures mechanically. Use concrete financial evidence to explain what it indicates about pressure, resilience, profitability, liquidity, or capacity to absorb change. Keep the interpretation narrow and evidence-bound. If financial evidence is thin, say that financial visibility is limited rather than inventing a read-through.
 

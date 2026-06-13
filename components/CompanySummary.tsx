@@ -297,9 +297,13 @@ const isForesightContext = (link) => {
     data.ai_verification?.unsupported_claims,
     data.general_summary_false_claims
   );
+  const aiReadinessEvidenceNote = data.ai_readiness_evidence_note
+    || data.dimension_evidence_notes?.ai_readiness?.warning
+    || '';
   const qualityNotes = normalizeTrustList(
     data.quality_notes,
     data.scan_quality?.quality_notes,
+    aiReadinessEvidenceNote,
     rawHallucinationFlags.map(normalizeSummaryLengthNote).filter(Boolean)
   );
   const hallucinationFlags = rawHallucinationFlags.filter((flag) => getSummaryLengthWordCount(flag) == null);
@@ -597,6 +601,8 @@ const isForesightContext = (link) => {
         var qualityNotes = normalizeList(
             exportData.quality_notes,
             exportData.scan_quality && exportData.scan_quality.quality_notes,
+            exportData.ai_readiness_evidence_note,
+            exportData.dimension_evidence_notes && exportData.dimension_evidence_notes.ai_readiness && exportData.dimension_evidence_notes.ai_readiness.warning,
             hallucinationWarnings.map(normalizeSummaryLengthNote).filter(Boolean)
         );
         hallucinationWarnings = hallucinationWarnings.filter(function(note) {
@@ -709,7 +715,7 @@ const isForesightContext = (link) => {
                     return '<tr><td>' + escapeHTML(finding) + '</td><td>' + escapeHTML(item.category || '') + '</td><td>' + escapeHTML(checklistMarkerState(item)) + '</td><td>' + escapeHTML(item.source_type || item.source || '') + '</td></tr>';
                 }).join('') + '</tbody></table></div>' : '';
         var breakdownHTML = Array.isArray(exportData.intent_breakdown) && exportData.intent_breakdown.length > 0
-            ? '<div class="table-wrap"><table><thead><tr><th>Dimension</th><th>Score</th></tr></thead><tbody>'
+            ? '<p class="muted">Dimension scores below describe Scanner 1 ambition / intent signals. They are not standalone proof of verified operational capability.</p><div class="table-wrap"><table><thead><tr><th>Dimension</th><th>Ambition / Intent Score</th></tr></thead><tbody>'
                 + exportData.intent_breakdown.map(function(item) {
                     return '<tr><td>' + escapeHTML(item.name) + '</td><td>' + escapeHTML(item.score) + '/100</td></tr>';
                 }).join('') + '</tbody></table></div>' : '';
@@ -717,7 +723,8 @@ const isForesightContext = (link) => {
         if (exportData.domain && observatoryData && observatoryData.domain_dossiers) {
             var dossier = observatoryData.domain_dossiers.find(function(d) { return d.domain === exportData.domain; });
             if (dossier && dossier.text) {
-                domainDossierHTML = renderReportBlocks(String(dossier.text).replace(/^#\s+Domain Force Dossier.*$/im, '').trim());
+                domainDossierHTML = '<div class="callout cyan"><h3>Scanner Portfolio Context</h3><p>These domain metrics are derived from the Scanner’s analyzed company portfolio. They summarize observed company statuses and foresight pressure inside the Scanner dataset, rather than claiming to be a complete external market census.</p></div>'
+                    + renderReportBlocks(String(dossier.text).replace(/^#\s+Domain Force Dossier.*$/im, '').trim());
             }
         }
         var renderSourceLink = function(url, label) {
@@ -1070,7 +1077,8 @@ const isForesightContext = (link) => {
                 const trimmed = block.trim();
                 return trimmed && !/^#\s+Domain Force Dossier/i.test(trimmed);
             }).join('\n\n');
-            dossierHTML = dossierStats + renderReportBlocks(dossierBody);
+            dossierHTML = '<div class="callout cyan"><h3>Scanner Portfolio Context</h3><p>These domain metrics are derived from the Scanner’s analyzed company portfolio. They summarize observed company statuses and foresight pressure inside the Scanner dataset, rather than claiming to be a complete external market census.</p></div>'
+                + dossierStats + renderReportBlocks(dossierBody);
         }
 
         const htmlContent = '<!DOCTYPE html>\n<html lang="en">\n<head>\n'
@@ -1079,7 +1087,7 @@ const isForesightContext = (link) => {
             + '<title>' + escapeHTML(companyName) + ' - Executive Summary</title>\n'
             + '<style>\n'
             + ':root{color-scheme:dark;--bg:#0f172a;--panel:#172033;--panel2:#111827;--line:#334155;--text:#e5e7eb;--muted:#94a3b8;--cyan:#67e8f9;--green:#6ee7b7;--amber:#fbbf24;--rose:#fda4af;--violet:#c4b5fd;}\n'
-            + '*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Arial,sans-serif;line-height:1.55}main{max-width:1120px;margin:0 auto;padding:40px 28px 56px}.hero{border:1px solid var(--line);background:linear-gradient(135deg,#172033,#0f172a);border-radius:8px;padding:30px;margin-bottom:20px}.kicker{color:var(--cyan);font-size:11px;font-weight:800;letter-spacing:.16em;text-transform:uppercase}.hero h1{margin:8px 0 10px;font-size:34px;line-height:1.1}.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.meta span,.chips span{border:1px solid rgba(148,163,184,.28);background:rgba(15,23,42,.62);border-radius:999px;padding:5px 9px;color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:20px 0}.metric{border:1px solid rgba(148,163,184,.22);background:rgba(15,23,42,.72);border-radius:8px;padding:14px}.metric span{display:block;color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em}.metric strong{display:block;margin-top:4px;font-size:24px;color:white}.metric em{display:block;margin-top:3px;color:var(--muted);font-size:11px;font-style:normal}.section{border:1px solid rgba(148,163,184,.22);background:rgba(17,24,39,.78);border-radius:8px;padding:24px;margin-top:16px}.section h2{margin:0 0 14px;color:white;font-size:20px}.section h3{margin:20px 0 8px;color:var(--cyan);font-size:14px;text-transform:uppercase;letter-spacing:.08em}.section h4{margin:16px 0 6px;color:white;font-size:14px}.section p{margin:0 0 13px;color:#dbe4f0}.eyebrow{margin-bottom:6px;color:var(--muted);font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}.two-col{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px}.two-col h3{color:var(--amber)}ul{margin:0;padding-left:20px}li{margin:8px 0}.callout{margin-top:18px;border-left:3px solid var(--rose);background:rgba(244,63,94,.08);padding:14px 16px}.stakeholders{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.stakeholders article{border:1px solid rgba(148,163,184,.18);background:rgba(15,23,42,.55);border-radius:8px;padding:15px}.stakeholders h3{margin:0;color:white;text-transform:none;letter-spacing:0;font-size:15px}.role{color:var(--green);font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin:4px 0 8px}.stakeholders small{display:block;margin-top:10px;color:var(--muted);font-size:11px}.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}.table-wrap{overflow-x:auto;margin-top:10px;margin-bottom:18px;border:1px solid rgba(148,163,184,.18);border-radius:8px}table{width:100%;border-collapse:collapse;font-size:11px;min-width:820px}th,td{padding:8px 10px;text-align:left;border-bottom:1px solid rgba(148,163,184,.14)}th{color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.08em;background:rgba(15,23,42,.68)}td{color:#dbe4f0}td:nth-child(4){color:var(--rose);font-weight:800}.scanner-link{display:inline-block;border:1px solid rgba(103,232,249,.38);background:rgba(8,145,178,.18);color:var(--cyan);border-radius:8px;padding:10px 14px;font-weight:800;text-decoration:none}.scanner-link:hover{background:rgba(8,145,178,.28);color:white}.formula{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}.muted{color:var(--muted)!important}strong{color:white}hr{border:0;border-top:1px solid var(--line);margin:20px 0}.footer{margin-top:28px;color:#64748b;font-size:11px;text-align:center}.page-note{color:var(--muted);max-width:820px;margin:0}\n'
+            + '*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Arial,sans-serif;line-height:1.55}main{max-width:1120px;margin:0 auto;padding:40px 28px 56px}.hero{border:1px solid var(--line);background:linear-gradient(135deg,#172033,#0f172a);border-radius:8px;padding:30px;margin-bottom:20px}.kicker{color:var(--cyan);font-size:11px;font-weight:800;letter-spacing:.16em;text-transform:uppercase}.hero h1{margin:8px 0 10px;font-size:34px;line-height:1.1}.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.meta span,.chips span{border:1px solid rgba(148,163,184,.28);background:rgba(15,23,42,.62);border-radius:999px;padding:5px 9px;color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:20px 0}.metric{border:1px solid rgba(148,163,184,.22);background:rgba(15,23,42,.72);border-radius:8px;padding:14px}.metric span{display:block;color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em}.metric strong{display:block;margin-top:4px;font-size:24px;color:white}.metric em{display:block;margin-top:3px;color:var(--muted);font-size:11px;font-style:normal}.section{border:1px solid rgba(148,163,184,.22);background:rgba(17,24,39,.78);border-radius:8px;padding:24px;margin-top:16px}.section h2{margin:0 0 14px;color:white;font-size:20px}.section h3{margin:20px 0 8px;color:var(--cyan);font-size:14px;text-transform:uppercase;letter-spacing:.08em}.section h4{margin:16px 0 6px;color:white;font-size:14px}.section p{margin:0 0 13px;color:#dbe4f0}.eyebrow{margin-bottom:6px;color:var(--muted);font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}.two-col{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px}.two-col h3{color:var(--amber)}ul{margin:0;padding-left:20px}li{margin:8px 0}.callout{margin-top:18px;border-left:3px solid var(--rose);background:rgba(244,63,94,.08);padding:14px 16px}.callout.cyan{border-left-color:var(--cyan);background:rgba(34,211,238,.08)}.stakeholders{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.stakeholders article{border:1px solid rgba(148,163,184,.18);background:rgba(15,23,42,.55);border-radius:8px;padding:15px}.stakeholders h3{margin:0;color:white;text-transform:none;letter-spacing:0;font-size:15px}.role{color:var(--green);font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin:4px 0 8px}.stakeholders small{display:block;margin-top:10px;color:var(--muted);font-size:11px}.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}.table-wrap{overflow-x:auto;margin-top:10px;margin-bottom:18px;border:1px solid rgba(148,163,184,.18);border-radius:8px}table{width:100%;border-collapse:collapse;font-size:11px;min-width:820px}th,td{padding:8px 10px;text-align:left;border-bottom:1px solid rgba(148,163,184,.14)}th{color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.08em;background:rgba(15,23,42,.68)}td{color:#dbe4f0}td:nth-child(4){color:var(--rose);font-weight:800}.scanner-link{display:inline-block;border:1px solid rgba(103,232,249,.38);background:rgba(8,145,178,.18);color:var(--cyan);border-radius:8px;padding:10px 14px;font-weight:800;text-decoration:none}.scanner-link:hover{background:rgba(8,145,178,.28);color:white}.formula{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}.muted{color:var(--muted)!important}strong{color:white}hr{border:0;border-top:1px solid var(--line);margin:20px 0}.footer{margin-top:28px;color:#64748b;font-size:11px;text-align:center}.page-note{color:var(--muted);max-width:820px;margin:0}\n'
             + '</style>\n</head>\n<body>\n<main>\n'
             + '<header class="hero"><div class="kicker">Executive Summary HTML Export</div><h1>' + escapeHTML(companyName) + '</h1><p class="page-note">Compact context package for leadership review and upload workflows. This file intentionally excludes the full raw JSON payload.</p><div class="meta">' + headerMeta + '<span>Generated ' + escapeHTML(generatedDate) + '</span></div></header>\n'
             + (isLowEvidenceMode ? '<section class="section"><div class="eyebrow">Evidence status</div><h2>' + escapeHTML(lowEvidenceLabel || 'Low promoted evidence') + '</h2><p class="muted">Promoted source-register evidence is limited. The summary remains usable, but precise external company claims require source-backed support.</p></section>' : '')
@@ -2308,6 +2316,9 @@ const isForesightContext = (link) => {
                 </h3>
                 <p className="text-[10px] text-slate-500 uppercase tracking-wider font-mono">
                   Strategic foresight analysis for the {domain} domain — from the Observatory
+                </p>
+                <p className="text-xs text-slate-400 mt-3 max-w-4xl leading-relaxed">
+                  These domain metrics are derived from the Scanner’s analyzed company portfolio. They summarize observed company statuses and foresight pressure inside the Scanner dataset, rather than claiming to be a complete external market census.
                 </p>
 
                 {/* Domain stats */}
