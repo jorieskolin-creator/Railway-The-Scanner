@@ -123,6 +123,12 @@ def service_kb_repair_chain(mode: str | None = None) -> tuple[str, ...]:
     return _dedupe_chain((CLAUDE_SONNET_MODEL, _haiku_model()))
 
 
+def buying_report_repair_chain(mode: str | None = None) -> tuple[str, ...]:
+    if _buying_model_mode(mode) == "quality":
+        return _dedupe_chain((GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL, _haiku_model()))
+    return _dedupe_chain((CLAUDE_SONNET_MODEL, _haiku_model()))
+
+
 def _latest_blob(storage, prefix: str, suffixes: tuple[str, ...] | None = None) -> dict | None:
     if not storage or not prefix:
         return None
@@ -652,6 +658,39 @@ Payload:
 """.strip()
 
 
+def _report_repair_prompt(raw_json: str) -> str:
+    return f"""
+Repair this Buying Potential report into valid JSON.
+
+Rules:
+- Return ONLY JSON. No markdown.
+- Do not add new claims, people, dates, financial values, partnerships, sources, or services.
+- Preserve the original meaning where possible.
+- If a field is malformed or incomplete, repair it conservatively or use an empty array/string.
+- Every gate must be one of: allowed_as_fact, allowed_as_hypothesis, allowed_as_discovery_question, internal_only, blocked.
+- overall_confidence and all confidence fields must be integers from 0 to 100.
+
+Required top-level schema:
+{{
+  "account_snapshot": {{"text": "", "gate": "allowed_as_hypothesis", "evidence_basis": []}},
+  "buying_potential_thesis": {{"text": "", "gate": "allowed_as_hypothesis", "confidence": 0}},
+  "pressure_signals": [],
+  "why_now": [],
+  "stakeholder_map": [],
+  "pain_to_solution_map": [],
+  "recommended_sales_plays": [],
+  "conversation_angles": [],
+  "evidence_confidence": {{"strongest_evidence": [], "weak_or_missing_evidence": [], "do_not_use_claims": [], "sensitive_claims": [], "claims_as_questions_only": []}},
+  "overall_confidence": 0,
+  "missing_input_warnings": [],
+  "model_notes": []
+}}
+
+Malformed JSON:
+{_clip(raw_json, 42000)}
+""".strip()
+
+
 def _gate_prompt(report: dict, payload: dict) -> str:
     return f"""
 Review this Buying Potential report for evidence safety. Use only the payload.
@@ -747,6 +786,193 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
     return report
 
 
+def _first_nonempty(*values: Any, limit: int = 900) -> str:
+    for value in values:
+        text = _clip(value, limit)
+        if text:
+            return text
+    return ""
+
+
+def _basis_from_payload(payload: dict, limit: int = 4) -> list[str]:
+    basis = [item.get("id") for item in _list(payload.get("verified_evidence")) if isinstance(item, dict) and item.get("id")]
+    basis.extend(item.get("id") for item in _list(payload.get("financial_sources")) if isinstance(item, dict) and item.get("id"))
+    return [str(item) for item in basis[:limit]]
+
+
+def _deterministic_buying_report(payload: dict, reason: str) -> dict:
+    company = _dict(payload.get("company"))
+    outputs = _dict(payload.get("scanner_outputs"))
+    company_name = company.get("name") or "the company"
+    basis = _basis_from_payload(payload)
+    services = [svc for svc in _list(payload.get("services")) if isinstance(svc, dict)]
+    stakeholders = [person for person in _list(payload.get("stakeholders")) if isinstance(person, dict)]
+    forces = [force for force in _list(payload.get("foresight_forces")) if isinstance(force, dict)]
+    evidence = [item for item in _list(payload.get("verified_evidence")) if isinstance(item, dict)]
+    financial = [item for item in _list(payload.get("financial_sources")) if isinstance(item, dict)]
+    weak = [item for item in _list(payload.get("blocked_or_display_only_sources")) if isinstance(item, dict)]
+
+    snapshot_text = _first_nonempty(
+        outputs.get("general_summary"),
+        f"{company_name} has stored Scanner analysis, but the Buying Insight generator could not return clean JSON.",
+        limit=700,
+    )
+    thesis_seed = _first_nonempty(outputs.get("ai_diagnosis"), outputs.get("pitch"), limit=650)
+    thesis_text = (
+        f"{company_name} may have buying potential where the stored Scanner diagnosis and service portfolio overlap. "
+        f"This is a cautious hypothesis because the generative report response required fallback handling."
+    )
+    if thesis_seed:
+        thesis_text = f"{thesis_text} Scanner context: {thesis_seed}"
+
+    pressure_signals = []
+    for idx, force in enumerate(forces[:3], start=1):
+        pressure_signals.append({
+            "signal_type": force.get("theme") or f"Foresight pressure {idx}",
+            "description": _first_nonempty(force.get("description"), force.get("dimension"), limit=360),
+            "gate": "allowed_as_hypothesis",
+            "confidence": _safe_int(force.get("confidence"), 45),
+            "evidence_basis": basis,
+        })
+    if not pressure_signals and thesis_seed:
+        pressure_signals.append({
+            "signal_type": "Scanner diagnosis pressure",
+            "description": thesis_seed,
+            "gate": "allowed_as_hypothesis",
+            "confidence": 45,
+            "evidence_basis": basis,
+        })
+
+    why_now = []
+    for item in _list(outputs.get("why"))[:3]:
+        why_now.append({
+            "trigger": _first_nonempty(item.get("title") if isinstance(item, dict) else item, "Stored WHY signal", limit=120),
+            "interpretation": _first_nonempty(item.get("text") if isinstance(item, dict) else item, item, limit=340),
+            "gate": "allowed_as_discovery_question",
+            "confidence": 45,
+            "evidence_basis": basis,
+        })
+
+    stakeholder_map = []
+    for person in stakeholders[:6]:
+        stakeholder_map.append({
+            "name": person.get("name"),
+            "role": person.get("role"),
+            "likely_buying_committee_role": "Potential stakeholder; validate role and relevance before use.",
+            "evidence_basis": person.get("source") or "Stored Scanner stakeholder data",
+            "confidence": _safe_int(person.get("confidence"), 45),
+            "allowed_use": "internal_only",
+        })
+
+    pain_to_solution = []
+    sales_plays = []
+    for svc in services[:5]:
+        service_name = svc.get("name") or svc.get("category") or "Service"
+        safe_wording = _first_nonempty(*_list(svc.get("safe_wording"))[:2], f"Explore whether {service_name} is relevant.", limit=260)
+        trigger = _first_nonempty(*_list(svc.get("pain_triggers"))[:2], "Potential service-fit signal", limit=220)
+        pain_to_solution.append({
+            "evidence": "Stored Scanner diagnosis and service-pattern fit.",
+            "interpreted_pressure": trigger,
+            "service": service_name,
+            "proof_point": _first_nonempty(*_list(svc.get("proof_points"))[:2], "Validate proof point before customer-facing use.", limit=240),
+            "safe_wording": safe_wording,
+            "gate": "allowed_as_discovery_question",
+            "confidence": 40,
+            "disqualifiers": _list(svc.get("disqualifiers"))[:4],
+        })
+        sales_plays.append({
+            "service_or_offer": service_name,
+            "why_relevant": trigger,
+            "target_stakeholder": "Relevant business, technology, transformation, or operations owner.",
+            "opening_angle": safe_wording,
+            "confidence": 40,
+            "overclaim_risk": "medium",
+            "evidence_basis": basis,
+            "disqualifiers": _list(svc.get("disqualifiers"))[:4],
+        })
+
+    strongest = [
+        f"{item.get('id')}: {item.get('title') or item.get('quote') or item.get('url')}"
+        for item in (evidence + financial)[:8]
+    ]
+    weak_notes = [
+        f"{item.get('title') or item.get('url')}: {item.get('verification_reason') or item.get('promotion_status') or 'not generation eligible'}"
+        for item in weak[:8]
+    ]
+
+    return {
+        "account_snapshot": {"text": snapshot_text, "gate": "allowed_as_hypothesis", "evidence_basis": basis},
+        "buying_potential_thesis": {"text": thesis_text[:1200], "gate": "allowed_as_hypothesis", "confidence": 42},
+        "pressure_signals": pressure_signals,
+        "why_now": why_now,
+        "stakeholder_map": stakeholder_map,
+        "pain_to_solution_map": pain_to_solution,
+        "recommended_sales_plays": sales_plays,
+        "conversation_angles": [
+            {
+                "angle_type": "discovery_question",
+                "text": "Which current transformation, modernization, or operating-model pressure is most visible internally right now?",
+                "gate": "allowed_as_discovery_question",
+                "confidence": 45,
+            },
+            {
+                "angle_type": "do_not_say",
+                "text": "Do not state confirmed buying intent or imply a project exists unless the customer confirms it.",
+                "gate": "blocked",
+                "confidence": 90,
+            },
+        ],
+        "evidence_confidence": {
+            "strongest_evidence": strongest,
+            "weak_or_missing_evidence": weak_notes + ["Generative report JSON was malformed; deterministic fallback used."],
+            "do_not_use_claims": _list(_dict(outputs.get("evidence_trust")).get("false_or_unsupported_claims"))[:10],
+            "sensitive_claims": [],
+            "claims_as_questions_only": ["Service-fit and timing signals should be used as discovery questions unless independently verified."],
+        },
+        "overall_confidence": 42,
+        "missing_input_warnings": [
+            "Generated with deterministic fallback after malformed model JSON.",
+            _clip(reason, 220),
+        ],
+        "model_notes": ["Deterministic fallback used; no new web search or external enrichment was performed."],
+    }
+
+
+def _parse_or_repair_report(
+    raw: str,
+    payload: dict,
+    model_mode: str | None = None,
+    stage_callback=None,
+) -> tuple[dict, str]:
+    try:
+        report = parse_json_object(raw)
+        if not isinstance(report, dict):
+            raise ValueError("Report JSON root was not an object")
+        return report, "parsed"
+    except Exception as parse_exc:
+        if stage_callback:
+            stage_callback("generate_report", 58, "Repairing malformed Buying Insight JSON")
+        try:
+            repair_raw, repair_model = call_json_model_chain(
+                _report_repair_prompt(raw),
+                buying_report_repair_chain(model_mode),
+                max_tokens=5200,
+                timeout=90,
+            )
+            report = parse_json_object(repair_raw)
+            if not isinstance(report, dict):
+                raise ValueError("Repaired report JSON root was not an object")
+            notes = _list(report.get("model_notes"))
+            notes.append(f"Malformed report JSON repaired by {repair_model}. Original parse error: {str(parse_exc)[:160]}")
+            report["model_notes"] = notes
+            return report, f"repaired by {repair_model}"
+        except Exception as repair_exc:
+            if stage_callback:
+                stage_callback("generate_report", 62, "Using cautious fallback report after JSON repair failed")
+            reason = f"Report JSON parse failed ({parse_exc}); repair failed ({repair_exc})"
+            return _deterministic_buying_report(payload, reason), "deterministic_fallback"
+
+
 def generate_buying_potential_report(
     company_data: dict,
     service_kb: dict,
@@ -763,8 +989,9 @@ def generate_buying_potential_report(
         stage_callback("generate_report", 50, "Generating Buying Potential report")
     prompt = _generation_prompt(payload)
     raw, model_used = call_json_model_chain(prompt, buying_generation_chain(model_mode), max_tokens=5200, timeout=120)
-    report = parse_json_object(raw)
+    report, parse_status = _parse_or_repair_report(raw, payload, model_mode, stage_callback)
     report["generation_model"] = model_used
+    report["generation_parse_status"] = parse_status
     report["model_mode"] = _buying_model_mode(model_mode)
 
     gate_review = None
