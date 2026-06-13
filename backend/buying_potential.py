@@ -32,7 +32,6 @@ from llm_clients import (
 from source_quality import is_generation_eligible_source
 
 
-SERVICE_KB_EXTRACTION_CHAIN = (GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL)
 SERVICE_KB_CACHE_PREFIX = "service_portfolio/vivicta_services.extracted"
 SERVICE_KB_TEXT_LIMIT = 65000
 ALLOWED_GATES = {
@@ -103,12 +102,24 @@ def _haiku_model() -> str:
 def buying_generation_chain(mode: str | None = None) -> tuple[str, ...]:
     if _buying_model_mode(mode) == "quality":
         return _dedupe_chain((CLAUDE_OPUS_MODEL, GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL))
-    return _dedupe_chain((CLAUDE_SONNET_MODEL, _haiku_model(), GPT_REASONING_MODEL))
+    return _dedupe_chain((CLAUDE_SONNET_MODEL, _haiku_model()))
 
 
 def buying_gate_chain(mode: str | None = None) -> tuple[str, ...]:
     if _buying_model_mode(mode) == "quality":
         return _dedupe_chain((GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL))
+    return _dedupe_chain((CLAUDE_SONNET_MODEL, _haiku_model()))
+
+
+def service_kb_extraction_chain(mode: str | None = None) -> tuple[str, ...]:
+    if _buying_model_mode(mode) == "quality":
+        return _dedupe_chain((GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL, _haiku_model()))
+    return _dedupe_chain((CLAUDE_SONNET_MODEL, _haiku_model()))
+
+
+def service_kb_repair_chain(mode: str | None = None) -> tuple[str, ...]:
+    if _buying_model_mode(mode) == "quality":
+        return _dedupe_chain((GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL, _haiku_model()))
     return _dedupe_chain((CLAUDE_SONNET_MODEL, _haiku_model()))
 
 
@@ -338,12 +349,25 @@ def _validate_service_kb(kb: Any) -> dict:
 
 
 def _structure_service_kb_from_pdf(storage, pdf_blob: dict, pdf_text: str) -> dict:
-    raw, model_used = call_json_model_chain(
-        _service_kb_extraction_prompt(pdf_text),
-        SERVICE_KB_EXTRACTION_CHAIN,
-        max_tokens=12000,
-        timeout=120,
-    )
+    try:
+        raw, model_used = call_json_model_chain(
+            _service_kb_extraction_prompt(pdf_text),
+            service_kb_extraction_chain(),
+            max_tokens=12000,
+            timeout=120,
+        )
+    except Exception as model_exc:
+        print(f"   ⚠️ [Buying Potential] Service KB model extraction failed; using deterministic PDF fallback: {model_exc}")
+        kb = _fallback_service_kb_from_pdf(pdf_text)
+        kb["source_pdf_pathname"] = pdf_blob.get("pathname")
+        kb["source_pdf_url"] = pdf_blob.get("url")
+        kb["source_pdf_uploaded_at"] = pdf_blob.get("uploadedAt")
+        kb["extracted_at"] = datetime.utcnow().isoformat()
+        kb["extraction_model"] = f"deterministic_pdf_fallback_after_model_failure: {str(model_exc)[:180]}"
+        kb["extracted_text_chars"] = len(pdf_text)
+        storage._put(f"{SERVICE_KB_CACHE_PREFIX}.json", kb)
+        storage._prune_old_versions(SERVICE_KB_CACHE_PREFIX, keep=3)
+        return kb
     try:
         kb = _validate_service_kb(parse_json_object(raw))
     except Exception as parse_exc:
@@ -351,7 +375,7 @@ def _structure_service_kb_from_pdf(storage, pdf_blob: dict, pdf_text: str) -> di
         try:
             repair_raw, repair_model = call_json_model_chain(
                 _service_kb_repair_prompt(raw, pdf_text),
-                (GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL),
+                service_kb_repair_chain(),
                 max_tokens=12000,
                 timeout=90,
             )
