@@ -157,6 +157,7 @@ const App = () => {
  const [evidenceCleanStatus, setEvidenceCleanStatus] = useState(null);
  const [cleaningEvidenceCompany, setCleaningEvidenceCompany] = useState(null);
  const [buyingInsightCompany, setBuyingInsightCompany] = useState(null);
+ const [buyingInsightStatus, setBuyingInsightStatus] = useState<any>(null);
 
   // MANUAL EDIT STATE
   const [editingCompany, setEditingCompany] = useState(null);  // company name being edited
@@ -880,6 +881,7 @@ const App = () => {
  const handleCreateBuyingInsight = async (companyName) => {
  if (!isAdmin) return;
  setBuyingInsightCompany(companyName);
+ setBuyingInsightStatus({ company: companyName, stage: 'queued', progress: 0 });
  try {
  const res = await fetch(`/admin/buying-potential/${encodeURIComponent(companyName)}`, {
  method: 'POST',
@@ -894,13 +896,37 @@ const App = () => {
  alert('Buying Insight failed: ' + detail);
  return;
  }
- const counts = json.source_counts || {};
- const warnings = (json.missing_input_warnings || []).slice(0, 5);
+ const jobId = json.job_id;
+ if (!jobId) throw new Error('Buying Insight job did not return a job id.');
+ let finalStatus: any = null;
+ let attempts = 0;
+ while (attempts < 240) {
+ const statusRes = await fetch(`/admin/buying-potential-status/${encodeURIComponent(jobId)}?t=${Date.now()}`, {
+ headers: authHeaders()
+ });
+ if (statusRes.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return; }
+ if (!statusRes.ok) throw new Error('Buying Insight status polling failed');
+ const statusJson = await statusRes.json();
+ setBuyingInsightStatus(statusJson);
+ if (statusJson.status === 'completed') {
+ finalStatus = statusJson;
+ break;
+ }
+ if (statusJson.status === 'failed') {
+ throw new Error(`${statusJson.stage || 'Buying Insight'}: ${statusJson.error || 'Job failed'}`);
+ }
+ await new Promise(r => setTimeout(r, 2500));
+ attempts += 1;
+ }
+ if (!finalStatus) throw new Error('Buying Insight timed out while polling status.');
+ const counts = finalStatus.source_counts || {};
+ const warnings = (finalStatus.warnings || []).slice(0, 5);
  alert(
  `Buying Insight created for "${companyName}".\n\n` +
- `Confidence: ${json.confidence ?? 'n/a'}\n` +
- `Allowed fact evidence: ${counts.allowed_fact_evidence ?? 0}\n` +
- `Hypothesis inputs: ${counts.hypothesis_inputs ?? 0}` +
+ `Confidence: ${finalStatus.confidence ?? 'n/a'}\n` +
+ `Generation-eligible evidence: ${counts.generation_eligible ?? 0}\n` +
+ `Financial sources: ${counts.financial_sources ?? 0}\n` +
+ `Blocked/display-only sources: ${counts.blocked_or_display_only ?? 0}` +
  (warnings.length ? `\n\nWarnings:\n- ${warnings.join('\n- ')}` : '')
  );
  await refreshReviewAfterAdminAction();
@@ -909,6 +935,7 @@ const App = () => {
  alert('Buying Insight failed: ' + (e?.message || e));
  } finally {
  setBuyingInsightCompany(null);
+ setBuyingInsightStatus(null);
  }
  };
 
@@ -2233,7 +2260,7 @@ const App = () => {
                                 {buyingInsightCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
                               </button>
                               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block z-50 pointer-events-none">
-                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 w-72 whitespace-normal shadow-xl">Buying Insight<br/><span className="text-slate-500">Create sales-facing buying potential insight from existing Scanner evidence and service portfolio KB. Does not rescan or modify company data.</span></div>
+                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 w-72 whitespace-normal shadow-xl">Buying Insight<br/><span className="text-slate-500">Create sales-facing buying potential insight from existing Scanner evidence and service portfolio KB. Does not rescan or modify company data.{buyingInsightCompany === item.companyName && buyingInsightStatus?.stage ? `\n\nNow: ${buyingInsightStatus.stage} (${buyingInsightStatus.progress || 0}%)` : ''}</span></div>
                               </div>
                             </div>
                             <div className="relative group/tip">

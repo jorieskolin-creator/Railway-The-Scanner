@@ -21,6 +21,7 @@ import requests
 from pypdf import PdfReader
 
 from llm_clients import (
+    CLAUDE_HAIKU_MODEL,
     CLAUDE_OPUS_MODEL,
     CLAUDE_SONNET_MODEL,
     GPT_REASONING_MODEL,
@@ -31,8 +32,6 @@ from llm_clients import (
 from source_quality import is_generation_eligible_source
 
 
-GENERATION_CHAIN = (CLAUDE_OPUS_MODEL, GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL)
-GATE_CHAIN = (GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL)
 SERVICE_KB_EXTRACTION_CHAIN = (GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL)
 SERVICE_KB_CACHE_PREFIX = "service_portfolio/vivicta_services.extracted"
 SERVICE_KB_TEXT_LIMIT = 65000
@@ -79,6 +78,38 @@ def _clean_env(value: str | None) -> str:
     if "=" in value:
         value = value.split("=", 1)[1]
     return value.strip().strip('"').strip("'")
+
+
+def _dedupe_chain(models: tuple[str, ...]) -> tuple[str, ...]:
+    seen = set()
+    cleaned = []
+    for model in models:
+        model = _clean_env(model)
+        if model and model not in seen:
+            seen.add(model)
+            cleaned.append(model)
+    return tuple(cleaned)
+
+
+def _buying_model_mode(mode: str | None = None) -> str:
+    value = _clean_env(mode or os.environ.get("BUYING_POTENTIAL_MODEL_MODE") or "testing").lower()
+    return "quality" if value == "quality" else "testing"
+
+
+def _haiku_model() -> str:
+    return _clean_env(os.environ.get("CLAUDE_HAIKU_MODEL") or CLAUDE_HAIKU_MODEL)
+
+
+def buying_generation_chain(mode: str | None = None) -> tuple[str, ...]:
+    if _buying_model_mode(mode) == "quality":
+        return _dedupe_chain((CLAUDE_OPUS_MODEL, GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL))
+    return _dedupe_chain((CLAUDE_SONNET_MODEL, _haiku_model(), GPT_REASONING_MODEL))
+
+
+def buying_gate_chain(mode: str | None = None) -> tuple[str, ...]:
+    if _buying_model_mode(mode) == "quality":
+        return _dedupe_chain((GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL))
+    return _dedupe_chain((CLAUDE_SONNET_MODEL, _haiku_model()))
 
 
 def _latest_blob(storage, prefix: str, suffixes: tuple[str, ...] | None = None) -> dict | None:
@@ -376,6 +407,58 @@ def load_service_portfolio_kb(storage=None) -> dict:
         raise BuyingPotentialError(f"Service KB PDF extraction failed: {str(exc)[:240]}", 409)
 
 
+def validate_service_portfolio_kb(storage=None) -> dict:
+    """Validate Service KB config/cache/PDF and return admin-facing diagnostics."""
+    started = time.time()
+    if not storage or not storage._load_token():
+        raise BuyingPotentialError("BLOB2_READ_WRITE_TOKEN is required for Buying Insight Service KB access.", 409)
+    service_prefix = _clean_env(os.environ.get("SERVICE_KB_BLOB_PREFIX"))
+    if not service_prefix:
+        raise BuyingPotentialError("SERVICE_KB_BLOB_PREFIX is required and must point to the Service KB PDF/prefix in BLOB2.", 409)
+
+    cache_blob = _latest_blob(storage, SERVICE_KB_CACHE_PREFIX, (".json",))
+    pdf_blob = _latest_blob(storage, service_prefix, (".pdf",))
+    cached_kb = _get_blob_json(storage, cache_blob)
+    cached_valid = False
+    cached_service_count = 0
+    if cached_kb:
+        try:
+            cached_validated = _validate_service_kb(cached_kb)
+            cached_valid = True
+            cached_service_count = len(_list(cached_validated.get("services")))
+        except BuyingPotentialError:
+            cached_valid = False
+
+    kb = load_service_portfolio_kb(storage)
+    return {
+        "ok": True,
+        "service_prefix": service_prefix,
+        "service_count": len(_list(kb.get("services"))),
+        "cache": {
+            "exists": bool(cache_blob),
+            "valid": cached_valid,
+            "service_count": cached_service_count,
+            "pathname": cache_blob.get("pathname") if cache_blob else None,
+            "uploaded_at": cache_blob.get("uploadedAt") if cache_blob else None,
+        },
+        "pdf": {
+            "exists": bool(pdf_blob),
+            "pathname": pdf_blob.get("pathname") if pdf_blob else None,
+            "uploaded_at": pdf_blob.get("uploadedAt") if pdf_blob else None,
+        },
+        "kb_metadata": {
+            "version": kb.get("version"),
+            "owner": kb.get("owner"),
+            "source_pdf_pathname": kb.get("source_pdf_pathname"),
+            "source_pdf_uploaded_at": kb.get("source_pdf_uploaded_at"),
+            "extracted_at": kb.get("extracted_at"),
+            "extraction_model": kb.get("extraction_model"),
+            "extracted_text_chars": kb.get("extracted_text_chars"),
+        },
+        "elapsed_ms": int((time.time() - started) * 1000),
+    }
+
+
 def _source_id(idx: int) -> str:
     return f"SRC-{idx:02d}"
 
@@ -640,18 +723,31 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
     return report
 
 
-def generate_buying_potential_report(company_data: dict, service_kb: dict) -> tuple[dict, str]:
+def generate_buying_potential_report(
+    company_data: dict,
+    service_kb: dict,
+    *,
+    stage_callback=None,
+    model_mode: str | None = None,
+) -> tuple[dict, str]:
     if not isinstance(company_data, dict) or not company_data.get("companyName"):
         raise BuyingPotentialError("Company data missing or invalid.", 404)
+    if stage_callback:
+        stage_callback("build_payload", 35, "Building Buying Insight prompt payload")
     payload = _build_input_payload(company_data, service_kb)
+    if stage_callback:
+        stage_callback("generate_report", 50, "Generating Buying Potential report")
     prompt = _generation_prompt(payload)
-    raw, model_used = call_json_model_chain(prompt, GENERATION_CHAIN, max_tokens=5200, timeout=120)
+    raw, model_used = call_json_model_chain(prompt, buying_generation_chain(model_mode), max_tokens=5200, timeout=120)
     report = parse_json_object(raw)
     report["generation_model"] = model_used
+    report["model_mode"] = _buying_model_mode(model_mode)
 
     gate_review = None
+    if stage_callback:
+        stage_callback("gate_review", 70, "Reviewing sales evidence gates")
     try:
-        gate_raw, gate_model = call_json_model_chain(_gate_prompt(report, payload), GATE_CHAIN, max_tokens=1800, timeout=60)
+        gate_raw, gate_model = call_json_model_chain(_gate_prompt(report, payload), buying_gate_chain(model_mode), max_tokens=1800, timeout=60)
         gate_review = parse_json_object(gate_raw)
         gate_review["model"] = gate_model
     except Exception as exc:
@@ -660,6 +756,8 @@ def generate_buying_potential_report(company_data: dict, service_kb: dict) -> tu
     report = _post_process_report(report, payload, gate_review)
     report["companyName"] = company_data.get("companyName")
     report["companyUrl"] = company_data.get("companyUrl")
+    if stage_callback:
+        stage_callback("render_html", 82, "Rendering Buying Insight HTML")
     html_report = render_buying_potential_html(report)
     return report, html_report
 

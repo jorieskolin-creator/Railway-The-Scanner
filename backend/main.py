@@ -45,7 +45,7 @@ from foresight_guardrails import sanitize_foresight_collection, sanitize_report_
 from domain_classifier import infer_domain
 from evidence_cleaner import CLEAN_EVIDENCE_MODEL_CHAIN, clean_company_evidence
 from llm_clients import call_anthropic_text, call_json_model_chain, call_openai_text
-from buying_potential import BuyingPotentialError, generate_buying_potential_report, load_service_portfolio_kb
+from buying_potential import BuyingPotentialError, generate_buying_potential_report, load_service_portfolio_kb, validate_service_portfolio_kb
 
 # VERIFICATION LOG: v5.4.0 - Extended Thinking + Search Budget Upgrade
 print("Starting Adaptability Scanner Backend (v5.4.0 - Extended Thinking + Search Budget Upgrade)...", flush=True)
@@ -934,39 +934,162 @@ async def review_data(request: Request):
     companies = storage.get_all_companies_summary()
     return {"companies": companies, "total": len(companies)}
 
-@app.post("/admin/buying-potential/{company_name}")
-async def create_buying_potential(company_name: str, request: Request):
-    """Create or regenerate a separate sales-facing Buying Potential report."""
-    verify_admin(request)
-    company_data = storage.get_company_data(company_name)
-    if not company_data:
-        raise HTTPException(status_code=404, detail=f"Company '{company_name}' not found in database.")
+_buying_potential_jobs = {}
+_buying_potential_jobs_lock = threading.Lock()
+
+
+def _append_buying_job_log(job_id: str, message: str):
+    with _buying_potential_jobs_lock:
+        job = _buying_potential_jobs.get(job_id)
+        if not job:
+            return
+        logs = job.setdefault("logs", [])
+        logs.append({"ts": datetime.utcnow().isoformat(), "message": message})
+        if len(logs) > 120:
+            del logs[:-120]
+
+
+def _update_buying_job(job_id: str, **fields):
+    with _buying_potential_jobs_lock:
+        job = _buying_potential_jobs.get(job_id)
+        if not job:
+            return
+        job.update(fields)
+
+
+def _run_buying_potential_job(job_id: str, company_name: str):
+    started = time.time()
+
+    def set_stage(stage: str, progress: int, message: str):
+        elapsed_ms = int((time.time() - started) * 1000)
+        _update_buying_job(job_id, status="running", stage=stage, progress=progress, elapsed_ms=elapsed_ms)
+        _append_buying_job_log(job_id, message)
+        print(f"   🔄 [Buying Potential] {company_name} | {stage} | {message} ({elapsed_ms}ms)", flush=True)
+
     try:
+        set_stage("load_company", 8, "Loading stored company data")
+        company_data = storage.get_company_data(company_name)
+        if not company_data:
+            raise BuyingPotentialError(f"Company '{company_name}' not found in database.", 404)
+
+        resolved_company = company_data.get("companyName") or company_name
+        _update_buying_job(job_id, company=resolved_company)
+        set_stage("load_service_kb", 22, "Loading and validating Service KB from BLOB2")
         service_kb = load_service_portfolio_kb(buying_storage)
-        report_json, html_report = generate_buying_potential_report(company_data, service_kb)
+        _append_buying_job_log(job_id, f"Service KB ready: {len(service_kb.get('services') or [])} services")
+
+        def stage_callback(stage: str, progress: int, message: str):
+            set_stage(stage, progress, message)
+
+        report_json, html_report = generate_buying_potential_report(
+            company_data,
+            service_kb,
+            stage_callback=stage_callback,
+        )
+
+        set_stage("save_artifacts", 90, "Saving Buying Insight JSON/HTML artifacts to BLOB2")
         metadata = buying_storage.save_buying_potential_report(
-            company_data.get("companyName") or company_name,
+            resolved_company,
             report_json,
             html_report,
             index_storage=storage,
         )
         if not metadata:
-            raise HTTPException(status_code=500, detail="Buying Potential report generated but could not be saved.")
-        return {
-            "status": "created",
-            "company": company_data.get("companyName") or company_name,
-            "metadata": metadata,
-            "confidence": report_json.get("overall_confidence"),
-            "missing_input_warnings": report_json.get("missing_input_warnings", []),
-            "source_counts": report_json.get("source_counts", {}),
+            raise BuyingPotentialError("Buying Potential report generated but could not be saved.", 500)
+        set_stage("update_index", 96, "Buying Insight metadata saved")
+        _update_buying_job(
+            job_id,
+            status="completed",
+            stage="completed",
+            progress=100,
+            metadata=metadata,
+            confidence=report_json.get("overall_confidence"),
+            source_counts=report_json.get("source_counts", {}),
+            warnings=report_json.get("missing_input_warnings", []),
+            completed_at=datetime.utcnow().isoformat(),
+            elapsed_ms=int((time.time() - started) * 1000),
+        )
+        _append_buying_job_log(job_id, "Buying Insight completed")
+        print(f"   ✅ [Buying Potential] {resolved_company} completed in {int((time.time() - started) * 1000)}ms", flush=True)
+    except BuyingPotentialError as exc:
+        _update_buying_job(
+            job_id,
+            status="failed",
+            error=str(exc),
+            error_status_code=exc.status_code,
+            progress=100,
+            completed_at=datetime.utcnow().isoformat(),
+            elapsed_ms=int((time.time() - started) * 1000),
+        )
+        _append_buying_job_log(job_id, f"Buying Insight failed: {exc}")
+        print(f"   ❌ [Buying Potential] {company_name} failed: {exc}", flush=True)
+    except Exception as exc:
+        _update_buying_job(
+            job_id,
+            status="failed",
+            error=f"{type(exc).__name__}: {str(exc)[:240]}",
+            progress=100,
+            completed_at=datetime.utcnow().isoformat(),
+            elapsed_ms=int((time.time() - started) * 1000),
+        )
+        _append_buying_job_log(job_id, f"Buying Insight failed: {exc}")
+        print(f"   ❌ [Buying Potential] {company_name}: {exc}", flush=True)
+
+
+@app.post("/admin/buying-potential/{company_name}")
+async def create_buying_potential(company_name: str, request: Request):
+    """Start a background job to create/regenerate a sales-facing Buying Potential report."""
+    verify_admin(request)
+    job_id = str(uuid.uuid4())
+    with _buying_potential_jobs_lock:
+        for job in _buying_potential_jobs.values():
+            if job.get("status") in {"queued", "running"}:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Buying Insight is already running for {job.get('company') or 'another company'}.",
+                )
+        _buying_potential_jobs[job_id] = {
+            "job_id": job_id,
+            "status": "queued",
+            "stage": "queued",
+            "progress": 0,
+            "company": company_name,
+            "error": None,
+            "metadata": None,
+            "confidence": None,
+            "source_counts": {},
+            "warnings": [],
+            "logs": [{"ts": datetime.utcnow().isoformat(), "message": f"Queued Buying Insight for {company_name}"}],
+            "created_at": datetime.utcnow().isoformat(),
+            "completed_at": None,
+            "elapsed_ms": 0,
         }
+    thread = threading.Thread(target=_run_buying_potential_job, args=(job_id, company_name), daemon=True)
+    thread.start()
+    return {"job_id": job_id, "status": "started", "company": company_name}
+
+
+@app.get("/admin/buying-potential-status/{job_id}")
+async def get_buying_potential_status(job_id: str, request: Request):
+    """Return progress for a Buying Potential background job."""
+    verify_admin(request)
+    with _buying_potential_jobs_lock:
+        job = _buying_potential_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Buying Potential job not found")
+        return dict(job)
+
+
+@app.post("/admin/buying-potential-service-kb/validate")
+async def validate_buying_potential_service_kb(request: Request):
+    """Validate BLOB2 Service KB config/cache/PDF before running a Buying Insight job."""
+    verify_admin(request)
+    try:
+        return validate_service_portfolio_kb(buying_storage)
     except BuyingPotentialError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc))
-    except HTTPException:
-        raise
     except Exception as exc:
-        print(f"   ❌ [Buying Potential] {company_name}: {exc}")
-        raise HTTPException(status_code=500, detail=f"Buying Potential generation failed: {str(exc)[:240]}")
+        raise HTTPException(status_code=500, detail=f"Service KB validation failed: {str(exc)[:240]}")
 
 @app.get("/admin/buying-potential/{company_name}")
 async def get_buying_potential(company_name: str, request: Request):

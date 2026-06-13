@@ -15,6 +15,7 @@ from typing import Any
 
 CLAUDE_OPUS_MODEL = "claude-opus-4-8"
 CLAUDE_SONNET_MODEL = "claude-sonnet-4-6"
+CLAUDE_HAIKU_MODEL = (os.environ.get("CLAUDE_HAIKU_MODEL") or "claude-haiku-4-5").strip().strip('"').strip("'")
 GPT_REASONING_MODEL = "gpt-5.5"
 GPT_VERIFIER_MODEL = "gpt-5.4"
 
