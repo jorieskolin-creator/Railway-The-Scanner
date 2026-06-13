@@ -9,11 +9,16 @@ account insight, and returns standalone JSON/HTML artifacts.
 from __future__ import annotations
 
 import html
+import io
 import json
+import os
 import re
+import time
 from datetime import datetime
-from pathlib import Path
 from typing import Any
+
+import requests
+from pypdf import PdfReader
 
 from llm_clients import (
     CLAUDE_OPUS_MODEL,
@@ -28,8 +33,9 @@ from source_quality import is_generation_eligible_source
 
 GENERATION_CHAIN = (CLAUDE_OPUS_MODEL, GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL)
 GATE_CHAIN = (GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL)
-SERVICE_KB_PREFIX = "service_portfolio/vivicta_services"
-LOCAL_SERVICE_KB = Path(__file__).resolve().parents[1] / "service_portfolio" / "vivicta_services.json"
+SERVICE_KB_EXTRACTION_CHAIN = (GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL)
+SERVICE_KB_CACHE_PREFIX = "service_portfolio/vivicta_services.extracted"
+SERVICE_KB_TEXT_LIMIT = 65000
 ALLOWED_GATES = {
     "allowed_as_fact",
     "allowed_as_hypothesis",
@@ -67,38 +73,170 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def load_service_portfolio_kb(storage=None) -> dict:
-    """Load Vivicta service portfolio KB from Blob or local seeded JSON."""
-    kb = None
-    if storage:
-        try:
-            candidate = storage.retrieve_latest_data(SERVICE_KB_PREFIX)
-            if isinstance(candidate, dict) and candidate:
-                kb = candidate
-        except Exception as exc:
-            print(f"   ⚠️ [Buying Potential] Blob service KB read failed: {exc}")
+def _clean_env(value: str | None) -> str:
+    if not value:
+        return ""
+    if "=" in value:
+        value = value.split("=", 1)[1]
+    return value.strip().strip('"').strip("'")
 
-    if kb is None and LOCAL_SERVICE_KB.exists():
-        try:
-            kb = json.loads(LOCAL_SERVICE_KB.read_text(encoding="utf-8"))
-        except Exception as exc:
-            raise BuyingPotentialError(f"Service Portfolio KB exists but cannot be parsed: {exc}", 500)
 
+def _latest_blob(storage, prefix: str, suffixes: tuple[str, ...] | None = None) -> dict | None:
+    if not storage or not prefix:
+        return None
+    blobs = storage._list(prefix=prefix, limit=50) or []
+    if suffixes:
+        lowered = tuple(s.lower() for s in suffixes)
+        blobs = [
+            blob for blob in blobs
+            if str(blob.get("pathname", "")).lower().endswith(lowered)
+        ]
+    if not blobs:
+        return None
+    blobs.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
+    return blobs[0]
+
+
+def _get_blob_json(storage, blob: dict | None) -> dict | None:
+    if not storage or not blob or not blob.get("url"):
+        return None
+    data = storage._get(blob["url"])
+    return data if isinstance(data, dict) else None
+
+
+def _fetch_blob_bytes(blob: dict) -> bytes:
+    url = blob.get("url")
+    if not url:
+        raise BuyingPotentialError("Service KB Blob entry has no URL.", 409)
+    resp = requests.get(f"{url}?t={int(time.time())}", timeout=45)
+    if resp.status_code != 200:
+        raise BuyingPotentialError(f"Service KB PDF fetch failed ({resp.status_code}).", 409)
+    return resp.content
+
+
+def _extract_pdf_text(pdf_bytes: bytes) -> str:
+    try:
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        chunks = []
+        for idx, page in enumerate(reader.pages, start=1):
+            text = page.extract_text() or ""
+            if text.strip():
+                chunks.append(f"\n\n--- PAGE {idx} ---\n{text}")
+        extracted = "\n".join(chunks).strip()
+    except Exception as exc:
+        raise BuyingPotentialError(f"Service KB PDF could not be parsed: {exc}", 409)
+    if len(extracted) < 800:
+        raise BuyingPotentialError("Service KB PDF parsed, but extracted text was too short to structure safely.", 409)
+    return extracted
+
+
+def _service_kb_extraction_prompt(pdf_text: str) -> str:
+    return f"""
+Extract a structured Vivicta Service Portfolio Knowledge Base from this PDF text.
+
+Use ONLY the PDF text. Do not invent services, proof points, personas, claims, dates, client names, or capabilities.
+If a field is not clearly present, use an empty array.
+
+Return ONLY valid JSON:
+{{
+  "version": "pdf-extracted",
+  "owner": "Vivicta",
+  "services": [
+    {{
+      "name": "...",
+      "category": "...",
+      "buyer_personas": [],
+      "pain_triggers": [],
+      "evidence_patterns": [],
+      "proof_points": [],
+      "safe_wording": [],
+      "do_not_claim": [],
+      "disqualifiers": []
+    }}
+  ],
+  "extraction_notes": []
+}}
+
+Field rules:
+- services[].name is required and must be a real service/offer from the PDF.
+- safe_wording must be cautious customer-facing wording.
+- do_not_claim must include overclaims the sales report must avoid.
+- disqualifiers must include conditions where the service should not be recommended.
+
+PDF text:
+{pdf_text[:SERVICE_KB_TEXT_LIMIT]}
+""".strip()
+
+
+def _validate_service_kb(kb: Any) -> dict:
     if not isinstance(kb, dict):
-        raise BuyingPotentialError(
-            "Service Portfolio KB missing. Add service_portfolio/vivicta_services.json "
-            "or upload service_portfolio/vivicta_services.json to Blob before creating Buying Insight.",
-            409,
-        )
-
+        raise BuyingPotentialError("Service Portfolio KB is not a JSON object.", 409)
     services = kb.get("services")
     if not isinstance(services, list) or not services:
         raise BuyingPotentialError("Service Portfolio KB must contain a non-empty 'services' array.", 409)
     valid = [svc for svc in services if isinstance(svc, dict) and svc.get("name")]
     if not valid:
         raise BuyingPotentialError("Service Portfolio KB services need at least a 'name' field.", 409)
+    for svc in valid:
+        for key in ("buyer_personas", "pain_triggers", "evidence_patterns", "proof_points", "safe_wording", "do_not_claim", "disqualifiers"):
+            if not isinstance(svc.get(key), list):
+                svc[key] = _list(svc.get(key)) if svc.get(key) else []
     kb["services"] = valid
     return kb
+
+
+def _structure_service_kb_from_pdf(storage, pdf_blob: dict, pdf_text: str) -> dict:
+    raw, model_used = call_json_model_chain(
+        _service_kb_extraction_prompt(pdf_text),
+        SERVICE_KB_EXTRACTION_CHAIN,
+        max_tokens=5200,
+        timeout=120,
+    )
+    kb = _validate_service_kb(parse_json_object(raw))
+    kb["source_pdf_pathname"] = pdf_blob.get("pathname")
+    kb["source_pdf_url"] = pdf_blob.get("url")
+    kb["source_pdf_uploaded_at"] = pdf_blob.get("uploadedAt")
+    kb["extracted_at"] = datetime.utcnow().isoformat()
+    kb["extraction_model"] = model_used
+    kb["extracted_text_chars"] = len(pdf_text)
+    storage._put(f"{SERVICE_KB_CACHE_PREFIX}.json", kb)
+    storage._prune_old_versions(SERVICE_KB_CACHE_PREFIX, keep=3)
+    return kb
+
+
+def load_service_portfolio_kb(storage=None) -> dict:
+    """Load and cache the Vivicta Service KB from BLOB2 PDF or extracted JSON."""
+    if not storage or not storage._load_token():
+        raise BuyingPotentialError("BLOB2_READ_WRITE_TOKEN is required for Buying Insight Service KB access.", 409)
+    service_prefix = _clean_env(os.environ.get("SERVICE_KB_BLOB_PREFIX"))
+    if not service_prefix:
+        raise BuyingPotentialError("SERVICE_KB_BLOB_PREFIX is required and must point to the Service KB PDF/prefix in BLOB2.", 409)
+
+    cache_blob = _latest_blob(storage, SERVICE_KB_CACHE_PREFIX, (".json",))
+    pdf_blob = _latest_blob(storage, service_prefix, (".pdf",))
+    cached_kb = _get_blob_json(storage, cache_blob)
+    if cached_kb and (not pdf_blob or str(cache_blob.get("uploadedAt", "")) >= str(pdf_blob.get("uploadedAt", ""))):
+        try:
+            return _validate_service_kb(cached_kb)
+        except BuyingPotentialError as cache_exc:
+            if not pdf_blob:
+                raise
+            print(f"   ⚠️ [Buying Potential] Cached Service KB is invalid; re-extracting from PDF: {cache_exc}")
+    if not pdf_blob:
+        if cached_kb:
+            return _validate_service_kb(cached_kb)
+        raise BuyingPotentialError(f"No Service KB PDF found in BLOB2 with prefix '{service_prefix}'.", 409)
+
+    try:
+        pdf_text = _extract_pdf_text(_fetch_blob_bytes(pdf_blob))
+        return _structure_service_kb_from_pdf(storage, pdf_blob, pdf_text)
+    except Exception as exc:
+        if cached_kb:
+            print(f"   ⚠️ [Buying Potential] Service KB PDF extraction failed; using cached JSON: {exc}")
+            return _validate_service_kb(cached_kb)
+        if isinstance(exc, BuyingPotentialError):
+            raise
+        raise BuyingPotentialError(f"Service KB PDF extraction failed: {str(exc)[:240]}", 409)
 
 
 def _source_id(idx: int) -> str:

@@ -14,12 +14,19 @@ _DROPPED = object()  # sentinel: callable was dropped, distinct from legitimate 
 class BlobStorage:
     _index_lock = threading.Lock()
 
-    def __init__(self):
+    def __init__(self, token_env="BLOB_READ_WRITE_TOKEN", url_envs=None, label="Storage"):
         self.api_url = "https://blob.vercel-storage.com"
+        self.token_env = token_env
+        self.url_envs = tuple(url_envs or ("VITE_BLOB_URL", "BLOB_URL"))
+        self.label = label
         self.token = self._load_token()
         
         # 1. Try to get URL from Env
-        raw_url = os.environ.get("VITE_BLOB_URL") or os.environ.get("BLOB_URL") or ""
+        raw_url = ""
+        for env_name in self.url_envs:
+            raw_url = os.environ.get(env_name) or ""
+            if raw_url:
+                break
         self.public_base_url = self._clean_env_var(raw_url)
         
         # 2. If missing, Auto-Discover it
@@ -27,7 +34,7 @@ class BlobStorage:
             self.public_base_url = self._discover_base_url()
 
     def _load_token(self):
-        raw_token = os.environ.get("BLOB_READ_WRITE_TOKEN", "")
+        raw_token = os.environ.get(self.token_env, "")
         return self._clean_env_var(raw_token)
 
     def _clean_env_var(self, value: str):
@@ -48,7 +55,7 @@ class BlobStorage:
         """
         Self-Healing: If BLOB_URL is missing, list 1 file to find the store's public domain.
         """
-        print("   [Storage] BLOB_URL env var missing. Attempting auto-discovery via API...")
+        print(f"   [{self.label}] Blob URL env var missing. Attempting auto-discovery via API...")
         try:
             # List 1 item to get its URL
             resp = requests.get(f"{self.api_url}?limit=1", headers=self._get_headers())
@@ -63,12 +70,12 @@ class BlobStorage:
                         parts = sample_url.split("/")
                         # parts[0] = https:, parts[1] = '', parts[2] = domain
                         base = f"{parts[0]}//{parts[2]}"
-                        print(f"   [Storage] Auto-discovery Success. Base URL: {base}")
+                        print(f"   [{self.label}] Auto-discovery Success. Base URL: {base}")
                         return base
         except Exception as e:
-            print(f"   [Storage] Auto-discovery failed: {e}")
+            print(f"   [{self.label}] Auto-discovery failed: {e}")
         
-        print("   [Storage] Could not determine Base URL. Reads will fail.")
+        print(f"   [{self.label}] Could not determine Base URL. Reads will fail.")
         return ""
 
     def _list(self, prefix, limit=100):
@@ -472,7 +479,7 @@ class BlobStorage:
                 self._prune_old_versions("index/buying_potential", keep=3)
             return new_url
 
-    def save_buying_potential_report(self, company_name, report_json, html_report):
+    def save_buying_potential_report(self, company_name, report_json, html_report, index_storage=None):
         clean_name = self.sanitize_filename(company_name)
         prefix = f"buying_potential/{clean_name}"
         generated_at = report_json.get("generated_at") or datetime.utcnow().isoformat()
@@ -504,11 +511,13 @@ class BlobStorage:
             "source_counts": report_json.get("source_counts", {}),
         }
         self._update_buying_potential_index(metadata)
-        self.update_global_index_fields(company_name, {
-            "buying_potential_available": True,
-            "buying_potential_updated_at": generated_at,
-            "buying_potential_confidence": report_json.get("overall_confidence"),
-        })
+        target_index_storage = index_storage if index_storage is not None else self
+        if target_index_storage:
+            target_index_storage.update_global_index_fields(company_name, {
+                "buying_potential_available": True,
+                "buying_potential_updated_at": generated_at,
+                "buying_potential_confidence": report_json.get("overall_confidence"),
+            })
         return metadata
 
     def get_buying_potential_report(self, company_name):

@@ -616,6 +616,11 @@ app.add_middleware(
 )
 
 storage = BlobStorage()
+buying_storage = BlobStorage(
+    token_env="BLOB2_READ_WRITE_TOKEN",
+    url_envs=("VITE_BLOB2_URL", "BLOB2_URL"),
+    label="BuyingStorage",
+)
 
 
 # --- AUTH LOGIN ENDPOINT ---
@@ -937,12 +942,13 @@ async def create_buying_potential(company_name: str, request: Request):
     if not company_data:
         raise HTTPException(status_code=404, detail=f"Company '{company_name}' not found in database.")
     try:
-        service_kb = load_service_portfolio_kb(storage)
+        service_kb = load_service_portfolio_kb(buying_storage)
         report_json, html_report = generate_buying_potential_report(company_data, service_kb)
-        metadata = storage.save_buying_potential_report(
+        metadata = buying_storage.save_buying_potential_report(
             company_data.get("companyName") or company_name,
             report_json,
             html_report,
+            index_storage=storage,
         )
         if not metadata:
             raise HTTPException(status_code=500, detail="Buying Potential report generated but could not be saved.")
@@ -966,13 +972,13 @@ async def create_buying_potential(company_name: str, request: Request):
 async def get_buying_potential(company_name: str, request: Request):
     """Return stored Buying Potential metadata/report for one company, if available."""
     verify_admin(request)
-    return storage.get_buying_potential_report(company_name)
+    return buying_storage.get_buying_potential_report(company_name)
 
 @app.get("/admin/buying-potential-index")
 async def buying_potential_index(request: Request):
     """Return the Buying Potential artifact index for Admin review."""
     verify_admin(request)
-    return {"reports": storage.get_buying_potential_index()}
+    return {"reports": buying_storage.get_buying_potential_index()}
 
 
 _evidence_clean_state = {
