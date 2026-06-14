@@ -204,9 +204,14 @@ def _company_tokens(company_name: str) -> list[str]:
     return [t for t in re.findall(r"[a-zåäö0-9]{3,}", text) if t not in {"the", "and", "for"}][:6]
 
 
+def _is_homepage_url(url: str) -> bool:
+    path_parts = [p for p in urlparse(_normalize_url(url)).path.split("/") if p]
+    return len(path_parts) == 0 or (len(path_parts) == 1 and path_parts[0].lower() in {"fi", "en", "sv", "se", "de", "fr"})
+
+
 def _source_profile(url: str, title: str = "") -> dict:
     value = f"{url} {title}".lower()
-    if url.rstrip("/").count("/") <= 2:
+    if _is_homepage_url(url):
         return dict(SOURCE_TARGET_REGISTRY[0])
     for target in SOURCE_TARGET_REGISTRY[1:]:
         if any(k and k in value for k in target.get("keywords", ())):
@@ -274,6 +279,30 @@ def _homepage_links(base_url: str, limit: int = 80) -> list[str]:
         return links
     except Exception:
         return []
+
+
+def _links_from_text(text: str, base_url: str, limit: int = 80) -> list[str]:
+    """Extract links from Firecrawl/Jina markdown or text snippets."""
+    base = _normalize_url(base_url)
+    official_host = _host(base)
+    if not text or not official_host:
+        return []
+    candidates = []
+    patterns = (
+        r"\[[^\]]+\]\((https?://[^)\s]+|/[^)\s]+)\)",
+        r"https?://[^\s)\"']+",
+    )
+    for pattern in patterns:
+        for match in re.findall(pattern, text):
+            url = str(match).strip().strip("<>").rstrip(".,;")
+            clean = _normalize_url(url, base)
+            if clean and _same_or_subdomain(_host(clean), official_host):
+                candidates.append(clean)
+            if len(candidates) >= limit:
+                break
+        if len(candidates) >= limit:
+            break
+    return candidates
 
 
 def _firecrawl_headers() -> dict:
@@ -382,10 +411,9 @@ def _fetch_source(url: str) -> dict:
 
 def _language_prefixes(base_url: str) -> list[str]:
     path_parts = [p for p in urlparse(_normalize_url(base_url)).path.split("/") if p]
-    prefixes = [""]
     if path_parts and path_parts[0].lower() in {"fi", "en", "sv", "se", "de", "fr"}:
-        prefixes.append(path_parts[0].lower())
-    return prefixes
+        return [path_parts[0].lower()]
+    return [""]
 
 
 def _localized_candidate_paths(base_url: str) -> list[str]:
@@ -400,9 +428,16 @@ def _localized_candidate_paths(base_url: str) -> list[str]:
     return paths
 
 
-def _target_score(url: str, base_url: str) -> int:
+def _base_origin(base_url: str) -> str:
+    parsed = urlparse(_normalize_url(base_url))
+    if not parsed.scheme or not parsed.netloc:
+        return _normalize_url(base_url)
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _target_score(url: str, base_url: str, origin_hint: str = "guess") -> int:
     path = urlparse(url).path.lower()
-    if _normalize_url(url) == _normalize_url(base_url):
+    if _is_homepage_url(url) and _host(url) == _host(base_url):
         return 100
     profile = _source_profile(url)
     category_order = {
@@ -420,20 +455,30 @@ def _target_score(url: str, base_url: str) -> int:
         score -= 50
     if len(path.strip("/").split("/")) > 4:
         score -= 12
+    if origin_hint == "discovered":
+        score += 10
+    elif origin_hint == "homepage_markdown":
+        score += 14
     return score
 
 
 def _discover_urls(company_url: str, max_urls: int) -> list[str]:
     base = _normalize_url(company_url)
     official_host = _host(base)
-    discovered = []
-    discovered.append(base)
-    discovered.extend(_firecrawl_map(base, max(max_urls * 3, 40)))
-    discovered.extend(_homepage_links(base, max(max_urls * 3, 60)))
-    discovered.extend(_normalize_url(urljoin(base.rstrip("/") + "/", path.lstrip("/"))) for path in _localized_candidate_paths(base))
+    origin = _base_origin(base)
+    discovered = [(base, "discovered")]
+    discovered.extend((url, "discovered") for url in _firecrawl_map(base, max(max_urls * 3, 40)))
+    discovered.extend((url, "discovered") for url in _homepage_links(base, max(max_urls * 3, 60)))
+    homepage_fetch = _firecrawl_scrape(base)
+    if homepage_fetch and homepage_fetch.get("text"):
+        discovered.extend((url, "homepage_markdown") for url in _links_from_text(homepage_fetch.get("text") or "", base, max(max_urls * 4, 80)))
+    discovered.extend(
+        (_normalize_url(urljoin(origin.rstrip("/") + "/", path.lstrip("/"))), "guess")
+        for path in _localized_candidate_paths(base)
+    )
     filtered = []
     seen = set()
-    for url in discovered:
+    for url, origin_hint in discovered:
         clean = _normalize_url(url, base)
         if not clean or clean in seen:
             continue
@@ -442,9 +487,9 @@ def _discover_urls(company_url: str, max_urls: int) -> list[str]:
             continue
         path = urlparse(clean).path.lower()
         if clean == base or any(keyword in path for keyword in TARGET_KEYWORDS):
-            filtered.append(clean)
-    filtered.sort(key=lambda item: _target_score(item, base), reverse=True)
-    return filtered[:max_urls]
+            filtered.append((clean, origin_hint))
+    filtered.sort(key=lambda item: _target_score(item[0], base, item[1]), reverse=True)
+    return [url for url, _origin_hint in filtered[:max_urls]]
 
 
 def _quote_for_entity(text: str, tokens: list[str]) -> str:
