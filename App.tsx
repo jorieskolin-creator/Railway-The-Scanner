@@ -158,6 +158,8 @@ const App = () => {
  const [cleaningEvidenceCompany, setCleaningEvidenceCompany] = useState(null);
  const [companyEvidenceCompany, setCompanyEvidenceCompany] = useState(null);
  const [companyEvidenceStatus, setCompanyEvidenceStatus] = useState<any>(null);
+ const [sourceLedgerCompany, setSourceLedgerCompany] = useState(null);
+ const [sourceLedgerStatus, setSourceLedgerStatus] = useState<any>(null);
  const [buyingInsightCompany, setBuyingInsightCompany] = useState(null);
  const [buyingInsightStatus, setBuyingInsightStatus] = useState<any>(null);
 
@@ -1003,6 +1005,70 @@ const App = () => {
  } finally {
  setCompanyEvidenceCompany(null);
  setCompanyEvidenceStatus(null);
+ }
+ };
+
+ const handleCombineCompanyEvidence = async (companyName) => {
+ if (!isAdmin) return;
+ const proceed = confirm(`Combine Company Evidence for "${companyName}"?\n\nThis creates a shared BLOB2 Source Ledger from Scanner evidence, financial evidence, foresight links, Company Evidence DB, and Buying Insight references. It does not modify normal scan data.`);
+ if (!proceed) return;
+ setSourceLedgerCompany(companyName);
+ setSourceLedgerStatus({ company: companyName, stage: 'queued', progress: 0 });
+ try {
+ const res = await fetch(`/admin/company-source-ledger/${encodeURIComponent(companyName)}`, {
+ method: 'POST',
+ headers: authHeaders()
+ });
+ if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return; }
+ const raw = await res.text();
+ let json: any = {};
+ try { json = raw ? JSON.parse(raw) : {}; } catch (_) { json = {}; }
+ if (!res.ok) {
+ const detail = json.detail || json.message || raw || 'Unknown error';
+ alert('Company Source Ledger failed: ' + detail);
+ return;
+ }
+ const jobId = json.job_id;
+ if (!jobId) throw new Error('Company Source Ledger job did not return a job id.');
+ let finalStatus: any = null;
+ let attempts = 0;
+ while (attempts < 120) {
+ const statusRes = await fetch(`/admin/company-source-ledger-status/${encodeURIComponent(jobId)}?t=${Date.now()}`, {
+ headers: authHeaders()
+ });
+ if (statusRes.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return; }
+ if (!statusRes.ok) throw new Error('Company Source Ledger status polling failed');
+ const statusJson = await statusRes.json();
+ setSourceLedgerStatus(statusJson);
+ if (statusJson.status === 'completed') {
+ finalStatus = statusJson;
+ break;
+ }
+ if (statusJson.status === 'failed') {
+ throw new Error(`${statusJson.stage || 'Company Source Ledger'}: ${statusJson.error || 'Job failed'}`);
+ }
+ await new Promise(r => setTimeout(r, 2500));
+ attempts += 1;
+ }
+ if (!finalStatus) throw new Error('Company Source Ledger timed out while polling status.');
+ const stats = finalStatus.stats || {};
+ const warnings = (finalStatus.warnings || []).slice(0, 5);
+ alert(
+ `Company Source Ledger created for "${companyName}".\n\n` +
+ `Records: ${stats.records ?? 0}\n` +
+ `Scanner seeds: ${stats.scanner_seed_eligible ?? 0}\n` +
+ `Buying eligible: ${stats.buying_eligible ?? 0}\n` +
+ `Deduplicated: ${stats.deduplicated ?? 0}\n` +
+ `Display-only/blocked: ${stats.display_only_or_blocked ?? 0}` +
+ (warnings.length ? `\n\nWarnings:\n- ${warnings.join('\n- ')}` : '')
+ );
+ await refreshReviewAfterAdminAction();
+ } catch (e) {
+ console.error(e);
+ alert('Company Source Ledger failed: ' + (e?.message || e));
+ } finally {
+ setSourceLedgerCompany(null);
+ setSourceLedgerStatus(null);
  }
  };
 
@@ -2328,6 +2394,18 @@ const App = () => {
                               </button>
                               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block z-50 pointer-events-none">
                                 <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 w-72 whitespace-normal shadow-xl">Build Evidence DB<br/><span className="text-slate-500">Gather official-domain candidate sources into BLOB2 for Buying Insight. Does not modify normal scan data.{companyEvidenceCompany === item.companyName && companyEvidenceStatus?.stage ? `\n\nNow: ${companyEvidenceStatus.stage} (${companyEvidenceStatus.progress || 0}%)` : ''}</span></div>
+                              </div>
+                            </div>
+                            <div className="relative group/tip">
+                              <button
+                                onClick={() => handleCombineCompanyEvidence(item.companyName)}
+                                disabled={sourceLedgerCompany === item.companyName}
+                                className="text-slate-500 hover:text-teal-300 p-1.5 rounded hover:bg-teal-500/10 transition-all disabled:opacity-50"
+                              >
+                                {sourceLedgerCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
+                              </button>
+                              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block z-50 pointer-events-none">
+                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 w-72 whitespace-normal shadow-xl">Combine Evidence<br/><span className="text-slate-500">Create shared company source ledger from Scanner, financial, foresight, Evidence DB, and Buying Insight sources. Does not modify normal scan data.{sourceLedgerCompany === item.companyName && sourceLedgerStatus?.stage ? `\n\nNow: ${sourceLedgerStatus.stage} (${sourceLedgerStatus.progress || 0}%)` : ''}</span></div>
                               </div>
                             </div>
                             <div className="relative group/tip">

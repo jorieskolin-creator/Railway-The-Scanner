@@ -534,7 +534,50 @@ def _company_evidence_records(company_evidence: dict | None) -> tuple[list[dict]
     return strongest[:30], blocked[:30]
 
 
-def _extract_evidence(company_data: dict, company_evidence: dict | None = None) -> tuple[list[dict], list[dict]]:
+def _company_source_ledger_records(company_source_ledger: dict | None) -> tuple[list[dict], list[dict]]:
+    if not isinstance(company_source_ledger, dict):
+        return [], []
+    strongest = []
+    blocked = []
+    for idx, rec in enumerate(_list(company_source_ledger.get("records")), start=1):
+        if not isinstance(rec, dict):
+            continue
+        item = {
+            "id": rec.get("id") or f"LEDGER-{idx:03d}",
+            "title": _clip(rec.get("title") or rec.get("url"), 160),
+            "url": rec.get("url"),
+            "source_type": rec.get("source_type") or rec.get("source_category"),
+            "credibility": rec.get("source_credibility") or "unknown",
+            "quote": _clip(rec.get("source_quote") or rec.get("snippet"), 480),
+            "claim_support_status": rec.get("claim_support_status"),
+            "promotion_status": rec.get("promotion_status"),
+            "analysis_verified": rec.get("analysis_verified") is True,
+            "generation_eligible": rec.get("generation_eligible") is True,
+            "buying_evidence_eligible": rec.get("buying_evidence_eligible") is True,
+            "allowed_as_fact": rec.get("allowed_as_fact") is True,
+            "allowed_as_hypothesis": rec.get("allowed_as_hypothesis") is True,
+            "allowed_as_discovery_question": rec.get("allowed_as_discovery_question") is True,
+            "internal_only": rec.get("internal_only") is True,
+            "blocked": rec.get("blocked") is True,
+            "source_freshness": rec.get("source_freshness"),
+            "last_checked": rec.get("last_checked"),
+            "source_database": "company_source_ledger",
+            "origins": rec.get("origins", []),
+            "wrong_entity": rec.get("wrong_entity") is True,
+            "verification_reason": rec.get("verification_reason"),
+        }
+        if item["buying_evidence_eligible"] or item["allowed_as_fact"]:
+            strongest.append(item)
+        else:
+            blocked.append(item)
+    return strongest[:30], blocked[:30]
+
+
+def _extract_evidence(
+    company_data: dict,
+    company_evidence: dict | None = None,
+    company_source_ledger: dict | None = None,
+) -> tuple[list[dict], list[dict]]:
     raw_links = _list(company_data.get("evidence_links")) + _list(company_data.get("foresight_links"))
     strongest: list[dict] = []
     blocked: list[dict] = []
@@ -560,7 +603,8 @@ def _extract_evidence(company_data: dict, company_evidence: dict | None = None) 
         else:
             blocked.append(item)
     company_strongest, company_blocked = _company_evidence_records(company_evidence)
-    return (company_strongest + strongest)[:30], (company_blocked + blocked)[:30]
+    ledger_strongest, ledger_blocked = _company_source_ledger_records(company_source_ledger)
+    return (ledger_strongest + company_strongest + strongest)[:36], (ledger_blocked + company_blocked + blocked)[:36]
 
 
 def _financial_evidence(company_data: dict) -> list[dict]:
@@ -584,8 +628,13 @@ def _financial_evidence(company_data: dict) -> list[dict]:
     return items[:12]
 
 
-def _build_input_payload(company_data: dict, service_kb: dict, company_evidence: dict | None = None) -> dict:
-    evidence, blocked = _extract_evidence(company_data, company_evidence)
+def _build_input_payload(
+    company_data: dict,
+    service_kb: dict,
+    company_evidence: dict | None = None,
+    company_source_ledger: dict | None = None,
+) -> dict:
+    evidence, blocked = _extract_evidence(company_data, company_evidence, company_source_ledger)
     financial_sources = _financial_evidence(company_data)
     ai_verification = _dict(company_data.get("ai_verification"))
     false_claims = _list(ai_verification.get("false_claims")) + _list(ai_verification.get("unsupported_claims"))
@@ -662,6 +711,12 @@ def _build_input_payload(company_data: dict, service_kb: dict, company_evidence:
             "generated_at": company_evidence.get("generated_at") if isinstance(company_evidence, dict) else None,
             "stats": company_evidence.get("stats", {}) if isinstance(company_evidence, dict) else {},
             "warnings": company_evidence.get("warnings", []) if isinstance(company_evidence, dict) else [],
+        },
+        "company_source_ledger": {
+            "available": isinstance(company_source_ledger, dict),
+            "generated_at": company_source_ledger.get("generated_at") if isinstance(company_source_ledger, dict) else None,
+            "stats": company_source_ledger.get("stats", {}) if isinstance(company_source_ledger, dict) else {},
+            "warnings": company_source_ledger.get("warnings", []) if isinstance(company_source_ledger, dict) else [],
         },
         "stakeholders": key_people,
         "foresight_forces": forces,
@@ -1299,6 +1354,7 @@ def generate_buying_potential_report(
     service_kb: dict,
     *,
     company_evidence: dict | None = None,
+    company_source_ledger: dict | None = None,
     stage_callback=None,
     model_mode: str | None = None,
 ) -> tuple[dict, str]:
@@ -1306,7 +1362,7 @@ def generate_buying_potential_report(
         raise BuyingPotentialError("Company data missing or invalid.", 404)
     if stage_callback:
         stage_callback("build_payload", 35, "Building Buying Insight prompt payload")
-    payload = _build_input_payload(company_data, service_kb, company_evidence)
+    payload = _build_input_payload(company_data, service_kb, company_evidence, company_source_ledger)
     if stage_callback:
         stage_callback("generate_report", 45, "Generating Buying Potential report sections")
     report = _assemble_section_report(payload, model_mode=model_mode, stage_callback=stage_callback)

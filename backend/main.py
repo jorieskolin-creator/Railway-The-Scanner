@@ -47,6 +47,7 @@ from evidence_cleaner import CLEAN_EVIDENCE_MODEL_CHAIN, clean_company_evidence
 from llm_clients import call_anthropic_text, call_json_model_chain, call_openai_text
 from buying_potential import BuyingPotentialError, generate_buying_potential_report, load_service_portfolio_kb, validate_service_portfolio_kb
 from company_evidence import CompanyEvidenceError, build_company_evidence_database
+from company_source_ledger import CompanySourceLedgerError, build_company_source_ledger, ledger_scanner_seed_links
 
 # VERIFICATION LOG: v5.4.0 - Extended Thinking + Search Budget Upgrade
 print("Starting Adaptability Scanner Backend (v5.4.0 - Extended Thinking + Search Budget Upgrade)...", flush=True)
@@ -939,6 +940,8 @@ _buying_potential_jobs = {}
 _buying_potential_jobs_lock = threading.Lock()
 _company_evidence_jobs = {}
 _company_evidence_jobs_lock = threading.Lock()
+_company_source_ledger_jobs = {}
+_company_source_ledger_jobs_lock = threading.Lock()
 
 
 def _append_company_evidence_log(job_id: str, message: str):
@@ -1024,6 +1027,111 @@ def _run_company_evidence_job(job_id: str, company_name: str):
         print(f"   ❌ [Company Evidence] {company_name}: {exc}", flush=True)
 
 
+def _append_company_source_ledger_log(job_id: str, message: str):
+    with _company_source_ledger_jobs_lock:
+        job = _company_source_ledger_jobs.get(job_id)
+        if not job:
+            return
+        logs = job.setdefault("logs", [])
+        logs.append({"ts": datetime.utcnow().isoformat(), "message": message})
+        if len(logs) > 120:
+            del logs[:-120]
+
+
+def _update_company_source_ledger_job(job_id: str, **fields):
+    with _company_source_ledger_jobs_lock:
+        job = _company_source_ledger_jobs.get(job_id)
+        if not job:
+            return
+        job.update(fields)
+
+
+def _run_company_source_ledger_job(job_id: str, company_name: str):
+    started = time.time()
+
+    def set_stage(stage: str, progress: int, message: str):
+        elapsed_ms = int((time.time() - started) * 1000)
+        _update_company_source_ledger_job(job_id, status="running", stage=stage, progress=progress, elapsed_ms=elapsed_ms)
+        _append_company_source_ledger_log(job_id, message)
+        print(f"   🔄 [Source Ledger] {company_name} | {stage} | {message} ({elapsed_ms}ms)", flush=True)
+
+    try:
+        set_stage("load_company", 8, "Loading stored Scanner company data")
+        company_data = storage.get_company_data(company_name)
+        if not company_data:
+            raise CompanySourceLedgerError(f"Company '{company_name}' not found in database.", 404)
+
+        resolved_company = company_data.get("companyName") or company_name
+        _update_company_source_ledger_job(job_id, company=resolved_company)
+
+        set_stage("load_company_evidence", 24, "Loading Company Evidence DB from BLOB2")
+        evidence_lookup = buying_storage.get_company_evidence_database(resolved_company)
+        company_evidence = evidence_lookup.get("database") if evidence_lookup.get("exists") else None
+        if company_evidence:
+            stats = company_evidence.get("stats", {})
+            _append_company_source_ledger_log(job_id, f"Company Evidence DB loaded: {stats.get('candidate_sources', 0)} candidates")
+        else:
+            _append_company_source_ledger_log(job_id, "No Company Evidence DB found; combining Scanner data only")
+
+        set_stage("load_buying_insight", 36, "Loading Buying Insight source references if available")
+        buying_lookup = buying_storage.get_buying_potential_report(resolved_company)
+        buying_report = buying_lookup.get("report") if buying_lookup.get("exists") else None
+        if buying_report:
+            _append_company_source_ledger_log(job_id, "Buying Insight report loaded for source-reference merge")
+
+        def stage_callback(stage: str, progress: int, message: str):
+            set_stage(stage, progress, message)
+
+        ledger_json, html_report = build_company_source_ledger(
+            company_data,
+            company_evidence=company_evidence,
+            buying_potential=buying_report,
+            stage_callback=stage_callback,
+        )
+        set_stage("save_ledger", 86, "Saving Company Source Ledger JSON/HTML to BLOB2")
+        metadata = buying_storage.save_company_source_ledger(resolved_company, ledger_json, html_report)
+        if not metadata:
+            raise CompanySourceLedgerError("Company Source Ledger generated but could not be saved.", 500)
+
+        set_stage("update_index", 95, "Company Source Ledger metadata saved")
+        _update_company_source_ledger_job(
+            job_id,
+            status="completed",
+            stage="completed",
+            progress=100,
+            metadata=metadata,
+            stats=ledger_json.get("stats", {}),
+            warnings=ledger_json.get("warnings", []),
+            completed_at=datetime.utcnow().isoformat(),
+            elapsed_ms=int((time.time() - started) * 1000),
+        )
+        _append_company_source_ledger_log(job_id, "Company Source Ledger completed")
+        print(f"   ✅ [Source Ledger] {resolved_company} completed in {int((time.time() - started) * 1000)}ms", flush=True)
+    except CompanySourceLedgerError as exc:
+        _update_company_source_ledger_job(
+            job_id,
+            status="failed",
+            error=str(exc),
+            error_status_code=exc.status_code,
+            progress=100,
+            completed_at=datetime.utcnow().isoformat(),
+            elapsed_ms=int((time.time() - started) * 1000),
+        )
+        _append_company_source_ledger_log(job_id, f"Company Source Ledger failed: {exc}")
+        print(f"   ❌ [Source Ledger] {company_name} failed: {exc}", flush=True)
+    except Exception as exc:
+        _update_company_source_ledger_job(
+            job_id,
+            status="failed",
+            error=f"{type(exc).__name__}: {str(exc)[:240]}",
+            progress=100,
+            completed_at=datetime.utcnow().isoformat(),
+            elapsed_ms=int((time.time() - started) * 1000),
+        )
+        _append_company_source_ledger_log(job_id, f"Company Source Ledger failed: {exc}")
+        print(f"   ❌ [Source Ledger] {company_name}: {exc}", flush=True)
+
+
 def _append_buying_job_log(job_id: str, message: str):
     with _buying_potential_jobs_lock:
         job = _buying_potential_jobs.get(job_id)
@@ -1070,6 +1178,13 @@ def _run_buying_potential_job(job_id: str, company_name: str):
             _append_buying_job_log(job_id, f"Company Evidence DB loaded: {stats.get('buying_evidence_eligible', 0)} eligible records")
         else:
             _append_buying_job_log(job_id, "No Company Evidence DB found; using Scanner data only")
+        ledger_lookup = buying_storage.get_company_source_ledger(resolved_company)
+        company_source_ledger = ledger_lookup.get("ledger") if ledger_lookup.get("exists") else None
+        if company_source_ledger:
+            stats = company_source_ledger.get("stats", {})
+            _append_buying_job_log(job_id, f"Company Source Ledger loaded: {stats.get('buying_eligible', 0)} buying-eligible records")
+        else:
+            _append_buying_job_log(job_id, "No Company Source Ledger found")
 
         def stage_callback(stage: str, progress: int, message: str):
             set_stage(stage, progress, message)
@@ -1078,6 +1193,7 @@ def _run_buying_potential_job(job_id: str, company_name: str):
             company_data,
             service_kb,
             company_evidence=company_evidence,
+            company_source_ledger=company_source_ledger,
             stage_callback=stage_callback,
         )
 
@@ -1218,6 +1334,63 @@ async def company_evidence_index(request: Request):
     """Return the Company Evidence DB artifact index for Admin review."""
     verify_admin(request)
     return {"reports": buying_storage.get_company_evidence_index()}
+
+
+@app.post("/admin/company-source-ledger/{company_name}")
+async def create_company_source_ledger(company_name: str, request: Request):
+    """Start a background job to combine reusable company source memory in BLOB2."""
+    verify_admin(request)
+    job_id = str(uuid.uuid4())
+    with _company_source_ledger_jobs_lock:
+        for job in _company_source_ledger_jobs.values():
+            if job.get("status") in {"queued", "running"}:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Company Source Ledger is already running for {job.get('company') or 'another company'}.",
+                )
+        _company_source_ledger_jobs[job_id] = {
+            "job_id": job_id,
+            "status": "queued",
+            "stage": "queued",
+            "progress": 0,
+            "company": company_name,
+            "error": None,
+            "metadata": None,
+            "stats": {},
+            "warnings": [],
+            "logs": [{"ts": datetime.utcnow().isoformat(), "message": f"Queued Company Source Ledger for {company_name}"}],
+            "created_at": datetime.utcnow().isoformat(),
+            "completed_at": None,
+            "elapsed_ms": 0,
+        }
+    thread = threading.Thread(target=_run_company_source_ledger_job, args=(job_id, company_name), daemon=True)
+    thread.start()
+    return {"job_id": job_id, "status": "started", "company": company_name}
+
+
+@app.get("/admin/company-source-ledger-status/{job_id}")
+async def get_company_source_ledger_status(job_id: str, request: Request):
+    """Return progress for a Company Source Ledger background job."""
+    verify_admin(request)
+    with _company_source_ledger_jobs_lock:
+        job = _company_source_ledger_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Company Source Ledger job not found")
+        return dict(job)
+
+
+@app.get("/admin/company-source-ledger/{company_name}")
+async def get_company_source_ledger(company_name: str, request: Request):
+    """Return stored Company Source Ledger metadata/database for one company, if available."""
+    verify_admin(request)
+    return buying_storage.get_company_source_ledger(company_name)
+
+
+@app.get("/admin/company-source-ledger-index")
+async def company_source_ledger_index(request: Request):
+    """Return the Company Source Ledger artifact index for Admin review."""
+    verify_admin(request)
+    return {"reports": buying_storage.get_company_source_ledger_index()}
 
 
 @app.get("/admin/buying-potential-status/{job_id}")
@@ -3260,6 +3433,24 @@ def _execute_scan_pipeline(
         except Exception as e:
             print(f"   [History] Could not load previous data (non-critical): {e}")
 
+        ledger_seed_links = []
+        try:
+            ledger_lookup = buying_storage.get_company_source_ledger(companyName)
+            if ledger_lookup.get("exists"):
+                ledger_seed_links = ledger_scanner_seed_links(ledger_lookup.get("ledger"), limit=8)
+                if ledger_seed_links:
+                    if previous_context is None:
+                        previous_context = {}
+                    previous_context["source_ledger_evidence"] = ledger_seed_links
+                    previous_context["previous_evidence"] = (
+                        ledger_seed_links + list(previous_context.get("previous_evidence") or [])
+                    )[:12]
+                    print(f"   [Source Ledger] Loaded {len(ledger_seed_links)} fresh source seed(s) for Scanner context.")
+                else:
+                    print("   [Source Ledger] Ledger found, but no fresh generation-eligible Scanner seeds available.")
+        except Exception as e:
+            print(f"   [Source Ledger] Optional lookup skipped: {e}")
+
         # --- STEP 2: SCANNER 2 (Reality) + FINANCIAL HEALTH (Parallel) ---
         if job_id:
             _update_scan_job(job_id, phase="reality_and_financial", progress=45)
@@ -3607,7 +3798,7 @@ def _execute_scan_pipeline(
             try:
                 claude_client = anthropic.Anthropic(api_key=anthropic_key) if anthropic_key else None
                 intent_narrative = json.dumps(intent_results["breakdown"])
-                synthesis_source_pool = (reality_results.get("links") or []) + financial_evidence_links
+                synthesis_source_pool = ledger_seed_links + (reality_results.get("links") or []) + financial_evidence_links
                 verified_links = _analysis_evidence_links(synthesis_source_pool)
 
                 def _fmt_evidence_link(l):
@@ -4319,7 +4510,7 @@ Respond with valid JSON only:
             archetype = "Cash Cow" if fin_for_archetype >= 50 else "At Risk"
 
         # --- SOURCE MANAGEMENT: Merge new evidence with existing, cap at 30 ---
-        existing_evidence = existing_data.get("evidence_links", []) if existing_data else []
+        existing_evidence = (existing_data.get("evidence_links", []) if existing_data else []) + ledger_seed_links
         source_mgmt = manage_evidence_sources(
             existing_links=existing_evidence,
             new_links=(reality_results.get("links") or []) + financial_evidence_links,
