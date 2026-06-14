@@ -693,8 +693,7 @@ Return ONLY valid JSON with this schema:
   "why_now": [{{"trigger": "...", "interpretation": "...", "gate": "...", "confidence": 0, "evidence_basis": []}}],
   "stakeholder_map": [{{"name": "...", "role": "...", "likely_buying_committee_role": "...", "evidence_basis": "...", "confidence": 0, "allowed_use": "internal_only|allowed_as_discovery_question|allowed_as_hypothesis"}}],
   "pain_to_solution_map": [{{"evidence": "...", "interpreted_pressure": "...", "service": "...", "proof_point": "...", "safe_wording": "...", "gate": "...", "confidence": 0, "disqualifiers": []}}],
-  "recommended_sales_plays": [{{"service_or_offer": "...", "why_relevant": "...", "target_stakeholder": "...", "opening_angle": "...", "confidence": 0, "overclaim_risk": "low|medium|high", "evidence_basis": [], "disqualifiers": []}}],
-  "conversation_angles": [{{"angle_type": "first_meeting|discovery_question|executive|technical|do_not_say", "text": "...", "gate": "...", "confidence": 0}}],
+  "recommended_sales_plays": [{{"service_or_offer": "...", "why_relevant": "...", "target_stakeholder": "...", "opening_angle": "...", "executive_angle": "...", "technical_angle": "...", "discovery_questions": ["..."], "do_not_say": ["..."], "confidence": 0, "overclaim_risk": "low|medium|high", "evidence_basis": [], "disqualifiers": []}}],
   "evidence_confidence": {{"strongest_evidence": [], "weak_or_missing_evidence": [], "do_not_use_claims": [], "sensitive_claims": [], "claims_as_questions_only": []}},
   "overall_confidence": 0,
   "missing_input_warnings": [],
@@ -703,6 +702,136 @@ Return ONLY valid JSON with this schema:
 
 Payload:
 {json.dumps(payload, ensure_ascii=False)}
+""".strip()
+
+
+BUYING_SECTION_SCHEMAS = {
+    "snapshot_thesis": """
+{
+  "account_snapshot": {"text": "...", "gate": "allowed_as_fact|allowed_as_hypothesis|allowed_as_discovery_question|internal_only|blocked", "evidence_basis": ["SRC-01"]},
+  "buying_potential_thesis": {"text": "...", "rationale": "...", "gate": "allowed_as_hypothesis", "confidence": 0, "evidence_basis": [], "overclaim_risk": "low|medium|high"},
+  "model_notes": []
+}
+""".strip(),
+    "why_now": """
+{
+  "why_now": [{"trigger": "...", "interpretation": "...", "gate": "allowed_as_hypothesis|allowed_as_discovery_question|internal_only|blocked", "confidence": 0, "evidence_basis": []}],
+  "model_notes": []
+}
+""".strip(),
+    "pain_to_solution": """
+{
+  "pain_to_solution_map": [{"evidence": "...", "interpreted_pressure": "...", "service": "...", "why_this_service": "...", "proof_point": "...", "safe_wording": "...", "gate": "allowed_as_hypothesis|allowed_as_discovery_question|internal_only|blocked", "confidence": 0, "disqualifiers": []}],
+  "model_notes": []
+}
+""".strip(),
+    "sales_plays": """
+{
+  "recommended_sales_plays": [{"service_or_offer": "...", "why_relevant": "...", "target_stakeholder": "...", "opening_angle": "...", "executive_angle": "...", "technical_angle": "...", "discovery_questions": ["..."], "do_not_say": ["..."], "confidence": 0, "overclaim_risk": "low|medium|high", "evidence_basis": [], "disqualifiers": []}],
+  "model_notes": []
+}
+""".strip(),
+    "pressure_evidence": """
+{
+  "pressure_signals": [{"signal_type": "...", "description": "...", "gate": "allowed_as_hypothesis|allowed_as_discovery_question|internal_only|blocked", "confidence": 0, "evidence_basis": []}],
+  "evidence_confidence": {"strongest_evidence": [], "weak_or_missing_evidence": [], "do_not_use_claims": [], "sensitive_claims": [], "claims_as_questions_only": []},
+  "overall_confidence": 0,
+  "missing_input_warnings": [],
+  "model_notes": []
+}
+""".strip(),
+    "stakeholders": """
+{
+  "stakeholder_map": [{"name": "...", "role": "...", "likely_buying_committee_role": "...", "evidence_basis": "...", "confidence": 0, "allowed_use": "internal_only|allowed_as_discovery_question|allowed_as_hypothesis"}],
+  "model_notes": []
+}
+""".strip(),
+}
+
+
+BUYING_SECTION_INSTRUCTIONS = {
+    "snapshot_thesis": (
+        "Create the account snapshot and a deeper buying-potential thesis. "
+        "The thesis must explain why the account may be worth a conversation now or soon, "
+        "but must not claim confirmed buying intent."
+    ),
+    "why_now": (
+        "Create timing signals for Why Now / Why Soon. Use recent verified triggers when available. "
+        "If timing is weak, frame the item as a discovery question."
+    ),
+    "pain_to_solution": (
+        "Create a rich Pain-to-Solution Map. Connect evidence to interpreted pressure, then to the relevant "
+        "Vivicta service, proof point, safe wording, confidence, and disqualifiers."
+    ),
+    "sales_plays": (
+        "Create recommended sales plays. Each play must include its own opening angle, discovery questions, "
+        "and do_not_say notes. Do not create a separate conversation-angles section."
+    ),
+    "pressure_evidence": (
+        "Summarize pressure signals and evidence confidence. This is a late-report evidence summary, so be "
+        "precise about what is strong, weak, question-only, sensitive, or blocked."
+    ),
+    "stakeholders": (
+        "Create a compact stakeholder map summary. Keep it professional, role-relevant, and source-bound. "
+        "Use internal_only unless the source basis clearly supports broader use."
+    ),
+}
+
+
+BUYING_SECTION_KEYS = {
+    "snapshot_thesis": ("account_snapshot", "buying_potential_thesis"),
+    "why_now": ("why_now",),
+    "pain_to_solution": ("pain_to_solution_map",),
+    "sales_plays": ("recommended_sales_plays",),
+    "pressure_evidence": ("pressure_signals", "evidence_confidence", "overall_confidence", "missing_input_warnings"),
+    "stakeholders": ("stakeholder_map",),
+}
+
+
+def _section_prompt(section: str, payload: dict) -> str:
+    return f"""
+You are creating one section of an Admin-only Evidence-Gated Buying Potential & Insight report.
+
+Section: {section}
+Task: {BUYING_SECTION_INSTRUCTIONS[section]}
+
+This is NOT confirmed buying intent. It is a sales-intelligence hypothesis based on already stored Scanner data.
+Use only the JSON payload below. Do not browse the web. Do not invent services, clients, personal data, dates, financials, partnerships, ownership details, or buying signals.
+
+Evidence contract:
+- allowed_as_fact: only when supported by verified_evidence, financial_sources marked generation_eligible, or explicitly labeled Scanner internal metrics.
+- allowed_as_hypothesis: plausible interpretation from Scanner diagnosis, pressure, foresight, Company Evidence DB, or service-pattern fit.
+- allowed_as_discovery_question: useful but weak or uncertain signal that should be asked, not asserted.
+- internal_only: useful for sales prep but not safe for customer-facing wording.
+- blocked: unsupported, wrong-entity, sensitive, or overclaiming material.
+- Say "buying potential", never "confirmed buying intent", unless explicit evidence exists in the payload.
+- Stakeholder notes must remain professional, role-relevant, and source-bound. No private-life profiling.
+
+Return ONLY valid JSON with this exact section schema:
+{BUYING_SECTION_SCHEMAS[section]}
+
+Payload:
+{json.dumps(payload, ensure_ascii=False)}
+""".strip()
+
+
+def _section_repair_prompt(section: str, raw_json: str) -> str:
+    return f"""
+Repair this Buying Potential section into valid JSON.
+
+Rules:
+- Return ONLY JSON. No markdown.
+- Do not add new claims, people, dates, financial values, partnerships, sources, or services.
+- Preserve the original meaning where possible.
+- If a field is malformed or incomplete, repair it conservatively or use an empty array/string.
+- Every gate must be one of: allowed_as_fact, allowed_as_hypothesis, allowed_as_discovery_question, internal_only, blocked.
+- Confidence fields must be integers from 0 to 100.
+
+Required schema:
+{BUYING_SECTION_SCHEMAS[section]}
+
+Malformed JSON:
+{_clip(raw_json, 42000)}
 """.strip()
 
 
@@ -727,7 +856,6 @@ Required top-level schema:
   "stakeholder_map": [],
   "pain_to_solution_map": [],
   "recommended_sales_plays": [],
-  "conversation_angles": [],
   "evidence_confidence": {{"strongest_evidence": [], "weak_or_missing_evidence": [], "do_not_use_claims": [], "sensitive_claims": [], "claims_as_questions_only": []}},
   "overall_confidence": 0,
   "missing_input_warnings": [],
@@ -795,11 +923,17 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
     for key in ("account_snapshot", "buying_potential_thesis"):
         if isinstance(report.get(key), dict):
             fix_item(report[key], "allowed_as_hypothesis")
-    for key in ("pressure_signals", "why_now", "pain_to_solution_map", "recommended_sales_plays", "conversation_angles"):
+    for key in ("pressure_signals", "why_now", "pain_to_solution_map", "recommended_sales_plays"):
         report[key] = [fix_item(item) for item in _list(report.get(key)) if isinstance(item, dict)]
+    for play in report.get("recommended_sales_plays", []):
+        play["discovery_questions"] = [str(item) for item in _list(play.get("discovery_questions"))[:5]]
+        play["do_not_say"] = [str(item) for item in _list(play.get("do_not_say"))[:5]]
+        play["evidence_basis"] = [str(item) for item in _list(play.get("evidence_basis"))[:6]]
+        play["disqualifiers"] = [str(item) for item in _list(play.get("disqualifiers"))[:5]]
     report["stakeholder_map"] = [
         fix_item(item, "internal_only") for item in _list(report.get("stakeholder_map")) if isinstance(item, dict)
     ]
+    report.pop("conversation_angles", None)
 
     evidence_confidence = _dict(report.get("evidence_confidence"))
     if low_evidence:
@@ -810,12 +944,28 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
     report["evidence_confidence"] = evidence_confidence
 
     if gate_review:
+        downgrades = _list(gate_review.get("required_downgrades"))
+        for downgrade in downgrades:
+            if not isinstance(downgrade, dict):
+                continue
+            new_gate = _normalize_gate(downgrade.get("new_gate"), "allowed_as_discovery_question")
+            path = str(downgrade.get("path") or "")
+            if path in {"account_snapshot", "buying_potential_thesis"} and isinstance(report.get(path), dict):
+                report[path]["gate"] = new_gate
+                continue
+            match = re.match(r"^([a-zA-Z_]+)\[(\d+)\]", path)
+            if match:
+                key, index_text = match.groups()
+                items = report.get(key)
+                index = _safe_int(index_text, -1)
+                if isinstance(items, list) and 0 <= index < len(items) and isinstance(items[index], dict):
+                    items[index]["gate"] = new_gate
         blocked = _list(gate_review.get("blocked_claims"))
         if blocked:
             evidence_confidence.setdefault("do_not_use_claims", []).extend(blocked[:12])
         report["gate_review"] = {
             "approved": gate_review.get("approved") is True,
-            "required_downgrades": _list(gate_review.get("required_downgrades"))[:20],
+            "required_downgrades": downgrades[:20],
             "blocked_claims": blocked[:20],
             "notes": _list(gate_review.get("notes"))[:10],
         }
@@ -933,6 +1083,16 @@ def _deterministic_buying_report(payload: dict, reason: str) -> dict:
             "why_relevant": trigger,
             "target_stakeholder": "Relevant business, technology, transformation, or operations owner.",
             "opening_angle": safe_wording,
+            "executive_angle": safe_wording,
+            "technical_angle": "Validate the current architecture, data, automation, security, or workplace baseline before proposing a solution.",
+            "discovery_questions": [
+                "Which current transformation, modernization, or operating-model pressure is most visible internally right now?",
+                f"Where would {service_name} be most useful if the pressure signal is confirmed?",
+            ],
+            "do_not_say": [
+                "Do not state confirmed buying intent or imply a project exists unless the customer confirms it.",
+                "Do not present service fit as fact when it is based on Scanner interpretation or weak public signals.",
+            ],
             "confidence": 40,
             "overclaim_risk": "medium",
             "evidence_basis": basis,
@@ -956,20 +1116,6 @@ def _deterministic_buying_report(payload: dict, reason: str) -> dict:
         "stakeholder_map": stakeholder_map,
         "pain_to_solution_map": pain_to_solution,
         "recommended_sales_plays": sales_plays,
-        "conversation_angles": [
-            {
-                "angle_type": "discovery_question",
-                "text": "Which current transformation, modernization, or operating-model pressure is most visible internally right now?",
-                "gate": "allowed_as_discovery_question",
-                "confidence": 45,
-            },
-            {
-                "angle_type": "do_not_say",
-                "text": "Do not state confirmed buying intent or imply a project exists unless the customer confirms it.",
-                "gate": "blocked",
-                "confidence": 90,
-            },
-        ],
         "evidence_confidence": {
             "strongest_evidence": strongest,
             "weak_or_missing_evidence": weak_notes + ["Generative report JSON was malformed; deterministic fallback used."],
@@ -1021,6 +1167,133 @@ def _parse_or_repair_report(
             return _deterministic_buying_report(payload, reason), "deterministic_fallback"
 
 
+def _section_fallback(section: str, payload: dict, reason: str) -> dict:
+    fallback = _deterministic_buying_report(payload, reason)
+    section_data = {key: fallback.get(key) for key in BUYING_SECTION_KEYS[section] if key in fallback}
+    section_data["model_notes"] = [reason]
+    return section_data
+
+
+def _section_token_limit(section: str) -> int:
+    if section in {"pain_to_solution", "sales_plays", "pressure_evidence"}:
+        return 2600
+    return 1800
+
+
+def _parse_or_repair_section(
+    section: str,
+    raw: str,
+    payload: dict,
+    model_mode: str | None = None,
+    stage_callback=None,
+) -> tuple[dict, str]:
+    try:
+        parsed = parse_json_object(raw)
+        if not isinstance(parsed, dict):
+            raise ValueError("Section JSON root was not an object")
+        return parsed, "parsed"
+    except Exception as parse_exc:
+        if stage_callback:
+            stage_callback("generate_report", 55, f"Repairing malformed Buying Insight section: {section}")
+        try:
+            repair_raw, repair_model = call_json_model_chain(
+                _section_repair_prompt(section, raw),
+                buying_report_repair_chain(model_mode),
+                max_tokens=_section_token_limit(section),
+                timeout=60,
+            )
+            parsed = parse_json_object(repair_raw)
+            if not isinstance(parsed, dict):
+                raise ValueError("Repaired section JSON root was not an object")
+            notes = _list(parsed.get("model_notes"))
+            notes.append(f"Malformed section JSON repaired by {repair_model}. Original parse error: {str(parse_exc)[:160]}")
+            parsed["model_notes"] = notes
+            return parsed, f"repaired by {repair_model}"
+        except Exception as repair_exc:
+            reason = f"Section '{section}' JSON parse failed ({parse_exc}); repair failed ({repair_exc})"
+            return _section_fallback(section, payload, reason), "section_deterministic_fallback"
+
+
+def _generate_buying_section(
+    section: str,
+    payload: dict,
+    *,
+    model_mode: str | None = None,
+    stage_callback=None,
+    progress: int = 50,
+) -> tuple[dict, dict]:
+    if stage_callback:
+        stage_callback("generate_report", progress, f"Generating Buying Insight section: {section}")
+    try:
+        raw, model_used = call_json_model_chain(
+            _section_prompt(section, payload),
+            buying_generation_chain(model_mode),
+            max_tokens=_section_token_limit(section),
+            timeout=75,
+        )
+        section_data, parse_status = _parse_or_repair_section(section, raw, payload, model_mode, stage_callback)
+        meta = {"section": section, "model": model_used, "parse_status": parse_status}
+        return section_data, meta
+    except Exception as exc:
+        reason = f"Section '{section}' generation failed: {exc}"
+        return _section_fallback(section, payload, reason), {
+            "section": section,
+            "model": "deterministic_fallback",
+            "parse_status": "section_generation_failed",
+            "error": str(exc)[:220],
+        }
+
+
+def _assemble_section_report(
+    payload: dict,
+    *,
+    model_mode: str | None = None,
+    stage_callback=None,
+) -> dict:
+    sections = (
+        ("snapshot_thesis", 48),
+        ("why_now", 52),
+        ("pain_to_solution", 56),
+        ("sales_plays", 60),
+        ("pressure_evidence", 64),
+        ("stakeholders", 68),
+    )
+    report: dict[str, Any] = {}
+    generation_meta = []
+    notes = []
+    for section, progress in sections:
+        section_data, meta = _generate_buying_section(
+            section,
+            payload,
+            model_mode=model_mode,
+            stage_callback=stage_callback,
+            progress=progress,
+        )
+        report.update({key: value for key, value in section_data.items() if key in BUYING_SECTION_KEYS[section]})
+        generation_meta.append(meta)
+        notes.extend(_list(section_data.get("model_notes")))
+        if meta.get("error"):
+            notes.append(f"{section}: {meta['error']}")
+
+    report.setdefault("account_snapshot", {})
+    report.setdefault("buying_potential_thesis", {})
+    report.setdefault("why_now", [])
+    report.setdefault("pain_to_solution_map", [])
+    report.setdefault("recommended_sales_plays", [])
+    report.setdefault("pressure_signals", [])
+    report.setdefault("stakeholder_map", [])
+    report.setdefault("evidence_confidence", {})
+    report.setdefault("overall_confidence", 45)
+    report.setdefault("missing_input_warnings", [])
+    report["section_generation"] = generation_meta
+    report["generation_parse_status"] = "section_assembled"
+    report["generation_model"] = ", ".join(
+        f"{meta.get('section')}:{meta.get('model')}" for meta in generation_meta
+    )
+    report["model_notes"] = notes
+    return report
+
+
 def generate_buying_potential_report(
     company_data: dict,
     service_kb: dict,
@@ -1035,12 +1308,8 @@ def generate_buying_potential_report(
         stage_callback("build_payload", 35, "Building Buying Insight prompt payload")
     payload = _build_input_payload(company_data, service_kb, company_evidence)
     if stage_callback:
-        stage_callback("generate_report", 50, "Generating Buying Potential report")
-    prompt = _generation_prompt(payload)
-    raw, model_used = call_json_model_chain(prompt, buying_generation_chain(model_mode), max_tokens=5200, timeout=120)
-    report, parse_status = _parse_or_repair_report(raw, payload, model_mode, stage_callback)
-    report["generation_model"] = model_used
-    report["generation_parse_status"] = parse_status
+        stage_callback("generate_report", 45, "Generating Buying Potential report sections")
+    report = _assemble_section_report(payload, model_mode=model_mode, stage_callback=stage_callback)
     report["model_mode"] = _buying_model_mode(model_mode)
 
     gate_review = None
@@ -1111,24 +1380,26 @@ def render_buying_potential_html(report: dict) -> str:
         <article class="card">
           <div class="card-top"><strong>{_esc(item.get('service'))}</strong>{_gate_badge(item.get('gate'))}</div>
           <p><b>Pressure:</b> {_esc(item.get('interpreted_pressure'))}</p>
+          <p><b>Why this service:</b> {_esc(item.get('why_this_service'))}</p>
           <p><b>Safe wording:</b> {_esc(item.get('safe_wording'))}</p>
           <small>Proof: {_esc(item.get('proof_point'))} · Disqualifiers: {_esc(disq)}</small>
         </article>"""
 
     def play_card(item):
+        questions = "".join(f"<li>{_esc(q)}</li>" for q in _list(item.get("discovery_questions"))[:5])
+        do_not_say = "".join(f"<li>{_esc(q)}</li>" for q in _list(item.get("do_not_say"))[:5])
         return f"""
         <article class="card">
           <div class="card-top"><strong>{_esc(item.get('service_or_offer'))}</strong><span class="risk">Risk: {_esc(item.get('overclaim_risk'))}</span></div>
           <p>{_esc(item.get('why_relevant'))}</p>
           <p><b>Opening angle:</b> {_esc(item.get('opening_angle'))}</p>
+          <p><b>Executive angle:</b> {_esc(item.get('executive_angle'))}</p>
+          <p><b>Technical angle:</b> {_esc(item.get('technical_angle'))}</p>
+          <h3>Discovery Questions</h3>
+          <ul>{questions or '<li>No questions generated.</li>'}</ul>
+          <h3>Do Not Say</h3>
+          <ul>{do_not_say or '<li>No guardrails generated.</li>'}</ul>
           <small>Target: {_esc(item.get('target_stakeholder'))} · Confidence {_esc(item.get('confidence'))}/100</small>
-        </article>"""
-
-    def angle_card(item):
-        return f"""
-        <article class="card compact">
-          <div class="card-top"><strong>{_esc(item.get('angle_type'))}</strong>{_gate_badge(item.get('gate'))}</div>
-          <p>{_esc(item.get('text'))}</p>
         </article>"""
 
     return f"""<!doctype html>
@@ -1185,18 +1456,17 @@ def render_buying_potential_html(report: dict) -> str:
     {_gate_badge(thesis.get('gate'))}
   </section>
 
-  <section><h2>Pressure Signals</h2><div class="grid">{_render_list(_list(report.get('pressure_signals')), pressure_card)}</div></section>
   <section><h2>Why Now / Why Soon</h2><div class="grid">{_render_list(_list(report.get('why_now')), why_card)}</div></section>
+
+  <section><h2>Pain-to-Solution Map</h2><div class="grid">{_render_list(_list(report.get('pain_to_solution_map')), solution_card)}</div></section>
+  <section><h2>Recommended Sales Plays</h2><div class="grid">{_render_list(_list(report.get('recommended_sales_plays')), play_card)}</div></section>
+  <section><h2>Pressure Signals</h2><div class="grid">{_render_list(_list(report.get('pressure_signals')), pressure_card)}</div></section>
 
   <section>
     <h2>Stakeholder Map</h2>
     <table><thead><tr><th>Name</th><th>Role</th><th>Likely Buying Committee Role</th><th>Allowed Use</th><th>Confidence</th></tr></thead>
     <tbody>{''.join(stakeholder_row(i) for i in _list(report.get('stakeholder_map')))}</tbody></table>
   </section>
-
-  <section><h2>Pain-to-Solution Map</h2><div class="grid">{_render_list(_list(report.get('pain_to_solution_map')), solution_card)}</div></section>
-  <section><h2>Recommended Sales Plays</h2><div class="grid">{_render_list(_list(report.get('recommended_sales_plays')), play_card)}</div></section>
-  <section><h2>Suggested Conversation Angles</h2><div class="grid">{_render_list(_list(report.get('conversation_angles')), angle_card)}</div></section>
 
   <section class="warning">
     <h2>Evidence, Confidence & Do-Not-Use Claims</h2>
