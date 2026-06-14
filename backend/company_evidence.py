@@ -20,19 +20,135 @@ import requests
 from bs4 import BeautifulSoup
 
 
-COMMON_TARGET_PATHS = (
-    "/", "/about", "/about-us", "/company", "/news", "/newsroom", "/press",
-    "/media", "/investors", "/investor", "/annual-report", "/reports",
-    "/sustainability", "/responsibility", "/careers", "/jobs", "/references",
-    "/case-studies", "/customers", "/services", "/solutions",
+SOURCE_TARGET_REGISTRY = (
+    {
+        "category": "identity_entity",
+        "source_type": "homepage",
+        "keywords": ("",),
+        "localized_paths": (),
+        "target_fields": ("company name", "domain", "country", "legal identity"),
+        "default_sales_use": "allowed_as_fact",
+        "fact_safe": True,
+        "context_only": False,
+    },
+    {
+        "category": "identity_entity",
+        "source_type": "about",
+        "keywords": ("about", "company", "who-we-are", "contact", "yritys", "meista", "meistä", "yhteystiedot", "om-oss", "kontakt"),
+        "localized_paths": ("about", "about-us", "company", "contact", "yritys", "meista", "meistä", "yhteystiedot", "om-oss", "kontakt"),
+        "target_fields": ("legal name", "company description", "locations", "group relationship"),
+        "default_sales_use": "allowed_as_fact",
+        "fact_safe": True,
+        "context_only": False,
+    },
+    {
+        "category": "strategy_trigger_events",
+        "source_type": "newsroom",
+        "keywords": ("news", "newsroom", "press", "media", "release", "uutiset", "tiedotteet", "ajankohtaista", "nyheter", "pressmeddelanden"),
+        "localized_paths": ("news", "newsroom", "press", "media", "uutiset", "tiedotteet", "ajankohtaista", "nyheter", "press"),
+        "target_fields": ("recent events", "partnerships", "leadership changes", "expansion", "new business units"),
+        "default_sales_use": "allowed_as_hypothesis",
+        "fact_safe": False,
+        "context_only": False,
+    },
+    {
+        "category": "strategy_trigger_events",
+        "source_type": "investor",
+        "keywords": ("investor", "annual", "financial", "report", "governance", "strategy", "sijoittajat", "vuosikertomus", "tilinpäätös", "hallinnointi"),
+        "localized_paths": ("investors", "investor", "annual-report", "reports", "strategy", "sijoittajat", "vuosikertomus", "raportit", "strategia"),
+        "target_fields": ("strategy", "financial updates", "ownership", "governance", "investment priorities"),
+        "default_sales_use": "allowed_as_fact",
+        "fact_safe": True,
+        "context_only": False,
+    },
+    {
+        "category": "market_regulatory_pressure",
+        "source_type": "sustainability",
+        "keywords": ("sustainability", "responsibility", "esg", "csrd", "esrs", "climate", "vastuullisuus", "kestävyys", "kestavyys", "hållbarhet"),
+        "localized_paths": ("sustainability", "responsibility", "esg", "vastuullisuus", "kestavyys", "kestävyys", "hållbarhet"),
+        "target_fields": ("CSRD", "ESRS", "climate", "workforce", "regulatory exposure"),
+        "default_sales_use": "allowed_as_hypothesis",
+        "fact_safe": True,
+        "context_only": True,
+    },
+    {
+        "category": "hiring_capability",
+        "source_type": "careers",
+        "keywords": ("career", "jobs", "open-position", "rekry", "ura", "avoimet", "tyopaikat", "työpaikat", "join-us", "work-with-us"),
+        "localized_paths": ("careers", "jobs", "open-positions", "join-us", "ura", "rekry", "avoimet-tyopaikat", "avoimet-työpaikat", "tyopaikat", "työpaikat"),
+        "target_fields": ("hiring themes", "AI roles", "cloud roles", "ERP roles", "cybersecurity roles", "platform engineering"),
+        "default_sales_use": "allowed_as_discovery_question",
+        "fact_safe": False,
+        "context_only": False,
+    },
+    {
+        "category": "technology_service_fit",
+        "source_type": "references",
+        "keywords": ("reference", "case", "customer", "client", "asiakastarina", "referenssi", "customers", "success-story"),
+        "localized_paths": ("references", "case-studies", "customers", "customer-stories", "referenssit", "asiakastarinat"),
+        "target_fields": ("customer cases", "delivery evidence", "technology partners", "proof points"),
+        "default_sales_use": "allowed_as_hypothesis",
+        "fact_safe": False,
+        "context_only": False,
+    },
+    {
+        "category": "technology_service_fit",
+        "source_type": "services",
+        "keywords": ("service", "solution", "product", "platform", "cloud", "ai", "data", "cyber", "security", "erp", "sap", "azure", "aws", "palvelut", "ratkaisut", "tuotteet"),
+        "localized_paths": ("services", "solutions", "products", "platform", "palvelut", "ratkaisut", "tuotteet"),
+        "target_fields": ("AI", "data", "cloud", "ERP", "cybersecurity", "digital workplace", "automation"),
+        "default_sales_use": "allowed_as_hypothesis",
+        "fact_safe": False,
+        "context_only": False,
+    },
+    {
+        "category": "stakeholder_evidence",
+        "source_type": "leadership",
+        "keywords": ("management", "leadership", "board", "executive", "team", "johto", "hallitus", "johtoryhma", "johtoryhmä", "ledning", "styrelse"),
+        "localized_paths": ("management", "leadership", "board", "team", "johto", "hallitus", "johtoryhma", "johtoryhmä", "ledning", "styrelse"),
+        "target_fields": ("leadership roles", "public statements", "buying committee relevance"),
+        "default_sales_use": "internal_only",
+        "fact_safe": False,
+        "context_only": False,
+    },
+    {
+        "category": "procurement_public_activity",
+        "source_type": "procurement",
+        "keywords": ("procurement", "tender", "contract", "hankinta", "kilpailutus", "tarjouspyynto", "tarjouspyyntö"),
+        "localized_paths": ("procurement", "tenders", "hankinnat", "kilpailutukset"),
+        "target_fields": ("public tenders", "contract activity", "service categories", "procurement contacts"),
+        "default_sales_use": "allowed_as_fact",
+        "fact_safe": True,
+        "context_only": False,
+    },
 )
-TARGET_KEYWORDS = (
-    "about", "company", "news", "press", "media", "investor", "annual",
-    "report", "sustainability", "responsibility", "career", "job",
-    "reference", "case", "customer", "service", "solution",
+
+COMMON_TARGET_PATHS = tuple(
+    "/" + path
+    for target in SOURCE_TARGET_REGISTRY
+    for path in target.get("localized_paths", ())
+    if path
 )
-FACT_SAFE_TYPES = {"homepage", "about", "investor", "sustainability"}
-ELIGIBLE_TYPES = FACT_SAFE_TYPES | {"newsroom", "careers", "references", "services", "official_page"}
+TARGET_KEYWORDS = tuple(
+    keyword
+    for target in SOURCE_TARGET_REGISTRY
+    for keyword in target.get("keywords", ())
+    if keyword
+)
+FACT_SAFE_TYPES = {target["source_type"] for target in SOURCE_TARGET_REGISTRY if target.get("fact_safe")}
+ELIGIBLE_TYPES = {target["source_type"] for target in SOURCE_TARGET_REGISTRY} | {"official_page"}
+TECH_SIGNAL_KEYWORDS = (
+    "ai", "tekoäly", "genai", "copilot", "agent", "data", "analytics", "cloud",
+    "azure", "aws", "gcp", "google cloud", "sap", "erp", "dynamics",
+    "salesforce", "oracle", "workday", "cyber", "security", "nis2", "dora",
+    "iam", "soc", "m365", "devops", "platform engineering", "automation",
+    "rpa", "process mining",
+)
+TRIGGER_EVENT_KEYWORDS = (
+    "acquisition", "partnership", "agreement", "investment", "funding",
+    "expansion", "launch", "appointment", "appointed", "strategy", "transform",
+    "yrityskauppa", "kumppanuus", "sopimus", "investointi", "laajent", "nimitys",
+)
 
 
 class CompanyEvidenceError(RuntimeError):
@@ -88,25 +204,41 @@ def _company_tokens(company_name: str) -> list[str]:
     return [t for t in re.findall(r"[a-zåäö0-9]{3,}", text) if t not in {"the", "and", "for"}][:6]
 
 
-def _source_type(url: str, title: str = "") -> str:
+def _source_profile(url: str, title: str = "") -> dict:
     value = f"{url} {title}".lower()
     if url.rstrip("/").count("/") <= 2:
-        return "homepage"
-    if any(k in value for k in ("about", "company", "who-we-are")):
-        return "about"
-    if any(k in value for k in ("news", "press", "media", "release")):
-        return "newsroom"
-    if any(k in value for k in ("investor", "annual", "financial", "report")):
-        return "investor"
-    if any(k in value for k in ("sustainability", "responsibility", "esg", "csrd")):
-        return "sustainability"
-    if any(k in value for k in ("career", "jobs", "open-position", "rekry", "ura")):
-        return "careers"
-    if any(k in value for k in ("reference", "case", "customer", "asiakastarina")):
-        return "references"
-    if any(k in value for k in ("service", "solution", "palvelut", "ratkaisut")):
-        return "services"
-    return "official_page"
+        return dict(SOURCE_TARGET_REGISTRY[0])
+    for target in SOURCE_TARGET_REGISTRY[1:]:
+        if any(k and k in value for k in target.get("keywords", ())):
+            return dict(target)
+    return {
+        "category": "other_official",
+        "source_type": "official_page",
+        "target_fields": ("official-domain context",),
+        "default_sales_use": "allowed_as_discovery_question",
+        "fact_safe": False,
+        "context_only": False,
+    }
+
+
+def _source_type(url: str, title: str = "") -> str:
+    return _source_profile(url, title).get("source_type", "official_page")
+
+
+def _is_not_found_content(title: str, text: str, status_code: int = 200) -> bool:
+    if status_code == 404:
+        return True
+    sample = f"{title} {text[:600]}".lower()
+    markers = (
+        "404: this page could not be found",
+        "404 - page not found",
+        "404 page not found",
+        "page could not be found",
+        "page not found",
+        "sivua ei löytynyt",
+        "sidan hittades inte",
+    )
+    return any(marker in sample for marker in markers)
 
 
 def _html_to_text(raw_html: str) -> tuple[str, str]:
@@ -115,6 +247,33 @@ def _html_to_text(raw_html: str) -> tuple[str, str]:
         tag.decompose()
     title = _clip(soup.title.string if soup.title else "", 180)
     return title, _clip(soup.get_text(" ", strip=True), 14000)
+
+
+def _homepage_links(base_url: str, limit: int = 80) -> list[str]:
+    """Extract official-domain links from the homepage for smarter targeting."""
+    base = _normalize_url(base_url)
+    official_host = _host(base)
+    if not base or not official_host:
+        return []
+    try:
+        resp = requests.get(base, headers={"User-Agent": "The-Scanner Company Evidence Builder/1.0"}, timeout=15)
+        if resp.status_code >= 400:
+            return []
+        soup = BeautifulSoup(resp.text, "html.parser")
+        links = []
+        for tag in soup.find_all("a", href=True):
+            href = str(tag.get("href") or "").strip()
+            if not href or href.startswith(("#", "mailto:", "tel:", "javascript:")):
+                continue
+            clean = _normalize_url(href, base)
+            if not clean or not _same_or_subdomain(_host(clean), official_host):
+                continue
+            links.append(clean)
+            if len(links) >= limit:
+                break
+        return links
+    except Exception:
+        return []
 
 
 def _firecrawl_headers() -> dict:
@@ -175,8 +334,9 @@ def _jina_fetch(url: str) -> dict | None:
     key = _clean_env(os.environ.get("JINA_API_KEY"))
     if key:
         headers["Authorization"] = f"Bearer {key}"
-    stripped = re.sub(r"^https?://", "", url)
-    for reader_url in (f"https://r.jina.ai/http://{url}", f"https://r.jina.ai/http://{stripped}"):
+    normalized = _normalize_url(url)
+    stripped = re.sub(r"^https?://", "", normalized)
+    for reader_url in (f"https://r.jina.ai/http://{stripped}", f"https://r.jina.ai/http://{normalized}"):
         try:
             resp = requests.get(reader_url, headers=headers, timeout=25)
             if resp.status_code == 200 and len(resp.text.strip()) > 250:
@@ -207,21 +367,70 @@ def _fetch_source(url: str) -> dict:
     if not fetched:
         return {"provider": "none", "url_verified": False, "content_verified": False, "title": "", "text": "", "status_code": 0}
     text = _clip(fetched.get("text"), 14000)
+    title = fetched.get("title") or ""
     status_code = int(fetched.get("status_code") or 200)
+    not_found = _is_not_found_content(title, text, status_code)
     return {
         **fetched,
+        "title": title,
         "text": text,
-        "url_verified": 200 <= status_code < 400,
-        "content_verified": len(text) >= 250,
+        "page_not_found": not_found,
+        "url_verified": (200 <= status_code < 400) and not not_found,
+        "content_verified": len(text) >= 250 and not not_found,
     }
+
+
+def _language_prefixes(base_url: str) -> list[str]:
+    path_parts = [p for p in urlparse(_normalize_url(base_url)).path.split("/") if p]
+    prefixes = [""]
+    if path_parts and path_parts[0].lower() in {"fi", "en", "sv", "se", "de", "fr"}:
+        prefixes.append(path_parts[0].lower())
+    return prefixes
+
+
+def _localized_candidate_paths(base_url: str) -> list[str]:
+    paths = []
+    for prefix in _language_prefixes(base_url):
+        for path in COMMON_TARGET_PATHS:
+            clean_path = path.strip("/")
+            if not clean_path:
+                continue
+            full_path = f"/{prefix}/{clean_path}" if prefix else f"/{clean_path}"
+            paths.append(full_path)
+    return paths
+
+
+def _target_score(url: str, base_url: str) -> int:
+    path = urlparse(url).path.lower()
+    if _normalize_url(url) == _normalize_url(base_url):
+        return 100
+    profile = _source_profile(url)
+    category_order = {
+        "identity_entity": 90,
+        "strategy_trigger_events": 82,
+        "technology_service_fit": 78,
+        "hiring_capability": 70,
+        "stakeholder_evidence": 66,
+        "procurement_public_activity": 64,
+        "market_regulatory_pressure": 58,
+        "other_official": 40,
+    }
+    score = category_order.get(profile.get("category"), 35)
+    if any(k in path for k in ("privacy", "cookie", "terms", "login", "cart", "search", "tag", "author")):
+        score -= 50
+    if len(path.strip("/").split("/")) > 4:
+        score -= 12
+    return score
 
 
 def _discover_urls(company_url: str, max_urls: int) -> list[str]:
     base = _normalize_url(company_url)
     official_host = _host(base)
-    discovered = [base]
-    discovered.extend(_firecrawl_map(base, max_urls))
-    discovered.extend(_normalize_url(urljoin(base.rstrip("/") + "/", path.lstrip("/"))) for path in COMMON_TARGET_PATHS)
+    discovered = []
+    discovered.append(base)
+    discovered.extend(_firecrawl_map(base, max(max_urls * 3, 40)))
+    discovered.extend(_homepage_links(base, max(max_urls * 3, 60)))
+    discovered.extend(_normalize_url(urljoin(base.rstrip("/") + "/", path.lstrip("/"))) for path in _localized_candidate_paths(base))
     filtered = []
     seen = set()
     for url in discovered:
@@ -234,17 +443,36 @@ def _discover_urls(company_url: str, max_urls: int) -> list[str]:
         path = urlparse(clean).path.lower()
         if clean == base or any(keyword in path for keyword in TARGET_KEYWORDS):
             filtered.append(clean)
-        if len(filtered) >= max_urls:
-            break
-    return filtered
+    filtered.sort(key=lambda item: _target_score(item, base), reverse=True)
+    return filtered[:max_urls]
 
 
 def _quote_for_entity(text: str, tokens: list[str]) -> str:
-    sentences = re.split(r"(?<=[.!?])\s+", text or "")
-    for sentence in sentences[:80]:
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text or "") if s.strip()]
+    evidence_terms = (
+        "company", "business", "service", "solution", "customer", "strategy",
+        "annual", "revenue", "employee", "founded", "develop", "manufactur",
+        "tuottaa", "tuotanto", "tuotekehitys", "palvelu", "ratkaisu",
+        "asiakas", "strategia", "liikevaihto", "henkilöstö", "henkilosto",
+        "ydinosaamista", "vastuullisuus", "ura", "rekry",
+    )
+    scored = []
+    for idx, sentence in enumerate(sentences[:140]):
         lowered = sentence.lower()
+        if len(sentence) < 45 or "base64-image-removed" in lowered:
+            continue
+        score = 0
         if any(token in lowered for token in tokens):
-            return _clip(sentence, 420)
+            score += 8
+        if any(term in lowered for term in evidence_terms):
+            score += 4
+        if idx < 40:
+            score += 1
+        if score:
+            scored.append((score, idx, sentence))
+    if scored:
+        scored.sort(key=lambda item: (-item[0], item[1]))
+        return _clip(scored[0][2], 420)
     return _clip(" ".join(sentences[:2]), 420)
 
 
@@ -254,12 +482,16 @@ def _verify_record(company_name: str, company_url: str, url: str, fetched: dict)
     tokens = _company_tokens(company_name)
     text = fetched.get("text") or ""
     title = fetched.get("title") or ""
-    source_type = _source_type(url, title)
+    profile = _source_profile(url, title)
+    source_type = profile.get("source_type", "official_page")
     same_domain = _same_or_subdomain(source_host, official_host)
     domain_token = official_host.split(".")[0] if official_host else ""
     text_l = text.lower()
     contains_entity = any(token in text_l for token in tokens) or (domain_token and domain_token in text_l)
     entity_verified = bool(same_domain and fetched.get("content_verified") and (contains_entity or source_type == "homepage"))
+    has_date = bool(re.search(r"\b(20[1-3][0-9]|19[8-9][0-9])\b", text_l))
+    has_trigger_event = any(term in text_l for term in TRIGGER_EVENT_KEYWORDS)
+    has_technology_signal = any(term in text_l for term in TECH_SIGNAL_KEYWORDS)
     eligible = bool(
         fetched.get("url_verified")
         and fetched.get("content_verified")
@@ -269,6 +501,9 @@ def _verify_record(company_name: str, company_url: str, url: str, fetched: dict)
     if not same_domain:
         match_status = "wrong"
         reason = "wrong_entity_domain_mismatch"
+    elif fetched.get("page_not_found"):
+        match_status = "unknown"
+        reason = "page_not_found"
     elif not fetched.get("url_verified"):
         match_status = "unknown"
         reason = "url_not_verified"
@@ -281,12 +516,55 @@ def _verify_record(company_name: str, company_url: str, url: str, fetched: dict)
     else:
         match_status = "exact"
         reason = "official_domain_entity_match"
+    allowed_as_fact = bool(
+        eligible
+        and (
+            source_type in FACT_SAFE_TYPES
+            or (source_type == "newsroom" and has_date and has_trigger_event)
+            or source_type == "procurement"
+        )
+        and source_type not in {"careers", "leadership"}
+    )
+    allowed_as_hypothesis = bool(
+        eligible
+        and not allowed_as_fact
+        and source_type not in {"leadership"}
+    )
+    allowed_as_discovery_question = bool(
+        (eligible or fetched.get("content_verified"))
+        and source_type in {"careers", "services", "references", "newsroom", "sustainability", "official_page", "leadership"}
+    )
+    internal_only = bool(
+        not allowed_as_fact
+        and not allowed_as_hypothesis
+        and not allowed_as_discovery_question
+    )
+    if source_type == "leadership" and eligible:
+        internal_only = True
+    if fetched.get("page_not_found"):
+        allowed_as_fact = allowed_as_hypothesis = allowed_as_discovery_question = False
+        internal_only = False
+    blocked = bool(match_status == "wrong" or fetched.get("page_not_found"))
+    if allowed_as_fact:
+        sales_use = "allowed_as_fact"
+    elif allowed_as_hypothesis:
+        sales_use = "allowed_as_hypothesis"
+    elif allowed_as_discovery_question:
+        sales_use = "allowed_as_discovery_question"
+    elif internal_only:
+        sales_use = "internal_only"
+    else:
+        sales_use = "blocked"
     return {
+        "source_category": profile.get("category"),
         "source_type": source_type,
+        "target_fields": list(profile.get("target_fields", ())),
+        "context_only": bool(profile.get("context_only")),
         "canonical_source_host": source_host,
         "source_quote": _quote_for_entity(text, tokens),
         "url_verified": bool(fetched.get("url_verified")),
         "content_verified": bool(fetched.get("content_verified")),
+        "page_not_found": bool(fetched.get("page_not_found")),
         "entity_verified": entity_verified,
         "entity_match_status": match_status,
         "claim_support_status": "supported" if eligible else "unchecked",
@@ -295,12 +573,17 @@ def _verify_record(company_name: str, company_url: str, url: str, fetched: dict)
         "buying_evidence_eligible": eligible,
         "promotion_status": "generation_eligible" if eligible else "display_only",
         "verification_reason": reason,
-        "allowed_as_fact": eligible and source_type in FACT_SAFE_TYPES,
-        "allowed_as_hypothesis": eligible,
-        "allowed_as_discovery_question": eligible or bool(fetched.get("content_verified")),
-        "internal_only": not eligible,
-        "blocked": match_status == "wrong",
-        "sales_use": "allowed_as_fact" if eligible and source_type in FACT_SAFE_TYPES else ("allowed_as_discovery_question" if eligible else "internal_only"),
+        "signal_markers": {
+            "has_recent_or_dated_content": has_date,
+            "has_trigger_event_language": has_trigger_event,
+            "has_technology_service_language": has_technology_signal,
+        },
+        "allowed_as_fact": allowed_as_fact,
+        "allowed_as_hypothesis": allowed_as_hypothesis,
+        "allowed_as_discovery_question": allowed_as_discovery_question,
+        "internal_only": internal_only,
+        "blocked": blocked,
+        "sales_use": sales_use,
         "wrong_entity": match_status == "wrong",
     }
 
@@ -329,16 +612,52 @@ def _candidate_record(idx: int, company_name: str, company_url: str, url: str) -
 
 
 def _stats(records: list[dict]) -> dict:
+    source_categories = {}
+    sales_use_counts = {}
+    for record in records:
+        category = record.get("source_category") or "unknown"
+        source_categories[category] = source_categories.get(category, 0) + 1
+        sales_use = record.get("sales_use") or "unknown"
+        sales_use_counts[sales_use] = sales_use_counts.get(sales_use, 0) + 1
     return {
         "candidate_sources": len(records),
         "url_verified": sum(1 for r in records if r.get("url_verified")),
         "content_verified": sum(1 for r in records if r.get("content_verified")),
         "entity_verified": sum(1 for r in records if r.get("entity_verified")),
         "buying_evidence_eligible": sum(1 for r in records if r.get("buying_evidence_eligible")),
+        "allowed_as_fact": sum(1 for r in records if r.get("allowed_as_fact")),
+        "allowed_as_hypothesis": sum(1 for r in records if r.get("allowed_as_hypothesis")),
+        "allowed_as_discovery_question": sum(1 for r in records if r.get("allowed_as_discovery_question")),
+        "internal_only": sum(1 for r in records if r.get("internal_only")),
+        "blocked": sum(1 for r in records if r.get("blocked")),
+        "page_not_found": sum(1 for r in records if r.get("page_not_found")),
         "display_only_or_blocked": sum(1 for r in records if not r.get("buying_evidence_eligible")),
         "wrong_entity": sum(1 for r in records if r.get("wrong_entity")),
+        "source_categories": source_categories,
+        "sales_use_counts": sales_use_counts,
         "providers": sorted({r.get("provider") for r in records if r.get("provider")}),
     }
+
+
+def _warnings(records: list[dict], stats: dict) -> list[str]:
+    warnings = []
+    total = max(1, stats.get("candidate_sources", 0))
+    if stats.get("page_not_found", 0) / total >= 0.35:
+        warnings.append("High page-not-found rate; official-domain discovery may need more site-specific links.")
+    if stats.get("content_verified", 0) / total < 0.35:
+        warnings.append("Low readable-content rate; extraction coverage is thin.")
+    if stats.get("buying_evidence_eligible", 0) < 3:
+        warnings.append("Few buying-evidence-eligible records found; Buying Insight should remain cautious.")
+    categories = stats.get("source_categories") or {}
+    if not categories.get("strategy_trigger_events"):
+        warnings.append("No recent strategy/newsroom trigger sources found.")
+    if not categories.get("technology_service_fit"):
+        warnings.append("No technology or service-fit sources found.")
+    if not categories.get("stakeholder_evidence"):
+        warnings.append("No stakeholder/leadership source pages found.")
+    if stats.get("allowed_as_fact", 0) == 0:
+        warnings.append("No sources are currently safe for customer-facing factual sales wording.")
+    return warnings
 
 
 def render_company_evidence_html(database: dict) -> str:
@@ -348,14 +667,16 @@ def render_company_evidence_html(database: dict) -> str:
         rows.append(
             "<tr>"
             f"<td>{html.escape(rec.get('id') or '')}</td>"
+            f"<td>{html.escape(rec.get('source_category') or '')}</td>"
             f"<td>{html.escape(rec.get('source_type') or '')}</td>"
             f"<td><a href=\"{html.escape(rec.get('url') or '')}\">{html.escape(_clip(rec.get('title') or rec.get('url'), 90))}</a></td>"
             f"<td>{html.escape(rec.get('provider') or '')}</td>"
-            f"<td>{'yes' if rec.get('buying_evidence_eligible') else 'no'}</td>"
+            f"<td>{html.escape(rec.get('sales_use') or '')}</td>"
             f"<td>{html.escape(rec.get('verification_reason') or '')}</td>"
             "</tr>"
         )
     stats = database.get("stats") or {}
+    warnings = "".join(f"<li>{html.escape(str(w))}</li>" for w in _list(database.get("warnings")))
     return f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>{html.escape(company)} — Company Evidence DB</title>
 <style>
@@ -371,10 +692,15 @@ th{{color:#93c5fd;text-transform:uppercase;font-size:12px;letter-spacing:.08em}}
 <div class="meta">
 <span class="pill">Candidates: {stats.get('candidate_sources', 0)}</span>
 <span class="pill">Eligible: {stats.get('buying_evidence_eligible', 0)}</span>
+<span class="pill">Facts: {stats.get('allowed_as_fact', 0)}</span>
+<span class="pill">Hypotheses: {stats.get('allowed_as_hypothesis', 0)}</span>
+<span class="pill">Questions: {stats.get('allowed_as_discovery_question', 0)}</span>
 <span class="pill">Entity verified: {stats.get('entity_verified', 0)}</span>
+<span class="pill">404 / not found: {stats.get('page_not_found', 0)}</span>
 <span class="pill">Display-only / blocked: {stats.get('display_only_or_blocked', 0)}</span>
 </div>
-<table><thead><tr><th>ID</th><th>Type</th><th>Source</th><th>Provider</th><th>Eligible</th><th>Reason</th></tr></thead>
+{"<ul>" + warnings + "</ul>" if warnings else ""}
+<table><thead><tr><th>ID</th><th>Category</th><th>Type</th><th>Source</th><th>Provider</th><th>Sales use</th><th>Reason</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table>
 </body></html>"""
 
@@ -397,8 +723,9 @@ def build_company_evidence_database(company_data: dict, *, stage_callback=None) 
         records.append(_candidate_record(idx, company_name, company_url, url))
     if stage_callback:
         stage_callback("verify_sources", 72, "Applying entity and sales-use gates")
+    stats = _stats(records)
     database = {
-        "version": "company-evidence-v1",
+        "version": "company-evidence-v1.1",
         "company_name": company_name,
         "company_url": company_url,
         "company_slug": "",
@@ -409,18 +736,19 @@ def build_company_evidence_database(company_data: dict, *, stage_callback=None) 
             "direct_fetch_enabled": True,
         },
         "acquisition_policy": {
-            "mode": "official_domain_only",
+            "mode": "official_domain_source_target_registry",
             "max_urls": max_urls,
             "broad_web_search": False,
             "social_scraping": False,
             "contact_scraping": False,
+            "coresignal_enabled": False,
+            "source_target_categories": sorted({target["category"] for target in SOURCE_TARGET_REGISTRY}),
         },
         "records": records,
-        "stats": _stats(records),
+        "stats": stats,
         "warnings": [],
     }
     if not _firecrawl_headers():
         database["warnings"].append("FIRECRAWL_API_KEY not configured; used Jina/direct official-domain fallback only.")
-    if not any(r.get("buying_evidence_eligible") for r in records):
-        database["warnings"].append("No buying-evidence-eligible records found; Buying Insight should remain cautious.")
+    database["warnings"].extend(_warnings(records, stats))
     return database, render_company_evidence_html(database)
