@@ -462,6 +462,86 @@ class BlobStorage:
         data = self.retrieve_latest_data("index/buying_potential")
         return data if isinstance(data, list) else []
 
+    def get_company_evidence_index(self):
+        data = self.retrieve_latest_data("index/company_evidence")
+        return data if isinstance(data, list) else []
+
+    def _update_company_evidence_index(self, metadata):
+        with BlobStorage._index_lock:
+            index = self.get_company_evidence_index()
+            company_key = (metadata.get("company_slug") or "").lower()
+            updated = False
+            for idx, item in enumerate(index):
+                if (item.get("company_slug") or "").lower() == company_key:
+                    index[idx] = metadata
+                    updated = True
+                    break
+            if not updated:
+                index.append(metadata)
+            new_url = self._put("index/company_evidence.json", index)
+            if new_url:
+                self._prune_old_versions("index/company_evidence", keep=3)
+            return new_url
+
+    def save_company_evidence_database(self, company_name, evidence_json, html_report):
+        clean_name = self.sanitize_filename(company_name)
+        prefix = f"company_evidence/{clean_name}"
+        generated_at = evidence_json.get("generated_at") or datetime.utcnow().isoformat()
+        evidence_json["generated_at"] = generated_at
+        evidence_json["company_name"] = evidence_json.get("company_name") or company_name
+        evidence_json["company_slug"] = clean_name
+
+        html_url = self._put_text(f"{prefix}.html", html_report, "text/html; charset=utf-8")
+        if not html_url:
+            return None
+        json_payload = {**evidence_json, "html_url": html_url}
+        json_url = self._put(f"{prefix}.json", json_payload)
+        if not json_url:
+            return None
+
+        self._prune_old_versions(prefix, keep=6)
+        stats = evidence_json.get("stats", {})
+        metadata = {
+            "companyName": company_name,
+            "company_slug": clean_name,
+            "updated_at": generated_at,
+            "json_url": json_url,
+            "html_url": html_url,
+            "status": "ready",
+            "stats": stats,
+            "warnings": evidence_json.get("warnings", []),
+        }
+        self._update_company_evidence_index(metadata)
+        return metadata
+
+    def get_company_evidence_database(self, company_name):
+        clean_name = self.sanitize_filename(company_name)
+        prefix = f"company_evidence/{clean_name}"
+        blobs = self._list(prefix=prefix, limit=20)
+        json_blobs = [b for b in blobs if str(b.get("pathname", "")).endswith(".json")]
+        if not json_blobs:
+            return {"exists": False, "companyName": company_name}
+        json_blobs.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
+        latest_json_url = json_blobs[0].get("url")
+        database = self._get(latest_json_url)
+        if not database:
+            return {"exists": False, "companyName": company_name}
+        return {
+            "exists": True,
+            "companyName": database.get("company_name") or company_name,
+            "metadata": {
+                "companyName": database.get("company_name") or company_name,
+                "company_slug": clean_name,
+                "updated_at": database.get("generated_at"),
+                "json_url": latest_json_url,
+                "html_url": database.get("html_url"),
+                "status": database.get("status", "ready"),
+                "stats": database.get("stats", {}),
+                "warnings": database.get("warnings", []),
+            },
+            "database": database,
+        }
+
     def _update_buying_potential_index(self, metadata):
         with BlobStorage._index_lock:
             index = self.get_buying_potential_index()

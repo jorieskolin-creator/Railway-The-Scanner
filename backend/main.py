@@ -46,6 +46,7 @@ from domain_classifier import infer_domain
 from evidence_cleaner import CLEAN_EVIDENCE_MODEL_CHAIN, clean_company_evidence
 from llm_clients import call_anthropic_text, call_json_model_chain, call_openai_text
 from buying_potential import BuyingPotentialError, generate_buying_potential_report, load_service_portfolio_kb, validate_service_portfolio_kb
+from company_evidence import CompanyEvidenceError, build_company_evidence_database
 
 # VERIFICATION LOG: v5.4.0 - Extended Thinking + Search Budget Upgrade
 print("Starting Adaptability Scanner Backend (v5.4.0 - Extended Thinking + Search Budget Upgrade)...", flush=True)
@@ -936,6 +937,91 @@ async def review_data(request: Request):
 
 _buying_potential_jobs = {}
 _buying_potential_jobs_lock = threading.Lock()
+_company_evidence_jobs = {}
+_company_evidence_jobs_lock = threading.Lock()
+
+
+def _append_company_evidence_log(job_id: str, message: str):
+    with _company_evidence_jobs_lock:
+        job = _company_evidence_jobs.get(job_id)
+        if not job:
+            return
+        logs = job.setdefault("logs", [])
+        logs.append({"ts": datetime.utcnow().isoformat(), "message": message})
+        if len(logs) > 120:
+            del logs[:-120]
+
+
+def _update_company_evidence_job(job_id: str, **fields):
+    with _company_evidence_jobs_lock:
+        job = _company_evidence_jobs.get(job_id)
+        if not job:
+            return
+        job.update(fields)
+
+
+def _run_company_evidence_job(job_id: str, company_name: str):
+    started = time.time()
+
+    def set_stage(stage: str, progress: int, message: str):
+        elapsed_ms = int((time.time() - started) * 1000)
+        _update_company_evidence_job(job_id, status="running", stage=stage, progress=progress, elapsed_ms=elapsed_ms)
+        _append_company_evidence_log(job_id, message)
+        print(f"   🔄 [Company Evidence] {company_name} | {stage} | {message} ({elapsed_ms}ms)", flush=True)
+
+    try:
+        set_stage("load_company", 8, "Loading stored company data")
+        company_data = storage.get_company_data(company_name)
+        if not company_data:
+            raise CompanyEvidenceError(f"Company '{company_name}' not found in database.", 404)
+        resolved_company = company_data.get("companyName") or company_name
+        _update_company_evidence_job(job_id, company=resolved_company)
+
+        def stage_callback(stage: str, progress: int, message: str):
+            set_stage(stage, progress, message)
+
+        evidence_json, html_report = build_company_evidence_database(company_data, stage_callback=stage_callback)
+        set_stage("save_database", 88, "Saving Company Evidence DB JSON/HTML to BLOB2")
+        metadata = buying_storage.save_company_evidence_database(resolved_company, evidence_json, html_report)
+        if not metadata:
+            raise CompanyEvidenceError("Company Evidence DB generated but could not be saved.", 500)
+        set_stage("update_index", 96, "Company Evidence DB metadata saved")
+        _update_company_evidence_job(
+            job_id,
+            status="completed",
+            stage="completed",
+            progress=100,
+            metadata=metadata,
+            stats=evidence_json.get("stats", {}),
+            warnings=evidence_json.get("warnings", []),
+            completed_at=datetime.utcnow().isoformat(),
+            elapsed_ms=int((time.time() - started) * 1000),
+        )
+        _append_company_evidence_log(job_id, "Company Evidence DB completed")
+        print(f"   ✅ [Company Evidence] {resolved_company} completed in {int((time.time() - started) * 1000)}ms", flush=True)
+    except CompanyEvidenceError as exc:
+        _update_company_evidence_job(
+            job_id,
+            status="failed",
+            error=str(exc),
+            error_status_code=exc.status_code,
+            progress=100,
+            completed_at=datetime.utcnow().isoformat(),
+            elapsed_ms=int((time.time() - started) * 1000),
+        )
+        _append_company_evidence_log(job_id, f"Company Evidence DB failed: {exc}")
+        print(f"   ❌ [Company Evidence] {company_name} failed: {exc}", flush=True)
+    except Exception as exc:
+        _update_company_evidence_job(
+            job_id,
+            status="failed",
+            error=f"{type(exc).__name__}: {str(exc)[:240]}",
+            progress=100,
+            completed_at=datetime.utcnow().isoformat(),
+            elapsed_ms=int((time.time() - started) * 1000),
+        )
+        _append_company_evidence_log(job_id, f"Company Evidence DB failed: {exc}")
+        print(f"   ❌ [Company Evidence] {company_name}: {exc}", flush=True)
 
 
 def _append_buying_job_log(job_id: str, message: str):
@@ -977,6 +1063,13 @@ def _run_buying_potential_job(job_id: str, company_name: str):
         set_stage("load_service_kb", 22, "Loading and validating Service KB from BLOB2")
         service_kb = load_service_portfolio_kb(buying_storage)
         _append_buying_job_log(job_id, f"Service KB ready: {len(service_kb.get('services') or [])} services")
+        evidence_lookup = buying_storage.get_company_evidence_database(resolved_company)
+        company_evidence = evidence_lookup.get("database") if evidence_lookup.get("exists") else None
+        if company_evidence:
+            stats = company_evidence.get("stats", {})
+            _append_buying_job_log(job_id, f"Company Evidence DB loaded: {stats.get('buying_evidence_eligible', 0)} eligible records")
+        else:
+            _append_buying_job_log(job_id, "No Company Evidence DB found; using Scanner data only")
 
         def stage_callback(stage: str, progress: int, message: str):
             set_stage(stage, progress, message)
@@ -984,6 +1077,7 @@ def _run_buying_potential_job(job_id: str, company_name: str):
         report_json, html_report = generate_buying_potential_report(
             company_data,
             service_kb,
+            company_evidence=company_evidence,
             stage_callback=stage_callback,
         )
 
@@ -1067,6 +1161,63 @@ async def create_buying_potential(company_name: str, request: Request):
     thread = threading.Thread(target=_run_buying_potential_job, args=(job_id, company_name), daemon=True)
     thread.start()
     return {"job_id": job_id, "status": "started", "company": company_name}
+
+
+@app.post("/admin/company-evidence/{company_name}")
+async def create_company_evidence(company_name: str, request: Request):
+    """Start a background job to build a BLOB2 Company Evidence Database for one company."""
+    verify_admin(request)
+    job_id = str(uuid.uuid4())
+    with _company_evidence_jobs_lock:
+        for job in _company_evidence_jobs.values():
+            if job.get("status") in {"queued", "running"}:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Company Evidence DB is already running for {job.get('company') or 'another company'}.",
+                )
+        _company_evidence_jobs[job_id] = {
+            "job_id": job_id,
+            "status": "queued",
+            "stage": "queued",
+            "progress": 0,
+            "company": company_name,
+            "error": None,
+            "metadata": None,
+            "stats": {},
+            "warnings": [],
+            "logs": [{"ts": datetime.utcnow().isoformat(), "message": f"Queued Company Evidence DB for {company_name}"}],
+            "created_at": datetime.utcnow().isoformat(),
+            "completed_at": None,
+            "elapsed_ms": 0,
+        }
+    thread = threading.Thread(target=_run_company_evidence_job, args=(job_id, company_name), daemon=True)
+    thread.start()
+    return {"job_id": job_id, "status": "started", "company": company_name}
+
+
+@app.get("/admin/company-evidence-status/{job_id}")
+async def get_company_evidence_status(job_id: str, request: Request):
+    """Return progress for a Company Evidence Database background job."""
+    verify_admin(request)
+    with _company_evidence_jobs_lock:
+        job = _company_evidence_jobs.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="Company Evidence DB job not found")
+        return dict(job)
+
+
+@app.get("/admin/company-evidence/{company_name}")
+async def get_company_evidence(company_name: str, request: Request):
+    """Return stored Company Evidence DB metadata/database for one company, if available."""
+    verify_admin(request)
+    return buying_storage.get_company_evidence_database(company_name)
+
+
+@app.get("/admin/company-evidence-index")
+async def company_evidence_index(request: Request):
+    """Return the Company Evidence DB artifact index for Admin review."""
+    verify_admin(request)
+    return {"reports": buying_storage.get_company_evidence_index()}
 
 
 @app.get("/admin/buying-potential-status/{job_id}")

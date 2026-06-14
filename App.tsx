@@ -156,6 +156,8 @@ const App = () => {
  const [evidenceCleanLoading, setEvidenceCleanLoading] = useState(false);
  const [evidenceCleanStatus, setEvidenceCleanStatus] = useState(null);
  const [cleaningEvidenceCompany, setCleaningEvidenceCompany] = useState(null);
+ const [companyEvidenceCompany, setCompanyEvidenceCompany] = useState(null);
+ const [companyEvidenceStatus, setCompanyEvidenceStatus] = useState<any>(null);
  const [buyingInsightCompany, setBuyingInsightCompany] = useState(null);
  const [buyingInsightStatus, setBuyingInsightStatus] = useState<any>(null);
 
@@ -936,6 +938,71 @@ const App = () => {
  } finally {
  setBuyingInsightCompany(null);
  setBuyingInsightStatus(null);
+ }
+ };
+
+ const handleBuildCompanyEvidence = async (companyName) => {
+ if (!isAdmin) return;
+ const proceed = confirm(`Build Company Evidence DB for "${companyName}"?\n\nThis gathers official-domain candidate sources into BLOB2 for Buying Insight. It does not modify the normal scan data.`);
+ if (!proceed) return;
+ setCompanyEvidenceCompany(companyName);
+ setCompanyEvidenceStatus({ company: companyName, stage: 'queued', progress: 0 });
+ try {
+ const res = await fetch(`/admin/company-evidence/${encodeURIComponent(companyName)}`, {
+ method: 'POST',
+ headers: authHeaders()
+ });
+ if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return; }
+ const raw = await res.text();
+ let json: any = {};
+ try { json = raw ? JSON.parse(raw) : {}; } catch (_) { json = {}; }
+ if (!res.ok) {
+ const detail = json.detail || json.message || raw || 'Unknown error';
+ alert('Company Evidence DB failed: ' + detail);
+ return;
+ }
+ const jobId = json.job_id;
+ if (!jobId) throw new Error('Company Evidence DB job did not return a job id.');
+ let finalStatus: any = null;
+ let attempts = 0;
+ while (attempts < 180) {
+ const statusRes = await fetch(`/admin/company-evidence-status/${encodeURIComponent(jobId)}?t=${Date.now()}`, {
+ headers: authHeaders()
+ });
+ if (statusRes.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return; }
+ if (!statusRes.ok) throw new Error('Company Evidence DB status polling failed');
+ const statusJson = await statusRes.json();
+ setCompanyEvidenceStatus(statusJson);
+ if (statusJson.status === 'completed') {
+ finalStatus = statusJson;
+ break;
+ }
+ if (statusJson.status === 'failed') {
+ throw new Error(`${statusJson.stage || 'Company Evidence DB'}: ${statusJson.error || 'Job failed'}`);
+ }
+ await new Promise(r => setTimeout(r, 2500));
+ attempts += 1;
+ }
+ if (!finalStatus) throw new Error('Company Evidence DB timed out while polling status.');
+ const stats = finalStatus.stats || {};
+ const warnings = (finalStatus.warnings || []).slice(0, 5);
+ alert(
+ `Company Evidence DB created for "${companyName}".\n\n` +
+ `Candidates: ${stats.candidate_sources ?? 0}\n` +
+ `URL verified: ${stats.url_verified ?? 0}\n` +
+ `Content readable: ${stats.content_verified ?? 0}\n` +
+ `Entity verified: ${stats.entity_verified ?? 0}\n` +
+ `Buying eligible: ${stats.buying_evidence_eligible ?? 0}\n` +
+ `Display-only/blocked: ${stats.display_only_or_blocked ?? 0}` +
+ (warnings.length ? `\n\nWarnings:\n- ${warnings.join('\n- ')}` : '')
+ );
+ await refreshReviewAfterAdminAction();
+ } catch (e) {
+ console.error(e);
+ alert('Company Evidence DB failed: ' + (e?.message || e));
+ } finally {
+ setCompanyEvidenceCompany(null);
+ setCompanyEvidenceStatus(null);
  }
  };
 
@@ -2249,6 +2316,18 @@ const App = () => {
                               </button>
                               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block z-50 pointer-events-none">
                                 <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 w-64 whitespace-normal shadow-xl">Verify Evidence<br/><span className="text-slate-500">Verify this company's evidence links and content support. Does not regenerate summaries.</span></div>
+                              </div>
+                            </div>
+                            <div className="relative group/tip">
+                              <button
+                                onClick={() => handleBuildCompanyEvidence(item.companyName)}
+                                disabled={companyEvidenceCompany === item.companyName}
+                                className="text-slate-500 hover:text-cyan-300 p-1.5 rounded hover:bg-cyan-500/10 transition-all disabled:opacity-50"
+                              >
+                                {companyEvidenceCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <HardDrive size={14} />}
+                              </button>
+                              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block z-50 pointer-events-none">
+                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 w-72 whitespace-normal shadow-xl">Build Evidence DB<br/><span className="text-slate-500">Gather official-domain candidate sources into BLOB2 for Buying Insight. Does not modify normal scan data.{companyEvidenceCompany === item.companyName && companyEvidenceStatus?.stage ? `\n\nNow: ${companyEvidenceStatus.stage} (${companyEvidenceStatus.progress || 0}%)` : ''}</span></div>
                               </div>
                             </div>
                             <div className="relative group/tip">
