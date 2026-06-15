@@ -147,8 +147,7 @@ def _dedupe_chain(models: tuple[str, ...]) -> tuple[str, ...]:
 
 
 def _buying_model_mode(mode: str | None = None) -> str:
-    value = _clean_env(mode or os.environ.get("BUYING_POTENTIAL_MODEL_MODE") or "testing").lower()
-    return "quality" if value == "quality" else "testing"
+    return "quality"
 
 
 def _haiku_model() -> str:
@@ -156,33 +155,23 @@ def _haiku_model() -> str:
 
 
 def buying_generation_chain(mode: str | None = None) -> tuple[str, ...]:
-    if _buying_model_mode(mode) == "quality":
-        return _dedupe_chain((CLAUDE_OPUS_MODEL, GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL))
-    return _dedupe_chain((CLAUDE_SONNET_MODEL, _haiku_model()))
+    return _dedupe_chain((CLAUDE_OPUS_MODEL, GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL))
 
 
 def buying_gate_chain(mode: str | None = None) -> tuple[str, ...]:
-    if _buying_model_mode(mode) == "quality":
-        return _dedupe_chain((GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL))
-    return _dedupe_chain((CLAUDE_SONNET_MODEL, _haiku_model()))
+    return _dedupe_chain((GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL))
 
 
 def service_kb_extraction_chain(mode: str | None = None) -> tuple[str, ...]:
-    if _buying_model_mode(mode) == "quality":
-        return _dedupe_chain((GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL, _haiku_model()))
-    return _dedupe_chain((CLAUDE_SONNET_MODEL, _haiku_model()))
+    return _dedupe_chain((GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL, _haiku_model()))
 
 
 def service_kb_repair_chain(mode: str | None = None) -> tuple[str, ...]:
-    if _buying_model_mode(mode) == "quality":
-        return _dedupe_chain((GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL, _haiku_model()))
-    return _dedupe_chain((CLAUDE_SONNET_MODEL, _haiku_model()))
+    return _dedupe_chain((GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL, _haiku_model()))
 
 
 def buying_report_repair_chain(mode: str | None = None) -> tuple[str, ...]:
-    if _buying_model_mode(mode) == "quality":
-        return _dedupe_chain((GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL, _haiku_model()))
-    return _dedupe_chain((CLAUDE_SONNET_MODEL, _haiku_model()))
+    return _dedupe_chain((GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL, _haiku_model()))
 
 
 def _latest_blob(storage, prefix: str, suffixes: tuple[str, ...] | None = None) -> dict | None:

@@ -69,6 +69,18 @@ def test_buying_potential_post_process_removes_legacy_angles_and_applies_downgra
     assert "Confirmed buying intent" in processed["evidence_confidence"]["do_not_use_claims"]
 
 
+def test_buying_potential_defaults_to_quality_model_chain(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    monkeypatch.setenv("BUYING_POTENTIAL_MODEL_MODE", "testing")
+
+    assert bp._buying_model_mode() == "quality"
+    assert bp.buying_generation_chain() == ("opus", "gpt", "sonnet")
+    assert bp.buying_gate_chain() == ("gptv", "sonnet")
+    assert bp.service_kb_extraction_chain() == ("gpt", "sonnet", "haiku")
+    assert bp.service_kb_repair_chain() == ("gptv", "sonnet", "haiku")
+    assert bp.buying_report_repair_chain() == ("gptv", "sonnet", "haiku")
+
+
 def test_buying_potential_renderer_uses_new_section_order_and_nested_play_angles(monkeypatch):
     bp = load_buying_potential(monkeypatch)
 
