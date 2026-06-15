@@ -534,6 +534,35 @@ def _company_evidence_records(company_evidence: dict | None) -> tuple[list[dict]
     return strongest[:30], blocked[:30]
 
 
+def _company_evidence_stakeholders(company_evidence: dict | None) -> list[dict]:
+    if not isinstance(company_evidence, dict):
+        return []
+    candidates = []
+    for rec in _list(company_evidence.get("records")):
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("provider_record_type") != "stakeholder_candidate" and rec.get("source_category") != "stakeholder_candidate":
+            continue
+        stakeholder = _dict(rec.get("stakeholder"))
+        name = stakeholder.get("name")
+        role = stakeholder.get("role")
+        if not name or not role:
+            continue
+        candidates.append({
+            "name": name,
+            "role": role,
+            "insight": _clip(rec.get("source_quote") or rec.get("text_excerpt"), 420),
+            "confidence": rec.get("extraction_confidence") or 50,
+            "source": stakeholder.get("public_profile_url") or rec.get("url"),
+            "source_database": "company_evidence",
+            "provider": rec.get("provider"),
+            "allowed_use": stakeholder.get("allowed_use") or rec.get("sales_use") or "allowed_as_discovery_question",
+            "matched_demand_groups": stakeholder.get("matched_demand_groups") or rec.get("demand_signal_ids") or [],
+            "stakeholder_role_match_reason": stakeholder.get("stakeholder_role_match_reason") or rec.get("stakeholder_role_match_reason"),
+        })
+    return candidates[:12]
+
+
 def _company_source_ledger_records(company_source_ledger: dict | None) -> tuple[list[dict], list[dict]]:
     if not isinstance(company_source_ledger, dict):
         return [], []
@@ -648,6 +677,14 @@ def _build_input_payload(
                 "confidence": person.get("confidence") or person.get("confidence_score"),
                 "source": person.get("source") or person.get("source_url"),
             })
+    seen_people = {str(person.get("name") or "").lower() for person in key_people if person.get("name")}
+    for person in _company_evidence_stakeholders(company_evidence):
+        key = str(person.get("name") or "").lower()
+        if key and key not in seen_people:
+            key_people.append(person)
+            seen_people.add(key)
+        if len(key_people) >= 16:
+            break
 
     strategic_foresight = _dict(company_data.get("strategic_foresight"))
     forces = []
@@ -711,6 +748,7 @@ def _build_input_payload(
             "generated_at": company_evidence.get("generated_at") if isinstance(company_evidence, dict) else None,
             "stats": company_evidence.get("stats", {}) if isinstance(company_evidence, dict) else {},
             "warnings": company_evidence.get("warnings", []) if isinstance(company_evidence, dict) else [],
+            "provider_status": company_evidence.get("provider_status", {}) if isinstance(company_evidence, dict) else {},
         },
         "company_source_ledger": {
             "available": isinstance(company_source_ledger, dict),

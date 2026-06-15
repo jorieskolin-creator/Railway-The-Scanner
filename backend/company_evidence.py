@@ -149,6 +149,37 @@ TRIGGER_EVENT_KEYWORDS = (
     "expansion", "launch", "appointment", "appointed", "strategy", "transform",
     "yrityskauppa", "kumppanuus", "sopimus", "investointi", "laajent", "nimitys",
 )
+ROLE_DEMAND_MAP = {
+    "ai_data_cloud_platform": {
+        "keywords": ("ai", "tekoäly", "genai", "copilot", "agent", "data", "analytics", "cloud", "azure", "aws", "gcp", "platform", "devops", "architecture"),
+        "roles": ("CIO", "CTO", "CDO", "Chief Data Officer", "Head of Data", "Head of AI", "Enterprise Architect", "IT Director", "Head of Platform"),
+    },
+    "erp_workplace_cyber": {
+        "keywords": ("erp", "sap", "dynamics", "salesforce", "oracle", "workday", "m365", "cyber", "security", "nis2", "dora", "iam", "soc", "workplace"),
+        "roles": ("CIO", "CISO", "Head of Infrastructure", "Head of Applications", "IT Director", "Procurement Director", "Chief Information Security Officer"),
+    },
+    "operations_manufacturing_automation": {
+        "keywords": ("manufacturing", "production", "operations", "automation", "rpa", "process mining", "supply", "logistics", "factory", "plant", "tuotanto"),
+        "roles": ("COO", "Chief Operating Officer", "Operations Director", "Production Director", "Head of Digitalization", "Automation Lead", "Supply Chain Director"),
+    },
+    "finance_risk_regulatory": {
+        "keywords": ("finance", "risk", "compliance", "regulation", "csrd", "esrs", "dora", "audit", "governance", "investor", "margin", "cost"),
+        "roles": ("CFO", "Chief Financial Officer", "Risk Director", "Compliance Director", "Legal Counsel", "General Counsel", "Head of Governance"),
+    },
+    "hr_workforce_culture": {
+        "keywords": ("hr", "people", "talent", "workforce", "culture", "employee", "training", "skills", "reskilling", "recruit", "career"),
+        "roles": ("CHRO", "HR Director", "People Director", "Talent Director", "Head of People", "Learning and Development Director"),
+    },
+    "strategy_growth_customer": {
+        "keywords": ("strategy", "growth", "customer", "sales", "market", "business unit", "transformation", "digital", "innovation", "service"),
+        "roles": ("CEO", "Chief Executive Officer", "Chief Strategy Officer", "Strategy Director", "Business Unit Director", "Commercial Director", "Customer Experience Director"),
+    },
+}
+TOP_MANAGEMENT_ROLES = (
+    "CEO", "Chief Executive Officer", "CFO", "Chief Financial Officer", "CIO",
+    "CTO", "COO", "CHRO", "CISO", "Chief Digital Officer", "Chief Data Officer",
+    "Strategy Director", "Business Development Director",
+)
 
 
 class CompanyEvidenceError(RuntimeError):
@@ -163,6 +194,13 @@ def _clean_env(value: str | None) -> str:
     if "=" in value:
         value = value.split("=", 1)[1]
     return value.strip().strip('"').strip("'")
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
 def _clip(value: Any, limit: int = 900) -> str:
@@ -656,14 +694,508 @@ def _candidate_record(idx: int, company_name: str, company_url: str, url: str) -
     }
 
 
+def _coresignal_key() -> str:
+    return _clean_env(os.environ.get("CORESIGNAL_API_KEY"))
+
+
+def _coresignal_enabled() -> bool:
+    key = _coresignal_key()
+    if not key:
+        return False
+    explicit = os.environ.get("CORESIGNAL_ENABLED")
+    if explicit is None:
+        return True
+    return _env_bool("CORESIGNAL_ENABLED", default=True)
+
+
+def _coresignal_base_url() -> str:
+    return _clean_env(os.environ.get("CORESIGNAL_BASE_URL")) or "https://api.coresignal.com"
+
+
+def _coresignal_headers() -> dict:
+    key = _coresignal_key()
+    if not key:
+        return {}
+    return {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+
+def _coresignal_url(path: str) -> str:
+    base = _coresignal_base_url().rstrip("/")
+    path = path if path.startswith("/") else "/" + path
+    return base + path
+
+
+def _coresignal_timeout() -> int:
+    return max(8, min(45, int(os.environ.get("CORESIGNAL_TIMEOUT_SECONDS", "20"))))
+
+
+def _coresignal_request(method: str, path: str, *, payload: dict | None = None) -> Any:
+    headers = _coresignal_headers()
+    if not headers:
+        return None
+    url = _coresignal_url(path)
+    try:
+        if method.upper() == "POST":
+            resp = requests.post(url, headers=headers, json=payload or {}, timeout=_coresignal_timeout())
+        else:
+            resp = requests.get(url, headers=headers, timeout=_coresignal_timeout())
+        if resp.status_code not in (200, 201):
+            print(f"   ⚠️ [Company Evidence] Coresignal {method.upper()} {path} failed ({resp.status_code})", flush=True)
+            return None
+        if not resp.text.strip():
+            return None
+        return resp.json()
+    except Exception as exc:
+        print(f"   ⚠️ [Company Evidence] Coresignal {method.upper()} {path} exception: {exc}", flush=True)
+        return None
+
+
+def _extract_ids(data: Any, limit: int) -> list[Any]:
+    if data is None:
+        return []
+    if isinstance(data, list):
+        values = data
+    elif isinstance(data, dict):
+        values = data.get("data") or data.get("results") or data.get("ids") or data.get("items") or []
+        if isinstance(values, dict):
+            values = values.get("data") or values.get("results") or values.get("ids") or []
+    else:
+        values = []
+    ids = []
+    for item in values:
+        if isinstance(item, (str, int)):
+            ids.append(item)
+        elif isinstance(item, dict):
+            item_id = item.get("id") or item.get("company_id") or item.get("member_id") or item.get("employee_id")
+            if item_id:
+                ids.append(item_id)
+        if len(ids) >= limit:
+            break
+    return ids
+
+
+def _as_records(data: Any) -> list[dict]:
+    if isinstance(data, dict):
+        values = data.get("data") or data.get("results") or data.get("items")
+        if isinstance(values, list):
+            return [item for item in values if isinstance(item, dict)]
+        return [data]
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    return []
+
+
+def _first_key(data: dict, keys: tuple[str, ...], default: Any = "") -> Any:
+    for key in keys:
+        if key in data and data.get(key) not in (None, "", []):
+            return data.get(key)
+    return default
+
+
+def _flatten_text(value: Any, limit: int = 1000) -> str:
+    if isinstance(value, dict):
+        return _clip("; ".join(f"{k}: {_flatten_text(v, 160)}" for k, v in value.items() if v not in (None, "", [])), limit)
+    if isinstance(value, list):
+        return _clip("; ".join(_flatten_text(v, 160) for v in value[:12]), limit)
+    return _clip(value, limit)
+
+
+def _list_values(value: Any, limit: int = 12) -> list[str]:
+    if isinstance(value, list):
+        return [_clip(item, 120) for item in value[:limit] if _clip(item, 120)]
+    if isinstance(value, str):
+        parts = [p.strip() for p in re.split(r"[,;|]", value) if p.strip()]
+        return [_clip(part, 120) for part in parts[:limit]]
+    return []
+
+
+def _coresignal_domain(data: dict) -> str:
+    website = _first_key(data, ("website", "company_website", "homepage_url", "url", "domain", "website_url"))
+    return _host(str(website)) if website else ""
+
+
+def _public_profile_url(data: dict) -> str:
+    return _normalize_url(_first_key(data, (
+        "linkedin_url", "public_profile_url", "profile_url", "url", "professional_network_url",
+        "company_linkedin_url", "website",
+    )))
+
+
+def _company_name_match(company_name: str, record_name: str) -> bool:
+    if not record_name:
+        return False
+    record_l = record_name.lower()
+    tokens = _company_tokens(company_name)
+    return any(token in record_l for token in tokens)
+
+
+def _demand_profile(company_data: dict) -> dict:
+    text_parts = [
+        company_data.get("summary_text"),
+        company_data.get("general_summary"),
+        company_data.get("pitch_text"),
+        company_data.get("domain_force_dossier"),
+        company_data.get("domain"),
+        company_data.get("archetype"),
+    ]
+    for key in ("why_proposals", "what_proposals"):
+        for item in _list(company_data.get(key)):
+            text_parts.append(_flatten_text(item, 500))
+    strategic = company_data.get("strategic_foresight")
+    if isinstance(strategic, dict):
+        text_parts.append(_flatten_text(strategic.get("dimension_forces"), 1200))
+    text = " ".join(_clip(part, 3000) for part in text_parts if part).lower()
+    groups = []
+    reasons = []
+    roles = []
+    for group, spec in ROLE_DEMAND_MAP.items():
+        matches = [kw for kw in spec["keywords"] if kw in text]
+        if matches:
+            groups.append(group)
+            reasons.append({"group": group, "matched_keywords": matches[:8]})
+            roles.extend(spec["roles"])
+    if not groups:
+        groups.append("strategy_growth_customer")
+        reasons.append({"group": "strategy_growth_customer", "matched_keywords": ["default_top_management"]})
+        roles.extend(ROLE_DEMAND_MAP["strategy_growth_customer"]["roles"])
+    roles = list(dict.fromkeys(list(TOP_MANAGEMENT_ROLES) + roles))
+    return {"groups": groups, "roles": roles[:24], "reasons": reasons}
+
+
+def _role_matches(title: str, demand_profile: dict) -> tuple[bool, str]:
+    title_l = (title or "").lower()
+    if not title_l:
+        return False, "missing_title"
+    role_terms = []
+    for role in _list(demand_profile.get("roles")):
+        role_l = str(role).lower()
+        role_terms.append(role_l)
+        for part in re.split(r"[/,&()\-]", role_l):
+            part = part.strip()
+            if len(part) >= 4:
+                role_terms.append(part)
+    leadership_terms = (
+        "chief", "ceo", "cfo", "cio", "cto", "coo", "ciso", "director", "head of",
+        "vp", "vice president", "management", "johtaja", "päällikkö", "paallikko",
+    )
+    if any(term and term in title_l for term in role_terms):
+        return True, "role_matches_detected_demand"
+    if any(term in title_l for term in leadership_terms):
+        return True, "top_management_or_senior_role"
+    return False, "role_not_matched_to_detected_demand"
+
+
+def _coresignal_company_search(company_name: str, company_url: str, limit: int) -> tuple[list[dict], list[Any], list[str]]:
+    warnings = []
+    domain = _host(company_url)
+    path = _clean_env(os.environ.get("CORESIGNAL_COMPANY_SEARCH_PATH")) or "/cdapi/v1/professional_network/company/search/filter"
+    collect_path = _clean_env(os.environ.get("CORESIGNAL_COMPANY_COLLECT_PATH")) or "/cdapi/v1/professional_network/company/collect/{id}"
+    payload = {
+        "name": company_name,
+        "website": domain,
+        "domain": domain,
+        "active": True,
+        "limit": limit,
+    }
+    raw = _coresignal_request("POST", path, payload=payload)
+    company_ids = _extract_ids(raw, limit)
+    records = _as_records(raw)
+    collected = []
+    for company_id in company_ids[:limit]:
+        data = _coresignal_request("GET", collect_path.format(id=company_id))
+        if isinstance(data, dict):
+            collected.append(data)
+    if collected:
+        records = collected
+    if not records:
+        warnings.append("Coresignal company search returned no usable records.")
+    return records[:limit], company_ids[:limit], warnings
+
+
+def _coresignal_employee_search(company_id: Any, company_name: str, demand_profile: dict, max_people: int) -> tuple[list[dict], list[str]]:
+    warnings = []
+    if not company_id:
+        return [], ["Coresignal stakeholder search skipped because no company id was available."]
+    path = _clean_env(os.environ.get("CORESIGNAL_EMPLOYEE_SEARCH_PATH")) or "/cdapi/v1/professional_network/employee/search/filter"
+    collect_path = _clean_env(os.environ.get("CORESIGNAL_EMPLOYEE_COLLECT_PATH")) or "/cdapi/v1/professional_network/employee/collect/{id}"
+    role_terms = _list(demand_profile.get("roles"))[:18]
+    payload = {
+        "current_company_id": company_id,
+        "company_id": company_id,
+        "company_name": company_name,
+        "title": role_terms,
+        "active": True,
+        "limit": max(max_people * 2, 8),
+    }
+    raw = _coresignal_request("POST", path, payload=payload)
+    people_ids = _extract_ids(raw, max(max_people * 2, 8))
+    records = _as_records(raw)
+    collected = []
+    for person_id in people_ids[:max(max_people * 2, 8)]:
+        data = _coresignal_request("GET", collect_path.format(id=person_id))
+        if isinstance(data, dict):
+            collected.append(data)
+        if len(collected) >= max_people:
+            break
+    if collected:
+        records = collected
+    if not records:
+        warnings.append("Coresignal stakeholder search returned no usable records.")
+    return records[:max(max_people * 2, 8)], warnings
+
+
+def _coresignal_company_record(idx: int, company_name: str, company_url: str, raw: dict) -> dict:
+    official_host = _host(company_url)
+    record_name = _clip(_first_key(raw, ("name", "company_name", "name_legal", "nameLegal", "legal_name")), 180)
+    record_domain = _coresignal_domain(raw)
+    public_url = _normalize_url(_first_key(raw, ("website", "company_website", "homepage_url", "url", "domain"), company_url))
+    domain_match = bool(record_domain and _same_or_subdomain(record_domain, official_host))
+    name_match = _company_name_match(company_name, record_name)
+    entity_verified = domain_match or name_match
+    blocked = bool(record_domain and official_host and not _same_or_subdomain(record_domain, official_host) and not name_match)
+    industries = _list_values(_first_key(raw, ("industries", "industry", "categories", "category")))
+    technologies = _list_values(_first_key(raw, ("technologies", "technology", "tech_stack", "technographics")))
+    quote = _clip(
+        f"Coresignal structured company record: name={record_name or company_name}; "
+        f"domain={record_domain or official_host}; industry={', '.join(industries[:5])}; "
+        f"employees={_first_key(raw, ('totalEmployeesExact', 'employees', 'employee_count', 'total_employees', 'size'))}; "
+        f"revenue={_first_key(raw, ('revenue', 'revenue_range', 'finances'))}.",
+        620,
+    )
+    sales_use = "blocked" if blocked else ("allowed_as_hypothesis" if entity_verified else "internal_only")
+    content_hash = hashlib.sha256(_flatten_text(raw, 6000).encode("utf-8", errors="ignore")).hexdigest()
+    return {
+        "id": f"CED-{idx:02d}",
+        "company_name": company_name,
+        "company_url": company_url,
+        "url": public_url or company_url,
+        "provider": "coresignal",
+        "provider_record_type": "company_enrichment",
+        "title": f"Coresignal company enrichment: {record_name or company_name}",
+        "fetched_at": datetime.utcnow().isoformat(),
+        "content_hash": content_hash,
+        "extraction_confidence": 72 if entity_verified else 35,
+        "source_freshness": "coresignal_snapshot",
+        "text_excerpt": quote,
+        "source_category": "company_enrichment",
+        "source_type": "coresignal_company_enrichment",
+        "target_fields": ["legal name", "domain", "country", "industry", "size band", "technology tags"],
+        "context_only": False,
+        "canonical_source_host": record_domain or official_host,
+        "source_quote": quote,
+        "url_verified": bool(public_url),
+        "content_verified": True,
+        "page_not_found": False,
+        "entity_verified": entity_verified,
+        "entity_match_status": "exact" if domain_match else ("scoped" if name_match else "unknown"),
+        "claim_support_status": "supported" if entity_verified and not blocked else "unchecked",
+        "analysis_verified": False,
+        "generation_eligible": False,
+        "buying_evidence_eligible": bool(entity_verified and not blocked),
+        "promotion_status": "display_only",
+        "verification_reason": "coresignal_domain_or_name_match" if entity_verified and not blocked else ("coresignal_domain_conflict" if blocked else "coresignal_entity_unconfirmed"),
+        "signal_markers": {
+            "has_company_enrichment": True,
+            "has_technology_service_language": bool(technologies),
+            "has_trigger_event_language": bool(_first_key(raw, ("funding", "funding_events", "acquisitions", "company_updates"))),
+        },
+        "allowed_as_fact": False,
+        "allowed_as_hypothesis": bool(entity_verified and not blocked),
+        "allowed_as_discovery_question": bool(entity_verified and not blocked),
+        "internal_only": not entity_verified and not blocked,
+        "blocked": blocked,
+        "sales_use": sales_use,
+        "wrong_entity": blocked,
+        "coresignal_fields": {
+            "record_name": record_name,
+            "record_domain": record_domain,
+            "country": _first_key(raw, ("country", "country_code", "headquarters_country")),
+            "industry": industries[:8],
+            "technologies": technologies[:12],
+            "social_profiles": _list_values(_first_key(raw, ("socials", "social_profiles", "social_media")), 8),
+        },
+    }
+
+
+def _coresignal_technology_record(idx: int, company_name: str, company_url: str, company_record: dict) -> dict | None:
+    fields = company_record.get("coresignal_fields") or {}
+    technologies = _list(fields.get("technologies"))
+    if not technologies:
+        return None
+    record = dict(company_record)
+    record.update({
+        "id": f"CED-{idx:02d}",
+        "provider_record_type": "technology_signal",
+        "title": f"Coresignal technology signals: {company_name}",
+        "source_category": "technology_service_fit",
+        "source_type": "coresignal_technology_signal",
+        "target_fields": ["cloud", "ERP", "AI", "cybersecurity", "workplace", "automation"],
+        "source_quote": _clip(f"Coresignal technology tags for {company_name}: {', '.join(technologies[:12])}. Treat as sales-prep signal, not proof of an active project.", 620),
+        "text_excerpt": _clip(f"Technology tags: {', '.join(technologies[:12])}", 620),
+        "allowed_as_fact": False,
+        "allowed_as_hypothesis": True,
+        "allowed_as_discovery_question": True,
+        "sales_use": "allowed_as_hypothesis",
+        "verification_reason": "coresignal_technology_tags_entity_matched" if company_record.get("entity_verified") else "coresignal_technology_tags_entity_unconfirmed",
+    })
+    return record
+
+
+def _coresignal_stakeholder_record(
+    idx: int,
+    company_name: str,
+    company_url: str,
+    raw: dict,
+    demand_profile: dict,
+) -> dict | None:
+    name = _clip(_first_key(raw, ("name", "full_name", "member_full_name", "person_name")), 160)
+    title = _clip(_first_key(raw, ("title", "current_title", "job_title", "position", "role")), 180)
+    if not name or not title:
+        return None
+    matched, reason = _role_matches(title, demand_profile)
+    if not matched:
+        return None
+    profile_url = _public_profile_url(raw)
+    public_url = profile_url or _normalize_url(company_url)
+    quote = _clip(
+        f"Coresignal public professional profile candidate: {name}, {title}. "
+        f"Matched demand groups: {', '.join(_list(demand_profile.get('groups')))}. "
+        f"Use as a role-relevance hypothesis, not as proof of a buying project.",
+        620,
+    )
+    content_hash = hashlib.sha256(_flatten_text({"name": name, "title": title, "profile_url": profile_url}, 1200).encode("utf-8", errors="ignore")).hexdigest()
+    return {
+        "id": f"CED-{idx:02d}",
+        "company_name": company_name,
+        "company_url": company_url,
+        "url": public_url,
+        "provider": "coresignal",
+        "provider_record_type": "stakeholder_candidate",
+        "title": f"Coresignal stakeholder candidate: {name}",
+        "fetched_at": datetime.utcnow().isoformat(),
+        "content_hash": content_hash,
+        "extraction_confidence": 68,
+        "source_freshness": "coresignal_snapshot",
+        "text_excerpt": quote,
+        "source_category": "stakeholder_candidate",
+        "source_type": "coresignal_stakeholder_candidate",
+        "target_fields": ["public professional profile", "role", "buying-committee relevance"],
+        "context_only": False,
+        "canonical_source_host": _host(public_url),
+        "source_quote": quote,
+        "url_verified": bool(public_url),
+        "content_verified": True,
+        "page_not_found": False,
+        "entity_verified": True,
+        "entity_match_status": "scoped",
+        "claim_support_status": "supported",
+        "analysis_verified": False,
+        "generation_eligible": False,
+        "buying_evidence_eligible": True,
+        "promotion_status": "display_only",
+        "verification_reason": "coresignal_public_profile_role_match",
+        "signal_markers": {
+            "has_stakeholder_candidate": True,
+            "has_detected_demand_role_match": True,
+        },
+        "allowed_as_fact": False,
+        "allowed_as_hypothesis": False,
+        "allowed_as_discovery_question": True,
+        "internal_only": False,
+        "blocked": False,
+        "sales_use": "allowed_as_discovery_question",
+        "wrong_entity": False,
+        "stakeholder": {
+            "name": name,
+            "role": title,
+            "public_profile_url": profile_url,
+            "matched_demand_groups": _list(demand_profile.get("groups")),
+            "stakeholder_role_match_reason": reason,
+            "demand_signal_ids": _list(demand_profile.get("groups")),
+            "linked_why_what_ids": [],
+            "linked_service_ids": [],
+            "allowed_use": "allowed_as_discovery_question",
+        },
+        "demand_signal_ids": _list(demand_profile.get("groups")),
+        "linked_why_what_ids": [],
+        "linked_service_ids": [],
+        "stakeholder_role_match_reason": reason,
+    }
+
+
+def _coresignal_records(company_data: dict, start_idx: int = 1, *, stage_callback=None) -> tuple[list[dict], dict, list[str]]:
+    diagnostics = {
+        "enabled": _coresignal_enabled(),
+        "queried": False,
+        "company_records": 0,
+        "technology_records": 0,
+        "stakeholder_candidates": 0,
+        "blocked_or_unmatched": 0,
+        "base_url": _coresignal_base_url() if _coresignal_enabled() else None,
+    }
+    warnings: list[str] = []
+    if not _coresignal_enabled():
+        diagnostics["reason"] = "CORESIGNAL_API_KEY missing or CORESIGNAL_ENABLED=false"
+        return [], diagnostics, warnings
+
+    company_name = company_data.get("companyName") or company_data.get("company_name")
+    company_url = company_data.get("companyUrl") or company_data.get("url")
+    max_companies = max(1, min(5, int(os.environ.get("CORESIGNAL_MAX_COMPANY_RESULTS", "2"))))
+    max_stakeholders = max(0, min(20, int(os.environ.get("CORESIGNAL_MAX_STAKEHOLDERS", "8"))))
+    if stage_callback:
+        stage_callback("coresignal_enrichment", 62, "Querying Coresignal company enrichment and public stakeholder candidates")
+
+    diagnostics["queried"] = True
+    records: list[dict] = []
+    company_items, company_ids, company_warnings = _coresignal_company_search(company_name, company_url, max_companies)
+    warnings.extend(company_warnings)
+    for raw in company_items:
+        company_record = _coresignal_company_record(start_idx + len(records), company_name, company_url, raw)
+        records.append(company_record)
+        tech_record = _coresignal_technology_record(start_idx + len(records), company_name, company_url, company_record)
+        if tech_record:
+            records.append(tech_record)
+
+    demand_profile = _demand_profile(company_data)
+    people_records = []
+    if max_stakeholders > 0:
+        for company_id in company_ids[:1]:
+            people, people_warnings = _coresignal_employee_search(company_id, company_name, demand_profile, max_stakeholders)
+            warnings.extend(people_warnings)
+            people_records.extend(people)
+            if people_records:
+                break
+    for raw in people_records:
+        stakeholder_record = _coresignal_stakeholder_record(start_idx + len(records), company_name, company_url, raw, demand_profile)
+        if stakeholder_record:
+            records.append(stakeholder_record)
+        else:
+            diagnostics["blocked_or_unmatched"] += 1
+    diagnostics["company_records"] = sum(1 for r in records if r.get("provider_record_type") == "company_enrichment")
+    diagnostics["technology_records"] = sum(1 for r in records if r.get("provider_record_type") == "technology_signal")
+    diagnostics["stakeholder_candidates"] = sum(1 for r in records if r.get("provider_record_type") == "stakeholder_candidate")
+    if diagnostics["queried"] and not records:
+        warnings.append("Coresignal was queried but produced no normalized evidence records.")
+    return records, diagnostics, warnings
+
+
 def _stats(records: list[dict]) -> dict:
     source_categories = {}
     sales_use_counts = {}
+    provider_record_types = {}
     for record in records:
         category = record.get("source_category") or "unknown"
         source_categories[category] = source_categories.get(category, 0) + 1
         sales_use = record.get("sales_use") or "unknown"
         sales_use_counts[sales_use] = sales_use_counts.get(sales_use, 0) + 1
+        provider_record_type = record.get("provider_record_type")
+        if provider_record_type:
+            provider_record_types[provider_record_type] = provider_record_types.get(provider_record_type, 0) + 1
     return {
         "candidate_sources": len(records),
         "url_verified": sum(1 for r in records if r.get("url_verified")),
@@ -680,7 +1212,13 @@ def _stats(records: list[dict]) -> dict:
         "wrong_entity": sum(1 for r in records if r.get("wrong_entity")),
         "source_categories": source_categories,
         "sales_use_counts": sales_use_counts,
+        "provider_record_types": provider_record_types,
         "providers": sorted({r.get("provider") for r in records if r.get("provider")}),
+        "coresignal_records": sum(1 for r in records if r.get("provider") == "coresignal"),
+        "coresignal_company_records": sum(1 for r in records if r.get("provider_record_type") == "company_enrichment"),
+        "coresignal_technology_records": sum(1 for r in records if r.get("provider_record_type") == "technology_signal"),
+        "coresignal_stakeholder_candidates": sum(1 for r in records if r.get("provider_record_type") == "stakeholder_candidate"),
+        "coresignal_sales_usable": sum(1 for r in records if r.get("provider") == "coresignal" and r.get("sales_use") in {"allowed_as_hypothesis", "allowed_as_discovery_question"}),
     }
 
 
@@ -698,7 +1236,7 @@ def _warnings(records: list[dict], stats: dict) -> list[str]:
         warnings.append("No recent strategy/newsroom trigger sources found.")
     if not categories.get("technology_service_fit"):
         warnings.append("No technology or service-fit sources found.")
-    if not categories.get("stakeholder_evidence"):
+    if not categories.get("stakeholder_evidence") and not categories.get("stakeholder_candidate"):
         warnings.append("No stakeholder/leadership source pages found.")
     if stats.get("allowed_as_fact", 0) == 0:
         warnings.append("No sources are currently safe for customer-facing factual sales wording.")
@@ -741,6 +1279,8 @@ th{{color:#93c5fd;text-transform:uppercase;font-size:12px;letter-spacing:.08em}}
 <span class="pill">Hypotheses: {stats.get('allowed_as_hypothesis', 0)}</span>
 <span class="pill">Questions: {stats.get('allowed_as_discovery_question', 0)}</span>
 <span class="pill">Entity verified: {stats.get('entity_verified', 0)}</span>
+<span class="pill">Coresignal: {stats.get('coresignal_records', 0)}</span>
+<span class="pill">Stakeholders: {stats.get('coresignal_stakeholder_candidates', 0)}</span>
 <span class="pill">404 / not found: {stats.get('page_not_found', 0)}</span>
 <span class="pill">Display-only / blocked: {stats.get('display_only_or_blocked', 0)}</span>
 </div>
@@ -766,6 +1306,12 @@ def build_company_evidence_database(company_data: dict, *, stage_callback=None) 
     records = []
     for idx, url in enumerate(urls, start=1):
         records.append(_candidate_record(idx, company_name, company_url, url))
+    coresignal_records, coresignal_diagnostics, coresignal_warnings = _coresignal_records(
+        company_data,
+        start_idx=len(records) + 1,
+        stage_callback=stage_callback,
+    )
+    records.extend(coresignal_records)
     if stage_callback:
         stage_callback("verify_sources", 72, "Applying entity and sales-use gates")
     stats = _stats(records)
@@ -779,15 +1325,21 @@ def build_company_evidence_database(company_data: dict, *, stage_callback=None) 
             "firecrawl_enabled": bool(_firecrawl_headers()),
             "jina_enabled": True,
             "direct_fetch_enabled": True,
+            "coresignal_enabled": bool(coresignal_diagnostics.get("enabled")),
+            "coresignal_queried": bool(coresignal_diagnostics.get("queried")),
         },
         "acquisition_policy": {
-            "mode": "official_domain_source_target_registry",
+            "mode": "official_domain_source_target_registry_plus_optional_coresignal",
             "max_urls": max_urls,
             "broad_web_search": False,
             "social_scraping": False,
             "contact_scraping": False,
-            "coresignal_enabled": False,
+            "coresignal_enabled": bool(coresignal_diagnostics.get("enabled")),
+            "coresignal_stakeholder_scope": "public_profiles_no_emails_or_phones",
             "source_target_categories": sorted({target["category"] for target in SOURCE_TARGET_REGISTRY}),
+        },
+        "provider_status": {
+            "coresignal": coresignal_diagnostics,
         },
         "records": records,
         "stats": stats,
@@ -795,5 +1347,8 @@ def build_company_evidence_database(company_data: dict, *, stage_callback=None) 
     }
     if not _firecrawl_headers():
         database["warnings"].append("FIRECRAWL_API_KEY not configured; used Jina/direct official-domain fallback only.")
+    if not coresignal_diagnostics.get("enabled"):
+        database["warnings"].append("CORESIGNAL_API_KEY not configured or Coresignal disabled; skipped structured enrichment.")
+    database["warnings"].extend(coresignal_warnings)
     database["warnings"].extend(_warnings(records, stats))
     return database, render_company_evidence_html(database)

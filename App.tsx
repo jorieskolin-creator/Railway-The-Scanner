@@ -995,6 +995,8 @@ const App = () => {
  `Content readable: ${stats.content_verified ?? 0}\n` +
  `Entity verified: ${stats.entity_verified ?? 0}\n` +
  `Buying eligible: ${stats.buying_evidence_eligible ?? 0}\n` +
+ `Coresignal records: ${stats.coresignal_records ?? 0}\n` +
+ `Coresignal stakeholders: ${stats.coresignal_stakeholder_candidates ?? 0}\n` +
  `Display-only/blocked: ${stats.display_only_or_blocked ?? 0}` +
  (warnings.length ? `\n\nWarnings:\n- ${warnings.join('\n- ')}` : '')
  );
