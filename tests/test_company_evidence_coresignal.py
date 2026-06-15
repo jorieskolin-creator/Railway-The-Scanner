@@ -25,6 +25,70 @@ def test_company_evidence_skips_coresignal_when_key_missing(monkeypatch):
     assert any("CORESIGNAL_API_KEY" in warning for warning in database["warnings"])
 
 
+def test_coresignal_company_search_uses_entity_first_query_and_confirms_domain(monkeypatch):
+    ce = load_company_evidence(monkeypatch)
+    monkeypatch.setenv("CORESIGNAL_API_KEY", "test-key")
+    calls = []
+
+    def fake_request(method, path, *, payload=None):
+        calls.append((method, path, payload))
+        if method == "POST":
+            return {
+                "hits": {
+                    "hits": [
+                        {
+                            "_id": "company-1",
+                            "_source": {
+                                "name": "Sisu Auto",
+                                "domain": "sisuauto.com",
+                                "technologies_used": [{"technology": "Salesforce"}],
+                            },
+                        }
+                    ]
+                }
+            }
+        return {
+            "id": "company-1",
+            "name": "Sisu Auto",
+            "domain": "sisuauto.com",
+            "technologies_used": [{"technology": "Salesforce"}],
+        }
+
+    monkeypatch.setattr(ce, "_coresignal_request", fake_request)
+
+    records, ids, diagnostics, warnings = ce._coresignal_company_search(
+        "Sisu Auto",
+        "https://sisuauto.com",
+        2,
+    )
+
+    assert warnings == []
+    assert ids == ["company-1"]
+    assert diagnostics["company_search_mode"] == "entity_domain_query"
+    assert records[0]["domain"] == "sisuauto.com"
+    assert calls[0][2]["query"]["bool"]["minimum_should_match"] == 1
+
+    normalized = ce._coresignal_company_record(1, "Sisu Auto", "https://sisuauto.com", records[0], "finland")
+    assert normalized["entity_match_status"] == "exact"
+    assert normalized["buying_evidence_eligible"] is True
+    assert normalized["coresignal_fields"]["technologies"] == ["Salesforce"]
+
+
+def test_coresignal_entity_decision_blocks_same_name_wrong_domain(monkeypatch):
+    ce = load_company_evidence(monkeypatch)
+
+    decision = ce._coresignal_entity_decision(
+        "Rebase Consulting",
+        "https://rebase.fi",
+        {"name": "Rebase Consulting", "domain": "rebaseconsultancy.com", "country": "Finland"},
+        "finland",
+    )
+
+    assert decision["confirmed"] is False
+    assert decision["status"] == "wrong"
+    assert "record_domain_conflicts" in decision["reason"]
+
+
 def test_company_evidence_normalizes_coresignal_company_and_public_stakeholders(monkeypatch):
     ce = load_company_evidence(monkeypatch)
     monkeypatch.setenv("CORESIGNAL_API_KEY", "test-key")
@@ -32,19 +96,19 @@ def test_company_evidence_normalizes_coresignal_company_and_public_stakeholders(
     monkeypatch.setenv("CORESIGNAL_MAX_STAKEHOLDERS", "4")
     monkeypatch.setattr(ce, "_discover_urls", lambda company_url, max_urls: [])
 
-    def fake_coresignal_request(method, path, payload=None):
-        if "company/search" in path:
+    def fake_coresignal_request(method, path, *, payload=None):
+        if "company" in path and "search" in path:
             return [123]
-        if "company/collect" in path:
+        if "company" in path and "collect" in path:
             return {
                 "id": 123,
                 "name": "Sisu Auto",
                 "website": "https://sisuauto.com",
                 "industries": ["manufacturing"],
-                "technologies": ["Azure", "SAP", "automation"],
+                "technologies_used": [{"technology": "Azure"}, {"technology": "SAP"}, {"technology": "automation"}],
                 "email": "do-not-store@example.com",
             }
-        if "employee/search" in path:
+        if "employee" in path and "search" in path:
             return [1, 2]
         if path.endswith("/1"):
             return {
