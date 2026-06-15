@@ -232,6 +232,106 @@ def test_company_evidence_normalizes_coresignal_company_and_public_stakeholders(
     assert "do-not-store@example.com" not in serialized
 
 
+def test_coresignal_stakeholder_groups_are_title_specific(monkeypatch):
+    ce = load_company_evidence(monkeypatch)
+    demand_profile = {
+        "groups": [
+            "ai_data_cloud_platform",
+            "operations_manufacturing_automation",
+            "finance_risk_regulatory",
+            "hr_workforce_culture",
+            "strategy_growth_customer",
+        ],
+        "roles": [
+            "Head of Applications",
+            "CFO",
+            "HR Director",
+            "Chief Executive Officer",
+        ],
+    }
+
+    app_owner = ce._coresignal_stakeholder_record(
+        1,
+        "Finavia",
+        "https://www.finavia.fi/fi",
+        {"name": "Nina Korpela", "title": "Head Of Application Services"},
+        demand_profile,
+    )
+    assert app_owner["stakeholder_role_match_reason"] == "role_matches_title_specific_demand"
+    assert app_owner["demand_signal_ids"] == ["ai_data_cloud_platform"]
+    assert "hr_workforce_culture" not in app_owner["demand_signal_ids"]
+
+    finance_owner = ce._coresignal_stakeholder_record(
+        2,
+        "Finavia",
+        "https://www.finavia.fi/fi",
+        {"name": "Finance Owner", "title": "Chief Financial Officer"},
+        demand_profile,
+    )
+    assert finance_owner["demand_signal_ids"] == ["finance_risk_regulatory"]
+
+
+def test_coresignal_executive_generalist_and_retired_roles(monkeypatch):
+    ce = load_company_evidence(monkeypatch)
+    demand_profile = {
+        "groups": ["ai_data_cloud_platform", "finance_risk_regulatory", "strategy_growth_customer"],
+        "roles": ["CEO", "CFO", "IT Director"],
+    }
+
+    chair = ce._coresignal_stakeholder_record(
+        1,
+        "Finavia",
+        "https://www.finavia.fi/fi",
+        {"name": "Kati Levoranta", "title": "Chair Of The Board Of Directors"},
+        demand_profile,
+    )
+    assert chair["stakeholder_role_match_reason"] == "executive_generalist"
+    assert chair["demand_signal_ids"] == ["strategy_growth_customer", "finance_risk_regulatory", "ai_data_cloud_platform"]
+    assert chair["sales_use"] == "allowed_as_discovery_question"
+
+    retired = ce._coresignal_stakeholder_record(
+        2,
+        "Finavia",
+        "https://www.finavia.fi/fi",
+        {"name": "Raimo Seppänen", "title": "Airport Director Ret."},
+        demand_profile,
+    )
+    assert retired["stakeholder_role_match_reason"] == "historical_or_retired_role"
+    assert retired["sales_use"] == "internal_only"
+    assert retired["internal_only"] is True
+    assert retired["buying_evidence_eligible"] is False
+    assert retired["demand_signal_ids"] == []
+
+
+def test_company_evidence_warnings_distinguish_coresignal_trigger_updates(monkeypatch):
+    ce = load_company_evidence(monkeypatch)
+    records = [
+        {
+            "source_category": "strategy_trigger_event",
+            "provider_record_type": "company_update_trigger",
+            "provider": "coresignal",
+            "sales_use": "allowed_as_hypothesis",
+            "buying_evidence_eligible": True,
+            "content_verified": True,
+            "url_verified": True,
+            "entity_verified": True,
+        }
+    ]
+    stats = ce._stats(records)
+    warnings = ce._warnings(records, stats)
+    assert "No official-domain strategy/newsroom trigger sources found; Coresignal updates are available as weak trigger signals." in warnings
+    assert "No recent strategy/newsroom trigger sources found." not in warnings
+
+
+def test_short_prh_aliases_are_kept_out_of_coresignal_fallback(monkeypatch):
+    ce = load_company_evidence(monkeypatch)
+    accepted, skipped = ce._prh_filtered_aliases("Finavia", ["Finavia Group", "Finavia", "AVIA"])
+    assert "Finavia Group" in accepted
+    assert "Finavia" in accepted
+    assert "AVIA" not in accepted
+    assert {"name": "AVIA", "reason": "alias_too_short_for_fallback_search"} in skipped
+
+
 def test_soft_oops_pages_are_blocked_not_fact_safe(monkeypatch):
     ce = load_company_evidence(monkeypatch)
     fetched = {

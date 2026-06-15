@@ -271,6 +271,16 @@ def _company_tokens(company_name: str) -> list[str]:
     return [t for t in re.findall(r"[a-zåäö0-9]{3,}", text) if t not in {"the", "and", "for"}][:6]
 
 
+def _broad_alias_reason(name: str) -> str:
+    base = _strip_legal_suffixes(name)
+    tokens = _company_tokens(base)
+    if len(base) < 5:
+        return "alias_too_short_for_fallback_search"
+    if len(tokens) == 1 and len(tokens[0]) <= 4:
+        return "alias_too_generic_for_fallback_search"
+    return ""
+
+
 def _dedupe_preserve(values: list[Any]) -> list[str]:
     seen = set()
     out = []
@@ -416,6 +426,9 @@ def _prh_alias_decision(company_name: str, name: str) -> tuple[bool, str]:
         return False, "empty_name"
     if target_base and name_base == target_base:
         return True, "base_name_exact"
+    broad_reason = _broad_alias_reason(name)
+    if broad_reason:
+        return False, broad_reason
     if target_base and (target_base in name_base or name_base in target_base):
         return True, "base_name_contains_target"
     if target_tokens and target_tokens <= name_tokens:
@@ -1436,6 +1449,97 @@ def _role_matches(title: str, demand_profile: dict) -> tuple[bool, str]:
     return False, "role_not_matched_to_detected_demand"
 
 
+HISTORICAL_ROLE_MARKERS = (
+    "retired", " ret,", " ret.", "ret.", "former", "ex-", "emeritus",
+    "previous", "ex ", "alumni", "entinen",
+)
+EXECUTIVE_GENERALIST_MARKERS = (
+    "ceo", "chief executive", "chair", "board", "hallitus", "strategy",
+    "business development", "commercial", "managing director", "toimitusjohtaja",
+)
+TITLE_GROUP_HINTS = {
+    "ai_data_cloud_platform": (
+        "cio", "cto", "cdo", "data", "ai", "application", "applications",
+        "platform", "architecture", "architect", "digital", "technology",
+        "information", "it", "software", "cloud",
+    ),
+    "erp_workplace_cyber": (
+        "ciso", "security", "cyber", "infrastructure", "applications",
+        "application", "it", "procurement", "sourcing", "workplace",
+        "enterprise systems", "erp", "sap",
+    ),
+    "operations_manufacturing_automation": (
+        "coo", "operations", "operation", "production", "maintenance",
+        "equipment", "infrastructure", "airport development", "automation",
+        "supply", "logistics", "network",
+    ),
+    "finance_risk_regulatory": (
+        "cfo", "finance", "financial", "business control", "controller",
+        "risk", "compliance", "legal", "governance", "audit",
+    ),
+    "hr_workforce_culture": (
+        "chro", "hr", "human resources", "people", "talent", "learning",
+        "workforce", "culture",
+    ),
+    "strategy_growth_customer": (
+        "ceo", "strategy", "business development", "commercial", "sales",
+        "customer", "marketing", "growth", "board", "chair", "director",
+    ),
+}
+
+
+def _is_historical_role(title: str) -> bool:
+    title_l = f" {(title or '').lower()} "
+    return any(marker in title_l for marker in HISTORICAL_ROLE_MARKERS)
+
+
+def _stakeholder_role_context(title: str, demand_profile: dict) -> dict:
+    title_l = (title or "").lower()
+    if not title_l:
+        return {"matched": False, "reason": "missing_title", "groups": [], "historical": False}
+    detected_groups = _list(demand_profile.get("groups"))
+    if _is_historical_role(title):
+        return {
+            "matched": True,
+            "reason": "historical_or_retired_role",
+            "groups": [],
+            "historical": True,
+        }
+    if any(marker in title_l for marker in EXECUTIVE_GENERALIST_MARKERS):
+        general_groups = [
+            group for group in ("strategy_growth_customer", "finance_risk_regulatory", "ai_data_cloud_platform")
+            if group in detected_groups
+        ] or ["strategy_growth_customer"]
+        return {
+            "matched": True,
+            "reason": "executive_generalist",
+            "groups": _dedupe_preserve(general_groups)[:3],
+            "historical": False,
+        }
+    title_groups = [
+        group for group, hints in TITLE_GROUP_HINTS.items()
+        if any(hint in title_l for hint in hints)
+    ]
+    scoped_groups = [group for group in title_groups if group in detected_groups] or title_groups
+    if scoped_groups:
+        return {
+            "matched": True,
+            "reason": "role_matches_title_specific_demand",
+            "groups": _dedupe_preserve(scoped_groups)[:3],
+            "historical": False,
+        }
+    matched, reason = _role_matches(title, demand_profile)
+    if matched:
+        fallback_groups = [group for group in detected_groups if group in title_groups] or detected_groups[:1]
+        return {
+            "matched": True,
+            "reason": reason,
+            "groups": fallback_groups[:2],
+            "historical": False,
+        }
+    return {"matched": False, "reason": reason, "groups": [], "historical": False}
+
+
 def _coresignal_entity_decision(company_name: str, company_url: str, raw: dict, target_country: str = "", identity: dict | None = None) -> dict:
     identity = identity or {}
     official_host = _host(company_url)
@@ -1878,18 +1982,22 @@ def _coresignal_stakeholder_record(
     title = _clip(_first_key(raw, ("title", "current_title", "job_title", "position", "role", "member_position_title")), 180)
     if not name or not title:
         return None
-    matched, reason = _role_matches(title, demand_profile)
-    if not matched:
+    role_context = _stakeholder_role_context(title, demand_profile)
+    if not role_context.get("matched"):
         return None
+    matched_groups = _list(role_context.get("groups"))
+    reason = role_context.get("reason") or "role_matches_detected_demand"
+    is_historical = bool(role_context.get("historical"))
     profile_url = _public_profile_url(raw)
     public_url = profile_url or _normalize_url(company_url)
     quote = _clip(
         f"Coresignal public professional profile candidate: {name}, {title}. "
-        f"Matched demand groups: {', '.join(_list(demand_profile.get('groups')))}. "
+        f"Matched demand groups: {', '.join(matched_groups) if matched_groups else 'historical_context_only'}. "
         f"Use as a role-relevance hypothesis, not as proof of a buying project.",
         620,
     )
     content_hash = hashlib.sha256(_flatten_text({"name": name, "title": title, "profile_url": profile_url}, 1200).encode("utf-8", errors="ignore")).hexdigest()
+    sales_use = "internal_only" if is_historical else "allowed_as_discovery_question"
     return {
         "id": f"CED-{idx:02d}",
         "company_name": company_name,
@@ -1917,33 +2025,34 @@ def _coresignal_stakeholder_record(
         "claim_support_status": "supported",
         "analysis_verified": False,
         "generation_eligible": False,
-        "buying_evidence_eligible": True,
+        "buying_evidence_eligible": not is_historical,
         "promotion_status": "display_only",
         "verification_reason": "coresignal_public_profile_role_match",
         "signal_markers": {
             "has_stakeholder_candidate": True,
-            "has_detected_demand_role_match": True,
+            "has_detected_demand_role_match": bool(matched_groups),
+            "historical_or_retired_role": is_historical,
         },
         "allowed_as_fact": False,
         "allowed_as_hypothesis": False,
-        "allowed_as_discovery_question": True,
-        "internal_only": False,
+        "allowed_as_discovery_question": not is_historical,
+        "internal_only": is_historical,
         "blocked": False,
-        "sales_use": "allowed_as_discovery_question",
+        "sales_use": sales_use,
         "wrong_entity": False,
         "stakeholder": {
             "name": name,
             "role": title,
             "public_profile_url": profile_url,
             "provider_person_id": _first_key(raw, ("parent_id", "id", "member_id", "person_id")),
-            "matched_demand_groups": _list(demand_profile.get("groups")),
+            "matched_demand_groups": matched_groups,
             "stakeholder_role_match_reason": reason,
-            "demand_signal_ids": _list(demand_profile.get("groups")),
+            "demand_signal_ids": matched_groups,
             "linked_why_what_ids": [],
             "linked_service_ids": [],
-            "allowed_use": "allowed_as_discovery_question",
+            "allowed_use": sales_use,
         },
-        "demand_signal_ids": _list(demand_profile.get("groups")),
+        "demand_signal_ids": matched_groups,
         "linked_why_what_ids": [],
         "linked_service_ids": [],
         "stakeholder_role_match_reason": reason,
@@ -2100,7 +2209,11 @@ def _warnings(records: list[dict], stats: dict) -> list[str]:
     if stats.get("buying_evidence_eligible", 0) < 3:
         warnings.append("Few buying-evidence-eligible records found; Buying Insight should remain cautious.")
     categories = stats.get("source_categories") or {}
-    if not categories.get("strategy_trigger_events"):
+    official_triggers = categories.get("strategy_trigger_events", 0)
+    coresignal_triggers = categories.get("strategy_trigger_event", 0)
+    if not official_triggers and coresignal_triggers:
+        warnings.append("No official-domain strategy/newsroom trigger sources found; Coresignal updates are available as weak trigger signals.")
+    elif not official_triggers:
         warnings.append("No recent strategy/newsroom trigger sources found.")
     if not categories.get("technology_service_fit"):
         warnings.append("No technology or service-fit sources found.")
