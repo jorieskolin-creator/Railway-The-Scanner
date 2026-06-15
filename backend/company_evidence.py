@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import json
 import os
 import re
 from datetime import datetime
@@ -180,6 +181,27 @@ TOP_MANAGEMENT_ROLES = (
     "CTO", "COO", "CHRO", "CISO", "Chief Digital Officer", "Chief Data Officer",
     "Strategy Director", "Business Development Director",
 )
+LEGAL_SUFFIXES = (
+    "Oyj", "Oy", "Oy Ab", "Ab", "Abp", "Ltd", "Limited", "Plc", "Corporation", "Corp",
+)
+LEGAL_PREFIX_SUFFIXES = (
+    ("Oy", "Ab"),
+    ("Ab", ""),
+)
+IDENTIFIER_KEYS = (
+    "business_id", "businessId", "businessID", "businessIdFi", "y_tunnus", "ytunnus",
+    "y-tunnus", "registration_id", "registrationId", "registration_number",
+    "registrationNumber", "company_registration_number", "companyRegistrationNumber",
+    "vat", "vat_number", "vatNumber", "lei", "LEI",
+)
+LEGAL_NAME_KEYS = (
+    "legal_name", "company_legal_name", "name_legal", "nameLegal", "legalName",
+    "registered_name", "registeredName", "official_name", "officialName",
+)
+ALIAS_KEYS = (
+    "aliases", "known_aliases", "name_aliases", "alternative_names", "nameAlts",
+    "former_names", "formerNames", "search_aliases",
+)
 
 
 class CompanyEvidenceError(RuntimeError):
@@ -240,6 +262,83 @@ def _same_or_subdomain(host: str, official_host: str) -> bool:
 def _company_tokens(company_name: str) -> list[str]:
     text = re.sub(r"\b(oyj|oy|abp|ab|plc|ltd|inc|corp|corporation|group|holding|holdings)\b", " ", (company_name or "").lower())
     return [t for t in re.findall(r"[a-zåäö0-9]{3,}", text) if t not in {"the", "and", "for"}][:6]
+
+
+def _dedupe_preserve(values: list[Any]) -> list[str]:
+    seen = set()
+    out = []
+    for value in values:
+        text = _clip(value, 180)
+        if not text:
+            continue
+        key = re.sub(r"\s+", " ", text).strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(text)
+    return out
+
+
+def _walk_identity_values(data: Any, keys: tuple[str, ...], *, max_depth: int = 3) -> list[str]:
+    values: list[str] = []
+    if max_depth < 0 or data is None:
+        return values
+    if isinstance(data, dict):
+        for key, value in data.items():
+            if key in keys:
+                if isinstance(value, list):
+                    values.extend(_clip(item, 180) for item in value if item)
+                elif isinstance(value, dict):
+                    values.extend(_walk_identity_values(value, keys, max_depth=max_depth - 1))
+                else:
+                    values.append(_clip(value, 180))
+            elif isinstance(value, (dict, list)):
+                values.extend(_walk_identity_values(value, keys, max_depth=max_depth - 1))
+    elif isinstance(data, list):
+        for item in data[:40]:
+            values.extend(_walk_identity_values(item, keys, max_depth=max_depth - 1))
+    return values
+
+
+def _strip_legal_suffixes(name: str) -> str:
+    text = re.sub(r"\b(oyj|oy|abp|ab|plc|ltd|limited|inc|corp|corporation|group|holding|holdings)\b", " ", name or "", flags=re.I)
+    return re.sub(r"\s+", " ", text).strip(" ,.-")
+
+
+def _generated_legal_aliases(name: str, company_url: str = "") -> list[str]:
+    base = _strip_legal_suffixes(name)
+    if not base or len(base) < 3:
+        return []
+    host = _host(company_url)
+    aliases = [base]
+    if host.endswith(".fi"):
+        aliases.extend([f"{base} {suffix}" for suffix in ("Oyj", "Oy", "Oy Ab", "Ab")])
+        aliases.extend([f"{prefix} {base}{(' ' + suffix) if suffix else ''}" for prefix, suffix in LEGAL_PREFIX_SUFFIXES])
+    else:
+        aliases.extend([f"{base} {suffix}" for suffix in LEGAL_SUFFIXES])
+    return _dedupe_preserve(aliases)
+
+
+def _company_identity_bundle(company_data: dict, company_name: str, company_url: str) -> dict:
+    explicit_names = [company_name]
+    explicit_names.extend(_walk_identity_values(company_data, LEGAL_NAME_KEYS, max_depth=4))
+    explicit_names.extend(_walk_identity_values(company_data, ALIAS_KEYS, max_depth=4))
+    generated_names = []
+    for name in explicit_names:
+        generated_names.extend(_generated_legal_aliases(name, company_url))
+    names = _dedupe_preserve([*explicit_names, *generated_names])[:18]
+    identifiers = _dedupe_preserve(_walk_identity_values(company_data, IDENTIFIER_KEYS, max_depth=4))[:10]
+    domains = _dedupe_preserve([
+        _host(company_url),
+        *(_host(value) for value in _walk_identity_values(company_data, ("companyUrl", "url", "website", "website_domain", "domain"), max_depth=3)),
+    ])[:6]
+    return {
+        "names": names,
+        "primary_name": company_name,
+        "domains": domains,
+        "primary_domain": _host(company_url),
+        "identifiers": identifiers,
+        "target_country": _target_country_from_url(company_url),
+    }
 
 
 def _is_homepage_url(url: str) -> bool:
@@ -925,6 +1024,25 @@ def _country_matches(target_country: str, record_country: str) -> bool | None:
     return bool(target_set & record_set or target in record or record in target)
 
 
+def _norm_identifier(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+
+def _coresignal_identifiers(data: dict) -> list[str]:
+    return [_norm_identifier(value) for value in _walk_identity_values(data, IDENTIFIER_KEYS, max_depth=4) if _norm_identifier(value)]
+
+
+def _coresignal_record_names(data: dict) -> list[str]:
+    names = []
+    for key in ("company_name", "name", *LEGAL_NAME_KEYS):
+        value = data.get(key) if isinstance(data, dict) else None
+        if isinstance(value, list):
+            names.extend(value)
+        elif value:
+            names.append(value)
+    return _dedupe_preserve(names)
+
+
 def _public_profile_url(data: dict) -> str:
     return _normalize_url(_first_key(data, (
         "linkedin_url", "public_profile_url", "profile_url", "url", "professional_network_url",
@@ -932,16 +1050,26 @@ def _public_profile_url(data: dict) -> str:
     )))
 
 
-def _company_name_match(company_name: str, record_name: str) -> bool:
+def _company_name_match(company_name: str, record_name: str, identity: dict | None = None) -> bool:
     if not record_name:
         return False
     record_l = record_name.lower()
-    tokens = _company_tokens(company_name)
+    names = _list((identity or {}).get("names")) or [company_name]
+    tokens = []
+    for name in names:
+        tokens.extend(_company_tokens(str(name)))
+        if str(name).strip().lower() in record_l:
+            return True
+    tokens = list(dict.fromkeys(tokens))
     return any(token in record_l for token in tokens)
 
 
-def _coresignal_search_payloads(company_name: str, domain: str, limit: int, target_country: str = "") -> list[tuple[str, dict]]:
+def _coresignal_search_payloads(company_name: str, domain: str, limit: int, target_country: str = "", identity: dict | None = None) -> list[tuple[str, dict]]:
     payloads: list[tuple[str, dict]] = []
+    identity = identity or {}
+    names = _list(identity.get("names")) or [company_name]
+    domains = _list(identity.get("domains")) or ([domain] if domain else [])
+    identifiers = _list(identity.get("identifiers"))
     should = []
     if domain:
         should.append({"term": {"website_domain": domain}})
@@ -959,13 +1087,43 @@ def _coresignal_search_payloads(company_name: str, domain: str, limit: int, targ
                 }
             },
         ))
+    expanded_should = []
+    for candidate_domain in domains:
+        if candidate_domain:
+            expanded_should.append({"term": {"website_domain": candidate_domain}})
+    for name in names:
+        if name:
+            expanded_should.append({"match_phrase": {"company_name": name}})
+    for identifier in identifiers:
+        if identifier:
+            expanded_should.extend([
+                {"term": {"business_id": identifier}},
+                {"term": {"registration_number": identifier}},
+                {"term": {"company_registration_number": identifier}},
+                {"term": {"vat_number": identifier}},
+                {"term": {"lei": identifier}},
+            ])
+    expanded_should = _dedupe_preserve([json.dumps(item, sort_keys=True) for item in expanded_should])
+    expanded_should = [json.loads(item) for item in expanded_should]
+    if expanded_should and expanded_should != should:
+        payloads.append((
+            "entity_alias_identifier_query",
+            {
+                "query": {
+                    "bool": {
+                        "should": expanded_should,
+                        "minimum_should_match": 1,
+                    }
+                }
+            },
+        ))
     payloads.append((
         "entity_name_only_query",
         {
             "query": {
                 "bool": {
                     "should": [
-                        {"match_phrase": {"company_name": company_name}},
+                        *[{"match_phrase": {"company_name": name}} for name in names if name],
                     ],
                     "minimum_should_match": 1,
                 }
@@ -1031,18 +1189,26 @@ def _role_matches(title: str, demand_profile: dict) -> tuple[bool, str]:
     return False, "role_not_matched_to_detected_demand"
 
 
-def _coresignal_entity_decision(company_name: str, company_url: str, raw: dict, target_country: str = "") -> dict:
+def _coresignal_entity_decision(company_name: str, company_url: str, raw: dict, target_country: str = "", identity: dict | None = None) -> dict:
+    identity = identity or {}
     official_host = _host(company_url)
-    record_name = _clip(_first_key(raw, ("company_name", "name", "name_legal", "nameLegal", "legal_name")), 180)
+    record_names = _coresignal_record_names(raw)
+    record_name = record_names[0] if record_names else _clip(_first_key(raw, ("company_name", "name", "name_legal", "nameLegal", "legal_name")), 180)
     record_domain = _coresignal_domain(raw)
     record_country = _coresignal_country(raw)
+    target_identifiers = {_norm_identifier(value) for value in _list(identity.get("identifiers")) if _norm_identifier(value)}
+    record_identifiers = set(_coresignal_identifiers(raw))
+    identifier_match = bool(target_identifiers and record_identifiers and target_identifiers & record_identifiers)
     domain_match = bool(record_domain and official_host and _same_or_subdomain(record_domain, official_host))
     domain_conflict = bool(record_domain and official_host and not _same_or_subdomain(record_domain, official_host))
-    name_match = _company_name_match(company_name, record_name)
+    name_match = any(_company_name_match(company_name, name, identity) for name in ([record_name] + record_names))
     country_match = _country_matches(target_country, record_country)
     name_country_match = bool(name_match and not domain_conflict and (country_match is True or (not record_domain and country_match is None)))
-    confirmed = bool(domain_match or name_country_match)
-    if domain_conflict:
+    confirmed = bool(domain_match or identifier_match or name_country_match)
+    if identifier_match:
+        status = "exact"
+        reason = "record_registration_identifier_matches_scanned_company"
+    elif domain_conflict:
         status = "wrong"
         reason = f"record_domain_conflicts_with_scanned_domain:{record_domain}!={official_host}"
     elif domain_match:
@@ -1062,19 +1228,24 @@ def _coresignal_entity_decision(company_name: str, company_url: str, raw: dict, 
         "status": status,
         "reason": reason,
         "record_name": record_name,
+        "record_names": record_names[:8],
         "record_domain": record_domain,
         "record_country": record_country,
         "domain_match": domain_match,
         "domain_conflict": domain_conflict,
         "name_match": name_match,
         "country_match": country_match,
+        "identifier_match": identifier_match,
+        "record_identifiers": sorted(record_identifiers)[:8],
+        "target_identifiers": sorted(target_identifiers)[:8],
     }
 
 
-def _coresignal_company_search(company_name: str, company_url: str, limit: int) -> tuple[list[dict], list[Any], dict, list[str]]:
+def _coresignal_company_search(company_name: str, company_url: str, limit: int, company_data: dict | None = None) -> tuple[list[dict], list[Any], dict, list[str]]:
     warnings = []
     domain = _host(company_url)
     target_country = _target_country_from_url(company_url)
+    identity = _company_identity_bundle(company_data or {}, company_name, company_url)
     path = _clean_env(os.environ.get("CORESIGNAL_COMPANY_SEARCH_PATH")) or "/cdapi/v2/company_multi_source/search/es_dsl"
     collect_path = _clean_env(os.environ.get("CORESIGNAL_COMPANY_COLLECT_PATH")) or "/cdapi/v2/company_multi_source/collect/{id}"
     fallback_path = _clean_env(os.environ.get("CORESIGNAL_COMPANY_SEARCH_FALLBACK_PATH"))
@@ -1090,6 +1261,10 @@ def _coresignal_company_search(company_name: str, company_url: str, limit: int) 
         "company_records_collected": 0,
         "company_search_error_type": None,
         "company_request_errors": [],
+        "identity_names_used": _list(identity.get("names"))[:18],
+        "identity_domains_used": _list(identity.get("domains"))[:6],
+        "identity_identifiers_used": _list(identity.get("identifiers"))[:10],
+        "company_candidate_rejections": [],
     }
     records: list[dict] = []
     company_ids: list[Any] = []
@@ -1102,7 +1277,7 @@ def _coresignal_company_search(company_name: str, company_url: str, limit: int) 
         if (search_path, current_collect_path) in seen_attempts:
             continue
         seen_attempts.add((search_path, current_collect_path))
-        for mode, payload in _coresignal_search_payloads(company_name, domain, limit, target_country):
+        for mode, payload in _coresignal_search_payloads(company_name, domain, limit, target_country, identity):
             raw = _coresignal_request("POST", search_path, payload=payload, errors=request_errors)
             candidate_ids = _extract_ids(raw, limit)
             candidate_records = _as_records(raw)
@@ -1116,10 +1291,25 @@ def _coresignal_company_search(company_name: str, company_url: str, limit: int) 
             elif candidate_ids and candidate_records:
                 warnings.append("Coresignal collect returned no usable records; using search result records for normalization.")
             confirmed_pairs = []
+            rejection_samples = []
             for idx, record in enumerate(candidate_records):
-                if _coresignal_entity_decision(company_name, company_url, record, target_country)["confirmed"]:
+                decision = _coresignal_entity_decision(company_name, company_url, record, target_country, identity)
+                if decision["confirmed"]:
                     record_id = collected_pairs[idx][0] if idx < len(collected_pairs) else _first_key(record, ("id", "company_id", "source_id"))
                     confirmed_pairs.append((record_id, record))
+                elif len(rejection_samples) < 6:
+                    rejection_samples.append({
+                        "mode": mode,
+                        "record_name": decision.get("record_name"),
+                        "record_domain": decision.get("record_domain"),
+                        "record_country": decision.get("record_country"),
+                        "status": decision.get("status"),
+                        "reason": decision.get("reason"),
+                        "domain_match": decision.get("domain_match"),
+                        "name_match": decision.get("name_match"),
+                        "country_match": decision.get("country_match"),
+                        "identifier_match": decision.get("identifier_match"),
+                    })
             confirmed = [record for _, record in confirmed_pairs]
             confirmed_ids = [record_id for record_id, _ in confirmed_pairs if record_id]
             diagnostics.update({
@@ -1131,6 +1321,7 @@ def _coresignal_company_search(company_name: str, company_url: str, limit: int) 
                 "company_records_confirmed": len(confirmed),
                 "company_records_rejected": max(0, len(candidate_records) - len(confirmed)),
                 "company_records_collected": len(collected_pairs),
+                "company_candidate_rejections": rejection_samples,
             })
             if confirmed:
                 records = confirmed[:limit]
@@ -1148,7 +1339,7 @@ def _coresignal_company_search(company_name: str, company_url: str, limit: int) 
         if 404 in status_codes:
             warnings.append("Coresignal endpoint returned 404; verify CORESIGNAL_COMPANY_SEARCH_PATH/CORESIGNAL_COMPANY_COLLECT_PATH against the API product.")
         if diagnostics.get("company_records_returned"):
-            warnings.append("Coresignal returned company candidates, but none passed domain/name/country entity confirmation.")
+            warnings.append("Coresignal returned company candidates, but none could be safely matched to this company by domain, legal/name-country scope, or registration identifier.")
     diagnostics["company_request_errors"] = request_errors[:6]
     return records[:limit], company_ids[:limit], diagnostics, warnings
 
@@ -1185,9 +1376,9 @@ def _coresignal_employee_search(company_id: Any, company_name: str, demand_profi
     return records[:max(max_people * 2, 8)], warnings
 
 
-def _coresignal_company_record(idx: int, company_name: str, company_url: str, raw: dict, target_country: str = "") -> dict:
+def _coresignal_company_record(idx: int, company_name: str, company_url: str, raw: dict, target_country: str = "", identity: dict | None = None) -> dict:
     official_host = _host(company_url)
-    decision = _coresignal_entity_decision(company_name, company_url, raw, target_country)
+    decision = _coresignal_entity_decision(company_name, company_url, raw, target_country, identity)
     record_name = decision["record_name"]
     record_domain = decision["record_domain"]
     raw_domain = raw.get("domain")
@@ -1261,6 +1452,8 @@ def _coresignal_company_record(idx: int, company_name: str, company_url: str, ra
             "size_range": _clip(_first_key(raw, ("size_range", "size", "employees")), 120),
             "employees_count": _first_key(raw, ("employees_count", "totalEmployeesExact", "employee_count", "total_employees")),
             "target_country": target_country,
+            "identity_names_used": _list((identity or {}).get("names"))[:18],
+            "identity_identifiers_used": _list((identity or {}).get("identifiers"))[:10],
             "industry": industries[:8],
             "technologies": technologies[:12],
             "social_profiles": (
@@ -1495,12 +1688,13 @@ def _coresignal_records(company_data: dict, start_idx: int = 1, *, stage_callbac
 
     diagnostics["queried"] = True
     records: list[dict] = []
-    company_items, company_ids, company_search_diagnostics, company_warnings = _coresignal_company_search(company_name, company_url, max_companies)
+    identity = _company_identity_bundle(company_data, company_name, company_url)
+    company_items, company_ids, company_search_diagnostics, company_warnings = _coresignal_company_search(company_name, company_url, max_companies, company_data)
     diagnostics.update(company_search_diagnostics)
     warnings.extend(company_warnings)
     target_country = _target_country_from_url(company_url)
     for raw in company_items:
-        company_record = _coresignal_company_record(start_idx + len(records), company_name, company_url, raw, target_country)
+        company_record = _coresignal_company_record(start_idx + len(records), company_name, company_url, raw, target_country, identity)
         records.append(company_record)
         update_records = _coresignal_update_records(start_idx + len(records), company_name, company_url, company_record)
         records.extend(update_records)

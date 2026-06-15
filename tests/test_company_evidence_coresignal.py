@@ -98,6 +98,78 @@ def test_coresignal_entity_decision_blocks_same_name_wrong_domain(monkeypatch):
     assert "record_domain_conflicts" in decision["reason"]
 
 
+def test_coresignal_search_uses_legal_aliases_and_confirms_collected_legal_name(monkeypatch):
+    ce = load_company_evidence(monkeypatch)
+    monkeypatch.setenv("CORESIGNAL_API_KEY", "test-key")
+    calls = []
+
+    def fake_request(method, path, *, payload=None, errors=None):
+        calls.append((method, path, payload))
+        if method == "POST":
+            payload_text = json.dumps(payload)
+            return [321] if "Finavia Oyj" in payload_text else []
+        return {
+            "id": 321,
+            "company_name": "Airport operator",
+            "company_legal_name": "Finavia Oyj",
+            "hq_country": "Finland",
+            "employees_count": 2500,
+        }
+
+    monkeypatch.setattr(ce, "_coresignal_request", fake_request)
+
+    records, ids, diagnostics, warnings = ce._coresignal_company_search(
+        "Finavia",
+        "https://finavia.fi",
+        2,
+        {"companyName": "Finavia", "companyUrl": "https://finavia.fi", "legal_name": "Finavia Oyj"},
+    )
+
+    assert warnings == []
+    assert ids == [321]
+    assert diagnostics["company_search_mode"] == "entity_alias_identifier_query"
+    assert "Finavia Oyj" in diagnostics["identity_names_used"]
+    assert records[0]["company_legal_name"] == "Finavia Oyj"
+
+    normalized = ce._coresignal_company_record(
+        1,
+        "Finavia",
+        "https://finavia.fi",
+        records[0],
+        "finland",
+        ce._company_identity_bundle({"legal_name": "Finavia Oyj"}, "Finavia", "https://finavia.fi"),
+    )
+    assert normalized["entity_verified"] is True
+    assert normalized["entity_match_status"] == "scoped"
+
+
+def test_coresignal_entity_decision_confirms_registration_identifier(monkeypatch):
+    ce = load_company_evidence(monkeypatch)
+    identity = ce._company_identity_bundle(
+        {"business_id": "2302570-2"},
+        "Finavia",
+        "https://finavia.fi",
+    )
+
+    decision = ce._coresignal_entity_decision(
+        "Finavia",
+        "https://finavia.fi",
+        {
+            "company_name": "Airport infrastructure record",
+            "website_domain": "airport-example.com",
+            "hq_country": "Finland",
+            "business_id": "2302570-2",
+        },
+        "finland",
+        identity,
+    )
+
+    assert decision["confirmed"] is True
+    assert decision["status"] == "exact"
+    assert decision["identifier_match"] is True
+    assert "registration_identifier" in decision["reason"]
+
+
 def test_company_evidence_normalizes_coresignal_company_and_public_stakeholders(monkeypatch):
     ce = load_company_evidence(monkeypatch)
     monkeypatch.setenv("CORESIGNAL_API_KEY", "test-key")
