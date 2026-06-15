@@ -413,15 +413,14 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
             # --- KEY PEOPLE NAME VALIDATION ---
             key_people = _validate_key_people(key_people, company_name, employees=company.get("employees"))
 
-            # --- STAKEHOLDER LINKEDIN ENRICHMENT ---
+            stakeholder_enrichment_skipped = "moved_to_buying_insight"
             if key_people:
-                try:
-                    from stakeholder_intel import enrich_key_people
-                    key_people = enrich_key_people(company_name, key_people)
-                except Exception as enrich_err:
-                    print(f"   [{company_name}] ⚠️ [Stakeholder Intel] Enrichment failed (non-fatal): {enrich_err}")
+                print(f"   [{company_name}] ⏭ [Stakeholder Intel] Live enrichment skipped for {len(key_people)} stakeholder(s) — moved to Buying Insight")
+                for person in key_people:
+                    if isinstance(person, dict):
+                        person.setdefault("stakeholder_intelligence_mode", "lightweight_scan_record")
 
-                # Filter out departed stakeholders (verified by enrichment)
+                # Keep a cheap compatibility filter for old enriched records.
                 departed = [p for p in key_people if p.get("linkedin_insights", {}).get("still_at_company") is False]
                 if departed:
                     departed_names = ", ".join(p.get("name", "?") for p in departed)
@@ -958,6 +957,8 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                 "evidence_links": managed_evidence_links,
                 "evidence_gold_standard": source_mgmt["gold_standard"],
                 "key_people": key_people,
+                "stakeholder_enrichment_skipped": stakeholder_enrichment_skipped,
+                "stakeholder_intelligence_mode": "buying_insight_only",
                 "summary_text": _strip_tac_codes(summary_text),
                 "pitch_text": pitch_text,
                 "why_proposals": why_proposals,
@@ -1103,14 +1104,14 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                     washing_type = None
                     print(f"   [{company_name}] ✅ [Fact-Check] Cleared washing flags (false claims corrected)")
 
-                    # Verify key_people survived the correction
+                    # Verify key_people survived the correction as compatibility data.
                     _kp_after_fc = len(full_data.get("key_people") or [])
                     if _kp_after_fc != _kp_before_fc:
-                        print(f"   [{company_name}] ⚠️ [Fact-Check] key_people count changed: {_kp_before_fc} → {_kp_after_fc} stakeholder(s)")
+                        print(f"   [{company_name}] ⚠️ [Fact-Check] key_people compatibility count changed: {_kp_before_fc} → {_kp_after_fc} stakeholder(s)")
                     elif _kp_after_fc == 0:
-                        print(f"   [{company_name}] ⚠️ [Fact-Check] key_people is empty after correction")
+                        print(f"   [{company_name}] ℹ️ [Fact-Check] key_people compatibility field is empty after correction")
                     else:
-                        print(f"   [{company_name}] ✅ [Fact-Check] key_people preserved: {_kp_after_fc} stakeholder(s)")
+                        print(f"   [{company_name}] ✅ [Fact-Check] key_people compatibility field preserved: {_kp_after_fc} stakeholder(s)")
 
                 else:
                     # --- Separate re-synthesis fallback ---

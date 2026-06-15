@@ -1651,16 +1651,15 @@ def _recheck_company_data(company_name: str, data: dict) -> dict:
             data["washing_type"] = None
             print(f"   ✅ [Admin Recheck] Cleared washing flags (false claims corrected by fact-checker)")
 
-            # Verify key_people survived the correction — it is a separate field and
-            # should never be touched by Stage 2, but an empty array means the
-            # Key Modernization Stakeholders UI section will not render.
+            # Verify key_people survived the correction — it is a compatibility
+            # field used by Admin/manual workflows and Buying Insight inputs.
             _kp_after_rc = len(data.get("key_people") or [])
             if _kp_after_rc != _kp_before_rc:
-                print(f"   ⚠️ [Admin Recheck] key_people count changed during correction: {_kp_before_rc} → {_kp_after_rc} stakeholder(s) — Key Modernization Stakeholders section may not render!")
+                print(f"   ⚠️ [Admin Recheck] key_people compatibility count changed during correction: {_kp_before_rc} → {_kp_after_rc} stakeholder(s)")
             elif _kp_after_rc == 0:
-                print(f"   ⚠️ [Admin Recheck] key_people is empty after correction — Key Modernization Stakeholders section will not render")
+                print(f"   ℹ️ [Admin Recheck] key_people compatibility field is empty after correction")
             else:
-                print(f"   ✅ [Admin Recheck] key_people preserved: {_kp_after_rc} stakeholder(s) — Key Modernization Stakeholders section OK")
+                print(f"   ✅ [Admin Recheck] key_people compatibility field preserved: {_kp_after_rc} stakeholder(s)")
 
             callable_paths = _find_callables(data, f"{company_name}.pre_save")
 
@@ -3610,15 +3609,14 @@ def _execute_scan_pipeline(
         from scanner_two import _validate_key_people
         key_people = _validate_key_people(key_people, companyName, employees=_employee_count)
 
-        # --- STAKEHOLDER LINKEDIN ENRICHMENT ---
+        stakeholder_enrichment_skipped = "moved_to_buying_insight"
         if key_people:
-            try:
-                from stakeholder_intel import enrich_key_people
-                key_people = enrich_key_people(companyName, key_people)
-            except Exception as enrich_err:
-                print(f"   ⚠️ [Stakeholder Intel] Enrichment failed (non-fatal): {enrich_err}")
+            print(f"   ⏭ [Stakeholder Intel] Live enrichment skipped for {len(key_people)} stakeholder(s) — moved to Buying Insight")
+            for person in key_people:
+                if isinstance(person, dict):
+                    person.setdefault("stakeholder_intelligence_mode", "lightweight_scan_record")
 
-            # Filter out people who have left the company (verified by enrichment)
+            # Keep a cheap compatibility filter for old enriched records.
             departed = [p for p in key_people if p.get("linkedin_insights", {}).get("still_at_company") is False]
             if departed:
                 departed_names = ", ".join(p.get("name", "?") for p in departed)
@@ -4554,6 +4552,8 @@ Respond with valid JSON only:
             },
             "ai_readiness_evidence_note": ai_readiness_evidence.get("warning", ""),
             "key_people": key_people,
+            "stakeholder_enrichment_skipped": stakeholder_enrichment_skipped,
+            "stakeholder_intelligence_mode": "buying_insight_only",
             "summary_text": _strip_tac_codes(summary),
             "pitch_text": pitch,
             "evidence_based_risks": evidence_based_risks,
@@ -4701,15 +4701,15 @@ Respond with valid JSON only:
                 full_data["washing_type"] = None
                 print(f"   ✅ [Fact-Check] Cleared washing flags (false claims corrected by fact-checker)")
 
-                # Verify key_people survived the correction (it is a separate field, never
-                # modified by Stage 2, but an empty array means the UI section won't render).
+                # Verify key_people survived the correction. It is a compatibility field
+                # used by Admin/manual workflows and Buying Insight inputs.
                 _kp_after_fc = len(full_data.get("key_people") or [])
                 if _kp_after_fc != _kp_before_fc:
-                    print(f"   ⚠️ [Fact-Check] key_people count changed during correction: {_kp_before_fc} → {_kp_after_fc} stakeholder(s) — Key Modernization Stakeholders section may not render!")
+                    print(f"   ⚠️ [Fact-Check] key_people compatibility count changed during correction: {_kp_before_fc} → {_kp_after_fc} stakeholder(s)")
                 elif _kp_after_fc == 0:
-                    print(f"   ⚠️ [Fact-Check] key_people is empty after correction — Key Modernization Stakeholders section will not render")
+                    print(f"   ℹ️ [Fact-Check] key_people compatibility field is empty after correction")
                 else:
-                    print(f"   ✅ [Fact-Check] key_people preserved: {_kp_after_fc} stakeholder(s) — Key Modernization Stakeholders section OK")
+                    print(f"   ✅ [Fact-Check] key_people compatibility field preserved: {_kp_after_fc} stakeholder(s)")
 
             else:
                 # --- Fallback: Fact-checker didn't produce corrected summary → separate re-synthesis ---

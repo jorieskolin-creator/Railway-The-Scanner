@@ -683,7 +683,7 @@ const App = () => {
         const json = await res.json();
         if (json.status === 'enriched') {
           const details = json.people.map(p => `${p.found ? '✅' : '⚪'} ${p.name} (${p.role}): ${p.summary}`).join('\n\n');
-          alert(`Stakeholder Intel for "${companyName}"\n${json.found_insights}/${json.total_people} with public insights (${json.duration_ms}ms)\n\n${details}`);
+          alert(`Optional Stakeholder Intel for "${companyName}"\n${json.found_insights}/${json.total_people} with public insights (${json.duration_ms}ms)\n\n${details}`);
         } else {
           alert(`Enrichment skipped for "${companyName}": ${json.reason || 'Unknown'}`);
         }
@@ -2210,7 +2210,7 @@ const App = () => {
                         <div className="flex items-center gap-2">
                           <Search size={16} className="text-indigo-400" />
                           <span className="font-bold text-white text-sm">
-                            Stakeholder Intel: {enrichStakeholdersResults.enriched} enriched, {enrichStakeholdersResults.skipped} skipped out of {enrichStakeholdersResults.total}
+                            Optional Stakeholder Intel: {enrichStakeholdersResults.enriched} enriched, {enrichStakeholdersResults.skipped} skipped out of {enrichStakeholdersResults.total}
                           </span>
                         </div>
                         <button onClick={() => setEnrichStakeholdersResults(null)} className="text-slate-500 hover:text-white"><X size={14} /></button>
@@ -2335,7 +2335,7 @@ const App = () => {
                                 {enrichingStakeholderCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
                               </button>
                               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block z-50 pointer-events-none">
-                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 w-64 whitespace-normal shadow-xl">Stakeholders<br/><span className="text-slate-500">Enrich stakeholders for this company.</span></div>
+                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 w-64 whitespace-normal shadow-xl">Stakeholders<br/><span className="text-slate-500">Optional manual enrichment. Buying Insight is the preferred route for rich stakeholder intelligence.</span></div>
                               </div>
                             </div>
                             <div className="relative group/tip">

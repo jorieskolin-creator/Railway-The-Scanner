@@ -127,7 +127,21 @@ def test_buying_potential_renderer_uses_new_section_order_and_nested_play_angles
                 }
             ],
             "pressure_signals": [],
-            "stakeholder_map": [],
+            "stakeholder_map": [
+                {
+                    "name": "Jane Leader",
+                    "role": "CIO",
+                    "likely_buying_committee_role": "Technology sponsor",
+                    "relevance_rationale": "Owns platform and data modernization concerns.",
+                    "linked_pressure_themes": ["platform pressure"],
+                    "linked_service_themes": ["Data and AI Governance"],
+                    "evidence_basis": "Company Evidence DB leadership record",
+                    "allowed_use": "allowed_as_discovery_question",
+                    "confidence": 55,
+                    "do_not_say": ["Do not imply confirmed buying intent."],
+                    "safety_notes": ["Validate current role before outreach."],
+                }
+            ],
             "evidence_confidence": {},
             "source_counts": {},
         }
@@ -139,6 +153,10 @@ def test_buying_potential_renderer_uses_new_section_order_and_nested_play_angles
     assert "Account Opportunity Hypothesis" in html
     assert "Opportunity-to-Offer Fit" in html
     assert "Recommended Growth Plays" in html
+    assert "Jane Leader" in html
+    assert "Technology sponsor" in html
+    assert "Data and AI Governance" in html
+    assert "Do not imply confirmed buying intent." in html
     assert html.index("Commercial Pressure Signals") < html.index("Timing Triggers")
     assert html.index("Buying Committee & Influence Map") < html.index("Opportunity-to-Offer Fit")
     assert html.index("Recommended Growth Plays") < html.index("Evidence, Confidence & Sales Guardrails")

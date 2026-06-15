@@ -1,6 +1,6 @@
 
 const { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Tooltip: RechartsTooltip, LineChart, Line, XAxis, YAxis, CartesianGrid, ReferenceLine } = (window as any).Recharts;
-const { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash, RefreshCw, XCircle, Search, Zap, Scale, Activity, Download, Copy, FileJson, FileCode, Check, Eye, AlertOctagon, Info, Users, Sparkles, TrendingUp } = (window as any).Lucide;
+const { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash, RefreshCw, XCircle, Search, Zap, Scale, Activity, Download, Copy, FileJson, FileCode, Check, Eye, AlertOctagon, Info, Sparkles, TrendingUp } = (window as any).Lucide;
 const React = (window as any).React;
 const { useRef, useState, useEffect } = React;
 
@@ -671,17 +671,6 @@ const isForesightContext = (link) => {
             exportData.lastUpdated ? '<span>Scanned ' + escapeHTML(new Date(exportData.lastUpdated).toLocaleDateString('en-FI', { day: 'numeric', month: 'long', year: 'numeric' })) + '</span>' : '',
             '<span>Generated ' + escapeHTML(generatedDate) + '</span>'
         ].filter(Boolean).join('');
-        var keyPeople = Array.isArray(exportData.key_people)
-            ? exportData.key_people.filter(function(person) { return person && (!person.linkedin_insights || person.linkedin_insights.still_at_company !== false); })
-            : [];
-        var stakeholdersHTML = keyPeople.length > 0 ? '<div class="stakeholders">' + keyPeople.map(function(person) {
-            var insights = person.linkedin_insights || {};
-            var insightBits = []
-                .concat(insights.verified_role ? ['Verified role: ' + insights.verified_role] : [])
-                .concat(insights.summary ? [insights.summary] : [])
-                .concat(Array.isArray(insights.topics) && insights.topics.length > 0 ? ['Topics: ' + insights.topics.slice(0, 5).join(', ')] : []);
-            return '<article><h3>' + escapeHTML(person.name) + '</h3><div class="role">' + escapeHTML(person.role || 'Role unavailable') + '</div><p>' + escapeHTML(person.relevance || '') + '</p>' + (insightBits.length > 0 ? '<small>' + escapeHTML(insightBits.join(' | ')) + '</small>' : '') + '</article>';
-        }).join('') + '</div>' : '<p class="muted">No current key stakeholders were available in this scan.</p>';
         var diagnosisHTML = renderParagraphs(exportData.summary_text)
             + (Array.isArray(exportData.evidence_based_risks) && exportData.evidence_based_risks.length > 0
                 ? '<div class="callout"><h3>Evidence-Based Risks</h3>' + renderList(exportData.evidence_based_risks) + '</div>'
@@ -841,7 +830,6 @@ const isForesightContext = (link) => {
             + renderSection('AI Diagnosis', 'Interpretation and risks', diagnosisHTML)
             + renderSection('Master Metrics', 'All score and trust signals', '<div class="metrics">' + metrics.join('') + '</div>' + breakdownHTML)
             + renderSection('Evidence Trust', 'Source verification and promotion state', trustHTML)
-            + renderSection('Key Stakeholders', 'People and influence', stakeholdersHTML)
             + renderSection('Strategic Activation', 'WHY, WHAT, and pitch', activationHTML)
             + renderSection('Strategic Foresight Evidence', 'Key forces, cross-impact, scenarios, and climate exposure', strategicForesightHTML)
             + renderSection('Reality Checklist', 'Forensic reality markers', checklistHTML)
@@ -1065,18 +1053,6 @@ const isForesightContext = (link) => {
             exportData.lastUpdated ? '<span>Scanned ' + escapeHTML(new Date(exportData.lastUpdated).toLocaleDateString('en-FI', { day: 'numeric', month: 'long', year: 'numeric' })) + '</span>' : ''
         ].filter(Boolean).join('');
 
-        const keyPeople = Array.isArray(exportData.key_people)
-            ? exportData.key_people.filter(function(person) { return person?.linkedin_insights?.still_at_company !== false; })
-            : [];
-        const stakeholdersHTML = keyPeople.length > 0 ? '<div class="stakeholders">' + keyPeople.map(function(person) {
-            const insights = person.linkedin_insights || {};
-            const insightBits = []
-                .concat(insights.verified_role ? ['Verified role: ' + insights.verified_role] : [])
-                .concat(insights.summary ? [insights.summary] : [])
-                .concat(Array.isArray(insights.topics) && insights.topics.length > 0 ? ['Topics: ' + insights.topics.slice(0, 5).join(', ')] : []);
-            return '<article><h3>' + escapeHTML(person.name) + '</h3><div class="role">' + escapeHTML(person.role || 'Role unavailable') + '</div><p>' + escapeHTML(person.relevance || '') + '</p>' + (insightBits.length > 0 ? '<small>' + escapeHTML(insightBits.join(' | ')) + '</small>' : '') + '</article>';
-        }).join('') + '</div>' : '<p class="muted">No current key stakeholders were available in this scan.</p>';
-
         const whyWhatHTML = '<div class="two-col"><div><h3>WHY</h3>' + renderList(exportData.why_proposals) + '</div><div><h3>WHAT</h3>' + renderList(exportData.what_proposals) + '</div></div>';
         const pitchHTML = renderParagraphs(exportData.pitch_text);
         const diagnosisHTML = renderParagraphs(exportData.summary_text)
@@ -1117,7 +1093,6 @@ const isForesightContext = (link) => {
             + renderSection('General Summary', 'Executive context', renderParagraphs(exportData.general_summary))
             + renderSection('AI Diagnosis', 'Interpretation and risks', diagnosisHTML)
             + renderSection('Core Metrics', 'Scorecard', '<div class="metrics">' + metrics.join('') + '</div>')
-            + renderSection('Key Stakeholders', 'People and influence', stakeholdersHTML)
             + renderSection('WHY and WHAT', 'Activation thesis', whyWhatHTML)
             + renderSection('Strategic Pitch', 'Outbound narrative', pitchHTML)
             + renderSection(exportData.domain ? 'Domain Force Dossier: ' + exportData.domain : 'Domain Force Dossier', 'Market context', dossierHTML)
@@ -1890,77 +1865,6 @@ const isForesightContext = (link) => {
             </div>
             </div>
         </div>
-
-        {/* KEY STAKEHOLDERS SECTION */}
-        {data.key_people && data.key_people.length > 0 && (
-            <div className="bg-white/5 p-6 rounded-2xl border border-white/10 backdrop-blur-md">
-                <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                    <Users className="text-indigo-400" size={20} />
-                    Key Modernization Stakeholders
-                </h3>
-                <div className="grid grid-cols-1 gap-3">
-                    {data.key_people.filter(p => p.linkedin_insights?.still_at_company !== false).map((person, idx) => {
-                        const insights = person.linkedin_insights;
-                        const hasInsights = insights && insights.found;
-                        return (
-                            <div key={idx} className="rounded-lg border border-white/5 bg-black/20 hover:border-indigo-500/30 transition-colors">
-                                <div className="flex items-center justify-between p-3">
-                                    <div className="flex flex-col min-w-0 mr-2">
-                                        <span className="font-bold text-sm text-slate-200 truncate">{person.name}</span>
-                                        <span className="text-xs text-indigo-300 truncate">{person.role}</span>
-                                        {person.relevance && <span className="text-[10px] text-slate-500 mt-1 line-clamp-1">{person.relevance}</span>}
-                                    </div>
-                                    <a
-                                        href={`https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(person.name + " " + data.companyName)}`}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="shrink-0 p-2 rounded-full bg-white/5 hover:bg-[#0077b5] hover:text-white text-slate-500 transition-all"
-                                        title="Find on LinkedIn"
-                                    >
-                                        <ExternalLink size={16} />
-                                    </a>
-                                </div>
-                                {insights && (
-                                    <div className={`px-3 pb-3 border-t ${hasInsights ? 'border-indigo-500/15' : 'border-white/5'}`}>
-                                        {hasInsights ? (
-                                            <div className="pt-2 space-y-1.5">
-                                                {insights.headline && (
-                                                    <p className="text-[11px] text-indigo-300 font-medium">{insights.headline}</p>
-                                                )}
-                                                <p className="text-[11px] text-slate-400 leading-relaxed">{insights.summary}</p>
-                                                {insights.topics && insights.topics.length > 0 && (
-                                                    <div className="flex flex-wrap gap-1 mt-1">
-                                                        {insights.topics.slice(0, 5).map((topic, ti) => (
-                                                            <span key={ti} className="text-[9px] px-1.5 py-0.5 rounded-full bg-indigo-500/15 text-indigo-300 border border-indigo-500/20">{topic}</span>
-                                                        ))}
-                                                    </div>
-                                                )}
-                                                {insights.career_moves && insights.career_moves.length > 0 && (
-                                                    <div className="mt-1">
-                                                        <span className="text-[9px] text-slate-600 uppercase tracking-wider">Previous:</span>
-                                                        <span className="text-[10px] text-slate-500 ml-1">{insights.career_moves.slice(0, 2).join(" → ")}</span>
-                                                    </div>
-                                                )}
-                                                {insights.notable_posts && insights.notable_posts.length > 0 && (
-                                                    <div className="mt-1">
-                                                        <span className="text-[9px] text-slate-600 uppercase tracking-wider">Shared publicly:</span>
-                                                        {insights.notable_posts.slice(0, 2).map((post, pi) => (
-                                                            <p key={pi} className="text-[10px] text-slate-500 ml-2 mt-0.5">— {post}</p>
-                                                        ))}
-                                                    </div>
-                                                )}
-                                            </div>
-                                        ) : (
-                                            <p className="text-[10px] text-slate-600 pt-2 italic">{insights.summary || "No public LinkedIn insights found."}</p>
-                                        )}
-                                    </div>
-                                )}
-                            </div>
-                        );
-                    })}
-                </div>
-            </div>
-        )}
 
         {activeTab === "activation" && (<>
         {/* STRATEGIC PITCH SECTION */}

@@ -599,11 +599,15 @@ def _company_evidence_stakeholders(company_evidence: dict | None) -> list[dict]:
             "insight": _clip(rec.get("source_quote") or rec.get("text_excerpt"), 420),
             "confidence": rec.get("extraction_confidence") or 50,
             "source": stakeholder.get("public_profile_url") or rec.get("url"),
+            "evidence_basis": stakeholder.get("evidence_basis") or rec.get("source_quote") or rec.get("title") or rec.get("url"),
             "source_database": "company_evidence",
             "provider": rec.get("provider"),
             "allowed_use": stakeholder.get("allowed_use") or rec.get("sales_use") or "allowed_as_discovery_question",
             "matched_demand_groups": stakeholder.get("matched_demand_groups") or rec.get("demand_signal_ids") or [],
+            "linked_service_ids": stakeholder.get("linked_service_ids") or rec.get("linked_service_ids") or [],
             "stakeholder_role_match_reason": stakeholder.get("stakeholder_role_match_reason") or rec.get("stakeholder_role_match_reason"),
+            "safety_notes": stakeholder.get("safety_notes") or rec.get("safety_notes") or [],
+            "do_not_say": stakeholder.get("do_not_say") or rec.get("do_not_say") or [],
         })
     return candidates[:12]
 
@@ -924,12 +928,30 @@ def _build_input_payload(
     key_people = []
     for person in _list(company_data.get("key_people"))[:10]:
         if isinstance(person, dict):
+            insights = _dict(person.get("linkedin_insights"))
+            if insights.get("still_at_company") is False:
+                continue
+            insight_bits = [
+                person.get("relevance"),
+                person.get("summary"),
+                person.get("insight"),
+                insights.get("headline"),
+                insights.get("summary"),
+            ]
+            topics = _list(insights.get("topics"))
             key_people.append({
                 "name": person.get("name"),
                 "role": person.get("role") or person.get("title"),
-                "insight": _clip(person.get("summary") or person.get("insight") or person.get("linkedin_insights"), 360),
+                "insight": _clip(" | ".join(str(x) for x in insight_bits if x), 520),
                 "confidence": person.get("confidence") or person.get("confidence_score"),
                 "source": person.get("source") or person.get("source_url"),
+                "evidence_basis": insights.get("verified_role") or person.get("source") or person.get("source_url") or "Stored Scanner stakeholder compatibility data",
+                "source_database": "scanner_key_people",
+                "allowed_use": "internal_only" if not person.get("source") and not person.get("source_url") else "allowed_as_discovery_question",
+                "matched_demand_groups": topics[:6],
+                "stakeholder_role_match_reason": person.get("relevance") or insights.get("verified_role"),
+                "safety_notes": ["Moved from normal Company Summary to Buying Insight; validate current role before customer-facing use."],
+                "do_not_say": ["Do not imply buying intent from role/title alone."],
             })
     seen_people = {str(person.get("name") or "").lower() for person in key_people if person.get("name")}
     for person in _company_evidence_stakeholders(company_evidence):
@@ -1041,7 +1063,7 @@ Return ONLY valid JSON with this schema:
   "buying_potential_thesis": {{"text": "...", "gate": "allowed_as_hypothesis", "confidence": 0}},
   "pressure_signals": [{{"signal_type": "...", "description": "...", "gate": "...", "confidence": 0, "evidence_basis": []}}],
   "why_now": [{{"trigger": "...", "interpretation": "...", "gate": "...", "confidence": 0, "evidence_basis": []}}],
-  "stakeholder_map": [{{"name": "...", "role": "...", "likely_buying_committee_role": "...", "evidence_basis": "...", "confidence": 0, "allowed_use": "internal_only|allowed_as_discovery_question|allowed_as_hypothesis"}}],
+  "stakeholder_map": [{{"name": "...", "role": "...", "likely_buying_committee_role": "...", "relevance_rationale": "...", "linked_pressure_themes": [], "linked_service_themes": [], "evidence_basis": "...", "confidence": 0, "allowed_use": "internal_only|allowed_as_discovery_question|allowed_as_hypothesis", "do_not_say": [], "safety_notes": []}}],
   "pain_to_solution_map": [{{"evidence": "...", "interpreted_pressure": "...", "service": "...", "proof_point": "...", "safe_wording": "...", "gate": "...", "confidence": 0, "disqualifiers": []}}],
   "recommended_sales_plays": [{{"service_or_offer": "...", "why_relevant": "...", "target_stakeholder": "...", "opening_angle": "...", "executive_angle": "...", "technical_angle": "...", "discovery_questions": ["..."], "do_not_say": ["..."], "confidence": 0, "overclaim_risk": "low|medium|high", "evidence_basis": [], "disqualifiers": []}}],
   "evidence_confidence": {{"strongest_evidence": [], "weak_or_missing_evidence": [], "do_not_use_claims": [], "sensitive_claims": [], "claims_as_questions_only": []}},
@@ -1092,7 +1114,7 @@ BUYING_SECTION_SCHEMAS = {
 """.strip(),
     "stakeholders": """
 {
-  "stakeholder_map": [{"name": "...", "role": "...", "likely_buying_committee_role": "...", "evidence_basis": "...", "confidence": 0, "allowed_use": "internal_only|allowed_as_discovery_question|allowed_as_hypothesis"}],
+  "stakeholder_map": [{"name": "...", "role": "...", "likely_buying_committee_role": "...", "relevance_rationale": "...", "linked_pressure_themes": [], "linked_service_themes": [], "evidence_basis": "...", "confidence": 0, "allowed_use": "internal_only|allowed_as_discovery_question|allowed_as_hypothesis", "do_not_say": [], "safety_notes": []}],
   "model_notes": []
 }
 """.strip(),
@@ -1127,9 +1149,10 @@ BUYING_SECTION_INSTRUCTIONS = {
         "sensitive, or blocked."
     ),
     "stakeholders": (
-        "Create a Buying Committee & Influence Map. Use named stakeholders only when source-bound and "
-        "role-relevant; otherwise use role-level buying committee guidance from buyer_role_lens. Keep it "
-        "professional and no private-life profiling."
+        "Create a rich Buying Committee & Influence Map. Use named stakeholders only when source-bound and "
+        "role-relevant; otherwise use role-level buying committee guidance from buyer_role_lens. Each card must "
+        "explain likely committee role, relevance rationale, linked pressure/service themes, evidence basis, "
+        "allowed-use boundary, confidence, and do_not_say safety notes. Keep it professional and no private-life profiling."
     ),
 }
 
@@ -1384,9 +1407,25 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         play["play_classification"] = play.get("play_classification") or _classify_play_score(play["play_score"])
         if play["play_classification"] in {"weak_signal", "do_not_use"} and play.get("gate") != "blocked":
             play["gate"] = "internal_only"
-    report["stakeholder_map"] = [
-        fix_item(item, "internal_only") for item in _list(report.get("stakeholder_map")) if isinstance(item, dict)
-    ]
+    fixed_stakeholders = []
+    for item in _list(report.get("stakeholder_map")):
+        if not isinstance(item, dict):
+            continue
+        fixed = fix_item(item, "internal_only")
+        fixed["relevance_rationale"] = _clip(
+            fixed.get("relevance_rationale") or fixed.get("insight") or fixed.get("likely_buying_committee_role"),
+            520,
+        )
+        fixed["linked_pressure_themes"] = [str(x) for x in _list(fixed.get("linked_pressure_themes"))[:8] if x]
+        fixed["linked_service_themes"] = [str(x) for x in _list(fixed.get("linked_service_themes"))[:8] if x]
+        fixed["do_not_say"] = [str(x) for x in _list(fixed.get("do_not_say"))[:5] if x]
+        fixed["safety_notes"] = [str(x) for x in _list(fixed.get("safety_notes"))[:5] if x]
+        if not fixed["do_not_say"]:
+            fixed["do_not_say"] = ["Do not imply confirmed buying intent from role/title alone."]
+        if not fixed["safety_notes"]:
+            fixed["safety_notes"] = ["Use as sales-prep context; validate current role and remit before outreach."]
+        fixed_stakeholders.append(fixed)
+    report["stakeholder_map"] = fixed_stakeholders
     report.pop("conversation_angles", None)
 
     if low_evidence:
@@ -1515,14 +1554,22 @@ def _deterministic_buying_report(payload: dict, reason: str) -> dict:
         })
 
     stakeholder_map = []
-    for person in stakeholders[:6]:
+    for person in stakeholders[:8]:
+        matched_groups = [str(x) for x in _list(person.get("matched_demand_groups"))[:6] if x]
+        service_themes = [str(x) for x in _list(person.get("linked_service_ids"))[:5] if x]
+        role_reason = person.get("stakeholder_role_match_reason") or "Professional role may be relevant to account qualification."
         stakeholder_map.append({
             "name": person.get("name"),
             "role": person.get("role"),
-            "likely_buying_committee_role": "Potential stakeholder; validate role and relevance before use.",
-            "evidence_basis": person.get("source") or "Stored Scanner stakeholder data",
+            "likely_buying_committee_role": _clip(role_reason, 260),
+            "relevance_rationale": _clip(person.get("insight") or role_reason, 420),
+            "linked_pressure_themes": matched_groups,
+            "linked_service_themes": service_themes,
+            "evidence_basis": person.get("evidence_basis") or person.get("source") or "Stored Scanner stakeholder compatibility data",
             "confidence": _safe_int(person.get("confidence"), 45),
-            "allowed_use": "internal_only",
+            "allowed_use": person.get("allowed_use") or "internal_only",
+            "do_not_say": _list(person.get("do_not_say"))[:4] or ["Do not imply this person has confirmed buying intent."],
+            "safety_notes": _list(person.get("safety_notes"))[:4] or ["Source-bound professional role context only; validate current remit before use."],
         })
     if not stakeholder_map:
         for signal in account_signals[:4]:
@@ -1531,9 +1578,14 @@ def _deterministic_buying_report(payload: dict, reason: str) -> dict:
                 "name": "Role-level target",
                 "role": role,
                 "likely_buying_committee_role": _clip(signal.get("buyer_role_concern"), 260),
+                "relevance_rationale": _clip(signal.get("commercial_pressure") or signal.get("business_consequence"), 360),
+                "linked_pressure_themes": [signal.get("pressure_type")] if signal.get("pressure_type") else [],
+                "linked_service_themes": _list(signal.get("service_fit_hints"))[:5],
                 "evidence_basis": signal.get("id"),
                 "confidence": _safe_int(signal.get("confidence"), 40),
                 "allowed_use": "allowed_as_discovery_question",
+                "do_not_say": ["Do not claim a named stakeholder exists without source-bound evidence."],
+                "safety_notes": ["Role-level buying committee guidance generated from account signals."],
             })
 
     pain_to_solution = []
@@ -1932,8 +1984,26 @@ def render_buying_potential_html(report: dict) -> str:
           <small>Confidence {_esc(item.get('confidence'))}/100</small>
         </article>"""
 
-    def stakeholder_row(item):
-        return f"<tr><td>{_esc(item.get('name'))}</td><td>{_esc(item.get('role'))}</td><td>{_esc(item.get('likely_buying_committee_role'))}</td><td>{_esc(item.get('allowed_use'))}</td><td>{_esc(item.get('confidence'))}/100</td></tr>"
+    def stakeholder_card(item):
+        pressure = "".join(f"<span class=\"pill tiny\">{_esc(x)}</span>" for x in _list(item.get("linked_pressure_themes"))[:6])
+        services = "".join(f"<span class=\"pill tiny service\">{_esc(x)}</span>" for x in _list(item.get("linked_service_themes"))[:6])
+        do_not_say = "".join(f"<li>{_esc(x)}</li>" for x in _list(item.get("do_not_say"))[:4])
+        safety = "".join(f"<li>{_esc(x)}</li>" for x in _list(item.get("safety_notes"))[:4])
+        return f"""
+        <article class="card stakeholder-card">
+          <div class="card-top"><strong>{_esc(item.get('name'))}</strong>{_gate_badge(item.get('allowed_use'))}</div>
+          <div class="role-line">{_esc(item.get('role'))}</div>
+          <p><b>Likely buying-committee role:</b> {_esc(item.get('likely_buying_committee_role'))}</p>
+          <p><b>Relevance rationale:</b> {_esc(item.get('relevance_rationale'))}</p>
+          <p><b>Evidence basis:</b> {_esc(item.get('evidence_basis'))}</p>
+          <div class="theme-row">{pressure or '<span class="pill tiny muted-pill">No linked pressure theme</span>'}</div>
+          <div class="theme-row">{services or '<span class="pill tiny muted-pill">No linked service theme</span>'}</div>
+          <h3>Do Not Say</h3>
+          <ul>{do_not_say or '<li>Do not imply confirmed buying intent from role/title alone.</li>'}</ul>
+          <h3>Safety Notes</h3>
+          <ul>{safety or '<li>Use as sales-prep context; validate current role and remit before outreach.</li>'}</ul>
+          <small>Allowed use: {_esc(item.get('allowed_use'))} · Confidence {_esc(item.get('confidence'))}/100</small>
+        </article>"""
 
     def solution_card(item):
         disq = ", ".join(item.get("disqualifiers") or [])
@@ -1991,6 +2061,7 @@ def render_buying_potential_html(report: dict) -> str:
     .lede {{ max-width:850px; color:#c8d3e5; font-size:18px; }}
     .meta {{ display:flex; flex-wrap:wrap; gap:10px; margin-top:18px; }}
     .pill,.gate,.risk {{ display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line); border-radius:999px; padding:5px 10px; color:var(--muted); font:700 11px ui-monospace,monospace; text-transform:uppercase; letter-spacing:.12em; }}
+    .tiny {{ font-size:9px; padding:4px 7px; margin:2px 4px 2px 0; }} .service {{ color:var(--cyan); border-color:rgba(103,232,249,.28); }} .muted-pill {{ opacity:.65; }}
     .gate-allowed_as_fact {{ color:var(--green); border-color:rgba(110,231,183,.5); }} .gate-allowed_as_hypothesis {{ color:var(--cyan); border-color:rgba(103,232,249,.45); }}
     .gate-allowed_as_discovery_question {{ color:var(--amber); border-color:rgba(250,204,21,.45); }} .gate-internal_only {{ color:var(--violet); border-color:rgba(167,139,250,.45); }} .gate-blocked {{ color:var(--rose); border-color:rgba(251,113,133,.45); }}
     section {{ border:1px solid var(--line); background:rgba(16,27,46,.74); border-radius:14px; padding:24px; margin:20px 0; }}
@@ -1999,6 +2070,7 @@ def render_buying_potential_html(report: dict) -> str:
     .card-top {{ display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:8px; }}
     small,.muted {{ color:var(--muted); }} table {{ width:100%; border-collapse:collapse; overflow:hidden; border-radius:10px; }} th,td {{ padding:11px; border-bottom:1px solid rgba(142,160,187,.16); text-align:left; vertical-align:top; }} th {{ color:var(--muted); font:700 11px ui-monospace,monospace; text-transform:uppercase; letter-spacing:.12em; }}
     ul {{ margin:8px 0 0 18px; padding:0; }} li {{ margin:5px 0; }} .warning {{ border-color:rgba(250,204,21,.4); background:rgba(250,204,21,.08); }} .danger {{ border-color:rgba(251,113,133,.4); background:rgba(251,113,133,.08); }}
+    .role-line {{ color:var(--green); font:800 12px ui-monospace,monospace; text-transform:uppercase; letter-spacing:.12em; margin:-2px 0 12px; }} .theme-row {{ display:flex; flex-wrap:wrap; gap:4px; margin:8px 0; }}
     @media (max-width:820px) {{ main {{ padding:24px 14px 48px; }} .grid,.grid-3 {{ grid-template-columns:1fr; }} .card-top {{ flex-direction:column; }} }}
   </style>
 </head>
@@ -2034,8 +2106,7 @@ def render_buying_potential_html(report: dict) -> str:
 
   <section>
     <h2>Buying Committee & Influence Map</h2>
-    <table><thead><tr><th>Name</th><th>Role</th><th>Likely Buying Committee Role</th><th>Allowed Use</th><th>Confidence</th></tr></thead>
-    <tbody>{''.join(stakeholder_row(i) for i in _list(report.get('stakeholder_map')))}</tbody></table>
+    <div class="grid">{_render_list(_list(report.get('stakeholder_map')), stakeholder_card)}</div>
   </section>
 
   <section><h2>Opportunity-to-Offer Fit</h2><div class="grid">{_render_list(_list(report.get('pain_to_solution_map')), solution_card)}</div></section>
