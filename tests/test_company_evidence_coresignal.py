@@ -26,32 +26,33 @@ def test_company_evidence_skips_coresignal_when_key_missing(monkeypatch):
     assert any("CORESIGNAL_API_KEY" in warning for warning in database["warnings"])
 
 
-def test_coresignal_company_search_uses_entity_first_query_and_confirms_domain(monkeypatch):
+def test_coresignal_company_search_uses_domain_enrich_first_and_confirms_domain(monkeypatch):
     ce = load_company_evidence(monkeypatch)
     monkeypatch.setenv("CORESIGNAL_API_KEY", "test-key")
     calls = []
 
     def fake_request(method, path, *, payload=None, errors=None):
         calls.append((method, path, payload))
-        if method == "POST":
-            return [4288299]
         return {
-            "id": 4288299,
-            "company_name": "Oy Sisu Auto Ab",
-            "company_legal_name": "Oy Sisu Auto Ab",
-            "website": "https://www.sisuauto.com",
-            "website_domain": "sisuauto.com",
-            "hq_country": "Finland",
-            "industry": "Motor Vehicle Manufacturing",
-            "size_range": "51-200 employees",
-            "employees_count": 61,
-            "technologies_used": [{"technology": "Salesforce"}],
-            "company_updates": [
-                {
-                    "date": "2026-05-25",
-                    "description": "Leading Finnish defence and research organisations signed a Letter of Intent to establish C4IMobility at Oy Sisu Auto Ab factory.",
-                }
-            ],
+            "type": "Success",
+            "data": {
+                "id": 4288299,
+                "company_name": "Oy Sisu Auto Ab",
+                "company_legal_name": "Oy Sisu Auto Ab",
+                "website": "https://www.sisuauto.com",
+                "website_domain": "sisuauto.com",
+                "hq_country": "Finland",
+                "industry": "Motor Vehicle Manufacturing",
+                "size_range": "51-200 employees",
+                "employees_count": 61,
+                "technologies_used": [{"technology": "Salesforce"}],
+                "company_updates": [
+                    {
+                        "date": "2026-05-25",
+                        "description": "Leading Finnish defence and research organisations signed a Letter of Intent to establish C4IMobility at Oy Sisu Auto Ab factory.",
+                    }
+                ],
+            },
         }
 
     monkeypatch.setattr(ce, "_coresignal_request", fake_request)
@@ -64,14 +65,11 @@ def test_coresignal_company_search_uses_entity_first_query_and_confirms_domain(m
 
     assert warnings == []
     assert ids == [4288299]
-    assert calls[0][1] == "/cdapi/v2/company_multi_source/search/es_dsl"
-    assert diagnostics["company_search_mode"] == "entity_domain_query"
+    assert calls[0][0] == "GET"
+    assert calls[0][1] == "/cdapi/v2/company_multi_source/enrich?website=sisuauto.com"
+    assert diagnostics["company_search_mode"] == "domain_enrich"
+    assert diagnostics["company_enrich_queried"] is True
     assert records[0]["website_domain"] == "sisuauto.com"
-    assert calls[0][2]["query"]["bool"]["minimum_should_match"] == 1
-    assert {"term": {"website_domain": "sisuauto.com"}} in calls[0][2]["query"]["bool"]["should"]
-    assert {"match_phrase": {"company_name": "Sisu Auto"}} in calls[0][2]["query"]["bool"]["should"]
-    assert "limit" not in calls[0][2]
-    assert calls[1][1] == "/cdapi/v2/company_multi_source/collect/4288299"
 
     normalized = ce._coresignal_company_record(1, "Sisu Auto", "https://sisuauto.com", records[0], "finland")
     assert normalized["entity_match_status"] == "exact"
@@ -106,6 +104,8 @@ def test_coresignal_search_uses_legal_aliases_and_confirms_collected_legal_name(
 
     def fake_request(method, path, *, payload=None, errors=None):
         calls.append((method, path, payload))
+        if method == "GET" and "enrich" in path:
+            return None
         if method == "POST":
             payload_text = json.dumps(payload)
             return [321] if "Finavia Oyj" in payload_text else []
@@ -131,6 +131,8 @@ def test_coresignal_search_uses_legal_aliases_and_confirms_collected_legal_name(
     assert diagnostics["company_search_mode"] == "entity_alias_identifier_query"
     assert "Finavia Oyj" in diagnostics["identity_names_used"]
     assert records[0]["company_legal_name"] == "Finavia Oyj"
+    post_calls = [call for call in calls if call[0] == "POST"]
+    assert post_calls[0][2]["query"]["bool"]["must"] == [{"term": {"website_domain": "finavia.fi"}}]
 
     normalized = ce._coresignal_company_record(
         1,
@@ -373,6 +375,8 @@ def test_coresignal_search_success_uses_search_records_when_collect_fails(monkey
     monkeypatch.setenv("CORESIGNAL_API_KEY", "test-key")
 
     def fake_request(method, path, *, payload=None, errors=None):
+        if method == "GET" and "enrich" in path:
+            return None
         if method == "POST":
             return {
                 "hits": {

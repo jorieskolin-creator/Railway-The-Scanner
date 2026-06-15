@@ -15,7 +15,7 @@ import os
 import re
 from datetime import datetime
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlencode, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -1113,6 +1113,8 @@ def _as_records(data: Any) -> list[dict]:
                     records.append(source)
         return records
     if isinstance(data, dict):
+        if isinstance(data.get("data"), dict):
+            return [data["data"]]
         return [data]
     if isinstance(data, list):
         return [item for item in data if isinstance(item, dict)]
@@ -1195,6 +1197,20 @@ def _target_country_from_url(company_url: str) -> str:
     }.get(tld, "")
 
 
+def _country_iso2(country: str) -> str:
+    value = (country or "").strip().lower()
+    return {
+        "finland": "FI",
+        "sweden": "SE",
+        "norway": "NO",
+        "denmark": "DK",
+        "estonia": "EE",
+        "germany": "DE",
+        "france": "FR",
+        "united kingdom": "GB",
+    }.get(value, "")
+
+
 def _country_matches(target_country: str, record_country: str) -> bool | None:
     target = (target_country or "").strip().lower()
     record = (record_country or "").strip().lower()
@@ -1260,30 +1276,62 @@ def _coresignal_search_payloads(company_name: str, domain: str, limit: int, targ
     names = _list(identity.get("names")) or [company_name]
     domains = _list(identity.get("domains")) or ([domain] if domain else [])
     identifiers = _list(identity.get("identifiers"))
-    should = []
+    target_iso2 = _country_iso2(target_country)
     if domain:
-        should.append({"term": {"website_domain": domain}})
-    if company_name:
-        should.append({"match_phrase": {"company_name": company_name}})
-    if should:
         payloads.append((
-            "entity_domain_query" if domain else "entity_name_query",
+            "entity_domain_exact_query",
             {
                 "query": {
                     "bool": {
-                        "should": should,
+                        "must": [
+                            {"term": {"website_domain": domain}},
+                        ],
+                    }
+                }
+            },
+        ))
+    website_alias_should = []
+    for candidate_domain in domains:
+        if candidate_domain:
+            website_alias_should.extend([
+                {"match_phrase": {"website_alias": f"https://{candidate_domain}"}},
+                {"match_phrase": {"website_alias": f"https://{candidate_domain}/"}},
+                {"match_phrase": {"website_alias": f"https://www.{candidate_domain}"}},
+                {"match_phrase": {"website_alias": f"https://www.{candidate_domain}/"}},
+            ])
+    if website_alias_should:
+        payloads.append((
+            "entity_website_alias_query",
+            {
+                "query": {
+                    "bool": {
+                        "should": website_alias_should,
                         "minimum_should_match": 1,
                     }
                 }
             },
         ))
+    if company_name:
+        name_must = [{"match_phrase": {"company_name": company_name}}]
+        if target_country:
+            country_should = [{"match_phrase": {"hq_country": target_country}}]
+            if target_iso2:
+                country_should.append({"term": {"hq_country_iso2": target_iso2}})
+            name_must.append({
+                "bool": {
+                    "should": country_should,
+                    "minimum_should_match": 1,
+                }
+            })
+        payloads.append((
+            "entity_name_country_query" if target_country else "entity_name_query",
+            {"query": {"bool": {"must": name_must}}},
+        ))
     expanded_should = []
-    for candidate_domain in domains:
-        if candidate_domain:
-            expanded_should.append({"term": {"website_domain": candidate_domain}})
     for name in names:
         if name:
             expanded_should.append({"match_phrase": {"company_name": name}})
+            expanded_should.append({"match_phrase": {"company_name_alias": name.lower()}})
     for identifier in identifiers:
         if identifier:
             expanded_should.extend([
@@ -1295,17 +1343,26 @@ def _coresignal_search_payloads(company_name: str, domain: str, limit: int, targ
             ])
     expanded_should = _dedupe_preserve([json.dumps(item, sort_keys=True) for item in expanded_should])
     expanded_should = [json.loads(item) for item in expanded_should]
-    if expanded_should and expanded_should != should:
-        payloads.append((
-            "entity_alias_identifier_query",
-            {
-                "query": {
+    if expanded_should:
+        alias_bool = {
+            "should": expanded_should,
+            "minimum_should_match": 1,
+        }
+        if target_country:
+            country_should = [{"match_phrase": {"hq_country": target_country}}]
+            if target_iso2:
+                country_should.append({"term": {"hq_country_iso2": target_iso2}})
+            alias_bool["filter"] = [
+                {
                     "bool": {
-                        "should": expanded_should,
+                        "should": country_should,
                         "minimum_should_match": 1,
                     }
                 }
-            },
+            ]
+        payloads.append((
+            "entity_alias_identifier_query",
+            {"query": {"bool": alias_bool}},
         ))
     payloads.append((
         "entity_name_only_query",
@@ -1431,19 +1488,69 @@ def _coresignal_entity_decision(company_name: str, company_url: str, raw: dict, 
     }
 
 
+def _coresignal_enrich_path(domain: str) -> str:
+    configured = _clean_env(os.environ.get("CORESIGNAL_COMPANY_ENRICH_PATH")) or "/cdapi/v2/company_multi_source/enrich"
+    if "{website}" in configured:
+        return configured.replace("{website}", domain)
+    if "{domain}" in configured:
+        return configured.replace("{domain}", domain)
+    separator = "&" if "?" in configured else "?"
+    return configured + separator + urlencode({"website": domain})
+
+
+def _confirmed_coresignal_pairs(
+    company_name: str,
+    company_url: str,
+    candidate_records: list[dict],
+    target_country: str,
+    identity: dict,
+    mode: str,
+    collected_pairs: list[tuple[Any, dict]] | None = None,
+) -> tuple[list[tuple[Any, dict]], list[dict]]:
+    confirmed_pairs = []
+    rejection_samples = []
+    collected_pairs = collected_pairs or []
+    for idx, record in enumerate(candidate_records):
+        decision = _coresignal_entity_decision(company_name, company_url, record, target_country, identity)
+        if decision["confirmed"]:
+            record_id = (
+                collected_pairs[idx][0]
+                if idx < len(collected_pairs)
+                else _first_key(record, ("id", "company_id", "source_id"))
+            )
+            confirmed_pairs.append((record_id, record))
+        elif len(rejection_samples) < 6:
+            rejection_samples.append({
+                "mode": mode,
+                "record_name": decision.get("record_name"),
+                "record_domain": decision.get("record_domain"),
+                "record_country": decision.get("record_country"),
+                "status": decision.get("status"),
+                "reason": decision.get("reason"),
+                "domain_match": decision.get("domain_match"),
+                "name_match": decision.get("name_match"),
+                "country_match": decision.get("country_match"),
+                "identifier_match": decision.get("identifier_match"),
+            })
+    return confirmed_pairs, rejection_samples
+
+
 def _coresignal_company_search(company_name: str, company_url: str, limit: int, company_data: dict | None = None) -> tuple[list[dict], list[Any], dict, list[str]]:
     warnings = []
     domain = _host(company_url)
     target_country = _target_country_from_url(company_url)
     identity = _company_identity_bundle(company_data or {}, company_name, company_url)
+    enrich_path = _coresignal_enrich_path(domain) if domain else ""
     path = _clean_env(os.environ.get("CORESIGNAL_COMPANY_SEARCH_PATH")) or "/cdapi/v2/company_multi_source/search/es_dsl"
     collect_path = _clean_env(os.environ.get("CORESIGNAL_COMPANY_COLLECT_PATH")) or "/cdapi/v2/company_multi_source/collect/{id}"
     fallback_path = _clean_env(os.environ.get("CORESIGNAL_COMPANY_SEARCH_FALLBACK_PATH"))
     fallback_collect_path = _clean_env(os.environ.get("CORESIGNAL_COMPANY_COLLECT_FALLBACK_PATH")) or collect_path
     diagnostics = {
         "company_search_path": path,
+        "company_enrich_path": enrich_path,
         "company_collect_path": collect_path,
         "company_search_mode": None,
+        "company_enrich_queried": False,
         "company_ids_returned": 0,
         "company_records_returned": 0,
         "company_records_confirmed": 0,
@@ -1460,10 +1567,37 @@ def _coresignal_company_search(company_name: str, company_url: str, limit: int, 
     }
     records: list[dict] = []
     company_ids: list[Any] = []
+    request_errors: list[dict] = []
+    if enrich_path:
+        raw_enrich = _coresignal_request("GET", enrich_path, errors=request_errors)
+        enrich_records = _as_records(raw_enrich)[:limit]
+        confirmed_pairs, rejection_samples = _confirmed_coresignal_pairs(
+            company_name,
+            company_url,
+            enrich_records,
+            target_country,
+            identity,
+            "domain_enrich",
+        )
+        diagnostics.update({
+            "company_search_mode": "domain_enrich",
+            "company_enrich_queried": True,
+            "company_records_returned": len(enrich_records),
+            "company_records_confirmed": len(confirmed_pairs),
+            "company_records_rejected": max(0, len(enrich_records) - len(confirmed_pairs)),
+            "company_records_collected": 0,
+            "company_candidate_rejections": rejection_samples,
+        })
+        if confirmed_pairs:
+            records = [record for _, record in confirmed_pairs][:limit]
+            company_ids = [record_id for record_id, _record in confirmed_pairs if record_id][:limit]
+            diagnostics["company_ids_returned"] = len(company_ids)
+            diagnostics["company_request_errors"] = request_errors[:6]
+            return records, company_ids, diagnostics, warnings
+
     search_attempts = [(path, collect_path)]
     if fallback_path:
         search_attempts.append((fallback_path, fallback_collect_path))
-    request_errors: list[dict] = []
     seen_attempts = set()
     for search_path, current_collect_path in search_attempts:
         if (search_path, current_collect_path) in seen_attempts:
@@ -1482,26 +1616,15 @@ def _coresignal_company_search(company_name: str, company_url: str, limit: int, 
                 candidate_records = [record for _, record in collected_pairs]
             elif candidate_ids and candidate_records:
                 warnings.append("Coresignal collect returned no usable records; using search result records for normalization.")
-            confirmed_pairs = []
-            rejection_samples = []
-            for idx, record in enumerate(candidate_records):
-                decision = _coresignal_entity_decision(company_name, company_url, record, target_country, identity)
-                if decision["confirmed"]:
-                    record_id = collected_pairs[idx][0] if idx < len(collected_pairs) else _first_key(record, ("id", "company_id", "source_id"))
-                    confirmed_pairs.append((record_id, record))
-                elif len(rejection_samples) < 6:
-                    rejection_samples.append({
-                        "mode": mode,
-                        "record_name": decision.get("record_name"),
-                        "record_domain": decision.get("record_domain"),
-                        "record_country": decision.get("record_country"),
-                        "status": decision.get("status"),
-                        "reason": decision.get("reason"),
-                        "domain_match": decision.get("domain_match"),
-                        "name_match": decision.get("name_match"),
-                        "country_match": decision.get("country_match"),
-                        "identifier_match": decision.get("identifier_match"),
-                    })
+            confirmed_pairs, rejection_samples = _confirmed_coresignal_pairs(
+                company_name,
+                company_url,
+                candidate_records,
+                target_country,
+                identity,
+                mode,
+                collected_pairs,
+            )
             confirmed = [record for _, record in confirmed_pairs]
             confirmed_ids = [record_id for record_id, _ in confirmed_pairs if record_id]
             diagnostics.update({
