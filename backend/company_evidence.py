@@ -293,8 +293,17 @@ def _walk_identity_values(data: Any, keys: tuple[str, ...], *, max_depth: int = 
         for key, value in data.items():
             if key in keys:
                 if isinstance(value, list):
-                    values.extend(_clip(item, 180) for item in value if item)
+                    for item in value:
+                        if isinstance(item, dict):
+                            extracted = _extract_identifier_value(item)
+                            if extracted:
+                                values.append(extracted)
+                        elif item:
+                            values.append(_clip(item, 180))
                 elif isinstance(value, dict):
+                    extracted = _extract_identifier_value(value)
+                    if extracted:
+                        values.append(extracted)
                     values.extend(_walk_identity_values(value, keys, max_depth=max_depth - 1))
                 else:
                     values.append(_clip(value, 180))
@@ -304,6 +313,27 @@ def _walk_identity_values(data: Any, keys: tuple[str, ...], *, max_depth: int = 
         for item in data[:40]:
             values.extend(_walk_identity_values(item, keys, max_depth=max_depth - 1))
     return values
+
+
+def _extract_identifier_value(value: Any) -> str:
+    if isinstance(value, dict):
+        direct = _first_key(value, ("value", "id", "identifier", "businessId", "registrationNumber"))
+        if direct:
+            return _clip(direct, 80)
+        for nested in value.values():
+            extracted = _extract_identifier_value(nested)
+            if extracted:
+                return extracted
+        return ""
+    if isinstance(value, list):
+        for item in value:
+            extracted = _extract_identifier_value(item)
+            if extracted:
+                return extracted
+        return ""
+    text = _clip(value, 80)
+    match = re.search(r"\b\d{7}-\d\b", text)
+    return match.group(0) if match else text
 
 
 def _strip_legal_suffixes(name: str) -> str:
@@ -333,7 +363,10 @@ def _company_identity_bundle(company_data: dict, company_name: str, company_url:
     for name in explicit_names:
         generated_names.extend(_generated_legal_aliases(name, company_url))
     names = _dedupe_preserve([*explicit_names, *generated_names])[:18]
-    identifiers = _dedupe_preserve(_walk_identity_values(company_data, IDENTIFIER_KEYS, max_depth=4))[:10]
+    identifiers = _dedupe_preserve(
+        _extract_identifier_value(value)
+        for value in _walk_identity_values(company_data, IDENTIFIER_KEYS, max_depth=4)
+    )[:10]
     raw_domains = [_host(company_url)]
     for value in _walk_identity_values(company_data, ("companyUrl", "url", "website", "website_domain", "domain"), max_depth=3):
         host = _host(value)
@@ -346,6 +379,8 @@ def _company_identity_bundle(company_data: dict, company_name: str, company_url:
         "domains": domains,
         "primary_domain": _host(company_url),
         "identifiers": identifiers,
+        "prh_aliases_used": _list((company_data.get("prh_identity") or {}).get("names"))[:8] if isinstance(company_data.get("prh_identity"), dict) else [],
+        "prh_aliases_skipped": _list((company_data.get("prh_identity") or {}).get("skipped_names"))[:12] if isinstance(company_data.get("prh_identity"), dict) else [],
         "target_country": _target_country_from_url(company_url),
     }
 
@@ -366,6 +401,38 @@ def _prh_name_values(record: dict) -> list[str]:
     if record.get("name"):
         names.append(record.get("name"))
     return _dedupe_preserve(names)
+
+
+def _prh_business_id(record: dict) -> str:
+    return _extract_identifier_value(record.get("businessId"))
+
+
+def _prh_alias_decision(company_name: str, name: str) -> tuple[bool, str]:
+    target_base = _strip_legal_suffixes(company_name).lower()
+    name_base = _strip_legal_suffixes(name).lower()
+    target_tokens = set(_company_tokens(company_name))
+    name_tokens = set(_company_tokens(name))
+    if not name_base:
+        return False, "empty_name"
+    if target_base and name_base == target_base:
+        return True, "base_name_exact"
+    if target_base and (target_base in name_base or name_base in target_base):
+        return True, "base_name_contains_target"
+    if target_tokens and target_tokens <= name_tokens:
+        return True, "target_tokens_in_alias"
+    return False, "alias_not_specific_to_scanned_company"
+
+
+def _prh_filtered_aliases(company_name: str, names: list[str]) -> tuple[list[str], list[dict]]:
+    accepted = []
+    skipped = []
+    for name in names:
+        keep, reason = _prh_alias_decision(company_name, name)
+        if keep:
+            accepted.append(name)
+        else:
+            skipped.append({"name": _clip(name, 140), "reason": reason})
+    return _dedupe_preserve(accepted), skipped[:12]
 
 
 def _prh_record_matches(company_name: str, record: dict) -> bool:
@@ -403,11 +470,16 @@ def _fetch_prh_identity(company_name: str, company_url: str) -> dict:
         if not best:
             return result
         names = _prh_name_values(best)
+        accepted_names, skipped_names = _prh_filtered_aliases(company_name, names)
+        business_id = _prh_business_id(best)
         result.update({
             "matched": True,
-            "business_id": _clip(best.get("businessId"), 40),
-            "legal_name": names[0] if names else "",
-            "names": names[:8],
+            "business_id": business_id,
+            "business_id_normalized": _norm_identifier(business_id),
+            "legal_name": accepted_names[0] if accepted_names else (company_name or ""),
+            "names": accepted_names[:8],
+            "skipped_names": skipped_names,
+            "raw_names": names[:12],
             "registration_date": _clip(best.get("registrationDate"), 40),
             "company_form": _clip(best.get("companyForm"), 80),
             "status": _clip(best.get("status"), 80),
@@ -424,6 +496,8 @@ def _merge_identity_enrichment(company_data: dict, identity_enrichment: dict | N
     merged["prh_identity"] = identity_enrichment
     if identity_enrichment.get("business_id"):
         merged.setdefault("business_id", identity_enrichment.get("business_id"))
+    if identity_enrichment.get("business_id_normalized"):
+        merged.setdefault("registration_id", identity_enrichment.get("business_id_normalized"))
     if identity_enrichment.get("legal_name"):
         merged.setdefault("legal_name", identity_enrichment.get("legal_name"))
     aliases = list(_list(merged.get("aliases")))
@@ -1380,6 +1454,8 @@ def _coresignal_company_search(company_name: str, company_url: str, limit: int, 
         "identity_names_used": _list(identity.get("names"))[:18],
         "identity_domains_used": _list(identity.get("domains"))[:6],
         "identity_identifiers_used": _list(identity.get("identifiers"))[:10],
+        "prh_aliases_used": _list(identity.get("prh_aliases_used"))[:8],
+        "prh_aliases_skipped": _list(identity.get("prh_aliases_skipped"))[:12],
         "company_candidate_rejections": [],
     }
     records: list[dict] = []
@@ -1446,7 +1522,7 @@ def _coresignal_company_search(company_name: str, company_url: str, limit: int, 
         if records:
             break
     if not records:
-        warnings.append("Coresignal company search returned no usable records.")
+        warnings.append("Coresignal enrichment unavailable/unconfirmed: no entity-confirmed Coresignal company record was found.")
         status_codes = {err.get("status_code") for err in request_errors if err.get("status_code")}
         error_types = [err.get("error_type") for err in request_errors if err.get("error_type")]
         diagnostics["company_search_error_type"] = error_types[0] if error_types else None

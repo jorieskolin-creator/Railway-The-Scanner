@@ -264,6 +264,7 @@ def test_prh_identity_is_merged_into_coresignal_identity_bundle(monkeypatch):
     enrichment = {
         "matched": True,
         "business_id": "2302570-2",
+        "business_id_normalized": "23025702",
         "legal_name": "Finavia Oyj",
         "names": ["Finavia Oyj"],
     }
@@ -272,8 +273,57 @@ def test_prh_identity_is_merged_into_coresignal_identity_bundle(monkeypatch):
     identity = ce._company_identity_bundle(merged, "Finavia", "https://finavia.fi")
 
     assert "2302570-2" in identity["identifiers"]
+    assert "23025702" in identity["identifiers"]
     assert "Finavia Oyj" in identity["names"]
     assert "finavia.fi" in identity["domains"]
+
+
+def test_prh_identity_parses_business_id_and_filters_noisy_aliases(monkeypatch):
+    ce = load_company_evidence(monkeypatch)
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "companies": [
+                    {
+                        "businessId": {"value": "0246812-5", "registrationDate": "1994-07-13"},
+                        "registrationDate": "1994-07-13",
+                        "names": [
+                            {"name": "Ilmailulaitos"},
+                            {"name": "Finnish Airports System FAS"},
+                            {"name": "Avia College"},
+                            {"name": "CA GROUP"},
+                            {"name": "Finavia Group"},
+                            {"name": "Finavia"},
+                        ],
+                    }
+                ]
+            }
+
+    monkeypatch.setenv("COMPANY_EVIDENCE_PRH_ENABLED", "true")
+    monkeypatch.setattr(ce.requests, "get", lambda *args, **kwargs: FakeResponse())
+
+    enrichment = ce._fetch_prh_identity("Finavia", "https://finavia.fi")
+
+    assert enrichment["matched"] is True
+    assert enrichment["business_id"] == "0246812-5"
+    assert enrichment["business_id_normalized"] == "02468125"
+    assert "Finavia" in enrichment["names"]
+    assert "Finavia Group" in enrichment["names"]
+    assert "CA GROUP" not in enrichment["names"]
+    assert "Avia College" not in enrichment["names"]
+    assert any(item["name"] == "CA GROUP" for item in enrichment["skipped_names"])
+
+    merged = ce._merge_identity_enrichment({"companyName": "Finavia", "companyUrl": "https://finavia.fi"}, enrichment)
+    identity = ce._company_identity_bundle(merged, "Finavia", "https://finavia.fi")
+
+    assert "0246812-5" in identity["identifiers"]
+    assert "02468125" in identity["identifiers"]
+    assert "CA GROUP" not in identity["names"]
+    assert "Avia College" not in identity["names"]
+    assert {"name": "CA GROUP", "reason": "alias_not_specific_to_scanned_company"} in identity["prh_aliases_skipped"]
 
 
 def test_buying_payload_includes_coresignal_stakeholder_candidates(monkeypatch):
