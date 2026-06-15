@@ -255,6 +255,13 @@ def _host(url: str | None) -> str:
     return host[4:] if host.startswith("www.") else host
 
 
+def _domain_like(value: str) -> bool:
+    text = str(value or "").strip().lower()
+    if not text or " " in text or "/" in text:
+        return False
+    return bool(re.match(r"^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$", text))
+
+
 def _same_or_subdomain(host: str, official_host: str) -> bool:
     return bool(host and official_host and (host == official_host or host.endswith("." + official_host)))
 
@@ -327,10 +334,12 @@ def _company_identity_bundle(company_data: dict, company_name: str, company_url:
         generated_names.extend(_generated_legal_aliases(name, company_url))
     names = _dedupe_preserve([*explicit_names, *generated_names])[:18]
     identifiers = _dedupe_preserve(_walk_identity_values(company_data, IDENTIFIER_KEYS, max_depth=4))[:10]
-    domains = _dedupe_preserve([
-        _host(company_url),
-        *(_host(value) for value in _walk_identity_values(company_data, ("companyUrl", "url", "website", "website_domain", "domain"), max_depth=3)),
-    ])[:6]
+    raw_domains = [_host(company_url)]
+    for value in _walk_identity_values(company_data, ("companyUrl", "url", "website", "website_domain", "domain"), max_depth=3):
+        host = _host(value)
+        if _domain_like(host):
+            raw_domains.append(host)
+    domains = _dedupe_preserve(raw_domains)[:6]
     return {
         "names": names,
         "primary_name": company_name,
@@ -339,6 +348,105 @@ def _company_identity_bundle(company_data: dict, company_name: str, company_url:
         "identifiers": identifiers,
         "target_country": _target_country_from_url(company_url),
     }
+
+
+def _prh_enabled(company_url: str) -> bool:
+    if not _host(company_url).endswith(".fi"):
+        return False
+    return _env_bool("COMPANY_EVIDENCE_PRH_ENABLED", default=True)
+
+
+def _prh_name_values(record: dict) -> list[str]:
+    names = []
+    for item in _list(record.get("names")):
+        if isinstance(item, dict):
+            names.append(item.get("name"))
+        else:
+            names.append(item)
+    if record.get("name"):
+        names.append(record.get("name"))
+    return _dedupe_preserve(names)
+
+
+def _prh_record_matches(company_name: str, record: dict) -> bool:
+    target_base = _strip_legal_suffixes(company_name).lower()
+    target_tokens = set(_company_tokens(company_name))
+    for name in _prh_name_values(record):
+        name_base = _strip_legal_suffixes(name).lower()
+        if target_base and name_base == target_base:
+            return True
+        name_tokens = set(_company_tokens(name))
+        if target_tokens and target_tokens <= name_tokens:
+            return True
+    return False
+
+
+def _fetch_prh_identity(company_name: str, company_url: str) -> dict:
+    """Best-effort Finnish registry identity for matching only; never blocks the job."""
+    result = {"enabled": _prh_enabled(company_url), "queried": False, "matched": False}
+    if not result["enabled"]:
+        return result
+    try:
+        resp = requests.get(
+            "https://avoindata.prh.fi/opendata-ytj-api/v3/companies",
+            params={"name": company_name, "maxResults": 5},
+            headers={"User-Agent": "The-Scanner Company Evidence Builder/1.0", "Accept": "application/json"},
+            timeout=8,
+        )
+        result.update({"queried": True, "status_code": resp.status_code})
+        if resp.status_code != 200:
+            return result
+        data = resp.json()
+        candidates = _list(data.get("companies"))
+        result["candidate_count"] = len(candidates)
+        best = next((candidate for candidate in candidates if isinstance(candidate, dict) and _prh_record_matches(company_name, candidate)), None)
+        if not best:
+            return result
+        names = _prh_name_values(best)
+        result.update({
+            "matched": True,
+            "business_id": _clip(best.get("businessId"), 40),
+            "legal_name": names[0] if names else "",
+            "names": names[:8],
+            "registration_date": _clip(best.get("registrationDate"), 40),
+            "company_form": _clip(best.get("companyForm"), 80),
+            "status": _clip(best.get("status"), 80),
+        })
+    except Exception as exc:
+        result.update({"queried": True, "error": _clip(exc, 240)})
+    return result
+
+
+def _merge_identity_enrichment(company_data: dict, identity_enrichment: dict | None) -> dict:
+    if not identity_enrichment or not identity_enrichment.get("matched"):
+        return dict(company_data)
+    merged = dict(company_data)
+    merged["prh_identity"] = identity_enrichment
+    if identity_enrichment.get("business_id"):
+        merged.setdefault("business_id", identity_enrichment.get("business_id"))
+    if identity_enrichment.get("legal_name"):
+        merged.setdefault("legal_name", identity_enrichment.get("legal_name"))
+    aliases = list(_list(merged.get("aliases")))
+    aliases.extend(_list(identity_enrichment.get("names")))
+    if aliases:
+        merged["aliases"] = _dedupe_preserve(aliases)
+    return merged
+
+
+def _keyword_matches(text: str, keyword: str) -> bool:
+    value = (text or "").lower()
+    term = (keyword or "").lower().strip()
+    if not term:
+        return False
+    if len(term) <= 3 and re.match(r"^[a-zåäö0-9]+$", term):
+        return bool(re.search(rf"(?<![a-zåäö0-9]){re.escape(term)}(?![a-zåäö0-9])", value))
+    if re.match(r"^[a-zåäö0-9]+$", term):
+        return bool(re.search(rf"(?<![a-zåäö0-9]){re.escape(term)}", value))
+    return term in value
+
+
+def _any_keyword(text: str, keywords: tuple[str, ...] | list[str]) -> bool:
+    return any(_keyword_matches(text, keyword) for keyword in keywords)
 
 
 def _is_homepage_url(url: str) -> bool:
@@ -351,7 +459,7 @@ def _source_profile(url: str, title: str = "") -> dict:
     if _is_homepage_url(url):
         return dict(SOURCE_TARGET_REGISTRY[0])
     for target in SOURCE_TARGET_REGISTRY[1:]:
-        if any(k and k in value for k in target.get("keywords", ())):
+        if _any_keyword(value, target.get("keywords", ())):
             return dict(target)
     return {
         "category": "other_official",
@@ -379,8 +487,14 @@ def _is_not_found_content(title: str, text: str, status_code: int = 200) -> bool
         "page not found",
         "sivua ei löytynyt",
         "sidan hittades inte",
+        "oops! finavia",
+        "oops! ",
     )
-    return any(marker in sample for marker in markers)
+    if any(marker in sample for marker in markers):
+        return True
+    if title.strip().lower().startswith("oops") and any(nav in sample for nav in ("palaa etusivulle", "back to homepage", "return to front page")):
+        return True
+    return False
 
 
 def _html_to_text(raw_html: str) -> tuple[str, str]:
@@ -596,6 +710,8 @@ def _target_score(url: str, base_url: str, origin_hint: str = "guess") -> int:
         score += 10
     elif origin_hint == "homepage_markdown":
         score += 14
+    elif origin_hint == "guess":
+        score -= 28
     return score
 
 
@@ -672,8 +788,8 @@ def _verify_record(company_name: str, company_url: str, url: str, fetched: dict)
     contains_entity = any(token in text_l for token in tokens) or (domain_token and domain_token in text_l)
     entity_verified = bool(same_domain and fetched.get("content_verified") and (contains_entity or source_type == "homepage"))
     has_date = bool(re.search(r"\b(20[1-3][0-9]|19[8-9][0-9])\b", text_l))
-    has_trigger_event = any(term in text_l for term in TRIGGER_EVENT_KEYWORDS)
-    has_technology_signal = any(term in text_l for term in TECH_SIGNAL_KEYWORDS)
+    has_trigger_event = _any_keyword(text_l, TRIGGER_EVENT_KEYWORDS)
+    has_technology_signal = _any_keyword(text_l, TECH_SIGNAL_KEYWORDS)
     eligible = bool(
         fetched.get("url_verified")
         and fetched.get("content_verified")
@@ -1850,6 +1966,8 @@ def build_company_evidence_database(company_data: dict, *, stage_callback=None) 
         raise CompanyEvidenceError("Company name missing from stored data.", 404)
     if not company_url:
         raise CompanyEvidenceError("Company URL missing from stored data; cannot build official-domain evidence.", 409)
+    identity_enrichment = _fetch_prh_identity(company_name, company_url)
+    enriched_company_data = _merge_identity_enrichment(company_data, identity_enrichment)
     max_urls = max(4, min(30, int(os.environ.get("COMPANY_EVIDENCE_MAX_URLS", "18"))))
     if stage_callback:
         stage_callback("discover_sources", 25, "Discovering official-domain source candidates")
@@ -1860,7 +1978,7 @@ def build_company_evidence_database(company_data: dict, *, stage_callback=None) 
     for idx, url in enumerate(urls, start=1):
         records.append(_candidate_record(idx, company_name, company_url, url))
     coresignal_records, coresignal_diagnostics, coresignal_warnings = _coresignal_records(
-        company_data,
+        enriched_company_data,
         start_idx=len(records) + 1,
         stage_callback=stage_callback,
     )
@@ -1893,6 +2011,7 @@ def build_company_evidence_database(company_data: dict, *, stage_callback=None) 
         },
         "provider_status": {
             "coresignal": coresignal_diagnostics,
+            "prh": identity_enrichment,
         },
         "records": records,
         "stats": stats,

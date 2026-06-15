@@ -12,6 +12,7 @@ def load_company_evidence(monkeypatch):
 def test_company_evidence_skips_coresignal_when_key_missing(monkeypatch):
     ce = load_company_evidence(monkeypatch)
     monkeypatch.delenv("CORESIGNAL_API_KEY", raising=False)
+    monkeypatch.setenv("COMPANY_EVIDENCE_PRH_ENABLED", "false")
     monkeypatch.setattr(ce, "_discover_urls", lambda company_url, max_urls: [])
 
     database, _ = ce.build_company_evidence_database({
@@ -175,6 +176,7 @@ def test_company_evidence_normalizes_coresignal_company_and_public_stakeholders(
     monkeypatch.setenv("CORESIGNAL_API_KEY", "test-key")
     monkeypatch.setenv("CORESIGNAL_ENABLED", "true")
     monkeypatch.setenv("CORESIGNAL_MAX_STAKEHOLDERS", "4")
+    monkeypatch.setenv("COMPANY_EVIDENCE_PRH_ENABLED", "false")
     monkeypatch.setattr(ce, "_discover_urls", lambda company_url, max_urls: [])
 
     def fake_coresignal_request(method, path, *, payload=None, errors=None):
@@ -226,6 +228,52 @@ def test_company_evidence_normalizes_coresignal_company_and_public_stakeholders(
     assert stakeholder["generation_eligible"] is False
     serialized = json.dumps(stakeholder)
     assert "do-not-store@example.com" not in serialized
+
+
+def test_soft_oops_pages_are_blocked_not_fact_safe(monkeypatch):
+    ce = load_company_evidence(monkeypatch)
+    fetched = {
+        "provider": "firecrawl",
+        "status_code": 200,
+        "title": "Oops! Finavia",
+        "text": "Palaa etusivulle Lentoasemat Tervetuloa Finavian lentoasemille",
+    }
+    fetched["page_not_found"] = ce._is_not_found_content(fetched["title"], fetched["text"], fetched["status_code"])
+    fetched["url_verified"] = not fetched["page_not_found"]
+    fetched["content_verified"] = len(fetched["text"]) >= 20 and not fetched["page_not_found"]
+
+    verified = ce._verify_record("Finavia", "https://www.finavia.fi/fi", "https://www.finavia.fi/fi/about", fetched)
+
+    assert verified["page_not_found"] is True
+    assert verified["buying_evidence_eligible"] is False
+    assert verified["allowed_as_fact"] is False
+    assert verified["sales_use"] == "blocked"
+
+
+def test_short_ai_keyword_does_not_match_airline_names(monkeypatch):
+    ce = load_company_evidence(monkeypatch)
+    profile = ce._source_profile("https://www.finavia.fi/fi/lentoyhti%C3%B6t/air-france-af", "Air France (AF) | Finavia")
+
+    assert profile["source_type"] != "services"
+    assert ce._any_keyword("Air France and airBaltic airline page", ce.TECH_SIGNAL_KEYWORDS) is False
+    assert ce._any_keyword("AI readiness and cloud platform", ce.TECH_SIGNAL_KEYWORDS) is True
+
+
+def test_prh_identity_is_merged_into_coresignal_identity_bundle(monkeypatch):
+    ce = load_company_evidence(monkeypatch)
+    enrichment = {
+        "matched": True,
+        "business_id": "2302570-2",
+        "legal_name": "Finavia Oyj",
+        "names": ["Finavia Oyj"],
+    }
+
+    merged = ce._merge_identity_enrichment({"companyName": "Finavia", "companyUrl": "https://finavia.fi"}, enrichment)
+    identity = ce._company_identity_bundle(merged, "Finavia", "https://finavia.fi")
+
+    assert "2302570-2" in identity["identifiers"]
+    assert "Finavia Oyj" in identity["names"]
+    assert "finavia.fi" in identity["domains"]
 
 
 def test_buying_payload_includes_coresignal_stakeholder_candidates(monkeypatch):
