@@ -854,10 +854,12 @@ def _verify_url(url, timeout=4, company_name=None):
             resp.close()
             return result
 
-        # Read first 10KB of body for soft 404 + company name check
+        # Read enough body to avoid false wrong-entity flags on long news,
+        # investor, and search-result pages where the company mention appears
+        # after cookie banners/navigation. Claim support is verified later.
         body_chunk = ""
         try:
-            raw = resp.raw.read(10240)
+            raw = resp.raw.read(65536)
             body_chunk = raw.decode("utf-8", errors="ignore").lower()
         except Exception:
             pass
@@ -872,11 +874,19 @@ def _verify_url(url, timeout=4, company_name=None):
         # Extract publication date from URL and page body
         result["extracted_date"] = _extract_page_date(url, body_chunk)
 
-        # Check company name presence if provided
-        if company_name and body_chunk:
+        # Check company name presence if provided. A company token in the URL is
+        # a weak positive identity hint for this URL-liveness stage; source-claim
+        # verification still decides whether it can support analysis.
+        if company_name:
             name_lower = company_name.lower()
             name_parts = [p for p in name_lower.split() if len(p) > 2 and p not in ("oy", "oyj", "ab", "ltd", "group", "inc", "gmbh", "oy:n", "abp")]
-            result["company_mentioned"] = any(part in body_chunk for part in name_parts) if name_parts else True
+            url_lower = url.lower()
+            if not name_parts:
+                result["company_mentioned"] = True
+            elif any(part in url_lower for part in name_parts):
+                result["company_mentioned"] = True
+            elif body_chunk:
+                result["company_mentioned"] = any(part in body_chunk for part in name_parts)
 
         return result
 

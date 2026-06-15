@@ -139,6 +139,10 @@ def _base_source(raw: dict, origin: str, company_name: str, generated_at: str, i
     wrong_entity = raw.get("wrong_entity") is True or raw.get("entity_match_status") == "wrong"
     blocked = raw.get("blocked") is True or raw.get("promotion_status") == "excluded" or wrong_entity
     analysis_verified = raw.get("analysis_verified") is True
+    entity_match_status = raw.get("entity_match_status") or "unknown"
+    content_entity_match_status = raw.get("content_entity_match_status") or entity_match_status
+    entity_scope = raw.get("entity_scope")
+    company_specific = raw.get("company_specific")
     generation_eligible = is_generation_eligible_source(raw) or (
         analysis_verified
         and raw.get("promotion_status") == "generation_eligible"
@@ -172,7 +176,12 @@ def _base_source(raw: dict, origin: str, company_name: str, generated_at: str, i
         "url_verified": raw.get("url_verified") is True,
         "content_verified": raw.get("content_verified") is True,
         "entity_verified": raw.get("entity_verified") is True or raw.get("entity_match_status") in {"exact", "scoped"},
-        "entity_match_status": raw.get("entity_match_status") or "unknown",
+        "entity_match_status": entity_match_status,
+        "content_entity_match_status": content_entity_match_status,
+        "entity_scope": entity_scope,
+        "company_specific": company_specific is not False,
+        "claim_type": raw.get("claim_type"),
+        "source_claim": raw.get("source_claim") or raw.get("claim"),
         "claim_support_status": raw.get("claim_support_status"),
         "analysis_verified": analysis_verified,
         "generation_eligible": bool(generation_eligible),
@@ -221,9 +230,30 @@ def _merge_records(existing: dict, incoming: dict) -> dict:
         merged[key] = bool(existing.get(key) or incoming.get(key))
     for key in ("wrong_entity", "blocked"):
         merged[key] = bool(existing.get(key) or incoming.get(key))
-    for key in ("source_quote", "snippet", "verification_reason", "source_credibility", "claim_support_status", "promotion_status"):
+    for key in (
+        "source_quote",
+        "snippet",
+        "verification_reason",
+        "source_credibility",
+        "claim_support_status",
+        "promotion_status",
+        "claim_type",
+        "source_claim",
+    ):
         if len(str(incoming.get(key) or "")) > len(str(merged.get(key) or "")):
             merged[key] = incoming.get(key)
+    entity_rank = {"wrong": 0, "unknown": 1, "weak": 2, "scoped": 3, "exact": 4}
+    for key in ("entity_match_status", "content_entity_match_status"):
+        current = str(merged.get(key) or "unknown")
+        incoming_value = str(incoming.get(key) or "unknown")
+        if entity_rank.get(incoming_value, 1) > entity_rank.get(current, 1):
+            merged[key] = incoming.get(key)
+    current_scope = str(merged.get("entity_scope") or "").lower()
+    incoming_scope = str(incoming.get("entity_scope") or "").lower()
+    if incoming_scope and incoming_scope not in {"unknown", "wrong"} and current_scope in {"", "unknown", "wrong"}:
+        merged["entity_scope"] = incoming.get("entity_scope")
+    if merged.get("company_specific") is None:
+        merged["company_specific"] = incoming.get("company_specific")
     if incoming.get("age_days") is not None and (merged.get("age_days") is None or incoming.get("age_days") < merged.get("age_days")):
         merged["last_checked"] = incoming.get("last_checked")
         merged["source_freshness"] = incoming.get("source_freshness")
@@ -373,23 +403,40 @@ def ledger_scanner_seed_links(ledger: dict | None, limit: int = 10) -> list[dict
     for record in records:
         if not isinstance(record, dict) or not record.get("usable_as_scanner_seed"):
             continue
-        seeds.append({
+        seed = {
             "title": record.get("title"),
             "url": record.get("url"),
             "snippet": record.get("snippet"),
             "source_quote": record.get("source_quote"),
             "source_type": record.get("source_type"),
+            "source_category": record.get("source_category"),
+            "source_claim": record.get("source_claim"),
             "source_credibility": record.get("source_credibility"),
+            "canonical_source_host": record.get("canonical_source_host"),
             "url_verified": record.get("url_verified") is True,
+            "verified": record.get("url_verified") is True,
             "content_verified": record.get("content_verified") is True,
             "entity_verified": record.get("entity_verified") is True,
+            "entity_match_status": record.get("entity_match_status") or "unknown",
+            "content_entity_match_status": record.get("content_entity_match_status") or record.get("entity_match_status") or "unknown",
+            "entity_scope": record.get("entity_scope"),
+            "company_specific": record.get("company_specific") is not False,
+            "claim_type": record.get("claim_type"),
             "analysis_verified": record.get("analysis_verified") is True,
             "claim_support_status": record.get("claim_support_status"),
             "promotion_status": record.get("promotion_status"),
             "generation_eligible": record.get("generation_eligible") is True,
+            "context_only": record.get("context_only") is True,
+            "wrong_entity": record.get("wrong_entity") is True,
+            "verification_reason": record.get("verification_reason"),
             "origin": "company_source_ledger",
+            "origins": record.get("origins") or ["company_source_ledger"],
+            "ledger_origin_records": record.get("origin_records") or [],
             "ledger_id": record.get("id"),
-        })
+        }
+        if not is_generation_eligible_source(seed):
+            continue
+        seeds.append(seed)
         if len(seeds) >= limit:
             break
     return seeds

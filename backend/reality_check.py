@@ -99,6 +99,24 @@ def _is_internal_scanner_observation(text: str) -> bool:
     return bool(text and _INTERNAL_SCAN_OBSERVATION_RE.search(text))
 
 
+def _is_supported_structured_financial_payload_claim(text: str, scan_payload: dict | None) -> bool:
+    """Return true when a financial claim is directly represented in the compact scan payload."""
+    if not text or not isinstance(scan_payload, dict):
+        return False
+    if not re.search(r'\b(?:revenue|sales|ebit|ebitda|profit|margin|cash flow|equity|financial|fy20\d{2}|€|\b\d+(?:\.\d+)?%|\bm\b|\bmillion)\b', text, re.IGNORECASE):
+        return False
+    payload_text = json.dumps(scan_payload.get("financial_payload") or {}, ensure_ascii=False).lower()
+    if not payload_text or payload_text == "{}":
+        return False
+    claim_text = text.lower()
+    values = re.findall(r'(?:€\s*)?\d+(?:[.,]\d+)?\s*(?:m|million|%|bn|billion)?', claim_text)
+    values = [re.sub(r'\s+', '', v.replace(",", ".")) for v in values if len(v.strip()) >= 2]
+    if values and all(v in re.sub(r'\s+', '', payload_text.replace(",", ".")) for v in values[:4]):
+        return True
+    words = [w for w in re.findall(r'[a-zåäöA-ZÅÄÖ]{4,}', claim_text) if w not in {"reported", "shows", "company", "annual", "financial"}]
+    return len(words) >= 4 and sum(1 for w in words[:10] if w in payload_text) >= 4
+
+
 def _strip_code_fences(text):
     """Strip markdown code fences (```json ... ```) from LLM responses."""
     if not text:
@@ -694,8 +712,8 @@ AI-GENERATED PITCH TO VERIFY:
         except Exception:
             payload_text = str(scan_payload)
         scan_payload_section = f"""
-SCAN PAYLOAD FOR INTERNAL SCANNER OBSERVATIONS:
-{payload_text[:9000]}
+SCAN PAYLOAD FOR INTERNAL SCANNER OBSERVATIONS AND STRUCTURED FINANCIAL FACTS:
+{payload_text[:14000]}
 """
 
     stage1_prompt = f"""You are an uncompromising Data Auditor. Evaluate the faithfulness and factual accuracy of an AI-generated company summary.
@@ -710,12 +728,14 @@ INSTRUCTIONS:
 2. Classify each claim before judging it:
    - EXTERNAL COMPANY FACT: company events, partnerships, products, customers, financial values, ownership, people, dates, operations, present-tense capabilities.
    - INTERNAL SCANNER OBSERVATION: statements about what the scan found or did not find, evidence counts, weak/no evidence by dimension, source quality, scores, confidence, archetype, evidence packet, or Scanner process state.
+   - STRUCTURED FINANCIAL PAYLOAD FACT: financial index/sub-score, revenue/profitability/stability/investment finding, or exact financial value explicitly present in the scan payload's financial_payload.
 3. For EXTERNAL COMPANY FACTS, cross-reference strictly against stored evidence. Use only verified, generation-eligible evidence as authoritative. Do not accept display-only, unsupported, wrong-entity, or weak evidence.
-4. For INTERNAL SCANNER OBSERVATIONS, verify against the SCAN PAYLOAD above, not external web sources. Do not flag an internal observation merely because no public webpage says it. Flag it only if it contradicts the scan payload or invents a Scanner result that is not present.
-5. If stored evidence is insufficient for an external company fact, use cautious external verification through your own provider tools/knowledge, but do not invent corrections.
-6. A company website is self-reported. It cannot by itself refute analytical observations about internal operating reality unless it contains concrete, specific operational metrics.
-7. Foresight/regulatory context cannot prove present-tense company behavior.
-8. Use "Internal Scan Mismatch" only for scanner-process statements that contradict the scan payload. Use Fabrication/Contradiction/Misattribution/Organizational Fabrication for external company facts.
+4. For STRUCTURED FINANCIAL PAYLOAD FACTS, verify against financial_payload in the SCAN PAYLOAD above. These facts may be valid Scanner financial-module facts even when they are not repeated in STORED EVIDENCE SOURCES. Flag them only if the value/detail is absent from or contradicts financial_payload.
+5. For INTERNAL SCANNER OBSERVATIONS, verify against the SCAN PAYLOAD above, not external web sources. Do not flag an internal observation merely because no public webpage says it. Flag it only if it contradicts the scan payload or invents a Scanner result that is not present.
+6. If stored evidence is insufficient for an external company fact, use cautious external verification through your own provider tools/knowledge, but do not invent corrections.
+7. A company website is self-reported. It cannot by itself refute analytical observations about internal operating reality unless it contains concrete, specific operational metrics.
+8. Foresight/regulatory context cannot prove present-tense company behavior.
+9. Use "Internal Scan Mismatch" only for scanner-process statements that contradict the scan payload. Use Fabrication/Contradiction/Misattribution/Organizational Fabrication for external company facts.
 
 OUTPUT FORMAT — valid JSON only:
 If accurate: {{"false_claims": [], "summary_accurate": true}}
@@ -931,6 +951,10 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
             # appear in external web sources, so source_indices is always empty for them.
             if not source_indices and _SCAN_HISTORY_RE.search(claim_text):
                 print(f"      [Fact-Check] Skipping internal scan history claim (not externally verifiable): {claim_text[:70]}...")
+                continue
+
+            if not source_indices and _is_supported_structured_financial_payload_claim(claim_text, scan_payload):
+                print(f"      [Fact-Check] Skipping structured financial payload claim: {claim_text[:70]}...")
                 continue
 
             # Scanner-process observations are checked against the internal

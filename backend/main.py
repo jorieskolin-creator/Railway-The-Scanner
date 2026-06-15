@@ -367,6 +367,22 @@ def _build_fact_check_scan_payload(data: dict) -> dict:
             "generation_eligible": is_generation_eligible_source(item),
         })
 
+    financial_findings = []
+    for item in (data.get("financial_findings") or [])[:20]:
+        if not isinstance(item, dict):
+            continue
+        financial_findings.append({
+            "dimension": item.get("dimension") or item.get("category"),
+            "finding": item.get("finding") or item.get("summary") or item.get("claim"),
+            "metric": item.get("metric") or item.get("label"),
+            "value": item.get("value") or item.get("amount"),
+            "evidence_snippet": item.get("evidence_snippet") or item.get("source_quote") or item.get("snippet"),
+            "source_title": item.get("source_title") or item.get("title"),
+            "source_url": item.get("source_url") or item.get("url"),
+            "analysis_verified": item.get("analysis_verified"),
+            "generation_eligible": item.get("generation_eligible"),
+        })
+
     return {
         "companyName": data.get("companyName"),
         "intent_score": data.get("intent_score"),
@@ -378,8 +394,60 @@ def _build_fact_check_scan_payload(data: dict) -> dict:
         "washing_type": data.get("washing_type"),
         "evidence_counts": evidence_counts,
         "dimension_evidence_counts": dimensions,
+        "financial_payload": {
+            "financial_index": data.get("financial_index"),
+            "financial_confidence": data.get("financial_confidence"),
+            "financial_sub_scores": data.get("financial_sub_scores") or {},
+            "financial_findings": financial_findings,
+        },
         "evidence_based_risks": data.get("evidence_based_risks") or [],
         "sample_reality_findings": sample_findings,
+    }
+
+
+def _fallback_foresight_from_links(company_name: str, foresight_links: list, domain: str = "") -> dict | None:
+    """Retain validated foresight links as context when current KB synthesis returns no force object."""
+    retained = []
+    seen = set()
+    for link in _safe_dict_list(foresight_links, "fallback_foresight_links"):
+        url = (link.get("url") or link.get("source_url") or "").strip()
+        if not url or url in seen:
+            continue
+        if link.get("verified") is not True and link.get("url_verified") is not True:
+            continue
+        seen.add(url)
+        retained.append({
+            "theme": link.get("theme") or link.get("dimension") or link.get("source_type") or "Retained foresight source",
+            "title": link.get("title") or link.get("source_title") or url,
+            "source_url": url,
+            "source_title": link.get("source_title") or link.get("title"),
+            "source_quote": link.get("source_quote") or link.get("snippet") or link.get("description") or "",
+            "evidence_status": "context_only_retained_link",
+            "context_only": True,
+            "generation_eligible": False,
+            "analysis_verified": False,
+            "promotion_status": "display_only",
+        })
+        if len(retained) >= 8:
+            break
+    if not retained:
+        return None
+    return {
+        "company_name": company_name,
+        "domain": domain,
+        "kb_first": False,
+        "fallback_from_links": True,
+        "insufficient_evidence": True,
+        "quality_label": "foresight_links_retained_no_current_synthesis",
+        "summary": (
+            "Current foresight synthesis did not produce generation-eligible forces. "
+            "Previously validated foresight links are retained as context-only audit material."
+        ),
+        "method_note": (
+            "These retained links are not promoted into fresh strategic foresight claims. "
+            "They preserve source continuity until the Foresight KB returns generation-eligible signals."
+        ),
+        "dimension_forces": retained,
     }
 
 
@@ -3757,6 +3825,10 @@ def _execute_scan_pipeline(
                 print(f"   📎 [Foresight Links] Merged {merged_count} validated links from previous scan")
 
         foresight_links = sanitize_foresight_collection(foresight_links, domain=company_domain)  # final foresight card sanitation
+        if not foresight_data and foresight_links:
+            foresight_data = _fallback_foresight_from_links(companyName, foresight_links, domain=company_domain)
+            if foresight_data:
+                print("   📎 [Foresight] Current synthesis unavailable; retained validated foresight links as context-only fallback")
 
         from scanner_two import get_clean_domain as _get_clean_domain
         _company_site_domain = _get_clean_domain(target_url) if target_url else ""
