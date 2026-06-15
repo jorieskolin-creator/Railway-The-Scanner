@@ -1275,6 +1275,17 @@ def _coresignal_company_record(idx: int, company_name: str, company_url: str, ra
                 for update in _list(raw.get("company_updates"))[:6]
                 if isinstance(update, dict) and update.get("description")
             ],
+            "key_executives": [
+                {
+                    "name": _clip(_first_key(executive, ("member_full_name", "name", "full_name", "person_name")), 160),
+                    "title": _clip(_first_key(executive, ("member_position_title", "title", "current_title", "job_title", "position", "role")), 180),
+                    "parent_id": _first_key(executive, ("parent_id", "id", "member_id", "person_id")),
+                }
+                for executive in _list(raw.get("key_executives"))[:24]
+                if isinstance(executive, dict)
+                and _first_key(executive, ("member_full_name", "name", "full_name", "person_name"))
+                and _first_key(executive, ("member_position_title", "title", "current_title", "job_title", "position", "role"))
+            ],
         },
     }
 
@@ -1356,7 +1367,7 @@ def _coresignal_stakeholder_record(
     demand_profile: dict,
 ) -> dict | None:
     name = _clip(_first_key(raw, ("name", "full_name", "member_full_name", "person_name")), 160)
-    title = _clip(_first_key(raw, ("title", "current_title", "job_title", "position", "role")), 180)
+    title = _clip(_first_key(raw, ("title", "current_title", "job_title", "position", "role", "member_position_title")), 180)
     if not name or not title:
         return None
     matched, reason = _role_matches(title, demand_profile)
@@ -1416,6 +1427,7 @@ def _coresignal_stakeholder_record(
             "name": name,
             "role": title,
             "public_profile_url": profile_url,
+            "provider_person_id": _first_key(raw, ("parent_id", "id", "member_id", "person_id")),
             "matched_demand_groups": _list(demand_profile.get("groups")),
             "stakeholder_role_match_reason": reason,
             "demand_signal_ids": _list(demand_profile.get("groups")),
@@ -1428,6 +1440,29 @@ def _coresignal_stakeholder_record(
         "linked_service_ids": [],
         "stakeholder_role_match_reason": reason,
     }
+
+
+def _coresignal_key_executive_records(company_record: dict, max_people: int) -> list[dict]:
+    if max_people <= 0:
+        return []
+    fields = company_record.get("coresignal_fields") or {}
+    executives = []
+    for executive in _list(fields.get("key_executives")):
+        if not isinstance(executive, dict):
+            continue
+        name = _clip(_first_key(executive, ("name", "member_full_name", "full_name", "person_name")), 160)
+        title = _clip(_first_key(executive, ("title", "member_position_title", "current_title", "job_title", "position", "role")), 180)
+        if not name or not title:
+            continue
+        executives.append({
+            "name": name,
+            "title": title,
+            "parent_id": _first_key(executive, ("parent_id", "id", "member_id", "person_id")),
+            "source": "coresignal_key_executives",
+        })
+        if len(executives) >= max_people:
+            break
+    return executives
 
 
 def _coresignal_records(company_data: dict, start_idx: int = 1, *, stage_callback=None) -> tuple[list[dict], dict, list[str]]:
@@ -1476,12 +1511,19 @@ def _coresignal_records(company_data: dict, start_idx: int = 1, *, stage_callbac
     demand_profile = _demand_profile(company_data)
     people_records = []
     if max_stakeholders > 0 and company_items and company_ids:
-        for company_id in company_ids[:1]:
-            people, people_warnings = _coresignal_employee_search(company_id, company_name, demand_profile, max_stakeholders)
-            warnings.extend(people_warnings)
-            people_records.extend(people)
-            if people_records:
+        for company_record in [record for record in records if record.get("provider_record_type") == "company_enrichment"]:
+            people_records.extend(_coresignal_key_executive_records(company_record, max_stakeholders - len(people_records)))
+            if len(people_records) >= max_stakeholders:
                 break
+        if not people_records and _env_bool("CORESIGNAL_USE_EMPLOYEE_API", default=False):
+            for company_id in company_ids[:1]:
+                people, people_warnings = _coresignal_employee_search(company_id, company_name, demand_profile, max_stakeholders)
+                warnings.extend(people_warnings)
+                people_records.extend(people)
+                if people_records:
+                    break
+        elif not people_records:
+            warnings.append("Coresignal company record did not include role-matched key executives; legacy employee API fallback disabled.")
     elif max_stakeholders > 0 and company_items:
         warnings.append("Coresignal stakeholder search skipped because the confirmed company record did not include a collectable company id.")
     elif max_stakeholders > 0:

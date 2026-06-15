@@ -106,6 +106,7 @@ def test_company_evidence_normalizes_coresignal_company_and_public_stakeholders(
     monkeypatch.setattr(ce, "_discover_urls", lambda company_url, max_urls: [])
 
     def fake_coresignal_request(method, path, *, payload=None, errors=None):
+        assert "professional_network/employee" not in path
         if "company" in path and "search" in path:
             return [123]
         if "company" in path and "collect" in path:
@@ -115,26 +116,19 @@ def test_company_evidence_normalizes_coresignal_company_and_public_stakeholders(
                 "website": "https://sisuauto.com",
                 "industries": ["manufacturing"],
                 "technologies_used": [{"technology": "Azure"}, {"technology": "SAP"}, {"technology": "automation"}],
+                "key_executives": [
+                    {
+                        "parent_id": 1,
+                        "member_full_name": "Jane Example",
+                        "member_position_title": "Chief Information Officer",
+                    },
+                    {
+                        "parent_id": 2,
+                        "member_full_name": "Unmatched Person",
+                        "member_position_title": "Junior Designer",
+                    },
+                ],
                 "email": "do-not-store@example.com",
-            }
-        if "employee" in path and "search" in path:
-            return [1, 2]
-        if path.endswith("/1"):
-            return {
-                "id": 1,
-                "name": "Jane Example",
-                "title": "Chief Information Officer",
-                "linkedin_url": "https://www.linkedin.com/in/jane-example",
-                "email": "jane@example.com",
-                "phone": "+358000000",
-            }
-        if path.endswith("/2"):
-            return {
-                "id": 2,
-                "name": "Unmatched Person",
-                "title": "Junior Designer",
-                "linkedin_url": "https://www.linkedin.com/in/unmatched",
-                "email": "unmatched@example.com",
             }
         return None
 
@@ -159,8 +153,7 @@ def test_company_evidence_normalizes_coresignal_company_and_public_stakeholders(
     assert stakeholder["sales_use"] == "allowed_as_discovery_question"
     assert stakeholder["generation_eligible"] is False
     serialized = json.dumps(stakeholder)
-    assert "jane@example.com" not in serialized
-    assert "+358" not in serialized
+    assert "do-not-store@example.com" not in serialized
 
 
 def test_buying_payload_includes_coresignal_stakeholder_candidates(monkeypatch):
