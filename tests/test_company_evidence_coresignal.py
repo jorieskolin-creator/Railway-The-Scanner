@@ -30,7 +30,7 @@ def test_coresignal_company_search_uses_entity_first_query_and_confirms_domain(m
     monkeypatch.setenv("CORESIGNAL_API_KEY", "test-key")
     calls = []
 
-    def fake_request(method, path, *, payload=None):
+    def fake_request(method, path, *, payload=None, errors=None):
         calls.append((method, path, payload))
         if method == "POST":
             return {
@@ -39,8 +39,8 @@ def test_coresignal_company_search_uses_entity_first_query_and_confirms_domain(m
                         {
                             "_id": "company-1",
                             "_source": {
-                                "name": "Sisu Auto",
-                                "domain": "sisuauto.com",
+                                "company_name": "Sisu Auto",
+                                "website_domain": "sisuauto.com",
                                 "technologies_used": [{"technology": "Salesforce"}],
                             },
                         }
@@ -49,8 +49,8 @@ def test_coresignal_company_search_uses_entity_first_query_and_confirms_domain(m
             }
         return {
             "id": "company-1",
-            "name": "Sisu Auto",
-            "domain": "sisuauto.com",
+            "company_name": "Sisu Auto",
+            "website_domain": "sisuauto.com",
             "technologies_used": [{"technology": "Salesforce"}],
         }
 
@@ -64,9 +64,12 @@ def test_coresignal_company_search_uses_entity_first_query_and_confirms_domain(m
 
     assert warnings == []
     assert ids == ["company-1"]
+    assert calls[0][1] == "/cdapi/v2/company_multi_source/search/es_dsl"
     assert diagnostics["company_search_mode"] == "entity_domain_query"
-    assert records[0]["domain"] == "sisuauto.com"
+    assert records[0]["website_domain"] == "sisuauto.com"
     assert calls[0][2]["query"]["bool"]["minimum_should_match"] == 1
+    assert {"term": {"website_domain": "sisuauto.com"}} in calls[0][2]["query"]["bool"]["should"]
+    assert {"match_phrase": {"company_name": "Sisu Auto"}} in calls[0][2]["query"]["bool"]["should"]
 
     normalized = ce._coresignal_company_record(1, "Sisu Auto", "https://sisuauto.com", records[0], "finland")
     assert normalized["entity_match_status"] == "exact"
@@ -96,7 +99,7 @@ def test_company_evidence_normalizes_coresignal_company_and_public_stakeholders(
     monkeypatch.setenv("CORESIGNAL_MAX_STAKEHOLDERS", "4")
     monkeypatch.setattr(ce, "_discover_urls", lambda company_url, max_urls: [])
 
-    def fake_coresignal_request(method, path, *, payload=None):
+    def fake_coresignal_request(method, path, *, payload=None, errors=None):
         if "company" in path and "search" in path:
             return [123]
         if "company" in path and "collect" in path:
@@ -194,3 +197,40 @@ def test_buying_payload_includes_coresignal_stakeholder_candidates(monkeypatch):
     assert payload["stakeholders"][0]["provider"] == "coresignal"
     assert payload["stakeholders"][0]["allowed_use"] == "allowed_as_discovery_question"
     assert payload["company_evidence_database"]["provider_status"]["coresignal"]["queried"] is True
+
+
+def test_coresignal_search_success_uses_search_records_when_collect_fails(monkeypatch):
+    ce = load_company_evidence(monkeypatch)
+    monkeypatch.setenv("CORESIGNAL_API_KEY", "test-key")
+
+    def fake_request(method, path, *, payload=None, errors=None):
+        if method == "POST":
+            return {
+                "hits": {
+                    "hits": [
+                        {
+                            "_id": "company-1",
+                            "_source": {
+                                "company_name": "Sisu Auto",
+                                "website_domain": "sisuauto.com",
+                            },
+                        }
+                    ]
+                }
+            }
+        if errors is not None:
+            errors.append({"method": method, "path": path, "status_code": 404})
+        return None
+
+    monkeypatch.setattr(ce, "_coresignal_request", fake_request)
+
+    records, ids, diagnostics, warnings = ce._coresignal_company_search(
+        "Sisu Auto",
+        "https://sisuauto.com",
+        2,
+    )
+
+    assert ids == ["company-1"]
+    assert records[0]["website_domain"] == "sisuauto.com"
+    assert diagnostics["company_records_confirmed"] == 1
+    assert any("using search result records" in warning for warning in warnings)

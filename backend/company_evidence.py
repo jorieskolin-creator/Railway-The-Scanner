@@ -734,7 +734,7 @@ def _coresignal_timeout() -> int:
     return max(8, min(45, int(os.environ.get("CORESIGNAL_TIMEOUT_SECONDS", "20"))))
 
 
-def _coresignal_request(method: str, path: str, *, payload: dict | None = None) -> Any:
+def _coresignal_request(method: str, path: str, *, payload: dict | None = None, errors: list[dict] | None = None) -> Any:
     headers = _coresignal_headers()
     if not headers:
         return None
@@ -746,12 +746,16 @@ def _coresignal_request(method: str, path: str, *, payload: dict | None = None) 
             resp = requests.get(url, headers=headers, timeout=_coresignal_timeout())
         if resp.status_code not in (200, 201):
             print(f"   ⚠️ [Company Evidence] Coresignal {method.upper()} {path} failed ({resp.status_code})", flush=True)
+            if errors is not None:
+                errors.append({"method": method.upper(), "path": path, "status_code": resp.status_code})
             return None
         if not resp.text.strip():
             return None
         return resp.json()
     except Exception as exc:
         print(f"   ⚠️ [Company Evidence] Coresignal {method.upper()} {path} exception: {exc}", flush=True)
+        if errors is not None:
+            errors.append({"method": method.upper(), "path": path, "exception": str(exc)})
         return None
 
 
@@ -860,7 +864,7 @@ def _list_values(value: Any, limit: int = 12) -> list[str]:
 def _coresignal_domain(data: dict) -> str:
     domain_obj = data.get("domain") if isinstance(data.get("domain"), dict) else {}
     website = _first_key(data, (
-        "website", "company_website", "homepage_url", "url", "website_url",
+        "website_domain", "website", "company_website", "homepage_url", "url", "website_url",
         "primary_domain", "canonical_domain",
     ))
     if not website:
@@ -929,26 +933,24 @@ def _company_name_match(company_name: str, record_name: str) -> bool:
 def _coresignal_search_payloads(company_name: str, domain: str, limit: int, target_country: str = "") -> list[tuple[str, dict]]:
     payloads: list[tuple[str, dict]] = []
     if domain:
-        domain_should = [
-            {"match_phrase": {field: domain}}
-            for field in (
-                "domain", "website", "website_url", "company_website", "homepage_url",
-                "primary_domain", "canonical_domain", "domain.domain",
-            )
-        ]
         payloads.append((
             "entity_domain_query",
             {
                 "query": {
                     "bool": {
-                        "should": domain_should,
+                        "should": [
+                            {"term": {"website_domain": domain}},
+                            {"match_phrase": {"company_name": company_name}},
+                            {"match_phrase": {"domain": domain}},
+                            {"match_phrase": {"website": domain}},
+                        ],
                         "minimum_should_match": 1,
                     }
                 },
                 "limit": limit,
             },
         ))
-    name_must = [{"match_phrase": {"name": company_name}}]
+    name_must = [{"match_phrase": {"company_name": company_name}}]
     if target_country:
         name_must.append({
             "bool": {
@@ -970,8 +972,9 @@ def _coresignal_search_payloads(company_name: str, domain: str, limit: int, targ
     payloads.append((
         "legacy_flat_query",
         {
+            "company_name": company_name,
             "name": company_name,
-            "website": domain,
+            "website_domain": domain,
             "domain": domain,
             "active": True,
             "limit": limit,
@@ -1038,7 +1041,7 @@ def _role_matches(title: str, demand_profile: dict) -> tuple[bool, str]:
 
 def _coresignal_entity_decision(company_name: str, company_url: str, raw: dict, target_country: str = "") -> dict:
     official_host = _host(company_url)
-    record_name = _clip(_first_key(raw, ("name", "company_name", "name_legal", "nameLegal", "legal_name")), 180)
+    record_name = _clip(_first_key(raw, ("company_name", "name", "name_legal", "nameLegal", "legal_name")), 180)
     record_domain = _coresignal_domain(raw)
     record_country = _coresignal_country(raw)
     domain_match = bool(record_domain and official_host and _same_or_subdomain(record_domain, official_host))
@@ -1080,8 +1083,8 @@ def _coresignal_company_search(company_name: str, company_url: str, limit: int) 
     warnings = []
     domain = _host(company_url)
     target_country = _target_country_from_url(company_url)
-    path = _clean_env(os.environ.get("CORESIGNAL_COMPANY_SEARCH_PATH")) or "/cdapi/v1/company_multi_source/search/filter"
-    collect_path = _clean_env(os.environ.get("CORESIGNAL_COMPANY_COLLECT_PATH")) or "/cdapi/v1/company_multi_source/collect/{id}"
+    path = _clean_env(os.environ.get("CORESIGNAL_COMPANY_SEARCH_PATH")) or "/cdapi/v2/company_multi_source/search/es_dsl"
+    collect_path = _clean_env(os.environ.get("CORESIGNAL_COMPANY_COLLECT_PATH")) or "/cdapi/v2/company_multi_source/collect/{id}"
     fallback_path = _clean_env(os.environ.get("CORESIGNAL_COMPANY_SEARCH_FALLBACK_PATH")) or "/cdapi/v1/professional_network/company/search/filter"
     fallback_collect_path = _clean_env(os.environ.get("CORESIGNAL_COMPANY_COLLECT_FALLBACK_PATH")) or "/cdapi/v1/professional_network/company/collect/{id}"
     diagnostics = {
@@ -1092,26 +1095,30 @@ def _coresignal_company_search(company_name: str, company_url: str, limit: int) 
         "company_records_returned": 0,
         "company_records_confirmed": 0,
         "company_records_rejected": 0,
+        "company_request_errors": [],
     }
     records: list[dict] = []
     company_ids: list[Any] = []
     search_attempts = [(path, collect_path), (fallback_path, fallback_collect_path)]
+    request_errors: list[dict] = []
     seen_attempts = set()
     for search_path, current_collect_path in search_attempts:
         if (search_path, current_collect_path) in seen_attempts:
             continue
         seen_attempts.add((search_path, current_collect_path))
         for mode, payload in _coresignal_search_payloads(company_name, domain, limit, target_country):
-            raw = _coresignal_request("POST", search_path, payload=payload)
+            raw = _coresignal_request("POST", search_path, payload=payload, errors=request_errors)
             candidate_ids = _extract_ids(raw, limit)
             candidate_records = _as_records(raw)
             collected = []
             for company_id in candidate_ids[:limit]:
-                data = _coresignal_request("GET", current_collect_path.format(id=company_id))
+                data = _coresignal_request("GET", current_collect_path.format(id=company_id), errors=request_errors)
                 if isinstance(data, dict):
                     collected.append(data)
             if collected:
                 candidate_records = collected
+            elif candidate_ids and candidate_records:
+                warnings.append("Coresignal collect returned no usable records; using search result records for normalization.")
             confirmed = [
                 record for record in candidate_records
                 if _coresignal_entity_decision(company_name, company_url, record, target_country)["confirmed"]
@@ -1133,8 +1140,12 @@ def _coresignal_company_search(company_name: str, company_url: str, limit: int) 
             break
     if not records:
         warnings.append("Coresignal company search returned no usable records.")
+        status_codes = {err.get("status_code") for err in request_errors if err.get("status_code")}
+        if 404 in status_codes:
+            warnings.append("Coresignal endpoint returned 404; verify CORESIGNAL_COMPANY_SEARCH_PATH/CORESIGNAL_COMPANY_COLLECT_PATH against the API product.")
         if diagnostics.get("company_records_returned"):
             warnings.append("Coresignal returned company candidates, but none passed domain/name/country entity confirmation.")
+    diagnostics["company_request_errors"] = request_errors[:6]
     return records[:limit], company_ids[:limit], diagnostics, warnings
 
 
@@ -1176,7 +1187,7 @@ def _coresignal_company_record(idx: int, company_name: str, company_url: str, ra
     record_name = decision["record_name"]
     record_domain = decision["record_domain"]
     raw_domain = raw.get("domain")
-    public_source = _first_key(raw, ("website", "company_website", "homepage_url", "url"))
+    public_source = _first_key(raw, ("website_domain", "website", "company_website", "homepage_url", "url"))
     if not public_source:
         public_source = _first_key(raw_domain, ("domain", "domainName", "url")) if isinstance(raw_domain, dict) else raw_domain
     public_url = _normalize_url(public_source or company_url)
