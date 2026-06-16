@@ -92,10 +92,7 @@
             const js = Babel.transform(tsx, {
               presets: [
                 ['react', { runtime: 'classic' }],
-                ['typescript', {
-                  allExtensions: true,
-                  isTSX: cleanFilename.endsWith('.tsx'),
-                }],
+                'typescript',
               ],
               filename: cleanFilename,
             }).code;
