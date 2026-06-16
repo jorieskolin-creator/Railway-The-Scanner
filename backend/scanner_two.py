@@ -1176,7 +1176,7 @@ def _build_previous_context_block(previous_context):
     persistent patterns that should carry extra weight.
     Returns empty string if no previous context is available.
     """
-    if not previous_context:
+    if not previous_context or not previous_context.get("last_scanned"):
         return ""
 
     # --- MOST RECENT SCAN (full detail) ---
@@ -1369,9 +1369,6 @@ def _build_evidence_anchors(previous_context):
 
     keyword_lines = [f'    - "{kw}"' for kw in list(keyword_set)[:8]]
 
-    if not url_lines and not keyword_lines:
-        return ""
-
     if url_lines:
         anchors.append(f"""    EVIDENCE ANCHORING — MANDATORY URL RE-VERIFICATION:
     The following URLs were found in the previous scan. You MUST search for and
@@ -1392,6 +1389,41 @@ def _build_evidence_anchors(previous_context):
 
     Previous key findings to re-verify:
 {chr(10).join(keyword_lines)}""")
+
+    company_evidence_candidates = previous_context.get("company_evidence_db_candidates", [])
+    candidate_lines = []
+    for item in company_evidence_candidates[:8]:
+        url = item.get("url", "")
+        title = item.get("title") or "Company Evidence DB source"
+        source_type = item.get("source_type") or "source"
+        provider = item.get("provider") or "stored acquisition"
+        cached_excerpt = (item.get("cached_excerpt") or item.get("snippet") or "").strip()
+        if url and url.startswith("http"):
+            line = f'    - "{title}" ({source_type}, {provider}): {url}'
+            if cached_excerpt:
+                line += f"\n      Cached extract for orientation only: {cached_excerpt[:180]}"
+            candidate_lines.append(line)
+        elif cached_excerpt:
+            candidate_lines.append(
+                f'    - "{title}" ({source_type}, {provider}): cached extract only, no live URL. '
+                f"Use as source-discovery context, not as a verified factual source.\n"
+                f"      Cached extract: {cached_excerpt[:220]}"
+            )
+
+    if candidate_lines:
+        anchors.append(f"""    COMPANY EVIDENCE DB CANDIDATES — SOURCE ACQUISITION TARGETS:
+    The following URLs were collected by the Admin Company Evidence DB workflow
+    using source-acquisition tools such as Firecrawl/Jina/Coresignal. Treat them
+    as CANDIDATE SOURCES ONLY, not verified facts. You MUST re-check entity,
+    content, and claim support before using them in findings, scoring, or prose.
+    If a page cannot be fetched live but the cached extract is relevant, use it
+    only as extraction context and still verify the claim/entity conservatively.
+
+    Company Evidence DB candidate URLs:
+{chr(10).join(candidate_lines)}""")
+
+    if not anchors:
+        return ""
 
     return "\n\n".join(anchors)
 

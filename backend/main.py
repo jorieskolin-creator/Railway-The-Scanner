@@ -47,7 +47,7 @@ from evidence_cleaner import CLEAN_EVIDENCE_MODEL_CHAIN, clean_company_evidence
 from llm_clients import call_anthropic_text, call_json_model_chain, call_openai_text
 from buying_potential import BuyingPotentialError, generate_buying_potential_report, load_service_portfolio_kb, validate_service_portfolio_kb
 from company_evidence import CompanyEvidenceError, build_company_evidence_database
-from company_source_ledger import CompanySourceLedgerError, build_company_source_ledger, ledger_scanner_seed_links
+from company_source_ledger import CompanySourceLedgerError, build_company_source_ledger
 
 # VERIFICATION LOG: v5.4.0 - Extended Thinking + Search Budget Upgrade
 print("Starting Adaptability Scanner Backend (v5.4.0 - Extended Thinking + Search Budget Upgrade)...", flush=True)
@@ -144,6 +144,112 @@ def _build_contradictions_block(verified_links: list, company_name: str) -> str:
 def _analysis_evidence_links(links: list) -> list:
     """Sources allowed to feed generated analysis, not merely live URLs."""
     return [l for l in (links or []) if is_generation_eligible_source(l)]
+
+
+def _company_evidence_db_scanner_candidates(company_evidence: dict | None, limit: int = 10) -> tuple[list[dict], dict]:
+    """
+    Convert Company Evidence DB records into neutral Scanner source candidates.
+
+    These are source-acquisition hints only. Scanner must re-check URL/content/entity/
+    claim support before any candidate can influence diagnosis or summaries.
+    """
+    stats = {
+        "candidates": 0,
+        "cached_extracts": 0,
+        "skipped": 0,
+        "skip_reasons": {},
+    }
+    if not isinstance(company_evidence, dict):
+        return [], stats
+
+    def skip(reason: str):
+        stats["skipped"] += 1
+        stats["skip_reasons"][reason] = stats["skip_reasons"].get(reason, 0) + 1
+
+    candidates = []
+    seen = set()
+    for record in company_evidence.get("records") or []:
+        if not isinstance(record, dict):
+            skip("invalid_record")
+            continue
+
+        provider_record_type = str(record.get("provider_record_type") or "").lower()
+        source_category = str(record.get("source_category") or "").lower()
+        source_type = str(record.get("source_type") or "").lower()
+        sales_use = str(record.get("sales_use") or "").lower()
+        entity_status = str(record.get("entity_match_status") or "").lower()
+
+        if record.get("blocked") is True:
+            skip("blocked")
+            continue
+        if record.get("wrong_entity") is True or entity_status == "wrong":
+            skip("wrong_entity")
+            continue
+        if record.get("page_not_found") is True or record.get("soft_404") is True:
+            skip("soft_404")
+            continue
+        if record.get("is_stale") is True:
+            skip("stale")
+            continue
+        if provider_record_type == "stakeholder_candidate" or source_category == "stakeholder_candidate":
+            skip("stakeholder_only")
+            continue
+        if record.get("internal_only") is True or "retired" in str(record.get("stakeholder_role_match_reason") or "").lower():
+            skip("retired_person")
+            continue
+        if sales_use in {"internal_only", "blocked"} or source_type.startswith("coresignal_stakeholder"):
+            skip("sales_only")
+            continue
+        if record.get("context_only") is True:
+            skip("context_only")
+            continue
+
+        url = str(record.get("url") or record.get("source_url") or "").strip()
+        cached_excerpt = (
+            record.get("source_quote")
+            or record.get("snippet")
+            or record.get("text_excerpt")
+            or record.get("markdown_excerpt")
+            or record.get("extracted_text")
+            or ""
+        )
+        cached_excerpt = re.sub(r"\s+", " ", str(cached_excerpt)).strip()[:900]
+        if not url and not cached_excerpt:
+            skip("no_url_or_cached_text")
+            continue
+
+        dedupe_key = (url.rstrip("/").lower() if url else str(record.get("content_hash") or cached_excerpt[:120]).lower())
+        if dedupe_key in seen:
+            skip("duplicate")
+            continue
+        seen.add(dedupe_key)
+
+        # Deliberately do not copy generation_eligible, promotion_status,
+        # allowed_as_fact, or analysis_verified from the Company Evidence DB.
+        candidate = {
+            "title": record.get("title") or record.get("source_title") or url or "Company Evidence DB source",
+            "url": url,
+            "snippet": cached_excerpt,
+            "source_quote": cached_excerpt,
+            "cached_excerpt": cached_excerpt,
+            "source_type": record.get("source_type") or "company_evidence_candidate",
+            "source_category": record.get("source_category"),
+            "source_database": "company_evidence_db",
+            "provider": record.get("provider"),
+            "provider_record_type": record.get("provider_record_type"),
+            "fetched_at": record.get("fetched_at") or record.get("last_checked") or record.get("generated_at"),
+            "content_hash": record.get("content_hash"),
+            "original_entity_match_status": record.get("entity_match_status"),
+            "original_verification_reason": record.get("verification_reason"),
+        }
+        candidates.append(candidate)
+        stats["candidates"] += 1
+        if cached_excerpt:
+            stats["cached_extracts"] += 1
+        if len(candidates) >= limit:
+            break
+
+    return candidates, stats
 
 
 def _financial_findings_to_evidence_links(financial_findings: list, company_name: str, company_domain: str = "") -> list:
@@ -3500,23 +3606,33 @@ def _execute_scan_pipeline(
         except Exception as e:
             print(f"   [History] Could not load previous data (non-critical): {e}")
 
-        ledger_seed_links = []
+        company_evidence_candidates = []
         try:
-            ledger_lookup = buying_storage.get_company_source_ledger(companyName)
-            if ledger_lookup.get("exists"):
-                ledger_seed_links = ledger_scanner_seed_links(ledger_lookup.get("ledger"), limit=8)
-                if ledger_seed_links:
+            evidence_lookup = buying_storage.get_company_evidence_database(companyName)
+            if evidence_lookup.get("exists"):
+                company_evidence_candidates, evidence_stats = _company_evidence_db_scanner_candidates(
+                    evidence_lookup.get("database"),
+                    limit=10,
+                )
+                if company_evidence_candidates:
                     if previous_context is None:
                         previous_context = {}
-                    previous_context["source_ledger_evidence"] = ledger_seed_links
-                    previous_context["previous_evidence"] = (
-                        ledger_seed_links + list(previous_context.get("previous_evidence") or [])
-                    )[:12]
-                    print(f"   [Source Ledger] Loaded {len(ledger_seed_links)} fresh source seed(s) for Scanner context.")
+                    previous_context["company_evidence_db_candidates"] = company_evidence_candidates
+                    skipped = evidence_stats.get("skipped", 0)
+                    skip_reasons = evidence_stats.get("skip_reasons", {})
+                    print(
+                        f"   [Company Evidence DB] Loaded {evidence_stats.get('candidates', 0)} candidate source(s), "
+                        f"{evidence_stats.get('cached_extracts', 0)} cached extract(s), {skipped} skipped."
+                    )
+                    if skip_reasons:
+                        print(f"   [Company Evidence DB] Skipped reasons: {skip_reasons}")
                 else:
-                    print("   [Source Ledger] Ledger found, but no fresh generation-eligible Scanner seeds available.")
+                    skipped = evidence_stats.get("skipped", 0)
+                    print(f"   [Company Evidence DB] Database found, but no Scanner-safe candidate sources available ({skipped} skipped).")
+            else:
+                print("   [Company Evidence DB] No source database found; Scanner will use normal search only.")
         except Exception as e:
-            print(f"   [Source Ledger] Optional lookup skipped: {e}")
+            print(f"   [Company Evidence DB] Optional lookup skipped: {e}")
 
         # --- STEP 2: SCANNER 2 (Reality) + FINANCIAL HEALTH (Parallel) ---
         if job_id:

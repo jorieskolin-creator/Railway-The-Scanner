@@ -1,10 +1,11 @@
 """
 Shared Company Source Ledger.
 
-The ledger is reusable source memory for one company. It combines Scanner
+The ledger is reusable source memory for Buying Insight. It combines Scanner
 evidence, financial source records, foresight links, Company Evidence DB records,
 and Buying Insight source references without promoting anything to truth.
-Scanner and Buying Insight may read it, but each still applies its own gates.
+Live Scanner scans do not consume this ledger; Scanner reads Company Evidence DB
+candidates directly and re-applies its own evidence gates.
 """
 
 from __future__ import annotations
@@ -367,21 +368,21 @@ def build_company_source_ledger(
     if not records:
         warnings.append("No reusable source records were found for this company.")
     if stats["scanner_seed_eligible"] == 0:
-        warnings.append("No fresh generation-eligible records are available as Scanner source seeds.")
+        warnings.append("No fresh generation-eligible records are present in the ledger; this does not affect live Scanner scans.")
     if stats["buying_eligible"] == 0:
         warnings.append("No buying-eligible ledger records are available; Buying Insight must rely on Scanner payload/service KB.")
     if stats["stale"] > max(2, len(records) // 3):
         warnings.append("A large share of ledger records are stale; refresh Company Evidence DB before relying on them.")
 
-    scanner_seed_links = ledger_scanner_seed_links({"records": records}, limit=12)
     ledger = {
         "report_type": "company_source_ledger",
         "status": "ready",
+        "ledger_scope": "buying_insight_only",
         "company_name": company_name,
         "company_url": company_data.get("companyUrl") or company_data.get("url"),
         "generated_at": generated_at,
         "records": records,
-        "scanner_seed_links": scanner_seed_links,
+        "scanner_seed_links": [],
         "stats": stats,
         "warnings": warnings,
         "source_inputs": {
@@ -390,12 +391,13 @@ def build_company_source_ledger(
             "buying_insight_available": isinstance(buying_potential, dict),
             "buying_insight_generated_at": buying_potential.get("generated_at") if isinstance(buying_potential, dict) else None,
         },
-        "trust_note": "This ledger is source memory, not truth. Scanner and Buying Insight must re-apply their own evidence gates before using a record.",
+        "trust_note": "This ledger is source memory, not truth. It is intended for Buying Insight. Live Scanner scans use Company Evidence DB candidates directly and must re-apply Scanner evidence gates.",
     }
     return ledger, render_company_source_ledger_html(ledger)
 
 
 def ledger_scanner_seed_links(ledger: dict | None, limit: int = 10) -> list[dict]:
+    """Deprecated compatibility helper; live scans no longer consume ledger seeds."""
     if not isinstance(ledger, dict):
         return []
     records = _list(ledger.get("records"))
@@ -484,13 +486,13 @@ def render_company_source_ledger_html(ledger: dict) -> str:
   <p class="meta">{html.escape(str(ledger.get('trust_note') or ''))}</p>
   <div class="grid">
     <div class="metric"><span>Records</span><strong>{stats.get('records', 0)}</strong></div>
-    <div class="metric"><span>Scanner Seeds</span><strong>{stats.get('scanner_seed_eligible', 0)}</strong></div>
+    <div class="metric"><span>Legacy Scan-Safe</span><strong>{stats.get('scanner_seed_eligible', 0)}</strong></div>
     <div class="metric"><span>Buying Eligible</span><strong>{stats.get('buying_eligible', 0)}</strong></div>
     <div class="metric"><span>Deduplicated</span><strong>{stats.get('deduplicated', 0)}</strong></div>
   </div>
   {f'<div class="warn"><strong>Warnings</strong><ul>{warning_html}</ul></div>' if warning_html else ''}
   <table>
-    <thead><tr><th>ID</th><th>Source</th><th>Origins</th><th>Type</th><th>Scanner seed</th><th>Buying</th><th>Freshness</th><th>Quote / snippet</th></tr></thead>
+    <thead><tr><th>ID</th><th>Source</th><th>Origins</th><th>Type</th><th>Legacy scan-safe</th><th>Buying</th><th>Freshness</th><th>Quote / snippet</th></tr></thead>
     <tbody>{''.join(rows)}</tbody>
   </table>
 </body>
