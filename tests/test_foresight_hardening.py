@@ -391,7 +391,7 @@ class TestCompanySpecificEvidencePreservation:
         assert item.get("not_evidence_of_deployment") is True
         assert item.get("generation_scope") == "foresight_synthesis_only"
 
-    def test_classify_preserves_analysis_verified_foresight_promotion(self):
+    def test_classify_preserves_foresight_context_promotion_without_company_generation(self):
         record = {
             "name": COMPANY,
             "foresight_links": [
@@ -410,9 +410,9 @@ class TestCompanySpecificEvidencePreservation:
         }
         classified = classify_source_registry_items(record)
         item = classified["foresight_links"][0]
-        assert item.get("generation_eligible") is True
-        assert item.get("analysis_verified") is True
-        assert item.get("promotion_status") == "generation_eligible"
+        assert item.get("generation_eligible") is False
+        assert item.get("analysis_verified") is False
+        assert item.get("promotion_status") == "foresight_context_eligible"
         assert item.get("claim_support_status") == "supported"
         assert item.get("excluded_from_company_fact_generation") is True
         assert item.get("foresight_context_eligible") is True

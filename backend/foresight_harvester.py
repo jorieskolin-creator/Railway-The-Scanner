@@ -180,9 +180,15 @@ def _mark_foresight_context_unavailable(
     excluded: bool = False,
 ) -> dict:
     sig = _prepare_signal_for_promotion(sig, theme)
+    # Central Foresight KB signals are macro context, not company evidence.
+    # Keep the legacy company-evidence fields false so downstream code does
+    # not confuse KB context with company-fact generation eligibility.
     sig["analysis_verified"] = False
     sig["generation_eligible"] = False
     sig["foresight_context_eligible"] = False
+    sig["theme_match"] = False
+    sig["trend_supported"] = False
+    sig["source_readable"] = False
     sig["content_verified"] = False
     sig["claim_support_status"] = "unavailable" if excluded else "unchecked"
     sig["promotion_status"] = "excluded" if excluded else "display_only"
@@ -200,11 +206,21 @@ def _foresight_context_supported(sig: dict, result: dict) -> bool:
     content_verified = result.get("content_verified") is True or bool(quote)
     cred = _foresight_source_credibility(sig)
     credible_source = cred in {"high", "medium"}
-    if not content_verified or support not in FORESIGHT_CONTEXT_SUPPORT_STATUSES:
+
+    # Foresight KB verification is not a company claim-support test.  The
+    # question is whether a credible macro/industry source is readable and
+    # directionally supports the stored trend signal.  Treat low-score or
+    # explicitly unsupported checks as display-only, but allow high-credibility
+    # partial/contextual matches to ground foresight synthesis.
+    if not content_verified or support == "unsupported":
         return False
-    if support == "supported":
-        return score >= FORESIGHT_CONTEXT_MIN_SCORE or (credible_source and score >= FORESIGHT_CONTEXT_PARTIAL_MIN_SCORE)
-    return credible_source and score >= FORESIGHT_CONTEXT_PARTIAL_MIN_SCORE and bool(quote)
+    if support in FORESIGHT_CONTEXT_SUPPORT_STATUSES:
+        if support == "supported":
+            return score >= FORESIGHT_CONTEXT_PARTIAL_MIN_SCORE or (credible_source and score >= 25)
+        return credible_source and score >= 25
+    if credible_source and score >= FORESIGHT_CONTEXT_PARTIAL_MIN_SCORE and bool(quote):
+        return True
+    return False
 
 
 def _apply_signal_promotion(sig: dict, result: dict | None, theme: str) -> dict:
@@ -224,7 +240,9 @@ def _apply_signal_promotion(sig: dict, result: dict | None, theme: str) -> dict:
         sig["content_match_score"] = score
     raw_support = str(result.get("claim_support_status") or sig.get("claim_support_status") or "unchecked").lower()
     sig["foresight_context_support_status"] = raw_support
-    sig["content_verified"] = result.get("content_verified") is True or bool(result.get("source_quote"))
+    source_readable = result.get("content_verified") is True or bool(result.get("source_quote"))
+    sig["source_readable"] = source_readable
+    sig["content_verified"] = source_readable
     reason = result.get("reason") or sig.get("content_verification_reason") or ""
     sig["content_verification_reason"] = reason
     sig["content_match_reason"] = reason
@@ -234,9 +252,14 @@ def _apply_signal_promotion(sig: dict, result: dict | None, theme: str) -> dict:
 
     eligible = _foresight_context_supported(sig, result)
     sig["foresight_context_eligible"] = eligible
-    sig["analysis_verified"] = eligible
-    sig["generation_eligible"] = eligible
-    sig["promotion_status"] = "generation_eligible" if eligible else "display_only"
+    sig["theme_match"] = bool(source_readable and score >= 25 and raw_support != "unsupported")
+    sig["trend_supported"] = eligible
+    # Do not promote central KB records as company-evidence generation items.
+    # Company scans consume `foresight_context_eligible` and then decide
+    # company relevance separately.
+    sig["analysis_verified"] = False
+    sig["generation_eligible"] = False
+    sig["promotion_status"] = "foresight_context_eligible" if eligible else "display_only"
     sig["source_registry_status"] = (
         "checked_foresight_context_eligible" if eligible else "checked_context_only"
     )
@@ -338,8 +361,11 @@ def _promote_foresight_signals_for_analysis(
     data["validation"]["url_verified"] = url_verified
     data["validation"]["content_verified"] = content_verified
     data["validation"]["foresight_context_eligible"] = context_eligible
-    data["validation"]["analysis_verified"] = context_eligible
-    data["validation"]["generation_eligible"] = context_eligible
+    data["validation"]["theme_match"] = sum(1 for s in signals if s.get("theme_match") is True)
+    data["validation"]["trend_supported"] = sum(1 for s in signals if s.get("trend_supported") is True)
+    data["validation"]["source_readable"] = sum(1 for s in signals if s.get("source_readable") is True)
+    data["validation"]["analysis_verified"] = 0
+    data["validation"]["generation_eligible"] = 0
     data["validation"]["display_only"] = sum(1 for s in signals if s.get("promotion_status") == "display_only")
     data["validation"]["excluded"] = sum(1 for s in signals if s.get("promotion_status") == "excluded")
     data["validation"]["foresight_evidence_version"] = FORESIGHT_KB_EVIDENCE_VERSION
@@ -738,8 +764,8 @@ def harvest_all_themes(
     return results
 
 
-def _is_kb_signal_generation_eligible(sig: dict) -> bool:
-    """Only verified foresight-context KB signals may enter foresight prompts."""
+def _is_kb_signal_context_eligible(sig: dict) -> bool:
+    """Only verified company-neutral KB context signals may enter foresight prompts."""
     if not isinstance(sig, dict):
         return False
     if sig.get("company_specific") is True or sig.get("wrong_entity") is True:
@@ -751,16 +777,19 @@ def _is_kb_signal_generation_eligible(sig: dict) -> bool:
         or sig.get("not_evidence_of_deployment") is True
         or source_type in {"foresight", "foresight_report", "trend_report", "regulatory_context"}
     )
+    promotion = str(sig.get("promotion_status") or "").lower()
     return (
         context_safe
-        and sig.get("analysis_verified") is True
-        and sig.get("generation_eligible") is True
-        and sig.get("promotion_status") == "generation_eligible"
-        and (
-            sig.get("foresight_context_eligible") is True
-            or sig.get("foresight_evidence_version") != FORESIGHT_KB_EVIDENCE_VERSION
-        )
+        and sig.get("foresight_context_eligible") is True
+        and promotion not in {"excluded", "checked_excluded"}
+        and (sig.get("url_verified") is True or sig.get("verified") is True)
+        and (sig.get("source_readable") is not False or sig.get("content_verified") is True or bool(sig.get("source_quote")))
     )
+
+
+# Backward-compatible alias for older imports/tests.  The name is legacy; the
+# behavior is now foresight-context eligibility, not company evidence generation.
+_is_kb_signal_generation_eligible = _is_kb_signal_context_eligible
 
 
 def get_kb_signals_for_themes(theme_names: list[str]) -> list[dict]:
@@ -785,7 +814,7 @@ def get_kb_signals_for_themes(theme_names: list[str]) -> list[dict]:
 
         if data and data.get("signals"):
             for sig in data["signals"]:
-                if _is_kb_signal_generation_eligible(sig):
+                if _is_kb_signal_context_eligible(sig):
                     promoted = dict(sig)
                     promoted["_from_kb"] = True
                     promoted["_kb_theme"] = theme
@@ -797,7 +826,7 @@ def get_kb_signals_for_themes(theme_names: list[str]) -> list[dict]:
                 display = validation.get("display_only", 0)
                 excluded = validation.get("excluded", 0)
                 print(
-                    f"   ⚠️ [Foresight KB] {theme}: {eligible}/{total} context-eligible "
+                    f"   ⚠️ [Foresight KB] {theme}: {eligible}/{total} foresight-context eligible "
                     f"(display-only {display}, excluded {excluded})"
                 )
 
@@ -809,7 +838,7 @@ def get_kb_signals_for_themes(theme_names: list[str]) -> list[dict]:
                 fallback_data = storage.get_foresight_kb(fallback_slug)
                 if fallback_data and fallback_data.get("signals"):
                     for sig in fallback_data["signals"]:
-                        if _is_kb_signal_generation_eligible(sig):
+                        if _is_kb_signal_context_eligible(sig):
                             promoted = dict(sig)
                             promoted["_from_kb"] = True
                             promoted["_kb_theme"] = theme  # Tag with the originally requested theme
@@ -963,7 +992,7 @@ def cleanup_foresight_kb(progress_callback=None) -> dict:
         url_verified = sum(1 for s in alive_signals if s.get("url_verified") is True or s.get("verified") is True)
         content_verified = sum(1 for s in alive_signals if s.get("content_verified") is True)
         context_eligible = sum(1 for s in alive_signals if s.get("foresight_context_eligible") is True)
-        analysis_verified = context_eligible
+        analysis_verified = 0
         display_only = sum(1 for s in alive_signals if s.get("promotion_status") == "display_only")
         excluded = sum(1 for s in alive_signals if s.get("promotion_status") == "excluded")
         results["signals_after"] += after_count

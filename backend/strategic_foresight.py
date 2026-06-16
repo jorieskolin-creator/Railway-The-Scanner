@@ -1379,7 +1379,7 @@ def generate_foresight(
         kb_signals = []
 
     if not kb_signals:
-        print(f"   ⚠️ [Foresight KB] No generation-eligible KB signals for {domain}")
+        print(f"   ⚠️ [Foresight KB] No foresight-context eligible KB signals for {domain}")
         return None
 
     verified_kb_signals = _quick_verify_kb_signals(kb_signals)

@@ -70,6 +70,8 @@ def _aggregate_kb_signals(all_kb: dict) -> dict:
     for theme_slug, theme_data in all_kb.items():
         signals = theme_data.get("signals", [])
         for sig in signals:
+            if str(sig.get("promotion_status") or "").lower() in {"excluded", "checked_excluded"}:
+                continue
             fp_theme = sig.get("fp_theme", "")
             category = THEME_CATEGORIES.get(fp_theme, "Unknown")
             by_category[category].append({
@@ -87,6 +89,11 @@ def _aggregate_kb_signals(all_kb: dict) -> dict:
                 "industries_affected": sig.get("industries_affected", []),
                 "source_url": sig.get("source_url", ""),
                 "source_count": sig.get("source_count", 0),
+                "foresight_context_eligible": sig.get("foresight_context_eligible") is True,
+                "theme_match": sig.get("theme_match") is True,
+                "trend_supported": sig.get("trend_supported") is True,
+                "source_readable": sig.get("source_readable") is not False,
+                "source_registry_status": sig.get("source_registry_status", ""),
             })
             by_timeframe[sig.get("timeframe", "unknown")] += 1
             by_force_type[sig.get("force_type", "unknown")] += 1
@@ -1036,7 +1043,7 @@ def generate_observatory(progress_callback=None):
         for theme in config.get("fp_themes", []):
             for theme_slug, theme_data in data["all_kb"].items():
                 for sig in theme_data.get("signals", []):
-                    if sig.get("fp_theme") == theme:
+                    if sig.get("fp_theme") == theme and str(sig.get("promotion_status") or "").lower() not in {"excluded", "checked_excluded"}:
                         kb_signals.append(sig)
 
         # Find market health for this domain

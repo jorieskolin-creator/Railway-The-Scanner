@@ -33,7 +33,7 @@ def _signal(**extra):
     return base
 
 
-def test_supported_foresight_signal_becomes_generation_eligible(monkeypatch):
+def test_supported_foresight_signal_becomes_context_eligible(monkeypatch):
     monkeypatch.setattr(
         foresight_harvester,
         "_check_relevance",
@@ -51,9 +51,9 @@ def test_supported_foresight_signal_becomes_generation_eligible(monkeypatch):
     data = foresight_harvester._verify_signal_content({"theme": "Automation", "signals": [_signal()]})
     sig = data["signals"][0]
 
-    assert sig["analysis_verified"] is True
-    assert sig["generation_eligible"] is True
-    assert sig["promotion_status"] == "generation_eligible"
+    assert sig["analysis_verified"] is False
+    assert sig["generation_eligible"] is False
+    assert sig["promotion_status"] == "foresight_context_eligible"
     assert sig["claim_support_status"] == "supported"
     assert sig["content_relevance_score"] == 86
     assert sig["source_quote"]
@@ -63,6 +63,9 @@ def test_supported_foresight_signal_becomes_generation_eligible(monkeypatch):
     assert sig["not_evidence_of_deployment"] is True
     assert sig["requires_company_specific_corroboration"] is True
     assert sig["foresight_context_eligible"] is True
+    assert sig["theme_match"] is True
+    assert sig["trend_supported"] is True
+    assert sig["source_readable"] is True
     assert sig["generation_scope"] == "foresight_synthesis_only"
     assert sig["excluded_from_company_fact_generation"] is True
     assert sig["foresight_evidence_version"] == foresight_harvester.FORESIGHT_KB_EVIDENCE_VERSION
@@ -87,8 +90,8 @@ def test_high_credibility_partial_foresight_support_can_be_context_eligible(monk
     sig = data["signals"][0]
 
     assert sig["foresight_context_eligible"] is True
-    assert sig["analysis_verified"] is True
-    assert sig["generation_eligible"] is True
+    assert sig["analysis_verified"] is False
+    assert sig["generation_eligible"] is False
     assert sig["claim_support_status"] == "supported"
     assert sig["foresight_context_support_status"] == "partial"
     assert sig["verification_reason"] == "foresight_context_verified"
@@ -120,7 +123,7 @@ def test_live_irrelevant_foresight_signal_stays_display_only(monkeypatch):
     assert sig["verification_reason"] == "claim_unsupported"
 
 
-def test_kb_selection_ignores_legacy_validated_but_unpromoted_signals(monkeypatch):
+def test_kb_selection_uses_context_eligibility_not_company_generation(monkeypatch):
     class FakeStorage:
         def get_foresight_kb(self, slug):
             return {
@@ -129,11 +132,12 @@ def test_kb_selection_ignores_legacy_validated_but_unpromoted_signals(monkeypatc
                     _signal(title="Old validated signal", analysis_verified=False, generation_eligible=True),
                     _signal(
                         title="Promoted signal",
-                        analysis_verified=True,
-                        generation_eligible=True,
-                        promotion_status="generation_eligible",
+                        analysis_verified=False,
+                        generation_eligible=False,
+                        promotion_status="foresight_context_eligible",
                         claim_type="foresight_context",
                         foresight_context_eligible=True,
+                        source_readable=True,
                     ),
                 ],
             }
@@ -146,7 +150,7 @@ def test_kb_selection_ignores_legacy_validated_but_unpromoted_signals(monkeypatc
     assert signals[0]["_from_kb"] is True
 
 
-def test_kb_near_fit_fallback_obeys_generation_eligibility(monkeypatch):
+def test_kb_near_fit_fallback_obeys_context_eligibility(monkeypatch):
     class FakeStorage:
         def get_foresight_kb(self, slug):
             if slug == foresight_harvester._theme_to_slug("Requested"):
@@ -157,11 +161,12 @@ def test_kb_near_fit_fallback_obeys_generation_eligibility(monkeypatch):
                     _signal(title="Fallback old", analysis_verified=False, generation_eligible=True),
                     _signal(
                         title="Fallback promoted",
-                        analysis_verified=True,
-                        generation_eligible=True,
-                        promotion_status="generation_eligible",
+                        analysis_verified=False,
+                        generation_eligible=False,
+                        promotion_status="foresight_context_eligible",
                         claim_type="foresight_context",
                         foresight_context_eligible=True,
+                        source_readable=True,
                     ),
                 ],
             }

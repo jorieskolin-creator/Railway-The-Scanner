@@ -422,7 +422,10 @@ def _mark_sanitized_foresight_context(item: dict) -> None:
 
     if _has_analysis_verified_promotion(item):
         item["foresight_context_eligible"] = True
-        item["generation_eligible"] = True
+        item["analysis_verified"] = False
+        item["generation_eligible"] = False
+        item["promotion_status"] = "foresight_context_eligible"
+        item["claim_support_status"] = item.get("claim_support_status") or "supported"
         item["source_registry_status"] = "checked_foresight_context_eligible"
         item.setdefault("verification_reason", "stored_foresight_context_repaired")
         return
