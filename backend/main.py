@@ -965,34 +965,24 @@ async def get_dashboard_data(response: Response):
 async def get_fp_themes(request: Request):
     """Return the 30 Strategic Foresight themes with descriptions and source counts. Guest or Admin."""
     verify_guest_or_admin(request)
-    from strategic_foresight import FP_THEMES_30, FP_THEME_DESCRIPTIONS, FP_THEME_SOURCES
-    categories = {
-        "Technology & Digital": FP_THEMES_30[0:3],
-        "Economy & Business": FP_THEMES_30[3:8],
-        "Industry & Infrastructure": FP_THEMES_30[8:13],
-        "Environment & Resources": FP_THEMES_30[13:18],
-        "Society & Governance": FP_THEMES_30[18:23],
-        "People & Well-being": FP_THEMES_30[23:28],
-        "Science & Demographics": FP_THEMES_30[28:30],
+    from strategic_foresight import build_strategic_foresight_theme_registry
+
+    registry = build_strategic_foresight_theme_registry()
+    return {
+        "categories": [c["name"] for c in registry.get("categories", [])],
+        "themes": [
+            {
+                "name": t.get("name", ""),
+                "category": t.get("category", ""),
+                "description": t.get("description", ""),
+                "source_count": t.get("source_count", 0),
+                "source_domains": t.get("source_domains", []),
+            }
+            for t in registry.get("themes", [])
+        ],
+        "registry_version": registry.get("registry_version"),
+        "refresh_rules": registry.get("refresh_rules", {}),
     }
-    themes = []
-    for cat_name, cat_themes in categories.items():
-        for theme in cat_themes:
-            sources = FP_THEME_SOURCES.get(theme, [])
-            # Extract domain from "site:domain.com search terms" format
-            domains = []
-            for s in sources:
-                if s.startswith("site:"):
-                    parts = s.split(" ", 1)
-                    domains.append(parts[0].replace("site:", ""))
-            themes.append({
-                "name": theme,
-                "category": cat_name,
-                "description": FP_THEME_DESCRIPTIONS.get(theme, ""),
-                "source_count": len(sources),
-                "source_domains": domains,
-            })
-    return {"categories": list(categories.keys()), "themes": themes}
 
 @app.get("/api/fp-themes/{theme_slug}/signals")
 async def get_theme_signals(theme_slug: str, request: Request):

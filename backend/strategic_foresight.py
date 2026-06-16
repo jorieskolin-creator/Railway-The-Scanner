@@ -599,6 +599,159 @@ FP_THEME_SOURCES = {
     ],
 }
 
+
+FP_THEME_CATEGORIES = {
+    "Technology & Digital": FP_THEMES_30[0:3],
+    "Economy & Business": FP_THEMES_30[3:8],
+    "Industry & Infrastructure": FP_THEMES_30[8:13],
+    "Environment & Resources": FP_THEMES_30[13:18],
+    "Society & Governance": FP_THEMES_30[18:23],
+    "People & Well-being": FP_THEMES_30[23:28],
+    "Science & Demographics": FP_THEMES_30[28:30],
+}
+
+
+FORESIGHT_SOURCE_QUALITY_TIERS = {
+    "tier_1": {
+        "label": "Highest authority",
+        "description": "Intergovernmental bodies, UN agencies, flagship journals, national academies, and official policy institutions.",
+        "domains": {
+            "ipcc.ch", "who.int", "iea.org", "irena.org", "imf.org", "worldbank.org",
+            "oecd.org", "nature.com", "science.org", "thelancet.com", "bis.org",
+            "fao.org", "ilo.org", "unep.org", "wto.org", "unctad.org", "unfccc.int",
+            "ipbes.net", "iom.int", "un.org", "ec.europa.eu", "europa.eu", "wmo.int",
+            "population.un.org", "en.unesco.org", "erc.europa.eu",
+        },
+    },
+    "tier_2": {
+        "label": "High authority",
+        "description": "Independent think tanks, major academic institutions, and established European research bodies.",
+        "domains": {
+            "chathamhouse.org", "rand.org", "brookings.edu", "carnegieendowment.org",
+            "csis.org", "iiss.org", "sipri.org", "oxfordmartin.ox.ac.uk",
+            "turing.ac.uk", "hai.stanford.edu", "lse.ac.uk", "oii.ox.ac.uk",
+            "bruegel.org", "cser.ac.uk", "belfercenter.org", "hks.harvard.edu",
+            "piie.com", "research.aalto.fi", "sloanreview.mit.edu", "ed.stanford.edu",
+            "openlearning.mit.edu", "isi.fraunhofer.de", "iiasa.ac.at",
+            "pik-potsdam.de", "futureearth.org", "oeaw.ac.at",
+        },
+    },
+    "tier_3": {
+        "label": "Solid specialist",
+        "description": "Foresight organisations, specialist research bodies, sector institutes, and well-established NGOs.",
+        "domains": {
+            "iftf.org", "cifs.dk", "soif.org.uk", "futures.hawaii.edu",
+            "weforum.org", "ellenmacarthurfoundation.org", "wri.org", "rmi.org",
+            "iucn.org", "fair.work", "sitra.fi", "nesta.org.uk", "c40.org",
+            "millennium-project.org", "clubofrome.org", "wfsf.org", "hybridcoe.fi",
+            "enisa.europa.eu", "edpb.europa.eu", "europol.europa.eu", "euipo.europa.eu",
+            "eu-osha.europa.eu", "eurofound.europa.eu", "gsma.com", "ericsson.com",
+            "cepi.org", "prb.org", "educause.edu", "wise-qatar.org",
+        },
+    },
+    "tier_4": {
+        "label": "Supplementary",
+        "description": "Commercial analysts, consultancies, professional associations, and reputable media used selectively.",
+        "domains": {
+            "mckinsey.com", "deloitte.com", "gartner.com", "forrester.com", "bcg.com",
+            "pwc.com", "hbr.org", "reuters.com", "ft.com", "bloomberg.com",
+            "economist.com", "wsj.com", "bbc.com", "idc.com", "accenture.com",
+            "kpmg.com", "capgemini.com", "cisco.com", "weforum.org", "euromonitor.com",
+            "mintel.com", "pewresearch.org", "gallup.com", "shrm.org", "cipd.org",
+        },
+    },
+}
+
+
+def _extract_site_domain(query: str) -> str:
+    """Extract the first `site:domain` target from a curated query seed."""
+    if not query:
+        return ""
+    match = re.search(r"site:([^\s)]+)", query)
+    if not match:
+        return ""
+    return match.group(1).strip().lower().replace("www.", "")
+
+
+def _source_quality_tier_for_domain(domain: str) -> str:
+    domain = (domain or "").lower().replace("www.", "")
+    if not domain:
+        return "unknown"
+    for tier, spec in FORESIGHT_SOURCE_QUALITY_TIERS.items():
+        if domain in spec["domains"] or any(domain.endswith(f".{d}") for d in spec["domains"]):
+            return tier
+    return "tier_4"
+
+
+def _refresh_tactics_for_theme(theme: str, queries: list[str]) -> list[dict]:
+    """Describe what the harvester should look for when refreshing a theme."""
+    tactics = []
+    for query in queries:
+        domain = _extract_site_domain(query)
+        terms = query.split(" ", 1)[1] if " " in query else ""
+        tactics.append({
+            "query_seed": query,
+            "source_domain": domain,
+            "source_quality_tier": _source_quality_tier_for_domain(domain),
+            "look_for": terms,
+            "allowed_source_type": "macro_or_industry_foresight",
+            "validation_contract": "foresight_context",
+        })
+    return tactics
+
+
+def build_strategic_foresight_theme_registry() -> dict:
+    """
+    Build the company-neutral Strategic Foresight Theme Registry.
+
+    Registry = curated source map and refresh tactics.
+    Foresight KB = harvested signals under this registry.
+    Company scans decide company-specific relevance separately.
+    """
+    generated_at = datetime.utcnow().isoformat()
+    themes = []
+    for category, category_themes in FP_THEME_CATEGORIES.items():
+        for theme in category_themes:
+            queries = FP_THEME_SOURCES.get(theme, [])
+            tactics = _refresh_tactics_for_theme(theme, queries)
+            themes.append({
+                "name": theme,
+                "slug": re.sub(r"[^a-z0-9]+", "_", theme.lower()).strip("_"),
+                "category": category,
+                "description": FP_THEME_DESCRIPTIONS.get(theme, ""),
+                "source_count": len(queries),
+                "source_domains": [t["source_domain"] for t in tactics if t.get("source_domain")],
+                "query_seeds": queries,
+                "refresh_tactics": tactics,
+                "quality_framework": "4-tier academic and institutional source-quality framework",
+                "allowed_claim_type": "foresight_context",
+                "company_specific": False,
+            })
+
+    return {
+        "registry_version": "strategic-foresight-theme-registry-v1",
+        "generated_at": generated_at,
+        "theme_count": len(themes),
+        "categories": [
+            {"name": name, "theme_count": len(theme_names), "themes": theme_names}
+            for name, theme_names in FP_THEME_CATEGORIES.items()
+        ],
+        "source_quality_tiers": {
+            tier: {k: sorted(v) if k == "domains" else v for k, v in spec.items()}
+            for tier, spec in FORESIGHT_SOURCE_QUALITY_TIERS.items()
+        },
+        "refresh_rules": {
+            "source_of_truth": "curated Strategic Foresight Theme Registry",
+            "search_scope": "allowed source domains and query seeds only",
+            "stored_signal_contract": "foresight_context",
+            "company_metadata_allowed": False,
+            "display_only_storage_policy": "do_not_store_in_central_kb",
+            "company_relevance_policy": "decided during company scan and stored only in company summary",
+        },
+        "themes": themes,
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # DOMAIN → FORESIGHT THEME MAPPING
 # Maps the scanner's 14 KNOWN_DOMAINS to the Strategic Foresight 30-theme taxonomy
@@ -1380,7 +1533,19 @@ def generate_foresight(
 
     if not kb_signals:
         print(f"   ⚠️ [Foresight KB] No foresight-context eligible KB signals for {domain}")
-        return None
+        foresight_data = _generate_foresight_from_registry_sources(
+            company_name=company_name,
+            domain=domain,
+            archetype=archetype,
+            reality_score=int(reality_score or 0),
+            financial_index=financial_index,
+            top_findings=top_findings or [],
+            domain_config=domain_config,
+            fallback_reason="no_foresight_context_eligible_kb_signals",
+        )
+        if not foresight_data:
+            return None
+        return _sanitize_foresight_data(foresight_data, domain=domain, company_name=company_name)
 
     verified_kb_signals = _quick_verify_kb_signals(kb_signals)
     if len(verified_kb_signals) < _MIN_KB_SIGNALS_FOR_SYNTHESIS:
@@ -1388,7 +1553,19 @@ def generate_foresight(
             f"   ⚠️ [Foresight KB] Insufficient verified KB signals "
             f"({len(verified_kb_signals)}/{_MIN_KB_SIGNALS_FOR_SYNTHESIS}) for {company_name}"
         )
-        return None
+        foresight_data = _generate_foresight_from_registry_sources(
+            company_name=company_name,
+            domain=domain,
+            archetype=archetype,
+            reality_score=int(reality_score or 0),
+            financial_index=financial_index,
+            top_findings=top_findings or [],
+            domain_config=domain_config,
+            fallback_reason="insufficient_verified_kb_signals",
+        )
+        if not foresight_data:
+            return None
+        return _sanitize_foresight_data(foresight_data, domain=domain, company_name=company_name)
 
     foresight_data = _generate_foresight_from_kb(
         company_name=company_name,
@@ -1403,6 +1580,161 @@ def generate_foresight(
     if not foresight_data:
         return None
     return _sanitize_foresight_data(foresight_data, domain=domain, company_name=company_name)
+
+
+def _generate_foresight_from_registry_sources(
+    company_name: str,
+    domain: str,
+    archetype: str,
+    reality_score: int,
+    financial_index: int | None,
+    top_findings: list[dict],
+    domain_config: dict,
+    fallback_reason: str,
+) -> dict | None:
+    """
+    Narrow fallback when the Foresight KB is thin.
+
+    This uses the curated Strategic Foresight Theme Registry source domains and
+    query seeds as the search boundary. It is intentionally not a broad harvest:
+    scan-time output is company-specific interpretation, while reusable macro
+    signals can later be harvested/cleaned into the central Foresight KB.
+    """
+    themes = domain_config.get("fp_themes", [])
+    theme_queries = []
+    for theme in themes:
+        theme_queries.extend(FP_THEME_SOURCES.get(theme, [])[:3])
+    theme_domains = []
+    for q in theme_queries:
+        domain_name = _extract_site_domain(q)
+        if domain_name and domain_name not in theme_domains:
+            theme_domains.append(domain_name)
+
+    kb_context = f"""
+STRATEGIC THEME REGISTRY FALLBACK:
+The central Foresight KB had insufficient currently eligible signals ({fallback_reason}).
+Use only the curated Strategic Foresight Theme Registry source domains/query seeds below.
+Treat every finding as macro or industry context, not company-specific evidence.
+Do not cite company deployment, compliance failure, or current adoption unless separate company evidence says so.
+
+Curated theme domains for this scan: {", ".join(theme_domains[:24]) or "N/A"}
+"""
+
+    prompt = _build_foresight_prompt(
+        company_name=company_name,
+        domain=domain,
+        archetype=archetype,
+        reality_score=reality_score,
+        financial_index=financial_index,
+        top_findings=top_findings,
+        domain_config=domain_config,
+        kb_context=kb_context,
+    )
+
+    models = (
+        ("gpt-5.5", "openai", 105),
+        ("claude-sonnet-4-6", "anthropic", 90),
+    )
+
+    for model_name, provider, timeout_sec in models:
+        try:
+            print(
+                f"   🔭 [Foresight Registry] Attempting curated-source fallback via "
+                f"{model_name} ({fallback_reason})..."
+            )
+            t0 = time.time()
+            if provider == "anthropic":
+                text = call_anthropic_text(
+                    prompt,
+                    model=model_name,
+                    max_tokens=9000,
+                    timeout=timeout_sec,
+                    web_search=True,
+                    max_searches=6,
+                    thinking_budget=900,
+                )
+            else:
+                text = call_openai_text(
+                    prompt,
+                    model=model_name,
+                    max_output_tokens=9000,
+                    timeout=timeout_sec,
+                    web_search=True,
+                    search_context_size="medium",
+                )
+            elapsed = int((time.time() - t0) * 1000)
+            if not text or len(text) < 100:
+                print(f"   ⚠️ [Foresight Registry] {model_name} returned insufficient text ({elapsed}ms)")
+                continue
+            json_str = _extract_json_from_text(text)
+            if not json_str:
+                print(f"   ⚠️ [Foresight Registry] Could not extract JSON from {model_name} ({elapsed}ms)")
+                continue
+            data = json.loads(json_str, strict=False)
+            if not data.get("dimension_forces") or not data.get("scenarios"):
+                print(f"   ⚠️ [Foresight Registry] {model_name} returned incomplete structure ({elapsed}ms)")
+                continue
+
+            urls_to_check = set()
+            for force in data.get("dimension_forces", []):
+                source_url = (force.get("source_url") or "").strip()
+                if source_url.startswith("http"):
+                    urls_to_check.add(source_url)
+                for ss in force.get("supporting_sources") or []:
+                    ss_url = (ss.get("url") or "").strip() if isinstance(ss, dict) else ""
+                    if ss_url.startswith("http"):
+                        urls_to_check.add(ss_url)
+
+            url_status = {}
+            if urls_to_check:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+                    futures = {pool.submit(_verify_foresight_url, u, 6): u for u in urls_to_check}
+                    for fut in concurrent.futures.as_completed(futures):
+                        u = futures[fut]
+                        try:
+                            url_status[u] = bool(fut.result())
+                        except Exception:
+                            url_status[u] = False
+
+            for force in data.get("dimension_forces", []):
+                source_url = (force.get("source_url") or "").strip()
+                force["url_verified"] = url_status.get(source_url, False) if source_url else False
+                force["validated"] = force.get("url_verified") is True
+                force["claim_type"] = "foresight_context"
+                force["company_specific"] = False
+                force["not_evidence_of_deployment"] = True
+                force["requires_company_specific_corroboration"] = True
+                force["modal_language_required"] = True
+                force["_from_registry_fallback"] = True
+                verified_supporting = []
+                for ss in force.get("supporting_sources") or []:
+                    if not isinstance(ss, dict):
+                        continue
+                    ss_url = (ss.get("url") or "").strip()
+                    verified_supporting.append({**ss, "url_verified": url_status.get(ss_url, False)})
+                force["verified_supporting_sources"] = verified_supporting
+                force["source_count"] = int(bool(source_url)) + len(verified_supporting)
+                force.setdefault("source_credibility", "medium")
+
+            data["fp_themes_used"] = themes
+            data["model"] = model_name
+            data["time_ms"] = elapsed
+            data["domain"] = domain
+            data["kb_first"] = False
+            data["registry_fallback"] = True
+            data["registry_fallback_reason"] = fallback_reason
+            data["registry_source_domains"] = theme_domains[:24]
+            print(
+                f"   ✅ [Foresight Registry] {model_name} fallback succeeded: "
+                f"{len(data.get('dimension_forces', []))} forces ({elapsed}ms)"
+            )
+            return data
+        except Exception as exc:
+            elapsed = int((time.time() - t0) * 1000) if "t0" in locals() else 0
+            print(f"   ⚠️ [Foresight Registry] {model_name} fallback failed ({elapsed}ms): {exc}")
+            continue
+
+    return None
 
 
 def _generate_foresight_from_kb(

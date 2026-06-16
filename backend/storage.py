@@ -880,6 +880,29 @@ class BlobStorage:
             "themes": theme_summaries,
         }
 
+    # --- STRATEGIC FORESIGHT THEME REGISTRY ---
+
+    def save_foresight_registry(self, registry_data: dict):
+        """
+        Saves a versioned snapshot of the curated Strategic Foresight Theme Registry.
+        The registry is company-neutral: themes, descriptions, source domains,
+        query seeds, and source-quality rules.
+        """
+        prefix = "foresight_registry/strategic_themes"
+        filename = f"{prefix}.json"
+        new_url = self._put(filename, registry_data)
+        if new_url:
+            self._prune_old_versions(prefix, keep=2)
+        return new_url
+
+    def get_foresight_registry(self):
+        """Retrieves the latest Strategic Foresight Theme Registry snapshot."""
+        blobs = self._list(prefix="foresight_registry/strategic_themes", limit=5)
+        if not blobs:
+            return None
+        blobs.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
+        return self._get(blobs[0].get("url"))
+
     # --- FORESIGHT OBSERVATORY ---
 
     def save_observatory(self, data: dict):

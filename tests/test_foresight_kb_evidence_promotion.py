@@ -14,6 +14,7 @@ if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
 import foresight_harvester  # noqa: E402
+import strategic_foresight  # noqa: E402
 
 
 def _signal(**extra):
@@ -193,3 +194,66 @@ def test_prompt_separates_verified_quote_from_kb_interpretation():
 
     assert "Verified source quote: The verified source text" in prompt
     assert "KB interpretation (not a quote): Scanner interpretation" in prompt
+
+
+def test_strategic_foresight_theme_registry_exposes_refresh_contract():
+    registry = strategic_foresight.build_strategic_foresight_theme_registry()
+
+    assert registry["theme_count"] == 30
+    assert registry["refresh_rules"]["stored_signal_contract"] == "foresight_context"
+    assert registry["refresh_rules"]["company_metadata_allowed"] is False
+    assert registry["refresh_rules"]["display_only_storage_policy"] == "do_not_store_in_central_kb"
+    ai_theme = next(t for t in registry["themes"] if t["name"] == "Artificial Intelligence")
+    assert ai_theme["refresh_tactics"]
+    assert all(t["validation_contract"] == "foresight_context" for t in ai_theme["refresh_tactics"])
+
+
+def test_cleanup_foresight_kb_removes_display_only_and_strips_company_metadata(monkeypatch):
+    saved = {}
+
+    class FakeStorage:
+        def get_all_foresight_kb(self):
+            return {
+                "business": {
+                    "theme": "Business",
+                    "signals": [
+                        _signal(
+                            title="Retained macro signal",
+                            promotion_status="generation_eligible",
+                            source_registry_status="generation_eligible",
+                            analysis_verified=True,
+                            generation_eligible=True,
+                            company_name="Example Oy",
+                            source_quote="Business model transformation pressure is rising.",
+                        ),
+                        _signal(
+                            title="Display-only signal",
+                            promotion_status="display_only",
+                            foresight_context_eligible=False,
+                        ),
+                    ],
+                }
+            }
+
+        def save_foresight_kb(self, slug, data):
+            saved[slug] = data
+            return "blob://saved"
+
+    monkeypatch.setattr(foresight_harvester, "BlobStorage", FakeStorage)
+
+    result = foresight_harvester.cleanup_foresight_kb()
+
+    assert result["signals_before"] == 2
+    assert result["signals_after"] == 1
+    assert result["display_only_removed"] == 1
+    assert result["company_metadata_removed"] == 1
+    retained = saved["business"]["signals"][0]
+    assert retained["title"] == "Retained macro signal"
+    assert retained["promotion_status"] == "foresight_context_eligible"
+    assert retained["source_registry_status"] == "checked_foresight_context_eligible"
+    assert retained["claim_type"] == "foresight_context"
+    assert retained["company_specific"] is False
+    assert retained["foresight_context_eligible"] is True
+    assert "generation_eligible" not in retained
+    assert "analysis_verified" not in retained
+    assert "company_name" not in retained
