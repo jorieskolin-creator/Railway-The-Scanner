@@ -90,7 +90,13 @@
             // Strip query string from filename so Babel detects .ts/.tsx extensions correctly
             const cleanFilename = url.split('?')[0];
             const js = Babel.transform(tsx, {
-              presets: ['react', 'typescript'],
+              presets: [
+                ['react', { runtime: 'classic' }],
+                ['typescript', {
+                  allExtensions: true,
+                  isTSX: cleanFilename.endsWith('.tsx'),
+                }],
+              ],
               filename: cleanFilename,
             }).code;
 
