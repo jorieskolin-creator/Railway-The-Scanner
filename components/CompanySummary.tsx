@@ -448,7 +448,7 @@ const isForesightContext = (link) => {
   };
 
   const handleDownloadHTML = () => {
-    var buildAndDownload = function(exportData) {
+    var buildAndDownload = function(exportData, buyingInsightReport) {
         var companyName = exportData.companyName || exportData.company_name || exportData.name || 'Company';
         var generatedDate = new Date().toISOString().split('T')[0];
         var rawData = JSON.stringify(exportData, null, 2).replace(/<\/script/gi, '<\\/script');
@@ -812,10 +812,42 @@ const isForesightContext = (link) => {
             }
             return parts.join('');
         };
+        var renderBuyingInsightStakeholders = function(report) {
+            var stakeholders = report && Array.isArray(report.stakeholder_map) ? report.stakeholder_map : [];
+            stakeholders = stakeholders.filter(function(item) {
+                return item && typeof item === 'object' && (item.name || item.role || item.likely_buying_committee_role);
+            }).slice(0, 12);
+            if (!stakeholders.length) return '';
+            var cards = stakeholders.map(function(item) {
+                var tags = []
+                    .concat(Array.isArray(item.linked_pressure_themes) ? item.linked_pressure_themes : [])
+                    .concat(Array.isArray(item.linked_service_themes) ? item.linked_service_themes : [])
+                    .filter(Boolean)
+                    .slice(0, 6);
+                var confidence = item.confidence === null || item.confidence === undefined || item.confidence === ''
+                    ? 'n/a'
+                    : formatScore(item.confidence, '/100');
+                var evidenceBasis = item.evidence_basis || item.source_basis || item.verification_reason || '';
+                return '<article>'
+                    + '<h3>' + escapeHTML(item.name || 'Role-level stakeholder') + '</h3>'
+                    + (item.role ? '<div class="role">' + escapeHTML(item.role) + '</div>' : '')
+                    + (item.relevance_rationale ? '<p>' + renderInlineMarkdown(item.relevance_rationale) + '</p>' : '')
+                    + (item.likely_buying_committee_role ? '<small><strong>Buying role:</strong> ' + escapeHTML(item.likely_buying_committee_role) + '</small>' : '')
+                    + (tags.length ? '<div class="chips">' + tags.map(function(tag) { return '<span>' + escapeHTML(tag) + '</span>'; }).join('') + '</div>' : '')
+                    + (evidenceBasis ? '<small><strong>Evidence basis:</strong> ' + escapeHTML(String(evidenceBasis).slice(0, 420)) + '</small>' : '')
+                    + '<small><strong>Allowed use:</strong> ' + escapeHTML(item.allowed_use || 'sales-prep') + ' · <strong>Confidence:</strong> ' + escapeHTML(confidence) + '</small>'
+                    + (Array.isArray(item.do_not_say) && item.do_not_say.length ? '<h4>Do Not Say</h4>' + renderList(item.do_not_say.slice(0, 4)) : '')
+                    + (Array.isArray(item.safety_notes) && item.safety_notes.length ? '<h4>Safety Notes</h4>' + renderList(item.safety_notes.slice(0, 4)) : '')
+                    + '</article>';
+            }).join('');
+            return '<div class="callout cyan"><h3>Copied From Buying Insight</h3><p>This stakeholder list is copied from the stored Admin Buying Insight report. Treat it as sales-prep and discovery guidance, not as core Scanner diagnostic evidence or confirmed buying intent.</p></div>'
+                + '<div class="stakeholders">' + cards + '</div>';
+        };
         var activationHTML = '<div class="two-col"><div><h3>WHY</h3>' + renderList(exportData.why_proposals) + '</div><div><h3>WHAT</h3>' + renderList(exportData.what_proposals) + '</div></div>'
             + renderSection('Strategic Pitch', 'Outbound narrative', renderParagraphs(exportData.pitch_text), 'nested');
         var strategicForesightData = exportData.strategic_foresight || {};
         var strategicForesightHTML = renderStrategicForesightEvidence(strategicForesightData);
+        var buyingInsightStakeholdersHTML = renderBuyingInsightStakeholders(buyingInsightReport);
         var rawDataHTML = '<details><summary>Open complete raw JSON payload</summary><pre>' + escapeHTML(JSON.stringify(exportData, null, 2)) + '</pre></details>';
         var htmlContent = '<!DOCTYPE html>\n<html lang="en">\n<head>\n'
             + '<meta charset="UTF-8">\n'
@@ -831,11 +863,12 @@ const isForesightContext = (link) => {
             + renderSection('Master Metrics', 'All score and trust signals', '<div class="metrics">' + metrics.join('') + '</div>' + breakdownHTML)
             + renderSection('Evidence Trust', 'Source verification and promotion state', trustHTML)
             + renderSection('Strategic Activation', 'WHY, WHAT, and pitch', activationHTML)
+            + renderSection('Detailed Forensic Report', 'Diagnostic detail', renderReportBlocks(exportData.detailed_report))
+            + renderSection(exportData.domain ? 'Domain Force Dossier: ' + exportData.domain : 'Domain Force Dossier', 'Market context', domainDossierHTML)
             + renderSection('Strategic Foresight Evidence', 'Key forces, cross-impact, scenarios, and climate exposure', strategicForesightHTML)
             + renderSection('Reality Checklist', 'Forensic reality markers', checklistHTML)
             + renderSection('Source Evidence Register', 'All company and foresight sources', sourceTable)
-            + renderSection(exportData.domain ? 'Domain Force Dossier: ' + exportData.domain : 'Domain Force Dossier', 'Market context', domainDossierHTML)
-            + renderSection('Detailed Forensic Report', 'Diagnostic detail', renderReportBlocks(exportData.detailed_report))
+            + renderSection('Buying Insight Stakeholders', 'Admin-only sales-prep copy', buyingInsightStakeholdersHTML)
             + renderSection('Raw JSON Payload', 'Machine-readable master data', rawDataHTML)
             + '<section class="section"><div class="eyebrow">Interactive source</div><h2>See Detailed Report</h2><p class="muted">For the full interactive scanner view, open the Scanner.</p><p><a class="scanner-link" href="https://the-demand-scanner.up.railway.app/" target="_blank" rel="noopener noreferrer">See detailed report - Scanner</a></p></section>'
             + '<script id="forensic-data" type="application/json">\n' + rawData + '\n<' + '/script>\n'
@@ -850,7 +883,8 @@ const isForesightContext = (link) => {
         URL.revokeObjectURL(url);
     };
 
-    fetch('/company/' + encodeURIComponent(data.companyName) + '?t=' + Date.now())
+    var companyNameForLookup = companyDisplayName || data.companyName || '';
+    var companyDataPromise = fetch('/company/' + encodeURIComponent(data.companyName) + '?t=' + Date.now())
         .then(function(res) {
             if (res.ok) return res.json();
             console.warn('[Master Data HTML Export] Fetch response not ok:', res.status);
@@ -859,11 +893,27 @@ const isForesightContext = (link) => {
         .catch(function(err) {
             console.warn('[Master Data HTML Export] Fetch error:', err);
             return null;
-        })
-        .then(function(fresh) {
-            var exportData = fresh ? Object.assign({}, data, fresh) : data;
-            buildAndDownload(exportData);
         });
+    var buyingInsightPromise = isAdmin && authToken && buyingInsightMeta?.html_url && companyNameForLookup
+        ? fetch('/admin/buying-potential/' + encodeURIComponent(companyNameForLookup), {
+            headers: { 'Authorization': 'Bearer ' + authToken }
+        })
+            .then(function(res) {
+                if (res.ok) return res.json();
+                console.warn('[Master Data HTML Export] Buying Insight fetch response not ok:', res.status);
+                return null;
+            })
+            .catch(function(err) {
+                console.warn('[Master Data HTML Export] Buying Insight fetch error:', err);
+                return null;
+            })
+        : Promise.resolve(null);
+    Promise.all([companyDataPromise, buyingInsightPromise]).then(function(results) {
+        var fresh = results[0];
+        var buyingInsight = results[1];
+        var exportData = fresh ? Object.assign({}, data, fresh) : data;
+        buildAndDownload(exportData, buyingInsight && buyingInsight.report ? buyingInsight.report : null);
+    });
   };
 
   const handleDownloadExecutiveHTML = () => {
