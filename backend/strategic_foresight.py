@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 
 import anthropic
 import requests
-from source_quality import HIGH_CREDIBILITY_DOMAINS, LOW_CREDIBILITY_DOMAINS, assess_source_credibility, classify_generation_context, is_generation_eligible_source
+from source_quality import assess_source_credibility
 from llm_clients import call_anthropic_text, call_json_model_chain, call_openai_text
 from foresight_guardrails import build_foresight_guardrails, annotate_foresight_signal, annotate_foresight_link, validate_foresight_text, sanitize_foresight_text, sanitize_future_insight, sanitize_foresight_record, sanitize_foresight_collection, sanitize_report_foresight_fields
 
@@ -1814,6 +1814,11 @@ def _generate_foresight_from_kb(
                 force["validated"] = True
                 source_url = (force.get("source_url") or "").strip()
                 force["url_verified"] = _kb_url_status.get(source_url, False) if source_url else False
+                force.setdefault("source_type", "foresight")
+                force["claim_type"] = "foresight_context"
+                force["company_specific"] = False
+                force["not_evidence_of_deployment"] = True
+                force["requires_company_specific_corroboration"] = True
                 force_title = (force.get("trend") or "").strip().lower()
                 matched_sig = None
                 for sig in kb_signals:
@@ -1839,6 +1844,18 @@ def _generate_foresight_from_kb(
                     ]
                     force["source_credibility"] = matched_sig.get("source_credibility", "medium")
                     force["source_count"] = 1 + len(force["verified_supporting_sources"])
+                    force["source_readable"] = matched_sig.get("source_readable") is True
+                    force["trend_supported"] = matched_sig.get("trend_supported") is True
+                    force["theme_match"] = matched_sig.get("theme_match") is not False
+                    force["foresight_context_eligible"] = matched_sig.get("foresight_context_eligible") is True
+                    force["foresight_signal_status"] = matched_sig.get("foresight_signal_status", "")
+                    force["source_audit_status"] = matched_sig.get("source_audit_status", "")
+                    force["trend_support_status"] = matched_sig.get("trend_support_status", "")
+                    force["foresight_evidence_version"] = matched_sig.get("foresight_evidence_version")
+                    force["fp_theme"] = matched_sig.get("fp_theme") or force.get("fp_theme")
+                    force["time_horizon"] = matched_sig.get("time_horizon") or force.get("time_horizon")
+                    force["s_curve_phase"] = matched_sig.get("s_curve_phase") or force.get("s_curve_phase")
+                    force["signal_direction"] = matched_sig.get("signal_direction") or force.get("signal_direction")
                     if matched_sig.get("description"):
                         force["_kb_description"] = matched_sig["description"]
                     for lc_field in ("lifecycle_stage", "trend_momentum", "action_timing"):
@@ -1848,6 +1865,12 @@ def _generate_foresight_from_kb(
                     force["source_credibility"] = "medium"
                     force["source_count"] = 1
                     force["verified_supporting_sources"] = []
+                    force["source_readable"] = force.get("url_verified") is True
+                    force["trend_supported"] = force.get("url_verified") is True
+                    force["theme_match"] = True
+                    force["foresight_context_eligible"] = force.get("url_verified") is True
+                    force["foresight_signal_status"] = "context_eligible" if force.get("foresight_context_eligible") else "rejected"
+                    force["source_audit_status"] = "accepted" if force.get("foresight_context_eligible") else "source_dead"
 
             _original_count = len(data["dimension_forces"])
             data["dimension_forces"] = [f for f in data["dimension_forces"] if f.get("url_verified") is True or not (f.get("source_url") or "").strip()]
@@ -1875,15 +1898,40 @@ def _force_generation_eligible_for_context(force: dict) -> bool:
     """True when a foresight force can feed generated prose as trend context."""
     if not isinstance(force, dict):
         return False
-    return is_generation_eligible_source({
-        **force,
-        "url": force.get("url") or force.get("source_url"),
-        "verified": force.get("verified", force.get("url_verified")),
-        "source_type": force.get("source_type", "foresight"),
-        "origin": force.get("origin", "foresight"),
-        "claim_type": force.get("claim_type", "foresight_context"),
-        "company_specific": force.get("company_specific", False),
-    })
+    claim_type = str(force.get("claim_type") or "foresight_context").strip().lower()
+    if claim_type != "foresight_context":
+        return False
+    if force.get("company_specific") is True:
+        return False
+
+    credibility = _norm_force_gate_value(force.get("source_credibility") or force.get("credibility"))
+    if credibility not in {"medium", "high"}:
+        return False
+
+    audit_status = _norm_force_gate_value(force.get("source_audit_status"))
+    if audit_status in {
+        "source_dead",
+        "source_unreadable",
+        "theme_mismatch",
+        "trend_not_supported",
+        "low_credibility_source",
+        "company_specific_not_macro",
+        "rejected",
+        "false_wrong",
+        "excluded",
+    }:
+        return False
+
+    if force.get("theme_match") is False:
+        return False
+    if force.get("trend_supported") is not True and _norm_force_gate_value(force.get("trend_support_status")) not in {"supported", "partially_supported"}:
+        return False
+
+    has_readable_source = force.get("source_readable") is True or force.get("content_verified") is True
+    if not has_readable_source:
+        return False
+
+    return _has_verified_force_support(force)
 
 
 def _norm_force_gate_value(value: object) -> str:
@@ -1925,21 +1973,13 @@ def _force_ai_diagnosis_eligible(force: dict) -> bool:
 
     confidence = _norm_force_gate_value(force.get("confidence"))
     credibility = _norm_force_gate_value(force.get("source_credibility") or force.get("credibility"))
-    support = _norm_force_gate_value(force.get("claim_support_status"))
-    promotion = _norm_force_gate_value(force.get("promotion_status"))
-    entity_status = _norm_force_gate_value(force.get("entity_match_status"))
-
     if confidence not in {"medium", "high"}:
         return False
-    if credibility not in {"medium", "high"}:
-        return False
-    if support in {"unsupported", "unavailable"}:
-        return False
-    if promotion == "excluded":
-        return False
-    if force.get("wrong_entity") is True or entity_status == "wrong":
-        return False
-    return _has_verified_force_support(force)
+    return _force_generation_eligible_for_context({
+        **force,
+        "confidence": confidence,
+        "source_credibility": credibility,
+    })
 
 
 def format_foresight_for_synthesis(foresight_data: dict, company_name: str, domain: str) -> str:
@@ -2560,6 +2600,7 @@ def extract_foresight_links(foresight_data, company_name="", domain=""):
     links = []
     seen_urls = set()
     for force in _dict_items_only(foresight_data.get("dimension_forces", []), "dimension_forces"):
+        force_context_ok = _force_generation_eligible_for_context(force)
         source_url = (force.get("source_url") or "").strip()
         if source_url and source_url.startswith("http") and source_url not in seen_urls:
             seen_urls.add(source_url)
@@ -2582,7 +2623,10 @@ def extract_foresight_links(foresight_data, company_name="", domain=""):
                 "source_type": force.get("source_type", "unknown"),
                 "verified": force.get("url_verified", False),
                 "source_credibility": force.get("source_credibility", "unknown"),
-                "validated": force.get("validated", False),
+                "validated": force_context_ok,
+                "foresight_context_eligible": force.get("foresight_context_eligible", force_context_ok),
+                "foresight_signal_status": force.get("foresight_signal_status", "context_eligible" if force_context_ok else "rejected"),
+                "source_audit_status": force.get("source_audit_status", "accepted" if force_context_ok else "rejected"),
                 "kb_dimension": force.get("kb_dimension", ""),
                 "fp_theme": force.get("fp_theme", ""),
                 "timeframe": force.get("timeframe", ""),
@@ -2614,7 +2658,10 @@ def extract_foresight_links(foresight_data, company_name="", domain=""):
                     "source_type": ss.get("source_type", "unknown"),
                     "verified": True,
                     "source_credibility": "medium",
-                    "validated": True,
+                    "validated": force_context_ok,
+                    "foresight_context_eligible": force.get("foresight_context_eligible", force_context_ok),
+                    "foresight_signal_status": force.get("foresight_signal_status", "context_eligible" if force_context_ok else "rejected"),
+                    "source_audit_status": force.get("source_audit_status", "accepted" if force_context_ok else "rejected"),
                     "kb_dimension": force.get("kb_dimension", ""),
                     "fp_theme": force.get("fp_theme", ""),
                     "timeframe": force.get("timeframe", ""),

@@ -196,6 +196,50 @@ def test_prompt_separates_verified_quote_from_kb_interpretation():
     assert "KB interpretation (not a quote): Scanner interpretation" in prompt
 
 
+def test_scan_time_foresight_gate_accepts_context_contract():
+    force = {
+        "trend": "AI governance fragmentation",
+        "source_url": "https://www.oecd.org/ai-governance",
+        "url_verified": True,
+        "verified": True,
+        "source_readable": True,
+        "trend_supported": True,
+        "theme_match": True,
+        "source_credibility": "high",
+        "confidence": "medium",
+        "claim_type": "foresight_context",
+        "company_specific": False,
+        "source_audit_status": "accepted",
+        "verified_supporting_sources": [{"url": "https://www.weforum.org/ai", "url_verified": True}],
+    }
+
+    assert strategic_foresight._force_generation_eligible_for_context(force) is True
+    assert strategic_foresight._force_ai_diagnosis_eligible(force) is True
+
+
+def test_scan_time_foresight_gate_rejects_old_company_evidence_shortcuts():
+    force = {
+        "trend": "AI governance fragmentation",
+        "source_url": "https://www.oecd.org/ai-governance",
+        "url_verified": True,
+        "verified": True,
+        "source_readable": False,
+        "trend_supported": False,
+        "theme_match": True,
+        "source_credibility": "high",
+        "confidence": "medium",
+        "claim_type": "foresight_context",
+        "company_specific": False,
+        "source_audit_status": "trend_not_supported",
+        "claim_support_status": "supported",
+        "promotion_status": "checked_generation_eligible",
+        "verified_supporting_sources": [{"url": "https://www.weforum.org/ai", "url_verified": True}],
+    }
+
+    assert strategic_foresight._force_generation_eligible_for_context(force) is False
+    assert strategic_foresight._force_ai_diagnosis_eligible(force) is False
+
+
 def test_strategic_foresight_theme_registry_exposes_refresh_contract():
     registry = strategic_foresight.build_strategic_foresight_theme_registry()
 
