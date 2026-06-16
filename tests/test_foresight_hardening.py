@@ -387,6 +387,9 @@ class TestCompanySpecificEvidencePreservation:
         assert item.get("promotion_status") == "display_only"
         assert item.get("claim_support_status") == "unchecked"
         assert item.get("verification_reason") == "foresight_sanitized_not_analysis_verified"
+        assert item.get("foresight_context_eligible") is False
+        assert item.get("not_evidence_of_deployment") is True
+        assert item.get("generation_scope") == "foresight_synthesis_only"
 
     def test_classify_preserves_analysis_verified_foresight_promotion(self):
         record = {
@@ -412,6 +415,9 @@ class TestCompanySpecificEvidencePreservation:
         assert item.get("promotion_status") == "generation_eligible"
         assert item.get("claim_support_status") == "supported"
         assert item.get("excluded_from_company_fact_generation") is True
+        assert item.get("foresight_context_eligible") is True
+        assert item.get("source_registry_status") == "checked_foresight_context_eligible"
+        assert item.get("generation_scope") == "foresight_synthesis_only"
 
     def test_bare_generation_eligible_does_not_promote_generic_foresight(self):
         record = {

@@ -748,7 +748,7 @@ const App = () => {
       if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); setKbCleanupLoading(false); return; }
       if (res.status === 409) { alert((await res.json()).detail); setKbCleanupLoading(false); return; }
       if (res.ok) {
-        alert("KB cleanup started! Re-verifying all stored URLs in background.");
+        alert("Foresight KB repair started! Re-verifying URLs and context eligibility in background.");
         const pollInterval = setInterval(async () => {
           try {
             const statusRes = await fetch('/admin/foresight-kb-cleanup-status');
@@ -759,19 +759,19 @@ const App = () => {
                 setKbCleanupLoading(false);
                 const r = status.result;
                 if (r && !r.error) {
-                  alert(`KB Cleanup Complete!\n\n${r.signals_removed} dead signals removed\n${r.signals_after} signals remaining across ${r.themes_checked} themes`);
+                  alert(`Foresight KB Repair Complete!\n\n${r.signals_removed} dead signals removed\n${r.foresight_context_eligible ?? r.analysis_verified ?? 0} context-eligible signals\n${r.signals_after} signals remaining across ${r.themes_checked} themes`);
                 } else if (r && r.error) {
-                  alert(`KB Cleanup Failed: ${r.error}`);
+                  alert(`Foresight KB Repair Failed: ${r.error}`);
                 }
               }
             }
           } catch (e) { /* ignore poll errors */ }
         }, 8000);
       } else {
-        alert("KB cleanup failed: " + (await res.text()));
+        alert("Foresight KB repair failed: " + (await res.text()));
         setKbCleanupLoading(false);
       }
-    } catch (e) { console.error(e); alert("KB cleanup failed."); setKbCleanupLoading(false); }
+    } catch (e) { console.error(e); alert("Foresight KB repair failed."); setKbCleanupLoading(false); }
   };
 
   const formatSanitizerSummary = (report) => {
@@ -810,18 +810,18 @@ const App = () => {
  const dryRun = await runForesightSanitizer({ write: false });
  setForesightSanitizerResults(dryRun);
  const summary = formatSanitizerSummary(dryRun);
- const shouldApply = confirm(`Foresight Sanitizer dry-run complete.\n\n${summary}\n\nApply these changes now?\n\nTip: choose OK only after the sample changes look safe.`);
+ const shouldApply = confirm(`FS Metadata Repair dry-run complete.\n\n${summary}\n\nApply these changes now?\n\nTip: choose OK only after the sample changes look safe.`);
  if (!shouldApply) return;
  const postClean = confirm('Use post-clean mode?\n\nOK = save cleaned records and prune older versions.\nCancel = save cleaned records without pruning old versions.');
  const writeReport = await runForesightSanitizer({ write: true, postClean });
  setForesightSanitizerResults(writeReport);
- alert(`Foresight Sanitizer applied.\n\n${formatSanitizerSummary(writeReport)}`);
+ alert(`FS Metadata Repair applied.\n\n${formatSanitizerSummary(writeReport)}`);
  const reviewRes = await fetch('/admin/review-data', { headers: authHeaders() });
  if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
  fetchSummaryData(true);
  } catch (e) {
  console.error(e);
- alert('Foresight Sanitizer failed: ' + (e?.message || e));
+ alert('FS Metadata Repair failed: ' + (e?.message || e));
  } finally {
  setForesightSanitizerLoading(false);
  }
@@ -833,17 +833,17 @@ const App = () => {
  try {
  const dryRun = await runForesightSanitizer({ company: companyName, write: false });
  const summary = formatSanitizerSummary(dryRun);
- const shouldApply = confirm(`Foresight Sanitizer dry-run for "${companyName}" complete.\n\n${summary}\n\nApply these changes to this company now?`);
+ const shouldApply = confirm(`FS Metadata Repair dry-run for "${companyName}" complete.\n\n${summary}\n\nApply these changes to this company now?`);
  if (!shouldApply) return;
  const postClean = confirm('Use post-clean mode for this company?\n\nOK = save cleaned record and prune older versions.\nCancel = save cleaned record without pruning old versions.');
  const writeReport = await runForesightSanitizer({ company: companyName, write: true, postClean });
- alert(`Foresight Sanitizer applied to "${companyName}".\n\n${formatSanitizerSummary(writeReport)}`);
+ alert(`FS Metadata Repair applied to "${companyName}".\n\n${formatSanitizerSummary(writeReport)}`);
  const reviewRes = await fetch('/admin/review-data', { headers: authHeaders() });
  if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
  fetchSummaryData(true);
  } catch (e) {
  console.error(e);
- alert('Foresight Sanitizer failed: ' + (e?.message || e));
+ alert('FS Metadata Repair failed: ' + (e?.message || e));
  } finally {
  setSanitizingForesightCompany(null);
  }
@@ -2048,19 +2048,19 @@ const App = () => {
                   onClick={handleSanitizeForesightAll}
                   disabled={foresightSanitizerLoading}
                   className="flex items-center gap-1.5 px-2.5 py-1 bg-violet-900/40 hover:bg-violet-800/60 border border-violet-600/50 text-violet-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
-                  title="Clean stored company-level foresight wording and metadata. Does not search, verify links, or create new foresight."
+                  title="Repair stored company-level foresight metadata and modal wording. Does not harvest new KB signals."
                 >
                   {foresightSanitizerLoading ? <Loader2 size={12} className="animate-spin" /> : <Shield size={12} />}
-                  {foresightSanitizerLoading ? 'SAN...' : 'SANITIZE FS'}
+                  {foresightSanitizerLoading ? 'REP...' : 'REPAIR FS'}
                 </button>
                 <button
                   onClick={handleCleanupForesightKb}
                   disabled={kbCleanupLoading || foresightKbLoading}
                   className="flex items-center gap-1.5 px-2.5 py-1 bg-teal-900/40 hover:bg-teal-800/60 border border-teal-600/50 text-teal-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
-                  title="Re-check existing Foresight KB signals. Removes dead links and updates analysis-verification metadata. Does not harvest new signals."
+                  title="Re-check existing Foresight KB signals. Removes dead links and updates foresight-context eligibility. Does not harvest new signals."
                 >
                   {kbCleanupLoading ? <Loader2 size={12} className="animate-spin" /> : <Shield size={12} />}
-                  {kbCleanupLoading ? 'KB...' : 'VERIFY KB'}
+                  {kbCleanupLoading ? 'KB...' : 'REPAIR KB'}
                 </button>
                 <button
                   onClick={handleCleanupIndex}
@@ -2238,7 +2238,7 @@ const App = () => {
                       <div className="flex items-center gap-2">
                         <Shield size={16} className="text-violet-400" />
                         <span className="font-bold text-white text-sm">
-                          Foresight Sanitizer: {foresightSanitizerResults.companies_changed} changed out of {foresightSanitizerResults.companies_checked} checked
+                          FS Metadata Repair: {foresightSanitizerResults.companies_changed} changed out of {foresightSanitizerResults.companies_checked} checked
                         </span>
                       </div>
                       <button onClick={() => setForesightSanitizerResults(null)} className="text-slate-500 hover:text-white"><X size={14} /></button>
@@ -2359,7 +2359,7 @@ const App = () => {
                                 {sanitizingForesightCompany === item.companyName ? <Loader2 size={14} className="animate-spin" /> : <Shield size={14} />}
                               </button>
                               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block z-50 pointer-events-none">
-                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 w-64 whitespace-normal shadow-xl">Sanitize Foresight<br/><span className="text-slate-500">Sanitize this company's stored foresight wording. Does not verify sources.</span></div>
+                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 w-64 whitespace-normal shadow-xl">Repair FS Metadata<br/><span className="text-slate-500">Repair this company's stored foresight metadata and modal wording.</span></div>
                               </div>
                             </div>
                             <div className="relative group/tip">

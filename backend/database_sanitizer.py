@@ -409,21 +409,29 @@ def _has_analysis_verified_promotion(item: dict) -> bool:
 
 
 def _mark_sanitized_foresight_context(item: dict) -> None:
-    """Mark generic foresight as context-safe without implying source verification."""
+    """Repair generic foresight metadata without implying company-fact evidence."""
     item.setdefault("claim_type", "foresight_context")
     item.setdefault("company_specific", False)
     item.setdefault("requires_company_specific_corroboration", True)
+    item.setdefault("not_evidence_of_deployment", True)
+    item.setdefault("modal_language_required", True)
+    item.setdefault("generation_scope", "foresight_synthesis_only")
     item["excluded_from_company_fact_generation"] = True
-    item.setdefault("source_registry_status", "checked_context_only")
     item.setdefault("exclusion_reason", "context_only_not_company_fact")
+    item.setdefault("stored_metadata_repair_version", FORESIGHT_SANITIZER_VERSION)
 
     if _has_analysis_verified_promotion(item):
+        item["foresight_context_eligible"] = True
         item["generation_eligible"] = True
+        item["source_registry_status"] = "checked_foresight_context_eligible"
+        item.setdefault("verification_reason", "stored_foresight_context_repaired")
         return
 
+    item["foresight_context_eligible"] = False
     item["analysis_verified"] = False
     item["generation_eligible"] = False
     item["promotion_status"] = "display_only"
+    item["source_registry_status"] = "checked_context_only"
     item.setdefault("claim_support_status", "unchecked")
     item.setdefault("verification_reason", "foresight_sanitized_not_analysis_verified")
 

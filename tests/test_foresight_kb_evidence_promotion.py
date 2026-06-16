@@ -1,5 +1,5 @@
 """
-Regression tests for Foresight KB analysis-verification gating.
+Regression tests for Foresight KB foresight-context promotion.
 
 Run with: python -m pytest tests/test_foresight_kb_evidence_promotion.py -v
 """
@@ -58,7 +58,40 @@ def test_supported_foresight_signal_becomes_generation_eligible(monkeypatch):
     assert sig["content_relevance_score"] == 86
     assert sig["source_quote"]
     assert sig["legacy_snippet"]
+    assert sig["claim_type"] == "foresight_context"
+    assert sig["company_specific"] is False
+    assert sig["not_evidence_of_deployment"] is True
+    assert sig["requires_company_specific_corroboration"] is True
+    assert sig["foresight_context_eligible"] is True
+    assert sig["generation_scope"] == "foresight_synthesis_only"
+    assert sig["excluded_from_company_fact_generation"] is True
     assert sig["foresight_evidence_version"] == foresight_harvester.FORESIGHT_KB_EVIDENCE_VERSION
+
+
+def test_high_credibility_partial_foresight_support_can_be_context_eligible(monkeypatch):
+    monkeypatch.setattr(
+        foresight_harvester,
+        "_check_relevance",
+        lambda *args, **kwargs: {
+            "relevance_score": 42,
+            "relevant": True,
+            "claim_support_status": "partial",
+            "content_verified": True,
+            "source_quote": "The report describes rising automation pressure in industry.",
+            "reason": "The source supports the trend direction, but not every KB wording detail.",
+            "verification_model": "gpt-5.4",
+        },
+    )
+
+    data = foresight_harvester._verify_signal_content({"theme": "Automation", "signals": [_signal()]})
+    sig = data["signals"][0]
+
+    assert sig["foresight_context_eligible"] is True
+    assert sig["analysis_verified"] is True
+    assert sig["generation_eligible"] is True
+    assert sig["claim_support_status"] == "supported"
+    assert sig["foresight_context_support_status"] == "partial"
+    assert sig["verification_reason"] == "foresight_context_verified"
 
 
 def test_live_irrelevant_foresight_signal_stays_display_only(monkeypatch):
@@ -81,6 +114,7 @@ def test_live_irrelevant_foresight_signal_stays_display_only(monkeypatch):
 
     assert sig["analysis_verified"] is False
     assert sig["generation_eligible"] is False
+    assert sig["foresight_context_eligible"] is False
     assert sig["promotion_status"] == "display_only"
     assert sig["claim_support_status"] == "unsupported"
     assert sig["verification_reason"] == "claim_unsupported"
@@ -98,6 +132,8 @@ def test_kb_selection_ignores_legacy_validated_but_unpromoted_signals(monkeypatc
                         analysis_verified=True,
                         generation_eligible=True,
                         promotion_status="generation_eligible",
+                        claim_type="foresight_context",
+                        foresight_context_eligible=True,
                     ),
                 ],
             }
@@ -124,6 +160,8 @@ def test_kb_near_fit_fallback_obeys_generation_eligibility(monkeypatch):
                         analysis_verified=True,
                         generation_eligible=True,
                         promotion_status="generation_eligible",
+                        claim_type="foresight_context",
+                        foresight_context_eligible=True,
                     ),
                 ],
             }
