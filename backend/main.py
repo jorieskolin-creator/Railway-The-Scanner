@@ -3984,7 +3984,7 @@ def _execute_scan_pipeline(
             try:
                 claude_client = anthropic.Anthropic(api_key=anthropic_key) if anthropic_key else None
                 intent_narrative = json.dumps(intent_results["breakdown"])
-                synthesis_source_pool = ledger_seed_links + (reality_results.get("links") or []) + financial_evidence_links
+                synthesis_source_pool = company_evidence_candidates + (reality_results.get("links") or []) + financial_evidence_links
                 verified_links = _analysis_evidence_links(synthesis_source_pool)
 
                 def _fmt_evidence_link(l):
@@ -4696,7 +4696,7 @@ Respond with valid JSON only:
             archetype = "Cash Cow" if fin_for_archetype >= 50 else "At Risk"
 
         # --- SOURCE MANAGEMENT: Merge new evidence with existing, cap at 30 ---
-        existing_evidence = (existing_data.get("evidence_links", []) if existing_data else []) + ledger_seed_links
+        existing_evidence = existing_data.get("evidence_links", []) if existing_data else []
         source_mgmt = manage_evidence_sources(
             existing_links=existing_evidence,
             new_links=(reality_results.get("links") or []) + financial_evidence_links,
