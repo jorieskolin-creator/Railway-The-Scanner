@@ -73,6 +73,20 @@ HARVEST_DEFAULT_QUERY_LIMIT = 8
 HARVEST_THEME_QUERY_LIMIT = {
     "Data & Digitalisation": 6,
 }
+HARVEST_BATCH_SIZE_DEFAULT = 4
+HARVEST_BATCH_SIZE_HARD = 3
+HARVEST_MIN_ACTIVE_TARGET = 3
+HARVEST_MAX_NEW_ACTIVE_TARGET = 5
+HARVEST_HARD_THEMES = {
+    "Communication & Media",
+    "Construction & Urbanisation",
+    "Data & Digitalisation",
+    "Health & Wellbeing",
+    "Leisure & Lifestyles",
+    "Sciences & Research",
+    "Society",
+    "Sustainability & Recycling",
+}
 HARVEST_THEME_QUERY_PRIORITY = {
     "Data & Digitalisation": [
         "site:oecd.org",
@@ -87,6 +101,22 @@ HARVEST_THEME_QUERY_PRIORITY = {
 HARVEST_DEFAULT_SONNET_SEARCHES = 5
 HARVEST_THEME_SONNET_SEARCHES = {
     "Data & Digitalisation": 4,
+}
+SOURCE_DOMAIN_PROFILES = {
+    "oecd.org": "static_html",
+    "ec.europa.eu": "date_hard",
+    "worldbank.org": "static_html",
+    "weforum.org": "static_html",
+    "sitra.fi": "static_html",
+    "turing.ac.uk": "static_html",
+    "nature.com": "pdf_heavy",
+    "science.org": "blocked_risk",
+    "thelancet.com": "blocked_risk",
+    "mckinsey.com": "dynamic",
+    "deloitte.com": "dynamic",
+    "gartner.com": "blocked_risk",
+    "forrester.com": "blocked_risk",
+    "hbr.org": "blocked_risk",
 }
 
 
@@ -513,6 +543,9 @@ def _classify_for_active_kb(sig: dict, theme: str, *, stage: str = "unknown") ->
     sig = _strip_company_evidence_fields(sig)
 
     source_url = (sig.get("source_url") or sig.get("url") or "").strip()
+    source_domain = sig.get("source_domain") or _source_domain(source_url)
+    sig["source_domain"] = source_domain
+    sig["source_domain_profile"] = _source_domain_profile(source_domain)
     curated = _is_curated_theme_source(sig, theme)
     tier1_exception = (
         not curated
@@ -615,11 +648,14 @@ def _split_active_and_audit(signals: list[dict], theme: str, *, stage: str) -> t
         "unknown_date": 0,
         "stale": 0,
         "aging": 0,
+        "source_domain_profiles": {},
     }
     for sig in signals or []:
         if not isinstance(sig, dict):
             continue
         normalized, is_active = _classify_for_active_kb(sig, theme, stage=stage)
+        profile = normalized.get("source_domain_profile") or "unknown"
+        stats["source_domain_profiles"][profile] = stats["source_domain_profiles"].get(profile, 0) + 1
         if is_active:
             active.append(normalized)
             stats["accepted_active"] += 1
@@ -652,6 +688,26 @@ def _split_active_and_audit(signals: list[dict], theme: str, *, stage: str) -> t
     return active, audit, stats
 
 
+def _merge_harvest_stats(*stats_objects: dict) -> dict:
+    merged: dict = {}
+    for stats in stats_objects:
+        if not isinstance(stats, dict):
+            continue
+        for key, value in stats.items():
+            if isinstance(value, (int, float)):
+                merged[key] = merged.get(key, 0) + value
+            elif isinstance(value, dict):
+                current = merged.setdefault(key, {})
+                for inner_key, inner_value in value.items():
+                    if isinstance(inner_value, (int, float)):
+                        current[inner_key] = current.get(inner_key, 0) + inner_value
+                    elif inner_key not in current:
+                        current[inner_key] = inner_value
+            elif key not in merged:
+                merged[key] = value
+    return merged
+
+
 def _theme_allowed_domains(theme: str) -> set[str]:
     domains: set[str] = set()
     for query in FP_THEME_SOURCES.get(theme, []) or []:
@@ -668,6 +724,19 @@ def _source_domain(url: str) -> str:
         return host.removeprefix("www.")
     except Exception:
         return ""
+
+
+def _source_domain_profile(domain: str) -> str:
+    domain = (domain or "").lower().removeprefix("www.")
+    if not domain:
+        return "unknown"
+    for known, profile in SOURCE_DOMAIN_PROFILES.items():
+        known = known.lower().removeprefix("www.")
+        if domain == known or domain.endswith(f".{known}"):
+            return profile
+    if domain.endswith(".pdf"):
+        return "pdf_heavy"
+    return "static_html"
 
 
 def _signal_has_context_text(sig: dict) -> bool:
@@ -1043,6 +1112,15 @@ def _select_harvest_queries(theme: str, search_queries: list[str]) -> list[str]:
     return selected[:limit]
 
 
+def _harvest_query_batches(theme: str, search_queries: list[str]) -> list[list[str]]:
+    """Split a theme's selected source queries into small timeout-resilient batches."""
+    selected = _select_harvest_queries(theme, search_queries)
+    if not selected:
+        return []
+    batch_size = HARVEST_BATCH_SIZE_HARD if theme in HARVEST_HARD_THEMES else HARVEST_BATCH_SIZE_DEFAULT
+    return [selected[i:i + batch_size] for i in range(0, len(selected), batch_size)]
+
+
 def _build_harvest_prompt(theme: str, search_queries: list[str]) -> str:
     """Build a web-research prompt to harvest megatrend signals for one FP theme."""
 
@@ -1138,10 +1216,17 @@ RETURN STRICT JSON ONLY:
 }}"""
 
 
-def _harvest_single_theme(theme: str, search_queries: list[str]) -> dict | None:
+def _harvest_single_theme(
+    theme: str,
+    search_queries: list[str],
+    *,
+    batch_index: int = 1,
+    batch_total: int = 1,
+) -> dict | None:
     """Harvest megatrend signals for one FP theme using Claude/GPT web search."""
 
     prompt = _build_harvest_prompt(theme, search_queries)
+    batch_label = f"batch {batch_index}/{batch_total}"
 
     mode = os.getenv("FORESIGHT_HARVEST_MODEL_MODE", HARVEST_DEFAULT_MODEL_MODE).strip().lower()
     if mode not in {"quality", "cost"}:
@@ -1162,11 +1247,11 @@ def _harvest_single_theme(theme: str, search_queries: list[str]) -> dict | None:
 
     for model_name, provider, timeout_sec, max_searches in models:
         try:
-            print(f"   🌐 [Harvest] {theme} → {model_name} (mode={mode}, timeout={timeout_sec}s)...")
+            print(f"   🌐 [Harvest] {theme} {batch_label} → {model_name} (mode={mode}, timeout={timeout_sec}s, queries={len(search_queries)})...")
             t0 = time.time()
             if provider == "anthropic":
                 text = _call_harvest_model_with_deadline(
-                    f"{theme} {model_name}",
+                    f"{theme} {batch_label} {model_name}",
                     timeout_sec,
                     lambda: call_anthropic_text(
                         prompt,
@@ -1180,7 +1265,7 @@ def _harvest_single_theme(theme: str, search_queries: list[str]) -> dict | None:
                 )
             else:
                 text = _call_harvest_model_with_deadline(
-                    f"{theme} {model_name}",
+                    f"{theme} {batch_label} {model_name}",
                     timeout_sec,
                     lambda: call_openai_text(
                         prompt,
@@ -1194,41 +1279,44 @@ def _harvest_single_theme(theme: str, search_queries: list[str]) -> dict | None:
             elapsed = int((time.time() - t0) * 1000)
 
             if not text or len(text) < 80:
-                print(f"   ⚠️ [Harvest] {theme}: {model_name} insufficient data ({len(text) if text else 0} chars, {elapsed}ms)")
+                print(f"   ⚠️ [Harvest] {theme} {batch_label}: {model_name} timeout_or_empty_before_json ({len(text) if text else 0} chars, {elapsed}ms)")
                 continue
 
             json_str = _extract_json_from_text(text)
             if not json_str:
-                print(f"   ⚠️ [Harvest] {theme}: could not extract JSON ({elapsed}ms)")
+                print(f"   ⚠️ [Harvest] {theme} {batch_label}: could not extract JSON ({elapsed}ms)")
                 continue
 
             data = json.loads(json_str, strict=False)
 
             if not data.get("signals"):
-                print(f"   ⚠️ [Harvest] {theme}: no signals in response ({elapsed}ms)")
+                print(f"   ⚠️ [Harvest] {theme} {batch_label}: no signals in response ({elapsed}ms)")
                 continue
 
             data["model"] = model_name
             data["model_mode"] = mode
             data["time_ms"] = elapsed
             data["theme"] = theme
+            data["batch_index"] = batch_index
+            data["batch_total"] = batch_total
+            data["batch_queries"] = search_queries
             n = len(data["signals"])
-            print(f"   ✅ [Harvest] {theme}: {n} raw signals ({elapsed}ms)")
+            print(f"   ✅ [Harvest] {theme} {batch_label}: {n} raw signals ({elapsed}ms)")
             if n >= 3 or model_name == models[-1][0]:
                 return data
-            print(f"   ⚠️ [Harvest] {theme}: too few raw signals from {model_name}; trying fallback")
+            print(f"   ⚠️ [Harvest] {theme} {batch_label}: too few raw signals from {model_name}; trying fallback")
             continue
 
         except json.JSONDecodeError as je:
             elapsed = int((time.time() - t0) * 1000)
-            print(f"   ⚠️ [Harvest] {theme}: JSON parse failed ({elapsed}ms): {je}")
+            print(f"   ⚠️ [Harvest] {theme} {batch_label}: JSON parse failed ({elapsed}ms): {je}")
             continue
         except Exception as e:
             elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
-            print(f"   ❌ [Harvest] {theme}: {model_name} failed ({elapsed}ms): {e}")
+            print(f"   ❌ [Harvest] {theme} {batch_label}: {model_name} failed ({elapsed}ms): {e}")
             continue
 
-    print(f"   ❌ [Harvest] {theme}: all models failed — skipped")
+    print(f"   ❌ [Harvest] {theme} {batch_label}: all models failed — skipped")
     return None
 
 
@@ -1379,9 +1467,10 @@ def harvest_all_themes(
         if progress_callback:
             progress_callback(theme, i, total, "harvesting")
 
-        selected_query_count = len(_select_harvest_queries(theme, search_queries))
+        query_batches = _harvest_query_batches(theme, search_queries)
+        selected_query_count = sum(len(batch) for batch in query_batches)
         query_label = f"{selected_query_count}/{len(search_queries)} queries" if search_queries else "0 queries"
-        print(f"\n--- [{i+1}/{total}] {theme} ({query_label}) ---")
+        print(f"\n--- [{i+1}/{total}] {theme} ({query_label}, {len(query_batches)} batch(es)) ---")
 
         # Step 1: Load and classify existing KB signals for this theme.
         existing_data = storage.get_foresight_kb(slug)
@@ -1398,20 +1487,63 @@ def harvest_all_themes(
             )
             audit_records.extend(existing_audit)
 
-        # Step 2: Harvest new signals
-        data = _harvest_single_theme(theme, search_queries)
-
         new_active = []
         new_stats = {}
-        if data and data.get("signals"):
-            # Step 3: Validate new harvest (URL liveness + credibility)
+        batch_diagnostics = []
+        harvest_model = None
+
+        # Step 2: Harvest new signals in smaller batches. Each batch is allowed
+        # to fail independently; existing active KB records remain protected.
+        for batch_index, query_batch in enumerate(query_batches, start=1):
+            data = _harvest_single_theme(
+                theme,
+                query_batch,
+                batch_index=batch_index,
+                batch_total=len(query_batches),
+            )
+            if not data or not data.get("signals"):
+                batch_diagnostics.append({
+                    "batch_index": batch_index,
+                    "queries": query_batch,
+                    "status": "model_timeout_or_no_json",
+                    "raw_signals": 0,
+                    "accepted_active": 0,
+                    "rejected_audit": 0,
+                })
+                continue
+
+            harvest_model = data.get("model") or harvest_model
             data = _validate_harvest_signals(data)
-            new_active, new_audit, new_stats = _split_active_and_audit(
+            batch_active, batch_audit, batch_stats = _split_active_and_audit(
                 data.get("signals", []),
                 theme,
-                stage="new_harvest",
+                stage=f"new_harvest_batch_{batch_index}",
             )
-            audit_records.extend(new_audit)
+            new_active.extend(batch_active)
+            audit_records.extend(batch_audit)
+            new_stats = _merge_harvest_stats(new_stats, batch_stats)
+            batch_diagnostics.append({
+                "batch_index": batch_index,
+                "queries": query_batch,
+                "status": "validated",
+                "raw_signals": len(data.get("signals", [])),
+                "accepted_active": len(batch_active),
+                "rejected_audit": len(batch_audit),
+                "stats": batch_stats,
+                "model": data.get("model"),
+                "time_ms": data.get("time_ms"),
+            })
+            print(
+                f"   🧭 [Harvest Batch] {theme} {batch_index}/{len(query_batches)}: "
+                f"raw={len(data.get('signals', []))}, active={len(batch_active)}, audit={len(batch_audit)}, "
+                f"reasons={{{', '.join(f'{k}:{v}' for k, v in batch_stats.items() if isinstance(v, int) and v)}}}"
+            )
+            if len(new_active) >= HARVEST_MAX_NEW_ACTIVE_TARGET:
+                print(f"   ✅ [Harvest] {theme}: active target reached ({len(new_active)} new active); stopping remaining batches")
+                break
+            if len(new_active) >= HARVEST_MIN_ACTIVE_TARGET and theme not in HARVEST_HARD_THEMES:
+                print(f"   ✅ [Harvest] {theme}: minimum active target reached ({len(new_active)} new active); stopping early")
+                break
 
         # Step 4: Merge active-only records.
         merged_signals = _merge_signals(existing_active, new_active)
@@ -1426,14 +1558,15 @@ def harvest_all_themes(
                     "audit_contract": "not_used_by_scanner_synthesis",
                     "stats": {
                         "existing_before": existing_before_count,
-                        "new_candidates": len(data.get("signals", [])) if data else 0,
+                        "new_candidates": sum(d.get("raw_signals", 0) for d in batch_diagnostics),
                         "rejected_audit": len(audit_records),
+                        "batch_diagnostics": batch_diagnostics,
                     },
                     "foresight_evidence_version": FORESIGHT_KB_EVIDENCE_VERSION,
                 }
                 storage.save_foresight_kb_audit(slug, audit_data)
             results["failed"] += 1
-            status = "no_valid_signals" if (data and data.get("signals") is not None) else "failed"
+            status = "no_valid_signals" if batch_diagnostics else "failed"
             results["rejected_audit"] += len(audit_records)
             results["themes"].append({
                 "theme": theme,
@@ -1441,6 +1574,7 @@ def harvest_all_themes(
                 "status": status,
                 "signals": 0,
                 "rejected_audit": len(audit_records),
+                "batch_diagnostics": batch_diagnostics,
             })
             print(f"   ⚠️ [Result] {theme}: no accepted active signals after merge — active KB unchanged; audit={len(audit_records)}")
             continue
@@ -1454,7 +1588,7 @@ def harvest_all_themes(
             "theme_slug": slug,
             "signals": merged_signals,
             "harvested_at": datetime.now(timezone.utc).isoformat(),
-            "model": data.get("model", (existing_data or {}).get("model", "unknown")) if data else (existing_data or {}).get("model", "unknown"),
+            "model": harvest_model or (existing_data or {}).get("model", "unknown"),
             "merge_stats": {
                 "existing_before_clean": existing_before_count,
                 "existing_active": len(existing_active),
@@ -1464,6 +1598,7 @@ def harvest_all_themes(
                 "rejected_audit": audit_count,
                 "existing_stats": existing_stats,
                 "new_stats": new_stats,
+                "batch_diagnostics": batch_diagnostics,
                 "storage_contract": "active_foresight_context_only",
             },
             "validation": {
@@ -1487,8 +1622,9 @@ def harvest_all_themes(
                 "audit_contract": "not_used_by_scanner_synthesis",
                 "stats": {
                     "existing_before": existing_before_count,
-                    "new_candidates": len(data.get("signals", [])) if data else 0,
+                    "new_candidates": sum(d.get("raw_signals", 0) for d in batch_diagnostics),
                     "rejected_audit": audit_count,
+                    "batch_diagnostics": batch_diagnostics,
                 },
                 "foresight_evidence_version": FORESIGHT_KB_EVIDENCE_VERSION,
             })
@@ -1508,6 +1644,7 @@ def harvest_all_themes(
             "new_added": len(new_active),
             "foresight_context_eligible": context_eligible_count,
             "rejected_audit": audit_count,
+            "batch_diagnostics": batch_diagnostics,
         })
 
         print(
