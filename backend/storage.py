@@ -820,6 +820,27 @@ class BlobStorage:
             self._prune_old_versions(prefix, keep=2)
         return new_url
 
+    def save_foresight_kb_audit(self, theme_slug: str, audit_data: dict):
+        """
+        Saves rejected or review-only foresight candidates for a single FP theme.
+        Audit records are never used by Scanner synthesis.
+        """
+        prefix = f"foresight_kb_audit/{theme_slug}"
+        filename = f"{prefix}.json"
+        new_url = self._put(filename, audit_data)
+        if new_url:
+            self._prune_old_versions(prefix, keep=3)
+        return new_url
+
+    def get_foresight_kb_audit(self, theme_slug: str):
+        """Retrieves the latest audit-only foresight candidates for one theme."""
+        prefix = f"foresight_kb_audit/{theme_slug}"
+        blobs = self._list(prefix=prefix, limit=5)
+        if not blobs:
+            return None
+        blobs.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
+        return self._get(blobs[0].get("url"))
+
     def get_foresight_kb(self, theme_slug: str):
         """Retrieves the latest validated foresight signals for a single FP theme."""
         prefix = f"foresight_kb/{theme_slug}"

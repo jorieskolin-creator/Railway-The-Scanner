@@ -2026,12 +2026,17 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             seen_urls.add(key)
             source_type = candidate.get("source_type") or candidate.get("source_category") or ""
             title = candidate.get("title") or candidate.get("source_title") or url or f"Company Evidence DB source {idx}"
+            safe_label = f"Revalidate cached source: {str(title)[:90]}"
             seed_findings.append({
-                "category": _seed_category(source_type, candidate.get("source_category", "")),
-                "label": title,
+                "category": "Candidate Evidence",
+                "label": safe_label,
                 "found": True,
                 "sentiment": "neutral",
-                "snippet": excerpt or "Company Evidence DB source available; live scan must revalidate content before use.",
+                "snippet": (
+                    f"Cached source text for revalidation: {excerpt}"
+                    if excerpt else
+                    "Company Evidence DB source available; live scan must revalidate content before use."
+                ),
                 "title": title,
                 "url": url,
                 "is_recent": False,
@@ -2055,9 +2060,10 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     continue
                 seen_urls.add(key)
                 title = prev_ev.get("title") or "Historical verified evidence"
+                safe_label = f"Revalidate historical source: {str(title)[:90]}"
                 seed_findings.append({
-                    "category": _seed_category(prev_ev.get("source_type", ""), prev_ev.get("source_category", "")),
-                    "label": title,
+                    "category": "Candidate Evidence",
+                    "label": safe_label,
                     "found": True,
                     "sentiment": "neutral",
                     "snippet": _seed_excerpt(prev_ev.get("snippet") or prev_ev.get("source_quote") or prev_ev.get("verification_reason"))
@@ -2364,18 +2370,19 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         print(f"   ⏭ [Forensic Scan] Legacy model executor disabled for {target_model_name}")
         return None
 
-    def execute_with_openai_web(active_prompt):
+    def execute_with_openai_web(active_prompt, timeout_cap: int | None = None, purpose: str = "primary"):
         """Primary web-search path using GPT-5.5 Responses web_search."""
         elapsed_total = time.time() - _fn_start
         if elapsed_total > _guard_anthropic:
             print(f"   ⏰ [Forensic Scan] Skipping GPT web search — elapsed {int(elapsed_total)}s exceeds {_guard_anthropic}s guard")
             return None
-        local_timeout = min(120, _phase_remaining(buffer=35))
+        ceiling = timeout_cap or 120
+        local_timeout = min(ceiling, _phase_remaining(buffer=35))
         if local_timeout < 25:
             print(f"   ⏭️ [Forensic Scan] Skipping GPT web search — only {local_timeout}s available before phase guard")
             return None
         try:
-            print(f"   🔄 [Forensic Scan] Attempting primary gpt-5.5 + web_search for {company_name} (timeout={local_timeout}s)...")
+            print(f"   🔄 [Forensic Scan] Attempting {purpose} gpt-5.5 + web_search for {company_name} (timeout={local_timeout}s)...")
             start = time.time()
             relaxed_prompt = re.sub(
                 r'RETURN STRICT JSON[^:]*:',
@@ -2618,19 +2625,57 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             print(f"   ❌ [Forensic Scan] claude-sonnet-4-6 + Web Search failed in {elapsed}ms: {e}")
             return None
 
-    # --- SEQUENTIAL: GPT-5.5 evidence scout → short Sonnet challenger/fallback ---
+    # --- SEQUENTIAL: seeded evidence when strong → GPT enrichment → short Sonnet challenger/fallback ---
     data = None
 
     print(f"   🔍 [Forensic Scan] Starting scan for {company_name}: GPT-5.5 evidence scout → short Sonnet challenger")
+
+    if strong_company_evidence_mode:
+        data = _build_seeded_forensic_fallback("strong_company_evidence_seeded_first")
+        if data:
+            print(
+                f"   🧭 [Forensic Seed] Company Evidence DB has strong cached coverage; "
+                "using seeded candidates immediately and running GPT web search as bounded enrichment."
+            )
+            enrichment_data = execute_with_openai_web(prompt, timeout_cap=75 if is_rescan else 90, purpose="enrichment")
+            if enrichment_data:
+                merged_findings, new_unique_count = _merge_findings(
+                    data.get("findings", []), enrichment_data.get("findings", [])
+                )
+                data["findings"] = merged_findings
+                if enrichment_data.get("key_people"):
+                    existing_names = {
+                        (p.get("name") or "").lower()
+                        for p in data.get("key_people", [])
+                    }
+                    for person in enrichment_data.get("key_people", []):
+                        name_key = (person.get("name") or "").lower()
+                        if name_key and name_key not in existing_names:
+                            data.setdefault("key_people", []).append(person)
+                            existing_names.add(name_key)
+                data["confidence_score"] = max(
+                    data.get("confidence_score", 0) or 0,
+                    enrichment_data.get("confidence_score", 0) or 0,
+                )
+                data["_search_provider"] = "company-evidence-seed+openai-web-enrichment"
+                print(
+                    f"   ✅ [Forensic Scan] GPT enrichment added {new_unique_count} unique finding(s); "
+                    f"confidence now {data.get('confidence_score', 0)}/100"
+                )
+            else:
+                print("   ⏭️ [Forensic Scan] GPT enrichment returned no usable data; keeping seeded candidates.")
 
     if not data:
         data = execute_with_openai_web(prompt)
 
     if not data:
-        print(f"   ⚠️ [Forensic Scan] GPT-5.5 web search returned no data. Trying bounded Sonnet challenger...")
-        data = execute_with_anthropic(prompt)
+        print(f"   ⚠️ [Forensic Scan] GPT-5.5 web search returned no data. Trying seeded forensic fallback before any challenger...")
+        data = _build_seeded_forensic_fallback("gpt_returned_no_data")
         if not data:
-            data = _build_seeded_forensic_fallback("gpt_and_sonnet_returned_no_data")
+            print(
+                "   ⏭️ [Forensic Scan] No seeded forensic sources available after GPT miss; "
+                "skipping Sonnet full-search fallback to preserve phase budget."
+            )
     else:
         scout_confidence = data.get("confidence_score", 0) or 0
         scout_evidence_count = len([

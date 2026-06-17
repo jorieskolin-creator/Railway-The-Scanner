@@ -21,6 +21,12 @@ def _signal(**extra):
     base = {
         "title": "Platform automation adoption",
         "description": "Independent research says platform automation adoption is rising.",
+        "semantic_snippet": (
+            "Independent research indicates that platform automation adoption is rising across business "
+            "operations as companies modernize workflows, integrate legacy systems, and shift repetitive "
+            "processes toward governed digital platforms. The signal is relevant for organizations with "
+            "complex operating models, fragmented data flows, and near-term modernization pressure."
+        ),
         "source_url": "https://www.oecd.org/platform-automation",
         "url_verified": True,
         "verified": True,
@@ -146,6 +152,8 @@ def test_kb_selection_uses_context_eligibility_not_company_generation(monkeypatc
                         promotion_status="foresight_context_eligible",
                         claim_type="foresight_context",
                         foresight_context_eligible=True,
+                        foresight_signal_status=foresight_harvester.ACTIVE_FORESIGHT_STATUS,
+                        source_audit_status="accepted_active",
                         source_readable=True,
                     ),
                 ],
@@ -175,6 +183,8 @@ def test_kb_near_fit_fallback_obeys_context_eligibility(monkeypatch):
                         promotion_status="foresight_context_eligible",
                         claim_type="foresight_context",
                         foresight_context_eligible=True,
+                        foresight_signal_status=foresight_harvester.ACTIVE_FORESIGHT_STATUS,
+                        source_audit_status="accepted_active",
                         source_readable=True,
                     ),
                 ],
@@ -262,6 +272,7 @@ def test_strategic_foresight_theme_registry_exposes_refresh_contract():
 
 def test_cleanup_foresight_kb_repairs_display_only_metadata_without_deleting(monkeypatch):
     saved = {}
+    audit_saved = {}
 
     class FakeStorage:
         def get_all_foresight_kb(self):
@@ -292,6 +303,10 @@ def test_cleanup_foresight_kb_repairs_display_only_metadata_without_deleting(mon
             saved[slug] = data
             return "blob://saved"
 
+        def save_foresight_kb_audit(self, slug, data):
+            audit_saved[slug] = data
+            return "blob://audit"
+
     monkeypatch.setattr(foresight_harvester, "BlobStorage", FakeStorage)
     monkeypatch.setattr(strategic_foresight, "_verify_foresight_url", lambda *args, **kwargs: True)
 
@@ -301,6 +316,7 @@ def test_cleanup_foresight_kb_repairs_display_only_metadata_without_deleting(mon
     assert result["signals_after"] == 2
     assert result["display_only_removed"] == 0
     assert result["metadata_repaired"] == 2
+    assert result["rejected_audit"] == 0
     retained = next(s for s in saved["business"]["signals"] if s["title"] == "Retained macro signal")
     assert retained["title"] == "Retained macro signal"
     assert "promotion_status" not in retained
@@ -308,8 +324,8 @@ def test_cleanup_foresight_kb_repairs_display_only_metadata_without_deleting(mon
     assert retained["claim_type"] == "foresight_context"
     assert retained["company_specific"] is False
     assert retained["foresight_context_eligible"] is True
-    assert retained["foresight_signal_status"] == "context_eligible"
-    assert retained["source_audit_status"] == "accepted"
+    assert retained["foresight_signal_status"] == foresight_harvester.ACTIVE_FORESIGHT_STATUS
+    assert retained["source_audit_status"] == "accepted_active"
     assert "generation_eligible" not in retained
     assert "analysis_verified" not in retained
     assert "company_name" not in retained
@@ -317,11 +333,13 @@ def test_cleanup_foresight_kb_repairs_display_only_metadata_without_deleting(mon
     assert "promotion_status" not in repaired_display_only
     assert repaired_display_only["tags"] == ["6-12mo", "go_to_market", "stable", "cred: high"]
     assert repaired_display_only["foresight_context_eligible"] is True
-    assert repaired_display_only["foresight_signal_status"] == "context_eligible"
+    assert repaired_display_only["foresight_signal_status"] == foresight_harvester.ACTIVE_FORESIGHT_STATUS
+    assert "business" not in audit_saved
 
 
-def test_repair_dead_signal_marks_dead_without_deleting(monkeypatch):
+def test_repair_dead_signal_moves_to_audit_without_overwriting_active_kb(monkeypatch):
     saved = {}
+    audit_saved = {}
 
     class FakeStorage:
         def get_all_foresight_kb(self):
@@ -342,21 +360,28 @@ def test_repair_dead_signal_marks_dead_without_deleting(monkeypatch):
             saved[slug] = data
             return "blob://saved"
 
+        def save_foresight_kb_audit(self, slug, data):
+            audit_saved[slug] = data
+            return "blob://audit"
+
     monkeypatch.setattr(foresight_harvester, "BlobStorage", FakeStorage)
     monkeypatch.setattr(strategic_foresight, "_verify_foresight_url", lambda *args, **kwargs: False)
 
     result = foresight_harvester.cleanup_foresight_kb()
 
     assert result["signals_before"] == 1
-    assert result["signals_after"] == 1
-    repaired = saved["automation"]["signals"][0]
+    assert result["signals_after"] == 0
+    assert result["themes_write_skipped"] == 1
+    assert "automation" not in saved
+    repaired = audit_saved["automation"]["candidates"][0]
     assert repaired["source_audit_status"] == "source_dead"
     assert repaired["foresight_context_eligible"] is False
     assert "promotion_status" not in repaired
 
 
-def test_harvest_merge_keeps_existing_review_records_when_new_batch_not_eligible(monkeypatch):
+def test_harvest_preserves_existing_active_when_new_batch_rejected(monkeypatch):
     saved = {}
+    audit_saved = {}
 
     class FakeStorage:
         def save_foresight_registry(self, registry):
@@ -364,13 +389,16 @@ def test_harvest_merge_keeps_existing_review_records_when_new_batch_not_eligible
 
         def get_foresight_kb(self, slug):
             return {
-                "theme": "Automation",
+                "theme": "Business",
                 "signals": [
                     _signal(
-                        title="Existing review signal",
-                        source_url="https://www.oecd.org/existing-review",
-                        promotion_status="display_only",
-                        trend_supported=False,
+                        title="Existing active signal",
+                        source_url="https://www.oecd.org/existing-active",
+                        foresight_context_eligible=True,
+                        foresight_signal_status=foresight_harvester.ACTIVE_FORESIGHT_STATUS,
+                        source_audit_status="accepted_active",
+                        theme_match=True,
+                        trend_supported=True,
                     )
                 ],
             }
@@ -378,6 +406,10 @@ def test_harvest_merge_keeps_existing_review_records_when_new_batch_not_eligible
         def save_foresight_kb(self, slug, data):
             saved[slug] = data
             return "blob://saved"
+
+        def save_foresight_kb_audit(self, slug, data):
+            audit_saved[slug] = data
+            return "blob://audit"
 
     monkeypatch.setattr(foresight_harvester, "BlobStorage", FakeStorage)
     monkeypatch.setattr(foresight_harvester, "_verify_foresight_url", lambda *args, **kwargs: True)
@@ -390,6 +422,7 @@ def test_harvest_merge_keeps_existing_review_records_when_new_batch_not_eligible
                 _signal(
                     title="Unsupported new signal",
                     source_url="https://www.oecd.org/unsupported-new",
+                    trend_supported=False,
                 )
             ],
             "model": "test",
@@ -410,10 +443,11 @@ def test_harvest_merge_keeps_existing_review_records_when_new_batch_not_eligible
     )
     monkeypatch.setattr(foresight_harvester.time, "sleep", lambda *_: None)
 
-    result = foresight_harvester.harvest_all_themes(["Automation"])
+    result = foresight_harvester.harvest_all_themes(["Business"])
 
     assert result["failed"] == 0
-    assert saved["automation"]["signals"]
-    titles = [s["title"] for s in saved["automation"]["signals"]]
-    assert titles == ["Existing review signal"]
-    assert saved["automation"]["merge_stats"]["new_harvested"] == 0
+    assert saved["business"]["signals"]
+    titles = [s["title"] for s in saved["business"]["signals"]]
+    assert titles == ["Existing active signal"]
+    assert saved["business"]["merge_stats"]["new_active"] == 0
+    assert audit_saved["business"]["candidates"][0]["title"] == "Unsupported new signal"
