@@ -612,6 +612,160 @@ def _company_evidence_stakeholders(company_evidence: dict | None) -> list[dict]:
     return candidates[:12]
 
 
+def _stakeholder_sort_score(item: dict) -> tuple[int, int, str]:
+    role = str(item.get("role") or item.get("position") or "").lower()
+    allowed = str(item.get("allowed_use") or item.get("sales_use") or "").lower()
+    source = str(item.get("source_database") or item.get("source") or "").lower()
+    score = 0
+    if "chief" in role or re.search(r"\b(cxo|ceo|cfo|coo|cio|cto|ciso|cdo|chro)\b", role):
+        score += 40
+    if any(token in role for token in ("director", "head of", "vp", "vice president", "board", "chair")):
+        score += 25
+    if "allowed_as_discovery_question" in allowed or "allowed_as_hypothesis" in allowed:
+        score += 15
+    if "company_evidence" in source:
+        score += 10
+    if "company_source_ledger" in source:
+        score += 5
+    confidence = _safe_int(item.get("confidence"), 0)
+    return (-score, -confidence, str(item.get("name") or "").lower())
+
+
+def _is_historical_stakeholder_role(role: Any) -> bool:
+    text = str(role or "").lower()
+    return bool(re.search(r"\b(retired|ret\.|former|ex-|emeritus|previous|past)\b", text))
+
+
+def _simple_stakeholder_item(
+    name: Any,
+    role: Any,
+    *,
+    source_database: str,
+    source: Any = None,
+    evidence_basis: Any = None,
+    allowed_use: Any = None,
+    confidence: Any = None,
+) -> dict | None:
+    name_text = _clip(name, 120)
+    role_text = _clip(role, 160)
+    if not name_text or not role_text:
+        return None
+    if len(name_text.split()) < 2:
+        return None
+    if _is_historical_stakeholder_role(role_text):
+        return None
+    allowed = _normalize_gate(allowed_use, "allowed_as_discovery_question")
+    if allowed == "blocked":
+        return None
+    return {
+        "name": name_text,
+        "position": role_text,
+        "source_database": source_database,
+        "source": _clip(source, 220),
+        "evidence_basis": _clip(evidence_basis or source or source_database, 260),
+        "allowed_use": allowed,
+        "confidence": _safe_int(confidence, 45),
+    }
+
+
+def _add_simple_stakeholder(target: list[dict], seen: set[str], item: dict | None) -> None:
+    if not item:
+        return
+    key = re.sub(r"\s+", " ", str(item.get("name") or "").strip().lower())
+    if not key or key in seen:
+        return
+    seen.add(key)
+    target.append(item)
+
+
+def _stakeholder_name_list(
+    company_data: dict,
+    company_evidence: dict | None = None,
+    company_source_ledger: dict | None = None,
+    *,
+    limit: int = 6,
+) -> list[dict]:
+    people: list[dict] = []
+    seen: set[str] = set()
+
+    for rec in _list(company_evidence.get("records") if isinstance(company_evidence, dict) else None):
+        if not isinstance(rec, dict) or rec.get("blocked") is True or rec.get("wrong_entity") is True:
+            continue
+        stakeholder = _dict(rec.get("stakeholder"))
+        if stakeholder:
+            _add_simple_stakeholder(
+                people,
+                seen,
+                _simple_stakeholder_item(
+                    stakeholder.get("name"),
+                    stakeholder.get("role"),
+                    source_database="company_evidence",
+                    source=stakeholder.get("public_profile_url") or rec.get("url"),
+                    evidence_basis=stakeholder.get("evidence_basis") or rec.get("source_quote") or rec.get("title"),
+                    allowed_use=stakeholder.get("allowed_use") or rec.get("sales_use"),
+                    confidence=rec.get("extraction_confidence"),
+                ),
+            )
+        coresignal_fields = _dict(rec.get("coresignal_fields"))
+        for executive in _list(coresignal_fields.get("key_executives")):
+            if not isinstance(executive, dict):
+                continue
+            _add_simple_stakeholder(
+                people,
+                seen,
+                _simple_stakeholder_item(
+                    executive.get("name") or executive.get("member_full_name") or executive.get("full_name"),
+                    executive.get("title") or executive.get("member_position_title") or executive.get("role"),
+                    source_database="company_evidence",
+                    source=rec.get("url"),
+                    evidence_basis=rec.get("title") or "Coresignal key executives in Company Evidence DB",
+                    allowed_use="allowed_as_discovery_question",
+                    confidence=rec.get("extraction_confidence"),
+                ),
+            )
+
+    for rec in _list(company_source_ledger.get("records") if isinstance(company_source_ledger, dict) else None):
+        if not isinstance(rec, dict) or rec.get("blocked") is True or rec.get("wrong_entity") is True:
+            continue
+        stakeholder = _dict(rec.get("stakeholder"))
+        _add_simple_stakeholder(
+            people,
+            seen,
+            _simple_stakeholder_item(
+                stakeholder.get("name"),
+                stakeholder.get("role"),
+                source_database="company_source_ledger",
+                source=stakeholder.get("public_profile_url") or rec.get("url"),
+                evidence_basis=stakeholder.get("evidence_basis") or rec.get("source_quote") or rec.get("title"),
+                allowed_use=stakeholder.get("allowed_use") or rec.get("sales_use"),
+                confidence=rec.get("extraction_confidence"),
+            ),
+        )
+
+    if len(people) < limit:
+        for person in _list(company_data.get("key_people")):
+            if not isinstance(person, dict):
+                continue
+            _add_simple_stakeholder(
+                people,
+                seen,
+                _simple_stakeholder_item(
+                    person.get("name"),
+                    person.get("role") or person.get("title"),
+                    source_database="scanner_key_people",
+                    source=person.get("source") or person.get("source_url"),
+                    evidence_basis=person.get("source") or person.get("source_url") or "Stored Scanner stakeholder compatibility data",
+                    allowed_use="allowed_as_discovery_question" if (person.get("source") or person.get("source_url")) else "internal_only",
+                    confidence=person.get("confidence") or person.get("confidence_score"),
+                ),
+            )
+            if len(people) >= limit:
+                break
+
+    people.sort(key=_stakeholder_sort_score)
+    return people[:limit]
+
+
 def _company_source_ledger_records(company_source_ledger: dict | None) -> tuple[list[dict], list[dict]]:
     if not isinstance(company_source_ledger, dict):
         return [], []
@@ -1033,6 +1187,7 @@ def _build_input_payload(
             "warnings": company_source_ledger.get("warnings", []) if isinstance(company_source_ledger, dict) else [],
         },
         "stakeholders": key_people,
+        "stakeholder_name_list": _stakeholder_name_list(company_data, company_evidence, company_source_ledger),
         "foresight_forces": forces,
         "services": services,
     }
@@ -1426,6 +1581,26 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             fixed["safety_notes"] = ["Use as sales-prep context; validate current role and remit before outreach."]
         fixed_stakeholders.append(fixed)
     report["stakeholder_map"] = fixed_stakeholders
+    extra_people = []
+    extra_seen: set[str] = set()
+    for person in _list(report.get("additional_stakeholder_names")) + _list(payload.get("stakeholder_name_list")):
+        if not isinstance(person, dict):
+            continue
+        _add_simple_stakeholder(
+            extra_people,
+            extra_seen,
+            _simple_stakeholder_item(
+                person.get("name"),
+                person.get("position") or person.get("role") or person.get("title"),
+                source_database=person.get("source_database") or "buying_insight",
+                source=person.get("source"),
+                evidence_basis=person.get("evidence_basis"),
+                allowed_use=person.get("allowed_use") or person.get("sales_use"),
+                confidence=person.get("confidence"),
+            ),
+        )
+    extra_people.sort(key=_stakeholder_sort_score)
+    report["additional_stakeholder_names"] = extra_people[:6]
     report.pop("conversation_angles", None)
 
     if low_evidence:
@@ -1719,6 +1894,7 @@ def _deterministic_buying_report(payload: dict, reason: str) -> dict:
         "pressure_signals": pressure_signals,
         "why_now": why_now,
         "stakeholder_map": stakeholder_map,
+        "additional_stakeholder_names": _list(payload.get("stakeholder_name_list"))[:6],
         "pain_to_solution_map": pain_to_solution,
         "recommended_sales_plays": sales_plays,
         "evidence_confidence": {
@@ -1887,6 +2063,7 @@ def _assemble_section_report(
     report.setdefault("recommended_sales_plays", [])
     report.setdefault("pressure_signals", [])
     report.setdefault("stakeholder_map", [])
+    report.setdefault("additional_stakeholder_names", [])
     report.setdefault("evidence_confidence", {})
     report.setdefault("overall_confidence", 45)
     report.setdefault("missing_input_warnings", [])
@@ -2005,6 +2182,29 @@ def render_buying_potential_html(report: dict) -> str:
           <small>Allowed use: {_esc(item.get('allowed_use'))} · Confidence {_esc(item.get('confidence'))}/100</small>
         </article>"""
 
+    def extra_stakeholder_rows(items):
+        rows = []
+        for item in _list(items)[:6]:
+            if not isinstance(item, dict):
+                continue
+            rows.append(
+                "<tr>"
+                f"<td>{_esc(item.get('name'))}</td>"
+                f"<td>{_esc(item.get('position') or item.get('role') or item.get('title'))}</td>"
+                f"<td>{_esc(item.get('source_database'))}</td>"
+                f"<td>{_esc(item.get('allowed_use'))}</td>"
+                "</tr>"
+            )
+        if not rows:
+            return ""
+        return (
+            '<div class="simple-list-block">'
+            "<h3>Additional Names To Review</h3>"
+            '<p class="muted">Source-bound people from Company Evidence DB, Source Ledger, or stored Scanner compatibility data. Use as sales-prep context only.</p>'
+            "<table><thead><tr><th>Name</th><th>Position</th><th>Source</th><th>Allowed Use</th></tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table></div>"
+        )
+
     def solution_card(item):
         disq = ", ".join(item.get("disqualifiers") or [])
         return f"""
@@ -2071,6 +2271,7 @@ def render_buying_potential_html(report: dict) -> str:
     small,.muted {{ color:var(--muted); }} table {{ width:100%; border-collapse:collapse; overflow:hidden; border-radius:10px; }} th,td {{ padding:11px; border-bottom:1px solid rgba(142,160,187,.16); text-align:left; vertical-align:top; }} th {{ color:var(--muted); font:700 11px ui-monospace,monospace; text-transform:uppercase; letter-spacing:.12em; }}
     ul {{ margin:8px 0 0 18px; padding:0; }} li {{ margin:5px 0; }} .warning {{ border-color:rgba(250,204,21,.4); background:rgba(250,204,21,.08); }} .danger {{ border-color:rgba(251,113,133,.4); background:rgba(251,113,133,.08); }}
     .role-line {{ color:var(--green); font:800 12px ui-monospace,monospace; text-transform:uppercase; letter-spacing:.12em; margin:-2px 0 12px; }} .theme-row {{ display:flex; flex-wrap:wrap; gap:4px; margin:8px 0; }}
+    .simple-list-block {{ margin-top:18px; border-top:1px solid rgba(142,160,187,.18); padding-top:18px; }}
     @media (max-width:820px) {{ main {{ padding:24px 14px 48px; }} .grid,.grid-3 {{ grid-template-columns:1fr; }} .card-top {{ flex-direction:column; }} }}
   </style>
 </head>
@@ -2107,6 +2308,7 @@ def render_buying_potential_html(report: dict) -> str:
   <section>
     <h2>Buying Committee & Influence Map</h2>
     <div class="grid">{_render_list(_list(report.get('stakeholder_map')), stakeholder_card)}</div>
+    {extra_stakeholder_rows(report.get('additional_stakeholder_names'))}
   </section>
 
   <section><h2>Opportunity-to-Offer Fit</h2><div class="grid">{_render_list(_list(report.get('pain_to_solution_map')), solution_card)}</div></section>
