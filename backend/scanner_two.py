@@ -2371,8 +2371,6 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             print(f"   ⏰ [Forensic Scan] Skipping GPT web search — elapsed {int(elapsed_total)}s exceeds {_guard_anthropic}s guard")
             return None
         local_timeout = min(120, _phase_remaining(buffer=35))
-        if strong_company_evidence_mode:
-            local_timeout = min(local_timeout, 90)
         if local_timeout < 25:
             print(f"   ⏭️ [Forensic Scan] Skipping GPT web search — only {local_timeout}s available before phase guard")
             return None
