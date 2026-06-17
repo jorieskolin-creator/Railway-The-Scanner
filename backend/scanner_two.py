@@ -5,7 +5,7 @@ import time
 import re
 import requests as http_requests
 import concurrent.futures
-from datetime import date
+from datetime import date, datetime
 from urllib.parse import urlparse
 import anthropic
 from knowledge_base import get_evolving_framework
@@ -1938,6 +1938,168 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         finally:
             pool.shutdown(wait=False)
 
+    def _seed_excerpt(value, limit=520):
+        if not value:
+            return ""
+        text = re.sub(r"\s+", " ", str(value)).strip()
+        return text[:limit]
+
+    def _seed_category(source_type="", source_category=""):
+        token = f"{source_type} {source_category}".lower()
+        if any(k in token for k in ["financial", "annual", "investor", "filing"]):
+            return "STRATEGIC JURY (Business Model, Procurement & Customer Experience)"
+        if any(k in token for k in ["career", "job", "hiring", "people", "culture"]):
+            return "CULTURAL JURY (Talent & Psychological Safety)"
+        if any(k in token for k in ["technology", "service", "cloud", "ai", "data", "cyber", "erp"]):
+            return "AI & DATA JURY (Future Readiness)"
+        if any(k in token for k in ["procurement", "contract", "tender", "reference", "case"]):
+            return "SERVICE PORTFOLIO JURY (Delivery Reality)"
+        return "Company Evidence DB / Historical Evidence"
+
+    def _is_previous_seedable(source):
+        if not isinstance(source, dict):
+            return False
+        if not source.get("url"):
+            return False
+        if source.get("wrong_entity_true") or source.get("entity_match_status") == "wrong":
+            return False
+        if source.get("promotion_status") in {"excluded", "blocked"}:
+            return False
+        return bool(
+            source.get("generation_eligible")
+            or source.get("analysis_verified")
+            or source.get("url_verified")
+            or source.get("verified")
+            or source.get("content_verified")
+        )
+
+    def _previous_scans_for_seed():
+        scans = []
+        if not isinstance(previous_context, dict):
+            return scans
+        scans.append({
+            "date": previous_context.get("last_scanned", ""),
+            "evidence": previous_context.get("previous_evidence", []),
+        })
+        for older in previous_context.get("scan_history", []) or []:
+            scans.append({
+                "date": older.get("date", ""),
+                "evidence": older.get("evidence", []),
+            })
+        return scans
+
+    def _scan_age_days(scan_date):
+        try:
+            if scan_date:
+                return (datetime.utcnow() - datetime.fromisoformat(str(scan_date))).days
+        except (ValueError, TypeError):
+            pass
+        return 999
+
+    def _build_seeded_forensic_fallback(reason):
+        """
+        Build candidate evidence from cached Company Evidence DB and recent
+        verified historical evidence when live web search fails. These are not
+        promoted facts; they are revalidation-pending inputs for the normal
+        Scanner gates.
+        """
+        seed_findings = []
+        seen_urls = set()
+        company_seed_count = 0
+        historical_seed_count = 0
+
+        for idx, candidate in enumerate(company_evidence_candidates[:14], start=1):
+            url = candidate.get("url") or candidate.get("source_url") or ""
+            excerpt = _seed_excerpt(
+                candidate.get("cached_excerpt")
+                or candidate.get("source_quote")
+                or candidate.get("snippet")
+                or candidate.get("text_excerpt")
+                or candidate.get("extracted_text")
+                or candidate.get("markdown")
+            )
+            if not url and not excerpt:
+                continue
+            key = url.rstrip("/").lower() if url else f"company-evidence-{idx}"
+            if key in seen_urls:
+                continue
+            seen_urls.add(key)
+            source_type = candidate.get("source_type") or candidate.get("source_category") or ""
+            title = candidate.get("title") or candidate.get("source_title") or url or f"Company Evidence DB source {idx}"
+            seed_findings.append({
+                "category": _seed_category(source_type, candidate.get("source_category", "")),
+                "label": title,
+                "found": True,
+                "sentiment": "neutral",
+                "snippet": excerpt or "Company Evidence DB source available; live scan must revalidate content before use.",
+                "title": title,
+                "url": url,
+                "is_recent": False,
+                "source_database": "company_evidence_db",
+                "forensic_seed_source": True,
+                "source_status": "candidate_revalidation_pending",
+                "verification_reason": "Seeded from Company Evidence DB after live forensic search returned no usable data.",
+                "cached_excerpt": excerpt,
+            })
+            company_seed_count += 1
+
+        for scan in _previous_scans_for_seed():
+            if _scan_age_days(scan.get("date")) >= 90:
+                continue
+            for prev_ev in scan.get("evidence", []) or []:
+                if not _is_previous_seedable(prev_ev):
+                    continue
+                url = prev_ev.get("url") or ""
+                key = url.rstrip("/").lower()
+                if not key or key in seen_urls:
+                    continue
+                seen_urls.add(key)
+                title = prev_ev.get("title") or "Historical verified evidence"
+                seed_findings.append({
+                    "category": _seed_category(prev_ev.get("source_type", ""), prev_ev.get("source_category", "")),
+                    "label": title,
+                    "found": True,
+                    "sentiment": "neutral",
+                    "snippet": _seed_excerpt(prev_ev.get("snippet") or prev_ev.get("source_quote") or prev_ev.get("verification_reason"))
+                    or "Previously verified evidence carried forward as historical revalidation-pending source.",
+                    "title": title,
+                    "url": url,
+                    "is_recent": False,
+                    "source_database": "previous_verified_evidence",
+                    "forensic_seed_source": True,
+                    "source_status": "historical_revalidation_pending",
+                    "verification_reason": "Seeded from previous verified evidence because live forensic search returned no usable data.",
+                })
+                historical_seed_count += 1
+                if len(seed_findings) >= 16:
+                    break
+            if len(seed_findings) >= 16:
+                break
+
+        if not seed_findings:
+            return None
+
+        confidence = 38 if company_seed_count >= 3 else 30
+        if historical_seed_count and not company_seed_count:
+            confidence = 28
+        print(
+            f"   🧭 [Forensic Seed] Live web search unavailable ({reason}); "
+            f"using {company_seed_count} Company Evidence DB source(s) and "
+            f"{historical_seed_count} historical verified source(s) as revalidation-pending candidates."
+        )
+        return {
+            "findings": seed_findings,
+            "key_people": [],
+            "reality_score_adjustment": 0,
+            "confidence_score": confidence,
+            "washing_flag": False,
+            "washing_type": None,
+            "_seeded_forensic_fallback": True,
+            "_fallback_reason": reason,
+            "_company_evidence_seed_count": company_seed_count,
+            "_historical_seed_count": historical_seed_count,
+        }
+
     search_name = clean_company_name_for_search(company_name)
     entity_terms = entity_search_terms(company_name)
     search_alias_block = ""
@@ -2469,6 +2631,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     if not data:
         print(f"   ⚠️ [Forensic Scan] GPT-5.5 web search returned no data. Trying bounded Sonnet challenger...")
         data = execute_with_anthropic(prompt)
+        if not data:
+            data = _build_seeded_forensic_fallback("gpt_and_sonnet_returned_no_data")
     else:
         scout_confidence = data.get("confidence_score", 0) or 0
         scout_evidence_count = len([
@@ -2524,6 +2688,28 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             else:
                 print("   ⏭ [Forensic Scan] Sonnet challenger produced no usable addition.")
 
+    if data:
+        linked_finding_count = len([
+            f for f in data.get("findings", [])
+            if f.get("found") and f.get("url")
+        ])
+        if linked_finding_count == 0:
+            seeded_data = _build_seeded_forensic_fallback("live_search_returned_zero_linked_sources")
+            if seeded_data:
+                data["findings"] = seeded_data.get("findings", []) + data.get("findings", [])
+                data["confidence_score"] = max(
+                    data.get("confidence_score", 0) or 0,
+                    seeded_data.get("confidence_score", 0) or 0,
+                )
+                data["_seeded_forensic_fallback"] = True
+                data["_fallback_reason"] = seeded_data.get("_fallback_reason")
+                data["_company_evidence_seed_count"] = seeded_data.get("_company_evidence_seed_count", 0)
+                data["_historical_seed_count"] = seeded_data.get("_historical_seed_count", 0)
+                print(
+                    f"   🧭 [Forensic Seed] Added seeded candidates because live result had zero linked sources "
+                    f"(confidence now {data.get('confidence_score', 0)}/100)."
+                )
+
     # --- CONFIDENCE FLOOR (two-pass structuring safety net) ---
     # When the structuring model (Pass 2) cannot determine confidence from
     # free-form text, it may default to 0 even when real evidence exists.
@@ -2552,6 +2738,12 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         #   2. fewer than 2 evidence links regardless of confidence (e.g. JSON-repaired
         #      model responses that claim high confidence but provide no sources)
         needs_research = (initial_confidence < 45 and initial_evidence_count < 3) or initial_evidence_count < 2
+        if data.get("_seeded_forensic_fallback"):
+            needs_research = False
+            print(
+                f"   [Re-Search] Skipped: using seeded forensic fallback "
+                f"({initial_evidence_count} revalidation-pending links). Preserving phase budget for synthesis."
+            )
         if strong_company_evidence_mode and initial_evidence_count >= 2 and initial_confidence >= 35:
             needs_research = False
             print(
@@ -2660,7 +2852,12 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     "url": f.get("url", ""),
                     "source": get_clean_domain(f.get("url", "")),
                     "is_recent": f.get("is_recent", False),
-                    "source_type": "current"
+                    "source_type": "current",
+                    "source_database": f.get("source_database"),
+                    "forensic_seed_source": bool(f.get("forensic_seed_source")),
+                    "source_status": f.get("source_status"),
+                    "verification_reason": f.get("verification_reason"),
+                    "cached_excerpt": f.get("cached_excerpt"),
                 })
 
         # --- EVIDENCE PERSISTENCE ---
@@ -2749,7 +2946,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         # ±25 is the permanent threshold — matches Opus Final Judge design.
         # If re-scan confirms the change → accept as fact (genuine change).
         # If re-scan contradicts → use the more conservative (closer to previous) result.
-        if previous_context and previous_context.get("previous_reality") is not None:
+        if previous_context and previous_context.get("previous_reality") is not None and not data.get("_seeded_forensic_fallback"):
             prev_reality = previous_context["previous_reality"]
             delta = final_score - prev_reality
 
@@ -2987,11 +3184,15 @@ RETURN STRICT JSON:
             "washing_flag": washing_flag,
             "washing_type": washing_type,
             "excluded_evidence": excluded_evidence if 'excluded_evidence' in locals() else [],
-            "evidence_sufficiency": evidence_sufficiency_score(raw_findings, company_domain)
+            "evidence_sufficiency": evidence_sufficiency_score(raw_findings, company_domain),
+            "forensic_fallback": bool(data.get("_seeded_forensic_fallback")),
+            "forensic_fallback_reason": data.get("_fallback_reason"),
+            "company_evidence_seed_count": data.get("_company_evidence_seed_count", 0),
+            "historical_seed_count": data.get("_historical_seed_count", 0),
         }
     
     # --- FALLBACK: All models failed — return empty result, never fabricate evidence ---
-    print(f"   [Scanner 2] All models failed for {company_name}. Returning empty result (no simulated data).")
+    print(f"   [Scanner 2] All models failed for {company_name}. Returning empty result only because no cached or historical evidence was available.")
     return { "score": 0, "checklist": [], "links": [], "key_people": [], "is_simulated": True, "confidence_score": 0, "washing_flag": False, "washing_type": None }
 
 

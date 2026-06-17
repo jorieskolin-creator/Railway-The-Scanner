@@ -15,6 +15,7 @@ import time
 import threading
 import concurrent.futures
 from datetime import datetime, date
+from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 from pypdf import PdfReader
 import anthropic
@@ -3754,6 +3755,76 @@ def _execute_scan_pipeline(
                         "financial_findings": [],
                         "financial_confidence": 0,
                         "is_simulated": True
+                    }
+
+        if (
+            reality_results.get("is_simulated")
+            and not reality_results.get("links")
+            and (
+                (previous_context and previous_context.get("previous_evidence"))
+                or company_evidence_candidates
+            )
+        ):
+            previous_links = []
+            if previous_context:
+                for ev in previous_context.get("previous_evidence", []) or []:
+                    if ev.get("url") and not ev.get("wrong_entity_true") and ev.get("promotion_status") not in {"excluded", "blocked"}:
+                        previous_links.append({
+                            **ev,
+                            "source_type": ev.get("source_type") or "historical",
+                            "source_status": "historical_revalidation_pending",
+                            "historical_revalidation_pending": True,
+                        })
+            if previous_links:
+                print(
+                    f"   🔄 [Scanner 2] Empty live reality result recovered with "
+                    f"{len(previous_links[:8])} previous verified source(s) as historical revalidation-pending evidence."
+                )
+                reality_results = {
+                    "score": existing_data.get("reality_score", 50) if existing_data else 50,
+                    "checklist": existing_data.get("reality_checklist", []) if existing_data else [],
+                    "links": previous_links[:8],
+                    "key_people": existing_data.get("key_people", []) if existing_data else [],
+                    "is_simulated": False,
+                    "confidence_score": max(25, int((existing_data or {}).get("confidence_score", 0) or 0)),
+                    "washing_flag": (existing_data or {}).get("washing_flag", False),
+                    "washing_type": (existing_data or {}).get("washing_type"),
+                    "historical_revalidation_pending": True,
+                    "forensic_fallback": True,
+                    "forensic_fallback_reason": "empty_live_result_reused_previous_evidence",
+                }
+            elif company_evidence_candidates:
+                seeded_links = []
+                for idx, candidate in enumerate(company_evidence_candidates[:8], start=1):
+                    url = candidate.get("url") or ""
+                    if not url:
+                        continue
+                    seeded_links.append({
+                        "title": candidate.get("title") or candidate.get("source_title") or f"Company Evidence DB source {idx}",
+                        "snippet": candidate.get("snippet") or candidate.get("source_quote") or candidate.get("cached_excerpt") or "",
+                        "url": url,
+                        "source": candidate.get("source") or urlparse(url).netloc.replace("www.", ""),
+                        "source_type": "company_evidence_db",
+                        "source_database": "company_evidence_db",
+                        "source_status": "candidate_revalidation_pending",
+                        "forensic_seed_source": True,
+                    })
+                if seeded_links:
+                    print(
+                        f"   🧭 [Scanner 2] Empty live reality result recovered with "
+                        f"{len(seeded_links)} Company Evidence DB source seed(s)."
+                    )
+                    reality_results = {
+                        "score": 50,
+                        "checklist": [],
+                        "links": seeded_links,
+                        "key_people": [],
+                        "is_simulated": False,
+                        "confidence_score": 30,
+                        "washing_flag": False,
+                        "washing_type": None,
+                        "forensic_fallback": True,
+                        "forensic_fallback_reason": "empty_live_result_used_company_evidence_db",
                     }
 
         print(f"   ✅ [Scanner 2] Reality check complete in {int((time.time() - s2_start) * 1000)}ms → Score: {reality_results['score']}/100, Confidence: {reality_results.get('confidence_score', 0)}/100")
