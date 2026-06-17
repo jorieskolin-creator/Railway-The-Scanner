@@ -8,9 +8,9 @@ injected into per-company foresight generation, avoiding redundant searches.
 
 Refresh-and-clean strategy:
   1. Load existing KB signals for the theme
-  2. Re-verify existing URLs — remove any that have gone dead since last harvest
+  2. Re-verify existing URLs — mark dead/unreadable records, do not wipe themes
   3. Harvest new signals from GPT/Claude web-search models
-  4. Deduplicate & merge — add new signals not already in the KB
+  4. Deduplicate & merge — add new storable signals not already in the KB
   5. Cap at MAX_SIGNALS_PER_THEME, ranked by confidence + recency
   6. Store the merged result
 
@@ -194,8 +194,8 @@ def _mark_foresight_context_unavailable(
     sig["trend_supported"] = False
     sig["source_readable"] = False
     sig["content_verified"] = False
-    sig["foresight_signal_status"] = "excluded" if excluded else "not_context_eligible"
-    sig["source_audit_status"] = "excluded" if excluded else "not_context_eligible"
+    sig["foresight_signal_status"] = "excluded" if excluded else "needs_review"
+    sig["source_audit_status"] = "excluded" if excluded else "needs_review"
     sig["trend_support_status"] = "unavailable" if excluded else "unchecked"
     sig["verification_reason"] = reason
     sig["content_verification_reason"] = reason
@@ -220,9 +220,11 @@ def _foresight_context_supported(sig: dict, result: dict) -> bool:
         return False
     if support in FORESIGHT_CONTEXT_SUPPORT_STATUSES:
         if support == "supported":
-            return score >= FORESIGHT_CONTEXT_PARTIAL_MIN_SCORE or (credible_source and score >= 25)
-        return credible_source and score >= 25
-    if credible_source and score >= FORESIGHT_CONTEXT_PARTIAL_MIN_SCORE and bool(quote):
+            return score >= 25 or credible_source
+        return credible_source and score >= 20
+    if credible_source and bool(quote) and score >= 20:
+        return True
+    if credible_source and content_verified and str(sig.get("validated")).lower() == "true" and support not in {"unsupported", "contradicted"}:
         return True
     return False
 
@@ -266,7 +268,7 @@ def _apply_signal_promotion(sig: dict, result: dict | None, theme: str) -> dict:
         "source_registry_status",
     ):
         sig.pop(field, None)
-    sig["foresight_signal_status"] = "context_eligible" if eligible else "not_context_eligible"
+    sig["foresight_signal_status"] = "context_eligible" if eligible else "needs_review"
     if eligible:
         sig["source_audit_status"] = "accepted"
     elif not source_readable:
@@ -276,13 +278,13 @@ def _apply_signal_promotion(sig: dict, result: dict | None, theme: str) -> dict:
     elif not sig["theme_match"]:
         sig["source_audit_status"] = "theme_mismatch"
     else:
-        sig["source_audit_status"] = "not_context_eligible"
+        sig["source_audit_status"] = "needs_review"
     sig["trend_support_status"] = "supported" if eligible else raw_support
     sig["analysis_scope"] = "foresight_context_only"
     sig["verification_reason"] = (
         "foresight_context_verified"
         if eligible
-        else ("claim_unsupported" if raw_support == "unsupported" else "foresight_context_not_supported")
+        else ("claim_unsupported" if raw_support == "unsupported" else "foresight_context_needs_review")
     )
     sig["foresight_evidence_version"] = FORESIGHT_KB_EVIDENCE_VERSION
     return sig
@@ -435,6 +437,41 @@ def _merge_signals(existing: list[dict], new_signals: list[dict], max_total: int
         print(f"   🔀 [Merge] {added} new, {updated} refreshed, {len(capped)} total (cap {max_total})")
 
     return capped
+
+
+def _is_central_kb_storable_signal(sig: dict, *, existing: bool = False) -> bool:
+    """Return whether a signal belongs in the central, company-neutral KB.
+
+    This is intentionally broader than scan-time context eligibility.  Scanner
+    consumes only `foresight_context_eligible=True`, but the KB can retain
+    metadata-repaired `needs_review` records for audit and future refresh.
+    """
+    if not isinstance(sig, dict):
+        return False
+    if sig.get("company_specific") is True or sig.get("wrong_entity") is True:
+        return False
+    if not (sig.get("source_url") or sig.get("url")):
+        return False
+    if sig.get("foresight_signal_status") == "excluded":
+        return False
+    if sig.get("source_audit_status") in {"excluded", "source_dead", "missing_source_url"}:
+        return bool(existing)
+    if not existing and sig.get("source_audit_status") in {
+        "trend_not_supported",
+        "theme_mismatch",
+        "source_unreadable",
+        "low_credibility",
+    }:
+        return False
+    claim_type = str(sig.get("claim_type") or "").lower()
+    source_type = str(sig.get("source_type") or sig.get("origin") or "").lower()
+    if claim_type and claim_type not in {"foresight_context", "regulatory_context"}:
+        return False
+    if source_type in {"company_evidence", "stakeholder_candidate", "sales_signal"}:
+        return False
+    if sig.get("url_verified") is False and sig.get("verified") is False:
+        return bool(existing)
+    return True
 
 
 def _build_harvest_prompt(theme: str, search_queries: list[str]) -> str:
@@ -709,7 +746,7 @@ def harvest_all_themes(
 
         print(f"\n--- [{i+1}/{total}] {theme} ({len(search_queries)} queries) ---")
 
-        # Step 1: Load & clean existing KB signals for this theme
+        # Step 1: Load & repair existing KB signals for this theme
         existing_data = storage.get_foresight_kb(slug)
         existing_before_count = len((existing_data or {}).get("signals", []))
         existing_signals = []
@@ -721,7 +758,7 @@ def harvest_all_themes(
             })
             existing_signals = [
                 s for s in promoted_existing.get("signals", [])
-                if _is_kb_signal_context_eligible(s)
+                if _is_central_kb_storable_signal(s, existing=True)
             ]
 
         # Step 2: Harvest new signals
@@ -736,7 +773,7 @@ def harvest_all_themes(
                 data = _verify_signal_content(data)
             new_validated_signals = [
                 s for s in (data.get("signals", []) if data else [])
-                if _is_kb_signal_context_eligible(s)
+                if _is_central_kb_storable_signal(s, existing=False)
             ]
 
         # Step 4: Merge — combine cleaned existing + validated new
@@ -746,8 +783,15 @@ def harvest_all_themes(
             results["failed"] += 1
             status = "no_valid_signals" if (data and data.get("signals") is not None) else "failed"
             results["themes"].append({"theme": theme, "slug": slug, "status": status, "signals": 0})
-            print(f"   ⚠️ [Result] {theme}: no signals after merge — skipped")
+            print(f"   ⚠️ [Result] {theme}: no storable company-neutral signals after merge — skipped")
             continue
+
+        context_eligible_count = sum(1 for s in merged_signals if _is_kb_signal_context_eligible(s))
+        needs_review_count = sum(1 for s in merged_signals if s.get("foresight_signal_status") == "needs_review")
+        not_context_eligible_count = sum(
+            1 for s in merged_signals
+            if s.get("foresight_signal_status") in {"not_context_eligible", "needs_review"}
+        )
 
         # Step 5: Build merged data envelope and store
         merged_data = {
@@ -761,7 +805,19 @@ def harvest_all_themes(
                 "existing_after_clean": len(existing_signals),
                 "new_harvested": len(new_validated_signals),
                 "merged_total": len(merged_signals),
+                "foresight_context_eligible": context_eligible_count,
+                "needs_review": needs_review_count,
+                "not_context_eligible": not_context_eligible_count,
                 "storage_contract": "foresight_context_only",
+            },
+            "validation": {
+                "total_signals": len(merged_signals),
+                "url_verified": sum(1 for s in merged_signals if s.get("url_verified") is True or s.get("verified") is True),
+                "content_verified": sum(1 for s in merged_signals if s.get("content_verified") is True or s.get("source_readable") is True),
+                "foresight_context_eligible": context_eligible_count,
+                "needs_review": needs_review_count,
+                "not_context_eligible": not_context_eligible_count,
+                "excluded": sum(1 for s in merged_signals if s.get("foresight_signal_status") == "excluded"),
             },
             "foresight_evidence_version": FORESIGHT_KB_EVIDENCE_VERSION,
         }
@@ -779,9 +835,14 @@ def harvest_all_themes(
             "stored_url": url,
             "existing_kept": len(existing_signals),
             "new_added": len(new_validated_signals),
+            "foresight_context_eligible": context_eligible_count,
+            "needs_review": needs_review_count,
         })
 
-        print(f"   💾 [Store] {theme}: {n_signals} signals saved to foresight_kb/{slug}")
+        print(
+            f"   💾 [Store] {theme}: {n_signals} signals saved to foresight_kb/{slug} "
+            f"({context_eligible_count} context eligible, {needs_review_count} needs review)"
+        )
 
         # Rate limit courtesy: pause between themes to avoid web-search provider quota hits
         if i < total - 1:
@@ -1008,9 +1069,17 @@ def _repair_central_kb_signal(sig: dict, theme: str, *, url_alive: bool | None =
     clean["content_verified"] = clean.get("content_verified") is True or bool(clean.get("source_quote"))
     clean["theme_match"] = clean.get("theme_match") is not False
 
-    legacy_eligible = _legacy_signal_was_context_eligible(sig)
     explicit_trend_supported = clean.get("trend_supported") is True
-    inferred_trend_supported = legacy_eligible and clean.get("trend_supported") is not False
+    explicitly_rejected = (
+        clean.get("trend_supported") is False
+        or str(clean.get("source_audit_status") or "").lower() in {"trend_not_supported", "theme_mismatch", "excluded"}
+        or str(clean.get("foresight_signal_status") or "").lower() == "excluded"
+    )
+    inferred_trend_supported = (
+        not explicitly_rejected
+        and clean["source_readable"]
+        and bool(_signal_claim_text(clean))
+    )
     clean["trend_supported"] = bool(explicit_trend_supported or inferred_trend_supported)
 
     credibility = _foresight_source_credibility(clean)
@@ -1021,11 +1090,10 @@ def _repair_central_kb_signal(sig: dict, theme: str, *, url_alive: bool | None =
         and clean["theme_match"]
         and clean["trend_supported"]
         and credible
-        and legacy_eligible
     )
 
     clean["foresight_context_eligible"] = eligible
-    clean["foresight_signal_status"] = "context_eligible" if eligible else "not_context_eligible"
+    clean["foresight_signal_status"] = "context_eligible" if eligible else "needs_review"
     if eligible:
         clean["source_audit_status"] = "accepted"
         clean["verification_reason"] = clean.get("verification_reason") or "foresight_context_metadata_repaired"
@@ -1042,8 +1110,8 @@ def _repair_central_kb_signal(sig: dict, theme: str, *, url_alive: bool | None =
         clean["source_audit_status"] = "low_credibility"
         clean["verification_reason"] = "source_credibility_too_low_for_context"
     else:
-        clean["source_audit_status"] = "not_context_eligible"
-        clean["verification_reason"] = clean.get("verification_reason") or "legacy_record_not_previously_context_eligible"
+        clean["source_audit_status"] = "needs_review"
+        clean["verification_reason"] = clean.get("verification_reason") or "foresight_context_needs_review"
     return clean
 
 
@@ -1133,6 +1201,7 @@ def cleanup_foresight_kb(progress_callback=None) -> dict:
         "url_verified": 0,
         "content_verified": 0,
         "foresight_context_eligible": 0,
+        "needs_review": 0,
         "not_context_eligible": 0,
         "analysis_verified": 0,
         "display_only": 0,
@@ -1197,6 +1266,7 @@ def cleanup_foresight_kb(progress_callback=None) -> dict:
         url_verified = sum(1 for s in repaired_records if s.get("url_verified") is True or s.get("verified") is True)
         content_verified = sum(1 for s in repaired_records if s.get("content_verified") is True or s.get("source_readable") is True)
         context_eligible = sum(1 for s in repaired_records if s.get("foresight_context_eligible") is True)
+        needs_review = sum(1 for s in repaired_records if s.get("foresight_signal_status") == "needs_review")
         not_context_eligible = sum(1 for s in repaired_records if s.get("foresight_signal_status") == "not_context_eligible")
         source_dead = sum(1 for s in repaired_records if s.get("source_audit_status") == "source_dead")
         source_unreadable = sum(1 for s in repaired_records if s.get("source_audit_status") == "source_unreadable")
@@ -1208,6 +1278,7 @@ def cleanup_foresight_kb(progress_callback=None) -> dict:
         results["url_verified"] += url_verified
         results["content_verified"] += content_verified
         results["foresight_context_eligible"] += context_eligible
+        results["needs_review"] += needs_review
         results["not_context_eligible"] += not_context_eligible
         results["analysis_verified"] += analysis_verified
         results["display_only"] += display_only
@@ -1242,6 +1313,7 @@ def cleanup_foresight_kb(progress_callback=None) -> dict:
                     "company_metadata_removed": metadata_removed,
                     "metadata_repaired": metadata_repaired,
                     "foresight_context_eligible": context_eligible,
+                    "needs_review": needs_review,
                     "not_context_eligible": not_context_eligible,
                 },
                 "validation": {
@@ -1249,6 +1321,7 @@ def cleanup_foresight_kb(progress_callback=None) -> dict:
                     "url_verified": url_verified,
                     "content_verified": content_verified,
                     "foresight_context_eligible": context_eligible,
+                    "needs_review": needs_review,
                     "not_context_eligible": not_context_eligible,
                     "source_dead": source_dead,
                     "source_unreadable": source_unreadable,
@@ -1259,7 +1332,7 @@ def cleanup_foresight_kb(progress_callback=None) -> dict:
             print(
                 f"   💾 [{i+1}/{total_themes}] {theme_name}: metadata repaired for "
                 f"{metadata_repaired}/{before_count}; context-eligible {context_eligible}, "
-                f"not eligible {not_context_eligible}, dead marked {source_dead}"
+                f"needs review {needs_review}, not eligible {not_context_eligible}, dead marked {source_dead}"
             )
         else:
             print(f"   ✅ [{i+1}/{total_themes}] {theme_name}: {before_count} signals already clean")
@@ -1275,6 +1348,7 @@ def cleanup_foresight_kb(progress_callback=None) -> dict:
             "url_verified": url_verified,
             "content_verified": content_verified,
             "foresight_context_eligible": context_eligible,
+            "needs_review": needs_review,
             "not_context_eligible": not_context_eligible,
             "analysis_verified": analysis_verified,
             "display_only": display_only,
@@ -1292,6 +1366,7 @@ def cleanup_foresight_kb(progress_callback=None) -> dict:
     print(
         f"🧹 KB VERIFY/REPAIR COMPLETE: {results['metadata_repaired']} signal metadata repairs; "
         f"{results['foresight_context_eligible']} foresight-context eligible; "
+        f"{results['needs_review']} need review; "
         f"{results['not_context_eligible']} retained as not context eligible"
     )
     print(f"{'='*70}\n")

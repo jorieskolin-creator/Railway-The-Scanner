@@ -282,6 +282,7 @@ def test_cleanup_foresight_kb_repairs_display_only_metadata_without_deleting(mon
                             title="Display-only signal",
                             promotion_status="display_only",
                             foresight_context_eligible=False,
+                            tags=["6-12mo", "go_to_market", "stable", "cred: high"],
                         ),
                     ],
                 }
@@ -292,6 +293,7 @@ def test_cleanup_foresight_kb_repairs_display_only_metadata_without_deleting(mon
             return "blob://saved"
 
     monkeypatch.setattr(foresight_harvester, "BlobStorage", FakeStorage)
+    monkeypatch.setattr(strategic_foresight, "_verify_foresight_url", lambda *args, **kwargs: True)
 
     result = foresight_harvester.cleanup_foresight_kb()
 
@@ -313,5 +315,105 @@ def test_cleanup_foresight_kb_repairs_display_only_metadata_without_deleting(mon
     assert "company_name" not in retained
     repaired_display_only = next(s for s in saved["business"]["signals"] if s["title"] == "Display-only signal")
     assert "promotion_status" not in repaired_display_only
-    assert repaired_display_only["foresight_context_eligible"] is False
-    assert repaired_display_only["foresight_signal_status"] == "not_context_eligible"
+    assert repaired_display_only["tags"] == ["6-12mo", "go_to_market", "stable", "cred: high"]
+    assert repaired_display_only["foresight_context_eligible"] is True
+    assert repaired_display_only["foresight_signal_status"] == "context_eligible"
+
+
+def test_repair_dead_signal_marks_dead_without_deleting(monkeypatch):
+    saved = {}
+
+    class FakeStorage:
+        def get_all_foresight_kb(self):
+            return {
+                "automation": {
+                    "theme": "Automation",
+                    "signals": [
+                        _signal(
+                            title="Dead macro signal",
+                            source_url="https://example.invalid/dead",
+                            url_verified=True,
+                        )
+                    ],
+                }
+            }
+
+        def save_foresight_kb(self, slug, data):
+            saved[slug] = data
+            return "blob://saved"
+
+    monkeypatch.setattr(foresight_harvester, "BlobStorage", FakeStorage)
+    monkeypatch.setattr(strategic_foresight, "_verify_foresight_url", lambda *args, **kwargs: False)
+
+    result = foresight_harvester.cleanup_foresight_kb()
+
+    assert result["signals_before"] == 1
+    assert result["signals_after"] == 1
+    repaired = saved["automation"]["signals"][0]
+    assert repaired["source_audit_status"] == "source_dead"
+    assert repaired["foresight_context_eligible"] is False
+    assert "promotion_status" not in repaired
+
+
+def test_harvest_merge_keeps_existing_review_records_when_new_batch_not_eligible(monkeypatch):
+    saved = {}
+
+    class FakeStorage:
+        def save_foresight_registry(self, registry):
+            return "blob://registry"
+
+        def get_foresight_kb(self, slug):
+            return {
+                "theme": "Automation",
+                "signals": [
+                    _signal(
+                        title="Existing review signal",
+                        source_url="https://www.oecd.org/existing-review",
+                        promotion_status="display_only",
+                        trend_supported=False,
+                    )
+                ],
+            }
+
+        def save_foresight_kb(self, slug, data):
+            saved[slug] = data
+            return "blob://saved"
+
+    monkeypatch.setattr(foresight_harvester, "BlobStorage", FakeStorage)
+    monkeypatch.setattr(foresight_harvester, "_verify_foresight_url", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        foresight_harvester,
+        "_harvest_single_theme",
+        lambda theme, queries: {
+            "theme": theme,
+            "signals": [
+                _signal(
+                    title="Unsupported new signal",
+                    source_url="https://www.oecd.org/unsupported-new",
+                )
+            ],
+            "model": "test",
+        },
+    )
+    monkeypatch.setattr(
+        foresight_harvester,
+        "_check_relevance",
+        lambda *args, **kwargs: {
+            "relevance_score": 10,
+            "relevant": False,
+            "claim_support_status": "unsupported",
+            "content_verified": True,
+            "source_quote": "Unrelated content.",
+            "reason": "Does not support trend.",
+            "verification_model": "test",
+        },
+    )
+    monkeypatch.setattr(foresight_harvester.time, "sleep", lambda *_: None)
+
+    result = foresight_harvester.harvest_all_themes(["Automation"])
+
+    assert result["failed"] == 0
+    assert saved["automation"]["signals"]
+    titles = [s["title"] for s in saved["automation"]["signals"]]
+    assert titles == ["Existing review signal"]
+    assert saved["automation"]["merge_stats"]["new_harvested"] == 0

@@ -827,7 +827,20 @@ class BlobStorage:
         if not blobs:
             return None
         blobs.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
-        return self._get(blobs[0].get("url"))
+        latest_data = self._get(blobs[0].get("url"))
+        if latest_data and latest_data.get("signals"):
+            return latest_data
+        for fallback in blobs[1:]:
+            fallback_data = self._get(fallback.get("url"))
+            if fallback_data and fallback_data.get("signals"):
+                print(
+                    f"   [Storage] Latest Foresight KB '{theme_slug}' is empty; "
+                    "using newest non-empty previous version"
+                )
+                fallback_data["_recovered_from_non_empty_version"] = True
+                fallback_data["_empty_latest_url"] = blobs[0].get("url")
+                return fallback_data
+        return latest_data
 
     def get_all_foresight_kb(self):
         """Retrieves all foresight KB themes. Returns dict {theme_slug: signals_data}."""
@@ -845,7 +858,7 @@ class BlobStorage:
                 themes[slug] = blob
         result = {}
         for slug, blob in themes.items():
-            data = self._get(blob.get("url"))
+            data = self.get_foresight_kb(slug)
             if data:
                 result[slug] = data
         return result
