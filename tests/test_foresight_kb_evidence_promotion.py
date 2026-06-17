@@ -52,10 +52,13 @@ def test_supported_foresight_signal_becomes_context_eligible(monkeypatch):
     data = foresight_harvester._verify_signal_content({"theme": "Automation", "signals": [_signal()]})
     sig = data["signals"][0]
 
-    assert sig["analysis_verified"] is False
-    assert sig["generation_eligible"] is False
-    assert sig["promotion_status"] == "foresight_context_eligible"
-    assert sig["claim_support_status"] == "supported"
+    assert "analysis_verified" not in sig
+    assert "generation_eligible" not in sig
+    assert "promotion_status" not in sig
+    assert "claim_support_status" not in sig
+    assert sig["foresight_signal_status"] == "context_eligible"
+    assert sig["source_audit_status"] == "accepted"
+    assert sig["trend_support_status"] == "supported"
     assert sig["content_relevance_score"] == 86
     assert sig["source_quote"]
     assert sig["legacy_snippet"]
@@ -91,14 +94,16 @@ def test_high_credibility_partial_foresight_support_can_be_context_eligible(monk
     sig = data["signals"][0]
 
     assert sig["foresight_context_eligible"] is True
-    assert sig["analysis_verified"] is False
-    assert sig["generation_eligible"] is False
-    assert sig["claim_support_status"] == "supported"
+    assert "analysis_verified" not in sig
+    assert "generation_eligible" not in sig
+    assert "claim_support_status" not in sig
+    assert sig["foresight_signal_status"] == "context_eligible"
+    assert sig["trend_support_status"] == "supported"
     assert sig["foresight_context_support_status"] == "partial"
     assert sig["verification_reason"] == "foresight_context_verified"
 
 
-def test_live_irrelevant_foresight_signal_stays_display_only(monkeypatch):
+def test_live_irrelevant_foresight_signal_stays_not_context_eligible(monkeypatch):
     monkeypatch.setattr(
         foresight_harvester,
         "_check_relevance",
@@ -116,11 +121,14 @@ def test_live_irrelevant_foresight_signal_stays_display_only(monkeypatch):
     data = foresight_harvester._verify_signal_content({"theme": "Automation", "signals": [_signal()]})
     sig = data["signals"][0]
 
-    assert sig["analysis_verified"] is False
-    assert sig["generation_eligible"] is False
+    assert "analysis_verified" not in sig
+    assert "generation_eligible" not in sig
     assert sig["foresight_context_eligible"] is False
-    assert sig["promotion_status"] == "display_only"
-    assert sig["claim_support_status"] == "unsupported"
+    assert "promotion_status" not in sig
+    assert "claim_support_status" not in sig
+    assert sig["foresight_signal_status"] == "not_context_eligible"
+    assert sig["source_audit_status"] == "trend_not_supported"
+    assert sig["trend_support_status"] == "unsupported"
     assert sig["verification_reason"] == "claim_unsupported"
 
 
@@ -246,13 +254,13 @@ def test_strategic_foresight_theme_registry_exposes_refresh_contract():
     assert registry["theme_count"] == 30
     assert registry["refresh_rules"]["stored_signal_contract"] == "foresight_context"
     assert registry["refresh_rules"]["company_metadata_allowed"] is False
-    assert registry["refresh_rules"]["display_only_storage_policy"] == "do_not_store_in_central_kb"
+    assert registry["refresh_rules"]["display_only_storage_policy"] == "replace_with_foresight_signal_status"
     ai_theme = next(t for t in registry["themes"] if t["name"] == "Artificial Intelligence")
     assert ai_theme["refresh_tactics"]
     assert all(t["validation_contract"] == "foresight_context" for t in ai_theme["refresh_tactics"])
 
 
-def test_cleanup_foresight_kb_removes_display_only_and_strips_company_metadata(monkeypatch):
+def test_cleanup_foresight_kb_repairs_display_only_metadata_without_deleting(monkeypatch):
     saved = {}
 
     class FakeStorage:
@@ -288,16 +296,22 @@ def test_cleanup_foresight_kb_removes_display_only_and_strips_company_metadata(m
     result = foresight_harvester.cleanup_foresight_kb()
 
     assert result["signals_before"] == 2
-    assert result["signals_after"] == 1
-    assert result["display_only_removed"] == 1
-    assert result["company_metadata_removed"] == 1
-    retained = saved["business"]["signals"][0]
+    assert result["signals_after"] == 2
+    assert result["display_only_removed"] == 0
+    assert result["metadata_repaired"] == 2
+    retained = next(s for s in saved["business"]["signals"] if s["title"] == "Retained macro signal")
     assert retained["title"] == "Retained macro signal"
-    assert retained["promotion_status"] == "foresight_context_eligible"
-    assert retained["source_registry_status"] == "checked_foresight_context_eligible"
+    assert "promotion_status" not in retained
+    assert "source_registry_status" not in retained
     assert retained["claim_type"] == "foresight_context"
     assert retained["company_specific"] is False
     assert retained["foresight_context_eligible"] is True
+    assert retained["foresight_signal_status"] == "context_eligible"
+    assert retained["source_audit_status"] == "accepted"
     assert "generation_eligible" not in retained
     assert "analysis_verified" not in retained
     assert "company_name" not in retained
+    repaired_display_only = next(s for s in saved["business"]["signals"] if s["title"] == "Display-only signal")
+    assert "promotion_status" not in repaired_display_only
+    assert repaired_display_only["foresight_context_eligible"] is False
+    assert repaired_display_only["foresight_signal_status"] == "not_context_eligible"

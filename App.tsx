@@ -759,7 +759,12 @@ const App = () => {
                 setKbCleanupLoading(false);
                 const r = status.result;
                 if (r && !r.error) {
-                  alert(`Foresight KB Repair Complete!\n\n${r.signals_removed} dead signals removed\n${r.foresight_context_eligible ?? r.analysis_verified ?? 0} context-eligible signals\n${r.signals_after} signals remaining across ${r.themes_checked} themes`);
+                  const metadataRepaired = r.metadata_repaired ?? r.company_metadata_removed ?? 0;
+                  const contextEligible = r.foresight_context_eligible ?? r.analysis_verified ?? 0;
+                  const notEligible = r.not_context_eligible ?? 0;
+                  const markedDead = r.source_dead ?? r.dead_removed ?? 0;
+                  const writeSkipped = r.themes_write_skipped ?? 0;
+                  alert(`Foresight KB Repair Complete!\n\n${metadataRepaired} signals metadata-repaired\n${contextEligible} context-eligible signals\n${notEligible} retained as not context-eligible\n${markedDead} dead/unreadable sources marked\n${r.signals_after} signals retained across ${r.themes_checked} themes${writeSkipped ? `\n${writeSkipped} theme writes skipped to avoid empty files` : ''}`);
                 } else if (r && r.error) {
                   alert(`Foresight KB Repair Failed: ${r.error}`);
                 }

@@ -745,7 +745,7 @@ def build_strategic_foresight_theme_registry() -> dict:
             "search_scope": "allowed source domains and query seeds only",
             "stored_signal_contract": "foresight_context",
             "company_metadata_allowed": False,
-            "display_only_storage_policy": "do_not_store_in_central_kb",
+            "display_only_storage_policy": "replace_with_foresight_signal_status",
             "company_relevance_policy": "decided during company scan and stored only in company summary",
         },
         "themes": themes,
