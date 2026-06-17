@@ -1906,6 +1906,38 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     _guard_delta_verify = time_budget - 130  # skip delta verification (leave room for URL validation)
     print(f"   [Scanner 2] Time budget: {time_budget}s (guards: forensic={_guard_forensic}s, research={_guard_research}s, delta={_guard_delta_verify}s)")
 
+    is_rescan = bool(previous_context and previous_context.get("previous_reality") is not None)
+    company_evidence_candidates = (previous_context or {}).get("company_evidence_db_candidates", []) if isinstance(previous_context, dict) else []
+    cached_company_evidence_count = len([
+        c for c in company_evidence_candidates
+        if c.get("cached_excerpt") or c.get("extracted_text") or c.get("markdown") or c.get("text_excerpt")
+    ])
+    strong_company_evidence_mode = len(company_evidence_candidates) >= 8 and cached_company_evidence_count >= 6
+    if strong_company_evidence_mode and max_research_loops > 1:
+        max_research_loops = 1
+        print(
+            f"   [Scanner 2] Company Evidence DB coverage is strong "
+            f"({len(company_evidence_candidates)} candidates, {cached_company_evidence_count} cached extracts) "
+            "→ reducing live re-search pressure."
+        )
+    sonnet_challenger_timeout = 60 if is_rescan else 75
+
+    def _phase_remaining(buffer: int = 0) -> int:
+        return max(0, int(time_budget - (time.time() - _fn_start) - buffer))
+
+    def _hard_timeout_call(label: str, timeout_sec: int, fn):
+        timeout_sec = max(1, int(timeout_sec))
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = pool.submit(fn)
+        try:
+            return future.result(timeout=timeout_sec)
+        except concurrent.futures.TimeoutError:
+            future.cancel()
+            print(f"   ⏰ [Forensic Scan] {label} hard deadline reached after {timeout_sec}s")
+            return None
+        finally:
+            pool.shutdown(wait=False)
+
     search_name = clean_company_name_for_search(company_name)
     entity_terms = entity_search_terms(company_name)
     search_alias_block = ""
@@ -2176,22 +2208,34 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         if elapsed_total > _guard_anthropic:
             print(f"   ⏰ [Forensic Scan] Skipping GPT web search — elapsed {int(elapsed_total)}s exceeds {_guard_anthropic}s guard")
             return None
+        local_timeout = min(120, _phase_remaining(buffer=35))
+        if strong_company_evidence_mode:
+            local_timeout = min(local_timeout, 90)
+        if local_timeout < 25:
+            print(f"   ⏭️ [Forensic Scan] Skipping GPT web search — only {local_timeout}s available before phase guard")
+            return None
         try:
-            print(f"   🔄 [Forensic Scan] Attempting primary gpt-5.5 + web_search for {company_name}...")
+            print(f"   🔄 [Forensic Scan] Attempting primary gpt-5.5 + web_search for {company_name} (timeout={local_timeout}s)...")
             start = time.time()
             relaxed_prompt = re.sub(
                 r'RETURN STRICT JSON[^:]*:',
                 'REPORT YOUR FINDINGS (valid JSON preferred; clear structured text acceptable):',
                 active_prompt,
             )
-            text_content = call_openai_text(
-                relaxed_prompt,
-                model="gpt-5.5",
-                max_output_tokens=14000,
-                timeout=150,
-                web_search=True,
-                search_context_size="medium",
+            text_content = _hard_timeout_call(
+                "gpt-5.5 web search",
+                local_timeout,
+                lambda: call_openai_text(
+                    relaxed_prompt,
+                    model="gpt-5.5",
+                    max_output_tokens=14000,
+                    timeout=local_timeout,
+                    web_search=True,
+                    search_context_size="medium",
+                ),
             )
+            if text_content is None:
+                return None
             elapsed = int((time.time() - start) * 1000)
             json_payload = extract_json_from_text(text_content)
             if json_payload:
@@ -2234,6 +2278,10 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         if elapsed_total > _guard_anthropic:
             print(f"   ⏰ [Forensic Scan] Skipping Sonnet + Web Search — elapsed {int(elapsed_total)}s exceeds {_guard_anthropic}s guard")
             return None
+        local_timeout = min(sonnet_challenger_timeout, _phase_remaining(buffer=40))
+        if local_timeout < 25:
+            print(f"   ⏭️ [Forensic Scan] Skipping Sonnet + Web Search — only {local_timeout}s available before phase guard")
+            return None
 
         anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
         if "=" in anthropic_key:
@@ -2251,8 +2299,9 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             # Sonnet is no longer the default evidence scout. Keep this path
             # bounded so it can challenge low-coverage GPT results without
             # consuming the synthesis budget.
-            is_rescan = bool(previous_context and previous_context.get("previous_reality") is not None)
             search_budget = 5 if is_rescan else 7
+            if strong_company_evidence_mode:
+                search_budget = min(search_budget, 4)
             if is_rescan:
                 print(f"   📊 [Forensic Scan] RESCAN: Sonnet challenger search budget = {search_budget} (verification + weak-jury challenge)")
             else:
@@ -2295,11 +2344,12 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             call_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             future = call_pool.submit(_call_sonnet_web)
             try:
-                response = future.result(timeout=120)
+                response = future.result(timeout=local_timeout)
             except concurrent.futures.TimeoutError:
+                future.cancel()
                 call_pool.shutdown(wait=False)
                 elapsed = int((time.time() - start) * 1000)
-                print(f"   ⏰ [Forensic Scan] claude-sonnet-4-6 + Web Search timed out after 120s ({elapsed}ms). Keeping GPT scout result if available.")
+                print(f"   ⏰ [Forensic Scan] claude-sonnet-4-6 + Web Search timed out after {local_timeout}s ({elapsed}ms). Keeping GPT scout result if available.")
                 return None
             call_pool.shutdown(wait=False)
 
@@ -2426,12 +2476,25 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             if f.get("found") and f.get("url")
         ])
         if scout_confidence < 45 or scout_evidence_count < 3:
-            print(
-                f"   🔎 [Forensic Scan] GPT scout coverage weak "
-                f"({scout_confidence}/100, {scout_evidence_count} linked findings). "
-                f"Trying bounded Sonnet challenger..."
-            )
-            challenger_data = execute_with_anthropic(prompt)
+            if strong_company_evidence_mode and scout_evidence_count >= 2 and scout_confidence >= 35:
+                print(
+                    f"   ⏭️ [Forensic Scan] Skipping Sonnet challenger: GPT returned usable evidence "
+                    f"({scout_confidence}/100, {scout_evidence_count} linked findings) and Company Evidence DB has strong coverage."
+                )
+                challenger_data = None
+            elif _phase_remaining(buffer=80) < 25:
+                print(
+                    f"   ⏭️ [Forensic Scan] Skipping Sonnet challenger: insufficient phase budget "
+                    f"({_phase_remaining(buffer=80)}s after buffer)."
+                )
+                challenger_data = None
+            else:
+                print(
+                    f"   🔎 [Forensic Scan] GPT scout coverage weak "
+                    f"({scout_confidence}/100, {scout_evidence_count} linked findings). "
+                    f"Trying bounded Sonnet challenger..."
+                )
+                challenger_data = execute_with_anthropic(prompt)
             if challenger_data:
                 challenger_findings = challenger_data.get("findings", [])
                 merged_findings, new_unique_count = _merge_findings(
@@ -2488,7 +2551,15 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         #   1. confidence < 45 AND fewer than 3 real evidence links, OR
         #   2. fewer than 2 evidence links regardless of confidence (e.g. JSON-repaired
         #      model responses that claim high confidence but provide no sources)
-        if (initial_confidence < 45 and initial_evidence_count < 3) or initial_evidence_count < 2:
+        needs_research = (initial_confidence < 45 and initial_evidence_count < 3) or initial_evidence_count < 2
+        if strong_company_evidence_mode and initial_evidence_count >= 2 and initial_confidence >= 35:
+            needs_research = False
+            print(
+                f"   [Re-Search] Skipped: Company Evidence DB has strong cached source coverage and "
+                f"GPT returned usable evidence ({initial_confidence}/100, {initial_evidence_count} links)."
+            )
+
+        if needs_research:
             print(f"   [Re-Search] Low confidence detected: {initial_confidence}/100 with {initial_evidence_count} evidence links.")
 
             all_findings = list(initial_findings)

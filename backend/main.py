@@ -3515,6 +3515,36 @@ def _execute_scan_pipeline(
             _update_scan_job(job_id, phase="initializing", progress=5)
             _append_scan_log(job_id, "Initializing scan pipeline")
 
+        def _scan_elapsed() -> float:
+            return time.time() - scan_start
+
+        def _scan_remaining() -> float:
+            return max(0.0, SCAN_TOTAL_BUDGET - _scan_elapsed())
+
+        def _remaining_after_final_reserve() -> float:
+            return max(0.0, _scan_remaining() - FINAL_OUTPUT_RESERVE)
+
+        def _remaining_after_synthesis_reserves() -> float:
+            return max(0.0, _scan_remaining() - CORE_SYNTHESIS_RESERVE - FINAL_OUTPUT_RESERVE)
+
+        def _budget_snapshot() -> dict:
+            return {
+                "elapsed": int(_scan_elapsed()),
+                "remaining": int(_scan_remaining()),
+                "after_final_reserve": int(_remaining_after_final_reserve()),
+                "after_core_and_final_reserve": int(_remaining_after_synthesis_reserves()),
+                "core_synthesis_reserve": CORE_SYNTHESIS_RESERVE,
+                "final_output_reserve": FINAL_OUTPUT_RESERVE,
+            }
+
+        def _log_budget_state(label: str) -> None:
+            snap = _budget_snapshot()
+            print(
+                f"   ⏱️ [Budget] {label}: elapsed={snap['elapsed']}s | "
+                f"remaining={snap['remaining']}s | after_final_reserve={snap['after_final_reserve']}s | "
+                f"after_core+final_reserve={snap['after_core_and_final_reserve']}s"
+            )
+
         # Model pipeline: Sonnet 4.6 + Web Search (forensic) | GPT/Claude financial search | Opus/GPT/Sonnet synthesis.
 
         # --- PROCESS FILES ---
@@ -3597,6 +3627,7 @@ def _execute_scan_pipeline(
             print(f"   [History] Could not load previous data (non-critical): {e}")
 
         company_evidence_candidates = []
+        company_evidence_cached_extracts = 0
         try:
             evidence_lookup = buying_storage.get_company_evidence_database(companyName)
             if evidence_lookup.get("exists"):
@@ -3604,6 +3635,7 @@ def _execute_scan_pipeline(
                     evidence_lookup.get("database"),
                     limit=10,
                 )
+                company_evidence_cached_extracts = int(evidence_stats.get("cached_extracts", 0) or 0)
                 if company_evidence_candidates:
                     if previous_context is None:
                         previous_context = {}
@@ -3631,6 +3663,7 @@ def _execute_scan_pipeline(
         # Allocate time: reserve protected time for core synthesis and final outputs.
         # Without this cap, difficult evidence searches can consume the entire live
         # scan budget and force AI Diagnosis / WHY-WHAT / Pitch to be skipped.
+        _log_budget_state("before reality search")
         elapsed_so_far = time.time() - scan_start
         reality_budget = int(
             SCAN_TOTAL_BUDGET
@@ -3640,6 +3673,14 @@ def _execute_scan_pipeline(
         )
         reality_budget = max(180, min(REALITY_PHASE_MAX_BUDGET, reality_budget))
         reality_outer_timeout = reality_budget + 10  # small buffer over internal budget
+        scanner_research_loops = 2
+        if len(company_evidence_candidates) >= 8 and company_evidence_cached_extracts >= 6:
+            scanner_research_loops = 1
+            print(
+                f"   [Company Evidence DB] Strong cached source coverage detected "
+                f"({len(company_evidence_candidates)} candidates, {company_evidence_cached_extracts} cached extracts) "
+                "→ limiting live re-search loops."
+            )
         # Get employee count for stakeholder seniority filtering
         _scan_meta = get_company_metadata(companyName) or {}
         _employee_count = _scan_meta.get("employees")
@@ -3655,7 +3696,7 @@ def _execute_scan_pipeline(
             reality_future = executor.submit(
                 x_ray_search, companyName, target_url,
                 model_id=None, intent_score=intent_results["score"],
-                previous_context=previous_context, max_research_loops=2,
+                previous_context=previous_context, max_research_loops=scanner_research_loops,
                 subsidiaries=company_subsidiaries,
                 time_budget=reality_budget,
                 employees=_employee_count
@@ -3667,7 +3708,13 @@ def _execute_scan_pipeline(
             try:
                 reality_results = reality_future.result(timeout=reality_outer_timeout)
             except (concurrent.futures.TimeoutError, Exception) as e:
-                print(f"   ❌ [Scanner 2] Reality search failed for {companyName}: {e}")
+                reality_elapsed = int(time.time() - s2_start)
+                print(
+                    f"   ❌ [Scanner 2] Reality search failed for {companyName}: "
+                    f"{type(e).__name__}: {repr(e)} "
+                    f"(elapsed={reality_elapsed}s, internal_budget={reality_budget}s, "
+                    f"outer_timeout={reality_outer_timeout}s, scan_budget={_budget_snapshot()})"
+                )
                 # PARTIAL UPDATE: reuse existing reality data if available
                 if existing_data and existing_data.get("reality_score") is not None:
                     print(f"   🔄 [Scanner 2] Reusing previous reality data (score: {existing_data['reality_score']}, confidence: {existing_data.get('confidence_score', 0)})")
@@ -3838,6 +3885,23 @@ def _execute_scan_pipeline(
                 extract_foresight_links, retry_failed_sources, enforce_source_quality_gate,
             )
             foresight_start = time.time()
+            _log_budget_state("before foresight")
+            foresight_fallback_headroom = _remaining_after_synthesis_reserves()
+            allow_registry_fallback = foresight_fallback_headroom >= 90
+            foresight_fallback_budget = 0
+            foresight_fallback_deadline = None
+            if allow_registry_fallback:
+                foresight_fallback_budget = 120 if foresight_fallback_headroom >= 180 else 90
+                foresight_fallback_deadline = time.time() + foresight_fallback_budget
+                print(
+                    f"   ⏱️ [Foresight] Registry fallback budget: {foresight_fallback_budget}s "
+                    f"(protected reserves remain after fallback headroom={int(foresight_fallback_headroom)}s)"
+                )
+            else:
+                print(
+                    f"   ⏭️ [Foresight] Registry fallback disabled — only "
+                    f"{int(foresight_fallback_headroom)}s available before protected synthesis/final reserves."
+                )
             foresight_data = generate_foresight(
                 company_name=companyName,
                 domain=company_domain,
@@ -3845,6 +3909,9 @@ def _execute_scan_pipeline(
                 reality_score=reality_results["score"],
                 financial_index=financial_results.get("financial_index"),
                 top_findings=reality_results.get("checklist", [])[:8],
+                allow_registry_fallback=allow_registry_fallback,
+                fallback_budget_sec=foresight_fallback_budget,
+                fallback_deadline_ts=foresight_fallback_deadline,
             )
             foresight_ms = int((time.time() - foresight_start) * 1000)
             if callable(foresight_data):
@@ -4250,6 +4317,7 @@ Do NOT generate commercial_pitch, why_proposals, or what_proposals in this call.
                 # evidence before generating the synthesis — exactly what a "judge" model should do.
                 response_text = ""
                 synth_start = time.time()
+                _log_budget_state("before synthesis")
                 synth_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
                 # Dynamic per-attempt timeout: share remaining budget across
                 # fallback attempts while protecting final report/export phases.

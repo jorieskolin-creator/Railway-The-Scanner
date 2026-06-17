@@ -1509,6 +1509,9 @@ def generate_foresight(
     reality_score: int,
     financial_index: int | None = None,
     top_findings: list[dict] | None = None,
+    allow_registry_fallback: bool = True,
+    fallback_budget_sec: int = 90,
+    fallback_deadline_ts: float | None = None,
 ) -> dict | None:
     """
     Generate structured company foresight evidence from the curated Foresight KB.
@@ -1533,6 +1536,9 @@ def generate_foresight(
 
     if not kb_signals:
         print(f"   ⚠️ [Foresight KB] No foresight-context eligible KB signals for {domain}")
+        if not allow_registry_fallback or fallback_budget_sec <= 0:
+            print("   ⏭️ [Foresight Registry] Curated-source fallback skipped by scan budget; retaining prior links if available.")
+            return None
         foresight_data = _generate_foresight_from_registry_sources(
             company_name=company_name,
             domain=domain,
@@ -1542,6 +1548,8 @@ def generate_foresight(
             top_findings=top_findings or [],
             domain_config=domain_config,
             fallback_reason="no_foresight_context_eligible_kb_signals",
+            fallback_budget_sec=fallback_budget_sec,
+            fallback_deadline_ts=fallback_deadline_ts,
         )
         if not foresight_data:
             return None
@@ -1553,6 +1561,9 @@ def generate_foresight(
             f"   ⚠️ [Foresight KB] Insufficient verified KB signals "
             f"({len(verified_kb_signals)}/{_MIN_KB_SIGNALS_FOR_SYNTHESIS}) for {company_name}"
         )
+        if not allow_registry_fallback or fallback_budget_sec <= 0:
+            print("   ⏭️ [Foresight Registry] Curated-source fallback skipped by scan budget; retaining prior links if available.")
+            return None
         foresight_data = _generate_foresight_from_registry_sources(
             company_name=company_name,
             domain=domain,
@@ -1562,6 +1573,8 @@ def generate_foresight(
             top_findings=top_findings or [],
             domain_config=domain_config,
             fallback_reason="insufficient_verified_kb_signals",
+            fallback_budget_sec=fallback_budget_sec,
+            fallback_deadline_ts=fallback_deadline_ts,
         )
         if not foresight_data:
             return None
@@ -1591,6 +1604,8 @@ def _generate_foresight_from_registry_sources(
     top_findings: list[dict],
     domain_config: dict,
     fallback_reason: str,
+    fallback_budget_sec: int = 90,
+    fallback_deadline_ts: float | None = None,
 ) -> dict | None:
     """
     Narrow fallback when the Foresight KB is thin.
@@ -1600,6 +1615,33 @@ def _generate_foresight_from_registry_sources(
     scan-time output is company-specific interpretation, while reusable macro
     signals can later be harvested/cleaned into the central Foresight KB.
     """
+    fallback_start = time.time()
+    fallback_budget_sec = max(0, int(fallback_budget_sec or 0))
+    fallback_deadline_ts = fallback_deadline_ts or (fallback_start + fallback_budget_sec)
+
+    def _fallback_remaining() -> int:
+        return max(0, int(fallback_deadline_ts - time.time()))
+
+    def _call_with_deadline(label: str, timeout_sec: int, fn):
+        timeout_sec = max(1, int(timeout_sec))
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = pool.submit(fn)
+        try:
+            return future.result(timeout=timeout_sec)
+        except concurrent.futures.TimeoutError:
+            future.cancel()
+            print(f"   ⏰ [Foresight Registry] {label} hit local deadline after {timeout_sec}s")
+            return None
+        finally:
+            pool.shutdown(wait=False)
+
+    if fallback_budget_sec <= 0 or _fallback_remaining() < 25:
+        print(
+            f"   ⏭️ [Foresight Registry] Fallback skipped: only {_fallback_remaining()}s "
+            "available before protected scan reserves."
+        )
+        return None
+
     themes = domain_config.get("fp_themes", [])
     theme_queries = []
     for theme in themes:
@@ -1632,35 +1674,51 @@ Curated theme domains for this scan: {", ".join(theme_domains[:24]) or "N/A"}
     )
 
     models = (
-        ("gpt-5.5", "openai", 105),
-        ("claude-sonnet-4-6", "anthropic", 90),
+        ("gpt-5.5", "openai", 75),
+        ("claude-sonnet-4-6", "anthropic", 60),
     )
 
     for model_name, provider, timeout_sec in models:
         try:
+            remaining = _fallback_remaining()
+            if remaining < 25:
+                print(
+                    f"   ⏭️ [Foresight Registry] Stopping fallback chain before {model_name}: "
+                    f"only {remaining}s remains in fallback budget."
+                )
+                break
+            timeout_sec = min(timeout_sec, max(15, remaining - 5))
             print(
                 f"   🔭 [Foresight Registry] Attempting curated-source fallback via "
-                f"{model_name} ({fallback_reason})..."
+                f"{model_name} ({fallback_reason}, timeout={timeout_sec}s, remaining={remaining}s)..."
             )
             t0 = time.time()
             if provider == "anthropic":
-                text = call_anthropic_text(
-                    prompt,
-                    model=model_name,
-                    max_tokens=9000,
-                    timeout=timeout_sec,
-                    web_search=True,
-                    max_searches=6,
-                    thinking_budget=900,
+                text = _call_with_deadline(
+                    f"{model_name} curated-source fallback",
+                    timeout_sec,
+                    lambda: call_anthropic_text(
+                        prompt,
+                        model=model_name,
+                        max_tokens=9000,
+                        timeout=timeout_sec,
+                        web_search=True,
+                        max_searches=4,
+                        thinking_budget=600,
+                    ),
                 )
             else:
-                text = call_openai_text(
-                    prompt,
-                    model=model_name,
-                    max_output_tokens=9000,
-                    timeout=timeout_sec,
-                    web_search=True,
-                    search_context_size="medium",
+                text = _call_with_deadline(
+                    f"{model_name} curated-source fallback",
+                    timeout_sec,
+                    lambda: call_openai_text(
+                        prompt,
+                        model=model_name,
+                        max_output_tokens=9000,
+                        timeout=timeout_sec,
+                        web_search=True,
+                        search_context_size="medium",
+                    ),
                 )
             elapsed = int((time.time() - t0) * 1000)
             if not text or len(text) < 100:
@@ -1686,15 +1744,21 @@ Curated theme domains for this scan: {", ".join(theme_domains[:24]) or "N/A"}
                         urls_to_check.add(ss_url)
 
             url_status = {}
-            if urls_to_check:
+            if urls_to_check and _fallback_remaining() > 10:
+                verify_timeout = min(4, max(2, _fallback_remaining() // max(1, len(urls_to_check))))
                 with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
-                    futures = {pool.submit(_verify_foresight_url, u, 6): u for u in urls_to_check}
+                    futures = {pool.submit(_verify_foresight_url, u, verify_timeout): u for u in urls_to_check}
                     for fut in concurrent.futures.as_completed(futures):
                         u = futures[fut]
                         try:
                             url_status[u] = bool(fut.result())
                         except Exception:
                             url_status[u] = False
+            elif urls_to_check:
+                print(
+                    f"   ⏭️ [Foresight Registry] Skipping URL verification for fallback sources: "
+                    f"only {_fallback_remaining()}s remains."
+                )
 
             for force in data.get("dimension_forces", []):
                 source_url = (force.get("source_url") or "").strip()
