@@ -36,6 +36,7 @@ from strategic_foresight import (
     FP_THEMES_30, FP_THEME_SOURCES, THEME_FALLBACK_MAP,
     _verify_foresight_url, _extract_json_from_text,
     build_strategic_foresight_theme_registry,
+    FORESIGHT_SOURCE_QUALITY_TIERS,
 )
 from storage import BlobStorage
 
@@ -47,6 +48,21 @@ FORESIGHT_CONTEXT_SUPPORT_STATUSES = {"supported", "partial"}
 ACTIVE_FORESIGHT_STATUS = "active_context"
 AUDIT_FORESIGHT_STATUS = "rejected_audit"
 MIN_SEMANTIC_SNIPPET_WORDS = 35
+TIER1_EXCEPTION_MIN_SEMANTIC_SNIPPET_WORDS = 55
+FRESHNESS_FRESH_MONTHS = 12
+FRESHNESS_CURRENT_MONTHS = 24
+FRESHNESS_STALE_MONTHS = 36
+FRESHNESS_ACTIVE_STATUSES = {"fresh", "current", "evergreen_context"}
+EVERGREEN_SOURCE_TYPES = {
+    "regulation",
+    "regulatory_context",
+    "official_dashboard",
+    "statistics",
+    "standard",
+    "framework",
+    "policy_framework",
+    "government",
+}
 HARVEST_DEFAULT_MODEL_MODE = "quality"
 HARVEST_GPT_TIMEOUT_SEC = 120
 HARVEST_SONNET_TIMEOUT_SEC = 90
@@ -226,11 +242,32 @@ def _word_count(text: str) -> int:
     return len(re.findall(r"\b[\w'-]+\b", str(text or "")))
 
 
+def _tier_domains(tier_name: str) -> set[str]:
+    spec = FORESIGHT_SOURCE_QUALITY_TIERS.get(tier_name) or {}
+    domains = spec.get("domains") or set()
+    return {str(domain).lower().removeprefix("www.") for domain in domains if domain}
+
+
+def _is_tier1_domain(domain: str) -> bool:
+    domain = (domain or "").lower().removeprefix("www.")
+    if not domain:
+        return False
+    return any(domain == d or domain.endswith(f".{d}") for d in _tier_domains("tier_1"))
+
+
+def _is_tier1_source(sig: dict) -> bool:
+    domain = sig.get("source_domain") or _source_domain(sig.get("source_url") or sig.get("url") or "")
+    return _is_tier1_domain(domain)
+
+
 def _source_tier_for_signal(sig: dict, theme: str) -> str:
     """Return a stable source-tier tag without overwriting legacy tags."""
     existing = str(sig.get("source_tier") or "").strip().lower()
     if existing:
-        return existing
+        return existing.replace("_", "")
+    domain = sig.get("source_domain") or _source_domain(sig.get("source_url") or sig.get("url") or "")
+    if _is_tier1_domain(domain):
+        return "tier1"
     cred = _foresight_source_credibility(sig)
     curated = _is_curated_theme_source(sig, theme)
     source_type = str(sig.get("source_type") or "").lower()
@@ -259,6 +296,128 @@ def _semantic_snippet_for_signal(sig: dict) -> str:
     return snippet[:900]
 
 
+def _parse_source_date(value) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        year = int(value)
+        if 1900 <= year <= 2100:
+            return datetime(year, 1, 1, tzinfo=timezone.utc)
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if re.fullmatch(r"\d{4}", text):
+        year = int(text)
+        if 1900 <= year <= 2100:
+            return datetime(year, 1, 1, tzinfo=timezone.utc)
+    normalized = text.replace("Z", "+00:00")
+    for pattern in ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%d.%m.%Y", "%d/%m/%Y"):
+        try:
+            parsed = datetime.strptime(text[:10], pattern)
+            return parsed.replace(tzinfo=timezone.utc)
+        except Exception:
+            pass
+    try:
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _source_publication_date(sig: dict) -> datetime | None:
+    for key in (
+        "published_at",
+        "publication_date",
+        "published_date",
+        "source_date",
+        "date",
+        "published",
+        "last_updated_at",
+        "updated_at",
+    ):
+        parsed = _parse_source_date(sig.get(key))
+        if parsed:
+            return parsed
+    return _parse_source_date(sig.get("published_year"))
+
+
+def _months_since(dt: datetime, now: datetime | None = None) -> int:
+    now = now or datetime.now(timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    dt = dt.astimezone(timezone.utc)
+    return max(0, (now.year - dt.year) * 12 + (now.month - dt.month) - (1 if now.day < dt.day else 0))
+
+
+def _is_evergreen_signal(sig: dict) -> bool:
+    if sig.get("evergreen_context") is True:
+        return True
+    source_type = str(sig.get("source_type") or "").lower().strip()
+    title = str(sig.get("title") or "").lower()
+    description = str(sig.get("description") or sig.get("semantic_snippet") or "").lower()
+    evergreen_terms = (
+        "framework",
+        "regulation",
+        "directive",
+        "standard",
+        "dashboard",
+        "statistics",
+        "data portal",
+        "working plan",
+        "taxonomy",
+    )
+    tier = str(sig.get("source_tier") or "").lower().replace("_", "")
+    official_tier = tier in {"tier1", "tier2"}
+    return bool(
+        official_tier
+        and (
+            source_type in EVERGREEN_SOURCE_TYPES
+            or any(term in title or term in description for term in evergreen_terms)
+        )
+    )
+
+
+def _normalize_freshness(sig: dict) -> dict:
+    sig = dict(sig)
+    now = datetime.now(timezone.utc)
+    published = _source_publication_date(sig)
+    sig["freshness_checked_at"] = now.isoformat()
+    if published:
+        age_months = _months_since(published, now)
+        sig["published_at"] = published.date().isoformat()
+        sig["published_year"] = published.year
+        sig["source_age_months"] = age_months
+        if age_months <= FRESHNESS_FRESH_MONTHS:
+            status = "fresh"
+        elif age_months <= FRESHNESS_CURRENT_MONTHS:
+            status = "current"
+        elif _is_evergreen_signal(sig):
+            status = "evergreen_context"
+        elif age_months <= FRESHNESS_STALE_MONTHS:
+            status = "aging"
+        else:
+            status = "stale"
+        sig["freshness_status"] = status
+        sig["freshness_reason"] = (
+            f"Source date {sig['published_at']} is {age_months} month(s) old."
+            if status != "evergreen_context"
+            else f"Source date {sig['published_at']} is older than the active window, but the source is official evergreen context."
+        )
+        return sig
+
+    sig["source_age_months"] = None
+    if _is_evergreen_signal(sig):
+        sig["freshness_status"] = "evergreen_context"
+        sig["freshness_reason"] = "No publication date found, but source type/tier indicate official evergreen context."
+    else:
+        sig["freshness_status"] = "unknown_date"
+        sig["freshness_reason"] = "No publication or update date was available."
+    return sig
+
+
 def _normalize_foresight_tags(sig: dict, theme: str) -> dict:
     """Normalize central-KB tags while preserving original harvesting tags."""
     sig = dict(sig)
@@ -283,7 +442,7 @@ def _normalize_foresight_tags(sig: dict, theme: str) -> dict:
         "accelerating", "stable", "decelerating", "declining", "emerging",
     })
     sig["semantic_snippet"] = _semantic_snippet_for_signal(sig)
-    return sig
+    return _normalize_freshness(sig)
 
 
 def _tag_value(tags: list, allowed: set[str]) -> str:
@@ -325,13 +484,26 @@ def _strip_company_evidence_fields(sig: dict) -> dict:
 
 
 def _active_signal_score(sig: dict) -> int:
-    tier_score = {"tier1": 100, "tier2": 80, "tier3": 60, "tier4": 35}.get(str(sig.get("source_tier") or "").lower(), 45)
+    tier = str(sig.get("source_tier") or "").lower().replace("_", "")
+    tier_score = {"tier1": 100, "tier2": 80, "tier3": 60, "tier4": 35}.get(tier, 45)
     cred_score = {"high": 30, "medium": 18, "low": 4}.get(str(sig.get("source_credibility") or "").lower(), 4)
     snippet_score = min(_word_count(sig.get("semantic_snippet") or ""), 120) // 4
     theme_score = 20 if sig.get("theme_match") is True else 0
     trend_score = 20 if sig.get("trend_supported") is True else 0
+    registry_score = {
+        "explicit_theme_domain": 20,
+        "tier1_theme_exception": 12,
+    }.get(str(sig.get("source_registry_match") or ""), 0)
+    freshness_score = {
+        "fresh": 25,
+        "current": 18,
+        "evergreen_context": 10,
+        "aging": -10,
+        "unknown_date": -20,
+        "stale": -50,
+    }.get(str(sig.get("freshness_status") or ""), -10)
     scan_value = _safe_int(sig.get("scan_enrichment_value") or sig.get("scan_enrichment_score"), 0)
-    return tier_score + cred_score + snippet_score + theme_score + trend_score + scan_value
+    return tier_score + cred_score + snippet_score + theme_score + trend_score + registry_score + freshness_score + scan_value
 
 
 def _classify_for_active_kb(sig: dict, theme: str, *, stage: str = "unknown") -> tuple[dict, bool]:
@@ -342,10 +514,25 @@ def _classify_for_active_kb(sig: dict, theme: str, *, stage: str = "unknown") ->
 
     source_url = (sig.get("source_url") or sig.get("url") or "").strip()
     curated = _is_curated_theme_source(sig, theme)
+    tier1_exception = (
+        not curated
+        and _is_tier1_source(sig)
+        and sig.get("theme_match") is True
+        and sig.get("trend_supported") is True
+        and sig.get("company_specific") is not True
+    )
+    if curated:
+        sig["source_registry_match"] = "explicit_theme_domain"
+    elif tier1_exception:
+        sig["source_registry_match"] = "tier1_theme_exception"
+    else:
+        sig["source_registry_match"] = "not_in_theme_registry"
     cred = _foresight_source_credibility(sig)
     url_verified = sig.get("url_verified") is True or sig.get("verified") is True
     source_readable = sig.get("source_readable") is True or sig.get("content_verified") is True or bool(sig.get("source_quote")) or bool(sig.get("semantic_snippet"))
     snippet_words = _word_count(sig.get("semantic_snippet") or "")
+    min_snippet_words = TIER1_EXCEPTION_MIN_SEMANTIC_SNIPPET_WORDS if tier1_exception else MIN_SEMANTIC_SNIPPET_WORDS
+    freshness_status = str(sig.get("freshness_status") or "").strip().lower()
     explicit_theme_mismatch = sig.get("theme_match") is False
     explicit_trend_mismatch = sig.get("trend_supported") is False or str(sig.get("trend_support_status") or "").lower() in {"unsupported", "contradicted"}
 
@@ -357,18 +544,21 @@ def _classify_for_active_kb(sig: dict, theme: str, *, stage: str = "unknown") ->
     elif not url_verified:
         status = "source_dead"
         reason = "Primary source URL could not be verified as live."
-    elif not curated:
+    elif not (curated or tier1_exception):
         status = "non_curated_source"
-        reason = "Source is outside the curated Strategic Foresight Theme registry domains."
+        reason = "Source is outside the curated Strategic Foresight Theme registry domains and is not a Tier 1 theme exception."
     elif cred not in {"high", "medium"}:
         status = "low_credibility"
         reason = "Source credibility is too low for active macro foresight context."
     elif not source_readable:
         status = "source_unreadable"
         reason = "Source was reachable but no usable text or quote was available."
-    elif snippet_words < MIN_SEMANTIC_SNIPPET_WORDS:
+    elif snippet_words < min_snippet_words:
         status = "snippet_too_short"
         reason = "Semantic snippet is too short for reliable scan-time source selection."
+    elif freshness_status not in FRESHNESS_ACTIVE_STATUSES:
+        status = f"{freshness_status or 'unknown_date'}_source"
+        reason = sig.get("freshness_reason") or "Source freshness did not meet the active Foresight KB window."
     elif explicit_theme_mismatch:
         status = "off_theme"
         reason = "The source did not match the requested foresight theme."
@@ -420,6 +610,11 @@ def _split_active_and_audit(signals: list[dict], theme: str, *, stage: str) -> t
         "not_curated": 0,
         "low_credibility": 0,
         "snippet_too_short": 0,
+        "tier1_theme_exception": 0,
+        "freshness_rejected": 0,
+        "unknown_date": 0,
+        "stale": 0,
+        "aging": 0,
     }
     for sig in signals or []:
         if not isinstance(sig, dict):
@@ -428,6 +623,8 @@ def _split_active_and_audit(signals: list[dict], theme: str, *, stage: str) -> t
         if is_active:
             active.append(normalized)
             stats["accepted_active"] += 1
+            if normalized.get("source_registry_match") == "tier1_theme_exception":
+                stats["tier1_theme_exception"] += 1
         else:
             audit.append(normalized)
             stats["rejected_audit"] += 1
@@ -444,6 +641,14 @@ def _split_active_and_audit(signals: list[dict], theme: str, *, stage: str) -> t
                 stats["low_credibility"] += 1
             elif audit_status == "snippet_too_short":
                 stats["snippet_too_short"] += 1
+            elif audit_status in {"aging_source", "stale_source", "unknown_date_source"}:
+                stats["freshness_rejected"] += 1
+                if audit_status == "unknown_date_source":
+                    stats["unknown_date"] += 1
+                elif audit_status == "stale_source":
+                    stats["stale"] += 1
+                elif audit_status == "aging_source":
+                    stats["aging"] += 1
     return active, audit, stats
 
 
@@ -850,18 +1055,23 @@ TASK: Identify the 3-5 most significant current signals/developments for the meg
 
 These signals must be:
 - HORIZONTAL: Industry-agnostic macro forces (not company-specific)
-- RECENT: From the last 12 months ({datetime.now().year}-{datetime.now().year + 1})
+- RECENT: Prefer the last 12 months and normally no older than 24 months unless the source is an official evergreen framework, regulation, standard, or living dashboard
 - VERIFIED: From authoritative sources you can cite with real URLs
 - ACTIONABLE: Relevant to strategic planning for businesses affected by this theme
 
 MANDATORY SOURCE TARGETING — Search these first:
 {queries_text}
 
-ALLOWED SOURCE DOMAINS (primary sources MUST come from these):
+ALLOWED SOURCE DOMAINS:
 Tier 1 (intergovernmental/UN/flagship journals): ipcc.ch, who.int, iea.org, irena.org, imf.org, worldbank.org, oecd.org, nature.com, science.org, thelancet.com, bis.org, fao.org, ilo.org, unep.org, wto.org, unctad.org, unfccc.int, ipbes.net, iom.int, un.org, ec.europa.eu, wmo.int
 Tier 2 (think tanks/academic): chathamhouse.org, rand.org, brookings.edu, carnegieendowment.org, csis.org, iiss.org, sipri.org, oxfordmartin.ox.ac.uk, turing.ac.uk, hai.stanford.edu, lse.ac.uk, oii.ox.ac.uk, bruegel.org, cser.ac.uk, belfercenter.org, piie.com
 Tier 3 (specialist research/foresight): iftf.org, cifs.dk, soif.org.uk, futures.hawaii.edu, weforum.org, ellenmacarthurfoundation.org, wri.org, rmi.org, iucn.org, fair.work, sitra.fi, nesta.org.uk, c40.org, millennium-project.org, clubofrome.org, hybridcoe.fi, enisa.europa.eu
 Tier 4 (commercial/supplementary): mckinsey.com, deloitte.com, gartner.com, forrester.com, bcg.com, pwc.com, hbr.org, reuters.com, ft.com, bloomberg.com, economist.com, idc.com, accenture.com
+
+SOURCE ACCEPTANCE RULE:
+- Prefer explicit theme-registry domains from MANDATORY SOURCE TARGETING.
+- A Tier 1 institutional source outside the explicit theme registry may be used only if it is clearly theme-matched, trend-supporting, company-neutral macro context, recent/current, and has a strong semantic snippet.
+- Tier 2-4 sources outside the explicit theme registry must not be used as primary active signals.
 
 DO NOT USE: blogs, press release wires, social media, content farms, regional tech news, marketing sites.
 
@@ -879,6 +1089,9 @@ For each signal, provide:
 - "timeframe": "6-12mo" | "12-24mo" | "24-36mo"
 - "time_horizon": Same value as timeframe, repeated as a stable metadata field
 - "source_url": Primary URL from your web search (MUST be real, from allowed domains)
+- "published_at": Publication date of the primary source in YYYY-MM-DD format when available
+- "published_year": Publication year as an integer
+- "last_updated_at": Last update date in YYYY-MM-DD format when available, otherwise null
 - "supporting_sources": Array of 1-2 additional corroborating URLs from different orgs. Each: {{"url": "https://...", "title": "Brief title"}}
 - "source_type": "academic" | "think_tank" | "industry_analyst" | "government" | "news"
 - "source_domain": Domain of the primary URL
@@ -906,6 +1119,9 @@ RETURN STRICT JSON ONLY:
       "timeframe": "...",
       "time_horizon": "...",
       "source_url": "https://...",
+      "published_at": "YYYY-MM-DD",
+      "published_year": 2026,
+      "last_updated_at": "YYYY-MM-DD or null",
       "supporting_sources": [{{"url": "https://...", "title": "..."}}],
       "source_type": "...",
       "source_domain": "...",

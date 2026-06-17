@@ -742,11 +742,22 @@ def build_strategic_foresight_theme_registry() -> dict:
         },
         "refresh_rules": {
             "source_of_truth": "curated Strategic Foresight Theme Registry",
-            "search_scope": "allowed source domains and query seeds only",
+            "search_scope": "explicit theme domains first; Tier 1 institutional theme exceptions only when strongly matched",
             "stored_signal_contract": "foresight_context",
             "company_metadata_allowed": False,
             "display_only_storage_policy": "replace_with_foresight_signal_status",
             "company_relevance_policy": "decided during company scan and stored only in company summary",
+            "source_acceptance_policy": {
+                "explicit_theme_domain": "preferred",
+                "tier1_theme_exception": "allowed when source is readable, recent/current, company-neutral, theme-matched, trend-supporting, and snippet-strong",
+                "tier2_to_tier4_non_registry": "audit_only",
+            },
+            "freshness_policy": {
+                "fresh_months": 12,
+                "default_active_window_months": 24,
+                "stale_after_months": 36,
+                "unknown_date_policy": "active only for Tier 1/2 official evergreen frameworks, regulations, standards, or living dashboards",
+            },
         },
         "themes": themes,
     }

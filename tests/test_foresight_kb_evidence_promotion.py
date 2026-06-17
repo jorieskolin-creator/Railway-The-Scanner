@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import datetime, timezone
 
 _BACKEND = os.path.join(os.path.dirname(__file__), "..", "backend")
 if _BACKEND not in sys.path:
@@ -15,6 +16,10 @@ if _BACKEND not in sys.path:
 
 import foresight_harvester  # noqa: E402
 import strategic_foresight  # noqa: E402
+
+
+def _recent_source_date() -> str:
+    return f"{datetime.now(timezone.utc).year}-03-01"
 
 
 def _signal(**extra):
@@ -32,6 +37,8 @@ def _signal(**extra):
         "verified": True,
         "source_credibility": "high",
         "source_type": "think_tank",
+        "published_at": _recent_source_date(),
+        "published_year": datetime.now(timezone.utc).year,
         "source_count": 2,
         "confidence": "medium",
         "validated": True,
@@ -265,6 +272,8 @@ def test_strategic_foresight_theme_registry_exposes_refresh_contract():
     assert registry["refresh_rules"]["stored_signal_contract"] == "foresight_context"
     assert registry["refresh_rules"]["company_metadata_allowed"] is False
     assert registry["refresh_rules"]["display_only_storage_policy"] == "replace_with_foresight_signal_status"
+    assert registry["refresh_rules"]["source_acceptance_policy"]["tier2_to_tier4_non_registry"] == "audit_only"
+    assert registry["refresh_rules"]["freshness_policy"]["default_active_window_months"] == 24
     ai_theme = next(t for t in registry["themes"] if t["name"] == "Artificial Intelligence")
     assert ai_theme["refresh_tactics"]
     assert all(t["validation_contract"] == "foresight_context" for t in ai_theme["refresh_tactics"])
@@ -451,3 +460,98 @@ def test_harvest_preserves_existing_active_when_new_batch_rejected(monkeypatch):
     assert titles == ["Existing active signal"]
     assert saved["business"]["merge_stats"]["new_active"] == 0
     assert audit_saved["business"]["candidates"][0]["title"] == "Unsupported new signal"
+
+
+def test_active_kb_accepts_recent_tier1_theme_exception():
+    signal = _signal(
+        title="AI governance exception source",
+        source_url="https://www.iea.org/reports/ai-energy-2026",
+        source_domain="iea.org",
+        source_tier="tier1",
+        source_type="government",
+        theme_match=True,
+        trend_supported=True,
+        source_readable=True,
+        content_verified=True,
+        semantic_snippet=(
+            "A Tier 1 institutional source describes a current macro transition affecting enterprise AI "
+            "infrastructure, electricity demand, technology governance, operating-model planning, and "
+            "investment decisions over the next 12 to 24 months. The signal is company-neutral and helps "
+            "screen organizations for exposure to AI capacity, platform, and governance pressures. It is "
+            "especially relevant for firms that are scaling digital services, planning AI adoption, or "
+            "reassessing infrastructure resilience under tightening policy and capacity constraints."
+        ),
+    )
+
+    normalized, active = foresight_harvester._classify_for_active_kb(signal, "Artificial Intelligence", stage="test")
+
+    assert active is True
+    assert normalized["source_registry_match"] == "tier1_theme_exception"
+    assert normalized["foresight_context_eligible"] is True
+    assert normalized["freshness_status"] in {"fresh", "current"}
+
+
+def test_active_kb_rejects_non_registry_tier2_source():
+    signal = _signal(
+        title="Readable non-registry tier two source",
+        source_url="https://hbr.org/2026/01/platform-shifts",
+        source_domain="hbr.org",
+        source_tier="tier2",
+        source_credibility="high",
+        source_readable=True,
+        content_verified=True,
+        theme_match=True,
+        trend_supported=True,
+    )
+
+    normalized, active = foresight_harvester._classify_for_active_kb(signal, "Artificial Intelligence", stage="test")
+
+    assert active is False
+    assert normalized["source_registry_match"] == "not_in_theme_registry"
+    assert normalized["source_audit_status"] == "non_curated_source"
+
+
+def test_active_kb_rejects_stale_curated_source(monkeypatch):
+    monkeypatch.setattr(foresight_harvester, "_is_curated_theme_source", lambda *args, **kwargs: True)
+    old_year = datetime.now(timezone.utc).year - 4
+    signal = _signal(
+        title="Old trend report",
+        published_at=f"{old_year}-01-01",
+        published_year=old_year,
+        source_readable=True,
+        content_verified=True,
+        theme_match=True,
+        trend_supported=True,
+    )
+
+    normalized, active = foresight_harvester._classify_for_active_kb(signal, "Business", stage="test")
+
+    assert active is False
+    assert normalized["source_registry_match"] == "explicit_theme_domain"
+    assert normalized["freshness_status"] == "stale"
+    assert normalized["source_audit_status"] == "stale_source"
+
+
+def test_unknown_date_official_evergreen_can_remain_active(monkeypatch):
+    monkeypatch.setattr(foresight_harvester, "_is_curated_theme_source", lambda *args, **kwargs: True)
+    signal = _signal(
+        title="AI regulatory framework",
+        source_url="https://ec.europa.eu/ai-act-framework",
+        source_domain="ec.europa.eu",
+        source_tier="tier1",
+        source_type="regulation",
+        theme_match=True,
+        trend_supported=True,
+        source_readable=True,
+        content_verified=True,
+        published_at="",
+        published_year="",
+    )
+    signal.pop("published_at", None)
+    signal.pop("published_year", None)
+
+    normalized, active = foresight_harvester._classify_for_active_kb(signal, "Artificial Intelligence", stage="test")
+
+    assert active is True
+    assert normalized["freshness_status"] == "evergreen_context"
+    assert normalized["foresight_context_eligible"] is True
