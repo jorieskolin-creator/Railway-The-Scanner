@@ -47,6 +47,31 @@ FORESIGHT_CONTEXT_SUPPORT_STATUSES = {"supported", "partial"}
 ACTIVE_FORESIGHT_STATUS = "active_context"
 AUDIT_FORESIGHT_STATUS = "rejected_audit"
 MIN_SEMANTIC_SNIPPET_WORDS = 35
+HARVEST_DEFAULT_MODEL_MODE = "quality"
+HARVEST_GPT_TIMEOUT_SEC = 120
+HARVEST_SONNET_TIMEOUT_SEC = 90
+HARVEST_THEME_SONNET_TIMEOUT_SEC = {
+    "Data & Digitalisation": 75,
+}
+HARVEST_DEFAULT_QUERY_LIMIT = 8
+HARVEST_THEME_QUERY_LIMIT = {
+    "Data & Digitalisation": 6,
+}
+HARVEST_THEME_QUERY_PRIORITY = {
+    "Data & Digitalisation": [
+        "site:oecd.org",
+        "site:ec.europa.eu",
+        "site:weforum.org",
+        "site:worldbank.org",
+        "site:sitra.fi",
+        "site:theodi.org",
+        "site:turing.ac.uk",
+    ],
+}
+HARVEST_DEFAULT_SONNET_SEARCHES = 5
+HARVEST_THEME_SONNET_SEARCHES = {
+    "Data & Digitalisation": 4,
+}
 
 
 def _theme_to_slug(theme: str) -> str:
@@ -71,6 +96,20 @@ def _signal_key(sig: dict) -> str:
     title = re.sub(r'[^a-z0-9 ]', '', title)
     title = re.sub(r'\s+', ' ', title).strip()
     return f"title:{title}"
+
+
+def _call_harvest_model_with_deadline(label: str, timeout_sec: int, fn):
+    """Run a harvest model call with a hard wall-clock deadline."""
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(fn)
+    try:
+        return future.result(timeout=timeout_sec)
+    except concurrent.futures.TimeoutError:
+        future.cancel()
+        print(f"   ⏱️ [Harvest] {label}: hard deadline exceeded after {timeout_sec}s")
+        return None
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 def _revalidate_existing_signals(existing_signals: list[dict], theme: str) -> list[dict]:
@@ -777,10 +816,33 @@ def _is_central_kb_storable_signal(sig: dict, *, existing: bool = False) -> bool
     return True
 
 
+def _select_harvest_queries(theme: str, search_queries: list[str]) -> list[str]:
+    """Choose a bounded, high-quality query subset for one harvest pass."""
+    queries = [q for q in (search_queries or []) if q]
+    limit = HARVEST_THEME_QUERY_LIMIT.get(theme, HARVEST_DEFAULT_QUERY_LIMIT)
+    priority_tokens = HARVEST_THEME_QUERY_PRIORITY.get(theme, [])
+    if not priority_tokens:
+        return queries[:limit]
+
+    selected: list[str] = []
+    for token in priority_tokens:
+        for query in queries:
+            if token in query and query not in selected:
+                selected.append(query)
+                break
+    for query in queries:
+        if query not in selected:
+            selected.append(query)
+        if len(selected) >= limit:
+            break
+    return selected[:limit]
+
+
 def _build_harvest_prompt(theme: str, search_queries: list[str]) -> str:
     """Build a web-research prompt to harvest megatrend signals for one FP theme."""
 
-    queries_text = "\n".join(f"- {q}" for q in search_queries[:8])
+    selected_queries = _select_harvest_queries(theme, search_queries)
+    queries_text = "\n".join(f"- {q}" for q in selected_queries)
 
     return f"""You are a Strategic Foresight Research Analyst specializing in megatrend signal detection.
 
@@ -865,40 +927,53 @@ def _harvest_single_theme(theme: str, search_queries: list[str]) -> dict | None:
 
     prompt = _build_harvest_prompt(theme, search_queries)
 
-    mode = os.getenv("FORESIGHT_HARVEST_MODEL_MODE", "cost").strip().lower()
+    mode = os.getenv("FORESIGHT_HARVEST_MODEL_MODE", HARVEST_DEFAULT_MODEL_MODE).strip().lower()
+    if mode not in {"quality", "cost"}:
+        mode = HARVEST_DEFAULT_MODEL_MODE
+
+    sonnet_timeout = HARVEST_THEME_SONNET_TIMEOUT_SEC.get(theme, HARVEST_SONNET_TIMEOUT_SEC)
+    sonnet_searches = HARVEST_THEME_SONNET_SEARCHES.get(theme, HARVEST_DEFAULT_SONNET_SEARCHES)
     if mode == "quality":
         models = [
-            ("gpt-5.5", "openai", 120),
-            ("claude-sonnet-4-6", "anthropic", 120),
+            ("gpt-5.5", "openai", HARVEST_GPT_TIMEOUT_SEC, None),
+            ("claude-sonnet-4-6", "anthropic", sonnet_timeout, sonnet_searches),
         ]
     else:
         models = [
-            ("claude-sonnet-4-6", "anthropic", 120),
-            ("gpt-5.5", "openai", 120),
+            ("claude-sonnet-4-6", "anthropic", sonnet_timeout, sonnet_searches),
+            ("gpt-5.5", "openai", HARVEST_GPT_TIMEOUT_SEC, None),
         ]
 
-    for model_name, provider, timeout_sec in models:
+    for model_name, provider, timeout_sec, max_searches in models:
         try:
-            print(f"   🌐 [Harvest] {theme} → {model_name}...")
+            print(f"   🌐 [Harvest] {theme} → {model_name} (mode={mode}, timeout={timeout_sec}s)...")
             t0 = time.time()
             if provider == "anthropic":
-                text = call_anthropic_text(
-                    prompt,
-                    model=model_name,
-                    max_tokens=7000,
-                    timeout=timeout_sec,
-                    web_search=True,
-                    max_searches=10,
-                    thinking_budget=3000,
+                text = _call_harvest_model_with_deadline(
+                    f"{theme} {model_name}",
+                    timeout_sec,
+                    lambda: call_anthropic_text(
+                        prompt,
+                        model=model_name,
+                        max_tokens=7000,
+                        timeout=timeout_sec,
+                        web_search=True,
+                        max_searches=max_searches or HARVEST_DEFAULT_SONNET_SEARCHES,
+                        thinking_budget=800,
+                    ),
                 )
             else:
-                text = call_openai_text(
-                    prompt,
-                    model=model_name,
-                    max_output_tokens=7000,
-                    timeout=timeout_sec,
-                    web_search=True,
-                    search_context_size="medium",
+                text = _call_harvest_model_with_deadline(
+                    f"{theme} {model_name}",
+                    timeout_sec,
+                    lambda: call_openai_text(
+                        prompt,
+                        model=model_name,
+                        max_output_tokens=7000,
+                        timeout=timeout_sec,
+                        web_search=True,
+                        search_context_size="medium",
+                    ),
                 )
             elapsed = int((time.time() - t0) * 1000)
 
@@ -1088,7 +1163,9 @@ def harvest_all_themes(
         if progress_callback:
             progress_callback(theme, i, total, "harvesting")
 
-        print(f"\n--- [{i+1}/{total}] {theme} ({len(search_queries)} queries) ---")
+        selected_query_count = len(_select_harvest_queries(theme, search_queries))
+        query_label = f"{selected_query_count}/{len(search_queries)} queries" if search_queries else "0 queries"
+        print(f"\n--- [{i+1}/{total}] {theme} ({query_label}) ---")
 
         # Step 1: Load and classify existing KB signals for this theme.
         existing_data = storage.get_foresight_kb(slug)
