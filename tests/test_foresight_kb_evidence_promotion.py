@@ -425,7 +425,7 @@ def test_harvest_preserves_existing_active_when_new_batch_rejected(monkeypatch):
     monkeypatch.setattr(
         foresight_harvester,
         "_harvest_single_theme",
-        lambda theme, queries: {
+        lambda theme, queries, **kwargs: {
             "theme": theme,
             "signals": [
                 _signal(
@@ -489,6 +489,87 @@ def test_active_kb_accepts_recent_tier1_theme_exception():
     assert normalized["source_registry_match"] == "tier1_theme_exception"
     assert normalized["foresight_context_eligible"] is True
     assert normalized["freshness_status"] in {"fresh", "current"}
+
+
+def test_fragile_themes_use_micro_batches():
+    queries = [f"site:source{i}.org report" for i in range(6)]
+
+    fragile = foresight_harvester._harvest_query_batches("Water & Oceans", queries)
+    focused = foresight_harvester._harvest_query_batches("Artificial Intelligence", queries)
+
+    assert fragile
+    assert max(len(batch) for batch in fragile) <= 2
+    assert focused
+    assert max(len(batch) for batch in focused) <= 4
+
+
+def test_harvest_diversity_requires_domains_and_source_variety():
+    same_domain = [
+        _signal(
+            title=f"Signal {index}",
+            source_url=f"https://www.oecd.org/signal-{index}",
+            source_domain="oecd.org",
+            source_type="government",
+            source_tier="tier1",
+            freshness_status="fresh",
+        )
+        for index in range(3)
+    ]
+    diverse = [
+        _signal(
+            title="Signal A",
+            source_url="https://www.oecd.org/a",
+            source_domain="oecd.org",
+            source_type="government",
+            source_tier="tier1",
+            freshness_status="fresh",
+        ),
+        _signal(
+            title="Signal B",
+            source_url="https://www.rand.org/b",
+            source_domain="rand.org",
+            source_type="think_tank",
+            source_tier="tier2",
+            freshness_status="current",
+        ),
+        _signal(
+            title="Signal C",
+            source_url="https://www.nature.com/c",
+            source_domain="nature.com",
+            source_type="academic",
+            source_tier="tier1",
+            freshness_status="fresh",
+        ),
+    ]
+
+    assert foresight_harvester._harvest_diversity_status(same_domain)["sufficient_diversity"] is False
+    assert foresight_harvester._harvest_diversity_status(diverse)["sufficient_diversity"] is True
+
+
+def test_gpt_failure_uses_reduced_gemini_batch(monkeypatch):
+    prompts = []
+    valid = '{"theme":"Artificial Intelligence","signals":[{"title":"A","source_url":"https://oecd.org/a"}]}'
+
+    monkeypatch.setattr(foresight_harvester, "gemini_api_key", lambda: "configured")
+    monkeypatch.setattr(foresight_harvester, "call_openai_text", lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError("timeout")))
+    monkeypatch.setattr(
+        foresight_harvester,
+        "call_gemini_harvest_text",
+        lambda prompt, **kwargs: prompts.append(prompt) or valid,
+    )
+    monkeypatch.setattr(foresight_harvester.time, "sleep", lambda *_: None)
+
+    result = foresight_harvester._harvest_single_theme(
+        "Artificial Intelligence",
+        ["site:oecd.org AI", "site:rand.org AI", "site:nature.com AI", "site:weforum.org AI"],
+        theme_deadline_monotonic=foresight_harvester.time.monotonic() + 30,
+    )
+
+    assert result["signals"]
+    assert result["model"] == foresight_harvester.GEMINI_HARVEST_MODEL
+    assert prompts
+    assert sum(1 for line in prompts[0].splitlines() if line.startswith("- site:")) <= 2
+    assert not any(a.get("purpose") == "json_repair" for a in result["provider_attempts"])
 
 
 def test_active_kb_rejects_non_registry_tier2_source():
