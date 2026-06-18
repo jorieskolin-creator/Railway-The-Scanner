@@ -151,3 +151,153 @@ def test_jury_cannot_promote_url_outside_supplied_packets():
     )
     assert result["findings"] == []
     assert result["rejected_evidence"][0]["url"] == invented["url"]
+
+
+def test_jury_requires_source_bound_quote_and_support_level():
+    jury = "ARCHITECTURAL JURY (Engineering Reality)"
+    supplied = _finding(
+        "https://example.fi/engineering", jury,
+        snippet="Example Oy publishes a developer API for shipment status integration.",
+    )
+    result = scanner_two._merge_forensic_jury_results(
+        {"confidence_score": 20, "findings": []},
+        [{
+            "jury": jury,
+            "status": "completed",
+            "provider": "gpt-5.5",
+            "packet_urls": [supplied["url"]],
+            "packets": [supplied],
+            "data": {
+                "findings": [{
+                    "url": supplied["url"],
+                    "supported_claim": "Example Oy publishes a shipment status API.",
+                    "source_quote": supplied["snippet"],
+                    "support_level": "exact",
+                    "title": "Developer API",
+                    "found": True,
+                }],
+                "confidence_score": 80,
+                "reality_score_adjustment": 0,
+            },
+        }],
+        {jury: []},
+    )
+    assert result["findings"][0]["support_level"] == "exact"
+    assert result["findings"][0]["analysis_verified"] is True
+    assert result["findings"][0]["claim_support_status"] == "supported"
+
+
+def test_generic_landing_page_is_context_only_even_if_jury_calls_it_exact():
+    jury = "CULTURAL JURY (Talent & Psychological Safety)"
+    supplied = _finding(
+        "https://example.fi/careers", jury,
+        snippet="Example Oy careers page describes opportunities to join the company.",
+        generic_context_page=True,
+    )
+    result = scanner_two._merge_forensic_jury_results(
+        {"confidence_score": 20, "findings": []},
+        [{
+            "jury": jury,
+            "status": "completed",
+            "provider": "gpt-5.5",
+            "packet_urls": [supplied["url"]],
+            "packets": [supplied],
+            "data": {
+                "findings": [{
+                    "url": supplied["url"],
+                    "supported_claim": "Example Oy has a careers page.",
+                    "source_quote": supplied["snippet"],
+                    "support_level": "exact",
+                    "title": "Careers",
+                    "found": True,
+                }],
+                "confidence_score": 60,
+                "reality_score_adjustment": 0,
+            },
+        }],
+        {jury: []},
+    )
+    assert result["findings"][0]["support_level"] == "context_only"
+    assert result["findings"][0]["analysis_verified"] is False
+
+
+def test_jury_rejects_claim_that_exceeds_its_exact_quote():
+    jury = "AI & DATA JURY (Future Readiness)"
+    supplied = _finding(
+        "https://example.fi/news/platform", jury,
+        snippet="Example Oy published a developer API for shipment status integration.",
+    )
+    result = scanner_two._merge_forensic_jury_results(
+        {"confidence_score": 20, "findings": []},
+        [{
+            "jury": jury,
+            "status": "completed",
+            "provider": "gpt-5.5",
+            "packet_urls": [supplied["url"]],
+            "packets": [supplied],
+            "data": {
+                "findings": [{
+                    "url": supplied["url"],
+                    "supported_claim": "Example Oy deployed 500 AI agents across every business unit.",
+                    "source_quote": supplied["snippet"],
+                    "support_level": "exact",
+                    "title": "Platform update",
+                    "found": True,
+                }],
+                "confidence_score": 80,
+                "reality_score_adjustment": 0,
+            },
+        }],
+        {jury: []},
+    )
+    assert result["findings"] == []
+    assert "exceeded" in result["rejected_evidence"][0]["reason"]
+
+
+def test_promoted_coverage_ignores_partial_and_unverified_findings():
+    jury = "SERVICE PORTFOLIO JURY (Delivery Reality)"
+    exact = _finding(
+        "https://example.fi/reference", jury,
+        verified=True, analysis_verified=True, support_level="exact",
+        claim_support_status="supported", source_status="fresh_discovery",
+    )
+    partial = _finding(
+        "https://example.fi/services", jury,
+        verified=True, analysis_verified=False, support_level="partial",
+        claim_support_status="partial", source_status="fresh_discovery",
+    )
+    coverage = scanner_two._compute_promoted_evidence_coverage([exact, partial], "example.fi")
+    assert coverage["promoted_findings"] == 1
+
+
+def test_pre_jury_gate_rejects_unbound_acquisition_quote(monkeypatch):
+    jury = "AI & DATA JURY (Future Readiness)"
+    source = _finding(
+        "https://example.fi/news/platform",
+        jury,
+        snippet="Example Oy deployed a named AI platform across every business unit.",
+    )
+
+    monkeypatch.setattr(
+        scanner_two,
+        "_verify_url",
+        lambda *_args, **_kwargs: {
+            "verified": True,
+            "company_mentioned": True,
+            "content_readable": True,
+            "content_excerpt": (
+                "Example Oy published a general corporate news page about sustainability "
+                "and annual reporting without any artificial intelligence platform claim."
+            ),
+            "extracted_date": None,
+        },
+    )
+
+    lanes, stats = scanner_two._prevalidate_acquisition_results(
+        [{"jury": jury, "provider": "gemini", "status": "completed", "sources": [source]}],
+        "Example Oy",
+    )
+
+    assert lanes[0]["sources"] == []
+    assert stats["quote_not_found"] == 1
+    assert lanes[0]["pre_jury_rejected"][0]["reason"] == "quote_not_found"

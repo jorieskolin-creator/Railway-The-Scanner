@@ -284,6 +284,141 @@ def _compute_forensic_coverage(findings: list, official_domain: str = "") -> dic
     }
 
 
+def _compute_promoted_evidence_coverage(findings: list, official_domain: str = "") -> dict:
+    """Measure evidence that survived entity and exact claim-support gates."""
+    promoted = [
+        item for item in (findings or [])
+        if isinstance(item, dict)
+        and item.get("url")
+        and item.get("verified") is True
+        and item.get("wrong_entity") is not True
+        and str(item.get("support_level") or "").lower() == "exact"
+        and str(item.get("claim_support_status") or "").lower() == "supported"
+        and item.get("analysis_verified") is True
+    ]
+    coverage = _compute_forensic_coverage(promoted, official_domain)
+    coverage["promoted_findings"] = len(promoted)
+    coverage["coverage_kind"] = "promoted_exact_claim_support"
+    return coverage
+
+
+def _is_generic_context_page(url: str) -> bool:
+    """Identify landing/index pages that cannot prove detailed operational claims."""
+    try:
+        path = (urlparse(url).path or "/").lower().rstrip("/") or "/"
+    except Exception:
+        return False
+    if path in {"/", "/fi", "/en", "/sv", "/careers", "/jobs", "/services", "/service"}:
+        return True
+    return bool(re.search(r"/(careers|jobs|services?|case-studies|references|customers)/?$", path))
+
+
+def _quote_matches_packet(quote: str, packet_text: str, require_verbatim: bool = False) -> bool:
+    """Require meaningful lexical overlap between the jury quote and supplied packet."""
+    normalized_quote = re.sub(r"\s+", " ", (quote or "")).strip().lower()
+    normalized_packet = re.sub(r"\s+", " ", (packet_text or "")).strip().lower()
+    if require_verbatim:
+        return len(normalized_quote) >= 24 and normalized_quote in normalized_packet
+    quote_terms = {
+        token.lower() for token in re.findall(r"[A-Za-zÅÄÖåäö0-9][A-Za-zÅÄÖåäö0-9\-]{2,}", quote or "")
+    }
+    packet_terms = {
+        token.lower() for token in re.findall(r"[A-Za-zÅÄÖåäö0-9][A-Za-zÅÄÖåäö0-9\-]{2,}", packet_text or "")
+    }
+    if len(quote_terms) < 4 or not packet_terms:
+        return False
+    return len(quote_terms & packet_terms) / len(quote_terms) >= 0.65
+
+
+def _claim_matches_quote(claim: str, quote: str, support_level: str) -> bool:
+    """Reject claims that materially outrun their supporting quote."""
+    stop_words = {
+        "about", "after", "also", "and", "are", "for", "from", "has", "have", "into",
+        "its", "that", "the", "their", "this", "through", "uses", "using", "with",
+        "että", "ja", "joka", "kanssa", "kun", "myös", "on", "ovat", "sekä", "sen", "yritys",
+    }
+
+    def meaningful_terms(value: str) -> set:
+        return {
+            token.lower()
+            for token in re.findall(r"[A-Za-zÅÄÖåäö0-9][A-Za-zÅÄÖåäö0-9+.#%€$\-/]{2,}", value or "")
+            if token.lower() not in stop_words
+        }
+
+    claim_terms = meaningful_terms(claim)
+    quote_terms = meaningful_terms(quote)
+    if not claim_terms or not quote_terms:
+        return False
+
+    numbers = set(re.findall(r"(?<!\w)[€$]?\d[\d.,]*%?", claim or ""))
+    if numbers and not all(number in (quote or "") for number in numbers):
+        return False
+
+    overlap = len(claim_terms & quote_terms) / len(claim_terms)
+    threshold = 0.50 if support_level == "exact" else 0.30
+    return overlap >= threshold and len(claim_terms & quote_terms) >= min(3, len(claim_terms))
+
+
+def _prevalidate_acquisition_results(acquisition_results: list, company_name: str) -> tuple[list, dict]:
+    """Gate fresh packets before expensive jury analysis."""
+    sources = [
+        source for lane in (acquisition_results or [])
+        for source in lane.get("sources", []) if isinstance(source, dict) and source.get("url")
+    ]
+    url_results = {}
+    unique_urls = sorted({source["url"] for source in sources})
+    if unique_urls:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(10, len(unique_urls))) as pool:
+            futures = {pool.submit(_verify_url, url, 6, company_name): url for url in unique_urls}
+            for future in concurrent.futures.as_completed(futures):
+                url = futures[future]
+                try:
+                    url_results[url] = future.result() or {}
+                except Exception:
+                    url_results[url] = {}
+
+    stats = {"input": len(sources), "passed": 0, "dead_or_soft_404": 0, "wrong_entity": 0, "unreadable": 0}
+    gated_results = []
+    for lane in acquisition_results or []:
+        kept = []
+        rejected = list(lane.get("pre_jury_rejected", []) or [])
+        for source in lane.get("sources", []) or []:
+            checked = url_results.get(source.get("url"), {})
+            source["url_verified"] = checked.get("verified") is True
+            source["verified"] = source["url_verified"]
+            source["content_readable"] = checked.get("content_readable") is True
+            source["entity_mentioned"] = checked.get("company_mentioned")
+            source["fetched_excerpt"] = str(checked.get("content_excerpt") or "")[:4000]
+            if checked.get("extracted_date"):
+                source["extracted_date"] = str(checked["extracted_date"])
+            reason = ""
+            if not source["url_verified"]:
+                reason = "dead_or_soft_404"
+            elif checked.get("company_mentioned") is False:
+                reason = "wrong_entity"
+            elif not source["content_readable"] or len(str(source.get("snippet") or "").strip()) < 40:
+                reason = "unreadable"
+            elif not _quote_matches_packet(
+                str(source.get("snippet") or ""),
+                str(checked.get("content_excerpt") or ""),
+            ):
+                reason = "quote_not_found"
+            if reason:
+                stats.setdefault(reason, 0)
+                stats[reason] += 1
+                rejected.append({"url": source.get("url"), "reason": reason, "stage": "pre_jury_gate"})
+                continue
+            source["pre_jury_gate"] = "passed"
+            source["generic_context_page"] = _is_generic_context_page(source.get("url") or "")
+            kept.append(source)
+            stats["passed"] += 1
+        normalized_lane = dict(lane)
+        normalized_lane["sources"] = kept
+        normalized_lane["pre_jury_rejected"] = rejected
+        gated_results.append(normalized_lane)
+    return gated_results, stats
+
+
 def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seeds: dict) -> dict:
     """Merge judged findings; retain only revalidated seeds when a jury fails."""
     result = {key: value for key, value in (baseline or {}).items() if key != "findings"}
@@ -306,6 +441,10 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
                 for item in routed_seeds.get(jury, []) or []
                 if item.get("url")
             }
+        packet_by_url = {
+            _canonical_evidence_url(item.get("url")): item
+            for item in lane.get("packets", []) or [] if item.get("url")
+        }
         accepted = []
         if payload:
             for item in payload.get("findings", []) or []:
@@ -318,11 +457,54 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
                         "jury": jury,
                     })
                     continue
+                packet = packet_by_url.get(_canonical_evidence_url(item.get("url")), {})
+                supported_claim = str(item.get("supported_claim") or item.get("label") or "").strip()
+                source_quote = str(item.get("source_quote") or item.get("snippet") or "").strip()
+                support_level = str(item.get("support_level") or "unsupported").lower()
+                if support_level not in {"exact", "partial", "context_only", "unsupported"}:
+                    support_level = "unsupported"
+                packet_text = str(
+                    packet.get("fetched_excerpt")
+                    or packet.get("snippet")
+                    or packet.get("cached_excerpt")
+                    or ""
+                )
+                if not supported_claim or not _quote_matches_packet(
+                    source_quote,
+                    packet_text,
+                    require_verbatim=support_level == "exact",
+                ) or not _claim_matches_quote(supported_claim, source_quote, support_level):
+                    rejected.append({
+                        "url": item.get("url"),
+                        "reason": "Jury claim lacked a source-bound quote or materially exceeded the quote.",
+                        "jury": jury,
+                    })
+                    continue
+                if packet.get("generic_context_page") and support_level == "exact":
+                    support_level = "context_only"
+                if support_level == "unsupported":
+                    rejected.append({"url": item.get("url"), "reason": "Jury marked claim unsupported.", "jury": jury})
+                    continue
                 normalized = dict(item)
                 normalized["category"] = jury
-                normalized["source_status"] = "jury_accepted"
-                normalized["analysis_verified"] = True
+                normalized["label"] = supported_claim[:300]
+                normalized["supported_claim"] = supported_claim
+                normalized["snippet"] = source_quote[:1200]
+                normalized["source_quote"] = source_quote[:1200]
+                normalized["support_level"] = support_level
+                normalized["source_status"] = "jury_accepted" if support_level == "exact" else f"jury_{support_level}"
+                normalized["analysis_verified"] = support_level == "exact"
+                normalized["claim_support_status"] = "supported" if support_level == "exact" else support_level
+                normalized["generation_eligible"] = False
                 normalized["claim_support_pending"] = False
+                normalized["verified"] = packet.get("verified") is True
+                normalized["url_verified"] = packet.get("url_verified") is True
+                normalized["content_readable"] = packet.get("content_readable") is True
+                normalized["generic_context_page"] = packet.get("generic_context_page") is True
+                normalized["source_type"] = item.get("source_type") or packet.get("source_type")
+                normalized["source_database"] = packet.get("source_database")
+                normalized["forensic_seed_source"] = bool(packet.get("forensic_seed_source"))
+                normalized["packet_source_status"] = packet.get("source_status")
                 accepted.append(normalized)
             rejected.extend(payload.get("rejected_evidence", []) or [])
             if accepted:
@@ -490,7 +672,10 @@ def _build_jury_analysis_prompt(search_name: str, jury_name: str, packets: list)
         compact.append({
             "url": item.get("url"),
             "title": item.get("title"),
-            "quote_or_content": str(item.get("snippet") or item.get("cached_excerpt") or "")[:1800],
+            "acquired_quote": str(item.get("snippet") or "")[:1200],
+            "fetched_or_cached_content": str(
+                item.get("fetched_excerpt") or item.get("cached_excerpt") or item.get("snippet") or ""
+            )[:2600],
             "published_at": item.get("published_at"),
             "source_type": item.get("source_type"),
             "entity_scope_candidate": item.get("entity_scope"),
@@ -508,6 +693,16 @@ For every promoted finding, verify from the supplied excerpt/content:
 
 Seeded material is candidate evidence, never inherited truth. Reject wrong-entity, generic,
 unsupported, stale, soft-404, or merely adjacent packets. Hiring is a weak signal, not deployment proof.
+Write the SMALLEST claim the packet actually supports. `source_quote` must be copied verbatim from
+`fetched_or_cached_content`, not invented, paraphrased, or copied only from an unconfirmed
+`acquired_quote`. Grade support as:
+- exact: quote directly supports the whole claim,
+- partial: quote supports only part; phrase as a cautious signal,
+- context_only: identity/general background only, not a company capability fact,
+- unsupported: reject.
+Precise figures, named systems/APIs/platforms, projects, outcomes, and specific hiring claims require
+`exact` support. Generic home, careers, service, reference-index, and case-study-index pages are
+context_only unless the supplied quote itself states the complete narrow fact.
 
 SOURCE PACKETS:
 {json.dumps(compact, ensure_ascii=False)}
@@ -516,11 +711,11 @@ Return ONLY valid JSON:
 {{
   "jury": {json.dumps(jury_name)},
   "findings": [
-    {{"category": {json.dumps(jury_name)}, "label": "supported finding", "found": true,
-      "sentiment": "positive|neutral|negative", "snippet": "supporting quote", "title": "source title",
+    {{"category": {json.dumps(jury_name)}, "supported_claim": "minimal source-supported claim", "found": true,
+      "sentiment": "positive|neutral|negative", "source_quote": "exact supplied quote", "title": "source title",
       "url": "https://...", "is_recent": true, "source_type": "type",
       "entity_scope": "company|group|subsidiary|context", "source_verdict": "accepted",
-      "confidence": 0}}
+      "support_level": "exact|partial|context_only", "confidence": 0}}
   ],
   "rejected_evidence": [{{"url": "https://...", "reason": "specific rejection reason"}}],
   "contradictions": ["supported contradiction"],
@@ -1156,8 +1351,16 @@ def _verify_url(url, timeout=4, company_name=None):
       - verified: True if URL is reachable and not a soft 404
       - company_mentioned: True if the company name appears on the page (None if not checked)
       - extracted_date: Publication date from URL/page content (None if not found)
+      - content_readable: True when the response contains enough visible text
+      - content_excerpt: Visible text used for pre-jury quote validation
     """
-    result = {"verified": False, "company_mentioned": None, "extracted_date": None}
+    result = {
+        "verified": False,
+        "company_mentioned": None,
+        "extracted_date": None,
+        "content_readable": False,
+        "content_excerpt": "",
+    }
     if not url or not url.startswith("http"):
         return result
 
@@ -1186,6 +1389,10 @@ def _verify_url(url, timeout=4, company_name=None):
             return result
 
         result["verified"] = True
+        visible_text = re.sub(r"<[^>]+>", " ", body_chunk)
+        visible_text = re.sub(r"\s+", " ", visible_text).strip()
+        result["content_readable"] = len(visible_text) >= 80
+        result["content_excerpt"] = visible_text[:12000]
 
         # Extract publication date from URL and page body
         result["extracted_date"] = _extract_page_date(url, body_chunk)
@@ -2729,6 +2936,14 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         ]
     acquisition_by_jury = {item["jury"]: item for item in acquisition_results}
 
+    acquisition_results, pre_jury_stats = _prevalidate_acquisition_results(acquisition_results, company_name)
+    acquisition_by_jury = {item["jury"]: item for item in acquisition_results}
+    print(
+        f"   🛡️ [Forensic Pre-Jury Gate] {pre_jury_stats['passed']}/{pre_jury_stats['input']} packets passed; "
+        f"dead/soft-404={pre_jury_stats['dead_or_soft_404']}, wrong_entity={pre_jury_stats['wrong_entity']}, "
+        f"unreadable={pre_jury_stats['unreadable']}, quote_not_found={pre_jury_stats.get('quote_not_found', 0)}."
+    )
+
     # --- PHASE 2: FIVE PARALLEL NO-WEB JURY ANALYSES ---
     analysis_ceiling = min(
         FORENSIC_JURY_ANALYSIS_CEILING_SECONDS,
@@ -2780,6 +2995,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             "status": "completed" if payload else "analysis_failed",
             "data": payload,
             "packet_urls": [item.get("url") for item in packets if item.get("url")],
+            "packets": packets,
         }
 
     jury_results = []
@@ -2814,6 +3030,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             "provider": item.get("provider"),
             "status": item.get("status"),
             "sources": len(item.get("sources", [])),
+            "pre_jury_rejected": len(item.get("pre_jury_rejected", [])),
         }
         for item in acquisition_results
     ]
@@ -2835,26 +3052,28 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         finding for finding in data.get("findings", [])
         if finding.get("source_status") == "fresh_discovery"
     ])
-    final_coverage = _compute_forensic_coverage(data.get("findings", []), domain_hint)
-    data["_final_forensic_coverage"] = final_coverage
+    source_coverage = _compute_forensic_coverage(data.get("findings", []), domain_hint)
+    data["_source_forensic_coverage"] = source_coverage
     jury_counts = {
         jury: len([finding for finding in data.get("findings", []) if _finding_jury(finding) == jury])
         for jury in FORENSIC_JURIES
     }
     missing_juries = [jury for jury, count in jury_counts.items() if count == 0]
     if completed_juries == 5 and accepted_fresh and not missing_juries:
-        run_mode = "full"
+        provisional_mode = "all_juries_fresh_pending_validation"
     elif completed_juries and accepted_fresh:
-        run_mode = "partially_fresh"
+        provisional_mode = "partially_fresh_pending_validation"
     elif data.get("findings"):
-        run_mode = "seeded_only"
+        provisional_mode = "seeded_pending_validation"
     else:
-        run_mode = "degraded"
-    data["forensic_run_mode"] = run_mode
+        provisional_mode = "degraded"
+    data["forensic_run_mode"] = "pending_claim_validation"
+    data["forensic_provisional_mode"] = provisional_mode
     print(
-        f"   📊 [Forensic Merge] mode={run_mode}; {len(data.get('findings', []))} judged/preserved findings; "
+        f"   📊 [Forensic Merge] provisional_mode={provisional_mode}; "
+        f"{len(data.get('findings', []))} judged/preserved findings; "
         f"{fresh_packets} fresh packets acquired, {accepted_fresh} accepted; "
-        f"coverage {final_coverage['score']}/100."
+        f"source coverage {source_coverage['score']}/100 (promotion pending)."
     )
     print(f"   📚 [Forensic Juries] {jury_counts}")
     if missing_juries:
@@ -2865,6 +3084,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         "postprocess_reserve_seconds": FORENSIC_POSTPROCESS_RESERVE_SECONDS,
         "merge_normalization_seconds": round(time.time() - postprocess_started, 2),
     }
+    data["_forensic_pre_jury_gate"] = pre_jury_stats
 
     # --- CONFIDENCE FLOOR (two-pass structuring safety net) ---
     # When the structuring model (Pass 2) cannot determine confidence from
@@ -2999,13 +3219,24 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 raw_findings.append({
                     "title": f.get("title", "Evidence Found"),
                     "snippet": f.get("snippet", ""),
+                    "source_quote": f.get("source_quote", f.get("snippet", "")),
+                    "supported_claim": f.get("supported_claim", f.get("label", "")),
+                    "label": f.get("label", f.get("supported_claim", "")),
+                    "category": f.get("category", "General"),
                     "url": f.get("url", ""),
                     "source": get_clean_domain(f.get("url", "")),
                     "is_recent": f.get("is_recent", False),
-                    "source_type": "current",
+                    "source_type": f.get("source_type") or "current",
+                    "support_level": f.get("support_level"),
+                    "claim_support_status": f.get("claim_support_status"),
+                    "analysis_verified": f.get("analysis_verified") is True,
+                    "generation_eligible": f.get("generation_eligible") is True,
+                    "entity_scope": f.get("entity_scope"),
                     "source_database": f.get("source_database"),
                     "forensic_seed_source": bool(f.get("forensic_seed_source")),
                     "source_status": f.get("source_status"),
+                    "acquisition_provider": f.get("acquisition_provider"),
+                    "forensic_provenance": f.get("forensic_provenance"),
                     "verification_reason": f.get("verification_reason"),
                     "cached_excerpt": f.get("cached_excerpt"),
                 })
@@ -3205,6 +3436,44 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         # Ensure every source carries final promotion metadata, even when
         # source-claim validation was skipped or only covered part of the pool.
         raw_findings = annotate_evidence_links(raw_findings, company_domain, company_name)
+
+        promoted_coverage = _compute_promoted_evidence_coverage(raw_findings, company_domain)
+        source_coverage = data.get("_source_forensic_coverage") or _compute_forensic_coverage(raw_findings, company_domain)
+        data["_final_forensic_coverage"] = {
+            "source_coverage": source_coverage,
+            "promoted_evidence_coverage": promoted_coverage,
+        }
+        exact_by_jury = {
+            jury: len([
+                item for item in raw_findings
+                if _finding_jury(item) == jury
+                and item.get("analysis_verified") is True
+                and item.get("claim_support_status") == "supported"
+                and item.get("support_level") == "exact"
+            ])
+            for jury in FORENSIC_JURIES
+        }
+        fresh_exact_juries = {
+            _finding_jury(item) for item in raw_findings
+            if item.get("source_status") == "fresh_discovery"
+            and item.get("support_level") == "exact"
+            and item.get("claim_support_status") == "supported"
+        }
+        completed_juries = len([item for item in data.get("forensic_jury_status", []) if item.get("status") == "completed"])
+        if completed_juries == 5 and len(fresh_exact_juries) == 5:
+            final_mode = "full"
+        elif fresh_exact_juries:
+            final_mode = "partially_fresh"
+        elif promoted_coverage.get("promoted_findings"):
+            final_mode = "seeded_only"
+        else:
+            final_mode = "degraded"
+        data["forensic_run_mode"] = final_mode
+        print(
+            f"   📐 [Forensic Coverage] source={source_coverage.get('score', 0)}/100; "
+            f"promoted={promoted_coverage.get('score', 0)}/100; exact findings={promoted_coverage.get('promoted_findings', 0)}; "
+            f"exact by jury={exact_by_jury}; mode={final_mode}."
+        )
 
         # --- SOURCE QUALITY ASSESSMENT ---
         # Evaluate credibility of each source domain (not just URL liveness).
