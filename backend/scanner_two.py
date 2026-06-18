@@ -12,6 +12,7 @@ from knowledge_base import get_evolving_framework
 from source_quality import assess_evidence_quality, confidence_quality_penalty, annotate_evidence_links, filter_admissible_sources, evidence_sufficiency_score, classify_generation_context, apply_language_metadata
 from entity_identity import build_entity_context_block, entity_search_terms
 from llm_clients import call_anthropic_text, call_json_model_chain, call_openai_text
+from gemini_client import call_gemini_forensic_text, gemini_api_key
 
 # --- HELPER: IMPROVE SEARCH RECALL ---
 def clean_company_name_for_search(name):
@@ -190,20 +191,11 @@ JURY_SOURCE_TARGETS = {
 }
 
 
-FORENSIC_DISCOVERY_BATCHES = {
-    "batch_1": (
-        "ARCHITECTURAL JURY (Engineering Reality)",
-        "AI & DATA JURY (Future Readiness)",
-        "SERVICE PORTFOLIO JURY (Delivery Reality)",
-    ),
-    "batch_2": (
-        "STRATEGIC JURY (Business Model, Procurement & Customer Experience)",
-        "CULTURAL JURY (Talent & Psychological Safety)",
-    ),
-}
-
-FORENSIC_DISCOVERY_CEILING_SECONDS = 150
 FORENSIC_POSTPROCESS_RESERVE_SECONDS = 30
+FORENSIC_ACQUISITION_CEILING_SECONDS = 135
+FORENSIC_JURY_ANALYSIS_CEILING_SECONDS = 95
+FORENSIC_GEMINI_TIMEOUT_SECONDS = 100
+FORENSIC_JURIES = tuple(JURY_SOURCE_TARGETS.keys())
 
 
 def _canonical_evidence_url(url: str) -> str:
@@ -224,14 +216,17 @@ def _finding_jury(finding: dict) -> str:
         return category
     token = " ".join(
         str((finding or {}).get(key) or "")
-        for key in ("category", "source_type", "source_category", "label", "title")
+        for key in (
+            "category", "source_type", "source_category", "label", "title",
+            "snippet", "cached_excerpt", "source_quote", "verification_reason",
+        )
     ).lower()
     if any(word in token for word in ("architecture", "engineering", "developer", "api", "job ad", "tech stack")):
         return "ARCHITECTURAL JURY (Engineering Reality)"
-    if any(word in token for word in ("ai", "data", "cloud", "cyber", "erp", "technology", "patent")):
-        return "AI & DATA JURY (Future Readiness)"
     if any(word in token for word in ("service", "reference", "customer story", "case study", "delivery")):
         return "SERVICE PORTFOLIO JURY (Delivery Reality)"
+    if any(word in token for word in ("ai", "data", "cloud", "cyber", "erp", "technology", "patent")):
+        return "AI & DATA JURY (Future Readiness)"
     if any(word in token for word in ("culture", "career", "hiring", "employee", "workplace", "sustainability")):
         return "CULTURAL JURY (Talent & Psychological Safety)"
     if any(word in token for word in ("strategy", "financial", "annual", "investor", "procurement", "tender", "customer")):
@@ -251,6 +246,7 @@ def _compute_forensic_coverage(findings: list, official_domain: str = "") -> dic
         if item.get("seed_url_verified") or item.get("url_verified") or item.get("verified")
     ]
     recent = [item for item in linked if item.get("is_recent")]
+    fresh = [item for item in linked if item.get("source_status") == "fresh_discovery"]
     juries = sorted({jury for jury in (_finding_jury(item) for item in linked) if jury})
     official = 0
     independent = 0
@@ -270,58 +266,93 @@ def _compute_forensic_coverage(findings: list, official_domain: str = "") -> dic
     elif official or independent:
         score += 5
     score += min(5, len(recent))
+    score = min(100, score)
+    if not fresh:
+        score = min(score, 55)
+    if len(juries) < len(FORENSIC_JURIES):
+        score = min(score, 75)
     return {
-        "score": min(100, score),
+        "score": score,
         "usable_urls": len(linked),
         "cached_or_readable": len(readable),
         "verified_urls": len(verified),
         "jury_coverage": juries,
         "official_sources": official,
         "independent_sources": independent,
+        "fresh_sources": len(fresh),
+        "missing_juries": [jury for jury in FORENSIC_JURIES if jury not in juries],
     }
 
 
-def _merge_forensic_batch_results(baseline: dict, batch_results: list) -> dict:
-    result = dict(baseline or {})
-    findings = list(result.get("findings") or [])
+def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seeds: dict) -> dict:
+    """Merge judged findings; retain only revalidated seeds when a jury fails."""
+    result = {key: value for key, value in (baseline or {}).items() if key != "findings"}
+    findings = []
+    statuses = []
+    confidences = []
     adjustments = []
-    confidences = [result.get("confidence_score", 0) or 0]
-    batch_status = []
-    for batch in batch_results or []:
-        name = batch.get("name", "batch")
-        payload = batch.get("data") if isinstance(batch.get("data"), dict) else None
-        if not payload:
-            batch_status.append({"batch": name, "status": batch.get("status", "batch_timeout"), "added": 0})
-            continue
-        before_urls = {_canonical_evidence_url(item.get("url")) for item in findings if item.get("url")}
-        additions = []
-        for item in payload.get("findings", []) or []:
-            if not isinstance(item, dict):
-                continue
-            normalized = dict(item)
-            normalized["forensic_batch"] = name
-            normalized["source_status"] = "fresh_discovery"
-            normalized["claim_support_pending"] = True
-            additions.append(normalized)
-        findings, _ = _merge_findings(findings, additions)
-        after_urls = {_canonical_evidence_url(item.get("url")) for item in findings if item.get("url")}
-        added = len(after_urls - before_urls)
-        batch_status.append({"batch": name, "status": "completed", "added": added})
-        adjustments.append((payload.get("reality_score_adjustment", 0) or 0, len(FORENSIC_DISCOVERY_BATCHES.get(name, ())) or 1))
-        confidences.append(payload.get("confidence_score", 0) or 0)
-        if payload.get("washing_flag"):
-            result["washing_flag"] = True
-            result["washing_type"] = payload.get("washing_type") or result.get("washing_type")
+    rejected = []
+    for lane in jury_results or []:
+        jury = lane.get("jury")
+        payload = lane.get("data") if isinstance(lane.get("data"), dict) else None
+        packet_urls = {
+            _canonical_evidence_url(url)
+            for url in (lane.get("packet_urls") or [])
+            if url
+        }
+        if not packet_urls:
+            packet_urls = {
+                _canonical_evidence_url(item.get("url"))
+                for item in routed_seeds.get(jury, []) or []
+                if item.get("url")
+            }
+        accepted = []
+        if payload:
+            for item in payload.get("findings", []) or []:
+                if not isinstance(item, dict) or not item.get("url"):
+                    continue
+                if _canonical_evidence_url(item.get("url")) not in packet_urls:
+                    rejected.append({
+                        "url": item.get("url"),
+                        "reason": "Jury returned a URL that was not present in its supplied source packets.",
+                        "jury": jury,
+                    })
+                    continue
+                normalized = dict(item)
+                normalized["category"] = jury
+                normalized["source_status"] = "jury_accepted"
+                normalized["analysis_verified"] = True
+                normalized["claim_support_pending"] = False
+                accepted.append(normalized)
+            rejected.extend(payload.get("rejected_evidence", []) or [])
+            if accepted:
+                confidences.append(payload.get("confidence_score", 0) or 0)
+                adjustments.append(payload.get("reality_score_adjustment", 0) or 0)
+        else:
+            for item in routed_seeds.get(jury, []) or []:
+                if item.get("seed_url_verified") and item.get("seed_entity_mentioned") is not False:
+                    fallback = dict(item)
+                    fallback["category"] = jury
+                    fallback["source_status"] = "seeded_analysis_pending"
+                    fallback["analysis_verified"] = False
+                    fallback["claim_support_pending"] = True
+                    accepted.append(fallback)
+        findings, _ = _merge_findings(findings, accepted)
+        statuses.append({
+            "jury": jury,
+            "status": lane.get("status") or ("completed" if payload else "degraded"),
+            "provider": lane.get("provider"),
+            "accepted": len(accepted),
+            "rejected": len((payload or {}).get("rejected_evidence", []) or []),
+        })
     result["findings"] = findings
     result["key_people"] = []
-    if adjustments:
-        total_weight = sum(weight for _, weight in adjustments)
-        result["reality_score_adjustment"] = round(sum(value * weight for value, weight in adjustments) / total_weight)
-    else:
-        result.setdefault("reality_score_adjustment", 0)
-    result["confidence_score"] = max(confidences) if confidences else 0
-    result["forensic_batch_status"] = batch_status
-    result["_batched_forensic_search"] = True
+    result["confidence_score"] = round(sum(confidences) / len(confidences)) if confidences else min(35, baseline.get("confidence_score", 20))
+    result["reality_score_adjustment"] = round(sum(adjustments) / len(adjustments)) if adjustments else 0
+    result["forensic_jury_status"] = statuses
+    result["rejected_evidence"] = rejected
+    result["_parallel_jury_forensic"] = True
+    result["_seeded_forensic_fallback"] = not any(lane.get("data") for lane in jury_results or [])
     return result
 
 
@@ -353,70 +384,149 @@ def _build_jury_source_registry_block(search_name: str, domain_hint: str, jury_n
     return "\n".join(lines)
 
 
-def _build_forensic_discovery_prompt(
+def _build_jury_acquisition_prompt(
     search_name: str,
     domain_hint: str,
-    batch_name: str,
-    coverage: dict,
-    seed_findings: list,
-    intent_score: int = 0,
+    jury_name: str,
     entity_context: str = "",
     search_aliases: str = "",
-    subsidiary_context: str = "",
-    pre_verified_context: str = "",
 ) -> str:
-    juries = FORENSIC_DISCOVERY_BATCHES[batch_name]
-    seed_lines = []
-    for item in (seed_findings or [])[:12]:
-        seed_lines.append(
-            f'- [{_finding_jury(item) or "unclassified"}] {item.get("title") or item.get("label") or "Source"} | '
-            f'{item.get("url") or "cached-only"} | {str(item.get("snippet") or item.get("cached_excerpt") or "")[:260]}'
-        )
-    depth = "narrow freshness and contradiction search" if coverage.get("score", 0) >= 65 else "deeper fresh discovery"
-    return f"""Perform FORENSIC DISCOVERY {batch_name.upper()} for "{search_name}" (official domain: {domain_hint}).
-Intent score context: {intent_score}/100. Baseline coverage: {coverage.get('score', 0)}/100. Search depth: {depth}.
+    """Build a search-only prompt for one independent evidence-acquisition lane."""
+    return f"""Acquire CURRENT SOURCE MATERIAL for \"{search_name}\" (official domain: {domain_hint}).
+This lane covers only: {jury_name}
 
-THIS CALL COVERS ONLY:
-{chr(10).join(f'- {jury}' for jury in juries)}
+This is source acquisition, not analysis. Search the approved registry below in Finnish and English.
+Prioritize sources published or updated within 24 months, while allowing current official registry,
+legal, procurement, developer, careers, and living documentation pages without a visible date.
+Do not search for people, stakeholders, profiles, emails, or contact details.
 
-MANDATORY FRESH-DISCOVERY LANE:
-Search every listed jury for recent developments, changed strategy, investments, current hiring/capability signals,
-technology or operating-model changes, partnerships/service delivery, and contradictions or completed/cancelled initiatives.
-Existing evidence is orientation and revalidation context, not permission to skip fresh discovery.
-Do not search for people, executives, stakeholders, LinkedIn profiles, emails, or contacts. Buying Insight owns stakeholder research.
-
-ENTITY AND SCOPE:
+ENTITY:
 {entity_context}
 {search_aliases}
-{subsidiary_context}
 
-PRE-VERIFIED CONTEXT (use only within its stated scope):
-{pre_verified_context}
+{_build_jury_source_registry_block(search_name, domain_hint, (jury_name,))}
 
-SEEDED BASELINE (do not repeat weak sources merely to fill the result):
-{chr(10).join(seed_lines) if seed_lines else '- No usable seeded sources; discovery must establish the baseline.'}
+Return only source packets that mention or clearly scope to the target company, group, or named subsidiary.
+Do not infer a claim from a title. Include the supporting quote or useful page excerpt.
+Return ONLY valid JSON:
+{{
+  "jury": {json.dumps(jury_name)},
+  "sources": [
+    {{"url": "https://...", "title": "page title", "quote": "supporting excerpt",
+      "published_at": "YYYY-MM-DD or null", "source_type": "registry source type",
+      "entity_scope_candidate": "company|group|subsidiary|context|unclear",
+      "discovery_query": "query used", "freshness": "fresh|current|evergreen|unknown"}}
+  ]
+}}
+"""
 
-{_build_jury_source_registry_block(search_name, domain_hint, juries)}
 
-EVIDENCE RULES:
-- Return a finding only with a real URL and source-supported snippet/quote.
-- Verify target entity and distinguish local legal entity, parent/group, subsidiary, customer, supplier, and sector context.
-- Hiring is a weak capability signal, not proof of a deployed system or active project.
-- Company-authored pages may prove statements/offers; independent sources are stronger for outcomes and CX.
-- Mark contradictions and stale/completed initiatives explicitly.
-- No exact financial, ownership, partnership, or launch-date claim unless the source excerpt supports it.
+def _normalize_acquisition_payload(payload: dict, jury_name: str, provider: str) -> list:
+    """Normalize one provider's source packets without promoting their trust."""
+    sources = payload.get("sources") if isinstance(payload, dict) else None
+    if not isinstance(sources, list):
+        sources = payload.get("findings", []) if isinstance(payload, dict) else []
+    normalized = []
+    seen = set()
+    for item in sources or []:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or item.get("source_url") or "").strip()
+        if not url.startswith("http"):
+            continue
+        key = _canonical_evidence_url(url)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        quote = str(item.get("quote") or item.get("snippet") or item.get("source_quote") or "").strip()
+        normalized.append({
+            "category": jury_name,
+            "label": str(item.get("label") or item.get("title") or "Fresh evidence candidate")[:180],
+            "title": str(item.get("title") or url)[:300],
+            "url": url,
+            "snippet": quote[:1800],
+            "published_at": item.get("published_at"),
+            "source_type": item.get("source_type") or "web_source",
+            "entity_scope": item.get("entity_scope_candidate") or item.get("entity_scope") or "unclear",
+            "discovery_query": item.get("discovery_query") or "",
+            "freshness": item.get("freshness") or "unknown",
+            "is_recent": (item.get("freshness") in {"fresh", "current"}),
+            "found": True,
+            "sentiment": "neutral",
+            "source_status": "fresh_discovery",
+            "claim_support_pending": True,
+            "acquisition_provider": provider,
+            "forensic_provenance": "fresh_acquisition",
+        })
+    return normalized
+
+
+def _route_seed_findings(findings: list) -> dict:
+    """Route inherited candidates to one nearest jury; never inherit trust."""
+    routed = {jury: [] for jury in FORENSIC_JURIES}
+    for item in findings or []:
+        if not isinstance(item, dict):
+            continue
+        jury = _finding_jury(item)
+        if not jury:
+            jury = "STRATEGIC JURY (Business Model, Procurement & Customer Experience)"
+        candidate = dict(item)
+        candidate["category"] = jury
+        candidate["claim_support_pending"] = True
+        candidate["claim_support_status"] = "pending_jury_verification"
+        candidate["generation_eligible"] = False
+        candidate["analysis_verified"] = False
+        candidate["allowed_as_fact"] = False
+        candidate["buying_evidence_eligible"] = False
+        candidate["promotion_status"] = "candidate_revalidation_pending"
+        candidate["forensic_provenance"] = "seed_candidate"
+        routed[jury].append(candidate)
+    return routed
+
+
+def _build_jury_analysis_prompt(search_name: str, jury_name: str, packets: list) -> str:
+    compact = []
+    for item in packets[:18]:
+        compact.append({
+            "url": item.get("url"),
+            "title": item.get("title"),
+            "quote_or_content": str(item.get("snippet") or item.get("cached_excerpt") or "")[:1800],
+            "published_at": item.get("published_at"),
+            "source_type": item.get("source_type"),
+            "entity_scope_candidate": item.get("entity_scope"),
+            "provenance": item.get("forensic_provenance") or item.get("source_database"),
+            "url_revalidated": item.get("seed_url_verified") or item.get("url_verified"),
+        })
+    return f"""Act as {jury_name} for the forensic review of \"{search_name}\".
+Do NOT browse the web. Judge only the supplied source packets.
+
+For every promoted finding, verify from the supplied excerpt/content:
+1. target entity and legal/group/subsidiary scope,
+2. recency and whether an initiative is current, completed, or contradicted,
+3. exact claim support rather than title similarity,
+4. source authority and promotional limitations.
+
+Seeded material is candidate evidence, never inherited truth. Reject wrong-entity, generic,
+unsupported, stale, soft-404, or merely adjacent packets. Hiring is a weak signal, not deployment proof.
+
+SOURCE PACKETS:
+{json.dumps(compact, ensure_ascii=False)}
 
 Return ONLY valid JSON:
 {{
+  "jury": {json.dumps(jury_name)},
   "findings": [
-    {{"category": "one exact jury name above", "label": "brief claim", "found": true,
-      "sentiment": "positive|neutral|negative", "snippet": "source-supported excerpt", "title": "source title",
-      "url": "https://...", "is_recent": true, "source_type": "type", "entity_scope": "company|group|subsidiary|context"}}
+    {{"category": {json.dumps(jury_name)}, "label": "supported finding", "found": true,
+      "sentiment": "positive|neutral|negative", "snippet": "supporting quote", "title": "source title",
+      "url": "https://...", "is_recent": true, "source_type": "type",
+      "entity_scope": "company|group|subsidiary|context", "source_verdict": "accepted",
+      "confidence": 0}}
   ],
-  "reality_score_adjustment": 0,
+  "rejected_evidence": [{{"url": "https://...", "reason": "specific rejection reason"}}],
+  "contradictions": ["supported contradiction"],
+  "missing_coverage": ["specific evidence gap"],
   "confidence_score": 0,
-  "washing_flag": false,
-  "washing_type": null
+  "reality_score_adjustment": 0
 }}
 """
 
@@ -2099,8 +2209,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
     is_rescan = bool(previous_context and previous_context.get("previous_reality") is not None)
     company_evidence_candidates = (previous_context or {}).get("company_evidence_db_candidates", []) if isinstance(previous_context, dict) else []
-    # The two mandatory discovery batches replace the legacy confidence-driven
-    # full-search loop. Coverage changes search depth, never whether a jury runs.
+    # Parallel jury acquisition replaces the legacy confidence-driven full-search
+    # loop. Coverage affects diagnostics, never whether a jury lane exists.
     max_research_loops = 0
 
     def _phase_remaining(buffer: int = 0) -> int:
@@ -2131,10 +2241,14 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             return "STRATEGIC JURY (Business Model, Procurement & Customer Experience)"
         if any(k in token for k in ["career", "job", "hiring", "people", "culture"]):
             return "CULTURAL JURY (Talent & Psychological Safety)"
-        if any(k in token for k in ["technology", "service", "cloud", "ai", "data", "cyber", "erp"]):
-            return "AI & DATA JURY (Future Readiness)"
-        if any(k in token for k in ["procurement", "contract", "tender", "reference", "case"]):
+        if any(k in token for k in ["service", "delivery", "reference", "case study", "customer story"]):
             return "SERVICE PORTFOLIO JURY (Delivery Reality)"
+        if any(k in token for k in ["procurement", "contract", "tender"]):
+            return "STRATEGIC JURY (Business Model, Procurement & Customer Experience)"
+        if any(k in token for k in ["technology", "cloud", "ai", "data", "cyber", "erp"]):
+            return "AI & DATA JURY (Future Readiness)"
+        if any(k in token for k in ["architecture", "engineering", "developer", "api", "tech stack"]):
+            return "ARCHITECTURAL JURY (Engineering Reality)"
         return "Company Evidence DB / Historical Evidence"
 
     def _is_previous_seedable(source):
@@ -2205,7 +2319,33 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 str(candidate.get("fetched_at") or candidate.get("last_verified_at") or ""),
             )
 
-        ranked_candidates = sorted(company_evidence_candidates, key=_candidate_rank, reverse=True)
+        def _company_seed_allowed(candidate):
+            if not isinstance(candidate, dict):
+                return False
+            status_token = " ".join(str(candidate.get(key) or "") for key in (
+                "promotion_status", "source_audit_status", "entity_match_status",
+                "verification_status", "page_status", "source_category", "source_type",
+            )).lower()
+            if candidate.get("wrong_entity_true") or candidate.get("entity_match_status") == "wrong":
+                return False
+            if any(token in status_token for token in (
+                "blocked", "excluded", "soft_404", "page_not_found", "source_dead",
+                "stakeholder_candidate", "stakeholder_only", "sales_only", "context_only",
+            )):
+                return False
+            if candidate.get("stale") is True or candidate.get("freshness_status") == "stale":
+                return False
+            return bool(candidate.get("url") or candidate.get("source_url") or _seed_excerpt(
+                candidate.get("cached_excerpt") or candidate.get("source_quote")
+                or candidate.get("snippet") or candidate.get("text_excerpt")
+            ))
+
+        eligible_company_candidates = [
+            candidate for candidate in company_evidence_candidates
+            if _company_seed_allowed(candidate)
+        ]
+        skipped_company_candidates = len(company_evidence_candidates) - len(eligible_company_candidates)
+        ranked_candidates = sorted(eligible_company_candidates, key=_candidate_rank, reverse=True)
         for idx, candidate in enumerate(ranked_candidates[:16], start=1):
             url = candidate.get("url") or candidate.get("source_url") or ""
             excerpt = _seed_excerpt(
@@ -2307,6 +2447,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         print(
             f"   🧭 [Forensic Seed] Baseline ready ({reason}): {company_seed_count} Company Evidence DB, "
             f"{historical_seed_count} historical, {coverage['verified_urls']} URL revalidated; "
+            f"{skipped_company_candidates} unsafe/inapplicable candidates skipped; "
             f"coverage {coverage['score']}/100 across {len(coverage['jury_coverage'])}/5 juries."
         )
         return {
@@ -2500,291 +2641,227 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             return None
 
     def execute_with_anthropic(active_prompt):
-        """
-        BOUNDED FALLBACK / CHALLENGER: Two-pass pipeline using Sonnet 4.6 + Web Search.
-
-        Pass 1 (Search): Sonnet searches the web and reports findings freely.
-                         Format requirements are relaxed so the model can focus
-                         on evidence quality rather than JSON syntax.
-        Pass 2 (Structure): A fast Sonnet call converts the free-form analysis
-                           into the expected JSON schema. Focused on one task,
-                           this rarely fails.
-
-        Fast path: If Pass 1 happens to return valid JSON, Pass 2 is skipped.
-        """
-        # Full Sonnet web-search retries are intentionally disabled. The two
-        # GPT discovery batches own the shared search budget; Sonnet is kept
-        # only in dedicated JSON-repair helpers where a bounded repair is safe.
-        print("   ⏭️ [Forensic Scan] Full Sonnet web-search retry disabled after batched discovery")
+        """Legacy entry point retained for callers; web discovery is jury-lane only."""
+        print("   ⏭️ [Forensic Scan] Full Sonnet web discovery disabled; Sonnet is jury-analysis fallback only")
         return None
 
-        # Elapsed time guard — leave buffer for URL validation + response
-        elapsed_total = time.time() - _fn_start
-        if elapsed_total > _guard_anthropic:
-            print(f"   ⏰ [Forensic Scan] Skipping Sonnet + Web Search — elapsed {int(elapsed_total)}s exceeds {_guard_anthropic}s guard")
-            return None
-        local_timeout = min(sonnet_challenger_timeout, _phase_remaining(buffer=40))
-        if local_timeout < 25:
-            print(f"   ⏭️ [Forensic Scan] Skipping Sonnet + Web Search — only {local_timeout}s available before phase guard")
-            return None
+    # --- PHASE 1: SEEDED TRIAGE + FIVE PARALLEL JURY ACQUISITIONS ---
+    baseline = _build_seeded_forensic_fallback("pre_acquisition_baseline")
+    coverage = baseline.get("_baseline_coverage") or _compute_forensic_coverage([], domain_hint)
+    routed_seeds = _route_seed_findings(baseline.get("findings", []))
+    acquisition_ceiling = min(
+        FORENSIC_ACQUISITION_CEILING_SECONDS,
+        _phase_remaining(buffer=FORENSIC_JURY_ANALYSIS_CEILING_SECONDS + FORENSIC_POSTPROCESS_RESERVE_SECONDS),
+    )
+    acquisition_started = time.time()
+    acquisition_deadline = acquisition_started + acquisition_ceiling
+    print(
+        f"   🔍 [Forensic Acquisition] Five parallel jury lanes for {company_name}: "
+        f"{acquisition_ceiling}s group ceiling; Gemini primary, GPT-5.5 web fallback; "
+        f"baseline {coverage['score']}/100 across {len(coverage['jury_coverage'])}/5 juries."
+    )
 
-        anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if "=" in anthropic_key:
-            try: anthropic_key = anthropic_key.split("=", 1)[1]
-            except: pass
-        anthropic_key = anthropic_key.strip().strip('"').strip("'")
-        if not anthropic_key:
-            print("   [Scanner 2] No ANTHROPIC_API_KEY for Sonnet + Web Search.")
+    def _parse_provider_payload(text):
+        payload = extract_json_from_text(text or "")
+        if not payload:
             return None
         try:
-            print(f"   🔄 [Forensic Scan] Attempting bounded claude-sonnet-4-6 + Web Search challenger for {company_name}...")
-            start = time.time()
-            claude_client = anthropic.Anthropic(api_key=anthropic_key)
-
-            # Sonnet is no longer the default evidence scout. Keep this path
-            # bounded so it can challenge low-coverage GPT results without
-            # consuming the synthesis budget.
-            search_budget = 5 if is_rescan else 7
-            if strong_company_evidence_mode:
-                search_budget = min(search_budget, 4)
-            if is_rescan:
-                print(f"   📊 [Forensic Scan] RESCAN: Sonnet challenger search budget = {search_budget} (verification + weak-jury challenge)")
-            else:
-                print(f"   📊 [Forensic Scan] FIRST SCAN: Sonnet challenger search budget = {search_budget} (combine targets across juries)")
-
-            # --- PASS 1: Web Search (format-relaxed) ---
-            # Replace strict JSON requirement with flexible format instruction.
-            # The model still sees the data schema as a reference, but is free to
-            # report in any clear structure — accuracy over format.
-            sonnet_prompt = re.sub(
-                r'RETURN STRICT JSON[^:]*:',
-                'REPORT YOUR FINDINGS (any clear structured format — JSON, markdown, or text):',
-                active_prompt
-            )
-            # Prepend wrap-up guard: tell Sonnet to stop searching 2 searches before the hard
-            # API-level max_uses limit, preventing pause_turn from cutting off mid-analysis.
-            _wrap_budget = search_budget - 2
-            sonnet_prompt = (
-                f"MANDATORY STOP RULE: After your {_wrap_budget}th web search, STOP SEARCHING "
-                f"immediately and write your final output — even if some juries are incomplete. "
-                f"Incomplete coverage is acceptable. An incomplete response that cuts off is not.\n\n"
-            ) + sonnet_prompt
-
-            # Enforce a short per-call timeout via thread pool. Heavy thinking
-            # belongs in synthesis; this stage is only evidence acquisition.
-            def _call_sonnet_web():
-                return claude_client.messages.create(
-                    model="claude-sonnet-4-6",
-                    max_tokens=16000,
-                    thinking={"type": "adaptive"},
-                    extra_body={"output_config": {"effort": "low" if is_rescan else "medium"}},
-                    tools=[{
-                        "type": "web_search_20250305",
-                        "name": "web_search",
-                        "max_uses": search_budget
-                    }],
-                    messages=[{"role": "user", "content": sonnet_prompt}]
-                )
-
-            call_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-            future = call_pool.submit(_call_sonnet_web)
-            try:
-                response = future.result(timeout=local_timeout)
-            except concurrent.futures.TimeoutError:
-                future.cancel()
-                call_pool.shutdown(wait=False)
-                elapsed = int((time.time() - start) * 1000)
-                print(f"   ⏰ [Forensic Scan] claude-sonnet-4-6 + Web Search timed out after {local_timeout}s ({elapsed}ms). Keeping GPT scout result if available.")
-                return None
-            call_pool.shutdown(wait=False)
-
-            pass1_elapsed = int((time.time() - start) * 1000)
-            print(f"   [Forensic Scan] Sonnet stop_reason: {response.stop_reason} | content_blocks: {len(response.content)} ({pass1_elapsed}ms)")
-
-            # Note: pause_turn can occur when the model hasn't finished all web searches,
-            # but continuing the conversation requires complex message threading with
-            # tool_result blocks in the correct roles. We extract whatever is available.
-            if response.stop_reason == "pause_turn":
-                print(f"   ⚠️ [Forensic Scan] Sonnet pause_turn — search budget exhausted mid-analysis. Extracting partial results.")
-            elif response.stop_reason == "max_tokens":
-                print(f"   ⚠️ [Forensic Scan] Sonnet max_tokens — response truncated. Attempting extraction from partial output.")
-
-            # Extract text AND web search citations from response content blocks
-            text_parts = []
-            web_citations = []  # URLs from web search results & inline citations
-            for block in response.content:
-                if hasattr(block, 'text'):
-                    text_parts.append(block.text)
-                    # Harvest inline citations from text blocks
-                    if hasattr(block, 'citations') and block.citations:
-                        for cite in block.citations:
-                            if hasattr(cite, 'url') and cite.url:
-                                web_citations.append({
-                                    "url": cite.url,
-                                    "title": getattr(cite, 'title', ''),
-                                })
-                # Harvest URLs from raw web search result blocks
-                if getattr(block, 'type', None) == 'web_search_tool_result':
-                    content = getattr(block, 'content', None)
-                    if isinstance(content, list):
-                        for sr in content:
-                            if getattr(sr, 'type', None) == 'web_search_result' and hasattr(sr, 'url'):
-                                web_citations.append({
-                                    "url": sr.url,
-                                    "title": getattr(sr, 'title', ''),
-                                })
-            text_content = "\n".join(text_parts)
-
-            # Deduplicate citations by URL
-            seen_urls = set()
-            unique_citations = []
-            for c in web_citations:
-                if c["url"] not in seen_urls:
-                    seen_urls.add(c["url"])
-                    unique_citations.append(c)
-            if unique_citations:
-                print(f"   🔗 [Web Search] Harvested {len(unique_citations)} citation URLs from Sonnet web search")
-
-            # --- FAST PATH: If Pass 1 returned valid JSON, skip Pass 2 ---
-            json_payload = extract_json_from_text(text_content)
-            if json_payload:
-                try:
-                    result = json.loads(json_payload, strict=False)
-                    # Enrich findings with web search citations:
-                    # 1. Fill in missing URLs on findings that have no url
-                    # 2. Add remaining citations as supplementary evidence
-                    if unique_citations and "findings" in result:
-                        citation_pool = list(unique_citations)
-                        for finding in result["findings"]:
-                            if finding.get("found") and not finding.get("url") and citation_pool:
-                                donor = citation_pool.pop(0)
-                                finding["url"] = donor["url"]
-                                if not finding.get("title"):
-                                    finding["title"] = donor["title"]
-                    result["_web_grounded"] = True
-                    result["_citation_count"] = len(unique_citations)
-                    elapsed = int((time.time() - start) * 1000)
-                    print(f"   ✅ [Forensic Scan] Pass 1 returned valid JSON — skipping Pass 2 ({elapsed}ms, {len(unique_citations)} citations)")
-                    return result
-                except json.JSONDecodeError as je:
-                    print(f"   ⚠️ [Forensic Scan] Pass 1 JSON parse failed: {je} — proceeding to Pass 2")
-
-            # --- PASS 2: Structure free-form response into JSON ---
-            if text_content and len(text_content) > 100:
-                print(f"   🔄 [Two-Pass] Pass 1 complete ({pass1_elapsed}ms, {len(text_content)} chars). Structuring into JSON (Pass 2)...")
-                structured = _repair_json_with_sonnet(
-                    text_content, company_name,
-                    is_structuring=True, citations=unique_citations
-                )
-                if structured:
-                    # Enrich with citation metadata
-                    if unique_citations and "findings" in structured:
-                        citation_pool = list(unique_citations)
-                        for finding in structured["findings"]:
-                            if finding.get("found") and not finding.get("url") and citation_pool:
-                                donor = citation_pool.pop(0)
-                                finding["url"] = donor["url"]
-                                if not finding.get("title"):
-                                    finding["title"] = donor["title"]
-                    structured["_web_grounded"] = True
-                    structured["_citation_count"] = len(unique_citations)
-                    total_elapsed = int((time.time() - start) * 1000)
-                    print(f"   ✅ [Two-Pass] Pass 2 structured successfully ({total_elapsed}ms total, {len(unique_citations)} citations)")
-                    return structured
-                else:
-                    print(f"   ⚠️ [Two-Pass] Pass 2 structuring failed — could not convert to JSON")
-                    return None
-            else:
-                elapsed = int((time.time() - start) * 1000)
-                print(f"   ⚠️ [Forensic Scan] claude-sonnet-4-6 + Web Search returned no usable text ({elapsed}ms)")
-                return None
-        except Exception as e:
-            elapsed = int((time.time() - start) * 1000)
-            print(f"   ❌ [Forensic Scan] claude-sonnet-4-6 + Web Search failed in {elapsed}ms: {e}")
+            return json.loads(payload, strict=False)
+        except json.JSONDecodeError:
             return None
 
-    # --- SEEDED BASELINE + TWO MANDATORY FRESH-DISCOVERY BATCHES ---
-    baseline = _build_seeded_forensic_fallback("pre_search_baseline")
-    coverage = baseline.get("_baseline_coverage") or _compute_forensic_coverage([], domain_hint)
-    discovery_ceiling = min(
-        FORENSIC_DISCOVERY_CEILING_SECONDS,
+    def _acquire_one_jury(jury_name):
+        lane_started = time.time()
+        prompt = _build_jury_acquisition_prompt(
+            search_name, domain_hint, jury_name, entity_context_block, search_alias_block
+        )
+        provider = "gemini-3.1-pro-preview"
+        payload = None
+        status = "provider_unavailable"
+        if gemini_api_key():
+            remaining = max(1, int(acquisition_deadline - time.time()))
+            native_timeout = min(FORENSIC_GEMINI_TIMEOUT_SECONDS, remaining)
+            try:
+                text = call_gemini_forensic_text(prompt, timeout=native_timeout)
+                payload = _parse_provider_payload(text)
+                status = "completed" if payload else "invalid_json"
+            except Exception as error:
+                status = "provider_timeout" if "timeout" in type(error).__name__.lower() or "timeout" in str(error).lower() else "provider_error"
+                print(f"   ⚠️ [Forensic Acquisition] {jury_name} Gemini {status}: {type(error).__name__}: {error}")
+        if not payload:
+            remaining = max(0, int(acquisition_deadline - time.time()))
+            if remaining >= 20:
+                provider = "gpt-5.5-web-fallback"
+                payload = execute_with_openai_web(
+                    prompt,
+                    timeout_cap=min(55, remaining),
+                    purpose=f"jury fallback: {jury_name}",
+                    search_context_size="low",
+                    allow_repair=False,
+                )
+                status = "fallback_completed" if payload else "fallback_failed"
+        sources = _normalize_acquisition_payload(payload or {}, jury_name, provider)
+        print(
+            f"   {'✅' if sources else '⚠️'} [Forensic Acquisition] {jury_name}: {len(sources)} source packet(s), "
+            f"provider={provider}, status={status}, elapsed={int(time.time() - lane_started)}s."
+        )
+        return {"jury": jury_name, "provider": provider, "status": status, "sources": sources}
+
+    acquisition_results = []
+    if acquisition_ceiling >= 20:
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=5)
+        futures = {pool.submit(_acquire_one_jury, jury): jury for jury in FORENSIC_JURIES}
+        done, pending = concurrent.futures.wait(futures, timeout=acquisition_ceiling)
+        for future in done:
+            jury = futures[future]
+            try:
+                acquisition_results.append(future.result())
+            except Exception as error:
+                acquisition_results.append({"jury": jury, "provider": None, "status": "lane_error", "sources": [], "error": repr(error)})
+        for future in pending:
+            future.cancel()
+            acquisition_results.append({"jury": futures[future], "provider": None, "status": "group_timeout", "sources": []})
+        pool.shutdown(wait=False)
+    else:
+        acquisition_results = [
+            {"jury": jury, "provider": None, "status": "budget_skipped", "sources": []}
+            for jury in FORENSIC_JURIES
+        ]
+    acquisition_by_jury = {item["jury"]: item for item in acquisition_results}
+
+    # --- PHASE 2: FIVE PARALLEL NO-WEB JURY ANALYSES ---
+    analysis_ceiling = min(
+        FORENSIC_JURY_ANALYSIS_CEILING_SECONDS,
         _phase_remaining(buffer=FORENSIC_POSTPROCESS_RESERVE_SECONDS),
     )
-    discovery_started = time.time()
-    discovery_deadline = discovery_started + discovery_ceiling
-    batch_results = []
-    print(
-        f"   🔍 [Forensic Scan] Two-batch discovery for {company_name}: shared ceiling {discovery_ceiling}s + "
-        f"protected {FORENSIC_POSTPROCESS_RESERVE_SECONDS}s post-processing; "
-        f"baseline coverage {coverage['score']}/100, juries {len(coverage['jury_coverage'])}/5."
-    )
+    analysis_started = time.time()
+    analysis_deadline = analysis_started + analysis_ceiling
+    print(f"   ⚖️ [Forensic Analysis] Five parallel no-web jury calls; group ceiling {analysis_ceiling}s.")
 
-    for batch_name, batch_cap in (("batch_1", 75), ("batch_2", 75)):
-        remaining_shared = int(discovery_deadline - time.time())
-        timeout_cap = min(batch_cap, max(0, remaining_shared))
-        scope = ", ".join(FORENSIC_DISCOVERY_BATCHES[batch_name])
-        if timeout_cap < 20:
-            print(
-                f"   ⏰ [Forensic Batch] {batch_name} could not start: {remaining_shared}s search budget remains. "
-                "The separate post-processing reserve remains protected and the baseline stays intact."
+    def _analyze_one_jury(jury_name):
+        fresh = acquisition_by_jury.get(jury_name, {}).get("sources", [])
+        seeds = routed_seeds.get(jury_name, [])
+        packets = fresh + seeds
+        if not packets:
+            return {"jury": jury_name, "provider": None, "status": "no_evidence", "data": None}
+        prompt = _build_jury_analysis_prompt(search_name, jury_name, packets)
+        lane_started = time.time()
+        payload = None
+        provider = "gpt-5.5"
+        remaining = max(1, int(analysis_deadline - time.time()))
+        try:
+            text = call_openai_text(
+                prompt, model="gpt-5.5", max_output_tokens=6500,
+                timeout=min(70, remaining), web_search=False,
             )
-            batch_results.append({"name": batch_name, "status": "batch_timeout", "data": None})
-            continue
-        batch_prompt = _build_forensic_discovery_prompt(
-            search_name=search_name,
-            domain_hint=domain_hint,
-            batch_name=batch_name,
-            coverage=coverage,
-            seed_findings=baseline.get("findings", []),
-            intent_score=intent_score,
-            entity_context=entity_context_block,
-            search_aliases=search_alias_block,
-            subsidiary_context=subsidiary_block,
-            pre_verified_context=pre_verified_block,
-        )
+            payload = _parse_provider_payload(text)
+        except Exception as error:
+            print(f"   ⚠️ [Forensic Analysis] {jury_name} GPT failed: {type(error).__name__}: {error}")
+        if not payload:
+            remaining = max(0, int(analysis_deadline - time.time()))
+            if remaining >= 15:
+                provider = "claude-sonnet-4-6"
+                try:
+                    text = call_anthropic_text(
+                        prompt, model="claude-sonnet-4-6", max_tokens=6500,
+                        timeout=min(35, remaining), web_search=False,
+                    )
+                    payload = _parse_provider_payload(text)
+                except Exception as error:
+                    print(f"   ⚠️ [Forensic Analysis] {jury_name} Sonnet failed: {type(error).__name__}: {error}")
+        accepted = len((payload or {}).get("findings", []) or [])
         print(
-            f"   🔎 [Forensic Batch] {batch_name} starting ({timeout_cap}s): {scope}; "
-            f"depth={'narrow' if coverage['score'] >= 65 else 'deep'}."
+            f"   {'✅' if payload else '⚠️'} [Forensic Analysis] {jury_name}: {accepted} accepted finding(s), "
+            f"provider={provider}, elapsed={int(time.time() - lane_started)}s."
         )
-        batch_started = time.time()
-        batch_data = execute_with_openai_web(
-            batch_prompt,
-            timeout_cap=timeout_cap,
-            purpose=batch_name,
-            search_context_size="low" if coverage["score"] >= 65 else "medium",
-            allow_repair=False,
-        )
-        elapsed_batch = int(time.time() - batch_started)
-        status = "completed" if batch_data else "batch_timeout"
-        returned = len((batch_data or {}).get("findings", []) or [])
-        print(
-            f"   {'✅' if batch_data else '⚠️'} [Forensic Batch] {batch_name} {status} in {elapsed_batch}s; "
-            f"{returned} finding(s) returned."
-        )
-        batch_results.append({"name": batch_name, "status": status, "data": batch_data})
+        return {
+            "jury": jury_name,
+            "provider": provider,
+            "status": "completed" if payload else "analysis_failed",
+            "data": payload,
+            "packet_urls": [item.get("url") for item in packets if item.get("url")],
+        }
 
+    jury_results = []
+    if analysis_ceiling >= 15:
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=5)
+        futures = {pool.submit(_analyze_one_jury, jury): jury for jury in FORENSIC_JURIES}
+        done, pending = concurrent.futures.wait(futures, timeout=analysis_ceiling)
+        for future in done:
+            jury = futures[future]
+            try:
+                jury_results.append(future.result())
+            except Exception as error:
+                jury_results.append({"jury": jury, "provider": None, "status": "lane_error", "data": None, "error": repr(error)})
+        for future in pending:
+            future.cancel()
+            jury_results.append({"jury": futures[future], "provider": None, "status": "group_timeout", "data": None})
+        pool.shutdown(wait=False)
+    else:
+        jury_results = [
+            {"jury": jury, "provider": None, "status": "budget_skipped", "data": None}
+            for jury in FORENSIC_JURIES
+        ]
+
+    # --- PHASE 3: DETERMINISTIC MERGE, NORMALIZATION, AND DIAGNOSTICS ---
     postprocess_started = time.time()
     postprocess_deadline = postprocess_started + FORENSIC_POSTPROCESS_RESERVE_SECONDS
-    data = _merge_forensic_batch_results(baseline, batch_results)
-    data["_search_provider"] = "seeded-baseline+two-batch-openai-web"
+    data = _merge_forensic_jury_results(baseline, jury_results, routed_seeds)
+    data["_search_provider"] = "parallel-gemini-acquisition+parallel-jury-analysis"
+    data["forensic_acquisition_status"] = [
+        {
+            "jury": item.get("jury"),
+            "provider": item.get("provider"),
+            "status": item.get("status"),
+            "sources": len(item.get("sources", [])),
+        }
+        for item in acquisition_results
+    ]
+    fresh_url_provenance = {
+        _canonical_evidence_url(source.get("url")): lane.get("provider")
+        for lane in acquisition_results
+        for source in lane.get("sources", [])
+        if source.get("url")
+    }
+    for finding in data.get("findings", []):
+        provider = fresh_url_provenance.get(_canonical_evidence_url(finding.get("url")))
+        if provider:
+            finding["source_status"] = "fresh_discovery"
+            finding["acquisition_provider"] = provider
+            finding["forensic_provenance"] = "fresh_acquisition_jury_accepted"
+    fresh_packets = sum(len(item.get("sources", [])) for item in acquisition_results)
+    completed_juries = len([item for item in jury_results if item.get("data")])
+    accepted_fresh = len([
+        finding for finding in data.get("findings", [])
+        if finding.get("source_status") == "fresh_discovery"
+    ])
     final_coverage = _compute_forensic_coverage(data.get("findings", []), domain_hint)
     data["_final_forensic_coverage"] = final_coverage
     jury_counts = {
         jury: len([finding for finding in data.get("findings", []) if _finding_jury(finding) == jury])
-        for jury in JURY_SOURCE_TARGETS
+        for jury in FORENSIC_JURIES
     }
     missing_juries = [jury for jury, count in jury_counts.items() if count == 0]
-    fresh_added = len([f for f in data.get("findings", []) if f.get("source_status") == "fresh_discovery"])
-    reconfirmed = len([f for f in data.get("findings", []) if f.get("source_status") == "seed_revalidated"])
+    if completed_juries == 5 and accepted_fresh and not missing_juries:
+        run_mode = "full"
+    elif completed_juries and accepted_fresh:
+        run_mode = "partially_fresh"
+    elif data.get("findings"):
+        run_mode = "seeded_only"
+    else:
+        run_mode = "degraded"
+    data["forensic_run_mode"] = run_mode
     print(
-        f"   📊 [Forensic Merge] {len(data.get('findings', []))} findings; {fresh_added} fresh, "
-        f"{reconfirmed} seeded URL-revalidated; coverage {final_coverage['score']}/100."
+        f"   📊 [Forensic Merge] mode={run_mode}; {len(data.get('findings', []))} judged/preserved findings; "
+        f"{fresh_packets} fresh packets acquired, {accepted_fresh} accepted; "
+        f"coverage {final_coverage['score']}/100."
     )
     print(f"   📚 [Forensic Juries] {jury_counts}")
     if missing_juries:
-        print(f"   ⚠️ [Forensic Juries] Missing coverage after discovery: {missing_juries}")
+        print(f"   ⚠️ [Forensic Juries] Missing judged coverage: {missing_juries}")
     data["_forensic_timing"] = {
-        "discovery_seconds": round(time.time() - discovery_started, 2),
+        "acquisition_seconds": round(time.time() - acquisition_started, 2),
+        "analysis_seconds": round(time.time() - analysis_started, 2),
         "postprocess_reserve_seconds": FORENSIC_POSTPROCESS_RESERVE_SECONDS,
         "merge_normalization_seconds": round(time.time() - postprocess_started, 2),
     }
@@ -2804,7 +2881,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             print(f"   📊 [Confidence Floor] Model returned {model_confidence}/100 but {evidence_with_urls} evidence links found. Adjusted to {floor}/100.")
 
     # The former confidence-driven re-search loop is intentionally disabled.
-    # Fresh discovery now always occurs in the two jury batches above; starting
+    # Fresh discovery now occurs in the five parallel jury lanes above; starting
     # another web-search cycle here would consume the protected normalization
     # and diagnostics slot.
     if data and max_research_loops > 0:
@@ -2824,13 +2901,6 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 f"   [Re-Search] Skipped: using seeded forensic fallback "
                 f"({initial_evidence_count} revalidation-pending links). Preserving phase budget for synthesis."
             )
-        if strong_company_evidence_mode and initial_evidence_count >= 2 and initial_confidence >= 35:
-            needs_research = False
-            print(
-                f"   [Re-Search] Skipped: Company Evidence DB has strong cached source coverage and "
-                f"GPT returned usable evidence ({initial_confidence}/100, {initial_evidence_count} links)."
-            )
-
         if needs_research:
             print(f"   [Re-Search] Low confidence detected: {initial_confidence}/100 with {initial_evidence_count} evidence links.")
 
@@ -3022,7 +3092,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         final_score = max(0, min(100, base_score + adjustment))
 
         # Large deltas are recorded for synthesis review. Starting another web
-        # search here would violate the two-batch discovery ceiling.
+        # search here would violate the bounded acquisition/analysis ceilings.
         if previous_context and previous_context.get("previous_reality") is not None and not data.get("_seeded_forensic_fallback"):
             prev_reality = previous_context["previous_reality"]
             delta = final_score - prev_reality

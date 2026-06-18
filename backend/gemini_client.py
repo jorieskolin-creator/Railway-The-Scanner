@@ -1,4 +1,4 @@
-"""Narrow Gemini helper used only by Foresight KB harvesting."""
+"""Narrow grounded Gemini helpers used by evidence-acquisition workflows."""
 
 from __future__ import annotations
 
@@ -9,6 +9,9 @@ from llm_clients import clean_env_var
 
 GEMINI_HARVEST_MODEL = (
     os.environ.get("GEMINI_HARVEST_MODEL") or "gemini-3.1-pro-preview"
+).strip().strip('"').strip("'")
+GEMINI_FORENSIC_MODEL = (
+    os.environ.get("GEMINI_FORENSIC_MODEL") or "gemini-3.1-pro-preview"
 ).strip().strip('"').strip("'")
 
 
@@ -45,3 +48,19 @@ def call_gemini_harvest_text(
         ),
     )
     return str(getattr(response, "text", "") or "").strip()
+
+
+def call_gemini_forensic_text(
+    prompt: str,
+    *,
+    model: str = GEMINI_FORENSIC_MODEL,
+    timeout: int = 105,
+    max_output_tokens: int = 6000,
+) -> str:
+    """Run one jury-scoped grounded acquisition call."""
+    return call_gemini_harvest_text(
+        prompt,
+        model=model,
+        timeout=timeout,
+        max_output_tokens=max_output_tokens,
+    )
