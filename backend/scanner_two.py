@@ -190,14 +190,152 @@ JURY_SOURCE_TARGETS = {
 }
 
 
-def _build_jury_source_registry_block(search_name: str, domain_hint: str) -> str:
+FORENSIC_DISCOVERY_BATCHES = {
+    "batch_1": (
+        "ARCHITECTURAL JURY (Engineering Reality)",
+        "AI & DATA JURY (Future Readiness)",
+        "SERVICE PORTFOLIO JURY (Delivery Reality)",
+    ),
+    "batch_2": (
+        "STRATEGIC JURY (Business Model, Procurement & Customer Experience)",
+        "CULTURAL JURY (Talent & Psychological Safety)",
+    ),
+}
+
+FORENSIC_DISCOVERY_CEILING_SECONDS = 150
+FORENSIC_POSTPROCESS_RESERVE_SECONDS = 30
+
+
+def _canonical_evidence_url(url: str) -> str:
+    if not url:
+        return ""
+    try:
+        parsed = urlparse(str(url).strip())
+        host = parsed.netloc.lower().removeprefix("www.")
+        path = re.sub(r"/+", "/", parsed.path or "/").rstrip("/") or "/"
+        return f"{host}{path}".lower()
+    except Exception:
+        return str(url).strip().lower().rstrip("/")
+
+
+def _finding_jury(finding: dict) -> str:
+    category = str((finding or {}).get("category") or "")
+    if category in JURY_SOURCE_TARGETS:
+        return category
+    token = " ".join(
+        str((finding or {}).get(key) or "")
+        for key in ("category", "source_type", "source_category", "label", "title")
+    ).lower()
+    if any(word in token for word in ("architecture", "engineering", "developer", "api", "job ad", "tech stack")):
+        return "ARCHITECTURAL JURY (Engineering Reality)"
+    if any(word in token for word in ("ai", "data", "cloud", "cyber", "erp", "technology", "patent")):
+        return "AI & DATA JURY (Future Readiness)"
+    if any(word in token for word in ("service", "reference", "customer story", "case study", "delivery")):
+        return "SERVICE PORTFOLIO JURY (Delivery Reality)"
+    if any(word in token for word in ("culture", "career", "hiring", "employee", "workplace", "sustainability")):
+        return "CULTURAL JURY (Talent & Psychological Safety)"
+    if any(word in token for word in ("strategy", "financial", "annual", "investor", "procurement", "tender", "customer")):
+        return "STRATEGIC JURY (Business Model, Procurement & Customer Experience)"
+    return ""
+
+
+def _compute_forensic_coverage(findings: list, official_domain: str = "") -> dict:
+    findings = [item for item in (findings or []) if isinstance(item, dict)]
+    linked = [item for item in findings if item.get("url")]
+    readable = [
+        item for item in linked
+        if item.get("cached_excerpt") or item.get("snippet") or item.get("content_verified")
+    ]
+    verified = [
+        item for item in linked
+        if item.get("seed_url_verified") or item.get("url_verified") or item.get("verified")
+    ]
+    recent = [item for item in linked if item.get("is_recent")]
+    juries = sorted({jury for jury in (_finding_jury(item) for item in linked) if jury})
+    official = 0
+    independent = 0
+    clean_domain = (official_domain or "").lower().removeprefix("www.")
+    for item in linked:
+        host = get_clean_domain(item.get("url") or "").lower()
+        if clean_domain and (host == clean_domain or host.endswith(f".{clean_domain}")):
+            official += 1
+        elif host:
+            independent += 1
+    score = min(25, len(linked) * 4)
+    score += min(20, len(readable) * 4)
+    score += min(20, len(verified) * 4)
+    score += min(20, len(juries) * 4)
+    if official and independent:
+        score += 10
+    elif official or independent:
+        score += 5
+    score += min(5, len(recent))
+    return {
+        "score": min(100, score),
+        "usable_urls": len(linked),
+        "cached_or_readable": len(readable),
+        "verified_urls": len(verified),
+        "jury_coverage": juries,
+        "official_sources": official,
+        "independent_sources": independent,
+    }
+
+
+def _merge_forensic_batch_results(baseline: dict, batch_results: list) -> dict:
+    result = dict(baseline or {})
+    findings = list(result.get("findings") or [])
+    adjustments = []
+    confidences = [result.get("confidence_score", 0) or 0]
+    batch_status = []
+    for batch in batch_results or []:
+        name = batch.get("name", "batch")
+        payload = batch.get("data") if isinstance(batch.get("data"), dict) else None
+        if not payload:
+            batch_status.append({"batch": name, "status": batch.get("status", "batch_timeout"), "added": 0})
+            continue
+        before_urls = {_canonical_evidence_url(item.get("url")) for item in findings if item.get("url")}
+        additions = []
+        for item in payload.get("findings", []) or []:
+            if not isinstance(item, dict):
+                continue
+            normalized = dict(item)
+            normalized["forensic_batch"] = name
+            normalized["source_status"] = "fresh_discovery"
+            normalized["claim_support_pending"] = True
+            additions.append(normalized)
+        findings, _ = _merge_findings(findings, additions)
+        after_urls = {_canonical_evidence_url(item.get("url")) for item in findings if item.get("url")}
+        added = len(after_urls - before_urls)
+        batch_status.append({"batch": name, "status": "completed", "added": added})
+        adjustments.append((payload.get("reality_score_adjustment", 0) or 0, len(FORENSIC_DISCOVERY_BATCHES.get(name, ())) or 1))
+        confidences.append(payload.get("confidence_score", 0) or 0)
+        if payload.get("washing_flag"):
+            result["washing_flag"] = True
+            result["washing_type"] = payload.get("washing_type") or result.get("washing_type")
+    result["findings"] = findings
+    result["key_people"] = []
+    if adjustments:
+        total_weight = sum(weight for _, weight in adjustments)
+        result["reality_score_adjustment"] = round(sum(value * weight for value, weight in adjustments) / total_weight)
+    else:
+        result.setdefault("reality_score_adjustment", 0)
+    result["confidence_score"] = max(confidences) if confidences else 0
+    result["forensic_batch_status"] = batch_status
+    result["_batched_forensic_search"] = True
+    return result
+
+
+def _build_jury_source_registry_block(search_name: str, domain_hint: str, jury_names=None) -> str:
     """Render source targets as a compact acquisition registry for the web-search prompt."""
     lines = [
         "SOURCE TARGET REGISTRY (candidate acquisition only — not automatic evidence):",
         "Search broadly, store more, promote narrowly. A source is allowed for analysis only after URL, content, target-entity, and claim-support verification pass.",
         "Do not increase search count because the registry is larger; combine adjacent targets and prioritize the highest-trust route for each jury.",
     ]
+    selected = set(jury_names or JURY_SOURCE_TARGETS.keys())
     for jury_name, targets in JURY_SOURCE_TARGETS.items():
+        if jury_name not in selected:
+            continue
         lines.append(f"\n    {jury_name}")
         for target in targets:
             query = target["query"].format(search_name=search_name, domain_hint=domain_hint)
@@ -213,6 +351,74 @@ def _build_jury_source_registry_block(search_name: str, domain_hint: str) -> str
                 )
             )
     return "\n".join(lines)
+
+
+def _build_forensic_discovery_prompt(
+    search_name: str,
+    domain_hint: str,
+    batch_name: str,
+    coverage: dict,
+    seed_findings: list,
+    intent_score: int = 0,
+    entity_context: str = "",
+    search_aliases: str = "",
+    subsidiary_context: str = "",
+    pre_verified_context: str = "",
+) -> str:
+    juries = FORENSIC_DISCOVERY_BATCHES[batch_name]
+    seed_lines = []
+    for item in (seed_findings or [])[:12]:
+        seed_lines.append(
+            f'- [{_finding_jury(item) or "unclassified"}] {item.get("title") or item.get("label") or "Source"} | '
+            f'{item.get("url") or "cached-only"} | {str(item.get("snippet") or item.get("cached_excerpt") or "")[:260]}'
+        )
+    depth = "narrow freshness and contradiction search" if coverage.get("score", 0) >= 65 else "deeper fresh discovery"
+    return f"""Perform FORENSIC DISCOVERY {batch_name.upper()} for "{search_name}" (official domain: {domain_hint}).
+Intent score context: {intent_score}/100. Baseline coverage: {coverage.get('score', 0)}/100. Search depth: {depth}.
+
+THIS CALL COVERS ONLY:
+{chr(10).join(f'- {jury}' for jury in juries)}
+
+MANDATORY FRESH-DISCOVERY LANE:
+Search every listed jury for recent developments, changed strategy, investments, current hiring/capability signals,
+technology or operating-model changes, partnerships/service delivery, and contradictions or completed/cancelled initiatives.
+Existing evidence is orientation and revalidation context, not permission to skip fresh discovery.
+Do not search for people, executives, stakeholders, LinkedIn profiles, emails, or contacts. Buying Insight owns stakeholder research.
+
+ENTITY AND SCOPE:
+{entity_context}
+{search_aliases}
+{subsidiary_context}
+
+PRE-VERIFIED CONTEXT (use only within its stated scope):
+{pre_verified_context}
+
+SEEDED BASELINE (do not repeat weak sources merely to fill the result):
+{chr(10).join(seed_lines) if seed_lines else '- No usable seeded sources; discovery must establish the baseline.'}
+
+{_build_jury_source_registry_block(search_name, domain_hint, juries)}
+
+EVIDENCE RULES:
+- Return a finding only with a real URL and source-supported snippet/quote.
+- Verify target entity and distinguish local legal entity, parent/group, subsidiary, customer, supplier, and sector context.
+- Hiring is a weak capability signal, not proof of a deployed system or active project.
+- Company-authored pages may prove statements/offers; independent sources are stronger for outcomes and CX.
+- Mark contradictions and stale/completed initiatives explicitly.
+- No exact financial, ownership, partnership, or launch-date claim unless the source excerpt supports it.
+
+Return ONLY valid JSON:
+{{
+  "findings": [
+    {{"category": "one exact jury name above", "label": "brief claim", "found": true,
+      "sentiment": "positive|neutral|negative", "snippet": "source-supported excerpt", "title": "source title",
+      "url": "https://...", "is_recent": true, "source_type": "type", "entity_scope": "company|group|subsidiary|context"}}
+  ],
+  "reality_score_adjustment": 0,
+  "confidence_score": 0,
+  "washing_flag": false,
+  "washing_type": null
+}}
+"""
 
 
 # --- PRH OPEN DATA PRE-FETCH ---
@@ -1056,9 +1262,6 @@ The expected JSON structure is:
   "findings": [
     {{"category": "Operating Model", "label": "Brief Label", "found": true, "sentiment": "positive", "snippet": "Evidence quote...", "title": "Source Title", "url": "https://...", "is_recent": true}}
   ],
-  "key_people": [
-    {{"name": "First Last (FULL NAME REQUIRED)", "role": "Exact Title", "relevance": "Why relevant to modernization"}}
-  ],
   "reality_score_adjustment": <integer -50 to +50>,
   "confidence_score": <integer 0-100>,
   "washing_flag": <boolean>,
@@ -1135,9 +1338,6 @@ The expected JSON structure is:
 {{
   "findings": [
     {{"category": "Operating Model", "label": "Brief Label", "found": true, "sentiment": "positive", "snippet": "Evidence quote...", "title": "Source Title", "url": "https://...", "is_recent": true}}
-  ],
-  "key_people": [
-    {{"name": "First Last (FULL NAME REQUIRED)", "role": "Exact Title", "relevance": "Why relevant to modernization"}}
   ],
   "reality_score_adjustment": <integer -50 to +50>,
   "confidence_score": <integer 0-100>,
@@ -1602,19 +1802,10 @@ def _build_research_prompt(search_name, domain_hint, weak_juries, loop_number, i
                 "is_recent": boolean (True if < 12 months)
             }}
         ],
-        "key_people": [
-            {{
-                "name": "First Name Last Name (FULL NAME REQUIRED — do NOT include if last name unknown)",
-                "role": "Exact Title",
-                "relevance": "Why relevant to modernization?"
-            }}
-        ],
         "new_evidence_count": (integer, how many NEW pieces of evidence you found)
     }}
 
-    KEY PEOPLE RULES: Only include stakeholders with VERIFIED full names (first + last). Quality over quantity — 0 is fine if none found.
-
-    If you find NO new evidence at all, return: {{"findings": [], "key_people": [], "new_evidence_count": 0}}
+    If you find NO new evidence at all, return: {{"findings": [], "new_evidence_count": 0}}
     """
 
 def _merge_findings(existing_findings, new_findings):
@@ -1908,19 +2099,9 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
     is_rescan = bool(previous_context and previous_context.get("previous_reality") is not None)
     company_evidence_candidates = (previous_context or {}).get("company_evidence_db_candidates", []) if isinstance(previous_context, dict) else []
-    cached_company_evidence_count = len([
-        c for c in company_evidence_candidates
-        if c.get("cached_excerpt") or c.get("extracted_text") or c.get("markdown") or c.get("text_excerpt")
-    ])
-    strong_company_evidence_mode = len(company_evidence_candidates) >= 8 and cached_company_evidence_count >= 6
-    if strong_company_evidence_mode and max_research_loops > 1:
-        max_research_loops = 1
-        print(
-            f"   [Scanner 2] Company Evidence DB coverage is strong "
-            f"({len(company_evidence_candidates)} candidates, {cached_company_evidence_count} cached extracts) "
-            "→ reducing live re-search pressure."
-        )
-    sonnet_challenger_timeout = 60 if is_rescan else 75
+    # The two mandatory discovery batches replace the legacy confidence-driven
+    # full-search loop. Coverage changes search depth, never whether a jury runs.
+    max_research_loops = 0
 
     def _phase_remaining(buffer: int = 0) -> int:
         return max(0, int(time_budget - (time.time() - _fn_start) - buffer))
@@ -2008,7 +2189,24 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         company_seed_count = 0
         historical_seed_count = 0
 
-        for idx, candidate in enumerate(company_evidence_candidates[:14], start=1):
+        def _candidate_rank(candidate):
+            url = candidate.get("url") or candidate.get("source_url") or ""
+            excerpt = (
+                candidate.get("cached_excerpt") or candidate.get("source_quote")
+                or candidate.get("snippet") or candidate.get("text_excerpt")
+                or candidate.get("extracted_text") or candidate.get("markdown")
+            )
+            host = get_clean_domain(url)
+            official = bool(domain_hint and host and (host == domain_hint or host.endswith(f".{domain_hint}")))
+            return (
+                1 if excerpt else 0,
+                1 if official else 0,
+                1 if candidate.get("url_verified") or candidate.get("content_verified") else 0,
+                str(candidate.get("fetched_at") or candidate.get("last_verified_at") or ""),
+            )
+
+        ranked_candidates = sorted(company_evidence_candidates, key=_candidate_rank, reverse=True)
+        for idx, candidate in enumerate(ranked_candidates[:16], start=1):
             url = candidate.get("url") or candidate.get("source_url") or ""
             excerpt = _seed_excerpt(
                 candidate.get("cached_excerpt")
@@ -2028,7 +2226,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             title = candidate.get("title") or candidate.get("source_title") or url or f"Company Evidence DB source {idx}"
             safe_label = f"Revalidate cached source: {str(title)[:90]}"
             seed_findings.append({
-                "category": "Candidate Evidence",
+                "category": _seed_category(source_type, candidate.get("source_category") or ""),
                 "label": safe_label,
                 "found": True,
                 "sentiment": "neutral",
@@ -2043,7 +2241,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 "source_database": "company_evidence_db",
                 "forensic_seed_source": True,
                 "source_status": "candidate_revalidation_pending",
-                "verification_reason": "Seeded from Company Evidence DB after live forensic search returned no usable data.",
+                "verification_reason": "Seeded from Company Evidence DB for Scanner revalidation before fresh discovery.",
                 "cached_excerpt": excerpt,
             })
             company_seed_count += 1
@@ -2062,7 +2260,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 title = prev_ev.get("title") or "Historical verified evidence"
                 safe_label = f"Revalidate historical source: {str(title)[:90]}"
                 seed_findings.append({
-                    "category": "Candidate Evidence",
+                    "category": _seed_category(prev_ev.get("source_type") or "", prev_ev.get("category") or ""),
                     "label": safe_label,
                     "found": True,
                     "sentiment": "neutral",
@@ -2074,7 +2272,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     "source_database": "previous_verified_evidence",
                     "forensic_seed_source": True,
                     "source_status": "historical_revalidation_pending",
-                    "verification_reason": "Seeded from previous verified evidence because live forensic search returned no usable data.",
+                    "verification_reason": "Seeded from recent verified evidence for continuity and current revalidation.",
                 })
                 historical_seed_count += 1
                 if len(seed_findings) >= 16:
@@ -2082,16 +2280,34 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             if len(seed_findings) >= 16:
                 break
 
-        if not seed_findings:
-            return None
+        # URL checks are deterministic and concurrent, outside the model budget.
+        linked = [finding for finding in seed_findings if finding.get("url")]
+        if linked:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(linked))) as pool:
+                futures = {
+                    pool.submit(_verify_url, finding["url"], 5, company_name): finding
+                    for finding in linked
+                }
+                for future, finding in futures.items():
+                    try:
+                        check = future.result(timeout=7) or {}
+                    except Exception:
+                        check = {}
+                    finding["seed_url_verified"] = bool(check.get("verified"))
+                    finding["seed_entity_mentioned"] = check.get("company_mentioned")
+                    if check.get("verified") and check.get("company_mentioned") is not False:
+                        finding["source_status"] = "seed_revalidated"
+                    else:
+                        finding["source_status"] = "claim_support_pending"
 
-        confidence = 38 if company_seed_count >= 3 else 30
+        coverage = _compute_forensic_coverage(seed_findings, domain_hint)
+        confidence = max(20, min(55, round(coverage["score"] * 0.65)))
         if historical_seed_count and not company_seed_count:
-            confidence = 28
+            confidence = min(confidence, 35)
         print(
-            f"   🧭 [Forensic Seed] Live web search unavailable ({reason}); "
-            f"using {company_seed_count} Company Evidence DB source(s) and "
-            f"{historical_seed_count} historical verified source(s) as revalidation-pending candidates."
+            f"   🧭 [Forensic Seed] Baseline ready ({reason}): {company_seed_count} Company Evidence DB, "
+            f"{historical_seed_count} historical, {coverage['verified_urls']} URL revalidated; "
+            f"coverage {coverage['score']}/100 across {len(coverage['jury_coverage'])}/5 juries."
         )
         return {
             "findings": seed_findings,
@@ -2104,6 +2320,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             "_fallback_reason": reason,
             "_company_evidence_seed_count": company_seed_count,
             "_historical_seed_count": historical_seed_count,
+            "_baseline_coverage": coverage,
         }
 
     search_name = clean_company_name_for_search(company_name)
@@ -2163,7 +2380,6 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         previous_context["company_name"] = search_name
     evidence_anchors = _build_evidence_anchors(previous_context)
     # Build constraint→role guidance for stakeholder targeting (rescan only)
-    detected_constraints_block = _build_detected_constraints_block(previous_context)
     if history_block:
         print(f"   [Scanner 2] RESCAN MODE: Previous data from {previous_context.get('last_scanned', 'unknown')} loaded.")
         if evidence_anchors:
@@ -2211,166 +2427,22 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     5. DO NOT penalize the group for lack of direct tech content on the holding company website — this is normal for holding structures.
     """
 
-    # --- COMPANY SIZE CONTEXT FOR STAKEHOLDER SELECTION ---
-    if employees and employees >= 5000:
-        _size_block = f"\n    COMPANY SIZE CONTEXT: {company_name} has approximately {employees:,} employees.\n    This is a LARGE organization (5000+). Focus on Tier 1-3 roles. A Manager-level person is NOT a key stakeholder at this scale.\n"
-    elif employees and employees >= 200:
-        _size_block = f"\n    COMPANY SIZE CONTEXT: {company_name} has approximately {employees:,} employees.\n    This is a MID-SIZE organization (200-5000). Focus on Tier 1-4 roles. Manager-level is acceptable only if no higher-tier leaders are found.\n"
-    elif employees:
-        _size_block = f"\n    COMPANY SIZE CONTEXT: {company_name} has approximately {employees:,} employees.\n    This is a SMALLER organization (<200). All tiers are acceptable, as managers may be true decision-makers.\n"
-    else:
-        _size_block = ""
-
-    source_target_block = _build_jury_source_registry_block(search_name, domain_hint)
-
-    # --- DEFINING THE PROMPT ONCE ---
-    prompt = f"""
-    Perform a FORENSIC INVESTIGATION on "{search_name}" (Domain: {domain_hint}).
-    CONTEXT: Internal/Marketing text analysis suggests an Intent Score of {intent_score}/100.
-    {history_block}
-    {evidence_anchors}
-    {entity_context_block}
-    {search_alias_block}
-    {subsidiary_block}
-    {pre_verified_block}
-    SEARCH STRATEGY:
-    Do NOT read the company's own marketing pages (About Us, Front Page).
-    EXCEPTION: Careers pages and Service Portfolio pages ARE allowed — they contain operational
-    evidence (real tech stacks, team structures, actual service delivery) not marketing fluff.
-    Otherwise, look at evidence from these specific 'JURIES' defined below.
-
-    {"SEARCH BUDGET: You have 10 web searches. The FIRST 3 MUST be used for verification (see RESCAN INSTRUCTIONS above). The remaining 7 are for jury searches below. Combine sub-queries with OR to cover multiple juries per search." if history_block else "SEARCH BUDGET: You have 10 web searches. Use 2 searches per jury for thorough coverage, combining sub-queries with OR operators."}
-
-    CRITICAL: You must execute searches for ALL 5 JURIES. Do not skip any.
-    NOTE: Target companies are primarily Finnish. Use BOTH English and Finnish search terms.
-
-    {source_target_block}
-
-    IDENTIFY KEY MODERNIZATION STAKEHOLDERS (include in JSON output):
-    Search for real, VERIFIED names of current executives/leaders relevant to modernization.
-    TARGET: Find 3-6 stakeholders. Search broadly across leadership levels to reach at least 3.
-
-    SENIORITY TIERS — prioritize higher tiers first:
-    Tier 1 (C-Suite):       CEO, COO, President, Managing Director, Country Manager, Co-Founder, Founder, General Manager
-    Tier 2 (CxO Functional): CTO, CIO, CDO, CPO (Product or People), CFO, CHRO, CMO, any Chief X Officer
-    Tier 3 (VP/SVP):        VP Engineering, VP Product, VP Strategy, SVP Operations, Board Member
-    Tier 4 (Director):      Director of Technology, HR Director, Director of Strategy
-    Tier 5 (Head of):       Head of Engineering, Head of Product, Head of Digital
-    Tier 6 (Manager):       Senior Manager, Program Manager (ONLY for companies with < 200 employees)
-    Non-standard senior titles (e.g. "Group Technology Lead", "Chief Digital & Technology Officer",
-    "Head of AI & Platforms") are treated as Tier 2-4 equivalents — include if the person is clearly
-    a decision-maker in the relevant functional area.
-{_size_block}
-    STAKEHOLDER QUALITY RULES (CRITICAL):
-    1. FULL NAMES ONLY: Every name MUST include both first name AND last name. Do NOT include
-       a person if you only found their first name. "Pirja" alone is NOT acceptable — you need
-       "Pirja Heiskanen" or similar. If you cannot find the full name, DO NOT include that person.
-    2. VERIFIED CONNECTION: Only include people you found through web search results that
-       explicitly connect them to {company_name}. Do NOT guess or infer people from partial mentions.
-    3. TARGET 3-6 STAKEHOLDERS: Search actively to find at least 3 verified stakeholders.
-       Search for CEO/MD first, then CTO/CIO, then other CxOs, then VPs, then Directors.
-       If you have fewer than 3 after the first pass, do an additional search specifically
-       for leadership names. Maximum 6. HOWEVER: if you truly cannot verify 3 names through
-       search results, return only what you can verify. NEVER fabricate or guess names.
-    4. CONSTRAINT-DRIVEN ROLE TARGETING: After running the 5 hypothesis verifications, identify
-       which functional area OWNS each confirmed challenge — then find the most senior verified
-       person in that area. Use the table below as a STARTING POINT, not a rigid list. If the
-       verified person has a non-standard but clearly senior title (e.g. "Group Technology Lead",
-       "Chief Digital & Technology Officer", "Co-Founder & CTO", "Head of AI & Platforms"),
-       include them — substance over exact title match.
-
-       STARTING POINT — roles most likely to own each challenge:
-         Legacy Inertia / Technical Debt       → CTO, VP Engineering, Head of Architecture, or equivalent technology leadership
-         Silos / Bureaucracy / Fragmentation   → CDO, COO, Head of Strategy & Transformation, or equivalent operations/strategy lead
-         Fake Agile / Waterfall                → VP Engineering, VP Product, Head of Delivery, or equivalent engineering/product lead
-         Surveillance / Control Culture        → CHRO, Head of People & Culture, COO, or equivalent people/culture lead
-         Platform Thinking gap / No APIs       → CTO, CPO, Head of Digital, Head of Product, or equivalent product/tech lead
-         AI Readiness gap / Pilot Purgatory    → CDO, Chief AI Officer, Head of Data & Analytics, or equivalent AI/data lead
-
-       CEO / MD / Co-Founder / President is relevant for ALL challenges — always search for them first.
-       If multiple constraints confirmed → include stakeholders covering different challenge areas (max 6 total).
-       EXCLUDE only: sales reps, marketing coordinators, office managers, returning employees without a
-       real title, generic "staff", or anyone whose functional area has no connection to any detected challenge.
-{detected_constraints_block}
-    5. CURRENT EMPLOYEES: Only include people who currently work at the company based on
-       search results. If search results suggest they left, do NOT include them.
-    6. SENIORITY PRIORITY: Always list the MOST SENIOR person first. If you find a CEO and
-       a Manager, the CEO must come first. Fill slots from Tier 1 downward.
-
-    VERIFY THESE 5 HYPOTHESES:
-    1. "Surveillance": Micromanagement/tracking?
-    2. "Silos": Bureaucracy complaints?
-    3. "Fake Agile": "Waterfall" or "Zombie Scrum"?
-    4. "Platform Thinking": Public API/Design System found?
-    5. "Legacy Inertia": Failed transformations or "Cloud Washing"?
-
-    SCORING LOGIC & TEMPORAL WEIGHTING (CRITICAL):
-    1. BASELINE: Start at 0 adjustment.
-    2. RECENCY WEIGHTING:
-       - Evidence < 12 months old: 100% Impact (Heavy Weight).
-       - Evidence > 18 months old: 20% Impact (Ignore unless recurring/unresolved).
-       - Favor FRESH evidence over legacy complaints.
-    3. TECHNICAL DEBT PENALTY:
-       - If RECENT (< 12 months) evidence confirms "Technical Debt", "Legacy Systems", "Manual Workarounds", or "Excel Hell":
-       - APPLY A SIGNIFICANT PENALTY (-20 to -35 points) to the adjustment.
-       - This is a strong signal of low reality.
-       - SEVERE: If near-zero evidence across all juries (company is invisible): -35 to -50 points.
-    4. POSITIVE SIGNALS (USE THE FULL RANGE — do NOT be conservative):
-       - GOOD: Verified evidence in 2-3 juries, some recent: +15 to +25 points.
-       - STRONG: Verified evidence in 3-4 juries, mostly recent, real tech stack visible: +25 to +35 points.
-       - OUTSTANDING: 4-5 juries confirm strong, recent, verifiable evidence (public repos,
-         design systems, real case studies, active hiring for modern roles): +35 to +45 points.
-       - You MUST use high adjustments (+30 to +45) for companies with genuinely strong evidence.
-         A top Finnish tech company with public GitHub repos, active hiring, and verified case
-         studies across multiple juries deserves +35 or higher. Do NOT cap at +20.
-
-    DETECT "WASHING" (Logic Check):
-    - Intent Score is {intent_score}. 
-    - RULE: "Washing" (Green/Agile/AI Washing) is ONLY possible if Intent Score is HIGH (>60) AND Reality is LOW.
-    - IF Intent Score is LOW (<50), you CANNOT flag this as Washing.
-    - AI WASHING: Claims of "AI-driven" but no technical evidence (Hugging Face/StackShare) found.
-    - AGILE WASHING: Claims of "Tribes/Squads" but evidence of "Waterfall", "Approvals", "Bureaucracy".
-
-    RETURN STRICT JSON:
-    {{
-        "key_people": [
-            {{
-                "name": "Full Name",
-                "role": "Exact Title",
-                "relevance": "Why relevant?"
-            }}
-        ],
-        "findings": [
-            {{
-                "category": "Operating Model",
-                "label": "Brief Label",
-                "found": boolean,
-                "sentiment": "negative" or "positive",
-                "snippet": "Quote...",
-                "title": "Source Title",
-                "url": "URL",
-                "entity_scope": "canonical_group" or "local_legal_entity" or "former_name" or "subsidiary" or "parent_owner" or "wrong_entity" or "unknown",
-                "is_recent": boolean (True if < 12 months)
-            }}
-        ],
-        "reality_score_adjustment": (integer -50 to +50),
-        "confidence_score": (integer 0 to 100),
-        "washing_flag": boolean (True if significant contradiction/washing found AND Intent > 60),
-        "washing_type": "AI Washing" or "Agile Washing" or "Green Washing" or null
-    }}
-    
-    GUIDE FOR CONFIDENCE SCORE:
-    - 0-40: Very few sources found, evidence is generic or very old.
-    - 41-70: Some specific evidence found, but mixed recency or limited sources.
-    - 71-100: Multiple independent sources (Juries) confirm findings, evidence is recent (<12mo) and specific.
-    """
+    # The forensic model no longer performs stakeholder discovery. Buying Insight
+    # owns that work; Scanner 2 spends its discovery budget on source coverage.
+    prompt = ""  # retained only for legacy helper call-shape compatibility
 
     def execute_with_model(target_model_name, custom_prompt=None, call_timeout=150):
         """Legacy executor slot retained for call-shape compatibility; inactive."""
         print(f"   ⏭ [Forensic Scan] Legacy model executor disabled for {target_model_name}")
         return None
 
-    def execute_with_openai_web(active_prompt, timeout_cap: int | None = None, purpose: str = "primary"):
+    def execute_with_openai_web(
+        active_prompt,
+        timeout_cap: int | None = None,
+        purpose: str = "primary",
+        search_context_size: str = "medium",
+        allow_repair: bool = False,
+    ):
         """Primary web-search path using GPT-5.5 Responses web_search."""
         elapsed_total = time.time() - _fn_start
         if elapsed_total > _guard_anthropic:
@@ -2395,10 +2467,10 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 lambda: call_openai_text(
                     relaxed_prompt,
                     model="gpt-5.5",
-                    max_output_tokens=14000,
+                    max_output_tokens=7000,
                     timeout=local_timeout,
                     web_search=True,
-                    search_context_size="medium",
+                    search_context_size=search_context_size,
                 ),
             )
             if text_content is None:
@@ -2414,7 +2486,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     return parsed
                 except json.JSONDecodeError as je:
                     print(f"   ⚠️ [Forensic Scan] GPT web JSON parse failed: {je}")
-            if text_content and len(text_content) > 100:
+            if allow_repair and text_content and len(text_content) > 100:
                 structured = _repair_json_with_sonnet(text_content, company_name, is_structuring=True)
                 if structured:
                     structured["_web_grounded"] = True
@@ -2440,6 +2512,12 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
         Fast path: If Pass 1 happens to return valid JSON, Pass 2 is skipped.
         """
+        # Full Sonnet web-search retries are intentionally disabled. The two
+        # GPT discovery batches own the shared search budget; Sonnet is kept
+        # only in dedicated JSON-repair helpers where a bounded repair is safe.
+        print("   ⏭️ [Forensic Scan] Full Sonnet web-search retry disabled after batched discovery")
+        return None
+
         # Elapsed time guard — leave buffer for URL validation + response
         elapsed_total = time.time() - _fn_start
         if elapsed_total > _guard_anthropic:
@@ -2625,133 +2703,91 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             print(f"   ❌ [Forensic Scan] claude-sonnet-4-6 + Web Search failed in {elapsed}ms: {e}")
             return None
 
-    # --- SEQUENTIAL: seeded evidence when strong → GPT enrichment → short Sonnet challenger/fallback ---
-    data = None
+    # --- SEEDED BASELINE + TWO MANDATORY FRESH-DISCOVERY BATCHES ---
+    baseline = _build_seeded_forensic_fallback("pre_search_baseline")
+    coverage = baseline.get("_baseline_coverage") or _compute_forensic_coverage([], domain_hint)
+    discovery_ceiling = min(
+        FORENSIC_DISCOVERY_CEILING_SECONDS,
+        _phase_remaining(buffer=FORENSIC_POSTPROCESS_RESERVE_SECONDS),
+    )
+    discovery_started = time.time()
+    discovery_deadline = discovery_started + discovery_ceiling
+    batch_results = []
+    print(
+        f"   🔍 [Forensic Scan] Two-batch discovery for {company_name}: shared ceiling {discovery_ceiling}s + "
+        f"protected {FORENSIC_POSTPROCESS_RESERVE_SECONDS}s post-processing; "
+        f"baseline coverage {coverage['score']}/100, juries {len(coverage['jury_coverage'])}/5."
+    )
 
-    print(f"   🔍 [Forensic Scan] Starting scan for {company_name}: GPT-5.5 evidence scout → short Sonnet challenger")
-
-    if strong_company_evidence_mode:
-        data = _build_seeded_forensic_fallback("strong_company_evidence_seeded_first")
-        if data:
+    for batch_name, batch_cap in (("batch_1", 75), ("batch_2", 75)):
+        remaining_shared = int(discovery_deadline - time.time())
+        timeout_cap = min(batch_cap, max(0, remaining_shared))
+        scope = ", ".join(FORENSIC_DISCOVERY_BATCHES[batch_name])
+        if timeout_cap < 20:
             print(
-                f"   🧭 [Forensic Seed] Company Evidence DB has strong cached coverage; "
-                "using seeded candidates immediately and running GPT web search as bounded enrichment."
+                f"   ⏰ [Forensic Batch] {batch_name} could not start: {remaining_shared}s search budget remains. "
+                "The separate post-processing reserve remains protected and the baseline stays intact."
             )
-            enrichment_data = execute_with_openai_web(prompt, timeout_cap=75 if is_rescan else 90, purpose="enrichment")
-            if enrichment_data:
-                merged_findings, new_unique_count = _merge_findings(
-                    data.get("findings", []), enrichment_data.get("findings", [])
-                )
-                data["findings"] = merged_findings
-                if enrichment_data.get("key_people"):
-                    existing_names = {
-                        (p.get("name") or "").lower()
-                        for p in data.get("key_people", [])
-                    }
-                    for person in enrichment_data.get("key_people", []):
-                        name_key = (person.get("name") or "").lower()
-                        if name_key and name_key not in existing_names:
-                            data.setdefault("key_people", []).append(person)
-                            existing_names.add(name_key)
-                data["confidence_score"] = max(
-                    data.get("confidence_score", 0) or 0,
-                    enrichment_data.get("confidence_score", 0) or 0,
-                )
-                data["_search_provider"] = "company-evidence-seed+openai-web-enrichment"
-                print(
-                    f"   ✅ [Forensic Scan] GPT enrichment added {new_unique_count} unique finding(s); "
-                    f"confidence now {data.get('confidence_score', 0)}/100"
-                )
-            else:
-                print("   ⏭️ [Forensic Scan] GPT enrichment returned no usable data; keeping seeded candidates.")
+            batch_results.append({"name": batch_name, "status": "batch_timeout", "data": None})
+            continue
+        batch_prompt = _build_forensic_discovery_prompt(
+            search_name=search_name,
+            domain_hint=domain_hint,
+            batch_name=batch_name,
+            coverage=coverage,
+            seed_findings=baseline.get("findings", []),
+            intent_score=intent_score,
+            entity_context=entity_context_block,
+            search_aliases=search_alias_block,
+            subsidiary_context=subsidiary_block,
+            pre_verified_context=pre_verified_block,
+        )
+        print(
+            f"   🔎 [Forensic Batch] {batch_name} starting ({timeout_cap}s): {scope}; "
+            f"depth={'narrow' if coverage['score'] >= 65 else 'deep'}."
+        )
+        batch_started = time.time()
+        batch_data = execute_with_openai_web(
+            batch_prompt,
+            timeout_cap=timeout_cap,
+            purpose=batch_name,
+            search_context_size="low" if coverage["score"] >= 65 else "medium",
+            allow_repair=False,
+        )
+        elapsed_batch = int(time.time() - batch_started)
+        status = "completed" if batch_data else "batch_timeout"
+        returned = len((batch_data or {}).get("findings", []) or [])
+        print(
+            f"   {'✅' if batch_data else '⚠️'} [Forensic Batch] {batch_name} {status} in {elapsed_batch}s; "
+            f"{returned} finding(s) returned."
+        )
+        batch_results.append({"name": batch_name, "status": status, "data": batch_data})
 
-    if not data:
-        data = execute_with_openai_web(prompt)
-
-    if not data:
-        print(f"   ⚠️ [Forensic Scan] GPT-5.5 web search returned no data. Trying seeded forensic fallback before any challenger...")
-        data = _build_seeded_forensic_fallback("gpt_returned_no_data")
-        if not data:
-            print(
-                "   ⏭️ [Forensic Scan] No seeded forensic sources available after GPT miss; "
-                "skipping Sonnet full-search fallback to preserve phase budget."
-            )
-    else:
-        scout_confidence = data.get("confidence_score", 0) or 0
-        scout_evidence_count = len([
-            f for f in data.get("findings", [])
-            if f.get("found") and f.get("url")
-        ])
-        if scout_confidence < 45 or scout_evidence_count < 3:
-            if strong_company_evidence_mode and scout_evidence_count >= 2 and scout_confidence >= 35:
-                print(
-                    f"   ⏭️ [Forensic Scan] Skipping Sonnet challenger: GPT returned usable evidence "
-                    f"({scout_confidence}/100, {scout_evidence_count} linked findings) and Company Evidence DB has strong coverage."
-                )
-                challenger_data = None
-            elif _phase_remaining(buffer=80) < 25:
-                print(
-                    f"   ⏭️ [Forensic Scan] Skipping Sonnet challenger: insufficient phase budget "
-                    f"({_phase_remaining(buffer=80)}s after buffer)."
-                )
-                challenger_data = None
-            else:
-                print(
-                    f"   🔎 [Forensic Scan] GPT scout coverage weak "
-                    f"({scout_confidence}/100, {scout_evidence_count} linked findings). "
-                    f"Trying bounded Sonnet challenger..."
-                )
-                challenger_data = execute_with_anthropic(prompt)
-            if challenger_data:
-                challenger_findings = challenger_data.get("findings", [])
-                merged_findings, new_unique_count = _merge_findings(
-                    data.get("findings", []), challenger_findings
-                )
-                data["findings"] = merged_findings
-                if challenger_data.get("key_people"):
-                    existing_names = {
-                        (p.get("name") or "").lower()
-                        for p in data.get("key_people", [])
-                    }
-                    for person in challenger_data.get("key_people", []):
-                        name_key = (person.get("name") or "").lower()
-                        if name_key and name_key not in existing_names:
-                            data.setdefault("key_people", []).append(person)
-                            existing_names.add(name_key)
-                data["confidence_score"] = max(
-                    data.get("confidence_score", 0) or 0,
-                    challenger_data.get("confidence_score", 0) or 0,
-                )
-                data["_search_provider"] = "openai-web-search+sonnet-challenger"
-                print(
-                    f"   ✅ [Forensic Scan] Sonnet challenger added "
-                    f"{new_unique_count} unique finding(s); confidence now "
-                    f"{data.get('confidence_score', 0)}/100"
-                )
-            else:
-                print("   ⏭ [Forensic Scan] Sonnet challenger produced no usable addition.")
-
-    if data:
-        linked_finding_count = len([
-            f for f in data.get("findings", [])
-            if f.get("found") and f.get("url")
-        ])
-        if linked_finding_count == 0:
-            seeded_data = _build_seeded_forensic_fallback("live_search_returned_zero_linked_sources")
-            if seeded_data:
-                data["findings"] = seeded_data.get("findings", []) + data.get("findings", [])
-                data["confidence_score"] = max(
-                    data.get("confidence_score", 0) or 0,
-                    seeded_data.get("confidence_score", 0) or 0,
-                )
-                data["_seeded_forensic_fallback"] = True
-                data["_fallback_reason"] = seeded_data.get("_fallback_reason")
-                data["_company_evidence_seed_count"] = seeded_data.get("_company_evidence_seed_count", 0)
-                data["_historical_seed_count"] = seeded_data.get("_historical_seed_count", 0)
-                print(
-                    f"   🧭 [Forensic Seed] Added seeded candidates because live result had zero linked sources "
-                    f"(confidence now {data.get('confidence_score', 0)}/100)."
-                )
+    postprocess_started = time.time()
+    postprocess_deadline = postprocess_started + FORENSIC_POSTPROCESS_RESERVE_SECONDS
+    data = _merge_forensic_batch_results(baseline, batch_results)
+    data["_search_provider"] = "seeded-baseline+two-batch-openai-web"
+    final_coverage = _compute_forensic_coverage(data.get("findings", []), domain_hint)
+    data["_final_forensic_coverage"] = final_coverage
+    jury_counts = {
+        jury: len([finding for finding in data.get("findings", []) if _finding_jury(finding) == jury])
+        for jury in JURY_SOURCE_TARGETS
+    }
+    missing_juries = [jury for jury, count in jury_counts.items() if count == 0]
+    fresh_added = len([f for f in data.get("findings", []) if f.get("source_status") == "fresh_discovery"])
+    reconfirmed = len([f for f in data.get("findings", []) if f.get("source_status") == "seed_revalidated"])
+    print(
+        f"   📊 [Forensic Merge] {len(data.get('findings', []))} findings; {fresh_added} fresh, "
+        f"{reconfirmed} seeded URL-revalidated; coverage {final_coverage['score']}/100."
+    )
+    print(f"   📚 [Forensic Juries] {jury_counts}")
+    if missing_juries:
+        print(f"   ⚠️ [Forensic Juries] Missing coverage after discovery: {missing_juries}")
+    data["_forensic_timing"] = {
+        "discovery_seconds": round(time.time() - discovery_started, 2),
+        "postprocess_reserve_seconds": FORENSIC_POSTPROCESS_RESERVE_SECONDS,
+        "merge_normalization_seconds": round(time.time() - postprocess_started, 2),
+    }
 
     # --- CONFIDENCE FLOOR (two-pass structuring safety net) ---
     # When the structuring model (Pass 2) cannot determine confidence from
@@ -2767,9 +2803,10 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             data["confidence_score"] = floor
             print(f"   📊 [Confidence Floor] Model returned {model_confidence}/100 but {evidence_with_urls} evidence links found. Adjusted to {floor}/100.")
 
-    # --- CONFIDENCE-DRIVEN RE-SEARCH LOOP ---
-    # Only triggers when initial results have low confidence AND weak coverage.
-    # Keeps all original findings, adds new ones on top.
+    # The former confidence-driven re-search loop is intentionally disabled.
+    # Fresh discovery now always occurs in the two jury batches above; starting
+    # another web-search cycle here would consume the protected normalization
+    # and diagnostics slot.
     if data and max_research_loops > 0:
         initial_findings = data.get("findings", [])
         initial_confidence = data.get("confidence_score", 50)
@@ -2984,56 +3021,25 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
         final_score = max(0, min(100, base_score + adjustment))
 
-        # --- DELTA VERIFICATION RE-SCAN ---
-        # If score changed by more than ±25 from previous, re-run the scan once.
-        # ±25 is the permanent threshold — matches Opus Final Judge design.
-        # If re-scan confirms the change → accept as fact (genuine change).
-        # If re-scan contradicts → use the more conservative (closer to previous) result.
+        # Large deltas are recorded for synthesis review. Starting another web
+        # search here would violate the two-batch discovery ceiling.
         if previous_context and previous_context.get("previous_reality") is not None and not data.get("_seeded_forensic_fallback"):
             prev_reality = previous_context["previous_reality"]
             delta = final_score - prev_reality
 
             if abs(delta) >= 25:
-                # Elapsed time guard — skip verification if running out of time.
-                # Delta re-scan + URL validation can fit in remaining time.
                 elapsed_total = time.time() - _fn_start
-                if elapsed_total > _guard_delta_verify:
-                    print(f"   ⏰ [Delta Verification] Skipping — elapsed {int(elapsed_total)}s exceeds {_guard_delta_verify}s guard. Keeping score {final_score}.")
-                else:
-                    print(f"   [Delta Verification] Large score change detected: {prev_reality} → {final_score} (delta {delta}). Running verification re-scan (same methodology)...")
-                    verify_data = execute_with_anthropic(prompt)
-                    if not verify_data:
-                        verify_data = execute_with_openai_web(prompt)
-
-                    if verify_data:
-                        verify_adjustment = verify_data.get("reality_score_adjustment", 0)
-                        verify_score = max(0, min(100, base_score + verify_adjustment))
-                        verify_delta = verify_score - prev_reality
-
-                        if abs(verify_delta) >= 25 and (delta > 0) == (verify_delta > 0):
-                            # Both scans agree on direction and magnitude — accept as genuine change
-                            # Use average of both for stability
-                            final_score = int((final_score + verify_score) / 2)
-                            print(f"   [Delta Verification] CONFIRMED: Re-scan also shows large delta ({verify_delta}). Accepted as genuine change. Final: {final_score}")
-                        else:
-                            # Re-scan disagrees — use the score closer to previous (more conservative)
-                            if abs(verify_score - prev_reality) < abs(final_score - prev_reality):
-                                final_score = verify_score
-                            print(f"   [Delta Verification] NOT CONFIRMED: Re-scan score {verify_score} (delta {verify_delta}). Using conservative: {final_score}")
-                    else:
-                        print(f"   [Delta Verification] Re-scan failed. Keeping original score {final_score}.")
+                print(
+                    f"   📏 [Delta Verification] Large delta {delta} noted at {int(elapsed_total)}s. "
+                    "No late web re-scan is started; source gates and synthesis will judge the change."
+                )
 
         # Determine Washing based on AI flag OR raw gap if flag is missing
         washing_flag = data.get("washing_flag", False)
         washing_type = data.get("washing_type", None)
 
-        key_people = data.get("key_people", [])
-
-        # --- KEY PEOPLE VALIDATION GATE ---
-        # Filter out stakeholders with incomplete or invalid names.
-        # This catches cases where the AI only found a first name, used a placeholder,
-        # or included people with no real relevance to modernization.
-        key_people = _validate_key_people(key_people, company_name, employees=employees)
+        # Compatibility field only. Stakeholder discovery belongs to Buying Insight.
+        key_people = []
 
         # --- URL VALIDATION GATE ---
         # Verify all evidence URLs actually exist before returning results.
@@ -3063,103 +3069,15 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             confidence = max(10, confidence - penalty)
             print(f"   🧹 [Source Gate] Excluded {excluded_total} sources {reasons} → confidence penalty -{penalty} ({old_conf} → {int(confidence)})")
 
-        # --- URL-TRIGGERED RE-SCAN ---
-        # If >20% of URLs are dead, the evidence base is unreliable.
-        # Run ONE targeted re-search to try to find real, verifiable evidence.
+        # Report URL failures, but do not start a third discovery cycle.
         url_total = url_verified + url_dead
         dead_ratio = url_dead / url_total if url_total > 0 else 0
 
-        if dead_ratio > 0.20 and url_dead >= 2 and (time.time() - _fn_start) <= 250:
-            # Identify categories where evidence URLs failed
-            dead_categories = set()
-            for item in raw_findings:
-                if not item.get("verified", True):
-                    dead_categories.add(item.get("source_type", "current"))
-            for item in checklist:
-                if not item.get("verified", True) and item.get("category"):
-                    dead_categories.add(item.get("category"))
-
-            dead_cat_list = list(dead_categories)[:4] if dead_categories else ["General"]
-            print(f"   🔄 [URL Re-Scan] {int(dead_ratio*100)}% URLs dead ({url_dead}/{url_total}). Triggering evidence recovery scan...")
-
-            recovery_prompt = f"""You are a forensic evidence researcher. A previous search for "{search_name}" returned {url_dead} URLs that do not exist (hallucinated links).
-
-Your task: Find REAL, VERIFIABLE evidence about this company's modernization and adaptability.
-Focus on these areas where evidence was weak: {', '.join(dead_cat_list)}
-
-CRITICAL RULES:
-- ONLY include URLs you find through actual web search results
-- Do NOT invent or guess URLs — every URL must come from a real search result
-- Prefer well-known sources: LinkedIn, news sites, industry reports, company press releases
-- Quality over quantity — 3 real URLs beats 10 fake ones
-
-RETURN STRICT JSON:
-{{
-    "findings": [
-        {{
-            "category": "Operating Model",
-            "label": "Brief Label",
-            "found": boolean,
-            "sentiment": "negative" or "positive",
-            "snippet": "Exact quote from the source...",
-            "title": "Source Title",
-            "url": "REAL URL from search results",
-            "is_recent": boolean
-        }}
-    ],
-    "key_people": [],
-    "reality_score_adjustment": 0,
-    "confidence_score": 50,
-    "washing_flag": false,
-    "washing_type": null
-}}"""
-
-            recovery_data = execute_with_anthropic(recovery_prompt)
-            if not recovery_data:
-                recovery_data = execute_with_openai_web(recovery_prompt)
-
-            if recovery_data:
-                new_findings = recovery_data.get("findings", [])
-                # Build temporary links from recovery findings
-                recovery_links = []
-                for f in new_findings:
-                    if f.get("found") and f.get("url"):
-                        recovery_links.append({
-                            "title": f.get("title", "Recovery Evidence"),
-                            "snippet": f.get("snippet", ""),
-                            "url": f.get("url", ""),
-                            "source": get_clean_domain(f.get("url", "")),
-                            "is_recent": f.get("is_recent", False),
-                            "source_type": "recovery"
-                        })
-
-                if recovery_links:
-                    # Validate the recovery URLs too
-                    recovery_links, _, rec_verified, rec_dead = _validate_evidence_urls(recovery_links, [], company_name=company_name)
-                    print(f"   🔗 [URL Re-Scan] Recovery: {rec_verified} verified, {rec_dead} dead out of {len(recovery_links)} new links")
-
-                    # Only keep verified recovery links, dedup against existing URLs
-                    existing_urls = {(f.get("url") or "").rstrip("/").lower() for f in raw_findings}
-                    added = 0
-                    recovery_links = annotate_evidence_links(recovery_links, company_domain, company_name)
-                    for link in recovery_links:
-                        if link.get("verified") and link.get("url") and link.get("admissible") is not False:
-                            url_key = link["url"].rstrip("/").lower()
-                            if url_key not in existing_urls:
-                                raw_findings.append(link)
-                                existing_urls.add(url_key)
-                                added += 1
-
-                    if added > 0:
-                        # Recalculate URL stats after recovery
-                        url_verified += added
-                        url_total = url_verified + url_dead
-                        dead_ratio = url_dead / url_total if url_total > 0 else 0
-                        print(f"   ✅ [URL Re-Scan] Added {added} verified links. Evidence pool now {url_verified}/{url_total} verified ({int((1-dead_ratio)*100)}%)")
-                    else:
-                        print(f"   ⚠️ [URL Re-Scan] No new verified links found in recovery scan")
-            else:
-                print(f"   ⚠️ [URL Re-Scan] Recovery scan returned no data")
+        if dead_ratio > 0.20 and url_dead >= 2:
+            print(
+                f"   ⚠️ [URL Diagnostics] {int(dead_ratio*100)}% URLs failed ({url_dead}/{url_total}). "
+                "No late recovery search started; preserving the 30s post-processing slot."
+            )
 
         # --- CONFIDENCE PENALTY (after recovery attempt) ---
         if url_total > 0:
@@ -3179,16 +3097,24 @@ RETURN STRICT JSON:
         # Check if verified sources actually support their claimed snippets.
         # Only runs when time permits (adds ~5-10s for page fetches + Flash calls).
         _elapsed = time.time() - _fn_start
-        if _elapsed < (time_budget - 40) and url_verified >= 1:
+        postprocess_remaining = max(0, int(postprocess_deadline - time.time()))
+        if postprocess_remaining >= 8 and url_verified >= 1:
             try:
                 from source_claim_validator import validate_source_claims
-                scv_result = validate_source_claims(
-                    raw_findings,
-                    max_checks=12,
-                    max_workers=4,
-                    company_name=company_name,
-                    company_domain=company_domain,
+                max_claim_checks = 12 if postprocess_remaining >= 18 else 6
+                scv_result = _hard_timeout_call(
+                    "forensic source-claim validation",
+                    postprocess_remaining,
+                    lambda: validate_source_claims(
+                        raw_findings,
+                        max_checks=max_claim_checks,
+                        max_workers=4,
+                        company_name=company_name,
+                        company_domain=company_domain,
+                    ),
                 )
+                if not scv_result:
+                    raise TimeoutError("source-claim validation exceeded post-processing deadline")
                 raw_findings = annotate_evidence_links(raw_findings, company_domain, company_name)
                 if scv_result["irrelevant"] > 0:
                     # Penalise confidence for irrelevant sources
@@ -3200,8 +3126,11 @@ RETURN STRICT JSON:
                         print(f"   ⚠️ [Source-Claim] {int(irr_ratio*100)}% sources irrelevant → confidence penalty -{penalty} ({old_conf} → {int(confidence)})")
             except Exception as scv_err:
                 print(f"   ⚠️ [Source-Claim] Validation skipped: {scv_err}")
-        elif _elapsed >= (time_budget - 40):
-            print(f"   ⏰ [Source-Claim] Skipped — time budget exhausted ({int(_elapsed)}s/{time_budget}s)")
+        elif postprocess_remaining < 8:
+            print(
+                f"   ⏰ [Source-Claim] Skipped — only {postprocess_remaining}s remain in the protected "
+                f"{FORENSIC_POSTPROCESS_RESERVE_SECONDS}s post-processing slot"
+            )
 
         # Ensure every source carries final promotion metadata, even when
         # source-claim validation was skipped or only covered part of the pool.
@@ -3216,6 +3145,14 @@ RETURN STRICT JSON:
         if total_q > 0:
             print(f"   🔍 [Source Quality] {high_q} high, {med_q} medium, {low_q} low credibility sources (quality: {quality_score}/100)")
         confidence = confidence_quality_penalty(confidence, raw_findings, company_domain)
+
+        postprocess_elapsed = round(time.time() - postprocess_started, 2)
+        data.setdefault("_forensic_timing", {})["postprocess_seconds"] = postprocess_elapsed
+        data["_forensic_timing"]["postprocess_overrun"] = postprocess_elapsed > FORENSIC_POSTPROCESS_RESERVE_SECONDS
+        print(
+            f"   🧭 [Forensic Postprocess] merge, URL/entity/claim gates, normalization and diagnostics "
+            f"completed in {postprocess_elapsed}s (reserved {FORENSIC_POSTPROCESS_RESERVE_SECONDS}s)"
+        )
 
         return {
             "score": int(final_score),
@@ -3232,6 +3169,9 @@ RETURN STRICT JSON:
             "forensic_fallback_reason": data.get("_fallback_reason"),
             "company_evidence_seed_count": data.get("_company_evidence_seed_count", 0),
             "historical_seed_count": data.get("_historical_seed_count", 0),
+            "forensic_timing": data.get("_forensic_timing", {}),
+            "forensic_batch_status": data.get("forensic_batch_status", []),
+            "forensic_coverage": data.get("_final_forensic_coverage", {}),
         }
     
     # --- FALLBACK: All models failed — return empty result, never fabricate evidence ---
