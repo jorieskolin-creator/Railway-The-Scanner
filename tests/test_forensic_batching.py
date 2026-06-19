@@ -65,6 +65,7 @@ def test_coverage_score_rewards_verified_diverse_balanced_sources():
 
 def test_forensic_timing_has_separate_discovery_and_postprocess_budgets():
     assert scanner_two.FORENSIC_ACQUISITION_CEILING_SECONDS == 135
+    assert scanner_two.FORENSIC_EXTRACTION_RECOVERY_CEILING_SECONDS == 35
     assert scanner_two.FORENSIC_JURY_ANALYSIS_CEILING_SECONDS == 95
     assert scanner_two.FORENSIC_POSTPROCESS_RESERVE_SECONDS == 30
 
@@ -76,8 +77,19 @@ def test_each_acquisition_prompt_is_jury_scoped_and_excludes_people_search():
         )
         assert f"This lane covers only: {jury}" in prompt
         assert "Do not search for people" in prompt
+        assert "verbatim_quote" in prompt
+        assert "copied word-for-word" in prompt
         other_juries = [name for name in scanner_two.FORENSIC_JURIES if name != jury]
         assert all(f"\n    {other}" not in prompt for other in other_juries)
+
+
+def test_quote_matching_handles_punctuation_without_accepting_paraphrase():
+    quote = "Example Oy launched an AI-enabled customer-service platform in 2026."
+    extracted = "Example Oy launched an AI enabled customer service platform in 2026."
+    unrelated = "Example Oy discussed its annual report and general sustainability targets."
+
+    assert scanner_two._quote_matches_packet(quote, extracted) is True
+    assert scanner_two._quote_matches_packet(quote, unrelated) is False
 
 
 def test_service_seed_routes_to_service_jury_not_ai_data():
@@ -271,6 +283,7 @@ def test_promoted_coverage_ignores_partial_and_unverified_findings():
 
 
 def test_pre_jury_gate_rejects_unbound_acquisition_quote(monkeypatch):
+    monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
     jury = "AI & DATA JURY (Future Readiness)"
     source = _finding(
         "https://example.fi/news/platform",
@@ -301,3 +314,77 @@ def test_pre_jury_gate_rejects_unbound_acquisition_quote(monkeypatch):
     assert lanes[0]["sources"] == []
     assert stats["quote_not_found"] == 1
     assert lanes[0]["pre_jury_rejected"][0]["reason"] == "quote_not_found"
+
+
+def test_pre_jury_gate_selectively_recovers_passage_with_firecrawl(monkeypatch):
+    jury = "AI & DATA JURY (Future Readiness)"
+    quote = "Example Oy launched a governed data platform for operational analytics in May 2026."
+    source = _finding("https://example.fi/news/data-platform", jury, snippet=quote)
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-key")
+    monkeypatch.setattr(
+        scanner_two,
+        "_verify_url",
+        lambda *_args, **_kwargs: {
+            "verified": True,
+            "company_mentioned": True,
+            "content_readable": True,
+            "content_excerpt": "Example Oy general newsroom navigation and cookie preferences.",
+            "extracted_date": None,
+        },
+    )
+    monkeypatch.setattr(
+        scanner_two,
+        "_firecrawl_forensic_extract",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "reason": "",
+            "text": f"Company update\n\n{quote}\n\nThe platform supports governed reporting.",
+        },
+    )
+
+    lanes, stats = scanner_two._prevalidate_acquisition_results(
+        [{"jury": jury, "provider": "gemini", "status": "completed", "sources": [source]}],
+        "Example Oy",
+    )
+
+    assert len(lanes[0]["sources"]) == 1
+    assert lanes[0]["sources"][0]["extraction_provider"] == "firecrawl"
+    assert lanes[0]["sources"][0]["quote_match_method"].startswith("firecrawl_")
+    assert stats["firecrawl_recovered"] == 1
+    assert stats["quote_not_found"] == 0
+
+
+def test_firecrawl_does_not_rescue_wrong_entity_packet(monkeypatch):
+    jury = "STRATEGIC JURY (Business Model, Procurement & Customer Experience)"
+    source = _finding(
+        "https://unrelated.example/news",
+        jury,
+        snippet="Another company announced a new operating model and investment programme.",
+    )
+    calls = []
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-key")
+    monkeypatch.setattr(
+        scanner_two,
+        "_verify_url",
+        lambda *_args, **_kwargs: {
+            "verified": True,
+            "company_mentioned": False,
+            "content_readable": True,
+            "content_excerpt": "Another company announced a new operating model.",
+            "extracted_date": None,
+        },
+    )
+    monkeypatch.setattr(
+        scanner_two,
+        "_firecrawl_forensic_extract",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    lanes, stats = scanner_two._prevalidate_acquisition_results(
+        [{"jury": jury, "provider": "gemini", "status": "completed", "sources": [source]}],
+        "Example Oy",
+    )
+
+    assert lanes[0]["sources"] == []
+    assert stats["wrong_entity"] == 1
+    assert calls == []

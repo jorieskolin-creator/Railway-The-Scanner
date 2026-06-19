@@ -3,6 +3,8 @@ import os
 import json
 import time
 import re
+import html as html_lib
+import unicodedata
 import requests as http_requests
 import concurrent.futures
 from datetime import date, datetime
@@ -193,6 +195,8 @@ JURY_SOURCE_TARGETS = {
 
 FORENSIC_POSTPROCESS_RESERVE_SECONDS = 30
 FORENSIC_ACQUISITION_CEILING_SECONDS = 135
+FORENSIC_EXTRACTION_RECOVERY_CEILING_SECONDS = 35
+FORENSIC_FIRECRAWL_MAX_URLS = 6
 FORENSIC_JURY_ANALYSIS_CEILING_SECONDS = 95
 FORENSIC_GEMINI_TIMEOUT_SECONDS = 100
 FORENSIC_JURIES = tuple(JURY_SOURCE_TARGETS.keys())
@@ -313,21 +317,105 @@ def _is_generic_context_page(url: str) -> bool:
     return bool(re.search(r"/(careers|jobs|services?|case-studies|references|customers)/?$", path))
 
 
-def _quote_matches_packet(quote: str, packet_text: str, require_verbatim: bool = False) -> bool:
-    """Require meaningful lexical overlap between the jury quote and supplied packet."""
-    normalized_quote = re.sub(r"\s+", " ", (quote or "")).strip().lower()
-    normalized_packet = re.sub(r"\s+", " ", (packet_text or "")).strip().lower()
+def _normalize_passage(value: str) -> str:
+    """Normalize presentation differences without turning paraphrases into quotes."""
+    normalized = unicodedata.normalize("NFKC", html_lib.unescape(value or "")).casefold()
+    normalized = normalized.replace("\u00ad", "").replace("\u00a0", " ")
+    normalized = re.sub(r"(?<=\w)-\s+(?=\w)", "", normalized)
+    normalized = re.sub(r"[\u2010-\u2015]", "-", normalized)
+    normalized = normalized.replace("-", " ")
+    normalized = re.sub(r"[\u2018\u2019]", "'", normalized)
+    normalized = re.sub(r'[\u201c\u201d]', '"', normalized)
+    normalized = re.sub(r"[^\w\d%€$+.#/\-]+", " ", normalized, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _quote_match_details(quote: str, packet_text: str, require_verbatim: bool = False) -> dict:
+    """Match an acquired passage while keeping the standard close to verbatim."""
+    normalized_quote = _normalize_passage(quote)
+    normalized_packet = _normalize_passage(packet_text)
+    details = {"matched": False, "method": "none", "score": 0.0}
+    if len(normalized_quote) < 24 or not normalized_packet:
+        return details
+    if normalized_quote in normalized_packet:
+        return {"matched": True, "method": "normalized_verbatim", "score": 1.0}
     if require_verbatim:
-        return len(normalized_quote) >= 24 and normalized_quote in normalized_packet
+        return details
     quote_terms = {
-        token.lower() for token in re.findall(r"[A-Za-zÅÄÖåäö0-9][A-Za-zÅÄÖåäö0-9\-]{2,}", quote or "")
+        token for token in re.findall(r"[\w\d][\w\d+.#%€$/\-]{2,}", normalized_quote, flags=re.UNICODE)
     }
     packet_terms = {
-        token.lower() for token in re.findall(r"[A-Za-zÅÄÖåäö0-9][A-Za-zÅÄÖåäö0-9\-]{2,}", packet_text or "")
+        token for token in re.findall(r"[\w\d][\w\d+.#%€$/\-]{2,}", normalized_packet, flags=re.UNICODE)
     }
     if len(quote_terms) < 4 or not packet_terms:
-        return False
-    return len(quote_terms & packet_terms) / len(quote_terms) >= 0.65
+        return details
+    score = len(quote_terms & packet_terms) / len(quote_terms)
+    # This tolerance handles punctuation, inflection and extraction noise. It is
+    # intentionally too strict for a semantic paraphrase to count as a quote.
+    matched = score >= 0.78 and len(quote_terms & packet_terms) >= min(6, len(quote_terms))
+    return {"matched": matched, "method": "normalized_token_match" if matched else "none", "score": score}
+
+
+def _quote_matches_packet(quote: str, packet_text: str, require_verbatim: bool = False) -> bool:
+    return _quote_match_details(quote, packet_text, require_verbatim=require_verbatim)["matched"]
+
+
+def _relevant_passage(quote: str, content: str, limit: int = 4200) -> str:
+    """Return the part of extracted content most likely to contain the quote."""
+    text = str(content or "").strip()
+    if len(text) <= limit:
+        return text
+    lowered = text.casefold()
+    words = [word for word in re.findall(r"[\w\d][\w\d\-]{4,}", quote or "", flags=re.UNICODE)]
+    center = -1
+    # Longer words are generally more discriminating than a company name or
+    # generic terms near the start of a page.
+    for word in sorted(set(words), key=len, reverse=True):
+        center = lowered.find(word.casefold())
+        if center >= 0:
+            break
+    if center < 0:
+        return text[:limit]
+    start = max(0, center - limit // 3)
+    return text[start:start + limit]
+
+
+def _firecrawl_forensic_extract(url: str, timeout: int = 25) -> dict:
+    """Extract one valuable forensic page after direct passage matching fails."""
+    key = str(os.environ.get("FIRECRAWL_API_KEY") or "").strip().strip("'\"")
+    if not key:
+        return {"ok": False, "reason": "not_configured", "text": ""}
+    try:
+        response = http_requests.post(
+            "https://api.firecrawl.dev/v1/scrape",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={"url": url, "formats": ["markdown"], "onlyMainContent": True},
+            timeout=timeout,
+        )
+        if response.status_code not in (200, 201):
+            return {"ok": False, "reason": f"http_{response.status_code}", "text": ""}
+        payload = response.json()
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, dict):
+            data = payload if isinstance(payload, dict) else {}
+        text = str(data.get("markdown") or data.get("content") or "").strip()
+        if len(text) < 120 or _SOFT_404_PATTERNS.search(text[:4000]):
+            return {"ok": False, "reason": "unreadable_or_soft_404", "text": text}
+        return {"ok": True, "reason": "", "text": text[:60000]}
+    except Exception as error:
+        return {"ok": False, "reason": type(error).__name__, "text": ""}
+
+
+def _firecrawl_recovery_priority(source: dict) -> int:
+    token = " ".join(str(source.get(key) or "") for key in ("source_type", "url", "title")).lower()
+    score = 0
+    if any(term in token for term in ("official", "filing", "legal", "procurement", "annual", "investor")):
+        score += 5
+    if any(term in token for term in ("case_study", "customer", "technical", "research", "workforce_metric")):
+        score += 3
+    if any(term in token for term in ("linkedin", "glassdoor", "teamblind", "search?", "/jobs")):
+        score -= 4
+    return score
 
 
 def _claim_matches_quote(claim: str, quote: str, support_level: str) -> bool:
@@ -359,7 +447,11 @@ def _claim_matches_quote(claim: str, quote: str, support_level: str) -> bool:
     return overlap >= threshold and len(claim_terms & quote_terms) >= min(3, len(claim_terms))
 
 
-def _prevalidate_acquisition_results(acquisition_results: list, company_name: str) -> tuple[list, dict]:
+def _prevalidate_acquisition_results(
+    acquisition_results: list,
+    company_name: str,
+    recovery_seconds: int = FORENSIC_EXTRACTION_RECOVERY_CEILING_SECONDS,
+) -> tuple[list, dict]:
     """Gate fresh packets before expensive jury analysis."""
     sources = [
         source for lane in (acquisition_results or [])
@@ -377,7 +469,54 @@ def _prevalidate_acquisition_results(acquisition_results: list, company_name: st
                 except Exception:
                     url_results[url] = {}
 
-    stats = {"input": len(sources), "passed": 0, "dead_or_soft_404": 0, "wrong_entity": 0, "unreadable": 0}
+    recovery_candidates = []
+    for source in sources:
+        checked = url_results.get(source.get("url"), {})
+        match = _quote_match_details(
+            str(source.get("snippet") or ""),
+            str(checked.get("content_excerpt") or ""),
+        )
+        if (
+            checked.get("verified") is True
+            and checked.get("company_mentioned") is not False
+            and checked.get("content_readable") is True
+            and len(str(source.get("snippet") or "").strip()) >= 40
+            and not match["matched"]
+        ):
+            recovery_candidates.append(source)
+
+    firecrawl_results = {}
+    selected_recovery = sorted(
+        recovery_candidates,
+        key=_firecrawl_recovery_priority,
+        reverse=True,
+    )[:FORENSIC_FIRECRAWL_MAX_URLS]
+    firecrawl_configured = bool(str(os.environ.get("FIRECRAWL_API_KEY") or "").strip())
+    if selected_recovery and firecrawl_configured and recovery_seconds > 0:
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(selected_recovery)))
+        futures = {
+            pool.submit(_firecrawl_forensic_extract, source["url"], min(25, recovery_seconds)): source["url"]
+            for source in selected_recovery
+        }
+        done, pending = concurrent.futures.wait(futures, timeout=recovery_seconds)
+        for future in done:
+            url = futures[future]
+            try:
+                firecrawl_results[url] = future.result() or {}
+            except Exception as error:
+                firecrawl_results[url] = {"ok": False, "reason": type(error).__name__, "text": ""}
+        for future in pending:
+            future.cancel()
+            firecrawl_results[futures[future]] = {"ok": False, "reason": "shared_deadline", "text": ""}
+        pool.shutdown(wait=False)
+
+    stats = {
+        "input": len(sources), "passed": 0, "dead_or_soft_404": 0,
+        "wrong_entity": 0, "unreadable": 0, "quote_not_found": 0,
+        "firecrawl_attempted": len(firecrawl_results), "firecrawl_recovered": 0,
+        "firecrawl_failed": 0, "firecrawl_skipped_by_cap": max(0, len(recovery_candidates) - len(selected_recovery)),
+        "firecrawl_unavailable": bool(recovery_candidates and not firecrawl_configured),
+    }
     gated_results = []
     for lane in acquisition_results or []:
         kept = []
@@ -388,7 +527,12 @@ def _prevalidate_acquisition_results(acquisition_results: list, company_name: st
             source["verified"] = source["url_verified"]
             source["content_readable"] = checked.get("content_readable") is True
             source["entity_mentioned"] = checked.get("company_mentioned")
-            source["fetched_excerpt"] = str(checked.get("content_excerpt") or "")[:4000]
+            direct_content = str(checked.get("content_excerpt") or "")
+            match = _quote_match_details(str(source.get("snippet") or ""), direct_content)
+            source["quote_match_method"] = match["method"]
+            source["quote_match_score"] = round(float(match["score"]), 3)
+            source["extraction_provider"] = "direct"
+            source["fetched_excerpt"] = _relevant_passage(str(source.get("snippet") or ""), direct_content)
             if checked.get("extracted_date"):
                 source["extracted_date"] = str(checked["extracted_date"])
             reason = ""
@@ -398,11 +542,24 @@ def _prevalidate_acquisition_results(acquisition_results: list, company_name: st
                 reason = "wrong_entity"
             elif not source["content_readable"] or len(str(source.get("snippet") or "").strip()) < 40:
                 reason = "unreadable"
-            elif not _quote_matches_packet(
-                str(source.get("snippet") or ""),
-                str(checked.get("content_excerpt") or ""),
-            ):
-                reason = "quote_not_found"
+            elif not match["matched"]:
+                recovered = firecrawl_results.get(source.get("url"), {})
+                recovered_text = str(recovered.get("text") or "")
+                recovered_match = _quote_match_details(str(source.get("snippet") or ""), recovered_text)
+                if recovered.get("ok") and recovered_match["matched"]:
+                    source["content_readable"] = True
+                    source["extraction_provider"] = "firecrawl"
+                    source["quote_match_method"] = f"firecrawl_{recovered_match['method']}"
+                    source["quote_match_score"] = round(float(recovered_match["score"]), 3)
+                    source["fetched_excerpt"] = _relevant_passage(
+                        str(source.get("snippet") or ""), recovered_text
+                    )
+                    stats["firecrawl_recovered"] += 1
+                else:
+                    if source.get("url") in firecrawl_results:
+                        stats["firecrawl_failed"] += 1
+                        source["extraction_recovery_reason"] = recovered.get("reason") or "passage_not_found"
+                    reason = "quote_not_found"
             if reason:
                 stats.setdefault(reason, 0)
                 stats[reason] += 1
@@ -589,12 +746,16 @@ ENTITY:
 {_build_jury_source_registry_block(search_name, domain_hint, (jury_name,))}
 
 Return only source packets that mention or clearly scope to the target company, group, or named subsidiary.
-Do not infer a claim from a title. Include the supporting quote or useful page excerpt.
+Do not infer a claim from a title. `verbatim_quote` is mandatory and must be copied word-for-word
+from the linked page itself, not paraphrased from a search-result summary. Use a direct canonical
+article, report, filing, documentation, or job URL rather than a search page or generic landing page.
+The quote should be 30-120 words and contain the target entity or the exact narrow fact it supports.
+If you cannot obtain a page-bound verbatim passage, omit that source.
 Return ONLY valid JSON:
 {{
   "jury": {json.dumps(jury_name)},
   "sources": [
-    {{"url": "https://...", "title": "page title", "quote": "supporting excerpt",
+    {{"url": "https://...", "title": "page title", "verbatim_quote": "exact page passage",
       "published_at": "YYYY-MM-DD or null", "source_type": "registry source type",
       "entity_scope_candidate": "company|group|subsidiary|context|unclear",
       "discovery_query": "query used", "freshness": "fresh|current|evergreen|unknown"}}
@@ -620,7 +781,9 @@ def _normalize_acquisition_payload(payload: dict, jury_name: str, provider: str)
         if not key or key in seen:
             continue
         seen.add(key)
-        quote = str(item.get("quote") or item.get("snippet") or item.get("source_quote") or "").strip()
+        quote = str(
+            item.get("verbatim_quote") or item.get("quote") or item.get("snippet") or item.get("source_quote") or ""
+        ).strip()
         normalized.append({
             "category": jury_name,
             "label": str(item.get("label") or item.get("title") or "Fresh evidence candidate")[:180],
@@ -1373,13 +1536,15 @@ def _verify_url(url, timeout=4, company_name=None):
             resp.close()
             return result
 
-        # Read enough body to avoid false wrong-entity flags on long news,
-        # investor, and search-result pages where the company mention appears
-        # after cookie banners/navigation. Claim support is verified later.
+        # Read a bounded but materially fuller body. The previous 64 KB raw-HTML
+        # cap often ended inside navigation/cookie markup and made valid quotes
+        # appear absent before the jury ever saw the source.
         body_chunk = ""
         try:
-            raw = resp.raw.read(65536)
-            body_chunk = raw.decode("utf-8", errors="ignore").lower()
+            resp.raw.decode_content = True
+            raw = resp.raw.read(524288)
+            encoding = resp.encoding or "utf-8"
+            body_chunk = raw.decode(encoding, errors="ignore").lower()
         except Exception:
             pass
         resp.close()
@@ -1389,10 +1554,11 @@ def _verify_url(url, timeout=4, company_name=None):
             return result
 
         result["verified"] = True
-        visible_text = re.sub(r"<[^>]+>", " ", body_chunk)
+        body_for_text = re.sub(r"<(script|style|noscript)[^>]*>.*?</\1>", " ", body_chunk, flags=re.I | re.S)
+        visible_text = html_lib.unescape(re.sub(r"<[^>]+>", " ", body_for_text))
         visible_text = re.sub(r"\s+", " ", visible_text).strip()
         result["content_readable"] = len(visible_text) >= 80
-        result["content_excerpt"] = visible_text[:12000]
+        result["content_excerpt"] = visible_text[:60000]
 
         # Extract publication date from URL and page body
         result["extracted_date"] = _extract_page_date(url, body_chunk)
@@ -2858,7 +3024,13 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     routed_seeds = _route_seed_findings(baseline.get("findings", []))
     acquisition_ceiling = min(
         FORENSIC_ACQUISITION_CEILING_SECONDS,
-        _phase_remaining(buffer=FORENSIC_JURY_ANALYSIS_CEILING_SECONDS + FORENSIC_POSTPROCESS_RESERVE_SECONDS),
+        _phase_remaining(
+            buffer=(
+                FORENSIC_EXTRACTION_RECOVERY_CEILING_SECONDS
+                + FORENSIC_JURY_ANALYSIS_CEILING_SECONDS
+                + FORENSIC_POSTPROCESS_RESERVE_SECONDS
+            )
+        ),
     )
     acquisition_started = time.time()
     acquisition_deadline = acquisition_started + acquisition_ceiling
@@ -2941,7 +3113,10 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     print(
         f"   🛡️ [Forensic Pre-Jury Gate] {pre_jury_stats['passed']}/{pre_jury_stats['input']} packets passed; "
         f"dead/soft-404={pre_jury_stats['dead_or_soft_404']}, wrong_entity={pre_jury_stats['wrong_entity']}, "
-        f"unreadable={pre_jury_stats['unreadable']}, quote_not_found={pre_jury_stats.get('quote_not_found', 0)}."
+        f"unreadable={pre_jury_stats['unreadable']}, quote_not_found={pre_jury_stats.get('quote_not_found', 0)}; "
+        f"Firecrawl recovered={pre_jury_stats.get('firecrawl_recovered', 0)}/"
+        f"{pre_jury_stats.get('firecrawl_attempted', 0)}, skipped_by_cap="
+        f"{pre_jury_stats.get('firecrawl_skipped_by_cap', 0)}."
     )
 
     # --- PHASE 2: FIVE PARALLEL NO-WEB JURY ANALYSES ---
@@ -3080,6 +3255,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         print(f"   ⚠️ [Forensic Juries] Missing judged coverage: {missing_juries}")
     data["_forensic_timing"] = {
         "acquisition_seconds": round(time.time() - acquisition_started, 2),
+        "extraction_recovery_ceiling_seconds": FORENSIC_EXTRACTION_RECOVERY_CEILING_SECONDS,
         "analysis_seconds": round(time.time() - analysis_started, 2),
         "postprocess_reserve_seconds": FORENSIC_POSTPROCESS_RESERVE_SECONDS,
         "merge_normalization_seconds": round(time.time() - postprocess_started, 2),
