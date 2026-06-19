@@ -18,11 +18,13 @@ This ensures the KB grows over time and a failed harvest never wipes good data.
 """
 
 import json
+import hashlib
 import re
+import threading
 import time
 import concurrent.futures
 from datetime import datetime, timezone
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from llm_clients import call_anthropic_text, call_openai_text
 from gemini_client import GEMINI_HARVEST_MODEL, call_gemini_harvest_text, gemini_api_key
@@ -70,6 +72,8 @@ HARVEST_GEMINI_OUTER_TIMEOUT_SEC = 100
 HARVEST_SONNET_REPAIR_NATIVE_TIMEOUT_SEC = 55
 HARVEST_SONNET_REPAIR_OUTER_TIMEOUT_SEC = 60
 HARVEST_TIMEOUT_COOLDOWN_SEC = 5
+HARVEST_THEME_WORKERS = 4
+HARVEST_PROVIDER_LIMITS = {"openai": 2, "google": 3, "anthropic": 2}
 HARVEST_DEFAULT_QUERY_LIMIT = 8
 HARVEST_THEME_QUERY_LIMIT = {
     "Data & Digitalisation": 6,
@@ -126,6 +130,59 @@ SOURCE_DOMAIN_PROFILES = {
 }
 
 
+class _HarvestRunContext:
+    """Shared provider health and concurrency limits for one harvest run."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._quarantined: dict[str, str] = {}
+        self._semaphores = {
+            provider: threading.BoundedSemaphore(limit)
+            for provider, limit in HARVEST_PROVIDER_LIMITS.items()
+        }
+
+    def quarantine(self, provider: str, reason: str) -> None:
+        with self._lock:
+            if provider not in self._quarantined:
+                self._quarantined[provider] = reason
+                print(f"   ⚠️ [Harvest Provider] {provider} quarantined for this run: {reason}")
+
+    def quarantine_reason(self, provider: str) -> str | None:
+        with self._lock:
+            return self._quarantined.get(provider)
+
+    def quarantined_snapshot(self) -> dict[str, str]:
+        with self._lock:
+            return dict(self._quarantined)
+
+    def call(self, provider: str, label: str, timeout_sec: int, fn) -> dict:
+        reason = self.quarantine_reason(provider)
+        if reason:
+            return {
+                "value": None,
+                "status": "provider_quarantined",
+                "error": reason,
+                "elapsed_ms": 0,
+                "lingering": False,
+            }
+        semaphore = self._semaphores[provider]
+        acquired = semaphore.acquire(timeout=max(1, min(15, timeout_sec)))
+        if not acquired:
+            return {
+                "value": None,
+                "status": "provider_queue_timeout",
+                "elapsed_ms": timeout_sec * 1000,
+                "lingering": False,
+            }
+        try:
+            result = _call_harvest_model_with_deadline(label, timeout_sec, fn)
+            if result.get("lingering"):
+                self.quarantine(provider, f"{label} exceeded its outer deadline")
+            return result
+        finally:
+            semaphore.release()
+
+
 def _theme_to_slug(theme: str) -> str:
     """Convert a theme name to a storage-safe slug."""
     slug = theme.lower()
@@ -135,12 +192,78 @@ def _theme_to_slug(theme: str) -> str:
     return slug.strip('_')
 
 
+_TRACKING_QUERY_KEYS = {"fbclid", "gclid", "mc_cid", "mc_eid", "ref", "source"}
+
+
+def _canonical_source_url(value: str) -> str:
+    """Canonicalize one URL without treating its whole domain as already seen."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+        host = (parsed.hostname or "").lower().removeprefix("www.")
+        if not host:
+            return ""
+        port = f":{parsed.port}" if parsed.port and parsed.port not in {80, 443} else ""
+        path = re.sub(r"/{2,}", "/", parsed.path or "/").rstrip("/") or "/"
+        query = [
+            (key, val) for key, val in parse_qsl(parsed.query, keep_blank_values=True)
+            if not key.lower().startswith("utm_") and key.lower() not in _TRACKING_QUERY_KEYS
+        ]
+        return urlunparse(("https", f"{host}{port}", path, "", urlencode(sorted(query)), ""))
+    except Exception:
+        return raw.lower().rstrip("/")
+
+
+def _signal_content_hash(sig: dict) -> str:
+    text = " ".join(str(sig.get(field) or "") for field in (
+        "semantic_snippet", "source_quote", "description", "title",
+    ))
+    text = re.sub(r"\s+", " ", text).strip().lower()
+    return hashlib.sha256(text.encode("utf-8")).hexdigest() if len(text) >= 80 else ""
+
+
+def _build_theme_source_memory(active: list[dict], audit: list[dict]) -> dict:
+    return {
+        "active_urls": {u for s in active if (u := _canonical_source_url(s.get("source_url") or s.get("url")))},
+        "audit_urls": {u for s in audit if (u := _canonical_source_url(s.get("source_url") or s.get("url")))},
+        "content_hashes": {h for s in [*active, *audit] if (h := _signal_content_hash(s))},
+    }
+
+
+def _filter_known_harvest_signals(signals: list[dict], memory: dict) -> tuple[list[dict], dict]:
+    """Suppress exact/duplicate material while allowing new URLs on known domains."""
+    kept = []
+    stats = {"known_active_url": 0, "known_audit_url": 0, "duplicate_content": 0}
+    seen_hashes = set(memory.get("content_hashes") or set())
+    for signal in signals or []:
+        canonical = _canonical_source_url(signal.get("source_url") or signal.get("url"))
+        content_hash = _signal_content_hash(signal)
+        if canonical and canonical in (memory.get("active_urls") or set()):
+            stats["known_active_url"] += 1
+            continue
+        if canonical and canonical in (memory.get("audit_urls") or set()):
+            stats["known_audit_url"] += 1
+            continue
+        if content_hash and content_hash in seen_hashes:
+            stats["duplicate_content"] += 1
+            continue
+        if canonical:
+            signal["canonical_source_url"] = canonical
+        if content_hash:
+            signal["content_hash"] = content_hash
+            seen_hashes.add(content_hash)
+        kept.append(signal)
+    return kept, stats
+
+
 def _signal_key(sig: dict) -> str:
     """
     Generate a deduplication key for a signal.
     Matches on source_url (exact) or title similarity (normalized).
     """
-    url = (sig.get("source_url") or "").strip().rstrip("/").lower()
+    url = _canonical_source_url(sig.get("canonical_source_url") or sig.get("source_url") or "")
     if url:
         return url
     # Fallback: normalized title
@@ -1226,12 +1349,23 @@ def _batch_signal_target(query_count: int) -> tuple[int, int]:
     return 2, 4
 
 
-def _build_harvest_prompt(theme: str, search_queries: list[str]) -> str:
+def _build_harvest_prompt(
+    theme: str,
+    search_queries: list[str],
+    known_urls: list[str] | None = None,
+) -> str:
     """Build a web-research prompt to harvest megatrend signals for one FP theme."""
 
     selected_queries = _select_harvest_queries(theme, search_queries)
     queries_text = "\n".join(f"- {q}" for q in selected_queries)
     target_min, target_max = _batch_signal_target(len(selected_queries))
+    known_urls_text = "\n".join(f"- {url}" for url in (known_urls or [])[:30])
+    source_memory_instruction = (
+        "\nSOURCE MEMORY — DO NOT RETURN THESE EXACT URLS AGAIN:\n"
+        f"{known_urls_text}\n"
+        "You may still use other, newer pages from the same domains.\n"
+        if known_urls_text else ""
+    )
 
     return f"""You are a Strategic Foresight Research Analyst specializing in megatrend signal detection.
 
@@ -1245,6 +1379,7 @@ These signals must be:
 
 MANDATORY SOURCE TARGETING — Search these first:
 {queries_text}
+{source_memory_instruction}
 
 ALLOWED SOURCE DOMAINS:
 Tier 1 (intergovernmental/UN/flagship journals): ipcc.ch, who.int, iea.org, irena.org, imf.org, worldbank.org, oecd.org, nature.com, science.org, thelancet.com, bis.org, fao.org, ilo.org, unep.org, wto.org, unctad.org, unfccc.int, ipbes.net, iom.int, un.org, ec.europa.eu, wmo.int
@@ -1329,6 +1464,8 @@ def _harvest_single_theme(
     batch_index: int = 1,
     batch_total: int = 1,
     theme_deadline_monotonic: float | None = None,
+    run_context: _HarvestRunContext | None = None,
+    known_urls: list[str] | None = None,
 ) -> dict:
     """Harvest one batch: GPT discovery, Gemini fallback, Sonnet JSON repair."""
 
@@ -1364,9 +1501,11 @@ Required envelope: {{"theme": {json.dumps(theme)}, "signals": [...]}}.
 
 RESPONSE TO REPAIR:
 {text[:30000]}"""
-        call = _call_harvest_model_with_deadline(
-            f"{theme} {batch_label} Sonnet JSON repair",
-            repair_timeout,
+        call_runner = run_context.call if run_context else (
+            lambda provider, label, timeout, fn: _call_harvest_model_with_deadline(label, timeout, fn)
+        )
+        call = call_runner(
+            "anthropic", f"{theme} {batch_label} Sonnet JSON repair", repair_timeout,
             lambda: call_anthropic_text(
                 repair_prompt,
                 model="claude-sonnet-4-6",
@@ -1386,7 +1525,7 @@ RESPONSE TO REPAIR:
             return None, call.get("status") or "invalid_json"
         return parse_payload(str(call.get("value") or ""))
 
-    prompt = _build_harvest_prompt(theme, search_queries)
+    prompt = _build_harvest_prompt(theme, search_queries, known_urls=known_urls)
     gpt_outer = min(HARVEST_GPT_OUTER_TIMEOUT_SEC, max(1, int(remaining())))
     if gpt_outer < 15:
         return {
@@ -1400,9 +1539,11 @@ RESPONSE TO REPAIR:
         f"   🌐 [Harvest] {theme} {batch_label} → gpt-5.5 "
         f"(discovery, timeout={gpt_outer}s, queries={len(search_queries)})..."
     )
-    gpt = _call_harvest_model_with_deadline(
-        f"{theme} {batch_label} gpt-5.5",
-        gpt_outer,
+    call_runner = run_context.call if run_context else (
+        lambda provider, label, timeout, fn: _call_harvest_model_with_deadline(label, timeout, fn)
+    )
+    gpt = call_runner(
+        "openai", f"{theme} {batch_label} gpt-5.5", gpt_outer,
         lambda: call_openai_text(
             prompt,
             model="gpt-5.5",
@@ -1410,6 +1551,7 @@ RESPONSE TO REPAIR:
             timeout=min(HARVEST_GPT_NATIVE_TIMEOUT_SEC, gpt_outer),
             web_search=True,
             search_context_size="medium",
+            max_retries=0,
         ),
     )
     attempts.append({
@@ -1421,15 +1563,6 @@ RESPONSE TO REPAIR:
         "lingering": gpt.get("lingering", False),
         "query_count": len(search_queries),
     })
-    if gpt.get("lingering"):
-        return {
-            "theme": theme,
-            "signals": [],
-            "failure_status": "provider_timeout",
-            "provider_attempts": attempts,
-            "lingering_provider_call": True,
-        }
-
     gpt_text = str(gpt.get("value") or "")
     data, parse_status = parse_payload(gpt_text) if gpt.get("status") == "ok" else (None, gpt.get("status"))
     if data is None and parse_status == "invalid_json":
@@ -1460,14 +1593,13 @@ RESPONSE TO REPAIR:
                 "failure_status": "theme_budget_exhausted",
                 "provider_attempts": attempts,
             }
-        fallback_prompt = _build_harvest_prompt(theme, fallback_queries)
+        fallback_prompt = _build_harvest_prompt(theme, fallback_queries, known_urls=known_urls)
         print(
             f"   🌐 [Harvest] {theme} {batch_label} → {GEMINI_HARVEST_MODEL} "
             f"(reduced fallback, timeout={gemini_outer}s, queries={len(fallback_queries)})..."
         )
-        gemini = _call_harvest_model_with_deadline(
-            f"{theme} {batch_label} {GEMINI_HARVEST_MODEL}",
-            gemini_outer,
+        gemini = call_runner(
+            "google", f"{theme} {batch_label} {GEMINI_HARVEST_MODEL}", gemini_outer,
             lambda: call_gemini_harvest_text(
                 fallback_prompt,
                 model=GEMINI_HARVEST_MODEL,
@@ -1491,6 +1623,7 @@ RESPONSE TO REPAIR:
                 "failure_status": "provider_timeout",
                 "provider_attempts": attempts,
                 "lingering_provider_call": True,
+                "lingering_provider": "google",
             }
         gemini_text = str(gemini.get("value") or "")
         data, parse_status = parse_payload(gemini_text) if gemini.get("status") == "ok" else (None, gemini.get("status"))
@@ -1616,22 +1749,24 @@ def _verify_signal_content(data: dict, max_checks: int | None = None, max_worker
     return _promote_foresight_signals_for_analysis(data, max_checks=max_checks, max_workers=max_workers)
 
 
-def harvest_all_themes(
+def _harvest_theme_group(
     themes: list[str] | None = None,
-    max_concurrent: int = 2,
     progress_callback=None,
+    *,
+    run_context: _HarvestRunContext | None = None,
+    save_registry: bool = False,
 ) -> dict:
     """
     Harvest megatrend signals for all (or selected) FP themes.
 
     Args:
         themes: List of theme names to harvest. None = all 30.
-        max_concurrent: Reserved for future parallel harvests; current flow is sequential to avoid provider rate limits.
         progress_callback: Optional fn(theme, index, total, status) for progress tracking.
 
     Returns dict with harvest results and summary.
     """
     storage = BlobStorage()
+    run_context = run_context or _HarvestRunContext()
 
     target_themes = themes or FP_THEMES_30
     total = len(target_themes)
@@ -1649,16 +1784,16 @@ def harvest_all_themes(
     print(f"🌐 FORESIGHT KB HARVEST — {total} themes")
     print(f"{'='*70}\n")
 
-    try:
-        registry_url = storage.save_foresight_registry(build_strategic_foresight_theme_registry())
-        if registry_url:
-            results["registry_url"] = registry_url
-            print("   📚 [Registry] Strategic Foresight Theme Registry snapshot saved")
-    except Exception as exc:
-        results["registry_warning"] = f"Could not save registry snapshot: {str(exc)[:160]}"
-        print(f"   ⚠️ [Registry] {results['registry_warning']}")
+    if save_registry:
+        try:
+            registry_url = storage.save_foresight_registry(build_strategic_foresight_theme_registry())
+            if registry_url:
+                results["registry_url"] = registry_url
+                print("   📚 [Registry] Strategic Foresight Theme Registry snapshot saved")
+        except Exception as exc:
+            results["registry_warning"] = f"Could not save registry snapshot: {str(exc)[:160]}"
+            print(f"   ⚠️ [Registry] {results['registry_warning']}")
 
-    abort_harvest = False
     for i, theme in enumerate(target_themes):
         slug = _theme_to_slug(theme)
         search_queries = FP_THEME_SOURCES.get(theme, [])
@@ -1699,6 +1834,22 @@ def harvest_all_themes(
             )
             audit_records.extend(existing_audit)
 
+        existing_audit_data = None
+        get_audit = getattr(storage, "get_foresight_kb_audit", None)
+        if callable(get_audit):
+            try:
+                existing_audit_data = get_audit(slug)
+            except Exception as exc:
+                print(f"   ⚠️ [Harvest Memory] {theme}: audit memory unavailable: {exc!r}")
+        existing_audit_candidates = list((existing_audit_data or {}).get("candidates") or [])
+        source_memory = _build_theme_source_memory(existing_active, existing_audit_candidates)
+        known_urls = sorted(source_memory["active_urls"] | source_memory["audit_urls"])
+        print(
+            f"   🧠 [Harvest Memory] {theme}: {len(source_memory['active_urls'])} active URL(s), "
+            f"{len(source_memory['audit_urls'])} rejected URL(s), "
+            f"{len(source_memory['content_hashes'])} content fingerprint(s)"
+        )
+
         new_active = []
         new_stats = {}
         batch_diagnostics = []
@@ -1729,6 +1880,8 @@ def harvest_all_themes(
                 batch_index=batch_index,
                 batch_total=len(query_batches),
                 theme_deadline_monotonic=theme_deadline,
+                run_context=run_context,
+                known_urls=known_urls,
             )
             if not data or not data.get("signals"):
                 batch_diagnostics.append({
@@ -1742,9 +1895,11 @@ def harvest_all_themes(
                     "lingering_provider_call": (data or {}).get("lingering_provider_call", False),
                 })
                 if (data or {}).get("lingering_provider_call"):
-                    print(f"   ⚠️ [Harvest] {theme}: possible lingering provider call; stopping this theme")
-                    abort_harvest = True
-                    results["abort_reason"] = "possibly_lingering_provider_call"
+                    provider = (data or {}).get("lingering_provider") or "unknown"
+                    print(
+                        f"   ⚠️ [Harvest] {theme}: {provider} call may still be lingering; "
+                        "stopping only this theme while other theme workers continue"
+                    )
                     break
                 if len(query_batch) > 1 and theme_deadline - time.monotonic() >= 30:
                     split_batches = [[query] for query in query_batch]
@@ -1753,6 +1908,28 @@ def harvest_all_themes(
                         f"   🔀 [Harvest] {theme}: failed batch split into "
                         f"{len(split_batches)} one-query micro-batches"
                     )
+                continue
+
+            filtered_signals, memory_stats = _filter_known_harvest_signals(
+                data.get("signals", []), source_memory,
+            )
+            data["signals"] = filtered_signals
+            if any(memory_stats.values()):
+                print(
+                    f"   🧠 [Harvest Memory] {theme}: suppressed exact/duplicate results "
+                    f"{memory_stats}"
+                )
+            if not filtered_signals:
+                batch_diagnostics.append({
+                    "batch_index": batch_index,
+                    "queries": query_batch,
+                    "status": "source_memory_suppressed",
+                    "raw_signals": sum(memory_stats.values()),
+                    "accepted_active": 0,
+                    "rejected_audit": 0,
+                    "source_memory": memory_stats,
+                    "provider_attempts": data.get("provider_attempts", []),
+                })
                 continue
 
             harvest_model = data.get("model") or harvest_model
@@ -1764,6 +1941,11 @@ def harvest_all_themes(
             )
             new_active.extend(batch_active)
             audit_records.extend(batch_audit)
+            source_memory = _build_theme_source_memory(
+                [*existing_active, *new_active],
+                [*existing_audit_candidates, *audit_records],
+            )
+            known_urls = sorted(source_memory["active_urls"] | source_memory["audit_urls"])
             new_stats = _merge_harvest_stats(new_stats, batch_stats)
             batch_diagnostics.append({
                 "batch_index": batch_index,
@@ -1776,6 +1958,7 @@ def harvest_all_themes(
                 "model": data.get("model"),
                 "time_ms": data.get("time_ms"),
                 "provider_attempts": data.get("provider_attempts", []),
+                "source_memory": memory_stats,
             })
             print(
                 f"   🧭 [Harvest Batch] {theme} {batch_index} (planned {len(query_batches)}): "
@@ -1840,9 +2023,6 @@ def harvest_all_themes(
                 "theme_elapsed_ms": theme_elapsed_ms,
             })
             print(f"   ⚠️ [Result] {theme}: no accepted active signals after merge — active KB unchanged; audit={len(audit_records)}")
-            if abort_harvest:
-                print("   🛑 [Harvest] Stopping run to prevent overlap with a possibly lingering provider call")
-                break
             continue
 
         context_eligible_count = sum(1 for s in merged_signals if _is_kb_signal_context_eligible(s))
@@ -1927,10 +2107,6 @@ def harvest_all_themes(
             f"({context_eligible_count} active, {audit_count} audit)"
         )
 
-        if abort_harvest:
-            print("   🛑 [Harvest] Stopping run to prevent overlap with a possibly lingering provider call")
-            break
-
         # Rate limit courtesy: pause between themes to avoid web-search provider quota hits
         if i < total - 1:
             time.sleep(2)
@@ -1942,6 +2118,90 @@ def harvest_all_themes(
     print(f"{'='*70}\n")
 
     return results
+
+
+def harvest_all_themes(
+    themes: list[str] | None = None,
+    max_concurrent: int = HARVEST_THEME_WORKERS,
+    progress_callback=None,
+) -> dict:
+    """Harvest themes in isolated workers with shared provider health controls."""
+    target_themes = list(themes or FP_THEMES_30)
+    total = len(target_themes)
+    worker_count = max(1, min(int(max_concurrent or HARVEST_THEME_WORKERS), HARVEST_THEME_WORKERS, total or 1))
+    started_at = datetime.now(timezone.utc).isoformat()
+    run_context = _HarvestRunContext()
+    aggregate = {
+        "harvested": 0,
+        "failed": 0,
+        "total_signals": 0,
+        "accepted_active": 0,
+        "rejected_audit": 0,
+        "themes": [],
+        "started_at": started_at,
+        "theme_workers": worker_count,
+    }
+
+    try:
+        registry_url = BlobStorage().save_foresight_registry(build_strategic_foresight_theme_registry())
+        if registry_url:
+            aggregate["registry_url"] = registry_url
+            print("   📚 [Registry] Strategic Foresight Theme Registry snapshot saved")
+    except Exception as exc:
+        aggregate["registry_warning"] = f"Could not save registry snapshot: {str(exc)[:160]}"
+        print(f"   ⚠️ [Registry] {aggregate['registry_warning']}")
+
+    print(
+        f"\n🚦 [Harvest Parallel] {total} theme(s), {worker_count} isolated theme worker(s), "
+        f"provider limits={HARVEST_PROVIDER_LIMITS}"
+    )
+
+    def run_theme(theme: str, index: int) -> dict:
+        try:
+            return _harvest_theme_group(
+                [theme],
+                progress_callback=None,
+                run_context=run_context,
+                save_registry=False,
+            )
+        except Exception as exc:
+            print(f"   ❌ [Harvest Worker] {theme}: {type(exc).__name__}: {exc!r}")
+            return {
+                "harvested": 0,
+                "failed": 1,
+                "total_signals": 0,
+                "accepted_active": 0,
+                "rejected_audit": 0,
+                "themes": [{
+                    "theme": theme,
+                    "status": "worker_exception",
+                    "error": f"{type(exc).__name__}: {str(exc)[:240]}",
+                }],
+            }
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as pool:
+        futures = {}
+        for index, theme in enumerate(target_themes):
+            if progress_callback:
+                progress_callback(theme, index, total, "queued")
+            futures[pool.submit(run_theme, theme, index)] = (theme, index)
+        for future in concurrent.futures.as_completed(futures):
+            theme, index = futures[future]
+            result = future.result()
+            for key in ("harvested", "failed", "total_signals", "accepted_active", "rejected_audit"):
+                aggregate[key] += int(result.get(key) or 0)
+            aggregate["themes"].extend(result.get("themes") or [])
+            if progress_callback:
+                progress_callback(theme, index, total, "completed")
+
+    aggregate["themes"].sort(key=lambda item: target_themes.index(item.get("theme")) if item.get("theme") in target_themes else total)
+    aggregate["provider_quarantines"] = run_context.quarantined_snapshot()
+    aggregate["completed_at"] = datetime.now(timezone.utc).isoformat()
+    print(
+        f"\n🌐 HARVEST COMPLETE: {aggregate['harvested']}/{total} themes, "
+        f"{aggregate['total_signals']} signals; provider quarantines={aggregate['provider_quarantines']}"
+    )
+    return aggregate
 
 
 def _is_kb_signal_context_eligible(sig: dict) -> bool:

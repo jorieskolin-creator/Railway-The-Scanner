@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
+import time
 from datetime import datetime, timezone
 
 _BACKEND = os.path.join(os.path.dirname(__file__), "..", "backend")
@@ -636,3 +638,95 @@ def test_unknown_date_official_evergreen_can_remain_active(monkeypatch):
     assert active is True
     assert normalized["freshness_status"] == "evergreen_context"
     assert normalized["foresight_context_eligible"] is True
+
+
+def test_harvest_source_memory_suppresses_exact_url_but_not_same_domain():
+    active = [_signal(source_url="https://www.oecd.org/report?utm_source=test")]
+    audit = [_signal(source_url="https://www.rand.org/rejected", title="Rejected")]
+    memory = foresight_harvester._build_theme_source_memory(active, audit)
+
+    kept, stats = foresight_harvester._filter_known_harvest_signals([
+        _signal(source_url="https://oecd.org/report", title="Known URL"),
+        _signal(
+            source_url="https://www.oecd.org/new-report",
+            title="New page on known domain",
+            semantic_snippet=(
+                "A newly published OECD report describes a distinct structural shift in digital public "
+                "infrastructure, cross-border interoperability, investment priorities, and organizational "
+                "capability requirements over the coming two years. This is intentionally different source "
+                "content and must remain discoverable even though another OECD URL is already in memory."
+            ),
+        ),
+        _signal(source_url="https://rand.org/rejected?utm_campaign=x", title="Known audit URL"),
+    ], memory)
+
+    assert [signal["title"] for signal in kept] == ["New page on known domain"]
+    assert stats["known_active_url"] == 1
+    assert stats["known_audit_url"] == 1
+
+
+def test_harvest_provider_lingering_call_quarantines_only_that_provider(monkeypatch):
+    calls = []
+
+    def fake_deadline(label, timeout_sec, fn):
+        calls.append(label)
+        return {
+            "value": None,
+            "status": "provider_timeout",
+            "elapsed_ms": timeout_sec * 1000,
+            "lingering": True,
+        }
+
+    monkeypatch.setattr(foresight_harvester, "_call_harvest_model_with_deadline", fake_deadline)
+    context = foresight_harvester._HarvestRunContext()
+
+    first = context.call("openai", "first", 1, lambda: "unused")
+    second = context.call("openai", "second", 1, lambda: "unused")
+    google = context.call("google", "google", 1, lambda: "unused")
+
+    assert first["lingering"] is True
+    assert second["status"] == "provider_quarantined"
+    assert google["status"] == "provider_timeout"
+    assert calls == ["first", "google"]
+    assert "openai" in context.quarantined_snapshot()
+    assert "google" in context.quarantined_snapshot()
+
+
+def test_harvest_all_themes_runs_theme_workers_in_parallel(monkeypatch):
+    active = 0
+    peak = 0
+    lock = threading.Lock()
+
+    class FakeStorage:
+        def save_foresight_registry(self, registry):
+            return "blob://registry"
+
+    def fake_group(themes, progress_callback=None, **kwargs):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.04)
+        with lock:
+            active -= 1
+        return {
+            "harvested": 1,
+            "failed": 0,
+            "total_signals": 1,
+            "accepted_active": 1,
+            "rejected_audit": 0,
+            "themes": [{"theme": themes[0], "status": "ok"}],
+        }
+
+    monkeypatch.setattr(foresight_harvester, "BlobStorage", FakeStorage)
+    monkeypatch.setattr(foresight_harvester, "_harvest_theme_group", fake_group)
+
+    result = foresight_harvester.harvest_all_themes(
+        ["Artificial Intelligence", "Business", "Finance"],
+        max_concurrent=3,
+    )
+
+    assert peak >= 2
+    assert result["harvested"] == 3
+    assert result["failed"] == 0
+    assert result["theme_workers"] == 3

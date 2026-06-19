@@ -69,13 +69,14 @@ def call_openai_text(
     timeout: int = 90,
     web_search: bool = False,
     search_context_size: str = "medium",
+    max_retries: int = 2,
 ) -> str:
     api_key = openai_api_key()
     if not api_key:
         raise ValueError("No GPT_API_KEY configured")
     from openai import OpenAI
 
-    client = OpenAI(api_key=api_key, timeout=timeout)
+    client = OpenAI(api_key=api_key, timeout=timeout, max_retries=max_retries)
     kwargs: dict[str, Any] = {
         "model": model,
         "input": prompt,

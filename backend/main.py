@@ -3066,11 +3066,19 @@ def _run_foresight_kb_harvest():
     try:
         from foresight_harvester import harvest_all_themes
 
+        completed_themes = 0
+
         def progress_cb(theme, index, total, status):
+            nonlocal completed_themes
             with _foresight_kb_lock:
-                _foresight_kb_state["current_theme"] = theme
-                _foresight_kb_state["current"] = index + 1
                 _foresight_kb_state["total"] = total
+                _foresight_kb_state["current_status"] = status
+                if status == "completed":
+                    completed_themes += 1
+                    _foresight_kb_state["current_theme"] = theme
+                    _foresight_kb_state["current"] = completed_themes
+                elif completed_themes == 0:
+                    _foresight_kb_state["current_theme"] = "Queueing themes..."
 
         result = harvest_all_themes(progress_callback=progress_cb)
 
@@ -3103,6 +3111,7 @@ def refresh_foresight_kb(request: Request):
         _foresight_kb_state["current"] = 0
         _foresight_kb_state["total"] = 30
         _foresight_kb_state["current_theme"] = "Starting..."
+        _foresight_kb_state["current_status"] = "starting"
         _foresight_kb_state["started_at"] = datetime.utcnow().isoformat()
         _foresight_kb_state["completed_at"] = None
         _foresight_kb_state["result"] = None
