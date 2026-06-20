@@ -17,7 +17,7 @@ from knowledge_base import get_evolving_framework
 from storage import BlobStorage
 from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, purge_false_evidence, _call_openai_text
 from general_summary import generate_general_summary, fact_check_general_summary
-from source_quality import manage_evidence_sources
+from source_quality import manage_evidence_sources, is_foresight_context_eligible_source
 from prompts import PROMPT_VERSION, build_shared_guardrails
 import anthropic
 
@@ -499,13 +499,13 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
                         if not passes_gate:
                             print(f"   [{company_name}] ⚠️ [Foresight] Insufficient evidence — foresight flagged as low-trust")
 
-                    # Merge with existing DB foresight links (preserve previously validated)
+                    # Preserve only links satisfying the current foresight contract.
                     if existing_company_data and existing_company_data.get("foresight_links"):
                         db_fl = existing_company_data["foresight_links"]
                         new_urls = {l.get("url") for l in foresight_links if l.get("url")}
                         for db_link in db_fl:
                             if db_link.get("url") and db_link["url"] not in new_urls:
-                                if db_link.get("verified") and db_link.get("validated"):
+                                if is_foresight_context_eligible_source(db_link):
                                     foresight_links.append(db_link)
                                     new_urls.add(db_link["url"])
                         print(f"   [{company_name}] 📎 [Foresight Links] Merged: {len(foresight_links)} total ({len(db_fl)} from DB)")

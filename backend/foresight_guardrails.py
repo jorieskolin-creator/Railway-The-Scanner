@@ -785,7 +785,7 @@ def sanitize_report_foresight_fields(data: dict, *, report_date: date | None = N
     for field in ["foresight_links", "foresight_evidence", "source_cards", "dimension_forces", "future_insights"]:
         if isinstance(out.get(field), list):
             out[field] = sanitize_foresight_collection(out[field], report_date=report_date, domain=domain, company_name=company_name)
-    for field in ["future_insight", "future_insights_text", "foresight_summary", "climate_exposure", "cross_impact_chain"]:
+    for field in ["future_insight", "future_insights_text", "climate_exposure", "cross_impact_chain"]:
         if isinstance(out.get(field), str):
             out[field], _ = sanitize_future_insight(out[field], report_date)
     out["clean_by_construction"] = True
@@ -797,7 +797,7 @@ def validate_clean_by_construction(data: dict, *, company_name: str = "", report
     if not isinstance(data, dict):
         return ["Generated foresight payload is not a dict"]
     report_date = report_date or date.today()
-    for field in ["future_insight", "future_insights_text", "foresight_summary", "climate_exposure"]:
+    for field in ["future_insight", "future_insights_text", "climate_exposure"]:
         if isinstance(data.get(field), str):
             issues.extend([f"{field}: {w}" for w in validate_foresight_text(data[field], report_date)])
     variants = _company_name_variants(company_name) if company_name else []

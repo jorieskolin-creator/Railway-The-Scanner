@@ -35,6 +35,7 @@ from source_quality import (
     assess_source_scope,
     annotate_evidence_links,
     is_generation_eligible_source,
+    is_foresight_context_eligible_source,
     infer_source_type,
     assess_source_credibility,
     compute_claim_tier,
@@ -513,14 +514,14 @@ def _build_fact_check_scan_payload(data: dict) -> dict:
 
 
 def _fallback_foresight_from_links(company_name: str, foresight_links: list, domain: str = "") -> dict | None:
-    """Retain validated foresight links as context when current KB synthesis returns no force object."""
+    """Retain only links already satisfying the foresight-context contract."""
     retained = []
     seen = set()
     for link in _safe_dict_list(foresight_links, "fallback_foresight_links"):
         url = (link.get("url") or link.get("source_url") or "").strip()
         if not url or url in seen:
             continue
-        if link.get("verified") is not True and link.get("url_verified") is not True:
+        if not is_foresight_context_eligible_source(link):
             continue
         seen.add(url)
         retained.append({
@@ -529,11 +530,13 @@ def _fallback_foresight_from_links(company_name: str, foresight_links: list, dom
             "source_url": url,
             "source_title": link.get("source_title") or link.get("title"),
             "source_quote": link.get("source_quote") or link.get("snippet") or link.get("description") or "",
-            "evidence_status": "context_only_retained_link",
+            "claim_type": "foresight_context",
+            "company_specific": False,
+            "foresight_context_eligible": True,
+            "foresight_signal_status": "context_eligible",
+            "source_audit_status": "accepted",
+            "evidence_status": "foresight_context_retained_link",
             "context_only": True,
-            "generation_eligible": False,
-            "analysis_verified": False,
-            "promotion_status": "display_only",
         })
         if len(retained) >= 8:
             break
@@ -545,14 +548,14 @@ def _fallback_foresight_from_links(company_name: str, foresight_links: list, dom
         "kb_first": False,
         "fallback_from_links": True,
         "insufficient_evidence": True,
-        "quality_label": "foresight_links_retained_no_current_synthesis",
+        "quality_label": "foresight_context_retained_no_current_synthesis",
         "summary": (
             "Current foresight synthesis did not produce generation-eligible forces. "
-            "Previously validated foresight links are retained as context-only audit material."
+            "Previously eligible foresight-context links are retained as macro context."
         ),
         "method_note": (
             "These retained links are not promoted into fresh strategic foresight claims. "
-            "They preserve source continuity until the Foresight KB returns generation-eligible signals."
+            "They preserve source continuity without becoming company-fact evidence."
         ),
         "dimension_forces": retained,
     }
@@ -4059,8 +4062,7 @@ def _execute_scan_pipeline(
             print(traceback.format_exc())
 
         # --- STEP 2.7.5: MERGE DB FORESIGHT LINKS ---
-        # Reuse validated/verified links from previous scans stored in the database.
-        # New sources are added; existing validated ones are preserved (de-duped by URL).
+        # Reuse only links that satisfy the current foresight-context contract.
         foresight_links = _safe_dict_list(foresight_links, "foresight_links before DB merge")
         if existing_data and existing_data.get("foresight_links"):
             existing_fl = _safe_dict_list(existing_data.get("foresight_links", []), "existing_data.foresight_links")
@@ -4069,13 +4071,12 @@ def _execute_scan_pipeline(
             for efl in existing_fl:
                 if (efl.get("url")
                     and efl["url"] not in new_urls
-                    and efl.get("verified") is True
-                    and efl.get("validated") is True):
+                    and is_foresight_context_eligible_source(efl)):
                     foresight_links.append(efl)
                     new_urls.add(efl["url"])
                     merged_count += 1
             if merged_count:
-                print(f"   📎 [Foresight Links] Merged {merged_count} validated links from previous scan")
+                print(f"   📎 [Foresight Links] Merged {merged_count} eligible context links from previous scan")
 
         foresight_links = sanitize_foresight_collection(foresight_links, domain=company_domain)  # final foresight card sanitation
         if not foresight_data and foresight_links:

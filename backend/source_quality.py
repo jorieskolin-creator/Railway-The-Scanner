@@ -1075,6 +1075,30 @@ def is_generation_eligible_source(link: dict) -> bool:
     )
 
 
+def is_foresight_context_eligible_source(link: dict) -> bool:
+    """True when a macro source may feed foresight synthesis, not company facts."""
+    if not isinstance(link, dict):
+        return False
+    if str(link.get("claim_type") or "").lower() != "foresight_context":
+        return False
+    if link.get("company_specific") is True:
+        return False
+    if link.get("foresight_context_eligible") is not True:
+        return False
+    if link.get("wrong_entity") is True or link.get("verification_conflict") is True:
+        return False
+    if str(link.get("source_audit_status") or "").lower() in {
+        "source_dead", "source_unreadable", "excluded",
+    }:
+        return False
+    return (
+        (link.get("verified") is True or link.get("url_verified") is True)
+        and link.get("source_readable", link.get("content_verified")) is True
+        and link.get("theme_match", True) is not False
+        and link.get("trend_supported", True) is not False
+    )
+
+
 def annotate_evidence_links(links: list, company_domain: str = "", company_name: str = "") -> list:
     """Normalize links in-place and annotate admissibility fields."""
     annotated = []

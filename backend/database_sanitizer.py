@@ -366,7 +366,11 @@ def classify_source_registry_items(record: dict) -> dict:
             if not isinstance(item, dict):
                 continue
             item.setdefault("search_skip", True)
-            if item.get("wrong_entity") is True or item.get("verified") is False:
+            if _is_probably_foresight_record(item) and not _is_company_specific_evidence(item):
+                # Macro foresight is not expected to match the company entity.
+                # Repair it under the separate foresight-context contract first.
+                _mark_sanitized_foresight_context(item)
+            elif item.get("wrong_entity") is True or item.get("verified") is False:
                 item["generation_eligible"] = False
                 item.setdefault("analysis_verified", False)
                 item["promotion_status"] = "excluded"
@@ -375,9 +379,6 @@ def classify_source_registry_items(record: dict) -> dict:
                 item["excluded_from_generation"] = True
                 item["source_registry_status"] = "checked_excluded"
                 item["exclusion_reason"] = "wrong_entity_or_unverified"
-            elif _is_probably_foresight_record(item) and not _is_company_specific_evidence(item):
-                # Generic foresight/regulatory/trend context — not company fact evidence.
-                _mark_sanitized_foresight_context(item)
             else:
                 # Company-specific evidence: preserve scope, but do not imply
                 # analysis verification from sanitation alone.
@@ -410,33 +411,43 @@ def _has_analysis_verified_promotion(item: dict) -> bool:
 
 def _mark_sanitized_foresight_context(item: dict) -> None:
     """Repair generic foresight metadata without implying company-fact evidence."""
-    item.setdefault("claim_type", "foresight_context")
-    item.setdefault("company_specific", False)
-    item.setdefault("requires_company_specific_corroboration", True)
-    item.setdefault("not_evidence_of_deployment", True)
+    item["claim_type"] = "foresight_context"
+    item["company_specific"] = False
+    item["requires_company_specific_corroboration"] = True
+    item["not_evidence_of_deployment"] = True
     item.setdefault("modal_language_required", True)
     item.setdefault("generation_scope", "foresight_synthesis_only")
     item["excluded_from_company_fact_generation"] = True
-    item.setdefault("exclusion_reason", "context_only_not_company_fact")
+    item["exclusion_reason"] = "context_only_not_company_fact"
     item.setdefault("stored_metadata_repair_version", FORESIGHT_SANITIZER_VERSION)
 
-    if _has_analysis_verified_promotion(item):
-        item["foresight_context_eligible"] = True
-        item["analysis_verified"] = False
-        item["generation_eligible"] = False
-        item["promotion_status"] = "foresight_context_eligible"
-        item["claim_support_status"] = item.get("claim_support_status") or "supported"
-        item["source_registry_status"] = "checked_foresight_context_eligible"
-        item.setdefault("verification_reason", "stored_foresight_context_repaired")
-        return
-
-    item["foresight_context_eligible"] = False
-    item["analysis_verified"] = False
-    item["generation_eligible"] = False
-    item["promotion_status"] = "display_only"
-    item["source_registry_status"] = "checked_context_only"
-    item.setdefault("claim_support_status", "unchecked")
-    item.setdefault("verification_reason", "foresight_sanitized_not_analysis_verified")
+    legacy_supported = (
+        item.get("verified") is True
+        and item.get("validated") is True
+        and item.get("source_readable", item.get("content_verified")) is True
+        and item.get("theme_match", True) is not False
+        and item.get("trend_supported", True) is not False
+        and item.get("verification_conflict") is not True
+        and str(item.get("source_audit_status") or "").lower()
+        not in {"source_dead", "source_unreadable", "excluded"}
+    )
+    context_eligible = item.get("foresight_context_eligible") is True or legacy_supported
+    item["foresight_context_eligible"] = context_eligible
+    item["foresight_signal_status"] = (
+        "context_eligible" if context_eligible else "context_only_unverified"
+    )
+    item["source_registry_status"] = item["foresight_signal_status"]
+    item["source_audit_status"] = "accepted" if context_eligible else "requires_revalidation"
+    item["verification_reason"] = (
+        "foresight_context_contract_satisfied"
+        if context_eligible
+        else "foresight_context_requires_revalidation"
+    )
+    for legacy_field in (
+        "analysis_verified", "generation_eligible", "promotion_status",
+        "claim_support_status", "entity_match_status", "content_entity_match_status",
+    ):
+        item.pop(legacy_field, None)
 
 
 def _company_name_from_record(record: dict) -> str:
@@ -470,6 +481,15 @@ def sanitize_company_record(
             classified, report_date=report_date, domain=domain
         )
 
+    removed_legacy_summary = False
+    for legacy_field in (
+        "foresight_summary", "foresight_summary_model",
+        "foresight_summary_status", "foresight_summary_skip_reason",
+    ):
+        if legacy_field in cleaned:
+            cleaned.pop(legacy_field, None)
+            removed_legacy_summary = True
+
     # Count content changes BEFORE adding runtime metadata (timestamp excluded from diff).
     changes = _count_changed_strings(original, cleaned)
     deterministic_count = 0
@@ -494,6 +514,8 @@ def sanitize_company_record(
     meta["changed_string_fields"] = len(changes)
     meta["deterministic_language_issues_found"] = deterministic_count
     meta["past_deadline_issues_found"] = past_deadline_count
+    if removed_legacy_summary:
+        meta["legacy_foresight_summary_removed"] = True
 
     audit = {
         "changed": bool(changes),
@@ -502,6 +524,7 @@ def sanitize_company_record(
         "past_deadline_issues_found": past_deadline_count,
         "sample_changes": changes[:20],
         "sanitizer_version": FORESIGHT_SANITIZER_VERSION,
+        "legacy_foresight_summary_removed": removed_legacy_summary,
     }
     return cleaned, audit
 

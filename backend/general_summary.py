@@ -279,48 +279,6 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
             "source_label": describe_source(l),
         })
 
-    # Add validated foresight sources to the evidence pool (max 3, validated only)
-    # Foresight sources always get deep snippets (500 chars) — forward-looking signals.
-    foresight_sources = []
-    fs_min, fs_max = tier_snippet_bounds("E")
-    for l in full_data.get("foresight_links", []):
-        if not is_generation_eligible_source(l):
-            continue
-        title = (l.get("title", "Foresight") or "Foresight")[:80]
-        snippet_raw = (l.get("snippet") or "").strip()
-        # If the raw snippet is hollow / title-echo, compose one from
-        # source_says + possible_relevance.  possible_relevance is the
-        # company-specific impact hypothesis, already modality-sanitized by
-        # foresight_guardrails.py — safe to surface verbatim.  Joining them
-        # gives the LLM both the trend and its application without inventing
-        # claims; tier-E metadata still tells the model to hedge.
-        if (len(snippet_raw) < fs_min
-                or is_title_echo(snippet_raw, title)
-                or is_boilerplate_snippet(snippet_raw)):
-            source_says = (l.get("source_says") or "").strip()
-            relevance = (l.get("possible_relevance") or "").strip()
-            if is_title_echo(source_says, title):
-                source_says = ""
-            composed = " — ".join(p for p in (source_says, relevance) if p)
-            if len(composed) < fs_min:
-                continue
-            snippet_raw = composed
-        snippet = snippet_raw[:fs_max]
-        scoped_link = apply_entity_scope(dict(l), company_name)
-        foresight_sources.append({
-            "title": title,
-            "snippet": snippet,
-            "is_recent": True,
-            "scope": assess_source_scope(l.get("url", ""), title, snippet),
-            "entity_scope": scoped_link.get("entity_scope", "unknown"),
-            "scope_warning": scoped_link.get("scope_warning", ""),
-            "claim_tier": "E",
-            "source_label": "Forward-looking foresight",
-        })
-        if len(foresight_sources) >= 3:
-            break
-    verified_links = verified_links + foresight_sources
-
     # Key jury findings — descriptions only, no URLs, no legal pages.
     # Checklist items are Scanner 2 analysis findings; they do NOT carry a url field
     # (urls live on raw_findings / evidence_links, not the checklist).  Requiring

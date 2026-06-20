@@ -14,7 +14,10 @@ import time
 
 import anthropic
 from llm_clients import CLAUDE_OPUS_MODEL, call_openai_text
-from source_quality import assess_source_scope, is_generation_eligible_source
+from source_quality import (
+    assess_source_scope, is_generation_eligible_source,
+    is_foresight_context_eligible_source,
+)
 from contradiction_detector import detect_contradictions
 from entity_identity import apply_entity_scope
 
@@ -74,7 +77,7 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
             delta = {"previous_scan_date": prev_date, "changes": parts}
 
     # Evidence — richer than general_summary (20 sources, 300-char snippets)
-    # Includes both forensic evidence_links and validated foresight_links.
+    # Company evidence and macro foresight are kept in separate payload lanes.
     # Each item carries a "scope" flag derived from the URL/title/snippet.
     # "narrow" means the source describes a limited population (master's
     # thesis, single-department survey, regional pilot). The prompt's SCOPE
@@ -106,19 +109,18 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
     # Add validated foresight sources (enriches the evidence pool with forward-looking sources)
     foresight_links = []
     for l in full_data.get("foresight_links", []):
-        if not is_generation_eligible_source(l):
+        if not is_foresight_context_eligible_source(l):
             continue
         title = (l.get("title", "Foresight Source") or "Foresight Source")[:80]
         snippet = (l.get("snippet") or "")[:300]
-        scoped_link = apply_entity_scope(dict(l), company_name)
         foresight_links.append({
             "title": title,
             "snippet": snippet,
             "origin": "foresight",
             "source_type": l.get("source_type", ""),
-            "scope": assess_source_scope(l.get("url", ""), title, snippet),
-            "entity_scope": scoped_link.get("entity_scope", "unknown"),
-            "scope_warning": scoped_link.get("scope_warning", ""),
+            "scope": "macro_context",
+            "company_specific": False,
+            "claim_type": "foresight_context",
         })
         if len(foresight_links) >= 5:
             break
@@ -142,19 +144,6 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
     fin_findings = [str(f) for f in (full_data.get("financial_findings") or [])[:5]]
     fin_sub = full_data.get("financial_sub_scores", {})
 
-    # Key people with enrichment data
-    people = []
-    for p in (full_data.get("key_people") or [])[:6]:
-        entry = {"name": p.get("name", ""), "role": p.get("role", "")}
-        if p.get("headline"):
-            entry["headline"] = p["headline"]
-        if p.get("career_moves"):
-            entry["career_moves"] = p["career_moves"][:2]
-        if p.get("topics"):
-            entry["topics"] = p["topics"][:3]
-        if entry["name"]:
-            people.append(entry)
-
     # Washing
     washing = None
     if full_data.get("washing_flag"):
@@ -170,9 +159,9 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
         "financial_index": full_data.get("financial_index"),
         "financial_sub_scores": fin_sub,
         "key_findings": key_findings,
-        "evidence_links": verified_links + foresight_links,
+        "evidence_links": verified_links,
+        "foresight_context_sources": foresight_links,
         "financial_findings": fin_findings,
-        "key_people": people,
         "washing": washing,
     }
 
@@ -180,7 +169,7 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
     # prompt can force the model to address both sides instead of silently
     # picking the more dramatic narrow-scope finding. Failure-safe: returns
     # [] if provider calls are unavailable.
-    contradictions = detect_contradictions(verified_links + foresight_links, company_name)
+    contradictions = detect_contradictions(verified_links, company_name)
     if contradictions:
         result["contradictions"] = contradictions
 
@@ -300,12 +289,6 @@ For the 3 dimensions where evidence is richest (strongest or weakest):
 - If a weakness: describe what improvement would look like in concrete terms
 Only cover dimensions with genuine evidence. If evidence is thin for a dimension, skip it — depth over breadth.
 
-SECTION 5 — heading "Leadership & Stakeholders" (~100-150 words)
-If key_people data is available in the evidence:
-- Name the identified modernization stakeholders and their roles
-- What their backgrounds or career moves suggest about the company's strategic direction
-- Any notable observations (e.g., recent leadership changes, domain expertise patterns)
-If no stakeholder data is available: skip this section entirely. Do not fabricate.
 {foresight_instruction}
 
 FINAL SECTION — heading "Verdict" (~100-150 words)
@@ -335,6 +318,7 @@ MANDATORY RULES:
 10. FORMAT: Prose with section headings only. Each section starts with "## Heading" on its own line followed by \\n\\n then the paragraph body. No bullet points, no other markdown, no links.
 11. TEMPORAL PRECISION: Use the most recent annual figures, not quarterly snapshots presented as annual results. Do not state that a financial metric is unpublished or unavailable if the payload contains that metric for the latest annual period.
 12. ORGANIZATIONAL CLAIMS: NEVER claim leadership gaps, unfilled roles, or organizational problems unless the evidence explicitly states them.
+13. FORESIGHT BOUNDARY: `foresight_context_sources` and the `foresight` object are external macro context only. They may support modal pressure analysis in the Strategic Foresight section, but never a factual claim about current company deployment, conduct, compliance, capability, or intent.
 
 Output only the prose text. Nothing else."""
 

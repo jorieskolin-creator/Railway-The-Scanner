@@ -2119,13 +2119,10 @@ def generate_foresight_summary(
     company_name: str,
     domain: str,
 ) -> tuple[str, str]:
-    """
-    Generate a 250-300 word "Future Insight" narrative from foresight data.
+    """Deprecated compatibility shim for the removed standalone section."""
+    return "", ""
 
-    Model chain: Sonnet 4.6 → GPT-5.5 fallback.
-    Returns (summary_text, model_used).
-    Returns ("", "") on failure.
-    """
+    # Legacy implementation remains unreachable until old imports disappear.
     if not foresight_data or not foresight_data.get("dimension_forces"):
         return "", ""
 

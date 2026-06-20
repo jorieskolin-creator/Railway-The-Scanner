@@ -382,11 +382,12 @@ class TestCompanySpecificEvidencePreservation:
         item = classified["foresight_links"][0]
         assert item.get("excluded_from_company_fact_generation") is True, \
             "Analyst/trend report should be context-only"
-        assert item.get("generation_eligible") is False, \
-            "Sanitized foresight must not become generation-eligible without analysis verification"
-        assert item.get("promotion_status") == "display_only"
-        assert item.get("claim_support_status") == "unchecked"
-        assert item.get("verification_reason") == "foresight_sanitized_not_analysis_verified"
+        assert "generation_eligible" not in item
+        assert "promotion_status" not in item
+        assert "claim_support_status" not in item
+        assert item.get("foresight_signal_status") == "context_only_unverified"
+        assert item.get("source_audit_status") == "requires_revalidation"
+        assert item.get("verification_reason") == "foresight_context_requires_revalidation"
         assert item.get("foresight_context_eligible") is False
         assert item.get("not_evidence_of_deployment") is True
         assert item.get("generation_scope") == "foresight_synthesis_only"
@@ -401,6 +402,11 @@ class TestCompanySpecificEvidencePreservation:
                     "title": "Gartner AI Trend Report",
                     "origin": "foresight",
                     "claim_type": "foresight_context",
+                    "verified": True,
+                    "validated": True,
+                    "source_readable": True,
+                    "theme_match": True,
+                    "trend_supported": True,
                     "analysis_verified": True,
                     "promotion_status": "generation_eligible",
                     "generation_eligible": True,
@@ -410,13 +416,15 @@ class TestCompanySpecificEvidencePreservation:
         }
         classified = classify_source_registry_items(record)
         item = classified["foresight_links"][0]
-        assert item.get("generation_eligible") is False
-        assert item.get("analysis_verified") is False
-        assert item.get("promotion_status") == "foresight_context_eligible"
-        assert item.get("claim_support_status") == "supported"
+        assert "generation_eligible" not in item
+        assert "analysis_verified" not in item
+        assert "promotion_status" not in item
+        assert "claim_support_status" not in item
         assert item.get("excluded_from_company_fact_generation") is True
         assert item.get("foresight_context_eligible") is True
-        assert item.get("source_registry_status") == "checked_foresight_context_eligible"
+        assert item.get("foresight_signal_status") == "context_eligible"
+        assert item.get("source_registry_status") == "context_eligible"
+        assert item.get("source_audit_status") == "accepted"
         assert item.get("generation_scope") == "foresight_synthesis_only"
 
     def test_bare_generation_eligible_does_not_promote_generic_foresight(self):
@@ -433,9 +441,23 @@ class TestCompanySpecificEvidencePreservation:
         }
         classified = classify_source_registry_items(record)
         item = classified["foresight_links"][0]
-        assert item.get("analysis_verified") is False
-        assert item.get("generation_eligible") is False
-        assert item.get("promotion_status") == "display_only"
+        assert "analysis_verified" not in item
+        assert "generation_eligible" not in item
+        assert "promotion_status" not in item
+        assert item.get("foresight_context_eligible") is False
+        assert item.get("foresight_signal_status") == "context_only_unverified"
+
+    def test_sanitize_removes_legacy_standalone_foresight_summary(self):
+        record = {
+            "name": COMPANY,
+            "foresight_summary": "Legacy standalone foresight narrative.",
+            "foresight_summary_model": "legacy-model",
+            "foresight_links": [],
+        }
+        cleaned, audit = sanitize_company_record(record, report_date=REPORT_DATE)
+        assert "foresight_summary" not in cleaned
+        assert "foresight_summary_model" not in cleaned
+        assert audit["legacy_foresight_summary_removed"] is True
 
 
 # ---------------------------------------------------------------------------
