@@ -17,6 +17,7 @@ CLAUDE_OPUS_MODEL = "claude-opus-4-8"
 CLAUDE_SONNET_MODEL = "claude-sonnet-4-6"
 CLAUDE_HAIKU_MODEL = (os.environ.get("CLAUDE_HAIKU_MODEL") or "claude-haiku-4-5").strip().strip('"').strip("'")
 GPT_REASONING_MODEL = "gpt-5.5"
+GPT_PRO_MODEL = "gpt-5.5-pro"
 GPT_VERIFIER_MODEL = "gpt-5.4"
 
 
@@ -70,6 +71,7 @@ def call_openai_text(
     web_search: bool = False,
     search_context_size: str = "medium",
     max_retries: int = 2,
+    reasoning_effort: str | None = None,
 ) -> str:
     api_key = openai_api_key()
     if not api_key:
@@ -84,6 +86,8 @@ def call_openai_text(
     }
     if web_search:
         kwargs["tools"] = [{"type": "web_search", "search_context_size": search_context_size}]
+    if reasoning_effort:
+        kwargs["reasoning"] = {"effort": reasoning_effort}
     response = client.responses.create(**kwargs)
     return extract_openai_text(response)
 
@@ -128,12 +132,19 @@ def call_json_model_chain(
     *,
     max_tokens: int = 1200,
     timeout: int = 60,
+    reasoning_effort: str | None = None,
 ) -> tuple[str, str]:
     errors: list[str] = []
     for model in model_chain:
         try:
             if model.startswith("gpt-"):
-                return call_openai_text(prompt, model, max_output_tokens=max_tokens, timeout=timeout), model
+                return call_openai_text(
+                    prompt,
+                    model,
+                    max_output_tokens=max_tokens,
+                    timeout=timeout,
+                    reasoning_effort=reasoning_effort,
+                ), model
             if model.startswith("claude-"):
                 return call_anthropic_text(prompt, model, max_tokens=max_tokens, timeout=timeout), model
             raise ValueError(f"Unsupported model provider: {model}")

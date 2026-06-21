@@ -123,3 +123,94 @@ def test_manifest_and_confidence_separate_source_layers():
     assert confidence["macro_force_evidence"]["score"] == 50
     assert confidence["company_portfolio_pattern"]["score"] == 50
     assert confidence["strategic_interpretation"]["status"] == "failed"
+
+
+def test_staged_dossiers_separate_macro_and_portfolio_evidence():
+    aggregate = observatory._aggregate_kb_signals({
+        "business": {"signals": [_signal("Eligible force", True)]}
+    })
+    mi = {
+        "company_count": 4,
+        "detailed_count": 3,
+        "market_health": [{"domain": "Industrial", "score": 70}],
+        "gap_patterns": [{"dimension": "Data", "avg_gap": 12, "company_count": 4}],
+        "cross_impact": [],
+        "top_foresights": [],
+    }
+    findings = observatory._build_structured_findings(aggregate, mi)
+    manifest = {
+        "central_foresight_kb": {"records_eligible": 1},
+        "company_portfolio": {"summary_records": 4},
+    }
+
+    l1 = observatory._build_l1_evidence_dossier(aggregate, mi, findings, manifest)
+    evidence_id = l1["macro_evidence"][0]["evidence_id"]
+    claims = [{
+        "claim_id": "L1-CLAIM-1",
+        "statement": "Eligible force is strategically relevant.",
+        "claim_type": "strategic_inference",
+        "evidence_ids": [evidence_id],
+        "confidence": 70,
+    }]
+    l2 = observatory._build_l2_evidence_dossier(mi, claims, findings, manifest)
+
+    assert l1["layer"] == "L1_global_force_landscape"
+    assert l1["evidence_contract"]["company_specific_claims_allowed"] is False
+    assert l2["validated_l1_claims"] == claims
+    assert l2["market_health"][0]["domain"] == "Industrial"
+    assert l2["market_health"][0]["evidence_id"].startswith("PORTFOLIO-HEALTH")
+
+
+def test_l2_prompt_uses_structured_l1_claims_not_full_l1_essay():
+    secret_essay = "RAW L1 ESSAY MUST NOT CROSS THE LAYER BOUNDARY"
+    claims = [{
+        "claim_id": "L1-CLAIM-1",
+        "statement": "A structured macro claim.",
+        "evidence_ids": ["KB-123"],
+    }]
+    dossier = {"validated_l1_claims": claims}
+
+    prompt = observatory._build_finland_prompt(
+        secret_essay,
+        {"company_count": 2, "detailed_count": 2},
+        {"by_category": {}},
+        "",
+        l1_claims=claims,
+        evidence_dossier=dossier,
+    )
+
+    assert secret_essay not in prompt
+    assert "A structured macro claim." in prompt
+    assert "the L1 essay is intentionally excluded" in prompt
+
+
+def test_l3_prompt_uses_locked_dossier_and_not_upstream_essays():
+    companies = [{"company_name": "Example Oy", "reality_score": 60, "financial_index": 70}]
+    signal = _signal("Domain force", True)
+    l3 = observatory._build_l3_evidence_dossier(
+        "Industrial",
+        {"fp_themes": ["Business"], "priority_dimensions": ["Strategy"]},
+        companies,
+        [signal],
+        {"domain": "Industrial", "score": 65},
+        [{"claim_id": "L1-C1", "statement": "Macro claim", "evidence_ids": ["KB-1"]}],
+        [{"claim_id": "L2-C1", "statement": "Portfolio claim", "evidence_ids": ["PORT-1"]}],
+        [],
+    )
+    prompt = observatory._build_domain_prompt(
+        "Industrial",
+        {"fp_themes": ["Business"], "priority_dimensions": ["Strategy"]},
+        companies,
+        [signal],
+        {"domain": "Industrial", "score": 65},
+        "RAW L1 ESSAY",
+        "RAW L2 ESSAY",
+        upstream_claims={"layer_1": l3["validated_l1_claims"], "layer_2": l3["validated_l2_claims"]},
+        evidence_dossier=l3,
+    )
+
+    assert "RAW L1 ESSAY" not in prompt
+    assert "RAW L2 ESSAY" not in prompt
+    assert "Macro claim" in prompt
+    assert "Portfolio claim" in prompt
+    assert "foresight signals as macro context" in prompt

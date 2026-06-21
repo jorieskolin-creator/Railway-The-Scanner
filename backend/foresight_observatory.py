@@ -7,8 +7,9 @@ Synthesizes existing Scanner data into macro-level strategic intelligence:
   3. Domain Force Dossiers — per-domain analysis with timescale mapping
 
 Model pipeline:
-  - Sonnet 4.6: Primary generation (narrative synthesis)
-  - GPT 5.4 / Sonnet 4.6: Verification (fact-check, framing compliance, structure)
+  - GPT-5.5 Pro: Layer 1 and Layer 2 strategic analysis
+  - Claude Opus 4.8: Layer 3 domain dossiers
+  - GPT-5.5 high / Sonnet 4.6: Independent verification
 
 All data comes from existing DB — no new scanning or web search required.
 """
@@ -24,7 +25,13 @@ from datetime import datetime
 
 import anthropic
 
-from llm_clients import call_json_model_chain
+from llm_clients import (
+    GPT_PRO_MODEL,
+    GPT_REASONING_MODEL,
+    call_json_model_chain,
+    call_openai_text,
+    parse_json_object,
+)
 from foresight_guardrails import build_foresight_guardrails, sanitize_foresight_text, validate_foresight_text, sanitize_future_insight
 from storage import BlobStorage
 from market_intelligence import (
@@ -47,6 +54,11 @@ CRITICAL FRAMING RULE — Technology is context, never conclusion:
 
 EVIDENCE RULE — Every claim must trace to the data provided. Include specific numbers when available (e.g., "60% of Finnish industrial companies sit in Cash Cow archetype"). Do not invent statistics.
 EVIDENCE TRACE RULE — When pre-computed findings include evidence IDs, preserve the relevant IDs in parentheses after material claims so the interpretation remains auditable."""
+
+OBSERVATORY_DOSSIER_VERSION = "observatory_dossier_v1"
+OBSERVATORY_L1_MODEL = GPT_PRO_MODEL
+OBSERVATORY_L2_MODEL = GPT_PRO_MODEL
+OBSERVATORY_L3_MODEL = "claude-opus-4-8"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -341,6 +353,331 @@ def _format_structured_findings(findings: list) -> str:
     )
 
 
+def _top_macro_evidence(kb_aggregate: dict, per_category: int = 5) -> list[dict]:
+    """Select a bounded, evidence-ID-preserving macro packet for analysis."""
+    selected = []
+    for category, signals in (kb_aggregate.get("by_category") or {}).items():
+        ranked = sorted(
+            signals,
+            key=lambda signal: (
+                signal.get("credibility") == "high",
+                signal.get("trend_momentum") == "accelerating",
+                signal.get("source_count", 0),
+            ),
+            reverse=True,
+        )[:per_category]
+        for signal in ranked:
+            selected.append({
+                "evidence_id": signal.get("evidence_id"),
+                "category": category,
+                "theme": signal.get("theme"),
+                "title": signal.get("title"),
+                "description": signal.get("description"),
+                "force_type": signal.get("force_type"),
+                "timeframe": signal.get("timeframe"),
+                "lifecycle_stage": signal.get("lifecycle_stage"),
+                "trend_momentum": signal.get("trend_momentum"),
+                "source_credibility": signal.get("credibility"),
+                "source_url": signal.get("source_url"),
+                "dimensions_affected": signal.get("dimensions_affected") or [],
+                "industries_affected": signal.get("industries_affected") or [],
+            })
+    return selected
+
+
+def _build_l1_evidence_dossier(
+    kb_aggregate: dict,
+    mi: dict,
+    structured_findings: list,
+    input_manifest: dict,
+) -> dict:
+    """Compile the locked macro-evidence input for Layer 1."""
+    macro_evidence = _top_macro_evidence(kb_aggregate)
+    macro_ids = {item.get("evidence_id") for item in macro_evidence if item.get("evidence_id")}
+    macro_findings = [
+        finding for finding in structured_findings
+        if finding.get("finding_type") == "macro_force"
+        and any(evidence_id in macro_ids for evidence_id in finding.get("evidence_ids") or [])
+    ]
+    macro_cross_impact = []
+    for signal in macro_evidence:
+        dimensions = signal.get("dimensions_affected") or []
+        if len(dimensions) >= 2:
+            macro_cross_impact.append({
+                "theme": signal.get("theme"),
+                "dimensions": dimensions,
+                "evidence_ids": [signal.get("evidence_id")],
+                "candidate_type": "macro_force_convergence",
+            })
+
+    return {
+        "schema_version": OBSERVATORY_DOSSIER_VERSION,
+        "layer": "L1_global_force_landscape",
+        "locked_at": datetime.utcnow().isoformat(),
+        "evidence_contract": {
+            "allowed_claim_types": ["macro_force", "cross_impact", "strategic_inference"],
+            "company_specific_claims_allowed": False,
+            "material_claims_require_evidence_ids": True,
+            "strategic_inference_must_be_labelled": True,
+        },
+        "input_manifest": input_manifest.get("central_foresight_kb", {}),
+        "signal_summary": {
+            "total_eligible": kb_aggregate.get("eligible_records", 0),
+            "themes": kb_aggregate.get("theme_count", 0),
+            "accelerating": kb_aggregate.get("accelerating", 0),
+            "decelerating": kb_aggregate.get("decelerating", 0),
+            "by_timeframe": kb_aggregate.get("by_timeframe", {}),
+            "by_force_type": kb_aggregate.get("by_force_type", {}),
+            "by_lifecycle": kb_aggregate.get("by_lifecycle", {}),
+            "by_momentum": kb_aggregate.get("by_momentum", {}),
+        },
+        "macro_evidence": macro_evidence,
+        "cross_impact_candidates": macro_cross_impact[:30],
+        "precomputed_findings": macro_findings,
+        "quality_notes": {
+            "excluded_kb_records": kb_aggregate.get("excluded_records", 0),
+            "exclusion_reasons": kb_aggregate.get("exclusion_reasons", {}),
+            "freshness_gap": "Use source dates when present; absence of a date lowers certainty.",
+        },
+    }
+
+
+def _allowed_evidence_ids(dossier: dict) -> set[str]:
+    ids: set[str] = set()
+
+    def collect(value):
+        if isinstance(value, dict):
+            if value.get("evidence_id"):
+                ids.add(str(value["evidence_id"]))
+            if value.get("finding_id"):
+                ids.add(str(value["finding_id"]))
+            ids.update(str(item) for item in value.get("evidence_ids") or [] if item)
+            for child in value.values():
+                collect(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect(child)
+
+    collect(dossier)
+    return ids
+
+
+def _extract_layer_claims(analysis: str, dossier: dict, layer: str) -> list[dict]:
+    """Convert narrative output into a bounded evidence-ID-backed handoff."""
+    allowed_ids = _allowed_evidence_ids(dossier)
+    prompt = f"""Extract the major claims from this {layer} strategic analysis for use by the next Observatory layer.
+
+Return JSON only:
+{{"claims": [{{"claim_id": "{layer}-CLAIM-1", "statement": "...", "claim_type": "macro_evidence|portfolio_evidence|strategic_inference", "evidence_ids": ["..."], "confidence": 0, "limitations": "..."}}]}}
+
+Rules:
+- Return at most 10 claims.
+- Evidence IDs must come from this allowed list: {json.dumps(sorted(allowed_ids))}.
+- A strategic inference must still cite the evidence IDs it interprets.
+- Drop claims that cannot be tied to an allowed evidence ID.
+- Confidence is 0-100.
+
+ANALYSIS:
+{analysis}
+"""
+    try:
+        raw, model_used = call_json_model_chain(
+            prompt,
+            (GPT_REASONING_MODEL, "claude-sonnet-4-6"),
+            max_tokens=2600,
+            timeout=120,
+            reasoning_effort="high",
+        )
+        parsed = parse_json_object(raw)
+        claims = []
+        for index, item in enumerate(parsed.get("claims") or []):
+            if not isinstance(item, dict) or not str(item.get("statement") or "").strip():
+                continue
+            evidence_ids = [eid for eid in item.get("evidence_ids") or [] if eid in allowed_ids]
+            if not evidence_ids:
+                continue
+            claims.append({
+                "claim_id": item.get("claim_id") or f"{layer}-CLAIM-{index + 1}",
+                "statement": str(item["statement"]).strip(),
+                "claim_type": item.get("claim_type") or "strategic_inference",
+                "evidence_ids": evidence_ids,
+                "confidence": max(0, min(100, int(item.get("confidence") or 50))),
+                "limitations": str(item.get("limitations") or "").strip(),
+                "extraction_model": model_used,
+            })
+        if claims:
+            return claims[:10]
+    except Exception as exc:
+        print(f"   [Observatory] {layer} claim extraction unavailable: {exc}")
+
+    # Deterministic fallback keeps the layer handoff structured and auditable.
+    fallback = []
+    for index, finding in enumerate(dossier.get("precomputed_findings") or []):
+        evidence_ids = [eid for eid in finding.get("evidence_ids") or [] if eid in allowed_ids]
+        if evidence_ids:
+            fallback.append({
+                "claim_id": f"{layer}-FALLBACK-{index + 1}",
+                "statement": finding.get("statement"),
+                "claim_type": finding.get("finding_type") or "strategic_inference",
+                "evidence_ids": evidence_ids,
+                "confidence": 50,
+                "limitations": "Deterministic handoff because model claim extraction was unavailable.",
+                "extraction_model": "deterministic",
+            })
+    return fallback[:10]
+
+
+def _build_l2_evidence_dossier(
+    mi: dict,
+    l1_claims: list[dict],
+    structured_findings: list,
+    input_manifest: dict,
+) -> dict:
+    """Compile Finnish portfolio evidence and validated L1 claims for Layer 2."""
+    portfolio_findings = [
+        finding for finding in structured_findings
+        if finding.get("finding_type") == "portfolio_pattern"
+    ]
+    market_health = [
+        {**item, "evidence_id": _evidence_id("PORTFOLIO-HEALTH", item.get("domain"))}
+        for item in (mi.get("market_health") or [])
+    ]
+    archetype_flow = [
+        {**item, "evidence_id": _evidence_id("PORTFOLIO-ARCHETYPE", item.get("domain"))}
+        for item in (mi.get("archetype_flow") or [])
+    ]
+    gap_patterns = [
+        {**item, "evidence_id": _evidence_id("PORTFOLIO-GAP", item.get("dimension"), item.get("company_count"))}
+        for item in (mi.get("gap_patterns") or [])
+    ]
+    top_foresights = [
+        {**item, "evidence_id": _evidence_id("PORTFOLIO-FORESIGHT", item.get("theme"), item.get("count"))}
+        for item in (mi.get("top_foresights") or [])[:15]
+    ]
+    favi_segments = {
+        segment: {
+            "evidence_id": _evidence_id("PORTFOLIO-FAVI", segment),
+            "count": count,
+        }
+        for segment, count in (mi.get("favi_segments") or {}).items()
+    }
+    cross_impact = [
+        {**item, "evidence_id": _evidence_id(
+            "PORTFOLIO-CROSS-IMPACT",
+            item.get("theme") or item.get("source_theme"),
+            item.get("dimension") or item.get("target_dimension"),
+        )}
+        for item in (mi.get("cross_impact") or [])[:30]
+    ]
+    return {
+        "schema_version": OBSERVATORY_DOSSIER_VERSION,
+        "layer": "L2_finnish_economy_force_map",
+        "locked_at": datetime.utcnow().isoformat(),
+        "evidence_contract": {
+            "macro_input": "structured L1 claims only; the L1 essay is intentionally excluded",
+            "portfolio_claims_require_computed_metrics": True,
+            "material_claims_require_evidence_ids": True,
+            "strategic_inference_must_be_labelled": True,
+        },
+        "input_manifest": input_manifest.get("company_portfolio", {}),
+        "validated_l1_claims": l1_claims,
+        "market_health": market_health,
+        "archetype_flow": archetype_flow,
+        "favi_segments": favi_segments,
+        "gap_patterns": gap_patterns,
+        "top_foresights": top_foresights,
+        "cross_impact": cross_impact,
+        "company_count": mi.get("company_count", 0),
+        "detailed_count": mi.get("detailed_count", 0),
+        "precomputed_findings": portfolio_findings,
+    }
+
+
+def _build_l3_evidence_dossier(
+    domain: str,
+    domain_config: dict,
+    domain_companies: list[dict],
+    kb_signals: list[dict],
+    market_health: dict | None,
+    l1_claims: list[dict],
+    l2_claims: list[dict],
+    structured_findings: list[dict],
+) -> dict:
+    """Compile one domain's evidence and upstream claim handoffs for Opus."""
+    company_metrics = []
+    for company in domain_companies:
+        name = company.get("company_name") or company.get("companyName") or "Unknown"
+        archetype = company.get("archetype")
+        if not archetype and company.get("reality_score") is not None:
+            comparison_score = company.get("financial_index")
+            if comparison_score is None:
+                comparison_score = company.get("intent_score")
+            if comparison_score is not None:
+                archetype = classify_archetype(
+                    float(company["reality_score"]),
+                    float(comparison_score),
+                )
+        company_metrics.append({
+            "evidence_id": _evidence_id("DOMAIN-COMPANY", domain, name),
+            "company_name": name,
+            "reality_score": company.get("reality_score"),
+            "intent_score": company.get("intent_score"),
+            "financial_index": company.get("financial_index"),
+            "archetype": archetype,
+            "why": company.get("why"),
+            "what": company.get("what"),
+        })
+
+    domain_signals = []
+    for signal in kb_signals[:20]:
+        domain_signals.append({
+            "evidence_id": signal.get("evidence_id") or _evidence_id(
+                "DOMAIN-FORESIGHT", domain, signal.get("source_url"), signal.get("title")
+            ),
+            "title": signal.get("title"),
+            "description": signal.get("description"),
+            "semantic_snippet": signal.get("semantic_snippet"),
+            "theme": signal.get("fp_theme") or signal.get("theme"),
+            "timeframe": signal.get("timeframe") or signal.get("time_horizon"),
+            "force_type": signal.get("force_type"),
+            "lifecycle_stage": signal.get("lifecycle_stage") or signal.get("s_curve_phase"),
+            "trend_momentum": signal.get("trend_momentum") or signal.get("signal_direction"),
+            "source_credibility": signal.get("source_credibility"),
+            "source_url": signal.get("source_url"),
+        })
+
+    relevant_findings = [
+        finding for finding in structured_findings
+        if domain.lower() in json.dumps(finding, ensure_ascii=False).lower()
+    ]
+    return {
+        "schema_version": OBSERVATORY_DOSSIER_VERSION,
+        "layer": "L3_domain_force_dossier",
+        "domain": domain,
+        "locked_at": datetime.utcnow().isoformat(),
+        "evidence_contract": {
+            "upstream_context": "structured L1/L2 claims only; upstream essays are excluded",
+            "company_metrics_are_portfolio_evidence": True,
+            "foresight_signals_are_macro_context_not_company_facts": True,
+            "material_claims_require_evidence_ids": True,
+            "strategic_inference_must_be_labelled": True,
+        },
+        "domain_configuration": {
+            "fp_themes": domain_config.get("fp_themes") or [],
+            "priority_dimensions": domain_config.get("priority_dimensions") or [],
+        },
+        "validated_l1_claims": l1_claims,
+        "validated_l2_claims": l2_claims,
+        "market_health": {
+            **(market_health or {}),
+            "evidence_id": _evidence_id("DOMAIN-HEALTH", domain),
+        },
+        "company_metrics": company_metrics,
+        "domain_foresight_signals": domain_signals,
+        "precomputed_findings": relevant_findings,
+    }
+
+
 def _build_confidence_summary(data: dict, verifications: list) -> dict:
     kb = data["kb_aggregate"]
     total_kb = max(kb.get("total_records", 0), 1)
@@ -429,14 +766,26 @@ def _format_top_signals_per_category(by_category: dict, per_cat: int = 5) -> str
     return "\n\n".join(blocks)
 
 
-def _build_global_prompt(kb_aggregate: dict, cross_impact: list, top_foresights: list, structured_findings: str = "") -> str:
+def _build_global_prompt(
+    kb_aggregate: dict,
+    cross_impact: list,
+    top_foresights: list,
+    structured_findings: str = "",
+    evidence_dossier=None,
+) -> str:
     """Build prompt for Output 1: Global Force Landscape."""
     # Rich signal evidence — top signals per category with full descriptions
     signal_evidence = _format_top_signals_per_category(kb_aggregate["by_category"], per_cat=5)
 
     # Top themes by cross-impact density
     cross_summary = ""
-    if cross_impact:
+    if evidence_dossier is not None:
+        cross_summary = "\n".join(
+            f"- {item.get('theme')}: {', '.join(item.get('dimensions') or [])} "
+            f"(Evidence: {', '.join(item.get('evidence_ids') or [])})"
+            for item in (evidence_dossier.get("cross_impact_candidates") or [])
+        ) or "No evidence-linked macro convergence candidate met the dossier rule."
+    elif cross_impact:
         theme_counts = Counter()
         for cell in cross_impact:
             theme_counts[cell["theme"]] += cell["count"]
@@ -445,15 +794,28 @@ def _build_global_prompt(kb_aggregate: dict, cross_impact: list, top_foresights:
 
     # Top foresights
     foresight_summary = ""
-    if top_foresights:
+    if evidence_dossier is not None:
+        foresight_summary = "Excluded from Layer 1. Company-portfolio prevalence belongs to the Layer 2 dossier."
+    elif top_foresights:
         foresight_summary = "\n".join(
             f"- {f['theme']} ({f['category']}): {f['count']} companies affected ({f['pct']}%)"
             for f in top_foresights[:10]
         )
 
+    locked_dossier = json.dumps(evidence_dossier or {}, ensure_ascii=False, indent=2)
+
     return f"""{SYSTEM_ROLE}
 
 TASK: Write a Global Force Landscape briefing — a futurologist's synthesis of the forces reshaping business globally.
+
+LOCKED LAYER 1 EVIDENCE DOSSIER ({OBSERVATORY_DOSSIER_VERSION}):
+{locked_dossier}
+
+DOSSIER RULE:
+- Treat the dossier above as the authoritative evidence boundary.
+- Use the summaries below only as readable views of the same dossier, not as additional evidence.
+- Cite evidence IDs after material claims.
+- Clearly distinguish macro evidence from strategic inference.
 
 DATA PROVIDED:
 
@@ -520,7 +882,15 @@ OUTPUT FORMAT:
 - End with implications for organizational thinking, never technology adoption"""
 
 
-def _build_finland_prompt(global_analysis: str, mi: dict, kb_aggregate: dict = None, structured_findings: str = "") -> str:
+def _build_finland_prompt(
+    global_analysis: str,
+    mi: dict,
+    kb_aggregate: dict = None,
+    structured_findings: str = "",
+    *,
+    l1_claims=None,
+    evidence_dossier=None,
+) -> str:
     """Build prompt for Output 2: Finnish Economy Force Map."""
     # Market health summary
     health_summary = ""
@@ -561,6 +931,17 @@ def _build_finland_prompt(global_analysis: str, mi: dict, kb_aggregate: dict = N
     signal_evidence = ""
     if kb_aggregate and kb_aggregate.get("by_category"):
         signal_evidence = _format_top_signals_per_category(kb_aggregate["by_category"], per_cat=5)
+    if evidence_dossier is not None:
+        signal_evidence = "Macro context is supplied through the validated_l1_claims in the locked dossier."
+
+    if l1_claims is not None:
+        global_context = json.dumps(l1_claims, ensure_ascii=False, indent=2)
+        global_context_label = "STRUCTURED L1 CLAIM HANDOFF (the L1 essay is intentionally excluded)"
+    else:
+        # Compatibility path for older callers and tests.
+        global_context = global_analysis
+        global_context_label = "GLOBAL CONTEXT"
+    locked_dossier = json.dumps(evidence_dossier or {}, ensure_ascii=False, indent=2)
 
     return f"""{SYSTEM_ROLE}
 
@@ -576,8 +957,16 @@ TONE CALIBRATION — Balanced Strategic Assessment:
 ANALYTICAL LENS — Strategic Asymmetry Mapping:
 Your task is NOT to summarize the data. Your task is to find the ASYMMETRIES — the places where the data contradicts expectations, where strength in one dimension masks vulnerability in another, where forces that seem separate are actually the same force arriving through different channels. Think like a strategist reading the data for what it reveals that the data itself does not say out loud.
 
-GLOBAL CONTEXT (the Layer 1 analysis you are building upon):
-{global_analysis}
+LOCKED LAYER 2 EVIDENCE DOSSIER ({OBSERVATORY_DOSSIER_VERSION}):
+{locked_dossier}
+
+DOSSIER RULE:
+- Treat this dossier as the authoritative Layer 2 evidence boundary.
+- Use only the structured L1 claims below; do not infer from or reproduce the full Layer 1 essay.
+- Cite evidence IDs after material claims and label strategic inference.
+
+{global_context_label}:
+{global_context}
 
 SOURCE SIGNAL EVIDENCE (top validated signals per category — use these to ground your analysis in actual source content, cite specific signals when making claims):
 {signal_evidence}
@@ -664,6 +1053,7 @@ def _build_domain_prompt(
     domain: str, domain_config: dict, domain_companies: list,
     kb_signals: list, market_health: dict,
     global_analysis: str, finland_analysis: str, structured_findings: str = "",
+    *, upstream_claims=None, evidence_dossier=None,
 ) -> str:
     """Build prompt for Output 3: Domain Force Dossier."""
     # Company stats
@@ -723,6 +1113,16 @@ def _build_domain_prompt(
         forces_by_tf[f["timeframe"]].append(f"{f['theme']}: {f['title']}")
 
     health_score = market_health.get("score", "N/A") if market_health else "N/A"
+    if upstream_claims is not None:
+        broader_context = json.dumps(upstream_claims, ensure_ascii=False, indent=2)
+        broader_context_rule = (
+            "Use only the structured, evidence-linked L1/L2 claims in the locked dossier. "
+            "The full upstream essays are intentionally excluded."
+        )
+    else:
+        broader_context = f"Layer 1:\n{global_analysis}\n\nLayer 2:\n{finland_analysis}"
+        broader_context_rule = "Use the supplied Layer 1 and Layer 2 analyses as broader context."
+    locked_dossier = json.dumps(evidence_dossier or {}, ensure_ascii=False, indent=2)
 
     return f"""{SYSTEM_ROLE}
 
@@ -736,10 +1136,22 @@ TONE CALIBRATION — Let the Data Drive the Tone:
 - A domain with 4 of 5 companies Thriving is genuinely strong. Do not undermine that finding with hypothetical future risks unless the signal evidence specifically supports those risks.
 
 BROADER CONTEXT — How to use prior analysis layers:
-The Global Force Landscape (Layer 1) and Finnish Economy Force Map (Layer 2) have been produced. Use them strategically:
+{broader_context_rule}
 - From Layer 1, identify 1-2 global forces most directly relevant to {domain} and reference how they manifest in this specific domain.
 - From Layer 2, use the Finnish positioning insights for {domain} specifically — do not repeat general Finnish findings.
 - Build on their conclusions but add domain-specific depth that the broader analyses could not provide.
+
+LOCKED LAYER 3 EVIDENCE DOSSIER ({OBSERVATORY_DOSSIER_VERSION}):
+{locked_dossier}
+
+STRUCTURED UPSTREAM CLAIM HANDOFF:
+{broader_context}
+
+DOSSIER RULE:
+- Treat the locked dossier as the authoritative evidence boundary.
+- Cite evidence IDs after material claims.
+- Treat foresight signals as macro context, never proof that a company has acted.
+- Label strategic inference and state important evidence gaps.
 
 DOMAIN DATA:
 
@@ -860,6 +1272,41 @@ def _generate_opus(prompt: str, max_tokens: int = 16000) -> tuple[str, int]:
     return text, wc
 
 
+def _generate_gpt_pro(prompt: str, max_tokens: int = 16000) -> tuple[str, int, str]:
+    """Generate L1/L2 with GPT-5.5 Pro and bounded quality fallbacks."""
+    attempts = (
+        (OBSERVATORY_L1_MODEL, None, 480),
+        (GPT_REASONING_MODEL, "xhigh", 300),
+    )
+    errors = []
+    for model, effort, timeout in attempts:
+        try:
+            t0 = time.time()
+            text = call_openai_text(
+                prompt,
+                model=model,
+                max_output_tokens=max_tokens,
+                timeout=timeout,
+                max_retries=1,
+                reasoning_effort=effort,
+            )
+            text = re.sub(r'\[([^\]]+)\]\(https?://[^)]+\)', r'\1', text).strip()
+            wc = len(text.split())
+            elapsed = int((time.time() - t0) * 1000)
+            print(f"   [Observatory] {model}{f' ({effort})' if effort else ''}: {wc} words ({elapsed}ms)")
+            return text, wc, model
+        except Exception as exc:
+            errors.append(f"{model}: {exc}")
+            print(f"   [Observatory] {model} generation unavailable: {exc}")
+
+    try:
+        text, wc = _generate_sonnet(prompt, max_tokens=min(max_tokens, 8000))
+        return text, wc, "claude-sonnet-4-6"
+    except Exception as exc:
+        errors.append(f"claude-sonnet-4-6: {exc}")
+        raise ValueError("All Observatory L1/L2 generation models failed: " + " | ".join(errors))
+
+
 def _verify_with_models(essay: str, source_data_summary: str, output_type: str, signal_evidence: str = "") -> dict:
     """Verify essay via GPT/Claude. Returns verification result.
 
@@ -877,7 +1324,7 @@ def _verify_with_models(essay: str, source_data_summary: str, output_type: str, 
    Only flag clear fabrications — reasonable synthesis and inference from multiple signals is expected and acceptable.
 
 KB SIGNAL EVIDENCE (the signals that were provided to the generation model):
-{signal_evidence[:6000]}
+{signal_evidence[:8000]}
 
 """
         signal_response_fields = ', "unsupported_claims": ["claim 1", ...], "signal_cross_validation_passed": true/false'
@@ -892,34 +1339,29 @@ CHECK LIST:
 3. STRUCTURE: Are all required sections present? Estimate the word count.
 4. EVIDENCE GROUNDING: Does the essay make claims not supported by the provided data?
 5. TONE BALANCE (for Finnish Economy Force Map and Domain Dossiers only): Does the essay manufacture or exaggerate risks that the data does not support? If the data shows strong performance (high Thriving ratios, healthy scores), does the essay acknowledge that strength clearly? Flag any cases where the tone is unjustifiably negative relative to the actual data.
+6. EVIDENCE-ID TRACE: Do material claims cite evidence IDs that actually exist in the locked dossier? Flag missing, unknown, or mismatched IDs. Distinguish direct evidence from strategic inference.
 {signal_check}
-SOURCE DATA:
-{source_data_summary[:4000]}
+LOCKED SOURCE DOSSIER:
+{source_data_summary[:24000]}
 
 ESSAY TO VERIFY:
 {essay}
 
 RESPOND IN JSON FORMAT ONLY:
-{{"passed": true/false, "word_count_estimate": N, "issues": ["issue 1", ...], "tech_framing_violations": ["sentence 1", ...], "data_mismatches": ["mismatch 1", ...]{signal_response_fields}}}"""
+{{"passed": true/false, "word_count_estimate": N, "issues": ["issue 1", ...], "tech_framing_violations": ["sentence 1", ...], "data_mismatches": ["mismatch 1", ...], "evidence_id_issues": ["issue 1", ...]{signal_response_fields}}}"""
 
     try:
         result, model_used = call_json_model_chain(
             prompt,
-            ("gpt-5.4", "claude-sonnet-4-6"),
-            max_tokens=2200,
-            timeout=75,
+            (GPT_REASONING_MODEL, "claude-sonnet-4-6"),
+            max_tokens=2600,
+            timeout=120,
+            reasoning_effort="high",
         )
-        if isinstance(result, dict):
-            result.setdefault("verification_model", model_used)
-            result["status"] = "verified" if result.get("passed") is True else "failed"
-            return result
-        return {
-            "passed": False,
-            "status": "unavailable",
-            "issues": [],
-            "note": "Could not parse verification response",
-            "verification_model": model_used,
-        }
+        parsed = result if isinstance(result, dict) else parse_json_object(result)
+        parsed.setdefault("verification_model", model_used)
+        parsed["status"] = "verified" if parsed.get("passed") is True else "failed"
+        return parsed
     except Exception as e:
         print(f"   [Observatory] Verification failed (non-blocking): {e}")
         return {
@@ -930,17 +1372,29 @@ RESPOND IN JSON FORMAT ONLY:
         }
 
 
-def _generate_with_verification(prompt: str, source_summary: str, output_type: str, use_opus: bool = False, signal_evidence: str = "") -> tuple[str, dict]:
+def _generate_with_verification(
+    prompt: str,
+    source_summary: str,
+    output_type: str,
+    use_opus: bool = False,
+    signal_evidence: str = "",
+    use_gpt_pro: bool = False,
+) -> tuple[str, dict]:
     """Generate via Claude, then verify via GPT/Claude. Returns (text, verification).
     use_opus=True uses Opus 4.8 for deeper analytical reasoning (Layer 3).
     signal_evidence: when provided, enables claim-level cross-validation against KB signals."""
-    generate_fn = _generate_opus if use_opus else _generate_sonnet
-    text, wc = generate_fn(prompt)
+    if use_gpt_pro:
+        text, wc, generation_model = _generate_gpt_pro(prompt)
+    else:
+        generate_fn = _generate_opus if use_opus else _generate_sonnet
+        text, wc = generate_fn(prompt)
+        generation_model = OBSERVATORY_L3_MODEL if use_opus else "claude-sonnet-4-6"
 
     if wc < 50:
         raise ValueError(f"Generation too short: {wc} words")
 
     verification = _verify_with_models(text, source_summary, output_type, signal_evidence=signal_evidence)
+    verification["generation_model"] = generation_model
 
     # Log cross-validation results if signal evidence was checked
     if signal_evidence and verification.get("unsupported_claims"):
@@ -967,8 +1421,12 @@ def _generate_with_verification(prompt: str, source_summary: str, output_type: s
 
     if needs_regen:
         correction = "\n\nCRITICAL CORRECTION: " + " ".join(correction_parts)
-        text, wc = generate_fn(prompt + correction)
+        if use_gpt_pro:
+            text, wc, generation_model = _generate_gpt_pro(prompt + correction)
+        else:
+            text, wc = generate_fn(prompt + correction)
         verification = _verify_with_models(text, source_summary, output_type, signal_evidence=signal_evidence)
+        verification["generation_model"] = generation_model
 
     return text, verification
 
@@ -998,6 +1456,7 @@ def generate_observatory(progress_callback=None):
     input_manifest = _build_input_manifest(data)
     structured_findings = _build_structured_findings(kb_agg, mi)
     findings_block = _format_structured_findings(structured_findings)
+    l1_dossier = _build_l1_evidence_dossier(kb_agg, mi, structured_findings, input_manifest)
 
     # Import domain config
     from strategic_foresight import DOMAIN_TO_FORESIGHT
@@ -1022,9 +1481,17 @@ def generate_observatory(progress_callback=None):
         mi.get("cross_impact", []),
         mi.get("top_foresights", []),
         findings_block,
+        evidence_dossier=l1_dossier,
     )
-    global_source = f"Total signals: {kb_agg['total_signals']}, Themes: {kb_agg['theme_count']}, Accelerating: {kb_agg['accelerating']}, Decelerating: {kb_agg['decelerating']}"
-    global_text, global_verify = _generate_with_verification(global_prompt, global_source, "Global Force Landscape", signal_evidence=signal_evidence)
+    global_source = json.dumps(l1_dossier, ensure_ascii=False)
+    global_text, global_verify = _generate_with_verification(
+        global_prompt,
+        global_source,
+        "Global Force Landscape",
+        signal_evidence=signal_evidence,
+        use_gpt_pro=True,
+    )
+    l1_claims = _extract_layer_claims(global_text, l1_dossier, "L1")
 
     # Extract key convergences from the text (first 3 sentences that mention convergence/force)
     key_convergences = []
@@ -1041,14 +1508,31 @@ def generate_observatory(progress_callback=None):
         "force_count": kb_agg["total_signals"],
         "accelerating_forces": kb_agg["accelerating"],
         "key_convergences": key_convergences,
+        "structured_claims": l1_claims,
+        "evidence_dossier_version": OBSERVATORY_DOSSIER_VERSION,
+        "analysis_model": global_verify.get("generation_model", OBSERVATORY_L1_MODEL),
         "verification": global_verify,
     }
 
     # --- Output 2: Finnish Economy Force Map ---
     progress("Finnish Economy Force Map", 1, total_steps)
-    finland_prompt = _build_finland_prompt(global_text, mi, kb_agg, findings_block)
-    finland_source = f"Companies: {mi.get('company_count', 0)}, Domains: {len(mi.get('market_health', []))}, Foresight Vulnerability segments: {json.dumps(mi.get('favi_segments', {}))}"
-    finland_text, finland_verify = _generate_with_verification(finland_prompt, finland_source, "Finnish Economy Force Map", use_opus=True, signal_evidence=signal_evidence)
+    l2_dossier = _build_l2_evidence_dossier(mi, l1_claims, structured_findings, input_manifest)
+    finland_prompt = _build_finland_prompt(
+        "",
+        mi,
+        kb_agg,
+        findings_block,
+        l1_claims=l1_claims,
+        evidence_dossier=l2_dossier,
+    )
+    finland_source = json.dumps(l2_dossier, ensure_ascii=False)
+    finland_text, finland_verify = _generate_with_verification(
+        finland_prompt,
+        finland_source,
+        "Finnish Economy Force Map",
+        use_gpt_pro=True,
+    )
+    l2_claims = _extract_layer_claims(finland_text, l2_dossier, "L2")
 
     # Extract top adaptability gaps
     top_gaps = []
@@ -1060,11 +1544,16 @@ def generate_observatory(progress_callback=None):
         "domains_analyzed": len(mi.get("market_health", [])),
         "favi_distribution": mi.get("favi_segments", {}),
         "top_adaptability_gaps": top_gaps,
+        "l1_claims_consumed": len(l1_claims),
+        "structured_claims": l2_claims,
+        "evidence_dossier_version": OBSERVATORY_DOSSIER_VERSION,
+        "analysis_model": finland_verify.get("generation_model", OBSERVATORY_L2_MODEL),
         "verification": finland_verify,
     }
 
     # --- Output 3: Domain Force Dossiers ---
     domain_dossiers = []
+    l3_dossiers = {}
     for i, domain in enumerate(active_domains):
         progress(f"Domain: {domain}", 2 + i, total_steps)
 
@@ -1087,11 +1576,18 @@ def generate_observatory(progress_callback=None):
                 mh = h
                 break
 
+        l3_dossier = _build_l3_evidence_dossier(
+            domain, config, companies, kb_signals, mh,
+            l1_claims, l2_claims, structured_findings,
+        )
+        l3_dossiers[domain] = l3_dossier
         domain_prompt = _build_domain_prompt(
             domain, config, companies, kb_signals, mh,
-            global_text, finland_text, findings_block,
+            "", "", findings_block,
+            upstream_claims={"layer_1": l1_claims, "layer_2": l2_claims},
+            evidence_dossier=l3_dossier,
         )
-        source = f"Domain: {domain}, Companies: {len(companies)}, KB signals: {len(kb_signals)}"
+        source = json.dumps(l3_dossier, ensure_ascii=False)
         # Build domain-specific signal evidence for cross-validation
         domain_signal_evidence = "\n".join(
             f"- **{s.get('title', 'N/A')}** [{s.get('force_type', '?')} | {s.get('timeframe', '?')}]\n  Description: {s.get('description', 'N/A')}"
@@ -1127,6 +1623,8 @@ def generate_observatory(progress_callback=None):
                 for c in companies if c.get("reality_score") is not None
             )),
             "forces_by_timescale": forces_by_ts,
+            "analysis_model": verify.get("generation_model", OBSERVATORY_L3_MODEL),
+            "evidence_dossier_version": OBSERVATORY_DOSSIER_VERSION,
             "verification": verify,
         }
         domain_dossiers.append(dossier)
@@ -1135,11 +1633,18 @@ def generate_observatory(progress_callback=None):
     all_verifications = [global_verify, finland_verify] + [item["verification"] for item in domain_dossiers]
     result = {
         "generated_at": datetime.utcnow().isoformat(),
-        "model": "claude-sonnet-4-6 (Layer 1) + claude-opus-4-8 (Layers 2-3)",
-        "verification_model": "gpt-5.4 / claude-sonnet-4-6",
+        "model": "gpt-5.5-pro (Layers 1-2) + claude-opus-4-8 (Layer 3)",
+        "verification_model": "gpt-5.5 high / claude-sonnet-4-6",
         "company_count": len(data["dashboard_data"]),
         "domain_count": len(active_domains),
         "input_manifest": input_manifest,
+        "evidence_dossiers": {
+            "schema_version": OBSERVATORY_DOSSIER_VERSION,
+            "layer_1": l1_dossier,
+            "layer_2": l2_dossier,
+            "layer_3": l3_dossiers,
+        },
+        "layer_claims": {"layer_1": l1_claims, "layer_2": l2_claims},
         "structured_findings": structured_findings,
         "confidence": _build_confidence_summary(data, all_verifications),
         "global_analysis": global_analysis,
