@@ -54,6 +54,21 @@ const exportObservatoryHtml = (data: any, marketIntelData?: any) => {
   if (!data) return;
 
   const date = data.generated_at ? new Date(data.generated_at).toLocaleDateString('en-FI', { day: 'numeric', month: 'long', year: 'numeric' }) : 'Unknown date';
+  const confidenceRows = [
+    ['Macro-force evidence', data.confidence?.macro_force_evidence],
+    ['Company portfolio pattern', data.confidence?.company_portfolio_pattern],
+    ['Strategic interpretation', data.confidence?.strategic_interpretation],
+  ].filter(([, value]) => value);
+  const kbManifest = data.input_manifest?.central_foresight_kb || {};
+  const portfolioManifest = data.input_manifest?.company_portfolio || {};
+  const governanceHtml = confidenceRows.length ? `
+    <div class="section">
+      <h2>Evidence &amp; Confidence</h2>
+      <div class="meta">
+        ${confidenceRows.map(([label, value]: any) => `<div class="meta-item"><strong>${label}</strong>: ${value.score}/100 (${value.status})</div>`).join('')}
+      </div>
+      <p>Central KB eligible: ${kbManifest.records_eligible || 0}/${kbManifest.records_total || 0}; excluded: ${kbManifest.records_excluded || 0}. Company foresight eligible: ${portfolioManifest.foresight_records_eligible || 0}/${portfolioManifest.foresight_records_total || 0}.</p>
+    </div>` : '';
 
   // Cross-impact matrix HTML
   let crossImpactHtml = '';
@@ -245,6 +260,7 @@ const exportObservatoryHtml = (data: any, marketIntelData?: any) => {
     <div class="meta-item">${data.domain_count} domains</div>
     ${data.global_analysis?.force_count ? `<div class="meta-item highlight">${data.global_analysis.force_count} forces tracked</div>` : ''}
   </div>
+  ${governanceHtml}
 
   ${foresightsHtml}
   ${crossImpactHtml}
@@ -313,7 +329,7 @@ const SECTION_COLORS = {
 
 const LAYER_DESCRIPTIONS: Record<string, string> = {
   global: "A futurologist's briefing on the converging global forces reshaping business. Synthesizes validated signals from the Foresight Knowledge Base into macro-level patterns — identifying which forces are accelerating, which are decelerating, and where unexpected cross-impacts create strategic inflection points. Frames the future through thinking capacity and adaptability, not technology adoption.",
-  finland: "Maps how global forces specifically land in the Finnish business landscape. Grounds every claim in actual company data — market health scores, archetype distributions, and gap patterns — to reveal where Finnish industry leads, where it lags, and where genuine strategic opportunities exist. Includes stakeholder dynamics analysis across organizational roles.",
+  finland: "Maps how global forces specifically land in the Finnish business landscape. Grounds every claim in current company data — market health scores, archetype distributions, and gap patterns — to reveal where Finnish industry leads, where it lags, and where genuine strategic opportunities exist.",
   domain: "Per-domain strategic analysis with timescale mapping. Each dossier examines a specific industry's position using company-level data, identifies forces by urgency horizon (Act Now / Prepare / Position), explores 'Own Race' opportunities, and offers a contrarian signal that challenges conventional domain wisdom.",
 };
 
@@ -361,16 +377,58 @@ const formatEssayText = (text: string) => {
 
 const VerificationBadge = ({ verification }: { verification: any }) => {
   if (!verification) return null;
-  const passed = verification.passed !== false;
+  const status = verification.status || (verification.passed === true ? "verified" : verification.passed === false ? "failed" : "unavailable");
+  const passed = status === "verified";
+  const unavailable = status === "unavailable";
   const issues = verification.issues || [];
   const violations = verification.tech_framing_violations || [];
   return (
     <div className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-mono ${
       passed ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
-             : "bg-amber-500/15 text-amber-300 border border-amber-500/30"
+             : unavailable
+               ? "bg-slate-500/15 text-slate-300 border border-slate-500/30"
+               : "bg-rose-500/15 text-rose-300 border border-rose-500/30"
     }`}>
       {passed ? <CheckCircle size={10} /> : <AlertTriangle size={10} />}
-      {passed ? "Verified" : `${issues.length + violations.length} issues`}
+      {passed ? "Verified" : unavailable ? "Verification unavailable" : `Verification failed${issues.length + violations.length ? `: ${issues.length + violations.length} issues` : ""}`}
+    </div>
+  );
+};
+
+const ObservatoryGovernance = ({ data }: { data: any }) => {
+  const confidence = data?.confidence || {};
+  const manifest = data?.input_manifest || {};
+  const kb = manifest.central_foresight_kb || {};
+  const portfolio = manifest.company_portfolio || {};
+  const rows = [
+    ["Macro-force evidence", confidence.macro_force_evidence],
+    ["Company portfolio pattern", confidence.company_portfolio_pattern],
+    ["Strategic interpretation", confidence.strategic_interpretation],
+  ].filter(([, value]) => value);
+  if (rows.length === 0 && !manifest.generated_at) return null;
+
+  return (
+    <div className="border border-white/10 rounded-lg bg-black/20 p-3 mb-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+        {rows.map(([label, value]: any) => (
+          <div key={label} className="border border-white/5 rounded p-2 bg-black/20">
+            <div className="text-[9px] uppercase tracking-wide text-slate-500">{label}</div>
+            <div className="flex items-baseline gap-2 mt-1">
+              <span className="text-sm font-bold text-slate-200">{value.score}/100</span>
+              <span className="text-[9px] font-mono text-slate-400">{value.status}</span>
+            </div>
+            <div className="text-[9px] text-slate-500 mt-1">{value.basis}</div>
+          </div>
+        ))}
+      </div>
+      {(kb.records_total !== undefined || portfolio.summary_records !== undefined) && (
+        <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 pt-2 border-t border-white/5 text-[9px] font-mono text-slate-500">
+          <span>KB eligible: {kb.records_eligible || 0}/{kb.records_total || 0}</span>
+          <span>KB excluded: {kb.records_excluded || 0}</span>
+          <span>Company foresight eligible: {portfolio.foresight_records_eligible || 0}/{portfolio.foresight_records_total || 0}</span>
+          <span>Snapshot: {portfolio.latest_snapshot_date ? new Date(portfolio.latest_snapshot_date).toLocaleDateString() : "unavailable"}</span>
+        </div>
+      )}
     </div>
   );
 };
@@ -859,6 +917,8 @@ const ObservatoryModal = ({ isOpen, data, loading, onClose, onRefresh, adminPass
                   </div>
                 )}
               </div>
+
+              <ObservatoryGovernance data={data} />
 
               {/* Foresight Landscape Charts — from Market Intelligence */}
               {marketIntelData && (marketIntelData.top_foresights?.length > 0 || marketIntelData.cross_impact?.length > 0) && (

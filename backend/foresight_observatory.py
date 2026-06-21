@@ -14,6 +14,7 @@ All data comes from existing DB — no new scanning or web search required.
 """
 
 import json
+import hashlib
 import os
 import re
 import time
@@ -44,7 +45,8 @@ CRITICAL FRAMING RULE — Technology is context, never conclusion:
 - The ultimate strategic question is not "how do we respond to these forces?" but "how do we create conditions where we define the game rather than react to it?"
 - Focus on: thinking and adaptability, future-drivenness, innovative thinking, organizational learning, what companies need to STOP doing, creating "Own Race" vs. participating reactively.
 
-EVIDENCE RULE — Every claim must trace to the data provided. Include specific numbers when available (e.g., "60% of Finnish industrial companies sit in Cash Cow archetype"). Do not invent statistics."""
+EVIDENCE RULE — Every claim must trace to the data provided. Include specific numbers when available (e.g., "60% of Finnish industrial companies sit in Cash Cow archetype"). Do not invent statistics.
+EVIDENCE TRACE RULE — When pre-computed findings include evidence IDs, preserve the relevant IDs in parentheses after material claims so the interpretation remains auditable."""
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -66,15 +68,24 @@ def _aggregate_kb_signals(all_kb: dict) -> dict:
     by_credibility = defaultdict(int)
     by_theme_momentum = defaultdict(lambda: {"accelerating": 0, "stable": 0, "decelerating": 0, "total": 0})
     total = 0
+    total_records = 0
+    excluded_records = 0
+    exclusion_reasons = Counter()
 
     for theme_slug, theme_data in all_kb.items():
         signals = theme_data.get("signals", [])
         for sig in signals:
-            if str(sig.get("promotion_status") or "").lower() in {"excluded", "checked_excluded"}:
+            total_records += 1
+            eligible, reason = _is_eligible_foresight_context(sig)
+            if not eligible:
+                excluded_records += 1
+                exclusion_reasons[reason] += 1
                 continue
             fp_theme = sig.get("fp_theme", "")
             category = THEME_CATEGORIES.get(fp_theme, "Unknown")
+            evidence_id = _evidence_id("KB", sig.get("source_url"), sig.get("title"), fp_theme)
             by_category[category].append({
+                "evidence_id": evidence_id,
                 "theme": fp_theme,
                 "dimension": sig.get("kb_dimension", ""),
                 "dimensions_affected": sig.get("kb_dimensions_affected", []),
@@ -129,6 +140,10 @@ def _aggregate_kb_signals(all_kb: dict) -> dict:
 
     return {
         "total_signals": total,
+        "total_records": total_records,
+        "eligible_records": total,
+        "excluded_records": excluded_records,
+        "exclusion_reasons": dict(exclusion_reasons),
         "by_category": dict(by_category),
         "by_timeframe": dict(by_timeframe),
         "by_force_type": dict(by_force_type),
@@ -141,6 +156,51 @@ def _aggregate_kb_signals(all_kb: dict) -> dict:
         "decelerating": decelerating,
         "theme_count": len(all_kb),
         "high_confidence_count": by_credibility.get("high", 0),
+    }
+
+
+def _evidence_id(prefix: str, *parts) -> str:
+    raw = "|".join(str(part or "") for part in parts)
+    return f"{prefix}-{hashlib.sha1(raw.encode('utf-8')).hexdigest()[:10].upper()}"
+
+
+def _is_eligible_foresight_context(record: dict) -> tuple[bool, str]:
+    """Use only explicit, readable foresight context; never infer eligibility."""
+    if not isinstance(record, dict):
+        return False, "invalid_record"
+    if record.get("foresight_context_eligible") is not True:
+        return False, "not_context_eligible"
+    status = str(record.get("foresight_signal_status") or record.get("source_audit_status") or "").lower()
+    if any(token in status for token in ("dead", "unreadable", "excluded", "rejected")):
+        return False, status or "excluded"
+    if record.get("source_readable") is False:
+        return False, "source_unreadable"
+    return True, "eligible"
+
+
+def _filter_company_foresight(company_details: list) -> tuple[list, dict]:
+    """Create an Observatory-only view with explicit company foresight context."""
+    filtered = []
+    total = eligible = 0
+    reasons = Counter()
+    for company in company_details:
+        item = dict(company)
+        kept = []
+        for link in company.get("foresight_links") or []:
+            total += 1
+            ok, reason = _is_eligible_foresight_context(link)
+            if ok:
+                kept.append(link)
+                eligible += 1
+            else:
+                reasons[reason] += 1
+        item["foresight_links"] = kept
+        filtered.append(item)
+    return filtered, {
+        "total_records": total,
+        "eligible_records": eligible,
+        "excluded_records": total - eligible,
+        "exclusion_reasons": dict(reasons),
     }
 
 
@@ -160,7 +220,11 @@ def _load_all_data(storage: BlobStorage):
         detail = storage.get_company_data(item.get("companyName", ""))
         if detail:
             company_details.append(detail)
-    print(f"   [Observatory] Companies: {len(dashboard_data)} summary, {len(company_details)} detailed")
+    company_details, company_foresight_stats = _filter_company_foresight(company_details)
+    print(
+        f"   [Observatory] Companies: {len(dashboard_data)} summary, {len(company_details)} detailed; "
+        f"company foresight {company_foresight_stats['eligible_records']}/{company_foresight_stats['total_records']} eligible"
+    )
 
     # 3. Market intelligence
     analysis_result = run_analysis(dashboard_data) if dashboard_data else {}
@@ -171,108 +235,148 @@ def _load_all_data(storage: BlobStorage):
         "kb_aggregate": kb_aggregate,
         "dashboard_data": dashboard_data,
         "company_details": company_details,
+        "company_foresight_stats": company_foresight_stats,
         "market_intel": mi,
     }
 
 
-def _aggregate_stakeholder_dynamics(company_details: list, gap_patterns: list) -> dict:
-    """Aggregate stakeholder data for MACTOR-lite analysis.
+def _latest_snapshot_date(records: list) -> str | None:
+    candidates = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        for key in ("updated_at", "scan_date", "scanned_at", "timestamp", "generated_at", "date"):
+            value = record.get(key)
+            if value:
+                candidates.append(str(value))
+    return max(candidates) if candidates else None
 
-    Cross-references key_people topics with KB dimensions and foresight themes
-    to identify which organizational roles champion or resist which forces.
-    """
-    # Role classification buckets
-    ROLE_BUCKETS = {
-        "C-Suite / Executive": ["ceo", "cfo", "cto", "cio", "coo", "chief", "president", "managing director", "vd"],
-        "Board / Governance": ["board", "chairman", "chairwoman", "director", "non-executive"],
-        "Technology / Innovation": ["technology", "innovation", "digital", "data", "architect", "engineering", "r&d"],
-        "Strategy / Commercial": ["strategy", "commercial", "business development", "marketing", "sales", "growth"],
-        "Operations / HR": ["operations", "hr", "human resources", "people", "talent", "supply chain", "logistics"],
+
+def _build_input_manifest(data: dict) -> dict:
+    kb = data["kb_aggregate"]
+    company_stats = data["company_foresight_stats"]
+    kb_signals = [
+        signal
+        for theme_data in (data.get("all_kb") or {}).values()
+        for signal in (theme_data.get("signals") or [])
+        if isinstance(signal, dict)
+    ]
+    return {
+        "generated_at": datetime.utcnow().isoformat(),
+        "contract_version": "observatory_evidence_v1",
+        "central_foresight_kb": {
+            "themes_loaded": kb.get("theme_count", 0),
+            "latest_signal_snapshot": _latest_snapshot_date(kb_signals),
+            "records_total": kb.get("total_records", 0),
+            "records_eligible": kb.get("eligible_records", 0),
+            "records_excluded": kb.get("excluded_records", 0),
+            "exclusion_reasons": kb.get("exclusion_reasons", {}),
+            "eligibility_contract": "foresight_context_eligible=true",
+        },
+        "company_portfolio": {
+            "summary_records": len(data.get("dashboard_data") or []),
+            "detailed_records": len(data.get("company_details") or []),
+            "latest_snapshot_date": _latest_snapshot_date(data.get("company_details") or []),
+            "foresight_records_total": company_stats.get("total_records", 0),
+            "foresight_records_eligible": company_stats.get("eligible_records", 0),
+            "foresight_records_excluded": company_stats.get("excluded_records", 0),
+            "foresight_exclusion_reasons": company_stats.get("exclusion_reasons", {}),
+        },
+        "market_intelligence": {"recomputed_from_current_company_snapshot": True},
+        "source_boundaries": {
+            "macro_context": "independent central Foresight KB",
+            "portfolio_patterns": "stored Company Summary data",
+            "company_evidence_db": "not read directly by Observatory",
+            "company_source_ledger": "not read by Observatory",
+            "people_and_influence": "not analyzed by Observatory; Buying Insight owns this layer",
+        },
     }
 
-    def classify_role(role_str: str) -> str:
-        role_lower = (role_str or "").lower()
-        for bucket, keywords in ROLE_BUCKETS.items():
-            if any(kw in role_lower for kw in keywords):
-                return bucket
-        return "Other"
 
-    # Dimension keywords for topic matching
-    DIM_KEYWORDS = {
-        "Operating Model": ["agile", "lean", "operating model", "organization", "team", "autonomy", "devops", "process"],
-        "Service Portfolio": ["product", "service", "saas", "platform", "portfolio", "offering", "revenue model"],
-        "Values": ["culture", "values", "trust", "diversity", "inclusion", "wellbeing", "sustainability", "esg"],
-        "Strategy": ["strategy", "growth", "market", "competitive", "vision", "transformation", "future"],
-        "AI Readiness": ["ai", "artificial intelligence", "data", "machine learning", "automation", "digital", "cloud"],
-    }
+def _build_structured_findings(kb_aggregate: dict, mi: dict) -> list:
+    findings = []
+    all_signals = [
+        signal
+        for signals in kb_aggregate.get("by_category", {}).values()
+        for signal in signals
+    ]
+    all_signals.sort(
+        key=lambda signal: (
+            signal.get("credibility") == "high",
+            signal.get("trend_momentum") == "accelerating",
+            signal.get("source_count", 0),
+        ),
+        reverse=True,
+    )
+    for signal in all_signals[:6]:
+        findings.append({
+            "finding_id": _evidence_id("FINDING", signal.get("evidence_id"), signal.get("title")),
+            "finding_type": "macro_force",
+            "statement": signal.get("title") or "Unnamed macro force",
+            "evidence_ids": [signal.get("evidence_id")],
+            "confidence_basis": "eligible central KB signal",
+        })
 
-    # Aggregate: role_bucket → dimension affinity counts
-    role_dim_affinity = defaultdict(lambda: defaultdict(int))
-    role_counts = Counter()
-    stakeholder_count = 0
-    enriched_count = 0
+    for gap in (mi.get("gap_patterns") or [])[:5]:
+        statement = (
+            f"{gap.get('dimension', 'Unknown dimension')} has an average intent-reality gap "
+            f"of {gap.get('avg_gap', 'n/a')} across {gap.get('company_count', 0)} companies."
+        )
+        findings.append({
+            "finding_id": _evidence_id("FINDING", "portfolio_gap", statement),
+            "finding_type": "portfolio_pattern",
+            "statement": statement,
+            "evidence_ids": [_evidence_id("PORTFOLIO", gap.get("dimension"), gap.get("company_count"))],
+            "confidence_basis": "computed company-portfolio aggregate",
+        })
+    return findings
 
-    for company in company_details:
-        for person in (company.get("key_people") or []):
-            stakeholder_count += 1
-            role = person.get("role", "")
-            bucket = classify_role(role)
-            role_counts[bucket] += 1
 
-            insights = person.get("linkedin_insights") or {}
-            if not insights.get("found"):
-                continue
-            enriched_count += 1
+def _format_structured_findings(findings: list) -> str:
+    if not findings:
+        return "No pre-computed findings available."
+    return "\n".join(
+        f"- [{item['finding_id']}] {item['statement']} Evidence: {', '.join(item['evidence_ids'])}"
+        for item in findings
+    )
 
-            topics = insights.get("topics") or []
-            headline = (insights.get("headline") or "").lower()
-            all_text = " ".join(topics).lower() + " " + headline
 
-            for dim, keywords in DIM_KEYWORDS.items():
-                if any(kw in all_text for kw in keywords):
-                    role_dim_affinity[bucket][dim] += 1
+def _build_confidence_summary(data: dict, verifications: list) -> dict:
+    kb = data["kb_aggregate"]
+    total_kb = max(kb.get("total_records", 0), 1)
+    macro_score = round(100 * kb.get("eligible_records", 0) / total_kb)
 
-    # Build the stakeholder-dimension matrix as readable text
-    matrix_lines = []
-    for bucket in ROLE_BUCKETS:
-        if role_counts.get(bucket, 0) == 0:
-            continue
-        affinities = role_dim_affinity.get(bucket, {})
-        if not affinities:
-            matrix_lines.append(f"- {bucket} ({role_counts[bucket]} people): No dimension affinity signals detected")
-            continue
-        top_dims = sorted(affinities.items(), key=lambda x: x[1], reverse=True)
-        dim_str = ", ".join(f"{d}={c}" for d, c in top_dims)
-        matrix_lines.append(f"- {bucket} ({role_counts[bucket]} people): focus on {dim_str}")
+    summary_count = len(data.get("dashboard_data") or [])
+    detail_count = len(data.get("company_details") or [])
+    portfolio_score = round(100 * detail_count / max(summary_count, 1)) if summary_count else 0
 
-    # Identify dimension gaps that lack stakeholder champions
-    championed_dims = set()
-    for bucket_affinities in role_dim_affinity.values():
-        for dim, count in bucket_affinities.items():
-            if count >= 2:
-                championed_dims.add(dim)
-
-    unchampioned = [dim for dim in KB_DIMENSIONS if dim not in championed_dims]
-
-    # Identify potential alignment conflicts (C-suite vs Tech roles)
-    conflicts = []
-    csuite = role_dim_affinity.get("C-Suite / Executive", {})
-    tech = role_dim_affinity.get("Technology / Innovation", {})
-    for dim in KB_DIMENSIONS:
-        cs_focus = csuite.get(dim, 0)
-        tech_focus = tech.get(dim, 0)
-        if cs_focus >= 2 and tech_focus == 0:
-            conflicts.append(f"{dim}: strong C-Suite focus but absent from Technology/Innovation discourse")
-        elif tech_focus >= 2 and cs_focus == 0:
-            conflicts.append(f"{dim}: Technology/Innovation advocates but no C-Suite championship")
+    statuses = [v.get("status", "unavailable") for v in verifications if isinstance(v, dict)]
+    verified = statuses.count("verified")
+    failed = statuses.count("failed")
+    unavailable = statuses.count("unavailable")
+    interpretation_score = round(100 * verified / max(len(statuses), 1)) if statuses else 0
+    interpretation_status = "verified" if statuses and failed == 0 and unavailable == 0 else "mixed"
+    if not statuses or unavailable == len(statuses):
+        interpretation_status = "unavailable"
+    elif failed:
+        interpretation_status = "failed"
 
     return {
-        "stakeholder_count": stakeholder_count,
-        "enriched_count": enriched_count,
-        "role_distribution": dict(role_counts),
-        "matrix_text": "\n".join(matrix_lines),
-        "unchampioned_dimensions": unchampioned,
-        "alignment_conflicts": conflicts,
+        "macro_force_evidence": {
+            "score": macro_score,
+            "status": "strong" if macro_score >= 70 else "limited",
+            "basis": f"{kb.get('eligible_records', 0)}/{kb.get('total_records', 0)} central KB records eligible",
+        },
+        "company_portfolio_pattern": {
+            "score": portfolio_score,
+            "status": "strong" if portfolio_score >= 70 else "limited",
+            "basis": f"{detail_count}/{summary_count} portfolio companies have detailed records",
+        },
+        "strategic_interpretation": {
+            "score": interpretation_score,
+            "status": interpretation_status,
+            "basis": f"{verified} verified, {failed} failed, {unavailable} unavailable outputs",
+        },
     }
 
 
@@ -311,7 +415,7 @@ def _format_top_signals_per_category(by_category: dict, per_cat: int = 5) -> str
             dims = s.get("dimensions_affected") or [s.get("dimension", "")]
             industries = s.get("industries_affected", [])
 
-            line = f"- **{s['title']}** [{s.get('force_type', '?')} | {s.get('timeframe', '?')}]\n"
+            line = f"- [{s.get('evidence_id', 'NO-ID')}] **{s['title']}** [{s.get('force_type', '?')} | {s.get('timeframe', '?')}]\n"
             line += f"  Description: {s.get('description', 'N/A')}\n"
             line += f"  Lifecycle: {lifecycle} | Momentum: {momentum} | Credibility: {s.get('credibility', '?')} ({source_count} verified sources)\n"
             if dims:
@@ -325,7 +429,7 @@ def _format_top_signals_per_category(by_category: dict, per_cat: int = 5) -> str
     return "\n\n".join(blocks)
 
 
-def _build_global_prompt(kb_aggregate: dict, cross_impact: list, top_foresights: list) -> str:
+def _build_global_prompt(kb_aggregate: dict, cross_impact: list, top_foresights: list, structured_findings: str = "") -> str:
     """Build prompt for Output 1: Global Force Landscape."""
     # Rich signal evidence — top signals per category with full descriptions
     signal_evidence = _format_top_signals_per_category(kb_aggregate["by_category"], per_cat=5)
@@ -382,6 +486,9 @@ Cross-impact density (theme x dimension interactions):
 Top foresight themes affecting companies:
 {foresight_summary}
 
+PRE-COMPUTED EVIDENCE-LINKED FINDINGS:
+{structured_findings}
+
 ANALYTICAL STRUCTURE (Popper's Foresight Framework):
 
 Section 1 — ANTICIPATION: What forces are converging? Which weak signals are strengthening? What established patterns are decelerating? Synthesize across categories — don't list themes, weave them into a narrative about interconnected forces.
@@ -413,29 +520,7 @@ OUTPUT FORMAT:
 - End with implications for organizational thinking, never technology adoption"""
 
 
-def _format_stakeholder_block(stakeholder_data: dict = None) -> str:
-    """Format stakeholder data for inclusion in prompts."""
-    if not stakeholder_data or stakeholder_data.get("enriched_count", 0) == 0:
-        return "STAKEHOLDER DATA: Not available (insufficient LinkedIn enrichment data)."
-
-    sd = stakeholder_data
-    block = f"""STAKEHOLDER-DIMENSION AFFINITY DATA (from {sd['stakeholder_count']} key stakeholders across all companies, {sd['enriched_count']} with LinkedIn insights):
-
-Role distribution: {json.dumps(sd['role_distribution'])}
-
-Stakeholder-Dimension Matrix (which roles focus on which strategic dimensions):
-{sd['matrix_text']}"""
-
-    if sd.get("unchampioned_dimensions"):
-        block += f"\n\nUnchampioned dimensions (under external pressure but lacking internal advocates): {', '.join(sd['unchampioned_dimensions'])}"
-
-    if sd.get("alignment_conflicts"):
-        block += f"\n\nAlignment conflicts detected:\n" + "\n".join(f"- {c}" for c in sd["alignment_conflicts"])
-
-    return block
-
-
-def _build_finland_prompt(global_analysis: str, mi: dict, stakeholder_data: dict = None, kb_aggregate: dict = None) -> str:
+def _build_finland_prompt(global_analysis: str, mi: dict, kb_aggregate: dict = None, structured_findings: str = "") -> str:
     """Build prompt for Output 2: Finnish Economy Force Map."""
     # Market health summary
     health_summary = ""
@@ -517,7 +602,8 @@ Top Foresight Themes Affecting Finnish Companies:
 Total companies analyzed: {mi.get('company_count', 0)}
 Companies with detailed data: {mi.get('detailed_count', 0)}
 
-{_format_stakeholder_block(stakeholder_data)}
+PRE-COMPUTED EVIDENCE-LINKED FINDINGS:
+{structured_findings}
 
 ANALYTICAL STRUCTURE (4 sections):
 
@@ -527,7 +613,7 @@ Combine the Finnish positioning data with the cross-domain convergence patterns 
 - A domain appears healthy by one metric but vulnerable by another
 - Forces converge on multiple domains simultaneously in ways that create compound exposure
 - A gap between intent and reality in one domain amplifies pressure in a connected domain
-- Stakeholder champions exist for well-served dimensions but are absent for the most critical ones
+- Organizational capability is concentrated in well-served dimensions but weak where pressure is greatest
 
 For each asymmetry, explain WHY it matters strategically — not just what the numbers show, but what the numbers MEAN for Finnish industry's future competitive position. Use specific signal evidence to connect these asymmetries to the global forces identified in Layer 1.
 
@@ -543,8 +629,6 @@ Key analytical questions:
 - Which gaps are the most dangerous — not because they are the largest, but because they create the most strategic exposure when combined with the force convergence patterns from Section 1?
 - What should Finnish companies STOP doing based on these gaps?
 
-If stakeholder alignment data is available, weave it into this analysis: do the roles that champion certain dimensions align with where the gaps are largest? If not, this is itself a critical finding.
-
 SO WHAT: What does the gap pattern reveal about whether Finnish industry is running its own race or someone else's?
 
 Section 3 — THREE HORIZONS FOR FINLAND:
@@ -552,7 +636,7 @@ Section 3 — THREE HORIZONS FOR FINLAND:
 - Prepare (12-24 months): What capabilities need building? Connect to the asymmetries and gaps identified above.
 - Position (24-36 months): What "Own Race" opportunities exist? Where could Finnish industry define new competitive terrain rather than compete on existing terrain?
 
-For each horizon, identify not just WHAT to do but WHO in the stakeholder landscape is best positioned to champion it — or whether the current stakeholder distribution creates a blind spot.
+For each horizon, identify not just WHAT to do but which organizational capability, governance mechanism, or operating-model change must carry it.
 
 SO WHAT: Which horizon carries the highest cost of inaction, and why?
 
@@ -576,67 +660,10 @@ OUTPUT FORMAT:
 - Reference specific KB signals by name when supporting claims about forces"""
 
 
-def _aggregate_domain_stakeholders(domain_companies: list) -> dict:
-    """Build domain-specific stakeholder summary from company key_people."""
-    ROLE_BUCKETS = {
-        "C-Suite / Executive": ["ceo", "cfo", "cto", "cio", "coo", "chief", "president", "managing director", "vd"],
-        "Technology / Innovation": ["technology", "innovation", "digital", "data", "architect", "engineering", "r&d"],
-        "Strategy / Commercial": ["strategy", "commercial", "business development", "marketing", "sales", "growth"],
-        "Operations / HR": ["operations", "hr", "human resources", "people", "talent", "supply chain", "logistics"],
-    }
-    DIM_KEYWORDS = {
-        "Operating Model": ["agile", "lean", "operating model", "organization", "team", "autonomy", "devops", "process"],
-        "Service Portfolio": ["product", "service", "saas", "platform", "portfolio", "offering", "revenue model"],
-        "Values": ["culture", "values", "trust", "diversity", "inclusion", "wellbeing", "sustainability", "esg"],
-        "Strategy": ["strategy", "growth", "market", "competitive", "vision", "transformation", "future"],
-        "AI Readiness": ["ai", "artificial intelligence", "data", "machine learning", "automation", "digital", "cloud"],
-    }
-
-    role_dim = defaultdict(lambda: defaultdict(int))
-    role_counts = Counter()
-    total = 0
-
-    for company in domain_companies:
-        for person in (company.get("key_people") or []):
-            total += 1
-            role_lower = (person.get("role") or "").lower()
-            bucket = "Other"
-            for bk, kws in ROLE_BUCKETS.items():
-                if any(kw in role_lower for kw in kws):
-                    bucket = bk
-                    break
-            role_counts[bucket] += 1
-
-            insights = person.get("linkedin_insights") or {}
-            if not insights.get("found"):
-                continue
-            all_text = " ".join(insights.get("topics") or []).lower() + " " + (insights.get("headline") or "").lower()
-            for dim, kws in DIM_KEYWORDS.items():
-                if any(kw in all_text for kw in kws):
-                    role_dim[bucket][dim] += 1
-
-    if total == 0:
-        return None
-
-    lines = []
-    for bucket in ROLE_BUCKETS:
-        if role_counts.get(bucket, 0) == 0:
-            continue
-        affs = role_dim.get(bucket, {})
-        if affs:
-            top = sorted(affs.items(), key=lambda x: x[1], reverse=True)
-            lines.append(f"- {bucket} ({role_counts[bucket]}): focus on {', '.join(f'{d}={c}' for d, c in top)}")
-        else:
-            lines.append(f"- {bucket} ({role_counts[bucket]}): no dimension signals")
-
-    return {"total": total, "summary": "\n".join(lines)} if lines else None
-
-
 def _build_domain_prompt(
     domain: str, domain_config: dict, domain_companies: list,
     kb_signals: list, market_health: dict,
-    global_analysis: str, finland_analysis: str,
-    domain_stakeholders: dict = None,
+    global_analysis: str, finland_analysis: str, structured_findings: str = "",
 ) -> str:
     """Build prompt for Output 3: Domain Force Dossier."""
     # Company stats
@@ -697,15 +724,6 @@ def _build_domain_prompt(
 
     health_score = market_health.get("score", "N/A") if market_health else "N/A"
 
-    # Build stakeholder block outside the f-string (Python 3.11 can't nest f"""...""")
-    stakeholder_block = ""
-    if domain_stakeholders:
-        stakeholder_block = (
-            f"DOMAIN STAKEHOLDER DYNAMICS ({domain_stakeholders['total']} key people in this domain):\n"
-            f"{domain_stakeholders['summary']}\n"
-            f"Use this to identify whether this domain's leadership has the internal alignment to act on the forces identified above."
-        )
-
     return f"""{SYSTEM_ROLE}
 
 TASK: Write a Domain Force Dossier for {domain}.
@@ -741,7 +759,8 @@ Forces identified in domain companies ({len(domain_forces)} total):
 KB SIGNAL EVIDENCE for this domain's themes (full descriptions — use these to ground your analysis in actual source content):
 {chr(10).join(kb_summary)}
 
-{stakeholder_block}
+PRE-COMPUTED EVIDENCE-LINKED FINDINGS:
+{structured_findings}
 
 ANALYTICAL STRUCTURE:
 
@@ -892,11 +911,23 @@ RESPOND IN JSON FORMAT ONLY:
         )
         if isinstance(result, dict):
             result.setdefault("verification_model", model_used)
+            result["status"] = "verified" if result.get("passed") is True else "failed"
             return result
-        return {"passed": True, "issues": [], "note": "Could not parse verification response", "verification_model": model_used}
+        return {
+            "passed": False,
+            "status": "unavailable",
+            "issues": [],
+            "note": "Could not parse verification response",
+            "verification_model": model_used,
+        }
     except Exception as e:
         print(f"   [Observatory] Verification failed (non-blocking): {e}")
-        return {"passed": True, "issues": [], "error": str(e)}
+        return {
+            "passed": False,
+            "status": "unavailable",
+            "issues": [],
+            "error": str(e),
+        }
 
 
 def _generate_with_verification(prompt: str, source_summary: str, output_type: str, use_opus: bool = False, signal_evidence: str = "") -> tuple[str, dict]:
@@ -964,6 +995,9 @@ def generate_observatory(progress_callback=None):
     data = _load_all_data(storage)
     kb_agg = data["kb_aggregate"]
     mi = data["market_intel"]
+    input_manifest = _build_input_manifest(data)
+    structured_findings = _build_structured_findings(kb_agg, mi)
+    findings_block = _format_structured_findings(structured_findings)
 
     # Import domain config
     from strategic_foresight import DOMAIN_TO_FORESIGHT
@@ -987,6 +1021,7 @@ def generate_observatory(progress_callback=None):
         kb_agg,
         mi.get("cross_impact", []),
         mi.get("top_foresights", []),
+        findings_block,
     )
     global_source = f"Total signals: {kb_agg['total_signals']}, Themes: {kb_agg['theme_count']}, Accelerating: {kb_agg['accelerating']}, Decelerating: {kb_agg['decelerating']}"
     global_text, global_verify = _generate_with_verification(global_prompt, global_source, "Global Force Landscape", signal_evidence=signal_evidence)
@@ -1011,9 +1046,7 @@ def generate_observatory(progress_callback=None):
 
     # --- Output 2: Finnish Economy Force Map ---
     progress("Finnish Economy Force Map", 1, total_steps)
-    stakeholder_data = _aggregate_stakeholder_dynamics(data["company_details"], mi.get("gap_patterns", []))
-    print(f"   [Observatory] Stakeholders: {stakeholder_data['stakeholder_count']} total, {stakeholder_data['enriched_count']} enriched, {len(stakeholder_data['alignment_conflicts'])} conflicts detected")
-    finland_prompt = _build_finland_prompt(global_text, mi, stakeholder_data, kb_agg)
+    finland_prompt = _build_finland_prompt(global_text, mi, kb_agg, findings_block)
     finland_source = f"Companies: {mi.get('company_count', 0)}, Domains: {len(mi.get('market_health', []))}, Foresight Vulnerability segments: {json.dumps(mi.get('favi_segments', {}))}"
     finland_text, finland_verify = _generate_with_verification(finland_prompt, finland_source, "Finnish Economy Force Map", use_opus=True, signal_evidence=signal_evidence)
 
@@ -1043,7 +1076,8 @@ def generate_observatory(progress_callback=None):
         for theme in config.get("fp_themes", []):
             for theme_slug, theme_data in data["all_kb"].items():
                 for sig in theme_data.get("signals", []):
-                    if sig.get("fp_theme") == theme and str(sig.get("promotion_status") or "").lower() not in {"excluded", "checked_excluded"}:
+                    eligible, _ = _is_eligible_foresight_context(sig)
+                    if sig.get("fp_theme") == theme and eligible:
                         kb_signals.append(sig)
 
         # Find market health for this domain
@@ -1053,12 +1087,9 @@ def generate_observatory(progress_callback=None):
                 mh = h
                 break
 
-        # Aggregate domain-specific stakeholder dynamics
-        dom_stakeholders = _aggregate_domain_stakeholders(companies)
-
         domain_prompt = _build_domain_prompt(
             domain, config, companies, kb_signals, mh,
-            global_text, finland_text, dom_stakeholders,
+            global_text, finland_text, findings_block,
         )
         source = f"Domain: {domain}, Companies: {len(companies)}, KB signals: {len(kb_signals)}"
         # Build domain-specific signal evidence for cross-validation
@@ -1101,12 +1132,16 @@ def generate_observatory(progress_callback=None):
         domain_dossiers.append(dossier)
 
     # --- Assemble final result ---
+    all_verifications = [global_verify, finland_verify] + [item["verification"] for item in domain_dossiers]
     result = {
         "generated_at": datetime.utcnow().isoformat(),
-        "model": "claude-sonnet-4-6 (L1-L2) + claude-opus-4-8 (L3)",
+        "model": "claude-sonnet-4-6 (Layer 1) + claude-opus-4-8 (Layers 2-3)",
         "verification_model": "gpt-5.4 / claude-sonnet-4-6",
         "company_count": len(data["dashboard_data"]),
         "domain_count": len(active_domains),
+        "input_manifest": input_manifest,
+        "structured_findings": structured_findings,
+        "confidence": _build_confidence_summary(data, all_verifications),
         "global_analysis": global_analysis,
         "finland_analysis": finland_analysis,
         "domain_dossiers": domain_dossiers,
