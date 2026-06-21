@@ -659,7 +659,7 @@ def _get_anthropic_key(anthropic_key=None):
     return api_key
 
 
-def _provider_fact_check(summary_text, company_name, evidence_links=None, pitch_text=None, scan_payload=None):
+def _provider_fact_check(summary_text, company_name, evidence_links=None, pitch_text=None, scan_payload=None, analysis_sections=None, document_label="AI Diagnosis"):
     """Two-stage GPT/Claude fact-check pipeline."""
     verified_links = []
     evidence_ref = ""
@@ -670,7 +670,12 @@ def _provider_fact_check(summary_text, company_name, evidence_links=None, pitch_
             if not l.get("verified", True):
                 continue
             title = (l.get("title") or "Unknown")[:80]
-            snippet_raw = (l.get("source_quote") or l.get("snippet") or "").strip()
+            semantic_hint = (l.get("semantic_hint") or l.get("snippet") or "").strip()
+            snippet_raw = (
+                l.get("fetched_excerpt") or l.get("normalized_content")
+                or l.get("content_excerpt") or l.get("extracted_text")
+                or l.get("cached_excerpt") or l.get("source_quote") or ""
+            ).strip()
             tier = (l.get("claim_tier") or "D").upper()
             if tier_snippet_bounds is None:
                 min_len, max_len = 0, 500
@@ -686,15 +691,18 @@ def _provider_fact_check(summary_text, company_name, evidence_links=None, pitch_
             verified_links.append({
                 "title": title,
                 "url": l.get("url", ""),
-                "snippet": snippet_raw[:max_len],
+                "semantic_hint": semantic_hint[:300],
+                "snippet": snippet_raw[:max(1800, max_len)],
                 "tier": tier,
                 "label": label,
+                "claim_type": l.get("claim_type") or "company_evidence",
             })
         verified_links = verified_links[:20]
         for i, link in enumerate(verified_links, 1):
             evidence_ref += (
                 f"[{i}] [tier={link['tier']}] [{link['label']}] "
-                f"{link['title']} | URL: {link['url']} | Snippet: {link['snippet']}\n"
+                f"{link['title']} | URL: {link['url']} | Claim type: {link['claim_type']} | "
+                f"Semantic hint (routing only): {link['semantic_hint']} | Current source content: {link['snippet']}\n"
             )
 
     evidence_section = f"""
@@ -715,14 +723,20 @@ AI-GENERATED PITCH TO VERIFY:
 SCAN PAYLOAD FOR INTERNAL SCANNER OBSERVATIONS AND STRUCTURED FINANCIAL FACTS:
 {payload_text[:14000]}
 """
+    sections_section = ""
+    if analysis_sections:
+        sections_section = f"""
+ADDITIONAL GENERATED SECTIONS TO VERIFY INDEPENDENTLY:
+{json.dumps(analysis_sections, ensure_ascii=False, indent=2)}
+"""
 
-    stage1_prompt = f"""You are an uncompromising Data Auditor. Evaluate the faithfulness and factual accuracy of an AI-generated company summary.
+    stage1_prompt = f"""You are an uncompromising Data Auditor. Evaluate the faithfulness and factual accuracy of this {document_label} section by section.
 
 COMPANY: {company_name}
 
 AI-GENERATED SUMMARY TO VERIFY:
 {summary_text}
-{pitch_section}{evidence_section}{scan_payload_section}
+{pitch_section}{sections_section}{evidence_section}{scan_payload_section}
 INSTRUCTIONS:
 1. Extract definitive claims from the summary and pitch.
 2. Classify each claim before judging it:
@@ -734,12 +748,14 @@ INSTRUCTIONS:
 5. For INTERNAL SCANNER OBSERVATIONS, verify against the SCAN PAYLOAD above, not external web sources. Do not flag an internal observation merely because no public webpage says it. Flag it only if it contradicts the scan payload or invents a Scanner result that is not present.
 6. If stored evidence is insufficient for an external company fact, use cautious external verification through your own provider tools/knowledge, but do not invent corrections.
 7. A company website is self-reported. It cannot by itself refute analytical observations about internal operating reality unless it contains concrete, specific operational metrics.
-8. Foresight/regulatory context cannot prove present-tense company behavior.
-9. Use "Internal Scan Mismatch" only for scanner-process statements that contradict the scan payload. Use Fabrication/Contradiction/Misattribution/Organizational Fabrication for external company facts.
+8. Foresight/regulatory sources are validated against their macro claims, not against a requirement to mention the company. They cannot prove present-tense company behavior. A company-fit statement is valid only as a clearly modal inference grounded separately in company evidence.
+9. Semantic hints and historical snippets are discovery aids only. Judge support from CURRENT SOURCE CONTENT. Exact quotation mismatch is not by itself a failure when the current passage supports the same claim; classify support as exact, partial, context_only, or unsupported.
+10. Financial evidence may support only financial condition, capacity and investment claims. It cannot substitute for missing operational, architectural, strategic, AI/data, service-delivery or cultural evidence.
+11. Use "Internal Scan Mismatch" only for scanner-process statements that contradict the scan payload. Use Fabrication/Contradiction/Misattribution/Organizational Fabrication for external company facts.
 
 OUTPUT FORMAT — valid JSON only:
 If accurate: {{"false_claims": [], "summary_accurate": true}}
-If false claims found: {{"false_claims": [{{"claim": "Exact quote or close paraphrase", "error_type": "Fabrication OR Contradiction OR Misattribution OR Organizational Fabrication OR Internal Scan Mismatch", "reasoning": "Brief reason", "correction": "Verified replacement or empty string", "wrong_value": "", "correct_value": "", "source_indices": [1]}}], "summary_accurate": false}}
+If false claims found: {{"false_claims": [{{"section": "section heading", "claim": "Exact quote or close paraphrase", "error_type": "Fabrication OR Contradiction OR Misattribution OR Organizational Fabrication OR Internal Scan Mismatch", "support_level": "exact OR partial OR context_only OR unsupported", "reasoning": "Brief reason", "correction": "Verified replacement or empty string", "wrong_value": "", "correct_value": "", "source_indices": [1]}}], "summary_accurate": false}}
 """
 
     stage1_false_claims = None
@@ -768,6 +784,7 @@ If false claims found: {{"false_claims": [{{"claim": "Exact quote or close parap
                             source_urls.append(url)
                 parsed.append({
                     "claim": claim_text,
+                    "section": fc.get("section") or document_label,
                     "error_type": fc.get("error_type") or "Unknown",
                     "reasoning": fc.get("reasoning") or "",
                     "correction": fc.get("correction") or "",
@@ -826,13 +843,17 @@ If false claims found: {{"false_claims": [{{"claim": "Exact quote or close parap
 ORIGINAL PITCH TO ALSO CORRECT (fix only if it references a false claim):
 {pitch_text}
 """ if pitch_text else ""
+    sections_correction_note = f"""
+ORIGINAL ADDITIONAL SECTIONS TO CORRECT:
+{json.dumps(analysis_sections, ensure_ascii=False, indent=2)}
+""" if analysis_sections else ""
     stage2_prompt = f"""You are a precise editorial editor. Surgically correct only the false claims below while preserving every unaffected sentence.
 
 COMPANY: {company_name}
 
 ORIGINAL SUMMARY:
 {summary_text}
-{pitch_correction_note}
+{pitch_correction_note}{sections_correction_note}
 IDENTIFIED FALSE CLAIMS WITH VERIFIED CORRECTIONS:
 {claims_text}
 
@@ -840,11 +861,12 @@ Rules:
 - Apply provided verified corrections exactly.
 - Delete fabricated sentences when no verified correction exists.
 - Do not add new claims.
-- Return valid JSON only: {{"corrected_summary": "...", "corrected_pitch": "..."}}
+- Return valid JSON only: {{"corrected_summary": "...", "corrected_pitch": "...", "corrected_sections": {{"section_key": []}}}}
 """
 
     corrected_summary = ""
     corrected_pitch = ""
+    corrected_sections = {}
     elapsed2 = 0
     s2_model_name = None
     for model_name in ("gpt-5.5", "claude-sonnet-4-6"):
@@ -870,6 +892,7 @@ Rules:
             if result and result.get("corrected_summary"):
                 corrected_summary = result.get("corrected_summary", "")
                 corrected_pitch = result.get("corrected_pitch", "")
+                corrected_sections = result.get("corrected_sections") or {}
                 s2_model_name = model_name
                 print(f"   ✏️ [Fact-Check S2] Correction produced ({len(corrected_summary.split())} words, {elapsed2}ms)")
                 break
@@ -880,11 +903,12 @@ Rules:
         "false_claims": stage1_false_claims,
         "corrected_summary": corrected_summary,
         "corrected_pitch": corrected_pitch,
+        "corrected_sections": corrected_sections,
         "model": f"{stage1_model_name}+{s2_model_name or 's2-failed'}",
         "time_ms": stage1_time_ms + elapsed2,
     }
 
-def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text=None, scan_payload=None):
+def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text=None, scan_payload=None, analysis_sections=None, document_label="AI Diagnosis"):
     """
     AI-powered fact-check — two-stage pipeline:
       Stage 1: GPT-5.4 → Claude Sonnet 4.6 — detects false claims.
@@ -915,6 +939,7 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
             "false_claims_detailed": [],
             "corrected_summary": "",
             "corrected_pitch": "",
+            "corrected_sections": {},
             "fact_check_model": "skipped",
             "fact_check_time_ms": 0,
         }
@@ -928,6 +953,8 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
         evidence_links=evidence_links,
         pitch_text=pitch_text,
         scan_payload=scan_payload,
+        analysis_sections=analysis_sections,
+        document_label=document_label,
     )
 
     all_claims = []
@@ -1070,6 +1097,7 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
 
     corrected_summary = result.get("corrected_summary") or ""
     corrected_pitch = result.get("corrected_pitch") or ""
+    corrected_sections = result.get("corrected_sections") or {}
     fact_check_skipped = result.get("fact_check_skipped", False)
 
     return {
@@ -1081,6 +1109,7 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
         "false_claims_detailed": all_claims_detailed[:10],
         "corrected_summary": corrected_summary,
         "corrected_pitch": corrected_pitch,
+        "corrected_sections": corrected_sections,
         "fact_check_model": result["model"],
         "fact_check_time_ms": total_ms,
     }

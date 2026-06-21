@@ -116,7 +116,7 @@ def test_cleaner_excludes_dead_urls_without_promoting(monkeypatch):
     assert link["verification_reason"] == "url_not_verified"
 
 
-def test_cleaner_processes_foresight_links_with_summary_claims(monkeypatch):
+def test_cleaner_validates_foresight_macro_claim_without_company_entity_gate(monkeypatch):
     monkeypatch.setattr(evidence_cleaner, "_verify_url", lambda url, timeout=6: (True, "url_verified"))
 
     def fake_validate(links, **kwargs):
@@ -133,8 +133,11 @@ def test_cleaner_processes_foresight_links_with_summary_claims(monkeypatch):
         "companyName": "Example",
         "foresight_links": [{
             "url": "https://example.com/platform",
-            "summary": "Demand for platform automation is rising.",
+            "source_says": "Demand for platform automation is rising.",
+            "snippet": "Example has already deployed platform automation.",
             "source_credibility": "medium",
+            "wrong_entity": True,
+            "entity_match_status": "wrong",
         }],
     }
 
@@ -142,8 +145,17 @@ def test_cleaner_processes_foresight_links_with_summary_claims(monkeypatch):
 
     link = data["foresight_links"][0]
     assert link["source_type"] == "foresight"
-    assert link["analysis_verified"] is True
-    assert data["evidence_cleaning_stats"]["by_field"]["foresight_links"]["analysis_verified"] == 1
+    assert link["snippet"] == "Demand for platform automation is rising."
+    assert link["company_fit_interpretation"] == "Example has already deployed platform automation."
+    assert link["claim_type"] == "foresight_context"
+    assert link["company_specific"] is False
+    assert link["foresight_context_eligible"] is True
+    assert link["not_evidence_of_deployment"] is True
+    assert "wrong_entity" not in link
+    assert "entity_match_status" not in link
+    assert "analysis_verified" not in link
+    assert "promotion_status" not in link
+    assert data["evidence_cleaning_stats"]["by_field"]["foresight_links"]["analysis_verified"] == 0
 
 
 def test_cleaner_blocks_same_name_wrong_entity_sources(monkeypatch):

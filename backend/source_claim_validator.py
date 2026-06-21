@@ -199,27 +199,40 @@ def _content_entity_match(url: str, page_text: str, company_name: str, company_d
     )
 
 
-def _reason_indicates_no_support(reason: str) -> bool:
+def _reason_indicates_no_support(reason: str, *, context_only: bool = False) -> bool:
     text = (reason or "").lower()
-    conflict_markers = (
-        "does not mention",
-        "doesn't mention",
-        "does not include",
-        "no mention",
-        "not mention",
-        "not the target",
-        "wrong entity",
-        "different entity",
-        "different company",
-        "appears to be for",
-        "rather than",
-        "unrelated",
-        "does not support",
-        "doesn't support",
-        "not support",
-        "no evidence",
-        "cannot verify",
-    )
+    if context_only:
+        # A macro source is allowed to omit the scanned company. Only language
+        # that rejects the trend/force itself is a verification conflict.
+        conflict_markers = (
+            "unrelated",
+            "does not support",
+            "doesn't support",
+            "not support",
+            "no evidence",
+            "cannot verify the trend",
+            "cannot verify the claim",
+        )
+    else:
+        conflict_markers = (
+            "does not mention",
+            "doesn't mention",
+            "does not include",
+            "no mention",
+            "not mention",
+            "not the target",
+            "wrong entity",
+            "different entity",
+            "different company",
+            "appears to be for",
+            "rather than",
+            "unrelated",
+            "does not support",
+            "doesn't support",
+            "not support",
+            "no evidence",
+            "cannot verify",
+        )
     return any(marker in text for marker in conflict_markers)
 
 
@@ -277,7 +290,13 @@ def _build_relevance_prompt(claim: str, page_text: str, company_name: str = "", 
         if context_only else
         "This is company-specific evidence. The extracted source text must identify the target company, its official domain, a known legal entity/subsidiary/former name, or an explicitly scoped parent/owner context."
     )
-    return f"""You are a strict evidence verifier. A forensic scanner cited this source URL to support a specific claim about a target company.
+    evidence_kind = "company-neutral foresight context" if context_only else "company-specific evidence"
+    quote_rule = (
+        "A supporting_quote must be copied from the source and support the macro trend, force, direction, or regulatory context. It does not need to name the target company."
+        if context_only else
+        "A supporting_quote must be copied from the source and contain the target/scoped entity name or exact values that prove the claim."
+    )
+    return f"""You are a strict evidence verifier. A forensic scanner cited this source URL as {evidence_kind}.
 
 TARGET COMPANY:
 "{target}"
@@ -300,7 +319,8 @@ Score 0-100:
 Entity rule:
 - {scope_rule}
 - A live page about a different same-name company is not support.
-- A supporting_quote should be copied from the source text and should contain the target/scoped entity name or exact values that prove the claim.
+- {quote_rule}
+- For foresight context, judge only whether the source supports the macro claim. Do not infer that the target company has acted, deployed anything, or is directly exposed.
 
 Respond with ONLY a JSON object, no other text:
 {{"score": <0-100>, "claim_supported": <true|false>, "entity_match_status": "exact|scoped|weak|wrong|unknown", "entity_name_found": "<entity name or empty>", "supporting_quote": "<short exact source excerpt or empty>", "unsupported_reason": "<why unsupported or empty>", "reason": "<one sentence explanation>"}}"""
@@ -361,7 +381,10 @@ def _evaluate_parsed_relevance(
         relevant = False
 
     conflict_reason = reason or parsed.get("unsupported_reason", "")
-    verification_conflict = _reason_indicates_no_support(conflict_reason)
+    verification_conflict = _reason_indicates_no_support(
+        conflict_reason,
+        context_only=context_only,
+    )
     quote_mismatch = not _quote_value_overlap(claim, supporting_quote, page_text)
     if (not entity_verified and not context_only) or verification_conflict or quote_mismatch:
         support_status = "unsupported"
@@ -395,7 +418,7 @@ def _evaluate_parsed_relevance(
 
 
 def _deterministic_support_safe(result: dict, claim: str, page_text: str, context_only: bool) -> bool:
-    if not result or result.get("wrong_entity") is True:
+    if not result or (result.get("wrong_entity") is True and not context_only):
         return False
     if result.get("verification_conflict") is True or result.get("quote_mismatch") is True:
         return False
@@ -621,7 +644,7 @@ def _check_relevance(
         "source_quote": _best_source_quote(page_text, claim),
         "reason": "Verifier failed: " + " | ".join(errors)[:240],
         "verification_model": "none",
-        "entity_verified": content_entity_status in {"exact", "scoped"},
+        "entity_verified": context_only or content_entity_status in {"exact", "scoped"},
         "content_entity_match_status": content_entity_status,
         "content_entity_match_reason": content_entity_match.get("entity_match_reason", ""),
         **display_entity_match,
@@ -812,7 +835,16 @@ def validate_foresight_claims(
         if not force.get("url_verified", False):
             continue
         url = (force.get("source_url") or "").strip()
-        claim = (force.get("summary") or force.get("force_name") or "").strip()
+        # Validate what the macro source says, never the separate company-fit
+        # interpretation attached by the scan.
+        claim = (
+            force.get("source_says")
+            or force.get("semantic_snippet")
+            or force.get("trend")
+            or force.get("summary")
+            or force.get("force_name")
+            or ""
+        ).strip()
         if url and claim and url.startswith("http") and len(claim) > 20:
             candidates.append((url, claim, force))
 
@@ -839,6 +871,9 @@ def validate_foresight_claims(
                     "snippet": claim,
                     "source_type": force.get("source_type", "foresight"),
                     "origin": "foresight",
+                    "claim_type": "foresight_context",
+                    "company_specific": False,
+                    "scope": "external-trend",
                 },
             )
             future_to_item[future] = (url, claim, force)
@@ -862,39 +897,52 @@ def validate_foresight_claims(
             if result.get("source_quote"):
                 force["source_quote"] = result["source_quote"]
             for key in (
-                "entity_match_status", "entity_match_reason", "canonical_source_host",
-                "content_entity_match_status", "content_entity_match_reason",
-                "entity_verified", "entity_name_found", "verification_conflict",
-                "quote_mismatch", "verification_reviewed_by", "verification_review_reason",
+                "verification_conflict", "quote_mismatch",
+                "verification_reviewed_by", "verification_review_reason",
                 "verification_disagreement", "primary_verification_model",
                 "secondary_verification_model", "verification_review_error",
             ):
                 if key in result and result.get(key) not in (None, ""):
                     force[key] = result[key]
-            if result.get("entity_match_status") == "wrong" or result.get("content_entity_match_status") == "wrong":
-                force["wrong_entity"] = True
-            try:
-                from source_quality import apply_analysis_verification
-                promoted = apply_analysis_verification(
-                    {
-                        **force,
-                        "url": force.get("url") or force.get("source_url"),
-                        "verified": force.get("verified", force.get("url_verified")),
-                        "source_type": force.get("source_type", "foresight"),
-                        "origin": force.get("origin", "foresight"),
-                        "claim_type": force.get("claim_type", "foresight_context"),
-                    },
-                    company_domain,
-                    company_name,
-                )
-                for key in (
-                    "analysis_verified", "promotion_status", "generation_eligible",
-                    "verification_reason", "analysis_verified_at", "entity_scope",
-                ):
-                    if key in promoted:
-                        force[key] = promoted[key]
-            except Exception:
-                pass
+            # Foresight verification has its own contract. A macro source is not
+            # rejected because it omits the company, and it is never promoted as
+            # proof of company action or deployment.
+            supported = result.get("claim_support_status") == "supported"
+            for key in (
+                "wrong_entity", "wrong_entity_true", "entity_match_status",
+                "entity_match_reason", "content_entity_match_status",
+                "content_entity_match_reason", "entity_scope", "entity_verified",
+                "entity_name_found", "canonical_source_host", "generation_eligible",
+                "analysis_verified", "promotion_status",
+            ):
+                force.pop(key, None)
+            force["claim_type"] = "foresight_context"
+            force["company_specific"] = False
+            force["requires_company_specific_corroboration"] = True
+            force["not_evidence_of_deployment"] = True
+            force["modal_language_required"] = True
+            force["source_readable"] = result.get("content_verified") is True
+            force["trend_supported"] = supported
+            force["trend_support_status"] = (
+                "supported" if supported else result.get("claim_support_status", "unchecked")
+            )
+            force["foresight_context_eligible"] = bool(
+                force.get("url_verified") is True
+                and force["source_readable"]
+                and supported
+                and force.get("theme_match", True) is not False
+            )
+            force["foresight_signal_status"] = (
+                "context_eligible" if force["foresight_context_eligible"] else "not_context_eligible"
+            )
+            force["source_audit_status"] = (
+                "accepted" if force["foresight_context_eligible"] else "trend_not_supported"
+            )
+            force["verification_reason"] = (
+                "macro_source_supports_foresight_claim; company_fit_requires_separate_corroboration"
+                if force["foresight_context_eligible"]
+                else result.get("reason") or "macro_source_did_not_support_foresight_claim"
+            )
 
     elapsed_ms = int((time.time() - start) * 1000)
     checked = len(results)

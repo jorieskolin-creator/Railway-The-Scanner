@@ -76,7 +76,8 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
         if parts:
             delta = {"previous_scan_date": prev_date, "changes": parts}
 
-    # Evidence — richer than general_summary (20 sources, 300-char snippets)
+    # Evidence packets keep routing hints separate from currently verified
+    # content. Historical snippets help selection, but never prove a claim.
     # Company evidence and macro foresight are kept in separate payload lanes.
     # Each item carries a "scope" flag derived from the URL/title/snippet.
     # "narrow" means the source describes a limited population (master's
@@ -94,12 +95,23 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
         ):
             continue
         title = (l.get("title", "Source") or "Source")[:80]
-        snippet = (l.get("source_quote") or l.get("snippet") or "")[:300]
+        semantic_hint = (l.get("semantic_hint") or l.get("snippet") or "")[:500]
+        source_content = (
+            l.get("fetched_excerpt") or l.get("normalized_content")
+            or l.get("content_excerpt") or l.get("extracted_text")
+            or l.get("cached_excerpt") or l.get("source_quote") or ""
+        )[:2200]
         scoped_link = apply_entity_scope(dict(l), company_name)
         verified_links.append({
+            "evidence_id": f"E{len(verified_links) + 1}",
             "title": title,
-            "snippet": snippet,
-            "scope": assess_source_scope(l.get("url", ""), title, snippet),
+            "url": l.get("url", ""),
+            "semantic_hint": semantic_hint,
+            "source_content": source_content,
+            "snippet": source_content,
+            "jury": l.get("category") or l.get("jury") or "",
+            "support_level": l.get("support_level") or "",
+            "scope": assess_source_scope(l.get("url", ""), title, source_content),
             "entity_scope": scoped_link.get("entity_scope", "unknown"),
             "scope_warning": scoped_link.get("scope_warning", ""),
         })
@@ -114,8 +126,11 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
         title = (l.get("title", "Foresight Source") or "Foresight Source")[:80]
         snippet = (l.get("snippet") or "")[:300]
         foresight_links.append({
+            "evidence_id": f"F{len(foresight_links) + 1}",
             "title": title,
-            "snippet": snippet,
+            "url": l.get("url") or l.get("source_url") or "",
+            "semantic_hint": snippet,
+            "source_content": (l.get("source_quote") or l.get("semantic_snippet") or snippet)[:1800],
             "origin": "foresight",
             "source_type": l.get("source_type", ""),
             "scope": "macro_context",
@@ -177,22 +192,11 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
         result["reality_score"] = full_data.get("reality_score", 0)
 
     # Foresight data (if available) — pass rich context for evidence-grounded narrative
-    def _force_generation_eligible(force: dict) -> bool:
-        if not isinstance(force, dict):
-            return False
-        # Newer foresight force records carry the same analysis-verification
-        # fields as evidence links.  If those fields exist, enforce them.
-        if any(k in force for k in ("analysis_verified", "promotion_status", "generation_eligible", "claim_support_status")):
-            return is_generation_eligible_source({
-                **force,
-                "url": force.get("url") or force.get("source_url"),
-                "verified": force.get("verified", force.get("url_verified")),
-            })
-        return False
-
     eligible_forces = [
         f for f in (foresight_data.get("dimension_forces") or [])
-        if _force_generation_eligible(f)
+        if isinstance(f, dict) and is_foresight_context_eligible_source({
+            **f, "url": f.get("url") or f.get("source_url")
+        })
     ] if foresight_data else []
 
     if eligible_forces:
@@ -237,18 +241,6 @@ def _build_prompt(payload: dict, company_name: str) -> str:
     """Build the detailed report prompt."""
     forbidden = ", ".join(_FORBIDDEN_TERMS)
 
-    # Foresight paragraph instruction
-    foresight_instruction = ""
-    if payload.get("foresight"):
-        foresight_instruction = """
-SECTION — heading "Strategic Foresight" (~100-150 words)
-Based on the foresight data in the evidence below:
-- Name the 1-2 most impactful external forces and their timeframe
-- Explain how these forces specifically affect THIS company given their current weaknesses
-- Reference the cross-impact chain if it connects 2+ dimensions
-- Mention the most relevant scenario (status quo or disruption)
-Use plain, forward-looking language."""
-
     # Meta-synthesis instruction when prior analyses are available
     synthesis_instruction = ""
     if payload.get("prior_analyses"):
@@ -259,7 +251,9 @@ This report has access to previously generated analyses: {available}.
 Your job is to SYNTHESIZE and DEEPEN these prior analyses into a coherent, unified diagnostic narrative.
 Do NOT simply repeat what they say — instead, find the through-lines, contradictions, and deeper implications
 that emerge when all analyses are read together. Add analytical depth that individual summaries could not provide.
-Use the prior analyses as your PRIMARY input; the raw evidence data is provided for fact-checking and detail only.
+Treat prior analyses as hypotheses and structural context, not factual authority. The promoted evidence
+packets and structured financial payload are authoritative. Retain a prior conclusion only when current
+evidence supports it.
 """
 
     return f"""You are a senior B2B intelligence analyst writing the detailed diagnostic section of a forensic company assessment report about {company_name}.
@@ -289,8 +283,6 @@ For the 3 dimensions where evidence is richest (strongest or weakest):
 - If a weakness: describe what improvement would look like in concrete terms
 Only cover dimensions with genuine evidence. If evidence is thin for a dimension, skip it — depth over breadth.
 
-{foresight_instruction}
-
 FINAL SECTION — heading "Verdict" (~100-150 words)
 - If washing data indicates a gap between stated ambitions and operational reality, name it explicitly
 - If rescan delta is available, note persistent patterns or meaningful trajectory changes
@@ -299,7 +291,7 @@ FINAL SECTION — heading "Verdict" (~100-150 words)
 
 MANDATORY RULES:
 1. WORD COUNT: {_WORD_MIN}-{_WORD_MAX} words. Count carefully. This is non-negotiable.
-2. EVIDENCE-FIRST: Every analytical claim must reference a specific finding or source from the data above. No evidence = no claim.
+2. EVIDENCE-FIRST: Every factual or diagnostic claim must be supported by a named evidence_id or structured financial field. `semantic_hint` is routing metadata only; support must come from `source_content`.
 3. PLAIN LANGUAGE: Do not use any of these terms: {forbidden}. Use descriptive business language instead.
 4. NO SCORES: Do not mention score names, score numbers, or internal metrics in prose.
 5. SOURCE REFERENCES: When citing evidence, use source titles naturally in text. Do NOT include URLs — those display separately.
@@ -318,7 +310,9 @@ MANDATORY RULES:
 10. FORMAT: Prose with section headings only. Each section starts with "## Heading" on its own line followed by \\n\\n then the paragraph body. No bullet points, no other markdown, no links.
 11. TEMPORAL PRECISION: Use the most recent annual figures, not quarterly snapshots presented as annual results. Do not state that a financial metric is unpublished or unavailable if the payload contains that metric for the latest annual period.
 12. ORGANIZATIONAL CLAIMS: NEVER claim leadership gaps, unfilled roles, or organizational problems unless the evidence explicitly states them.
-13. FORESIGHT BOUNDARY: `foresight_context_sources` and the `foresight` object are external macro context only. They may support modal pressure analysis in the Strategic Foresight section, but never a factual claim about current company deployment, conduct, compliance, capability, or intent.
+13. FORESIGHT BOUNDARY: `foresight_context_sources` and the `foresight` object are external macro context only. Weave relevant pressure into the applicable dimension; do not create a standalone company-focused foresight-analysis section. They may never support a factual claim about current company deployment, conduct, compliance, capability, or intent.
+14. FINANCIAL BOUNDARY: Financial evidence supports financial condition, capacity and investment claims only. It cannot prove architecture, operations, AI/data maturity, service delivery, strategy execution or culture. If non-financial promoted evidence is absent, state that the dimension is unresolved or omit it.
+15. FORESIGHT FIT: Validate a foresight source against its macro trend claim. The connection to this company must be written separately as a cautious analytical inference ("may create pressure because..."). Do not require a macro source to mention the company, and do not present company fit as a sourced company fact.
 
 Output only the prose text. Nothing else."""
 

@@ -2624,6 +2624,9 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
   - ORGANIZATIONAL CLAIMS PROHIBITION: NEVER claim or imply leadership gaps, unfilled executive roles, succession planning issues, management vacancies, or organizational restructuring unless the evidence EXPLICITLY states this. The absence of a person in scanner results does NOT mean the role is vacant — it means the scanner didn't find them. Do NOT invent risk factors about people, roles, or organizational structure to add analytical depth. If the evidence doesn't mention an organizational problem, the problem does not exist for this analysis.
   - Use ONLY the four archetype labels: Thriving, Modernizing, Cash Cow, At Risk.
   - CRITICAL SEPARATION: This section is strictly neutral diagnosis. Do NOT use sales language, calls-to-action, persuasion, or proposal framing here.
+  - EVIDENCE DIMENSION BOUNDARY: Financial evidence may establish financial condition, capacity or investment context only. It cannot establish operating-model maturity, architecture, AI/data capability, service delivery, strategy execution or culture. Diagnose those dimensions only from promoted non-financial jury evidence; otherwise state that evidence is insufficient.
+  - HISTORICAL EVIDENCE: Previous links and snippets are discovery inputs only. Use them only after current URL, entity, content and claim-support validation.
+  - FORESIGHT CONTRACT: Validate foresight material as company-neutral macro context. Any connection to this company is a separate, clearly modal inference grounded in company evidence; foresight is never proof of current company behavior.
 
 STEP 4 — PITCH (90-110 words):
 A direct cold-outreach message to a C-level executive at {company_name}:
@@ -2669,6 +2672,7 @@ Rules:
 - NEVER extrapolate small signals into sweeping assessments (e.g., a tool mentioned in a job ad does NOT reveal corporate strategy).
 - If a KB dimension has no supporting evidence, score it neutrally and acknowledge the gap — do not speculate.
 - Every factual claim in the summary must be traceable to a specific piece of evidence above.
+- Every risk must be traceable to promoted evidence from the relevant non-financial jury or to an explicit structured financial fact. Do not create a non-financial risk from financial performance alone.
 
 ### OUTPUT
 Respond with valid JSON only. Required fields:
@@ -3964,7 +3968,7 @@ def _execute_scan_pipeline(
         foresight_links = []
         try:
             from strategic_foresight import (
-                generate_foresight, validate_foresight_urls, reality_check_foresight,
+                generate_foresight, validate_foresight_urls,
                 extract_foresight_links, retry_failed_sources, enforce_source_quality_gate,
             )
             foresight_start = time.time()
@@ -4013,9 +4017,11 @@ def _execute_scan_pipeline(
                 if is_kb_first:
                     # --- KB-FIRST PATH: URLs already verified, sources pre-validated ---
                     # Skip URL verification, source retry, and quality gate.
-                    # Go straight to reality check and link extraction.
+                    # Go straight to link extraction. Central KB signals already
+                    # use the company-neutral foresight-context contract; the
+                    # former company-focused reality_check_foresight pass was a
+                    # residual analysis layer and could incorrectly demote them.
                     foresight_data["insufficient_evidence"] = False
-                    foresight_data = reality_check_foresight(foresight_data, company_name=companyName)
                     foresight_links = extract_foresight_links(foresight_data, company_name=companyName, domain=company_domain)
                     foresight_links = _safe_dict_list(foresight_links, "foresight_links")
                     passes_gate = True
@@ -4044,9 +4050,6 @@ def _execute_scan_pipeline(
 
                     # STEP 2.7.3: QUALITY GATE
                     foresight_data, passes_gate = enforce_source_quality_gate(foresight_data)
-
-                    # Reality-check pass (SIFT-based source quality assessment)
-                    foresight_data = reality_check_foresight(foresight_data, company_name=companyName)
 
                     # Extract validated sources into foresight_links
                     foresight_links = extract_foresight_links(foresight_data, company_name=companyName, domain=company_domain)
@@ -4956,6 +4959,8 @@ Respond with valid JSON only:
                 company_name=companyName,
                 pitch_text=full_data.get("pitch_text", ""),
                 scan_payload=_build_fact_check_scan_payload(full_data),
+                analysis_sections={"evidence_based_risks": full_data.get("evidence_based_risks") or []},
+                document_label="AI Diagnosis and Evidence-Based Risks",
             )
         full_data["ai_verification"] = {
             "verified": fact_check["verified"],
@@ -4995,6 +5000,10 @@ Respond with valid JSON only:
             # Step 2: Apply corrected summary from fact-check (or fall back to separate re-synthesis)
             corrected_summary = fact_check.get("corrected_summary", "")
             corrected_pitch = fact_check.get("corrected_pitch", "")
+            corrected_sections = fact_check.get("corrected_sections") or {}
+            corrected_risks = corrected_sections.get("evidence_based_risks")
+            if isinstance(corrected_risks, list):
+                full_data["evidence_based_risks"] = corrected_risks
             resynth_ms = 0
             resynth_model_used = fact_check.get("fact_check_model", "")
 
@@ -5323,6 +5332,30 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                 print(f"   ⚠️ [Detailed Report] Failed: {dr_err} — skipping")
 
         if dr_text:
+            _dr_fc_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
+            if _dr_fc_remaining >= 55:
+                print(f"   🔍 [Detailed Report Fact-Check] Section-level verification ({int(_dr_fc_remaining)}s remaining)...")
+                dr_check = ai_fact_check_summary(
+                    summary_text=dr_text,
+                    evidence_links=managed_evidence_links,
+                    company_name=companyName,
+                    scan_payload=_build_fact_check_scan_payload(full_data),
+                    document_label="Detailed Forensic Report",
+                )
+                if dr_check.get("corrected_summary"):
+                    dr_text = dr_check["corrected_summary"]
+                full_data["detailed_report_verification"] = {
+                    "verified": dr_check.get("verified", False),
+                    "fact_check_skipped": dr_check.get("fact_check_skipped", False),
+                    "false_claims": dr_check.get("false_claims", []),
+                    "model": dr_check.get("fact_check_model", ""),
+                }
+            else:
+                full_data["detailed_report_verification"] = {
+                    "verified": False,
+                    "fact_check_skipped": True,
+                    "reason": "insufficient_budget",
+                }
             full_data["detailed_report"] = dr_text
             full_data["detailed_report_model"] = dr_model
             full_data["detailed_report_status"] = "generated"

@@ -2721,13 +2721,14 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         ranked_candidates = sorted(eligible_company_candidates, key=_candidate_rank, reverse=True)
         for idx, candidate in enumerate(ranked_candidates[:16], start=1):
             url = candidate.get("url") or candidate.get("source_url") or ""
+            semantic_hint = _seed_excerpt(
+                candidate.get("source_quote") or candidate.get("snippet")
+                or candidate.get("verification_reason")
+            )
             excerpt = _seed_excerpt(
-                candidate.get("cached_excerpt")
-                or candidate.get("source_quote")
-                or candidate.get("snippet")
-                or candidate.get("text_excerpt")
-                or candidate.get("extracted_text")
-                or candidate.get("markdown")
+                candidate.get("cached_excerpt") or candidate.get("text_excerpt")
+                or candidate.get("extracted_text") or candidate.get("markdown")
+                or candidate.get("normalized_content")
             )
             if not url and not excerpt:
                 continue
@@ -2743,11 +2744,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 "label": safe_label,
                 "found": True,
                 "sentiment": "neutral",
-                "snippet": (
-                    f"Cached source text for revalidation: {excerpt}"
-                    if excerpt else
-                    "Company Evidence DB source available; live scan must revalidate content before use."
-                ),
+                "snippet": "",
+                "semantic_hint": semantic_hint,
                 "title": title,
                 "url": url,
                 "is_recent": False,
@@ -2756,6 +2754,14 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 "source_status": "candidate_revalidation_pending",
                 "verification_reason": "Seeded from Company Evidence DB for Scanner revalidation before fresh discovery.",
                 "cached_excerpt": excerpt,
+                "verified": False,
+                "url_verified": False,
+                "content_readable": False,
+                "analysis_verified": False,
+                "generation_eligible": False,
+                "promotion_status": "candidate_revalidation_pending",
+                "claim_support_status": "pending",
+                "entity_match_status": "pending",
             })
             company_seed_count += 1
 
@@ -2777,8 +2783,11 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     "label": safe_label,
                     "found": True,
                     "sentiment": "neutral",
-                    "snippet": _seed_excerpt(prev_ev.get("snippet") or prev_ev.get("source_quote") or prev_ev.get("verification_reason"))
-                    or "Previously verified evidence carried forward as historical revalidation-pending source.",
+                    "snippet": "",
+                    "semantic_hint": _seed_excerpt(
+                        prev_ev.get("source_quote") or prev_ev.get("snippet")
+                        or prev_ev.get("verification_reason")
+                    ),
                     "title": title,
                     "url": url,
                     "is_recent": False,
@@ -2786,6 +2795,14 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     "forensic_seed_source": True,
                     "source_status": "historical_revalidation_pending",
                     "verification_reason": "Seeded from recent verified evidence for continuity and current revalidation.",
+                    "verified": False,
+                    "url_verified": False,
+                    "content_readable": False,
+                    "analysis_verified": False,
+                    "generation_eligible": False,
+                    "promotion_status": "candidate_revalidation_pending",
+                    "claim_support_status": "pending",
+                    "entity_match_status": "pending",
                 })
                 historical_seed_count += 1
                 if len(seed_findings) >= 16:
@@ -2808,6 +2825,9 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                         check = {}
                     finding["seed_url_verified"] = bool(check.get("verified"))
                     finding["seed_entity_mentioned"] = check.get("company_mentioned")
+                    finding["fetched_excerpt"] = _seed_excerpt(check.get("content_excerpt"), 2400)
+                    finding["url_verified"] = bool(check.get("verified"))
+                    finding["content_readable"] = bool(check.get("content_readable"))
                     if check.get("verified") and check.get("company_mentioned") is not False:
                         finding["source_status"] = "seed_revalidated"
                     else:
@@ -3234,6 +3254,21 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         for jury in FORENSIC_JURIES
     }
     missing_juries = [jury for jury, count in jury_counts.items() if count == 0]
+    fresh_supported_targets = {}
+    for jury in FORENSIC_JURIES:
+        supported = [
+            finding for finding in data.get("findings", [])
+            if _finding_jury(finding) == jury
+            and finding.get("source_status") == "fresh_discovery"
+            and finding.get("claim_support_status") == "supported"
+            and finding.get("support_level") in ("exact", "partial")
+        ]
+        fresh_supported_targets[jury] = {
+            "target": 2,
+            "fresh_supported": len(supported),
+            "met": len(supported) >= 2,
+        }
+    data["_forensic_jury_evidence_targets"] = fresh_supported_targets
     if completed_juries == 5 and accepted_fresh and not missing_juries:
         provisional_mode = "all_juries_fresh_pending_validation"
     elif completed_juries and accepted_fresh:
@@ -3251,6 +3286,12 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         f"source coverage {source_coverage['score']}/100 (promotion pending)."
     )
     print(f"   📚 [Forensic Juries] {jury_counts}")
+    for jury, target in fresh_supported_targets.items():
+        if not target["met"]:
+            print(
+                f"   ⚠️ [Forensic Jury Target] {jury}: "
+                f"{target['fresh_supported']}/{target['target']} fresh supported findings"
+            )
     if missing_juries:
         print(f"   ⚠️ [Forensic Juries] Missing judged coverage: {missing_juries}")
     data["_forensic_timing"] = {

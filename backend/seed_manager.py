@@ -456,7 +456,7 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
             foresight_links = []
             try:
                 from strategic_foresight import (
-                    generate_foresight, validate_foresight_urls, reality_check_foresight,
+                    generate_foresight, validate_foresight_urls,
                     extract_foresight_links, retry_failed_sources, enforce_source_quality_gate,
                 )
                 foresight_data = generate_foresight(
@@ -475,7 +475,6 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
 
                     if is_kb_first:
                         foresight_data["insufficient_evidence"] = False
-                        foresight_data = reality_check_foresight(foresight_data, company_name=company_name)
                         foresight_links = extract_foresight_links(foresight_data, company_name=company_name, domain=company_domain)
                         print(f"   [{company_name}] 📚 [Foresight KB-First] Skipped URL verify + source retry (pre-validated)")
                     else:
@@ -494,7 +493,6 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
                         except Exception as scv_err:
                             print(f"   [{company_name}] ⚠️ [Foresight Source-Claim] Validation skipped: {scv_err}")
                         foresight_data, passes_gate = enforce_source_quality_gate(foresight_data)
-                        foresight_data = reality_check_foresight(foresight_data, company_name=company_name)
                         foresight_links = extract_foresight_links(foresight_data, company_name=company_name, domain=company_domain)
                         if not passes_gate:
                             print(f"   [{company_name}] ⚠️ [Foresight] Insufficient evidence — foresight flagged as low-trust")

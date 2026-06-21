@@ -19,7 +19,7 @@ from source_claim_validator import CLEAN_EVIDENCE_MODEL_CHAIN, validate_source_c
 from source_quality import annotate_evidence_links
 
 
-EVIDENCE_CLEANING_VERSION = "analysis-verification-v1"
+EVIDENCE_CLEANING_VERSION = "analysis-verification-v2-foresight-context"
 _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; AdaptabilityScanner/1.0)"}
 
 
@@ -33,6 +33,28 @@ def _get_claim_text(link: dict) -> str:
         or link.get("description")
         or link.get("summary")
         or link.get("claim")
+        or link.get("title")
+        or ""
+    ).strip()
+
+
+def _is_foresight_link(link: dict, field: str = "") -> bool:
+    source_type = str(link.get("source_type") or link.get("origin") or "").lower()
+    claim_type = str(link.get("claim_type") or "").lower()
+    return field == "foresight_links" or source_type in {
+        "foresight", "foresight_report", "trend_report", "regulatory_context",
+        "industry_report", "policy_report",
+    } or claim_type == "foresight_context"
+
+
+def _get_foresight_claim_text(link: dict) -> str:
+    """Return the macro claim, excluding company-fit interpretation fields."""
+    return str(
+        link.get("source_says")
+        or link.get("semantic_snippet")
+        or link.get("trend")
+        or link.get("description")
+        or link.get("summary")
         or link.get("title")
         or ""
     ).strip()
@@ -60,15 +82,38 @@ def _prepare_link_for_cleaning(link: dict, field: str) -> bool:
         return False
 
     changed = False
-    claim = _get_claim_text(link)
-    if claim and not link.get("legacy_snippet"):
-        link["legacy_snippet"] = claim
+    foresight_context = _is_foresight_link(link, field)
+    claim = _get_foresight_claim_text(link) if foresight_context else _get_claim_text(link)
+    old_snippet = str(link.get("snippet") or "").strip()
+    if old_snippet and not link.get("legacy_snippet"):
+        link["legacy_snippet"] = old_snippet
         changed = True
-    if claim and not link.get("snippet"):
+    if foresight_context and old_snippet and old_snippet != claim:
+        link.setdefault("company_fit_interpretation", old_snippet)
+        changed = True
+    if claim and link.get("snippet") != claim:
+        # validate_source_claims reads `snippet` as its claim. For foresight this
+        # must be the macro claim, never the stored company-fit interpretation.
         link["snippet"] = claim
         changed = True
-    if field == "foresight_links" and not link.get("source_type"):
-        link["source_type"] = "foresight"
+    if foresight_context:
+        link["source_type"] = link.get("source_type") or "foresight"
+        link["claim_type"] = "foresight_context"
+        link["company_specific"] = False
+        link["requires_company_specific_corroboration"] = True
+        link["not_evidence_of_deployment"] = True
+        link["modal_language_required"] = True
+        # Remove inherited company-entity verdicts. Repair verifies the macro
+        # claim; company fit is a separate downstream inference.
+        for key in (
+            "wrong_entity", "wrong_entity_true", "entity_match_status",
+            "content_entity_match_status", "entity_scope", "generation_eligible",
+            "analysis_verified", "promotion_status", "entity_verified",
+            "entity_match_reason", "content_entity_match_reason",
+            "entity_name_found", "canonical_source_host",
+        ):
+            if key in link:
+                link.pop(key, None)
         changed = True
 
     url = _get_url(link)
@@ -229,6 +274,57 @@ def clean_company_evidence(company_name: str, data: dict, *, model_chain=None) -
 
     for _, links in _evidence_lists(data):
         annotate_evidence_links(links, company_domain, company_name)
+
+    # Generic company-evidence annotation is intentionally not the final gate
+    # for foresight. Restore the company-neutral context contract after source
+    # validation so Verify Evidence cannot turn a macro source into company proof.
+    for field, links in _evidence_lists(data):
+        for link in links:
+            if not _is_foresight_link(link, field):
+                continue
+            supported = str(link.get("claim_support_status") or "").lower() == "supported"
+            readable = link.get("content_verified") is True and bool(link.get("source_quote"))
+            eligible = bool(
+                (link.get("verified") is True or link.get("url_verified") is True)
+                and readable
+                and supported
+                and link.get("theme_match", True) is not False
+            )
+            for key in (
+                "wrong_entity", "wrong_entity_true", "entity_match_status",
+                "content_entity_match_status", "entity_scope", "generation_eligible",
+                "analysis_verified", "promotion_status", "entity_verified",
+                "entity_match_reason", "content_entity_match_reason",
+                "entity_name_found", "canonical_source_host",
+            ):
+                link.pop(key, None)
+            link["claim_type"] = "foresight_context"
+            link["company_specific"] = False
+            link["requires_company_specific_corroboration"] = True
+            link["not_evidence_of_deployment"] = True
+            link["modal_language_required"] = True
+            link["source_readable"] = readable
+            link["trend_supported"] = supported
+            link["trend_support_status"] = (
+                "supported" if supported else link.get("claim_support_status", "unchecked")
+            )
+            link["foresight_context_eligible"] = eligible
+            link["foresight_signal_status"] = "context_eligible" if eligible else "not_context_eligible"
+            if eligible:
+                audit_status = "accepted"
+            elif not (link.get("verified") is True or link.get("url_verified") is True):
+                audit_status = "source_dead_or_unavailable"
+            elif not readable:
+                audit_status = "source_unreadable"
+            elif not supported:
+                audit_status = "trend_not_supported"
+            else:
+                audit_status = "theme_mismatch"
+            link["source_audit_status"] = audit_status
+            link["verification_reason"] = (
+                "macro_source_supports_foresight_claim; company_fit_requires_separate_corroboration"
+                if eligible else link.get("content_verification_reason") or "macro_claim_not_supported"
+            )
 
     cleaned_at = datetime.utcnow().isoformat()
     stats = _build_stats(data)

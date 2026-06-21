@@ -2363,7 +2363,9 @@ def _repair_central_kb_signal(sig: dict, theme: str, *, url_alive: bool | None =
 
     This is metadata-only: signals are retained for audit even when not currently
     eligible for scan-time foresight synthesis. Company scans only consume records
-    with `foresight_context_eligible=True`.
+    with `foresight_context_eligible=True`. Company-name presence is deliberately
+    not an eligibility condition: Repair verifies macro trend support, while any
+    company-fit inference requires separate company-specific corroboration.
     """
     clean = dict(sig)
     for field in _CENTRAL_KB_COMPANY_EVIDENCE_FIELDS:
