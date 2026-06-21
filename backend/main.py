@@ -21,7 +21,12 @@ from pypdf import PdfReader
 import anthropic
 
 from scanner_one import analyze_intent
-from scanner_two import x_ray_search, extract_json_from_text, run_self_analysis, financial_health_search, compute_financial_index, migrate_financial_sub_scores
+from scanner_two import (
+    x_ray_search, extract_json_from_text, run_self_analysis, financial_health_search,
+    compute_financial_index, migrate_financial_sub_scores,
+    prepare_historical_revalidation_candidate, historical_source_can_revalidate,
+    collapse_active_evidence,
+)
 from storage import BlobStorage
 from seed_manager import run_batch_seed, scrape_strategic_content
 from finland_list import TOP_100_COMPANIES, get_company_metadata
@@ -3784,23 +3789,19 @@ def _execute_scan_pipeline(
             previous_links = []
             if previous_context:
                 for ev in previous_context.get("previous_evidence", []) or []:
-                    if ev.get("url") and not ev.get("wrong_entity_true") and ev.get("promotion_status") not in {"excluded", "blocked"}:
-                        previous_links.append({
-                            **ev,
-                            "source_type": ev.get("source_type") or "historical",
-                            "source_status": "historical_revalidation_pending",
-                            "historical_revalidation_pending": True,
-                        })
+                    if historical_source_can_revalidate(ev):
+                        previous_links.append(prepare_historical_revalidation_candidate(ev))
             if previous_links:
+                previous_links = collapse_active_evidence(previous_links)[:8]
                 print(
                     f"   🔄 [Scanner 2] Empty live reality result recovered with "
-                    f"{len(previous_links[:8])} previous verified source(s) as historical revalidation-pending evidence."
+                    f"{len(previous_links)} historical URL candidate(s) with all prior verdicts reset."
                 )
                 reality_results = {
                     "score": existing_data.get("reality_score", 50) if existing_data else 50,
                     "checklist": existing_data.get("reality_checklist", []) if existing_data else [],
-                    "links": previous_links[:8],
-                    "key_people": existing_data.get("key_people", []) if existing_data else [],
+                    "links": previous_links,
+                    "key_people": [],
                     "is_simulated": False,
                     "confidence_score": max(25, int((existing_data or {}).get("confidence_score", 0) or 0)),
                     "washing_flag": (existing_data or {}).get("washing_flag", False),

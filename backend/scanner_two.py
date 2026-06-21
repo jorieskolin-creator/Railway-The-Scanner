@@ -214,6 +214,165 @@ def _canonical_evidence_url(url: str) -> str:
         return str(url).strip().lower().rstrip("/")
 
 
+_HISTORICAL_VERDICT_FIELDS = (
+    "promotion_status", "generation_eligible", "analysis_verified",
+    "claim_support_status", "support_level", "entity_match_status",
+    "content_entity_match_status", "entity_scope", "verification_reason",
+    "url_verified", "content_verified", "source_status", "model",
+)
+
+
+def _verification_snapshot(record: dict) -> dict:
+    """Keep an old verdict for audit without letting it govern the next scan."""
+    if not isinstance(record, dict):
+        return {}
+    snapshot = {
+        key: record.get(key)
+        for key in _HISTORICAL_VERDICT_FIELDS
+        if record.get(key) not in (None, "")
+    }
+    observed_at = (
+        record.get("observed_at") or record.get("verified_at")
+        or record.get("last_verified_at") or record.get("fetched_at")
+        or record.get("scan_date") or record.get("last_scanned")
+    )
+    if observed_at:
+        snapshot["observed_at"] = observed_at
+    return snapshot
+
+
+def _merge_verification_history(*records) -> list:
+    history = []
+    seen = set()
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        candidates = list(record.get("verification_history") or [])
+        snapshot = _verification_snapshot(record)
+        if snapshot:
+            candidates.append(snapshot)
+        for item in candidates:
+            if not isinstance(item, dict) or not item:
+                continue
+            key = json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
+            if key in seen:
+                continue
+            seen.add(key)
+            history.append(item)
+    return history[-8:]
+
+
+def prepare_historical_revalidation_candidate(record: dict, source_database="previous_verified_evidence") -> dict:
+    """Convert stored evidence into an untrusted URL-discovery candidate."""
+    record = record if isinstance(record, dict) else {}
+    url = str(record.get("url") or "").strip()
+    title = record.get("title") or record.get("source_title") or "Historical evidence source"
+    semantic_hint = re.sub(
+        r"\s+", " ", str(
+            record.get("source_quote") or record.get("snippet")
+            or record.get("semantic_hint") or record.get("verification_reason") or ""
+        )
+    ).strip()[:700]
+    return {
+        "title": title,
+        "url": url,
+        "source": record.get("source") or get_clean_domain(url),
+        "source_type": record.get("source_type") or "historical",
+        "category": record.get("category") or "Historical Evidence",
+        "published_at": record.get("published_at"),
+        "fetched_at": record.get("fetched_at"),
+        "content_hash": record.get("content_hash"),
+        # Old prose helps route the URL, but is never evidence for the new verdict.
+        "semantic_hint": semantic_hint,
+        "snippet": "",
+        "source_quote": "",
+        "cached_excerpt": "",
+        "found": True,
+        "sentiment": "neutral",
+        "is_recent": False,
+        "source_database": source_database,
+        "forensic_seed_source": True,
+        "forensic_provenance": "historical_revalidation_candidate",
+        "source_status": "historical_revalidation_pending",
+        "historical_revalidation_pending": True,
+        "verification_reason": "Stored URL selected for fresh retrieval and current verification.",
+        "verified": False,
+        "url_verified": False,
+        "content_verified": False,
+        "content_readable": False,
+        "analysis_verified": False,
+        "generation_eligible": False,
+        "allowed_as_fact": False,
+        "buying_evidence_eligible": False,
+        "promotion_status": "candidate_revalidation_pending",
+        "claim_support_status": "pending_jury_verification",
+        "support_level": "pending",
+        "entity_match_status": "pending",
+        "content_entity_match_status": "pending",
+        "verification_history": _merge_verification_history(record),
+    }
+
+
+def historical_source_can_revalidate(record: dict) -> bool:
+    """Allow stale verdicts to be ignored, but retain known hard safety failures."""
+    if not isinstance(record, dict) or not record.get("url"):
+        return False
+    if record.get("wrong_entity_true") or record.get("entity_match_status") == "wrong":
+        return False
+    status = " ".join(str(record.get(key) or "") for key in (
+        "promotion_status", "source_status", "source_audit_status",
+        "exclusion_reason", "page_status", "verification_status",
+    )).lower()
+    return not any(token in status for token in (
+        "wrong_entity", "soft_404", "page_not_found", "source_dead",
+        "dead_link", "blocked", "excluded",
+    ))
+
+
+def _active_evidence_score(record: dict, position: int) -> tuple:
+    """Prefer the newest current verdict over historical/pending duplicates."""
+    current_verdict = not bool(record.get("historical_revalidation_pending"))
+    supported = record.get("claim_support_status") == "supported"
+    exact = record.get("support_level") == "exact"
+    return (
+        int(current_verdict),
+        int(record.get("analysis_verified") is True),
+        int(supported),
+        int(exact),
+        int(record.get("url_verified") is True or record.get("verified") is True),
+        int(record.get("content_readable") is True or record.get("content_verified") is True),
+        position,
+    )
+
+
+def collapse_active_evidence(records: list) -> list:
+    """Keep one active record per canonical URL and retain superseded verdict history."""
+    output = []
+    by_url = {}
+    for position, record in enumerate(records or []):
+        if not isinstance(record, dict):
+            continue
+        key = _canonical_evidence_url(record.get("url"))
+        if not key:
+            output.append(dict(record))
+            continue
+        if key not in by_url:
+            candidate = dict(record)
+            by_url[key] = (len(output), candidate, position)
+            output.append(candidate)
+            continue
+        output_index, existing, existing_position = by_url[key]
+        if _active_evidence_score(record, position) >= _active_evidence_score(existing, existing_position):
+            winner = dict(record)
+            winner["verification_history"] = _merge_verification_history(existing, winner)
+            output[output_index] = winner
+            by_url[key] = (output_index, winner, position)
+        else:
+            existing["verification_history"] = _merge_verification_history(record, existing)
+            output[output_index] = existing
+    return output
+
+
 def _finding_jury(finding: dict) -> str:
     category = str((finding or {}).get("category") or "")
     if category in JURY_SOURCE_TARGETS:
@@ -222,7 +381,7 @@ def _finding_jury(finding: dict) -> str:
         str((finding or {}).get(key) or "")
         for key in (
             "category", "source_type", "source_category", "label", "title",
-            "snippet", "cached_excerpt", "source_quote", "verification_reason",
+            "snippet", "semantic_hint", "cached_excerpt", "source_quote", "verification_reason",
         )
     ).lower()
     if any(word in token for word in ("architecture", "engineering", "developer", "api", "job ad", "tech stack")):
@@ -662,6 +821,9 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
                 normalized["source_database"] = packet.get("source_database")
                 normalized["forensic_seed_source"] = bool(packet.get("forensic_seed_source"))
                 normalized["packet_source_status"] = packet.get("source_status")
+                normalized["historical_revalidation_pending"] = False
+                normalized["verification_history"] = _merge_verification_history(packet)
+                normalized["revalidated_at"] = datetime.utcnow().isoformat()
                 accepted.append(normalized)
             rejected.extend(payload.get("rejected_evidence", []) or [])
             if accepted:
@@ -816,6 +978,7 @@ def _route_seed_findings(findings: list) -> dict:
         if not jury:
             jury = "STRATEGIC JURY (Business Model, Procurement & Customer Experience)"
         candidate = dict(item)
+        prior_history = _merge_verification_history(candidate)
         candidate["category"] = jury
         candidate["claim_support_pending"] = True
         candidate["claim_support_status"] = "pending_jury_verification"
@@ -825,6 +988,7 @@ def _route_seed_findings(findings: list) -> dict:
         candidate["buying_evidence_eligible"] = False
         candidate["promotion_status"] = "candidate_revalidation_pending"
         candidate["forensic_provenance"] = "seed_candidate"
+        candidate["verification_history"] = prior_history
         routed[jury].append(candidate)
     return routed
 
@@ -2625,13 +2789,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         return "Company Evidence DB / Historical Evidence"
 
     def _is_previous_seedable(source):
-        if not isinstance(source, dict):
-            return False
-        if not source.get("url"):
-            return False
-        if source.get("wrong_entity_true") or source.get("entity_match_status") == "wrong":
-            return False
-        if source.get("promotion_status") in {"excluded", "blocked"}:
+        if not historical_source_can_revalidate(source):
             return False
         return bool(
             source.get("generation_eligible")
@@ -2772,38 +2930,18 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 if not _is_previous_seedable(prev_ev):
                     continue
                 url = prev_ev.get("url") or ""
-                key = url.rstrip("/").lower()
+                key = _canonical_evidence_url(url)
                 if not key or key in seen_urls:
                     continue
                 seen_urls.add(key)
-                title = prev_ev.get("title") or "Historical verified evidence"
+                candidate = prepare_historical_revalidation_candidate(prev_ev)
+                title = candidate.get("title") or "Historical verified evidence"
                 safe_label = f"Revalidate historical source: {str(title)[:90]}"
-                seed_findings.append({
+                candidate.update({
                     "category": _seed_category(prev_ev.get("source_type") or "", prev_ev.get("category") or ""),
                     "label": safe_label,
-                    "found": True,
-                    "sentiment": "neutral",
-                    "snippet": "",
-                    "semantic_hint": _seed_excerpt(
-                        prev_ev.get("source_quote") or prev_ev.get("snippet")
-                        or prev_ev.get("verification_reason")
-                    ),
-                    "title": title,
-                    "url": url,
-                    "is_recent": False,
-                    "source_database": "previous_verified_evidence",
-                    "forensic_seed_source": True,
-                    "source_status": "historical_revalidation_pending",
-                    "verification_reason": "Seeded from recent verified evidence for continuity and current revalidation.",
-                    "verified": False,
-                    "url_verified": False,
-                    "content_readable": False,
-                    "analysis_verified": False,
-                    "generation_eligible": False,
-                    "promotion_status": "candidate_revalidation_pending",
-                    "claim_support_status": "pending",
-                    "entity_match_status": "pending",
                 })
+                seed_findings.append(candidate)
                 historical_seed_count += 1
                 if len(seed_findings) >= 16:
                     break
@@ -2826,6 +2964,10 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     finding["seed_url_verified"] = bool(check.get("verified"))
                     finding["seed_entity_mentioned"] = check.get("company_mentioned")
                     finding["fetched_excerpt"] = _seed_excerpt(check.get("content_excerpt"), 2400)
+                    # Only freshly retrieved text can support the current jury verdict.
+                    finding["snippet"] = ""
+                    finding["source_quote"] = ""
+                    finding["cached_excerpt"] = ""
                     finding["url_verified"] = bool(check.get("verified"))
                     finding["content_readable"] = bool(check.get("content_readable"))
                     if check.get("verified") and check.get("company_mentioned") is not False:
@@ -3456,83 +3598,21 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     "forensic_provenance": f.get("forensic_provenance"),
                     "verification_reason": f.get("verification_reason"),
                     "cached_excerpt": f.get("cached_excerpt"),
+                    "historical_revalidation_pending": bool(f.get("historical_revalidation_pending")),
+                    "verification_history": list(f.get("verification_history") or []),
+                    "revalidated_at": f.get("revalidated_at"),
                 })
 
-        # --- EVIDENCE PERSISTENCE ---
-        # Collect evidence from ALL previous scans (up to 3 files in Vercel Blob).
-        # Previous evidence is "innocent until proven fixed" — it doesn't vanish just
-        # because Google returned different results this time.
-        # Evidence expires after 90 days only.
+        # Historical evidence has already passed through the seeded acquisition and
+        # jury path above. Never append old records here: that would restore stale
+        # promotion/entity/claim verdicts after current verification has finished.
         if previous_context:
-            # Build set of current evidence URLs for dedup
-            current_urls = {f.get("url", "").rstrip("/").lower() for f in raw_findings if f.get("url")}
-            current_queries = {c.get("query", "").lower() for c in checklist}
-
-            # Collect evidence from ALL previous scans (latest + history)
-            all_prev_scans = []
-
-            # 1. Latest scan (most recent file)
-            all_prev_scans.append({
-                "date": previous_context.get("last_scanned", ""),
-                "evidence": previous_context.get("previous_evidence", []),
-                "findings": previous_context.get("previous_findings", [])
-            })
-
-            # 2. Older scans from history (up to 2 more files)
-            for older in previous_context.get("scan_history", []):
-                all_prev_scans.append({
-                    "date": older.get("date", ""),
-                    "evidence": older.get("evidence", []),
-                    "findings": older.get("findings", [])
-                })
-
-            historical_count = 0
-            for scan in all_prev_scans:
-                # Check age — expire after 90 days
-                scan_days = 999
-                try:
-                    scan_date = scan.get("date", "")
-                    if scan_date:
-                        from datetime import datetime as dt
-                        scan_days = (dt.utcnow() - dt.fromisoformat(scan_date)).days
-                except (ValueError, TypeError):
-                    pass
-
-                if scan_days >= 90:
-                    continue
-
-                # Carry forward evidence URLs not in current results
-                for prev_ev in scan.get("evidence", []):
-                    prev_url = (prev_ev.get("url", "") or "").rstrip("/").lower()
-                    if prev_url and prev_url not in current_urls:
-                        raw_findings.append({
-                            "title": prev_ev.get("title", "Historical Evidence"),
-                            "snippet": prev_ev.get("snippet", ""),
-                            "url": prev_ev.get("url", ""),
-                            "source": prev_ev.get("source", get_clean_domain(prev_ev.get("url", ""))),
-                            "is_recent": False,
-                            "source_type": "historical"
-                        })
-                        current_urls.add(prev_url)
-                        historical_count += 1
-
-                # Carry forward checklist findings not in current results
-                for prev_f in scan.get("findings", []):
-                    prev_query = (prev_f.get("query", "") or prev_f.get("label", "") or "").lower()
-                    if prev_query and prev_query not in current_queries and prev_f.get("found", False):
-                        checklist.append({
-                            "category": prev_f.get("category", "General"),
-                            "query": prev_f.get("query", prev_f.get("label", "Signal")),
-                            "found": True,
-                            "sentiment": prev_f.get("sentiment", "neutral"),
-                            "is_recent": False,
-                            "source_type": "historical"
-                        })
-                        current_queries.add(prev_query)
-                        historical_count += 1
-
-            if historical_count > 0:
-                print(f"   [Evidence Persistence] Carried forward {historical_count} historical finding(s) from {len(all_prev_scans)} previous scan(s).")
+            previous_count = len(previous_context.get("previous_evidence", []) or [])
+            if previous_count:
+                print(
+                    f"   🗂️ [Evidence Persistence] {previous_count} stored source(s) remained discovery history; "
+                    "only sources re-fetched and judged in this run can enter the active register."
+                )
 
         adjustment = data.get("reality_score_adjustment", 0)
         confidence = data.get("confidence_score", 50)
@@ -3563,6 +3643,13 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         # Verify all evidence URLs actually exist before returning results.
         # Marks each link/checklist entry with "verified": true/false.
         # Penalizes confidence when many URLs are dead (hallucinated evidence).
+        before_collapse = len(raw_findings)
+        raw_findings = collapse_active_evidence(raw_findings)
+        if len(raw_findings) != before_collapse:
+            print(
+                f"   🧾 [Evidence Register] Replaced {before_collapse - len(raw_findings)} canonical duplicate(s) "
+                "with the newest current verdict."
+            )
         raw_findings, checklist, url_verified, url_dead = _validate_evidence_urls(raw_findings, checklist, company_name=company_name)
 
         # --- SOURCE ADMISSIBILITY GATE (Phase 1) ---
@@ -3653,6 +3740,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         # Ensure every source carries final promotion metadata, even when
         # source-claim validation was skipped or only covered part of the pool.
         raw_findings = annotate_evidence_links(raw_findings, company_domain, company_name)
+        raw_findings = collapse_active_evidence(raw_findings)
 
         promoted_coverage = _compute_promoted_evidence_coverage(raw_findings, company_domain)
         source_coverage = data.get("_source_forensic_coverage") or _compute_forensic_coverage(raw_findings, company_domain)

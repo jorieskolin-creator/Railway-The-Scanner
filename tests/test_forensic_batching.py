@@ -282,6 +282,82 @@ def test_promoted_coverage_ignores_partial_and_unverified_findings():
     assert coverage["promoted_findings"] == 1
 
 
+def test_historical_display_only_is_reset_to_fresh_revalidation_candidate():
+    old = {
+        "url": "https://example.fi/news/platform",
+        "title": "Old platform finding",
+        "snippet": "Example Oy previously described a platform programme.",
+        "source_quote": "Example Oy previously described a platform programme.",
+        "promotion_status": "display_only",
+        "generation_eligible": True,
+        "analysis_verified": True,
+        "claim_support_status": "supported",
+        "support_level": "exact",
+        "entity_match_status": "exact",
+        "url_verified": True,
+    }
+    candidate = scanner_two.prepare_historical_revalidation_candidate(old)
+
+    assert candidate["promotion_status"] == "candidate_revalidation_pending"
+    assert candidate["generation_eligible"] is False
+    assert candidate["analysis_verified"] is False
+    assert candidate["entity_match_status"] == "pending"
+    assert candidate["snippet"] == ""
+    assert candidate["source_quote"] == ""
+    assert candidate["cached_excerpt"] == ""
+    assert "previously described" in candidate["semantic_hint"]
+    assert candidate["verification_history"][0]["promotion_status"] == "display_only"
+
+
+def test_historical_display_only_can_revalidate_but_hard_failures_cannot():
+    assert scanner_two.historical_source_can_revalidate({
+        "url": "https://example.fi/report",
+        "promotion_status": "display_only",
+        "url_verified": True,
+    }) is True
+    assert scanner_two.historical_source_can_revalidate({
+        "url": "https://example.fi/missing",
+        "promotion_status": "display_only",
+        "source_status": "soft_404",
+    }) is False
+    assert scanner_two.historical_source_can_revalidate({
+        "url": "https://other.example/report",
+        "wrong_entity_true": True,
+    }) is False
+
+
+def test_new_canonical_verdict_replaces_old_active_record_and_keeps_audit_history():
+    old = scanner_two.prepare_historical_revalidation_candidate({
+        "url": "https://www.example.fi/news/platform/?tracking=old",
+        "title": "Old finding",
+        "promotion_status": "display_only",
+        "url_verified": True,
+        "claim_support_status": "unsupported",
+    })
+    current = {
+        "url": "https://example.fi/news/platform",
+        "title": "Current verified finding",
+        "snippet": "Example Oy launched the platform in 2026.",
+        "url_verified": True,
+        "content_readable": True,
+        "analysis_verified": True,
+        "claim_support_status": "supported",
+        "support_level": "exact",
+        "promotion_status": "generation_eligible",
+        "historical_revalidation_pending": False,
+    }
+
+    collapsed = scanner_two.collapse_active_evidence([old, current])
+
+    assert len(collapsed) == 1
+    assert collapsed[0]["title"] == "Current verified finding"
+    assert collapsed[0]["promotion_status"] == "generation_eligible"
+    assert any(
+        item.get("promotion_status") == "display_only"
+        for item in collapsed[0]["verification_history"]
+    )
+
+
 def test_pre_jury_gate_rejects_unbound_acquisition_quote(monkeypatch):
     monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
     jury = "AI & DATA JURY (Future Readiness)"
