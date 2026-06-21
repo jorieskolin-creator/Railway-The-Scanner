@@ -59,7 +59,7 @@ try:
     from source_quality import (
         annotate_evidence_links, filter_admissible_sources,
         is_boilerplate_snippet, is_title_echo, tier_snippet_bounds, describe_source,
-        is_generation_eligible_source,
+        is_generation_eligible_source, is_foresight_context_eligible_source,
     )
 except Exception:  # Keep reality_check import-safe in minimal deployments.
     annotate_evidence_links = None
@@ -69,6 +69,7 @@ except Exception:  # Keep reality_check import-safe in minimal deployments.
     tier_snippet_bounds = None
     describe_source = None
     is_generation_eligible_source = None
+    is_foresight_context_eligible_source = None
 
 # Regex for detecting scan history references in fact-check claims.
 # These come from internal DB records (scan_history), not external web sources,
@@ -659,56 +660,105 @@ def _get_anthropic_key(anthropic_key=None):
     return api_key
 
 
-def _provider_fact_check(summary_text, company_name, evidence_links=None, pitch_text=None, scan_payload=None, analysis_sections=None, document_label="AI Diagnosis"):
-    """Two-stage GPT/Claude fact-check pipeline."""
-    verified_links = []
-    evidence_ref = ""
-    if evidence_links:
-        for l in evidence_links:
-            if is_generation_eligible_source and not is_generation_eligible_source(l):
-                continue
-            if not l.get("verified", True):
-                continue
-            title = (l.get("title") or "Unknown")[:80]
-            semantic_hint = (l.get("semantic_hint") or l.get("snippet") or "").strip()
-            snippet_raw = (
-                l.get("fetched_excerpt") or l.get("normalized_content")
-                or l.get("content_excerpt") or l.get("extracted_text")
-                or l.get("cached_excerpt") or l.get("source_quote") or ""
-            ).strip()
-            tier = (l.get("claim_tier") or "D").upper()
+def _fact_check_source_content(link):
+    return (
+        link.get("fetched_excerpt") or link.get("normalized_content")
+        or link.get("content_excerpt") or link.get("extracted_text")
+        or link.get("cached_excerpt") or link.get("semantic_snippet")
+        or link.get("source_quote") or link.get("snippet") or link.get("description") or ""
+    ).strip()
+
+
+def _build_fact_check_source_pack(evidence_links=None, foresight_links=None):
+    """Build separately governed company and macro-context source packets."""
+    packets = []
+    seen_urls = set()
+
+    def add_source(link, evidence_kind):
+        if not isinstance(link, dict):
+            return
+        url = (link.get("url") or link.get("source_url") or "").strip()
+        if not url or url in seen_urls:
+            return
+        if link.get("verified") is False or link.get("url_verified") is False:
+            return
+        title = (link.get("title") or link.get("source_title") or "Unknown")[:120]
+        content = _fact_check_source_content(link)
+        if not content:
+            return
+        if evidence_kind == "company_evidence":
+            if is_generation_eligible_source and not is_generation_eligible_source(link):
+                return
+            tier = (link.get("claim_tier") or "D").upper()
             if tier_snippet_bounds is None:
                 min_len, max_len = 0, 500
             else:
                 min_len, max_len = tier_snippet_bounds(tier)
-            if min_len and len(snippet_raw) < min_len:
-                continue
-            if is_title_echo and is_title_echo(snippet_raw, title):
-                continue
-            if is_boilerplate_snippet and is_boilerplate_snippet(snippet_raw):
-                continue
-            label = describe_source(l) if describe_source else "Source"
-            verified_links.append({
-                "title": title,
-                "url": l.get("url", ""),
-                "semantic_hint": semantic_hint[:300],
-                "snippet": snippet_raw[:max(1800, max_len)],
-                "tier": tier,
-                "label": label,
-                "claim_type": l.get("claim_type") or "company_evidence",
-            })
-        verified_links = verified_links[:20]
-        for i, link in enumerate(verified_links, 1):
-            evidence_ref += (
-                f"[{i}] [tier={link['tier']}] [{link['label']}] "
-                f"{link['title']} | URL: {link['url']} | Claim type: {link['claim_type']} | "
-                f"Semantic hint (routing only): {link['semantic_hint']} | Current source content: {link['snippet']}\n"
-            )
+            if min_len and len(content) < min_len:
+                return
+            if is_title_echo and is_title_echo(content, title):
+                return
+            if is_boilerplate_snippet and is_boilerplate_snippet(content):
+                return
+        else:
+            if is_foresight_context_eligible_source and not is_foresight_context_eligible_source(link):
+                return
+            tier = str(link.get("source_tier") or link.get("claim_tier") or "foresight").upper()
+            max_len = 1800
+        seen_urls.add(url)
+        packets.append({
+            "evidence_id": f"{'C' if evidence_kind == 'company_evidence' else 'F'}{1 + sum(1 for p in packets if p['evidence_kind'] == evidence_kind)}",
+            "evidence_kind": evidence_kind,
+            "title": title,
+            "url": url,
+            "semantic_hint": (link.get("semantic_hint") or link.get("semantic_snippet") or "").strip()[:500],
+            "snippet": content[:max(1800, max_len)],
+            "tier": tier,
+            "label": describe_source(link) if describe_source else "Source",
+            "claim_type": "foresight_context" if evidence_kind == "foresight_context" else (link.get("claim_type") or "company_evidence"),
+            "theme": link.get("theme") or link.get("dimension") or "",
+            "company_specific": evidence_kind == "company_evidence",
+        })
 
-    evidence_section = f"""
-STORED EVIDENCE SOURCES (these were used to generate the summary):
-{evidence_ref}
-""" if evidence_ref else ""
+    for link in evidence_links or []:
+        add_source(link, "company_evidence")
+        if sum(1 for p in packets if p["evidence_kind"] == "company_evidence") >= 20:
+            break
+    for link in foresight_links or []:
+        add_source(link, "foresight_context")
+        if sum(1 for p in packets if p["evidence_kind"] == "foresight_context") >= 10:
+            break
+    return packets
+
+
+def _provider_fact_check(summary_text, company_name, evidence_links=None, foresight_links=None, pitch_text=None, scan_payload=None, analysis_sections=None, document_label="AI Diagnosis"):
+    """Two-stage GPT/Claude fact-check pipeline."""
+    verified_links = _build_fact_check_source_pack(evidence_links, foresight_links)
+    company_ref = ""
+    foresight_ref = ""
+    for i, link in enumerate(verified_links, 1):
+        row = (
+            f"[{i}] [id={link['evidence_id']}] [tier={link['tier']}] [{link['label']}] "
+            f"{link['title']} | URL: {link['url']} | Claim type: {link['claim_type']} | "
+            f"Theme: {link['theme']} | Semantic hint (routing only): {link['semantic_hint']} | "
+            f"Current source content: {link['snippet']}\n"
+        )
+        if link["evidence_kind"] == "foresight_context":
+            foresight_ref += row
+        else:
+            company_ref += row
+
+    evidence_section = ""
+    if company_ref:
+        evidence_section += f"""
+VERIFIED COMPANY EVIDENCE SOURCES:
+{company_ref}
+"""
+    if foresight_ref:
+        evidence_section += f"""
+VERIFIED MACRO FORESIGHT CONTEXT SOURCES (not proof of company action or deployment):
+{foresight_ref}
+"""
     pitch_section = f"""
 AI-GENERATED PITCH TO VERIFY:
 {pitch_text}
@@ -743,19 +793,23 @@ INSTRUCTIONS:
    - EXTERNAL COMPANY FACT: company events, partnerships, products, customers, financial values, ownership, people, dates, operations, present-tense capabilities.
    - INTERNAL SCANNER OBSERVATION: statements about what the scan found or did not find, evidence counts, weak/no evidence by dimension, source quality, scores, confidence, archetype, evidence packet, or Scanner process state.
    - STRUCTURED FINANCIAL PAYLOAD FACT: financial index/sub-score, revenue/profitability/stability/investment finding, or exact financial value explicitly present in the scan payload's financial_payload.
+   - MACRO FORESIGHT CONTEXT: an external trend, regulation, market pressure, technology trajectory, or time-horizon claim that is not asserted as present company behavior.
+   - STRATEGIC INFERENCE: a new analytical conclusion connecting one or more supported company premises to supported macro context, expressed as a pressure, exposure, implication, opportunity, risk, or question.
 3. For EXTERNAL COMPANY FACTS, cross-reference strictly against stored evidence. Use only verified, generation-eligible evidence as authoritative. Do not accept display-only, unsupported, wrong-entity, or weak evidence.
 4. For STRUCTURED FINANCIAL PAYLOAD FACTS, verify against financial_payload in the SCAN PAYLOAD above. These facts may be valid Scanner financial-module facts even when they are not repeated in STORED EVIDENCE SOURCES. Flag them only if the value/detail is absent from or contradicts financial_payload.
 5. For INTERNAL SCANNER OBSERVATIONS, verify against the SCAN PAYLOAD above, not external web sources. Do not flag an internal observation merely because no public webpage says it. Flag it only if it contradicts the scan payload or invents a Scanner result that is not present.
 6. If stored evidence is insufficient for an external company fact, use cautious external verification through your own provider tools/knowledge, but do not invent corrections.
 7. A company website is self-reported. It cannot by itself refute analytical observations about internal operating reality unless it contains concrete, specific operational metrics.
-8. Foresight/regulatory sources are validated against their macro claims, not against a requirement to mention the company. They cannot prove present-tense company behavior. A company-fit statement is valid only as a clearly modal inference grounded separately in company evidence.
-9. Semantic hints and historical snippets are discovery aids only. Judge support from CURRENT SOURCE CONTENT. Exact quotation mismatch is not by itself a failure when the current passage supports the same claim; classify support as exact, partial, context_only, or unsupported.
-10. Financial evidence may support only financial condition, capacity and investment claims. It cannot substitute for missing operational, architectural, strategic, AI/data, service-delivery or cultural evidence.
-11. Use "Internal Scan Mismatch" only for scanner-process statements that contradict the scan payload. Use Fabrication/Contradiction/Misattribution/Organizational Fabrication for external company facts.
+8. Validate MACRO FORESIGHT CONTEXT against VERIFIED MACRO FORESIGHT CONTEXT SOURCES. The source does not need to mention the company. Never reject macro context merely because it is absent from the company scan payload.
+9. A STRATEGIC INFERENCE is newly created analysis and is not expected to appear verbatim in any database or source. Do not flag it merely because "the payload does not contain the conclusion." Validate its premises instead: at least one company premise must be supported by company evidence, structured financial data, or an internal Scanner observation, and any macro premise must be supported by foresight context. It must remain modal and must not claim that the company has already acted, deployed, selected a vendor, or incurred a quantified impact unless company evidence proves that fact.
+10. For a STRATEGIC INFERENCE, classify support as exact when all premises are directly supported, partial when the inference is reasonable but one non-essential premise is context-only, context_only when it is suitable only as a cautious scenario/question, and unsupported only when a required premise is absent or contradicted.
+11. Semantic hints and historical snippets are discovery aids only. Judge support from CURRENT SOURCE CONTENT. Exact quotation mismatch is not by itself a failure when the current passage supports the same claim; classify support as exact, partial, context_only, or unsupported.
+12. Financial evidence may support only financial condition, capacity and investment claims. It cannot substitute for missing operational, architectural, strategic, AI/data, service-delivery or cultural evidence.
+13. Use "Internal Scan Mismatch" only for scanner-process statements that contradict the scan payload. Use Fabrication/Contradiction/Misattribution/Organizational Fabrication for external company facts. For macro context or strategic inference, identify the missing or contradicted premise rather than saying only that the conclusion is absent from the payload.
 
 OUTPUT FORMAT — valid JSON only:
 If accurate: {{"false_claims": [], "summary_accurate": true}}
-If false claims found: {{"false_claims": [{{"section": "section heading", "claim": "Exact quote or close paraphrase", "error_type": "Fabrication OR Contradiction OR Misattribution OR Organizational Fabrication OR Internal Scan Mismatch", "support_level": "exact OR partial OR context_only OR unsupported", "reasoning": "Brief reason", "correction": "Verified replacement or empty string", "wrong_value": "", "correct_value": "", "source_indices": [1]}}], "summary_accurate": false}}
+If false claims found: {{"false_claims": [{{"section": "section heading", "claim": "Exact quote or close paraphrase", "claim_class": "external_company_fact OR internal_scanner_observation OR structured_financial_payload_fact OR macro_foresight_context OR strategic_inference", "error_type": "Fabrication OR Contradiction OR Misattribution OR Organizational Fabrication OR Internal Scan Mismatch", "support_level": "exact OR partial OR context_only OR unsupported", "missing_or_contradicted_premise": "Specific premise or empty string", "reasoning": "Brief reason", "correction": "Verified replacement or empty string", "wrong_value": "", "correct_value": "", "source_indices": [1]}}], "summary_accurate": false}}
 """
 
     stage1_false_claims = None
@@ -775,6 +829,25 @@ If false claims found: {{"false_claims": [{{"section": "section heading", "claim
                 claim_text = fc.get("claim") or str(fc)
                 if any(p in claim_text.lower() for p in _not_real):
                     continue
+                claim_class = (fc.get("claim_class") or "").strip().lower()
+                support_level = (fc.get("support_level") or "unsupported").strip().lower()
+                missing_premise = (fc.get("missing_or_contradicted_premise") or "").strip()
+                reasoning_lower = (fc.get("reasoning") or "").lower()
+                # A supported inference is analysis, not a false factual claim. Filter it
+                # before Stage 2 so valid diagnosis prose is never silently deleted.
+                if (
+                    claim_class in {"macro_foresight_context", "strategic_inference"}
+                    and support_level in {"exact", "partial", "context_only"}
+                    and not missing_premise
+                ):
+                    continue
+                if (
+                    claim_class in {"macro_foresight_context", "strategic_inference"}
+                    and "not present in the scan payload" in reasoning_lower
+                    and "contradict" not in reasoning_lower
+                    and not missing_premise
+                ):
+                    continue
                 indices = fc.get("source_indices") or []
                 source_urls = []
                 for idx in indices:
@@ -786,6 +859,9 @@ If false claims found: {{"false_claims": [{{"section": "section heading", "claim
                     "claim": claim_text,
                     "section": fc.get("section") or document_label,
                     "error_type": fc.get("error_type") or "Unknown",
+                    "claim_class": claim_class,
+                    "support_level": support_level,
+                    "missing_or_contradicted_premise": missing_premise,
                     "reasoning": fc.get("reasoning") or "",
                     "correction": fc.get("correction") or "",
                     "wrong_value": fc.get("wrong_value") or "",
@@ -908,7 +984,7 @@ Rules:
         "time_ms": stage1_time_ms + elapsed2,
     }
 
-def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text=None, scan_payload=None, analysis_sections=None, document_label="AI Diagnosis"):
+def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text=None, scan_payload=None, analysis_sections=None, document_label="AI Diagnosis", foresight_links=None):
     """
     AI-powered fact-check — two-stage pipeline:
       Stage 1: GPT-5.4 → Claude Sonnet 4.6 — detects false claims.
@@ -946,11 +1022,12 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
 
     total_start = time.time()
 
-    print(f"   🔍 [Fact-Check] GPT/Claude fact-check against generation-eligible evidence...")
+    print(f"   🔍 [Evidence & Reasoning Audit] Checking source support, premises and analytical logic...")
     result = _provider_fact_check(
         summary_text,
         company_name,
         evidence_links=evidence_links,
+        foresight_links=foresight_links,
         pitch_text=pitch_text,
         scan_payload=scan_payload,
         analysis_sections=analysis_sections,
@@ -972,6 +1049,9 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
             reasoning = (fc.get("reasoning") or "") if isinstance(fc, dict) else ""
             source_urls = (fc.get("source_urls") or []) if isinstance(fc, dict) else []
             source_indices = (fc.get("source_indices") or []) if isinstance(fc, dict) else []
+            claim_class = (fc.get("claim_class") or "") if isinstance(fc, dict) else ""
+            support_level = (fc.get("support_level") or "unsupported") if isinstance(fc, dict) else "unsupported"
+            missing_premise = (fc.get("missing_or_contradicted_premise") or "") if isinstance(fc, dict) else ""
 
             # Skip internal scan history false positives — score trajectories and
             # scan count references are based on internal DB records and will never
@@ -1080,6 +1160,9 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
                 "type": "false_claim",
                 "claim": claim_text,
                 "error_type": error_type,
+                "claim_class": claim_class,
+                "support_level": support_level,
+                "missing_or_contradicted_premise": missing_premise,
                 "reasoning": reasoning,
                 "correction": correction,
                 "wrong_value": wrong_value,

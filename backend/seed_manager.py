@@ -1026,6 +1026,7 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                     fact_check = ai_fact_check_summary(
                         summary_text=full_data["summary_text"],
                         evidence_links=reality_results.get("links", []),
+                        foresight_links=full_data.get("foresight_links", []),
                         company_name=company_name,
                         pitch_text=full_data.get("pitch_text", ""),
                     )

@@ -496,6 +496,31 @@ def _build_fact_check_scan_payload(data: dict) -> dict:
             "generation_eligible": item.get("generation_eligible"),
         })
 
+    foresight_forces = []
+    foresight_data = data.get("strategic_foresight") or {}
+    if isinstance(foresight_data, dict):
+        raw_forces = foresight_data.get("forces") or foresight_data.get("strategic_forces") or []
+        for force in raw_forces[:10]:
+            if not isinstance(force, dict):
+                continue
+            foresight_forces.append({
+                "theme": force.get("theme") or force.get("force") or force.get("title"),
+                "description": force.get("description") or force.get("summary") or force.get("implication"),
+                "time_horizon": force.get("time_horizon") or force.get("horizon"),
+                "company_relevance": force.get("company_relevance") or force.get("relevance") or force.get("why_it_matters"),
+                "source_ids": force.get("source_ids") or force.get("evidence_ids") or [],
+                "claim_type": "foresight_context",
+                "company_specific": False,
+            })
+
+    foresight_source_counts = {
+        "total": len(data.get("foresight_links") or []),
+        "context_eligible": sum(
+            1 for item in (data.get("foresight_links") or [])
+            if isinstance(item, dict) and is_foresight_context_eligible_source(item)
+        ),
+    }
+
     return {
         "companyName": data.get("companyName"),
         "intent_score": data.get("intent_score"),
@@ -512,6 +537,14 @@ def _build_fact_check_scan_payload(data: dict) -> dict:
             "financial_confidence": data.get("financial_confidence"),
             "financial_sub_scores": data.get("financial_sub_scores") or {},
             "financial_findings": financial_findings,
+        },
+        "foresight_context": {
+            "forces": foresight_forces,
+            "source_counts": foresight_source_counts,
+            "verification_rule": (
+                "Macro context is verified against Foresight KB sources. Company relevance is a modal "
+                "strategic inference and is not proof of company action or deployment."
+            ),
         },
         "evidence_based_risks": data.get("evidence_based_risks") or [],
         "sample_reality_findings": sample_findings,
@@ -1772,6 +1805,7 @@ def _recheck_company_data(company_name: str, data: dict) -> dict:
         company_name=company_name,
         pitch_text=data.get("pitch_text", ""),
         scan_payload=_build_fact_check_scan_payload(data),
+        foresight_links=data.get("foresight_links", []),
     )
 
     # Step 3: Persist AI verification result back to stored data
@@ -2801,6 +2835,7 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                 evidence_links=data.get("evidence_links", []),
                 company_name=company_name,
                 scan_payload=_build_fact_check_scan_payload(data),
+                foresight_links=data.get("foresight_links", []),
             )
 
             data["ai_verification"] = {
@@ -4962,6 +4997,7 @@ Respond with valid JSON only:
                 scan_payload=_build_fact_check_scan_payload(full_data),
                 analysis_sections={"evidence_based_risks": full_data.get("evidence_based_risks") or []},
                 document_label="AI Diagnosis and Evidence-Based Risks",
+                foresight_links=full_data.get("foresight_links", []),
             )
         full_data["ai_verification"] = {
             "verified": fact_check["verified"],
@@ -5342,6 +5378,7 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                     company_name=companyName,
                     scan_payload=_build_fact_check_scan_payload(full_data),
                     document_label="Detailed Forensic Report",
+                    foresight_links=full_data.get("foresight_links", []),
                 )
                 if dr_check.get("corrected_summary"):
                     dr_text = dr_check["corrected_summary"]

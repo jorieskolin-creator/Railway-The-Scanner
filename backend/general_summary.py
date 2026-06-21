@@ -412,7 +412,7 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
 def _build_prompt(payload: dict, company_name: str) -> str:
     forbidden = ", ".join(_FORBIDDEN_TERMS)
     summary_guardrails = _general_summary_guardrails()
-    return f"""You are writing the General Summary section of a forensic B2B intelligence report about {company_name}. Your role in this section is to write an evidence-based business snapshot: what is materially true about the company right now, with light financial and operational interpretation that is directly supported by the payload. You are not writing the AI Diagnosis, not giving advice, not making recommendations, and not projecting future outcomes.
+    return f"""You are writing the General Summary section of a forensic B2B intelligence report about {company_name}. Your role in this section is to write a facts-only business snapshot: what the supplied evidence establishes about the company right now. Do not analyze causes, infer implications, diagnose maturity, evaluate readiness, give advice, make recommendations, or project future outcomes.
 
 This section differs from nearby report sections:
 - AI Diagnosis owns deeper interpretation, risk framing, recommendations, and projected consequences.
@@ -420,7 +420,7 @@ This section differs from nearby report sections:
 - Structured Strategic Foresight Evidence owns key forces, scenarios, and cross-impact context.
 - Evidence Trust owns source verification status.
 
-The General Summary should connect evidence into a concise executive snapshot without duplicating those sections.
+The General Summary should organize verified facts into a concise executive snapshot without duplicating or performing the analysis owned by those sections.
 
 SHARED FACT-DISCIPLINE / FORESIGHT GUARDRAILS:
 {summary_guardrails}
@@ -429,13 +429,13 @@ EVIDENCE — the ONLY material you may reference. Every sentence you write must 
 {json.dumps(payload, ensure_ascii=False, indent=2)}
 
 WRITING APPROACH:
-Weave the evidence into a coherent narrative that gives a C-level reader an immediate, factual understanding of where this company stands today. Connect related findings to reveal patterns — do not list them. Stay in the present and past tense: report what has happened and what currently exists. Do not project future outcomes, consequences, or trajectories — that belongs in the AI Diagnosis section.
+Organize the evidence into a coherent narrative that gives a C-level reader an immediate factual snapshot. Stay in the present and past tense: report what has happened and what currently exists. You may group related facts for readability, but do not turn their combination into a new analytical conclusion. Do not project outcomes, consequences, trajectories, pressures, opportunities, or risks; those belong in the AI Diagnosis and foresight sections.
 
 The summary should answer four questions, only where the payload supports them:
 1. What is the company's current verified business context?
-2. What do the financial facts imply about pressure, resilience, or adaptation capacity?
+2. What are the latest supported financial facts and documented changes?
 3. What operational reality is actually evidenced?
-4. What unresolved tension or contradiction should the reader notice?
+4. What explicit contradiction or evidence limitation is documented in the payload?
 
 MANDATORY RULES:
 
@@ -469,7 +469,7 @@ MANDATORY RULES:
      - If source_label = "Independent news / analyst" → write "[source_title] reported"
      - Do not write that a financial metric is unpublished, unavailable, or not yet reported if any financial_findings or evidence item contains that metric for the latest annual period. Use the latest annual value and source attribution instead.
    The "assessment" text is interpretation, not a quote. Use the underlying figure (revenue, margin, ratio) but rephrase in your own words; never present the model's interpretive language as if it were a source quote.
-   Financial paragraph goal: do not list figures mechanically. Use concrete financial evidence to explain what it indicates about pressure, resilience, profitability, liquidity, or capacity to absorb change. Keep the interpretation narrow and evidence-bound. If financial evidence is thin, say that financial visibility is limited rather than inventing a read-through.
+   Financial paragraph goal: report the latest supported figures, their periods, their scope, and documented changes. Do not infer resilience, pressure, investment capacity, liquidity quality, or ability to absorb change. If financial evidence is thin, state only that the available financial evidence is limited.
 
 4. FORBIDDEN TERMS: Do not use any of these: {forbidden}. Use plain descriptive language instead.
 
@@ -484,15 +484,15 @@ MANDATORY RULES:
    - Never open with a revenue figure, profit margin, or financial ratio.
    - Never open with a number. Never open with a narrative characterisation — anchor on a specific, verifiable data point.
 
-7. COVERAGE: Address at least 3 distinct dimensions if the evidence supports them — business context or structural events, financial read-through, operational or technology reality, and open tensions or contradictions. Do not write the entire summary about a single event or topic. If the evidence does not support a dimension, omit it rather than filling the gap with unsupported claims.
+7. COVERAGE: Address at least 3 distinct dimensions if the evidence supports them — business context or structural events, financial facts, operational or technology facts, and explicit contradictions or evidence limitations. Do not write the entire summary about a single event or topic. If the evidence does not support a dimension, omit it rather than filling the gap with analysis.
 
 8. PARAGRAPH ALLOCATION — CRITICAL:
    Financial data (revenue, profit, margins, equity ratios) may occupy AT MOST one of the 3–4 paragraphs, and only when the financial evidence is concrete and material. Do not lead with financial data.
    Default priority order for paragraph topics:
      1. Current verified business context: what the company is, entity-scope caveats, and material strategic or structural changes (carve-out, acquisition, major contract win, certification, new business unit)
-     2. Financial read-through: what concrete financial evidence says about pressure, resilience, profitability, liquidity, or capacity to absorb change
+     2. Financial facts: latest supported values, periods, entity scope, and documented changes
      3. Operational reality: delivery model, technology signals, AI integration, platform, tools, certifications, partnerships, culture, or service portfolio evidence
-     4. Open tension: a concise neutral question or caveat where stated ambition, operational evidence, financial signals, or source claims do not fully align
+     4. Explicit contradiction or limitation: only a discrepancy or evidence gap directly recorded in the payload, stated without diagnosing its cause or consequence
    If only financial evidence is strong and operational evidence is thin, one paragraph on financials is acceptable — but do not pad other paragraphs with weak signals to meet the 3-paragraph minimum. Acknowledge the evidential gap instead.
 
 9. SCOPE & SOURCE QUALIFICATION — CRITICAL:
@@ -507,7 +507,7 @@ MANDATORY RULES:
 
 9. BALANCING CONTRADICTIONS & PROPORTIONALITY — CRITICAL: 
    - If a narrow-scope independent source contradicts a broad self-reported metric, briefly state both side-by-side (e.g., "Wärtsilä reports [X] company-wide users, though a departmental survey of HR found [Y]").
-   - If intent and reality appear misaligned, mention the tension neutrally as an open evidence question. Example form: "The open question is whether the documented operating evidence is sufficient to substantiate the stated modernization position." Do not explain root causes or predict consequences.
+   - Do not infer a tension from internal scores or from absence of evidence. Mention a discrepancy only when the payload explicitly records contradictory facts or a defined evidence limitation.
    - PROPORTIONALITY: You are summarizing a multi-billion euro enterprise. Keep narrow departmental statistics extremely brief. Do not let a single departmental survey dominate the technology or operational narrative of a global firm. Address the contradiction in a single, strictly factual sentence and move on.
 
 10. RISK REPORTING: If the evidence documents negative trends or concrete vulnerabilities, report them factually. If the data reflects standard business practices (e.g., strategic outsourcing, white-labeling), do not manufacture artificial crises. Do not speculate about consequences — state the documented fact and let the reader draw conclusions.
@@ -602,7 +602,8 @@ Your task is narrow: compare the SUMMARY against the PAYLOAD and identify factua
 Rules:
 - Use ONLY the PAYLOAD as source material. Do not use outside knowledge.
 - A claim is supported when it can be traced to a specific payload item, financial finding, contradiction, delta, or evidence snippet.
-- Do not flag wording differences, harmless synthesis, or cautious interpretation that is directly grounded in the payload.
+- Do not flag wording differences or factual grouping that introduces no new conclusion.
+- General Summary is facts-only. Flag causal explanations, readiness judgments, pressure/resilience interpretations, risk/opportunity statements, recommendations, and projected consequences even when they sound plausible, unless the payload explicitly states that exact documented fact.
 - Do flag invented events, invented people, invented figures, wrong entity claims, unqualified local-entity claims, and future claims presented as facts.
 - If the summary says something broader than the payload supports, flag it and explain the scope problem.
 
