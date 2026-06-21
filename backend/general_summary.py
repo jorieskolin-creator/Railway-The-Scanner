@@ -171,6 +171,14 @@ _FORBIDDEN_TERMS = [
     "Knowledge Base", "KB dimension", "archetype",
 ]
 
+_INTERNAL_PROCESS_PATTERNS = (
+    "supplied payload", "current payload", "supplied delta", "payload identifies",
+    "key_findings", "evidence_links", "generation-eligible", "generation eligible",
+    "display-only", "display only", "promoted evidence", "promoted source",
+    "source register", "scanner returned", "current scan returned",
+    "zero promoted", "evidence pipeline",
+)
+
 _WORD_MIN = 250
 _WORD_MAX = 320
 
@@ -456,6 +464,7 @@ MANDATORY RULES:
      (d) If a snippet mentions a technology, product, or platform that was clearly from a different era (e.g., discontinued products, legacy platforms), do NOT include it regardless of is_recent value.
 
 3. DATA HANDLING / META-METRICS: Do not reference the report's internal scoring metrics (e.g., "Reality Score," "Ambition Score," "Friction Index," "Integrity Delta," "Financial Health") by name in the generated prose. These scores should inform your overall tone only. The summary itself must focus strictly on the company's real-world financial, operational, and organizational data.
+   Never mention the payload, scan, Scanner, source register, field names, promotion states, generation eligibility, display-only status, or counts of accepted/rejected evidence. If a business dimension lacks supported facts, omit it or describe the public evidence limitation in ordinary reader-facing language without exposing the analysis process.
 
 3a. FINANCIAL FINDINGS ATTRIBUTION — CRITICAL:
    Each item in financial_findings carries:
@@ -538,6 +547,12 @@ def _strip_links(text: str) -> str:
     return re.sub(r'\[([^\]]+)\]\(https?://[^)]+\)', r'\1', text)
 
 
+def _internal_process_phrases(text: str) -> list[str]:
+    """Return Scanner-internal language that must never reach a company summary."""
+    lowered = str(text or "").lower()
+    return [phrase for phrase in _INTERNAL_PROCESS_PATTERNS if phrase in lowered]
+
+
 def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, str]:
     """
     Generate a 250-320 word General Summary from structured scan data.
@@ -558,6 +573,14 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
         wc = _word_count(text)
         elapsed = int((time.time() - t0) * 1000)
         print(f"   [General Summary] {PRIMARY_MODEL}: {wc} words ({elapsed}ms)")
+        if text:
+            process_phrases = _internal_process_phrases(text)
+            if process_phrases:
+                print(
+                    "   ⚠️ [General Summary] GPT-5.5 exposed internal process language "
+                    f"({', '.join(process_phrases[:4])}) — trying independent backup"
+                )
+                text = ""
         if text:
             if not (_WORD_MIN <= wc <= _WORD_MAX):
                 print(f"   [General Summary] {PRIMARY_MODEL} word count outside [{_WORD_MIN}-{_WORD_MAX}] — using non-empty result")
@@ -585,6 +608,14 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
             wc = _word_count(text)
             elapsed = int((time.time() - t0) * 1000)
             print(f"   [General Summary] {SONNET_MODEL} backup: {wc} words ({elapsed}ms)")
+            if text:
+                process_phrases = _internal_process_phrases(text)
+                if process_phrases:
+                    print(
+                        "   ⚠️ [General Summary] Sonnet exposed internal process language "
+                        f"({', '.join(process_phrases[:4])}) — rejecting summary"
+                    )
+                    text = ""
             if text:
                 return text, SONNET_MODEL
     except Exception as e:
@@ -726,6 +757,18 @@ def fact_check_general_summary(
         return {"verified": False, "false_claims": [], "corrected_summary": "",
                 "corrected_model": "", "check_time_ms": elapsed,
                 "fact_check_skipped": True}
+
+    # Process narration is invalid independently of factual accuracy. The model
+    # verifier can miss it because field names do exist in the payload, so enforce
+    # this presentation boundary deterministically.
+    for phrase in _internal_process_phrases(summary_text):
+        false_claims.append({
+            "claim": phrase,
+            "reason": (
+                "General Summary must describe the company, not Scanner payload fields, "
+                "evidence promotion states, or the report-generation process."
+            ),
+        })
 
     if not false_claims:
         elapsed = int((time.time() - t0) * 1000)

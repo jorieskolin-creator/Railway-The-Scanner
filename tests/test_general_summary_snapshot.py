@@ -119,3 +119,14 @@ def test_general_summary_payload_keeps_only_generation_eligible_sources(monkeypa
 
     titles = [item["title"] for item in payload["evidence_links"]]
     assert titles == ["Eligible source"]
+
+
+def test_general_summary_rejects_scanner_process_language():
+    bad = (
+        "The supplied payload contains zero promoted evidence and the key_findings "
+        "and evidence_links fields are empty."
+    )
+    phrases = general_summary._internal_process_phrases(bad)
+    assert "supplied payload" in phrases
+    assert "zero promoted" in phrases
+    assert "key_findings" in phrases

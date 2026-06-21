@@ -199,6 +199,52 @@ def test_jury_requires_source_bound_quote_and_support_level():
     assert result["findings"][0]["claim_support_status"] == "supported"
 
 
+def test_jury_preserves_preverified_entity_and_content_verdicts():
+    jury = "SERVICE PORTFOLIO JURY (Delivery Reality)"
+    supplied = _finding(
+        "https://example.fi/services/managed-cloud", jury,
+        snippet="Example Oy provides managed cloud operations and application support services.",
+        verified=True,
+        url_verified=True,
+        content_readable=True,
+        content_verified=True,
+        entity_verified=True,
+        entity_match_status="exact",
+        content_entity_match_status="exact",
+        entity_scope="canonical_group",
+        entity_mentioned=True,
+    )
+    result = scanner_two._merge_forensic_jury_results(
+        {"confidence_score": 20, "findings": []},
+        [{
+            "jury": jury,
+            "status": "completed",
+            "provider": "gpt-5.5",
+            "packet_urls": [supplied["url"]],
+            "packets": [supplied],
+            "data": {
+                "findings": [{
+                    "url": supplied["url"],
+                    "supported_claim": "Example Oy provides managed cloud operations and application support services.",
+                    "source_quote": supplied["snippet"],
+                    "support_level": "exact",
+                    "title": "Managed cloud services",
+                    "found": True,
+                }],
+                "confidence_score": 80,
+                "reality_score_adjustment": 0,
+            },
+        }],
+        {jury: []},
+    )
+    finding = result["findings"][0]
+    assert finding["entity_match_status"] == "exact"
+    assert finding["content_entity_match_status"] == "exact"
+    assert finding["entity_scope"] == "canonical_group"
+    assert finding["entity_verified"] is True
+    assert finding["content_verified"] is True
+
+
 def test_generic_landing_page_is_context_only_even_if_jury_calls_it_exact():
     jury = "CULTURAL JURY (Talent & Psychological Safety)"
     supplied = _finding(

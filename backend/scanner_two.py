@@ -686,6 +686,28 @@ def _prevalidate_acquisition_results(
             source["verified"] = source["url_verified"]
             source["content_readable"] = checked.get("content_readable") is True
             source["entity_mentioned"] = checked.get("company_mentioned")
+            entity_scope = str(source.get("entity_scope") or "unclear").lower()
+            entity_mentioned = checked.get("company_mentioned")
+            if entity_mentioned is True:
+                if entity_scope in {"subsidiary", "local_legal_entity", "former_name", "parent_owner"}:
+                    entity_status = "scoped"
+                else:
+                    entity_status = "exact"
+                    entity_scope = "canonical_group"
+                source["entity_match_status"] = entity_status
+                source["content_entity_match_status"] = entity_status
+                source["entity_scope"] = entity_scope
+                source["entity_verified"] = True
+            elif entity_mentioned is False:
+                source["entity_match_status"] = "wrong"
+                source["content_entity_match_status"] = "wrong"
+                source["entity_scope"] = "wrong_entity"
+                source["entity_verified"] = False
+            else:
+                source["entity_match_status"] = "unknown"
+                source["content_entity_match_status"] = "unknown"
+                source["entity_scope"] = "unknown"
+                source["entity_verified"] = False
             direct_content = str(checked.get("content_excerpt") or "")
             match = _quote_match_details(str(source.get("snippet") or ""), direct_content)
             source["quote_match_method"] = match["method"]
@@ -724,6 +746,9 @@ def _prevalidate_acquisition_results(
                 stats[reason] += 1
                 rejected.append({"url": source.get("url"), "reason": reason, "stage": "pre_jury_gate"})
                 continue
+            # This verifies the acquired passage, not any later analytical claim.
+            # Claim support is decided independently by the jury.
+            source["content_verified"] = True
             source["pre_jury_gate"] = "passed"
             source["generic_context_page"] = _is_generic_context_page(source.get("url") or "")
             kept.append(source)
@@ -816,6 +841,20 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
                 normalized["verified"] = packet.get("verified") is True
                 normalized["url_verified"] = packet.get("url_verified") is True
                 normalized["content_readable"] = packet.get("content_readable") is True
+                normalized["content_verified"] = packet.get("content_verified") is True
+                normalized["entity_verified"] = packet.get("entity_verified") is True
+                normalized["entity_match_status"] = packet.get("entity_match_status") or "unknown"
+                normalized["content_entity_match_status"] = (
+                    packet.get("content_entity_match_status")
+                    or packet.get("entity_match_status")
+                    or "unknown"
+                )
+                normalized["entity_scope"] = packet.get("entity_scope") or "unknown"
+                normalized["company_mentioned"] = packet.get("entity_mentioned")
+                normalized["wrong_entity_true"] = (
+                    normalized["entity_match_status"] == "wrong"
+                    or normalized["content_entity_match_status"] == "wrong"
+                )
                 normalized["generic_context_page"] = packet.get("generic_context_page") is True
                 normalized["source_type"] = item.get("source_type") or packet.get("source_type")
                 normalized["source_database"] = packet.get("source_database")
