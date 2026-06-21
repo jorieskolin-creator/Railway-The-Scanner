@@ -245,6 +245,51 @@ def test_jury_preserves_preverified_entity_and_content_verdicts():
     assert finding["content_verified"] is True
 
 
+def test_jury_uses_current_quote_match_as_content_verification():
+    jury = "SERVICE PORTFOLIO JURY (Delivery Reality)"
+    supplied = _finding(
+        "https://example.fi/services/support", jury,
+        snippet="",
+        fetched_excerpt="Example Oy provides lifecycle support for its installed systems.",
+        verified=True,
+        url_verified=True,
+        content_readable=True,
+        content_verified=False,
+        entity_verified=True,
+        entity_match_status="exact",
+        content_entity_match_status="exact",
+        entity_scope="canonical_group",
+        entity_mentioned=True,
+        forensic_seed_source=True,
+    )
+    result = scanner_two._merge_forensic_jury_results(
+        {"confidence_score": 20, "findings": []},
+        [{
+            "jury": jury,
+            "status": "completed",
+            "provider": "gpt-5.5",
+            "packet_urls": [supplied["url"]],
+            "packets": [supplied],
+            "data": {
+                "findings": [{
+                    "url": supplied["url"],
+                    "supported_claim": "Example Oy provides lifecycle support for its installed systems.",
+                    "source_quote": supplied["fetched_excerpt"],
+                    "support_level": "exact",
+                    "title": "Lifecycle support",
+                    "found": True,
+                }],
+                "confidence_score": 80,
+            },
+        }],
+        {jury: []},
+    )
+    finding = result["findings"][0]
+    assert finding["content_verified"] is True
+    assert finding["entity_verified"] is True
+    assert finding["claim_support_status"] == "supported"
+
+
 def test_generic_landing_page_is_context_only_even_if_jury_calls_it_exact():
     jury = "CULTURAL JURY (Talent & Psychological Safety)"
     supplied = _finding(

@@ -967,6 +967,19 @@ def apply_analysis_verification(link: dict, company_domain: str = "", company_na
     )
     if link.get("entity_verified") is not entity_verified:
         link["entity_verified"] = entity_verified
+    # Full-content entity verification is stronger than title/URL inference.
+    # Normalization may leave the latter as unknown even after a verifier found
+    # the exact target in readable page content. Reconcile that mismatch here,
+    # but never override an explicit wrong-entity verdict from either layer.
+    if (
+        entity_status in {"", "unknown", "pending", "weak"}
+        and content_entity_status in {"exact", "scoped"}
+        and entity_verified
+        and link.get("wrong_entity") is not True
+    ):
+        entity_status = content_entity_status
+        link["entity_match_status"] = content_entity_status
+        link["entity_match"] = content_entity_status
     scoped_entity_scopes = {
         ENTITY_SCOPE_LOCAL_LEGAL_ENTITY,
         ENTITY_SCOPE_SUBSIDIARY,
@@ -1054,8 +1067,8 @@ def is_generation_eligible_source(link: dict) -> bool:
         content_entity_status in {"exact", "scoped"} and link.get("wrong_entity") is not True
     )
     entity_ok = (
-        entity_status in {"exact", "scoped"}
-        and (not link.get("content_entity_match_status") or content_entity_status in {"exact", "scoped"})
+        entity_status != "wrong"
+        and content_entity_status in {"exact", "scoped"}
         and entity_verified
         and entity_scope not in {"", ENTITY_SCOPE_UNKNOWN, ENTITY_SCOPE_WRONG_ENTITY}
     ) or (

@@ -841,7 +841,12 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
                 normalized["verified"] = packet.get("verified") is True
                 normalized["url_verified"] = packet.get("url_verified") is True
                 normalized["content_readable"] = packet.get("content_readable") is True
-                normalized["content_verified"] = packet.get("content_verified") is True
+                # The quote has just been matched against freshly fetched packet
+                # content above. This is current content verification, independent
+                # of any historical verdict carried only in verification_history.
+                normalized["content_verified"] = (
+                    packet.get("content_verified") is True or bool(source_quote)
+                )
                 normalized["entity_verified"] = packet.get("entity_verified") is True
                 normalized["entity_match_status"] = packet.get("entity_match_status") or "unknown"
                 normalized["content_entity_match_status"] = (
@@ -3008,7 +3013,25 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     finding["source_quote"] = ""
                     finding["cached_excerpt"] = ""
                     finding["url_verified"] = bool(check.get("verified"))
+                    finding["verified"] = bool(check.get("verified"))
                     finding["content_readable"] = bool(check.get("content_readable"))
+                    entity_mentioned = check.get("company_mentioned")
+                    finding["entity_mentioned"] = entity_mentioned
+                    if entity_mentioned is True:
+                        finding["entity_match_status"] = "exact"
+                        finding["content_entity_match_status"] = "exact"
+                        finding["entity_scope"] = "canonical_group"
+                        finding["entity_verified"] = True
+                    elif entity_mentioned is False:
+                        finding["entity_match_status"] = "wrong"
+                        finding["content_entity_match_status"] = "wrong"
+                        finding["entity_scope"] = "wrong_entity"
+                        finding["entity_verified"] = False
+                    else:
+                        finding["entity_match_status"] = "unknown"
+                        finding["content_entity_match_status"] = "unknown"
+                        finding["entity_scope"] = "unknown"
+                        finding["entity_verified"] = False
                     if check.get("verified") and check.get("company_mentioned") is not False:
                         finding["source_status"] = "seed_revalidated"
                     else:

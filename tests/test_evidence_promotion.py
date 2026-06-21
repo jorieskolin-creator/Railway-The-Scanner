@@ -230,3 +230,50 @@ def test_scoped_legal_entity_financial_source_can_be_generation_eligible():
     assert link["promotion_status"] == PROMOTION_GENERATION_ELIGIBLE
     assert link["entity_scope"] == "local_legal_entity"
     assert link["scope_warning"]
+
+
+def test_exact_content_verdict_overrides_unknown_display_entity_match():
+    link = apply_analysis_verification(
+        _source(
+            title="Palvelut | ABB",
+            url="https://new.abb.com/service/fi",
+            snippet="ABB provides lifecycle services for installed industrial systems.",
+            source_quote="ABB provides lifecycle services for installed industrial systems.",
+            entity_scope="local_legal_entity",
+            entity_match_status="unknown",
+            content_entity_match_status="exact",
+            content_entity_match_reason="target entity found in current page content",
+            entity_verified=True,
+            claim_support_status="supported",
+            claim_irrelevant=False,
+            verification_conflict=False,
+            quote_mismatch=False,
+        ),
+        company_domain="https://abb.com",
+        company_name="ABB Oy",
+    )
+
+    assert link["entity_match_status"] == "exact"
+    assert link["content_entity_match_status"] == "exact"
+    assert link["analysis_verified"] is True
+    assert link["generation_eligible"] is True
+    assert is_generation_eligible_source(link) is True
+
+
+def test_content_verdict_never_overrides_explicit_wrong_entity():
+    link = apply_analysis_verification(
+        _source(
+            entity_scope="wrong_entity",
+            entity_match_status="wrong",
+            content_entity_match_status="exact",
+            entity_verified=True,
+            wrong_entity=True,
+        ),
+        company_domain="https://abb.com",
+        company_name="ABB Oy",
+    )
+
+    assert link["analysis_verified"] is False
+    assert link["generation_eligible"] is False
+    assert link["promotion_status"] == PROMOTION_EXCLUDED
+    assert is_generation_eligible_source(link) is False
