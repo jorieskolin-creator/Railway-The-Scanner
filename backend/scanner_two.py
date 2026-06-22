@@ -565,11 +565,48 @@ def _firecrawl_forensic_extract(url: str, timeout: int = 25) -> dict:
         return {"ok": False, "reason": type(error).__name__, "text": ""}
 
 
+def _jina_forensic_extract(url: str, timeout: int = 20) -> dict:
+    """Use Jina Reader as a narrow fallback for an already-selected URL."""
+    try:
+        headers = {"Accept": "text/plain", "X-Return-Format": "markdown"}
+        key = str(os.environ.get("JINA_API_KEY") or "").strip().strip("'\"")
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        response = http_requests.get(f"https://r.jina.ai/{url}", headers=headers, timeout=timeout)
+        if response.status_code != 200:
+            return {"ok": False, "reason": f"http_{response.status_code}", "text": "", "provider": "jina"}
+        text = str(response.text or "").strip()
+        if len(text) < 120 or _SOFT_404_PATTERNS.search(text[:4000]):
+            return {"ok": False, "reason": "unreadable_or_soft_404", "text": text, "provider": "jina"}
+        return {"ok": True, "reason": "", "text": text[:60000], "provider": "jina"}
+    except Exception as error:
+        return {"ok": False, "reason": type(error).__name__, "text": "", "provider": "jina"}
+
+
+def _recover_forensic_extract(url: str, timeout: int = 25) -> dict:
+    """Try Firecrawl, then Jina, without broad crawling or URL discovery."""
+    firecrawl = _firecrawl_forensic_extract(url, timeout=timeout)
+    if firecrawl.get("ok"):
+        firecrawl["provider"] = "firecrawl"
+        return firecrawl
+    jina = _jina_forensic_extract(url, timeout=min(20, timeout))
+    if jina.get("ok"):
+        return jina
+    return {
+        "ok": False,
+        "reason": f"firecrawl:{firecrawl.get('reason')};jina:{jina.get('reason')}",
+        "text": "",
+        "provider": "none",
+    }
+
+
 def _firecrawl_recovery_priority(source: dict) -> int:
     token = " ".join(str(source.get(key) or "") for key in ("source_type", "url", "title")).lower()
     score = 0
     if any(term in token for term in ("official", "filing", "legal", "procurement", "annual", "investor")):
         score += 5
+    if source.get("_precheck_company_mentioned") is True:
+        score += 8
     if any(term in token for term in ("case_study", "customer", "technical", "research", "workforce_metric")):
         score += 3
     if any(term in token for term in ("linkedin", "glassdoor", "teamblind", "search?", "/jobs")):
@@ -606,6 +643,20 @@ def _claim_matches_quote(claim: str, quote: str, support_level: str) -> bool:
     return overlap >= threshold and len(claim_terms & quote_terms) >= min(3, len(claim_terms))
 
 
+def _is_atomic_supported_claim(claim: str) -> bool:
+    """Reject clearly bundled claims so the jury must emit separate findings."""
+    text = str(claim or "").strip()
+    if not text:
+        return False
+    sentences = [part for part in re.split(r"(?<=[.!?])\s+", text) if part.strip()]
+    if len(sentences) > 1:
+        return False
+    numbers = re.findall(r"(?<!\w)[€$]?\d[\d.,]*%?", text)
+    if len(numbers) > 1 and (";" in text or re.search(r"\b(?:and|while|alongside|sekä|ja samalla)\b", text, re.I)):
+        return False
+    return True
+
+
 def _prevalidate_acquisition_results(
     acquisition_results: list,
     company_name: str,
@@ -635,12 +686,12 @@ def _prevalidate_acquisition_results(
             str(source.get("snippet") or ""),
             str(checked.get("content_excerpt") or ""),
         )
+        source["_precheck_company_mentioned"] = checked.get("company_mentioned")
         if (
             checked.get("verified") is True
             and checked.get("company_mentioned") is not False
-            and checked.get("content_readable") is True
             and len(str(source.get("snippet") or "").strip()) >= 40
-            and not match["matched"]
+            and (checked.get("content_readable") is not True or not match["matched"])
         ):
             recovery_candidates.append(source)
 
@@ -654,7 +705,7 @@ def _prevalidate_acquisition_results(
     if selected_recovery and firecrawl_configured and recovery_seconds > 0:
         pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(4, len(selected_recovery)))
         futures = {
-            pool.submit(_firecrawl_forensic_extract, source["url"], min(25, recovery_seconds)): source["url"]
+            pool.submit(_recover_forensic_extract, source["url"], min(25, recovery_seconds)): source["url"]
             for source in selected_recovery
         }
         done, pending = concurrent.futures.wait(futures, timeout=recovery_seconds)
@@ -721,16 +772,17 @@ def _prevalidate_acquisition_results(
                 reason = "dead_or_soft_404"
             elif checked.get("company_mentioned") is False:
                 reason = "wrong_entity"
-            elif not source["content_readable"] or len(str(source.get("snippet") or "").strip()) < 40:
+            elif len(str(source.get("snippet") or "").strip()) < 40:
                 reason = "unreadable"
-            elif not match["matched"]:
+            elif not source["content_readable"] or not match["matched"]:
                 recovered = firecrawl_results.get(source.get("url"), {})
                 recovered_text = str(recovered.get("text") or "")
                 recovered_match = _quote_match_details(str(source.get("snippet") or ""), recovered_text)
                 if recovered.get("ok") and recovered_match["matched"]:
                     source["content_readable"] = True
-                    source["extraction_provider"] = "firecrawl"
-                    source["quote_match_method"] = f"firecrawl_{recovered_match['method']}"
+                    provider = recovered.get("provider") or "firecrawl"
+                    source["extraction_provider"] = provider
+                    source["quote_match_method"] = f"{provider}_{recovered_match['method']}"
                     source["quote_match_score"] = round(float(recovered_match["score"]), 3)
                     source["fetched_excerpt"] = _relevant_passage(
                         str(source.get("snippet") or ""), recovered_text
@@ -740,7 +792,7 @@ def _prevalidate_acquisition_results(
                     if source.get("url") in firecrawl_results:
                         stats["firecrawl_failed"] += 1
                         source["extraction_recovery_reason"] = recovered.get("reason") or "passage_not_found"
-                    reason = "quote_not_found"
+                    reason = "unreadable" if not source["content_readable"] else "quote_not_found"
             if reason:
                 stats.setdefault(reason, 0)
                 stats[reason] += 1
@@ -810,14 +862,14 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
                     or packet.get("cached_excerpt")
                     or ""
                 )
-                if not supported_claim or not _quote_matches_packet(
+                if not supported_claim or not _is_atomic_supported_claim(supported_claim) or not _quote_matches_packet(
                     source_quote,
                     packet_text,
                     require_verbatim=support_level == "exact",
                 ) or not _claim_matches_quote(supported_claim, source_quote, support_level):
                     rejected.append({
                         "url": item.get("url"),
-                        "reason": "Jury claim lacked a source-bound quote or materially exceeded the quote.",
+                        "reason": "Jury claim was bundled, lacked a source-bound quote, or materially exceeded the quote.",
                         "jury": jury,
                     })
                     continue
@@ -1071,6 +1123,11 @@ Write the SMALLEST claim the packet actually supports. `source_quote` must be co
 - partial: quote supports only part; phrase as a cautious signal,
 - context_only: identity/general background only, not a company capability fact,
 - unsupported: reject.
+Each finding must contain exactly ONE atomic assertion. Split separate events, figures, systems,
+capabilities, outcomes, or time periods into separate findings even when they share one source.
+For an official company source, an exact scoped statement may be accepted as a company-reported fact
+when phrased with attribution (for example, "ABB states..." or "ABB lists..."). It is not independent
+proof of effectiveness, adoption, market impact, or achieved outcomes.
 Precise figures, named systems/APIs/platforms, projects, outcomes, and specific hiring claims require
 `exact` support. Generic home, careers, service, reference-index, and case-study-index pages are
 context_only unless the supplied quote itself states the complete narrow fact.

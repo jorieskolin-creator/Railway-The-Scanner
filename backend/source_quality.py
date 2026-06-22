@@ -363,7 +363,7 @@ def assess_source_credibility(url: str, source_type: str = "", company_domain: s
     Logic:
     1. Known high-credibility domain → "high"
     2. Known low-credibility domain or pattern → "low"
-    3. Company's own domain (self-reporting) → "low"
+    3. Company's own domain (self-reporting) → "medium"
     4. Institutional TLD (.gov, .edu, .ac.*, .mil, .int) → "high"
     5. Source type "academic"/"government"/"think_tank" on unknown domain → "medium"
     6. Everything else → "medium" (unknown ≠ low; low-credibility list catches bad sources)
@@ -388,11 +388,15 @@ def assess_source_credibility(url: str, source_type: str = "", company_domain: s
     if _domain_matches_patterns(domain):
         return "low"
 
-    # Self-reporting check: company citing its own website
+    # A company site is an authentic primary source for what the company says,
+    # offers, publishes, or announces.  Its independence is limited, but that is
+    # a separate axis from source quality.  Marking it "low" caused exact,
+    # supported official statements to be discarded before attribution and
+    # claim-scope rules could be applied.
     if company_domain:
-        clean_company = company_domain.lower().replace("www.", "")
+        clean_company = _get_domain(company_domain) or company_domain.lower().replace("www.", "").strip("/")
         if clean_company and (domain == clean_company or domain.endswith("." + clean_company)):
-            return "low"
+            return "medium"
 
     # Institutional TLDs are inherently credible (gov, edu, academic, military)
     if _is_institutional_tld(domain):
@@ -809,7 +813,24 @@ def normalize_evidence_link(link: dict, company_domain: str = "", company_name: 
 
     source_type = infer_source_type(url, title, snippet, link.get("source_type") or link.get("category") or "")
     link["source_type"] = source_type
-    link["source_credibility"] = link.get("source_credibility") or assess_source_credibility(url, source_type, company_domain)
+    source_host = _get_domain(url)
+    clean_company_host = _get_domain(company_domain) if company_domain else ""
+    official_company_source = bool(
+        source_host
+        and clean_company_host
+        and (source_host == clean_company_host or source_host.endswith("." + clean_company_host))
+    )
+    assessed_credibility = assess_source_credibility(url, source_type, company_domain)
+    stored_credibility = str(link.get("source_credibility") or "").lower()
+    # Repair the legacy policy that labelled all first-party URLs as low. Known
+    # bad domains remain low because they cannot also be the target domain.
+    if official_company_source and stored_credibility in {"", "low", "unknown", "weak", "unverified"}:
+        link["source_credibility"] = "medium"
+    else:
+        link["source_credibility"] = stored_credibility or assessed_credibility
+    link["source_authenticity"] = (
+        "official_company_source" if official_company_source else link.get("source_authenticity") or "external_source"
+    )
     link["scope"] = link.get("scope") or assess_source_scope(url, title, snippet)
     link["time_validity"] = link.get("time_validity") or infer_time_validity(link)
 
@@ -821,9 +842,13 @@ def normalize_evidence_link(link: dict, company_domain: str = "", company_name: 
     else:
         link["entity_match"] = link.get("entity_match") or "unknown"
 
-    link["independence"] = link.get("independence") or (
-        "company-reported" if source_type in SELF_REPORTED_SOURCE_TYPES else "third-party-or-independent"
+    link["independence"] = (
+        "company-reported" if official_company_source or source_type in SELF_REPORTED_SOURCE_TYPES
+        else link.get("independence") or "third-party-or-independent"
     )
+    if link["independence"] == "company-reported":
+        link["attribution_required"] = True
+        link["evidence_role"] = link.get("evidence_role") or "company_statement"
     link["allowed_claim_types"] = sorted(SOURCE_TYPE_ALLOWED_USES.get(source_type, {"third_party_observation"}))
 
     # Claim tier, entity scope, and target-entity match — computed last so all

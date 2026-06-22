@@ -260,6 +260,57 @@ def test_exact_content_verdict_overrides_unknown_display_entity_match():
     assert is_generation_eligible_source(link) is True
 
 
+def test_official_company_source_repairs_legacy_low_credibility_without_claim_bypass():
+    link = apply_analysis_verification(
+        _source(
+            title="Palvelut | ABB",
+            url="https://new.abb.com/service/fi",
+            snippet="ABB states that it provides lifecycle services for installed industrial systems.",
+            source_quote="ABB states that it provides lifecycle services for installed industrial systems.",
+            source_type="company_website",
+            source_credibility="low",
+            content_entity_match_status="exact",
+            entity_match_status="exact",
+            entity_verified=True,
+            claim_support_status="supported",
+        ),
+        company_domain="https://abb.com",
+        company_name="ABB Oy",
+    )
+
+    assert link["source_credibility"] == "medium"
+    assert link["source_authenticity"] == "official_company_source"
+    assert link["independence"] == "company-reported"
+    assert link["attribution_required"] is True
+    assert link["claim_tier"] == "C"
+    assert link["analysis_verified"] is True
+    assert link["generation_eligible"] is True
+
+
+def test_official_company_source_still_requires_supported_content():
+    link = apply_analysis_verification(
+        _source(
+            title="Palvelut | ABB",
+            url="https://new.abb.com/service/fi",
+            snippet="ABB service landing page.",
+            source_quote="ABB service landing page.",
+            source_type="company_website",
+            source_credibility="low",
+            content_entity_match_status="exact",
+            entity_match_status="exact",
+            entity_verified=True,
+            claim_support_status="unsupported",
+        ),
+        company_domain="https://abb.com",
+        company_name="ABB Oy",
+    )
+
+    assert link["source_credibility"] == "medium"
+    assert link["analysis_verified"] is False
+    assert link["generation_eligible"] is False
+    assert link["verification_reason"] == "claim_unsupported"
+
+
 def test_content_verdict_never_overrides_explicit_wrong_entity():
     link = apply_analysis_verification(
         _source(

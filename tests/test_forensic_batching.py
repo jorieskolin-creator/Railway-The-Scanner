@@ -357,6 +357,39 @@ def test_jury_rejects_claim_that_exceeds_its_exact_quote():
     assert "exceeded" in result["rejected_evidence"][0]["reason"]
 
 
+def test_jury_rejects_bundled_multi_assertion_claim():
+    jury = "STRATEGIC JURY (Business Model, Procurement & Customer Experience)"
+    supplied = _finding(
+        "https://example.fi/news/investment", jury,
+        snippet="Example Oy announced a 20 million euro factory investment in 2026.",
+    )
+    result = scanner_two._merge_forensic_jury_results(
+        {"confidence_score": 20, "findings": []},
+        [{
+            "jury": jury,
+            "status": "completed",
+            "provider": "gpt-5.5",
+            "packet_urls": [supplied["url"]],
+            "packets": [supplied],
+            "data": {
+                "findings": [{
+                    "url": supplied["url"],
+                    "supported_claim": "Example Oy announced a 20 million euro factory investment in 2026 and achieved 15 percent productivity growth.",
+                    "source_quote": supplied["snippet"],
+                    "support_level": "exact",
+                    "title": "Factory investment",
+                    "found": True,
+                }],
+                "confidence_score": 80,
+            },
+        }],
+        {jury: []},
+    )
+
+    assert result["findings"] == []
+    assert "bundled" in result["rejected_evidence"][0]["reason"]
+
+
 def test_promoted_coverage_ignores_partial_and_unverified_findings():
     jury = "SERVICE PORTFOLIO JURY (Delivery Reality)"
     exact = _finding(
