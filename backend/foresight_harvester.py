@@ -41,6 +41,7 @@ from strategic_foresight import (
     FORESIGHT_SOURCE_QUALITY_TIERS,
 )
 from storage import BlobStorage
+from evidence_contracts import normalize_central_foresight_signal
 
 MAX_SIGNALS_PER_THEME = 15
 FORESIGHT_KB_EVIDENCE_VERSION = "foresight-active-v3"
@@ -699,6 +700,7 @@ def _classify_for_active_kb(sig: dict, theme: str, *, stage: str = "unknown") ->
     sig = _prepare_signal_for_promotion(dict(sig), theme)
     sig = _normalize_foresight_tags(sig, theme)
     sig = _strip_company_evidence_fields(sig)
+    sig, _removed_contract_fields = normalize_central_foresight_signal(sig)
 
     source_url = (sig.get("source_url") or sig.get("url") or "").strip()
     source_domain = sig.get("source_domain") or _source_domain(source_url)
@@ -2367,7 +2369,7 @@ def _repair_central_kb_signal(sig: dict, theme: str, *, url_alive: bool | None =
     not an eligibility condition: Repair verifies macro trend support, while any
     company-fit inference requires separate company-specific corroboration.
     """
-    clean = dict(sig)
+    clean, _removed_contract_fields = normalize_central_foresight_signal(sig)
     for field in _CENTRAL_KB_COMPANY_EVIDENCE_FIELDS:
         clean.pop(field, None)
     for field in ("promotion_status", "source_registry_status", "claim_support_status"):

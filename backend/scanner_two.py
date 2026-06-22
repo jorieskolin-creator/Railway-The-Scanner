@@ -15,6 +15,12 @@ from source_quality import assess_evidence_quality, confidence_quality_penalty, 
 from entity_identity import build_entity_context_block, entity_search_terms
 from llm_clients import call_anthropic_text, call_json_model_chain, call_openai_text
 from gemini_client import call_gemini_forensic_text, gemini_api_key
+from evidence_contracts import (
+    VERIFIED_COMPANY_EVIDENCE,
+    current_company_verification,
+    mark_company_candidate,
+    mark_verified_company_evidence,
+)
 
 # --- HELPER: IMPROVE SEARCH RECALL ---
 def clean_company_name_for_search(name):
@@ -273,7 +279,7 @@ def prepare_historical_revalidation_candidate(record: dict, source_database="pre
             or record.get("semantic_hint") or record.get("verification_reason") or ""
         )
     ).strip()[:700]
-    return {
+    return mark_company_candidate({
         "title": title,
         "url": url,
         "source": record.get("source") or get_clean_domain(url),
@@ -310,7 +316,7 @@ def prepare_historical_revalidation_candidate(record: dict, source_database="pre
         "entity_match_status": "pending",
         "content_entity_match_status": "pending",
         "verification_history": _merge_verification_history(record),
-    }
+    })
 
 
 def historical_source_can_revalidate(record: dict) -> bool:
@@ -820,6 +826,18 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
     confidences = []
     adjustments = []
     rejected = []
+    seed_urls = {
+        _canonical_evidence_url(item.get("url"))
+        for items in (routed_seeds or {}).values()
+        for item in (items or [])
+        if item.get("url")
+    }
+    revalidated_seed_urls = {
+        _canonical_evidence_url(item.get("url"))
+        for items in (routed_seeds or {}).values()
+        for item in (items or [])
+        if item.get("url") and item.get("seed_url_verified") is True
+    }
     for lane in jury_results or []:
         jury = lane.get("jury")
         payload = lane.get("data") if isinstance(lane.get("data"), dict) else None
@@ -920,7 +938,10 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
                 normalized["historical_revalidation_pending"] = False
                 normalized["verification_history"] = _merge_verification_history(packet)
                 normalized["revalidated_at"] = datetime.utcnow().isoformat()
-                accepted.append(normalized)
+                # Only current packet verification is authoritative here. Old
+                # verdicts remain confined to verification_history.
+                normalized.update(current_company_verification(packet))
+                accepted.append(mark_verified_company_evidence(normalized))
             rejected.extend(payload.get("rejected_evidence", []) or [])
             if accepted:
                 confidences.append(payload.get("confidence_score", 0) or 0)
@@ -948,6 +969,28 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
     result["reality_score_adjustment"] = round(sum(adjustments) / len(adjustments)) if adjustments else 0
     result["forensic_jury_status"] = statuses
     result["rejected_evidence"] = rejected
+    accepted_seed_urls = {
+        _canonical_evidence_url(item.get("url"))
+        for item in findings
+        if _canonical_evidence_url(item.get("url")) in seed_urls
+        and item.get("evidence_contract") == VERIFIED_COMPANY_EVIDENCE
+    }
+    seed_rejections = [
+        item for item in rejected
+        if _canonical_evidence_url(item.get("url")) in seed_urls
+    ]
+    rejection_reasons = {}
+    for item in seed_rejections:
+        reason = str(item.get("reason") or "unspecified")
+        rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
+    result["seed_lifecycle"] = {
+        "selected": len(seed_urls),
+        "url_revalidated": len(revalidated_seed_urls),
+        "jury_accepted": len(accepted_seed_urls),
+        "promoted_to_verified": len(accepted_seed_urls),
+        "rejected": len(seed_rejections),
+        "rejection_reasons": rejection_reasons,
+    }
     result["_parallel_jury_forensic"] = True
     result["_seeded_forensic_fallback"] = not any(lane.get("data") for lane in jury_results or [])
     return result
@@ -1085,7 +1128,7 @@ def _route_seed_findings(findings: list) -> dict:
         candidate["promotion_status"] = "candidate_revalidation_pending"
         candidate["forensic_provenance"] = "seed_candidate"
         candidate["verification_history"] = prior_history
-        routed[jury].append(candidate)
+        routed[jury].append(mark_company_candidate(candidate))
     return routed
 
 
@@ -3547,6 +3590,15 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         f"source coverage {source_coverage['score']}/100 (promotion pending)."
     )
     print(f"   📚 [Forensic Juries] {jury_counts}")
+    seed_lifecycle = data.get("seed_lifecycle") or {}
+    print(
+        "   🧭 [Seed Lifecycle] "
+        f"selected={seed_lifecycle.get('selected', 0)}, "
+        f"URL revalidated={seed_lifecycle.get('url_revalidated', 0)}, "
+        f"promoted to verified={seed_lifecycle.get('promoted_to_verified', 0)}, "
+        f"rejected={seed_lifecycle.get('rejected', 0)}, "
+        f"reasons={seed_lifecycle.get('rejection_reasons', {})}"
+    )
     for jury, target in fresh_supported_targets.items():
         if not target["met"]:
             print(

@@ -29,6 +29,7 @@ import requests
 from source_quality import assess_source_credibility
 from llm_clients import call_anthropic_text, call_json_model_chain, call_openai_text
 from foresight_guardrails import build_foresight_guardrails, annotate_foresight_signal, annotate_foresight_link, validate_foresight_text, sanitize_foresight_text, sanitize_future_insight, sanitize_foresight_record, sanitize_foresight_collection, sanitize_report_foresight_fields
+from evidence_contracts import mark_company_foresight_interpretation
 
 
 def _get_url_domain(url: str) -> str:
@@ -2550,7 +2551,9 @@ def extract_foresight_links(foresight_data, company_name="", domain=""):
                 "not_evidence_of_deployment": True,
                 "is_priority_dimension": force.get("kb_dimension", "") in core_dims,
             }
-            links.append(annotate_foresight_link(link, domain=domain, company_name=company_name))
+            links.append(mark_company_foresight_interpretation(
+                annotate_foresight_link(link, domain=domain, company_name=company_name)
+            ))
 
         # Also include verified supporting sources
         for ss in force.get("verified_supporting_sources", []):
@@ -2582,7 +2585,9 @@ def extract_foresight_links(foresight_data, company_name="", domain=""):
                     "not_evidence_of_deployment": True,
                     "is_priority_dimension": force.get("kb_dimension", "") in core_dims,
                 }
-                links.append(annotate_foresight_link(link, domain=domain, company_name=company_name))
+                links.append(mark_company_foresight_interpretation(
+                    annotate_foresight_link(link, domain=domain, company_name=company_name)
+                ))
 
     # Sort: validated first, then by credibility
     credibility_order = {"high": 0, "medium": 1, "low": 2, "unknown": 3}
