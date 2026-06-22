@@ -2160,169 +2160,36 @@ Return ONLY valid JSON, no explanation."""
         return None
 
 def _build_previous_context_block(previous_context):
-    """
-    Builds an optional prompt section from previous scan data.
-    Uses VERIFICATION-FIRST approach with MULTI-SCAN LOOKBACK (up to 3 scans).
-    The most recent summary is the primary checklist; older summaries reveal
-    persistent patterns that should carry extra weight.
-    Returns empty string if no previous context is available.
+    """Expose prior scans only as a source-discovery cache.
+
+    Scanner outputs are not longitudinal company evidence. Model, prompt, and
+    gate changes make scores and diagnoses across runs incomparable. Prior URLs
+    may be re-used, but every trust and claim-support decision must be made
+    again from current source content.
     """
     if not previous_context or not previous_context.get("last_scanned"):
         return ""
-
-    # --- MOST RECENT SCAN (full detail) ---
-    prev_findings = previous_context.get("previous_findings", [])
-    findings_summary = ""
-    if prev_findings:
-        items = []
-        for f in prev_findings[:6]:
-            sentiment = f.get("sentiment", "neutral")
-            label = f.get("query", f.get("label", "Unknown"))
-            items.append(f"  - [{sentiment.upper()}] {label}")
-        findings_summary = "\n".join(items)
-
     prev_evidence = previous_context.get("previous_evidence", [])
-    evidence_summary = ""
-    if prev_evidence:
-        items = [f"  - {e.get('title', 'Unknown')}: {e.get('snippet', '')[:80]}" for e in prev_evidence[:4]]
-        evidence_summary = "\n".join(items)
+    source_lines = []
+    for item in prev_evidence[:12]:
+        url = item.get("url", "") if isinstance(item, dict) else ""
+        if url.startswith("http"):
+            source_lines.append(f"    - {url}")
+    if not source_lines:
+        return ""
+    return """
 
-    prev_summary = previous_context.get("previous_summary", "")
-    summary_block = ""
-    if prev_summary and len(prev_summary) > 20:
-        truncated = prev_summary[:1500]
-        summary_block = f"""
-    === SCAN -1 SUMMARY (MOST RECENT — PRIMARY VERIFICATION CHECKLIST) ===
-    Date: {previous_context.get('last_scanned', 'Unknown')}
-    {truncated}
-    === END SCAN -1 SUMMARY ===
-    """
+    --- HISTORICAL SOURCE DISCOVERY CACHE ---
+    The following URLs came from an earlier run. They are candidate locations,
+    not current evidence and not proof that any earlier conclusion remains true:
+{sources}
 
-    # --- OLDER SCANS (summaries only, for persistent pattern detection) ---
-    older_summaries_block = ""
-    scan_history = previous_context.get("scan_history", [])
-    if scan_history:
-        older_parts = []
-        for idx, older_scan in enumerate(scan_history, start=2):
-            older_summary = older_scan.get("summary_text", "")
-            if older_summary and len(older_summary) > 20:
-                older_date = older_scan.get("date", "Unknown")
-                older_reality = older_scan.get("reality_score", "N/A")
-                older_intent = older_scan.get("intent_score", "N/A")
-                older_washing = older_scan.get("washing_type", "None")
-                older_parts.append(f"""
-    === SCAN -{idx} SUMMARY (OLDER — PATTERN DETECTION) ===
-    Date: {older_date} | Intent: {older_intent}/100 | Reality: {older_reality}/100 | Washing: {older_washing}
-    {older_summary[:800]}
-    === END SCAN -{idx} SUMMARY ===""")
-        if older_parts:
-            older_summaries_block = "\n".join(older_parts)
-
-    # Count how many scans we have for the instructions
-    total_scans = 1 + len(scan_history)
-
-    # --- PERSISTENCE INSTRUCTION (only when we have 2+ scans) ---
-    persistence_instruction = ""
-    if scan_history:
-        persistence_instruction = f"""
-    PERSISTENCE ANALYSIS ({total_scans} previous scans available):
-    You have summaries from {total_scans} previous scans above. Compare them:
-      - PERSISTENT THEME: A topic/issue that appears in 2+ scans → HIGH CONFIDENCE.
-        These are near-certain real patterns, not search variance. Weight them heavily.
-      - ONE-TIME FINDING: A topic that appeared in only 1 scan and was never seen again →
-        could be search variance. Still carry forward, but note lower certainty.
-      - ESCALATING PATTERN: A topic that gets worse across scans → flag as urgent concern.
-      - FADING PATTERN: A topic present in older scans but absent in the most recent →
-        may be genuinely resolving. Still verify, but less weight than persistent themes.
-
-    When a negative finding appears across ALL previous scans, it is almost certainly
-    a REAL structural issue, not a one-off. Your score MUST reflect this."""
-
-    return f"""
-
-    --- PREVIOUS SCAN CONTEXT (RESCAN MODE — {total_scans} SCAN{'S' if total_scans > 1 else ''} AVAILABLE) ---
-    Most Recent Scan: {previous_context.get('last_scanned', 'Unknown')}
-    Previous Intent Score: {previous_context.get('previous_intent', 'N/A')}/100
-    Previous Reality Score: {previous_context.get('previous_reality', 'N/A')}/100
-    Previous Confidence: {previous_context.get('previous_confidence', 'N/A')}/100
-    Previous Washing Flag: {previous_context.get('previous_washing', 'None')}
-    {summary_block}
-    {older_summaries_block}
-    Previous Key Findings (from most recent scan):
-{findings_summary if findings_summary else '    (No previous findings available)'}
-
-    Previous Evidence Sources (from most recent scan):
-{evidence_summary if evidence_summary else '    (No previous evidence available)'}
-
-    RESCAN INSTRUCTIONS (VERIFICATION-FIRST — CRITICAL):
-
-    SEARCH BUDGET ALLOCATION (YOU HAVE 10 WEB SEARCHES — USE THEM IN THIS ORDER):
-    ┌─────────────────────────────────────────────────────────────────┐
-    │ Searches 1-3:  VERIFICATION (Steps 1-3 below)                 │
-    │   → Re-verify previous evidence URLs and key claims           │
-    │   → Combine multiple verifications into single broad searches  │
-    │     e.g. `"{previous_context.get('company_name', 'company')}" site:linkedin.com OR site:kauppalehti.fi` │
-    │                                                                │
-    │ Searches 4-10: NEW JURY EVIDENCE (Step 4 below)               │
-    │   → One search per jury, combine sub-queries with OR           │
-    │   → Prioritize juries where previous evidence was weakest      │
-    └─────────────────────────────────────────────────────────────────┘
-    YOU MUST USE YOUR FIRST SEARCHES FOR VERIFICATION. Do NOT skip to juries.
-    If you run out of searches before covering all juries, that is acceptable —
-    verification of existing evidence is MORE IMPORTANT than finding new evidence.
-
-    STEP 1 - VERIFY THE MOST RECENT SUMMARY (YOUR #1 PRIORITY):
-    Read SCAN -1 SUMMARY above carefully. It contains specific claims,
-    themes, diagnoses, and terminology about this company. These are your verification targets.
-
-    For EACH specific claim in the summary (e.g. "Digital Taylorism", "legacy silos",
-    "AI Washing", "strong engineering culture", etc.):
-      a) Search for the SAME themes using the SAME words and concepts.
-      b) Try to find the SAME sources that were previously cited.
-      c) Assign a status:
-         - "CONFIRMED": You found the same or similar evidence again. The claim holds.
-         - "RESOLVED": You found SPECIFIC NEW counter-evidence that DISPROVES the claim.
-           (e.g. previous claim was "layoffs" → you found "major hiring campaign 2025")
-         - "UNVERIFIED": You could NOT find evidence for or against the claim.
-           CRITICAL: "UNVERIFIED" = CARRY FORWARD AS-IS. Do NOT flip it.
-           Not finding something again is NOT proof of improvement — it is search variance.
-
-    STEP 2 - CHECK FOR PERSISTENT PATTERNS ACROSS ALL SCANS:
-    Compare ALL available scan summaries (Scan -1 through Scan -{total_scans}).
-    Identify themes that RECUR across multiple scans — these are persistent patterns
-    that carry higher certainty than any single finding.
-    {persistence_instruction}
-
-    STEP 3 - VERIFY PREVIOUS EVIDENCE SOURCES:
-    For EACH evidence source listed above, try to access or re-find it.
-    If the same URL/source still exists and says the same thing → CONFIRMED.
-    If you cannot find it → UNVERIFIED (carry forward).
-
-    STEP 4 - SEARCH FOR NEW EVIDENCE (USE REMAINING SEARCHES):
-    ONLY AFTER completing Steps 1-3, run the normal jury searches for any
-    NEW evidence not covered by the previous analyses.
-
-    STEP 5 - SCORING (CRITICAL — READ CAREFULLY):
-
-    FUNDAMENTAL RULE: Previous findings that are NOT proven "fixed" by new counter-evidence
-    are STILL CURRENT FINDINGS. They are NOT historical — they are ACTIVE issues.
-    You MUST include them in your scoring as if you found them yourself today.
-
-    Your reality_score_adjustment must be calculated from the COMPLETE evidence set:
-      - ALL confirmed claims from previous scans → ACTIVE (full weight)
-      - ALL unverified previous claims → ACTIVE (full weight, not finding them again ≠ fixed)
-      - PERSISTENT themes (found in 2+ scans) → HIGHEST WEIGHT
-      - ALL new findings (positive or negative) → ACTIVE
-      - RESOLVED claims → ONLY removed if you found SPECIFIC NEW counter-evidence
-        that proves the issue was fixed (e.g. "layoffs" → "major hiring campaign 2025")
-
-    SCORING CONSISTENCY: If evidence has not materially changed, the score MUST NOT
-    materially change. A company cannot transform in days or weeks. If the previous
-    Reality Score was {previous_context.get('previous_reality', 'N/A')}/100 and you found
-    no significant new positive or negative evidence, your score adjustment should produce
-    a result within ±10 of that score. A larger change requires EXPLICIT new evidence.
-    --- END PREVIOUS CONTEXT ---
-    """
+    Re-fetch each selected URL. Reset inherited trust, promotion, quote, entity,
+    scope, and claim-support verdicts. Use only current readable content that
+    independently passes today's evidence gates. Never compare prior Scanner
+    scores, gaps, diagnoses, labels, confidence, or summaries.
+    --- END HISTORICAL SOURCE DISCOVERY CACHE ---
+    """.format(sources="\n".join(source_lines))
 
 
 def _build_evidence_anchors(previous_context):
@@ -2346,40 +2213,17 @@ def _build_evidence_anchors(previous_context):
         if url and url.startswith("http"):
             url_lines.append(f'    - "{title}": {url}')
 
-    # 2. Extract key finding labels/keywords from previous findings
-    prev_findings = previous_context.get("previous_findings", [])
-    keyword_set = set()
-    for f in prev_findings[:8]:
-        label = f.get("label", "")
-        if label and len(label) > 3:
-            keyword_set.add(label)
-        snippet = f.get("snippet", "")
-        if snippet and len(snippet) > 10:
-            # Extract quoted terms or significant phrases (first 60 chars)
-            keyword_set.add(snippet[:60].strip())
-
-    keyword_lines = [f'    - "{kw}"' for kw in list(keyword_set)[:8]]
-
     if url_lines:
         anchors.append(f"""    EVIDENCE ANCHORING — MANDATORY URL RE-VERIFICATION:
-    The following URLs were found in the previous scan. You MUST search for and
-    re-verify each one BEFORE running fresh jury searches. For each URL:
-    - If accessible and still relevant → include it in your findings as CONFIRMED
-    - If the content has changed → note the change
-    - If not accessible → mark as UNVERIFIED (carry forward the previous finding)
+    The following URLs were found in a previous scan. They are discovery leads
+    only. Re-fetch selected URLs and evaluate their current content from zero:
+    - reset inherited trust, promotion, quote, entity, and support metadata;
+    - include only currently readable, entity-safe, claim-supporting content;
+    - if inaccessible or unsupported, reject it for this run;
+    - never carry forward an earlier finding merely because its URL once existed.
 
     Previous evidence URLs:
 {chr(10).join(url_lines)}""")
-
-    if keyword_lines:
-        anchors.append(f"""    KEYWORD ANCHORING — SEARCH CONTINUITY:
-    The following key findings/terms were identified in the previous scan.
-    Include these as ADDITIONAL search terms alongside your standard jury queries.
-    Example: If a keyword is "legacy migration project", add a search like
-    `"{previous_context.get('company_name', 'company')}" "legacy migration"` to verify if it still holds.
-
-    Previous key findings to re-verify:
-{chr(10).join(keyword_lines)}""")
 
     company_evidence_candidates = previous_context.get("company_evidence_db_candidates", [])
     candidate_lines = []
@@ -2719,150 +2563,14 @@ def _compute_scan_diagnostics(company_name, prev_findings, prev_evidence, curr_f
 
 def run_self_analysis(company_name, previous_scan_data, current_scan_data, days_since_last):
     """
-    SELF-ANALYSIS: Triggered when scanner produces significantly different results
-    for the same company within a short timeframe.
+    Deprecated compatibility hook.
 
-    Pre-computes diagnostics from actual data, then asks GPT/Claude to interpret
-    them and select from a constrained set of actionable suggestion types.
-
-    Returns a dict with analysis results, or None if analysis fails.
+    Scanner outputs from different runs are not a longitudinal company dataset:
+    model, evidence and pipeline changes make score deltas incomparable. Previous
+    runs may seed source discovery only, so this hook intentionally produces no
+    company analysis.
     """
-    prev_reality = previous_scan_data.get("previous_reality", "N/A")
-    prev_confidence = previous_scan_data.get("previous_confidence", "N/A")
-    prev_findings_raw = previous_scan_data.get("previous_findings", [])
-    prev_evidence = previous_scan_data.get("previous_evidence", [])
-
-    curr_reality = current_scan_data.get("score", "N/A")
-    curr_confidence = current_scan_data.get("confidence_score", "N/A")
-    curr_findings = current_scan_data.get("checklist", [])
-    curr_evidence = current_scan_data.get("links", [])
-
-    # --- PRE-COMPUTE DIAGNOSTICS from actual data ---
-    diagnostics = _compute_scan_diagnostics(
-        company_name, prev_findings_raw, prev_evidence, curr_findings, curr_evidence
-    )
-
-    # Summarize previous findings
-    prev_summary = []
-    for f in prev_findings_raw[:6]:
-        prev_summary.append(f"[{f.get('sentiment', '?').upper()}] {f.get('query', f.get('label', '?'))}")
-
-    # Summarize current findings
-    curr_summary = []
-    for f in curr_findings[:8]:
-        curr_summary.append(f"[{f.get('sentiment', '?').upper()}] {f.get('query', '?')} (found={f.get('found', '?')})")
-
-    prev_evidence_summary = [f"{e.get('title', '?')}: {e.get('snippet', '')[:60]}" for e in prev_evidence[:4]]
-    curr_evidence_summary = [f"{e.get('title', '?')}: {e.get('snippet', '')[:60]}" for e in curr_evidence[:4]]
-
-    prompt = f"""SELF-ANALYSIS: SCANNER VARIANCE DETECTED
-
-Company: {company_name}
-Time between scans: {days_since_last} days
-
-PREVIOUS SCAN:
-  Reality Score: {prev_reality}/100
-  Confidence: {prev_confidence}/100
-  Findings: {json.dumps(prev_summary)}
-  Evidence sources: {json.dumps(prev_evidence_summary)}
-
-CURRENT SCAN:
-  Reality Score: {curr_reality}/100
-  Confidence: {curr_confidence}/100
-  Findings: {json.dumps(curr_summary)}
-  Evidence sources: {json.dumps(curr_evidence_summary)}
-
-Score delta: {curr_reality - prev_reality if isinstance(curr_reality, (int, float)) and isinstance(prev_reality, (int, float)) else 'N/A'}
-
-PRE-COMPUTED DIAGNOSTICS (from actual scan data — use these, do NOT invent your own metrics):
-{json.dumps(diagnostics, indent=2)}
-
-ANALYZE:
-1. CAUSE: Why did the scanner produce different results? Pick the most likely:
-   - search_variance: URL overlap is low — same queries hit different web results
-   - evidence_gap: One scan found sources the other missed
-   - prompt_sensitivity: Model interpreted context differently (same evidence, different conclusion)
-   - genuine_change: Real company change (unlikely if < 7 days)
-
-2. WHICH FINDINGS CHANGED: List specific findings that appeared or disappeared.
-
-3. RELIABILITY: Based on this variance, how reliable is the current scan? (low/medium/high)
-
-4. ACTIONABLE SUGGESTIONS: Select ONLY from the types below. Each suggestion MUST map to
-   something the scanning system can programmatically act on. Do NOT write consulting advice.
-   Do NOT suggest things that require human research or manual data gathering.
-
-   AVAILABLE TYPES (pick all that apply based on the diagnostics above):
-   - "widen_search_parent": The company appears to be a subsidiary. Include parent/group company
-     in future searches. Provide the parent company name in "detail" if identifiable.
-   - "source_diversity_low": Evidence dominated by a single domain (dominance_ratio > 0.5).
-     The system should diversify search sources.
-   - "jury_single_source": A jury relies on only 1 evidence source — flag it as low-confidence.
-     Specify which jury in "detail".
-   - "search_terms_narrow": URL overlap between scans is very low (< 0.2), meaning searches
-     are hitting different results each time. Search terms should be broadened or pinned.
-   - "recency_gap": Most evidence is older than 18 months. Freshness-targeted re-search needed.
-   - "evidence_language_bias": Evidence is skewed to one language. Add more Finnish or English terms.
-
-   RULES:
-   - Maximum 3 suggestions
-   - ONLY pick types where the diagnostics clearly support it
-   - If diagnostics look healthy, return an empty suggestions array — do not force suggestions
-
-Return STRICT JSON:
-{{
-    "primary_cause": "search_variance" or "evidence_gap" or "prompt_sensitivity" or "genuine_change",
-    "cause_explanation": "One sentence explaining what happened",
-    "changed_findings": ["List of specific findings that appeared or disappeared"],
-    "reliability": "low" or "medium" or "high",
-    "suggestions": [
-        {{"type": "suggestion_type_from_list_above", "detail": "Brief specifics (e.g. which jury, which domain, parent company name)"}}
-    ],
-    "recommended_action": "One sentence: what should the system do differently next scan?"
-}}
-"""
-
-    try:
-        start = time.time()
-        _sa_model_chain = [("gpt-5.4", 60), ("claude-sonnet-4-6", 60)]
-        for _sa_model, _sa_timeout in _sa_model_chain:
-            print(f"   [Self-Analysis] Trying {_sa_model} on stored diagnostics...")
-            try:
-                text, used_model = call_json_model_chain(prompt, (_sa_model,), max_tokens=2000, timeout=_sa_timeout)
-            except Exception as model_err:
-                elapsed = int((time.time() - start) * 1000)
-                print(f"   ❌ [Self-Analysis] {_sa_model} failed after {elapsed}ms: {model_err}")
-                continue
-
-            json_payload = extract_json_from_text(text)
-            elapsed = int((time.time() - start) * 1000)
-            if json_payload:
-                analysis = json.loads(json_payload, strict=False)
-                analysis["company"] = company_name
-                analysis["days_between_scans"] = days_since_last
-                analysis["diagnostics"] = diagnostics
-                analysis["score_delta"] = curr_reality - prev_reality if isinstance(curr_reality, (int, float)) and isinstance(prev_reality, (int, float)) else None
-                analysis["model"] = used_model
-
-                print(f"   [Self-Analysis] Cause: {analysis.get('primary_cause', 'unknown')} | Reliability: {analysis.get('reliability', '?')} ({elapsed}ms)")
-                print(f"   [Self-Analysis] {analysis.get('cause_explanation', '')}")
-
-                suggestions = analysis.get("suggestions", [])
-                if suggestions:
-                    for s in suggestions[:3]:
-                        print(f"   [Self-Analysis] Action [{s.get('type', '?')}]: {s.get('detail', '')}")
-                else:
-                    print(f"   [Self-Analysis] No actionable suggestions (diagnostics healthy).")
-
-                analysis["improvement_suggestions"] = [
-                    f"[{s.get('type', '?')}] {s.get('detail', '')}" for s in suggestions
-                ]
-                return analysis
-            print(f"   [Self-Analysis] No parseable JSON from {_sa_model} ({elapsed}ms). Trying next model...")
-        return None
-    except Exception as e:
-        print(f"   [Self-Analysis] Failed: {e}")
-        return None
+    return None
 
 
 def x_ray_search(company_name: str, company_url: str = None, model_id: str = None, intent_score: int = 0, previous_context: dict = None, max_research_loops: int = 2, subsidiaries: list = None, time_budget: int = 350, employees: int = None, batch_mode: bool = False):
@@ -2888,7 +2596,11 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     _guard_delta_verify = time_budget - 130  # skip delta verification (leave room for URL validation)
     print(f"   [Scanner 2] Time budget: {time_budget}s (guards: forensic={_guard_forensic}s, research={_guard_research}s, delta={_guard_delta_verify}s)")
 
-    is_rescan = bool(previous_context and previous_context.get("previous_reality") is not None)
+    is_rescan = bool(previous_context and (
+        previous_context.get("previous_evidence")
+        or previous_context.get("previous_scan_date")
+        or previous_context.get("last_scanned")
+    ))
     company_evidence_candidates = (previous_context or {}).get("company_evidence_db_candidates", []) if isinstance(previous_context, dict) else []
     # Parallel jury acquisition replaces the legacy confidence-driven full-search
     # loop. Coverage affects diagnostics, never whether a jury lane exists.
@@ -3217,7 +2929,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     if previous_context:
         previous_context["company_name"] = search_name
     evidence_anchors = _build_evidence_anchors(previous_context)
-    # Build constraint→role guidance for stakeholder targeting (rescan only)
+    # Historical context is limited to source discovery and revalidation. It is
+    # never used for stakeholder targeting or cross-scan company conclusions.
     if history_block:
         print(f"   [Scanner 2] RESCAN MODE: Previous data from {previous_context.get('last_scanned', 'unknown')} loaded.")
         if evidence_anchors:
@@ -3789,19 +3502,6 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         confidence = data.get("confidence_score", 50)
 
         final_score = max(0, min(100, base_score + adjustment))
-
-        # Large deltas are recorded for synthesis review. Starting another web
-        # search here would violate the bounded acquisition/analysis ceilings.
-        if previous_context and previous_context.get("previous_reality") is not None and not data.get("_seeded_forensic_fallback"):
-            prev_reality = previous_context["previous_reality"]
-            delta = final_score - prev_reality
-
-            if abs(delta) >= 25:
-                elapsed_total = time.time() - _fn_start
-                print(
-                    f"   📏 [Delta Verification] Large delta {delta} noted at {int(elapsed_total)}s. "
-                    "No late web re-scan is started; source gates and synthesis will judge the change."
-                )
 
         # Determine Washing based on AI flag OR raw gap if flag is missing
         washing_flag = data.get("washing_flag", False)

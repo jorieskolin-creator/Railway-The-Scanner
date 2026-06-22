@@ -2,7 +2,8 @@
 general_summary.py — Evidence-based business snapshot generator + payload fact-check.
 
 Assembles a 250-320 word narrative from already-computed structured scan data
-(jury findings, financial findings, delta). No inline links are included —
+(jury findings and financial findings). Citations resolve through the shared
+evidence manifest —
 the General Summary is plain prose only; all evidence links are already shown
 in the AI Diagnosis section of the UI.
 
@@ -31,7 +32,7 @@ from entity_identity import apply_entity_scope, get_company_identity
 
 def _general_summary_guardrails() -> str:
     """Shared fact-discipline guardrails for plain General Summary mode."""
-    return build_shared_guardrails(include_diagnostic=False, include_foresight=True, include_claim_tier=True)
+    return build_shared_guardrails(include_diagnostic=False, include_foresight=False, include_claim_tier=True)
 
 
 def _clean_env_var(value: str) -> str:
@@ -187,27 +188,8 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
     """Extract only the structured fields the model is allowed to reference."""
     full_data = _sanitize_general_summary_input(full_data or {}, f"{company_name}.general_summary_input")
 
-    # Delta from history
-    history = _dict_items_only(full_data.get("history") or [], "history")
-    delta = None
-    if history:
-        prev = history[-1]
-        prev_reality = prev.get("reality_score")
-        prev_financial = prev.get("financial_index")
-        prev_date = (prev.get("lastUpdated") or "")[:10]
-        parts = []
-        cur_reality = full_data.get("reality_score", 0)
-        cur_financial = full_data.get("financial_index")
-        if prev_reality is not None:
-            diff = cur_reality - prev_reality
-            direction = "improved" if diff > 0 else ("declined" if diff < 0 else "unchanged")
-            parts.append(f"Reality Score {direction} from {prev_reality} to {cur_reality}")
-        if prev_financial is not None and cur_financial is not None:
-            fdiff = cur_financial - prev_financial
-            fdirection = "improved" if fdiff > 0 else ("declined" if fdiff < 0 else "unchanged")
-            parts.append(f"Financial Health {fdirection} from {prev_financial} to {cur_financial}")
-        if parts:
-            delta = {"previous_scan_date": prev_date, "changes": parts}
+    # Previous Scanner outputs are deliberately excluded. Model and pipeline
+    # changes make scores, gaps and classifications incomparable across scans.
 
     # Legal/ToS URL patterns — these pages contain conditional/hypothetical
     # language that models consistently misread as factual past events.
@@ -277,6 +259,8 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
         snippet = snippet_raw[:max_len]
         scoped_link = apply_entity_scope(dict(l), company_name)
         verified_links.append({
+            "evidence_id": l.get("evidence_id", ""),
+            "citation": l.get("citation", ""),
             "title": title,
             "snippet": snippet,
             "is_recent": l.get("is_recent", False),
@@ -385,8 +369,6 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
     # excluded: when present as JSON fields the model treats them as "facts to
     # report" and dumps them as a score list instead of writing a narrative.
     # financial_index is kept (single number) as context for financial findings.
-    # reality_score is kept only when delta is present so the trend sentence
-    # has a concrete number to anchor to.
     # Detect quantitative disagreements between evidence items (e.g. one
     # source says "9% of HR personnel use Tool X", another says "thousands
     # of weekly users"). When present, the prompt instructs the model to
@@ -401,7 +383,6 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
             "canonical_name": get_company_identity(company_name).get("canonical_name", company_name),
             "entity_scope_policy": get_company_identity(company_name).get("entity_scope_policy", ""),
         },
-        "delta": delta,
         "key_findings": key_findings,
         "evidence_links": verified_links,
         "financial_findings": fin_findings,
@@ -412,8 +393,6 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
     }
     if contradictions:
         result["contradictions"] = contradictions
-    if delta:
-        result["reality_score"] = full_data.get("reality_score", 0)
     return result
 
 
@@ -488,8 +467,7 @@ MANDATORY RULES:
    - Use precise, neutral language. Prefer concrete descriptions over characterisations. Instead of "aggressively pivoting toward AI," write "has established a dedicated AI business unit and deployed Copilot to N users."
 
 6. OPENING SENTENCE — MANDATORY:
-   - If delta data is present: open with the most significant concrete STRATEGIC or OPERATIONAL change from the delta (e.g. "Since the previous assessment in [date], [company] has [structural event or operational change]"). If the delta shows both financial and non-financial changes, prefer the non-financial event — financial figures belong in the financial paragraph, not the opening.
-   - If no delta: open with the single most significant observed fact from key_findings or evidence_links — prioritise a strategic event, structural change, or operational signal over a financial figure.
+   - Open with the single most significant current observed fact from key_findings or evidence_links — prioritise a strategic event, structural change, or operational signal over a financial figure.
    - Never open with a revenue figure, profit margin, or financial ratio.
    - Never open with a number. Never open with a narrative characterisation — anchor on a specific, verifiable data point.
 
@@ -527,7 +505,7 @@ MANDATORY RULES:
 
 12. PARAGRAPHS: Structure the output as exactly 3-4 paragraphs, each covering a distinct dimension. Separate paragraphs using standard newline characters (\\n\\n). This is required for readability.
 
-13. FORMAT: Plain prose only. No headers, no bullet points, no markdown, no links, no citations. CRITICAL: Do NOT use HTML tags like <br> to format line breaks.
+13. FORMAT: Plain prose only. No headers, bullets, links, or HTML. Add the supplied numeric citation (for example [3]) immediately after each externally sourced factual statement. Never invent a citation number.
 
 14. ENTITY NAMING CONSISTENCY — CRITICAL:
    - Usually refer to the target company by its PRIMARY BRAND NAME ({company_name}) throughout the summary. Do not surface individual country-specific legal entity registrations (e.g., "{company_name} Oy", "{company_name} Ltd", "{company_name} Limited", "{company_name} GmbH", "{company_name} s.r.o.", "{company_name} AB", "{company_name} AS", etc.) as if they were separate, noteworthy organisations.
@@ -632,7 +610,8 @@ Your task is narrow: compare the SUMMARY against the PAYLOAD and identify factua
 
 Rules:
 - Use ONLY the PAYLOAD as source material. Do not use outside knowledge.
-- A claim is supported when it can be traced to a specific payload item, financial finding, contradiction, delta, or evidence snippet.
+- A claim is supported when it can be traced to a specific current payload item, financial finding, contradiction, or evidence snippet.
+- Never infer a company trend from previous Scanner scores, gaps, diagnoses, or classifications.
 - Do not flag wording differences or factual grouping that introduces no new conclusion.
 - General Summary is facts-only. Flag causal explanations, readiness judgments, pressure/resilience interpretations, risk/opportunity statements, recommendations, and projected consequences even when they sound plausible, unless the payload explicitly states that exact documented fact.
 - Do flag invented events, invented people, invented figures, wrong entity claims, unqualified local-entity claims, and future claims presented as facts.

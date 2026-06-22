@@ -33,6 +33,46 @@ def test_company_seed_contract_resets_trust_and_retains_old_verdict_only_as_hist
     assert candidate["verification_history"][0]["promotion_status"] == "generation_eligible"
 
 
+def test_previous_scan_context_contains_urls_but_no_scanner_conclusions():
+    context = {
+        "last_scanned": "2026-06-20T10:00:00Z",
+        "intent_score": 90,
+        "reality_score": 20,
+        "reality_gap": 70,
+        "summary_text": "Readiness declined and the gap widened.",
+        "previous_evidence": [{
+            "url": "https://example.fi/current-source",
+            "title": "Current source",
+            "promotion_status": "generation_eligible",
+        }],
+    }
+
+    block = scanner_two._build_previous_context_block(context)
+
+    assert "https://example.fi/current-source" in block
+    assert "Readiness declined" not in block
+    assert "90" not in block
+    assert "70" not in block
+    assert "Never compare prior Scanner" in block
+
+
+def test_previous_source_anchor_is_a_revalidation_lead_not_inherited_truth():
+    anchors = scanner_two._build_evidence_anchors({
+        "previous_evidence": [{
+            "url": "https://example.fi/current-source",
+            "title": "Current source",
+            "source_quote": "Old quote must not be trusted.",
+            "promotion_status": "generation_eligible",
+            "entity_match_status": "exact",
+        }],
+    })
+
+    assert "https://example.fi/current-source" in anchors
+    assert "Old quote must not be trusted" not in anchors
+    assert "reset inherited trust, promotion, quote, entity, and support metadata" in anchors
+    assert "never carry forward an earlier finding" in anchors
+
+
 def test_jury_handoff_uses_current_packet_verdict_and_reports_seed_lifecycle():
     jury = "AI & DATA JURY (Future Readiness)"
     url = "https://example.fi/news/platform"

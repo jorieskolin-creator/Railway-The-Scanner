@@ -669,8 +669,38 @@ def _fact_check_source_content(link):
     ).strip()
 
 
-def _build_fact_check_source_pack(evidence_links=None, foresight_links=None):
+def _build_fact_check_source_pack(evidence_links=None, foresight_links=None, evidence_manifest=None):
     """Build separately governed company and macro-context source packets."""
+    if evidence_manifest:
+        packets = []
+        for record in evidence_manifest:
+            if not isinstance(record, dict) or not record.get("evidence_id"):
+                continue
+            content = _fact_check_source_content(record)
+            if not content:
+                content = record.get("exact_passage") or ""
+            packets.append({
+                "evidence_id": record["evidence_id"],
+                "report_ref": record.get("report_ref"),
+                "evidence_kind": record.get("evidence_kind") or "company_evidence",
+                "title": (record.get("title") or record.get("source_title") or "Unknown")[:120],
+                "url": record.get("url") or record.get("canonical_url") or "",
+                "semantic_hint": (record.get("semantic_hint") or record.get("semantic_snippet") or "")[:500],
+                "snippet": content[:2400],
+                "tier": str(record.get("source_tier") or record.get("claim_tier") or "unknown").upper(),
+                "label": describe_source(record) if describe_source else "Source",
+                "claim_type": record.get("claim_type") or "company_fact",
+                "theme": record.get("theme") or record.get("dimension") or "",
+                "company_specific": record.get("company_specific", True),
+                "verification_state": {
+                    "url_verified": record.get("url_verified", record.get("verified")),
+                    "content_verified": record.get("content_verified", record.get("source_readable")),
+                    "entity_match_status": record.get("entity_match_status"),
+                    "claim_support_status": record.get("claim_support_status"),
+                    "foresight_context_eligible": record.get("foresight_context_eligible"),
+                },
+            })
+        return packets
     packets = []
     seen_urls = set()
 
@@ -731,16 +761,17 @@ def _build_fact_check_source_pack(evidence_links=None, foresight_links=None):
     return packets
 
 
-def _provider_fact_check(summary_text, company_name, evidence_links=None, foresight_links=None, pitch_text=None, scan_payload=None, analysis_sections=None, document_label="AI Diagnosis"):
+def _provider_fact_check(summary_text, company_name, evidence_links=None, foresight_links=None, pitch_text=None, scan_payload=None, analysis_sections=None, document_label="AI Diagnosis", evidence_manifest=None, claim_graph=None):
     """Two-stage GPT/Claude fact-check pipeline."""
-    verified_links = _build_fact_check_source_pack(evidence_links, foresight_links)
+    verified_links = _build_fact_check_source_pack(evidence_links, foresight_links, evidence_manifest=evidence_manifest)
     company_ref = ""
     foresight_ref = ""
     for i, link in enumerate(verified_links, 1):
         row = (
-            f"[{i}] [id={link['evidence_id']}] [tier={link['tier']}] [{link['label']}] "
+            f"[{link.get('report_ref') or i}] [id={link['evidence_id']}] [tier={link['tier']}] [{link['label']}] "
             f"{link['title']} | URL: {link['url']} | Claim type: {link['claim_type']} | "
             f"Theme: {link['theme']} | Semantic hint (routing only): {link['semantic_hint']} | "
+            f"Verification: {json.dumps(link.get('verification_state') or {}, ensure_ascii=False)} | "
             f"Current source content: {link['snippet']}\n"
         )
         if link["evidence_kind"] == "foresight_context":
@@ -779,6 +810,12 @@ SCAN PAYLOAD FOR INTERNAL SCANNER OBSERVATIONS AND STRUCTURED FINANCIAL FACTS:
 ADDITIONAL GENERATED SECTIONS TO VERIFY INDEPENDENTLY:
 {json.dumps(analysis_sections, ensure_ascii=False, indent=2)}
 """
+    claim_graph_section = ""
+    if claim_graph:
+        claim_graph_section = f"""
+CANONICAL CLAIM GRAPH (claims cite stable evidence IDs):
+{json.dumps(claim_graph, ensure_ascii=False, indent=2)[:18000]}
+"""
 
     stage1_prompt = f"""You are an uncompromising Data Auditor. Evaluate the faithfulness and factual accuracy of this {document_label} section by section.
 
@@ -786,7 +823,7 @@ COMPANY: {company_name}
 
 AI-GENERATED SUMMARY TO VERIFY:
 {summary_text}
-{pitch_section}{sections_section}{evidence_section}{scan_payload_section}
+{pitch_section}{sections_section}{evidence_section}{claim_graph_section}{scan_payload_section}
 INSTRUCTIONS:
 1. Extract definitive claims from the summary and pitch.
 2. Classify each claim before judging it:
@@ -797,7 +834,7 @@ INSTRUCTIONS:
    - STRATEGIC INFERENCE: a new analytical conclusion connecting one or more supported company premises to supported macro context, expressed as a pressure, exposure, implication, opportunity, risk, or question.
 3. For EXTERNAL COMPANY FACTS, cross-reference strictly against stored evidence. Use only verified, generation-eligible evidence as authoritative. Do not accept display-only, unsupported, wrong-entity, or weak evidence.
 4. For STRUCTURED FINANCIAL PAYLOAD FACTS, verify against financial_payload in the SCAN PAYLOAD above. These facts may be valid Scanner financial-module facts even when they are not repeated in STORED EVIDENCE SOURCES. Flag them only if the value/detail is absent from or contradicts financial_payload.
-5. For INTERNAL SCANNER OBSERVATIONS, verify against the SCAN PAYLOAD above, not external web sources. Do not flag an internal observation merely because no public webpage says it. Flag it only if it contradicts the scan payload or invents a Scanner result that is not present.
+5. INTERNAL SCANNER OBSERVATIONS and comparisons between previous scans are prohibited in company-facing analysis. Identify them as Prohibited Scanner Observation so correction removes them; never use them as company evidence.
 6. If stored evidence is insufficient for an external company fact, use cautious external verification through your own provider tools/knowledge, but do not invent corrections.
 7. A company website is self-reported. It cannot by itself refute analytical observations about internal operating reality unless it contains concrete, specific operational metrics.
 8. Validate MACRO FORESIGHT CONTEXT against VERIFIED MACRO FORESIGHT CONTEXT SOURCES. The source does not need to mention the company. Never reject macro context merely because it is absent from the company scan payload.
@@ -805,11 +842,12 @@ INSTRUCTIONS:
 10. For a STRATEGIC INFERENCE, classify support as exact when all premises are directly supported, partial when the inference is reasonable but one non-essential premise is context-only, context_only when it is suitable only as a cautious scenario/question, and unsupported only when a required premise is absent or contradicted.
 11. Semantic hints and historical snippets are discovery aids only. Judge support from CURRENT SOURCE CONTENT. Exact quotation mismatch is not by itself a failure when the current passage supports the same claim; classify support as exact, partial, context_only, or unsupported.
 12. Financial evidence may support only financial condition, capacity and investment claims. It cannot substitute for missing operational, architectural, strategic, AI/data, service-delivery or cultural evidence.
-13. Use "Internal Scan Mismatch" only for scanner-process statements that contradict the scan payload. Use Fabrication/Contradiction/Misattribution/Organizational Fabrication for external company facts. For macro context or strategic inference, identify the missing or contradicted premise rather than saying only that the conclusion is absent from the payload.
+13. Use "Prohibited Scanner Observation" for scanner-process or cross-scan performance statements. Use Fabrication/Contradiction/Misattribution/Organizational Fabrication for external company facts. For macro context or strategic inference, identify the missing or contradicted premise rather than saying only that the conclusion is absent from the payload.
+14. The evidence manifest above is the exact bibliography supplied to generation. If a claim cites an evidence ID that is absent from this checker payload, classify it as Evidence Handoff Failure, not Fabrication. A handoff failure is an infrastructure defect and must not purge the source or automatically delete otherwise plausible analysis.
 
 OUTPUT FORMAT — valid JSON only:
 If accurate: {{"false_claims": [], "summary_accurate": true}}
-If false claims found: {{"false_claims": [{{"section": "section heading", "claim": "Exact quote or close paraphrase", "claim_class": "external_company_fact OR internal_scanner_observation OR structured_financial_payload_fact OR macro_foresight_context OR strategic_inference", "error_type": "Fabrication OR Contradiction OR Misattribution OR Organizational Fabrication OR Internal Scan Mismatch", "support_level": "exact OR partial OR context_only OR unsupported", "missing_or_contradicted_premise": "Specific premise or empty string", "reasoning": "Brief reason", "correction": "Verified replacement or empty string", "wrong_value": "", "correct_value": "", "source_indices": [1]}}], "summary_accurate": false}}
+If false claims found: {{"false_claims": [{{"section": "section heading", "claim": "Exact quote or close paraphrase", "claim_class": "external_company_fact OR internal_scanner_observation OR structured_financial_payload_fact OR macro_foresight_context OR strategic_inference", "error_type": "Fabrication OR Contradiction OR Misattribution OR Organizational Fabrication OR Prohibited Scanner Observation OR Evidence Handoff Failure", "support_level": "exact OR partial OR context_only OR unsupported", "missing_or_contradicted_premise": "Specific premise or empty string", "reasoning": "Brief reason", "correction": "Verified replacement or empty string", "wrong_value": "", "correct_value": "", "source_indices": [1], "source_ids": ["EVD-...", "FOR-..."]}}], "summary_accurate": false}}
 """
 
     stage1_false_claims = None
@@ -849,7 +887,18 @@ If false claims found: {{"false_claims": [{{"section": "section heading", "claim
                 ):
                     continue
                 indices = fc.get("source_indices") or []
+                source_ids = fc.get("source_ids") or []
                 source_urls = []
+                by_id = {link.get("evidence_id"): link for link in verified_links}
+                missing_source_ids = [sid for sid in source_ids if sid not in by_id]
+                if missing_source_ids:
+                    fc["error_type"] = "Evidence Handoff Failure"
+                    fc["missing_or_contradicted_premise"] = ", ".join(missing_source_ids)
+                    missing_premise = fc["missing_or_contradicted_premise"]
+                for source_id in source_ids:
+                    url = (by_id.get(source_id) or {}).get("url", "")
+                    if url:
+                        source_urls.append(url)
                 for idx in indices:
                     if isinstance(idx, int) and 1 <= idx <= len(verified_links):
                         url = verified_links[idx - 1].get("url", "")
@@ -867,6 +916,7 @@ If false claims found: {{"false_claims": [{{"section": "section heading", "claim
                     "wrong_value": fc.get("wrong_value") or "",
                     "correct_value": fc.get("correct_value") or "",
                     "source_indices": indices,
+                    "source_ids": source_ids,
                     "source_urls": source_urls,
                 })
         return parsed
@@ -911,9 +961,25 @@ If false claims found: {{"false_claims": [{{"section": "section heading", "claim
     if not stage1_false_claims:
         return {"false_claims": [], "corrected_summary": "", "corrected_pitch": "", "model": stage1_model_name, "time_ms": stage1_time_ms}
 
+    handoff_failures = [
+        fc for fc in stage1_false_claims
+        if str(fc.get("error_type") or "").strip().lower() == "evidence handoff failure"
+    ]
+    correctable_claims = [fc for fc in stage1_false_claims if fc not in handoff_failures]
+    if not correctable_claims:
+        return {
+            "false_claims": handoff_failures,
+            "corrected_summary": "",
+            "corrected_pitch": "",
+            "corrected_sections": {},
+            "model": stage1_model_name,
+            "time_ms": stage1_time_ms,
+            "evidence_handoff_failure": True,
+        }
+
     claims_text = "\n".join(
         f"- [{fc.get('error_type', 'Unknown')}] {fc.get('claim', '')} (reason: {fc.get('reasoning', '')})\n  → VERIFIED CORRECTION: {fc.get('correction', '')}"
-        for fc in stage1_false_claims
+        for fc in correctable_claims
     )
     pitch_correction_note = f"""
 ORIGINAL PITCH TO ALSO CORRECT (fix only if it references a false claim):
@@ -937,7 +1003,8 @@ Rules:
 - Apply provided verified corrections exactly.
 - Delete fabricated sentences when no verified correction exists.
 - Do not add new claims.
-- Return valid JSON only: {{"corrected_summary": "...", "corrected_pitch": "...", "corrected_sections": {{"section_key": []}}}}
+- Preserve each additional section's JSON type: strings remain strings and lists remain lists.
+- Return valid JSON only: {{"corrected_summary": "...", "corrected_pitch": "...", "corrected_sections": {{"section_key": "... or original JSON type"}}}}
 """
 
     corrected_summary = ""
@@ -976,7 +1043,7 @@ Rules:
             print(f"   ❌ [Fact-Check S2] {model_name} failed: {e}")
 
     return {
-        "false_claims": stage1_false_claims,
+        "false_claims": correctable_claims + handoff_failures,
         "corrected_summary": corrected_summary,
         "corrected_pitch": corrected_pitch,
         "corrected_sections": corrected_sections,
@@ -984,7 +1051,7 @@ Rules:
         "time_ms": stage1_time_ms + elapsed2,
     }
 
-def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text=None, scan_payload=None, analysis_sections=None, document_label="AI Diagnosis", foresight_links=None):
+def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text=None, scan_payload=None, analysis_sections=None, document_label="AI Diagnosis", foresight_links=None, evidence_manifest=None, claim_graph=None):
     """
     AI-powered fact-check — two-stage pipeline:
       Stage 1: GPT-5.4 → Claude Sonnet 4.6 — detects false claims.
@@ -1032,10 +1099,13 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
         scan_payload=scan_payload,
         analysis_sections=analysis_sections,
         document_label=document_label,
+        evidence_manifest=evidence_manifest,
+        claim_graph=claim_graph,
     )
 
     all_claims = []
     all_claims_detailed = []
+    handoff_failures = []
 
     # Build company domain pattern for self-referential detection
     _company_name_lower = (company_name or "").strip().lower()
@@ -1053,12 +1123,20 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
             support_level = (fc.get("support_level") or "unsupported") if isinstance(fc, dict) else "unsupported"
             missing_premise = (fc.get("missing_or_contradicted_premise") or "") if isinstance(fc, dict) else ""
 
-            # Skip internal scan history false positives — score trajectories and
-            # scan count references are based on internal DB records and will never
-            # appear in external web sources, so source_indices is always empty for them.
-            if not source_indices and _SCAN_HISTORY_RE.search(claim_text):
-                print(f"      [Fact-Check] Skipping internal scan history claim (not externally verifiable): {claim_text[:70]}...")
+            if error_type == "Evidence Handoff Failure":
+                handoff_failures.append({
+                    "claim": claim_text,
+                    "missing_evidence_ids": missing_premise,
+                    "reasoning": reasoning,
+                })
+                print(f"      [Fact-Check] Evidence handoff failure; preserving analysis for re-audit: {claim_text[:80]}...")
                 continue
+
+            # Cross-scan Scanner outputs are not company trends. Keep these in
+            # the correction set so they are removed from company-facing prose.
+            if _SCAN_HISTORY_RE.search(claim_text):
+                error_type = "Prohibited Scanner Observation"
+                claim_class = "internal_scanner_observation"
 
             if not source_indices and _is_supported_structured_financial_payload_claim(claim_text, scan_payload):
                 print(f"      [Fact-Check] Skipping structured financial payload claim: {claim_text[:70]}...")
@@ -1169,6 +1247,7 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
                 "correct_value": correct_value,
                 "source_urls": source_urls,
                 "source_indices": source_indices,
+                "source_ids": (fc.get("source_ids") or []) if isinstance(fc, dict) else [],
             })
             src_info = f" (sources: {source_urls})" if source_urls else " (no specific source identified)"
             error_info = f" [{error_type}]" if error_type != "Unknown" else ""
@@ -1182,14 +1261,24 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
     corrected_pitch = result.get("corrected_pitch") or ""
     corrected_sections = result.get("corrected_sections") or {}
     fact_check_skipped = result.get("fact_check_skipped", False)
+    if fact_check_skipped:
+        verification_status = "unavailable"
+    elif handoff_failures:
+        verification_status = "failed_handoff"
+    elif all_claims:
+        verification_status = "failed"
+    else:
+        verification_status = "verified"
 
     return {
         # verified=False when skipped: an unverified summary must not be treated
         # as clean. It stays unmodified but is flagged so callers can handle it.
-        "verified": not fact_check_skipped and len(all_claims) == 0,
+        "verified": verification_status == "verified",
+        "verification_status": verification_status,
         "fact_check_skipped": fact_check_skipped,
         "false_claims": all_claims[:10],
         "false_claims_detailed": all_claims_detailed[:10],
+        "evidence_handoff_failures": handoff_failures[:10],
         "corrected_summary": corrected_summary,
         "corrected_pitch": corrected_pitch,
         "corrected_sections": corrected_sections,
@@ -1434,7 +1523,8 @@ def purge_false_evidence(data, unsupported_claims, detailed_claims=None):
     if not unsupported_claims and not detailed_claims:
         return {"evidence_removed": 0, "checklist_removed": 0, "purged_items": [], "skipped_claims": 0}
 
-    # Collect all source URLs that the AI explicitly attributed to false claims
+    # Collect only URLs whose source itself genuinely failed. A valid source is
+    # never purged merely because an inference built from it overreached.
     urls_to_purge = set()
     skipped_claims = 0
     claims_with_sources = 0
@@ -1443,6 +1533,30 @@ def purge_false_evidence(data, unsupported_claims, detailed_claims=None):
         for dc in detailed_claims:
             source_urls = dc.get("source_urls", [])
             claim_text = dc.get("claim", "")
+            error_type = str(dc.get("error_type") or "").strip().lower()
+            claim_class = str(dc.get("claim_class") or "").strip().lower()
+            reasoning = str(dc.get("reasoning") or "").lower()
+            source_failure = (
+                error_type in {"misattribution", "organizational fabrication"}
+                or any(marker in reasoning for marker in (
+                    "dead url", "source is dead", "soft-404", "soft 404",
+                    "wrong entity", "materially misrepresent", "unreadable source",
+                ))
+            )
+            protected_reasoning = (
+                error_type in {"evidence handoff failure", "prohibited scanner observation"}
+                or claim_class in {
+                    "strategic_inference", "macro_foresight_context",
+                    "structured_financial_payload_fact", "internal_scanner_observation",
+                }
+            )
+            if protected_reasoning or not source_failure:
+                skipped_claims += 1
+                print(
+                    f"   ⏭️ [Purge] Keeping source; claim correction is not a source failure: "
+                    f"'{claim_text[:80]}'"
+                )
+                continue
             if source_urls:
                 claims_with_sources += 1
                 for url in source_urls:

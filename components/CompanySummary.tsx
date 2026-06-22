@@ -4,7 +4,7 @@ const { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash, Refr
 const React = (window as any).React;
 const { useRef, useState, useEffect } = React;
 
-const HighlightText = ({ text }) => {
+const HighlightText = ({ text }: { text: any; key?: any }) => {
   if (!text) return null;
   
   const negativeTerms = [
@@ -55,6 +55,38 @@ const HighlightText = ({ text }) => {
         }
 
         return part;
+      })}
+    </>
+  );
+};
+
+const EvidenceCitedText = ({ text, evidenceManifest = [] }) => {
+  if (!text) return null;
+  const evidenceById = (Array.isArray(evidenceManifest) ? evidenceManifest : []).reduce((acc, item) => {
+    if (item?.evidence_id) acc[item.evidence_id] = item;
+    return acc;
+  }, {});
+  const parts = String(text).split(/(\[(?:EVD|FOR)-[A-F0-9]{12}\])/g);
+  return (
+    <>
+      {parts.map((part, index) => {
+        const match = part.match(/^\[((?:EVD|FOR)-[A-F0-9]{12})\]$/);
+        if (!match) return <HighlightText key={index} text={part} />;
+        const item = evidenceById[match[1]];
+        if (!item) return <span key={index} className="text-slate-500">{part}</span>;
+        return (
+          <sup key={index} className="mx-0.5">
+            <a
+              href={item.url || item.source_url || '#'}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-cyan-300 hover:text-cyan-100 font-bold"
+              title={`${item.title || item.evidence_id}: ${item.exact_passage || item.source_quote || ''}`}
+            >
+              [{item.report_ref || '?'}]
+            </a>
+          </sup>
+        );
       })}
     </>
   );
@@ -461,8 +493,19 @@ const isForesightContext = (link) => {
                 .replace(/>/g, '&gt;')
                 .replace(/"/g, '&quot;');
         };
+        var evidenceManifest = Array.isArray(exportData.evidence_manifest) ? exportData.evidence_manifest : [];
+        var evidenceById = evidenceManifest.reduce(function(acc, item) {
+            if (item && item.evidence_id) acc[item.evidence_id] = item;
+            return acc;
+        }, {});
         var renderInlineMarkdown = function(value) {
-            return escapeHTML(value).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+            return escapeHTML(value)
+                .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+                .replace(/\[(EVD|FOR)-([A-F0-9]{12})\]/g, function(_, prefix, suffix) {
+                    var id = prefix + '-' + suffix;
+                    var item = evidenceById[id];
+                    return item ? '<a class="citation" href="#evidence-' + id + '">[' + escapeHTML(item.report_ref || '?') + ']</a>' : '[' + id + ']';
+                });
         };
         var hasText = function(value) {
             return typeof value === 'string' && value.trim().length > 0;
@@ -494,7 +537,7 @@ const isForesightContext = (link) => {
                 return '<li>' + renderInlineMarkdown(typeof item === 'string' ? item : JSON.stringify(item)) + '</li>';
             }).join('') + '</ul>';
         };
-        var renderSection = function(title, eyebrow, bodyHTML, modifier) {
+        var renderSection = function(title, eyebrow, bodyHTML, modifier?) {
             if (!bodyHTML) return '';
             var label = eyebrow ? '<div class="eyebrow">' + escapeHTML(eyebrow) + '</div>' : '';
             return '<section class="section ' + (modifier || '') + '">' + label + '<h2>' + escapeHTML(title) + '</h2>' + bodyHTML + '</section>';
@@ -514,9 +557,9 @@ const isForesightContext = (link) => {
             if (typeof item !== 'object') return String(item);
             return item.preferred_wording || item.warning || item.message || item.claim || item.topic || JSON.stringify(item);
         };
-        var normalizeList = function() {
+        var normalizeList = function(...values) {
             var out = [];
-            Array.prototype.slice.call(arguments).forEach(function(value) {
+            values.forEach(function(value) {
                 if (!value) return;
                 (Array.isArray(value) ? value : [value]).forEach(function(item) {
                     var text = stringifyItem(item).trim();
@@ -534,7 +577,7 @@ const isForesightContext = (link) => {
         };
         var companyEvidencePool = [].concat(Array.isArray(exportData.evidence_links) ? exportData.evidence_links : []);
         var foresightEvidencePool = [].concat(Array.isArray(exportData.foresight_links) ? exportData.foresight_links : []);
-        var evidencePool = companyEvidencePool.concat(foresightEvidencePool);
+        var evidencePool = evidenceManifest.length ? evidenceManifest : companyEvidencePool.concat(foresightEvidencePool);
         var foresightContextEligible = foresightEvidencePool.filter(function(link) {
             return link && (link.foresight_context_eligible === true || link.claim_type === 'foresight_context');
         }).length;
@@ -704,15 +747,16 @@ const isForesightContext = (link) => {
             + (wrongEntityWarnings.length ? '<div class="callout"><h3>Wrong-Entity Warnings</h3>' + renderList(wrongEntityWarnings) + '</div>' : '<p class="muted">No wrong-entity evidence detected.</p>')
             + (hallucinationWarnings.length ? '<div class="callout"><h3>Hallucination / Unsupported-Claim Flags</h3>' + renderList(hallucinationWarnings) + '</div>' : '<p class="muted">No hallucination or unsupported-claim flags detected.</p>')
             + (qualityNotes.length ? '<div class="callout cyan"><h3>Quality Notes</h3>' + renderList(qualityNotes) + '</div>' : '<p class="muted">No format or style notes detected.</p>');
-        var sourceTable = evidencePool.length ? '<div class="table-wrap source-register-wrap"><table class="source-register"><colgroup><col class="source-col"><col class="type-col"><col class="cred-col"><col class="url-col"><col class="promotion-col"><col class="entity-col"><col class="support-col"><col class="model-col"><col class="reason-col"></colgroup><thead><tr><th>Source</th><th>Type</th><th>Cred</th><th>URL</th><th>Promotion</th><th>Entity</th><th>Support</th><th>Model</th><th>Quote / Reason</th></tr></thead><tbody>'
+        var sourceTable = evidencePool.length ? '<div class="table-wrap source-register-wrap"><table class="source-register"><thead><tr><th>Ref</th><th>Stable ID</th><th>Source</th><th>Type</th><th>URL</th><th>Verification</th><th>Entity / Scope</th><th>Support</th><th>Exact Passage</th><th>Claim IDs</th></tr></thead><tbody>'
             + evidencePool.map(function(link) {
                 var url = link.url || link.source_url || '';
                 var sourceName = link.title || link.source || link.source_title || link.fp_theme || 'Evidence source';
-                var quote = link.source_quote || link.source_says || link.snippet || link.description || link.summary || '';
+                var quote = link.exact_passage || link.source_quote || link.source_says || link.snippet || link.description || link.summary || '';
                 var analysis = isAnalysisSafe(link) ? 'Verified for analysis' : (isVerificationConflict(link) ? 'Blocked: verification conflict' : (link.promotion_status || link.verification_reason || link.entity_match_reason || 'Display only'));
                 var entity = link.entity_verified === true ? 'verified' : (link.content_entity_match_status || link.entity_match_status || 'unknown');
-                var reason = [quote, link.content_verification_reason, link.content_entity_match_reason].filter(Boolean).join(' — ');
-                return '<tr><td>' + escapeHTML(sourceName) + '</td><td>' + escapeHTML(link.source_type || link.origin || '') + '</td><td>' + escapeHTML(link.source_credibility || link.credibility || 'unknown') + '</td><td>' + (url ? '<a href="' + escapeHTML(url) + '">' + escapeHTML(url) + '</a>' : '') + '</td><td>' + escapeHTML(analysis) + '</td><td>' + escapeHTML(entity) + '</td><td>' + escapeHTML(link.claim_support_status || '') + '</td><td>' + escapeHTML(link.verification_model || '') + '</td><td>' + escapeHTML(String(reason).slice(0, 520)) + '</td></tr>';
+                var verification = link.url_verified === false || link.verified === false ? 'failed' : (link.content_verified === true || link.source_readable === true ? 'content verified' : analysis);
+                var claims = Array.isArray(link.associated_claim_ids) ? link.associated_claim_ids.join(', ') : '';
+                return '<tr id="evidence-' + escapeHTML(link.evidence_id || '') + '"><td>' + escapeHTML(link.report_ref || '') + '</td><td>' + escapeHTML(link.evidence_id || '') + '</td><td>' + escapeHTML(sourceName) + '</td><td>' + escapeHTML(link.evidence_kind || link.source_type || link.origin || '') + '</td><td>' + (url ? '<a href="' + escapeHTML(url) + '">' + escapeHTML(url) + '</a>' : '') + '</td><td>' + escapeHTML(verification) + '</td><td>' + escapeHTML(entity) + '</td><td>' + escapeHTML(link.claim_support_status || (link.foresight_context_eligible === true ? 'macro context' : '')) + '</td><td>' + escapeHTML(String(quote).slice(0, 700)) + '</td><td>' + escapeHTML(claims) + '</td></tr>';
             }).join('') + '</tbody></table></div>' : '<p class="muted">No evidence links were available in this export.</p>';
         function checklistMarkerState(item) {
             var source = String(item.source_type || item.source || '').toLowerCase();
@@ -861,11 +905,12 @@ const isForesightContext = (link) => {
             + '<title>' + escapeHTML(companyName) + ' - Master Data Report</title>\n'
             + '<style>\n'
             + ':root{color-scheme:dark;--bg:#0f172a;--panel:#172033;--panel2:#111827;--line:#334155;--text:#e5e7eb;--muted:#94a3b8;--cyan:#67e8f9;--green:#6ee7b7;--amber:#fbbf24;--rose:#fda4af;--violet:#c4b5fd;}\n'
-            + '*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Arial,sans-serif;line-height:1.55}main{width:min(1560px,calc(100% - 32px));margin:0 auto;padding:40px 28px 56px}.hero{border:1px solid var(--line);background:linear-gradient(135deg,#172033,#0f172a);border-radius:8px;padding:30px;margin-bottom:20px}.kicker{color:var(--cyan);font-size:11px;font-weight:800;letter-spacing:.16em;text-transform:uppercase}.hero h1{margin:8px 0 10px;font-size:34px;line-height:1.1}.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.meta span,.chips span{border:1px solid rgba(148,163,184,.28);background:rgba(15,23,42,.62);border-radius:999px;padding:5px 9px;color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:14px 0}.metric{border:1px solid rgba(148,163,184,.22);background:rgba(15,23,42,.72);border-radius:8px;padding:14px}.metric span{display:block;color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em}.metric strong{display:block;margin-top:4px;font-size:23px;color:white}.metric em{display:block;margin-top:3px;color:var(--muted);font-size:11px;font-style:normal}.section{border:1px solid rgba(148,163,184,.22);background:rgba(17,24,39,.78);border-radius:8px;padding:24px;margin-top:16px}.section.nested{background:rgba(15,23,42,.38);padding:18px}.section h2{margin:0 0 14px;color:white;font-size:20px}.section h3{margin:20px 0 8px;color:var(--cyan);font-size:14px;text-transform:uppercase;letter-spacing:.08em}.section h4{margin:16px 0 6px;color:white;font-size:14px}.section p{margin:0 0 13px;color:#dbe4f0}.eyebrow{margin-bottom:6px;color:var(--muted);font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}.two-col{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px}.two-col h3{color:var(--amber)}ul{margin:0;padding-left:20px}li{margin:8px 0}.callout{margin-top:18px;border-left:3px solid var(--rose);background:rgba(244,63,94,.08);padding:14px 16px}.callout.amber{border-left-color:var(--amber);background:rgba(251,191,36,.08)}.callout.cyan{border-left-color:var(--cyan);background:rgba(34,211,238,.08)}.stakeholders{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.stakeholders article{border:1px solid rgba(148,163,184,.18);background:rgba(15,23,42,.55);border-radius:8px;padding:15px}.stakeholders h3{margin:0;color:white;text-transform:none;letter-spacing:0;font-size:15px}.role{color:var(--green);font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin:4px 0 8px}.stakeholders small{display:block;margin-top:10px;color:var(--muted);font-size:11px}.table-wrap{overflow-x:auto;margin-top:10px;margin-bottom:18px;border:1px solid rgba(148,163,184,.18);border-radius:8px}table{width:100%;border-collapse:collapse;font-size:11px;min-width:820px}th,td{padding:8px 10px;text-align:left;border-bottom:1px solid rgba(148,163,184,.14);vertical-align:top}th{color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.08em;background:rgba(15,23,42,.68)}td{color:#dbe4f0}a{color:var(--cyan);overflow-wrap:anywhere;word-break:normal}.source-register-wrap{max-width:100%}.source-register{min-width:1420px;table-layout:fixed}.source-register .source-col{width:20%}.source-register .type-col{width:9%}.source-register .cred-col{width:6%}.source-register .url-col{width:19%}.source-register .promotion-col{width:9%}.source-register .entity-col{width:7%}.source-register .support-col{width:8%}.source-register .model-col{width:7%}.source-register .reason-col{width:15%}.source-register td:nth-child(1),.source-register td:nth-child(9){overflow-wrap:anywhere}.source-register td:nth-child(4) a{display:block;min-width:0;overflow-wrap:anywhere;word-break:break-word;line-height:1.45}@media(max-width:760px){main{width:100%;padding:20px 12px 36px}.section{padding:16px}.source-register{min-width:1260px}.source-register .source-col{width:18%}.source-register .url-col{width:20%}.source-register .reason-col{width:17%}}.muted{color:var(--muted)!important}strong{color:white}hr{border:0;border-top:1px solid var(--line);margin:20px 0}details{border:1px solid rgba(148,163,184,.22);border-radius:8px;background:rgba(15,23,42,.72);padding:14px}summary{cursor:pointer;color:var(--cyan);font-weight:800}pre{white-space:pre-wrap;word-break:break-word;color:#cbd5e1;font-size:11px;line-height:1.45;max-height:720px;overflow:auto}.footer{margin-top:28px;color:#64748b;font-size:11px;text-align:center}.page-note{color:var(--muted);max-width:850px;margin:0}.scanner-link{display:inline-block;border:1px solid rgba(103,232,249,.38);background:rgba(8,145,178,.18);color:var(--cyan);border-radius:8px;padding:10px 14px;font-weight:800;text-decoration:none}\n'
+            + '*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Arial,sans-serif;line-height:1.55}main{width:min(1560px,calc(100% - 32px));margin:0 auto;padding:40px 28px 56px}.hero{border:1px solid var(--line);background:linear-gradient(135deg,#172033,#0f172a);border-radius:8px;padding:30px;margin-bottom:20px}.kicker{color:var(--cyan);font-size:11px;font-weight:800;letter-spacing:.16em;text-transform:uppercase}.hero h1{margin:8px 0 10px;font-size:34px;line-height:1.1}.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.meta span,.chips span{border:1px solid rgba(148,163,184,.28);background:rgba(15,23,42,.62);border-radius:999px;padding:5px 9px;color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:14px 0}.metric{border:1px solid rgba(148,163,184,.22);background:rgba(15,23,42,.72);border-radius:8px;padding:14px}.metric span{display:block;color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em}.metric strong{display:block;margin-top:4px;font-size:23px;color:white}.metric em{display:block;margin-top:3px;color:var(--muted);font-size:11px;font-style:normal}.section{border:1px solid rgba(148,163,184,.22);background:rgba(17,24,39,.78);border-radius:8px;padding:24px;margin-top:16px}.section.nested{background:rgba(15,23,42,.38);padding:18px}.section h2{margin:0 0 14px;color:white;font-size:20px}.section h3{margin:20px 0 8px;color:var(--cyan);font-size:14px;text-transform:uppercase;letter-spacing:.08em}.section h4{margin:16px 0 6px;color:white;font-size:14px}.section p{margin:0 0 13px;color:#dbe4f0}.eyebrow{margin-bottom:6px;color:var(--muted);font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}.two-col{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px}.two-col h3{color:var(--amber)}ul{margin:0;padding-left:20px}li{margin:8px 0}.callout{margin-top:18px;border-left:3px solid var(--rose);background:rgba(244,63,94,.08);padding:14px 16px}.callout.amber{border-left-color:var(--amber);background:rgba(251,191,36,.08)}.callout.cyan{border-left-color:var(--cyan);background:rgba(34,211,238,.08)}.stakeholders{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.stakeholders article{border:1px solid rgba(148,163,184,.18);background:rgba(15,23,42,.55);border-radius:8px;padding:15px}.stakeholders h3{margin:0;color:white;text-transform:none;letter-spacing:0;font-size:15px}.role{color:var(--green);font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin:4px 0 8px}.stakeholders small{display:block;margin-top:10px;color:var(--muted);font-size:11px}.table-wrap{overflow-x:auto;margin-top:10px;margin-bottom:18px;border:1px solid rgba(148,163,184,.18);border-radius:8px}table{width:100%;border-collapse:collapse;font-size:11px;min-width:820px}th,td{padding:8px 10px;text-align:left;border-bottom:1px solid rgba(148,163,184,.14);vertical-align:top}th{color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.08em;background:rgba(15,23,42,.68)}td{color:#dbe4f0}a{color:var(--cyan);overflow-wrap:anywhere;word-break:normal}.citation{text-decoration:none;font-weight:800}.source-register-wrap{max-width:100%}.source-register{min-width:1680px;table-layout:auto}.source-register th:nth-child(1),.source-register td:nth-child(1){width:48px}.source-register th:nth-child(2),.source-register td:nth-child(2){width:150px}.source-register th:nth-child(3),.source-register td:nth-child(3){min-width:220px}.source-register th:nth-child(5),.source-register td:nth-child(5){min-width:280px}.source-register th:nth-child(9),.source-register td:nth-child(9){min-width:340px}.source-register td{overflow-wrap:anywhere}.source-register td:nth-child(5) a{display:block;overflow-wrap:anywhere;word-break:break-word;line-height:1.45}@media(max-width:760px){main{width:100%;padding:20px 12px 36px}.section{padding:16px}.source-register{min-width:1540px}}.muted{color:var(--muted)!important}strong{color:white}hr{border:0;border-top:1px solid var(--line);margin:20px 0}details{border:1px solid rgba(148,163,184,.22);border-radius:8px;background:rgba(15,23,42,.72);padding:14px}summary{cursor:pointer;color:var(--cyan);font-weight:800}pre{white-space:pre-wrap;word-break:break-word;color:#cbd5e1;font-size:11px;line-height:1.45;max-height:720px;overflow:auto}.footer{margin-top:28px;color:#64748b;font-size:11px;text-align:center}.page-note{color:var(--muted);max-width:850px;margin:0}.scanner-link{display:inline-block;border:1px solid rgba(103,232,249,.38);background:rgba(8,145,178,.18);color:var(--cyan);border-radius:8px;padding:10px 14px;font-weight:800;text-decoration:none}\n'
             + '</style>\n</head>\n<body>\n<main>\n'
             + '<header class="hero"><div class="kicker">Master Data HTML Export</div><h1>' + escapeHTML(companyName) + '</h1><p class="page-note">Complete uploadable evidence and analysis package. This file includes collected sources, trust metadata, diagnosis, activation context, foresight analysis, detailed forensic report, and the raw JSON payload.</p><div class="meta">' + headerMeta + '</div></header>\n'
             + renderSection('General Summary', 'Executive context', renderParagraphs(exportData.general_summary))
             + renderSection('AI Diagnosis', 'Interpretation and risks', diagnosisHTML)
+            + renderSection('Strategic Synthesis', 'Current reality × external pressure', renderParagraphs(exportData.strategic_synthesis))
             + renderSection('Master Metrics', 'All score and trust signals', '<div class="metrics">' + metrics.join('') + '</div>' + breakdownHTML)
             + renderSection('Evidence Trust', 'Source verification and promotion state', trustHTML)
             + renderSection('Strategic Activation', 'WHY, WHAT, and pitch', activationHTML)
@@ -923,6 +968,7 @@ const isForesightContext = (link) => {
   };
 
   const handleDownloadExecutiveHTML = () => {
+    let executiveEvidenceById = {};
     const escapeHTML = function(value) {
         return String(value == null ? '' : value)
             .replace(/&/g, '&amp;')
@@ -932,7 +978,13 @@ const isForesightContext = (link) => {
     };
 
     const renderInlineMarkdown = function(value) {
-        return escapeHTML(value).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+        return escapeHTML(value)
+            .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+            .replace(/\[(EVD|FOR)-([A-F0-9]{12})\]/g, function(_, prefix, suffix) {
+                const id = prefix + '-' + suffix;
+                const item = executiveEvidenceById[id];
+                return item ? '<a class="citation" href="' + escapeHTML(item.url || item.source_url || '#') + '" target="_blank" rel="noopener noreferrer">[' + escapeHTML(item.report_ref || '?') + ']</a>' : '[' + id + ']';
+            });
     };
 
     const hasText = function(value) {
@@ -969,7 +1021,7 @@ const isForesightContext = (link) => {
         }).join('') + '</ul>';
     };
 
-    const renderSection = function(title, eyebrow, bodyHTML, modifier) {
+    const renderSection = function(title, eyebrow, bodyHTML, modifier?) {
         if (!bodyHTML) return '';
         const label = eyebrow ? '<div class="eyebrow">' + escapeHTML(eyebrow) + '</div>' : '';
         return '<section class="section ' + (modifier || '') + '">' + label + '<h2>' + escapeHTML(title) + '</h2>' + bodyHTML + '</section>';
@@ -996,9 +1048,14 @@ const isForesightContext = (link) => {
         const companyName = exportData.companyName || exportData.company_name || exportData.name || 'Company';
         const generatedDate = new Date().toISOString().split('T')[0];
         const gap = Number(exportData.intent_score || 0) - Number(exportData.reality_score || 0);
+        const evidenceManifest = Array.isArray(exportData.evidence_manifest) ? exportData.evidence_manifest : [];
+        executiveEvidenceById = evidenceManifest.reduce(function(acc, item) {
+            if (item && item.evidence_id) acc[item.evidence_id] = item;
+            return acc;
+        }, {});
         const companyEvidencePool = [].concat(Array.isArray(exportData.evidence_links) ? exportData.evidence_links : []);
         const foresightEvidencePool = [].concat(Array.isArray(exportData.foresight_links) ? exportData.foresight_links : []);
-        const evidencePool = companyEvidencePool.concat(foresightEvidencePool);
+        const evidencePool = evidenceManifest.length ? evidenceManifest : companyEvidencePool.concat(foresightEvidencePool);
         const foresightContextEligible = foresightEvidencePool.filter(function(link) {
             return link && (link.foresight_context_eligible === true || link.claim_type === 'foresight_context');
         }).length;
@@ -1152,6 +1209,7 @@ const isForesightContext = (link) => {
             + (isLowEvidenceMode ? '<section class="section"><div class="eyebrow">Evidence status</div><h2>' + escapeHTML(lowEvidenceLabel || 'Low promoted evidence') + '</h2><p class="muted">Promoted source-register evidence is limited. The summary remains usable, but precise external company claims require source-backed support.</p></section>' : '')
             + renderSection('General Summary', 'Executive context', renderParagraphs(exportData.general_summary))
             + renderSection('AI Diagnosis', 'Interpretation and risks', diagnosisHTML)
+            + renderSection('Strategic Synthesis', 'Current reality x external pressure', renderParagraphs(exportData.strategic_synthesis))
             + renderSection('Core Metrics', 'Scorecard', '<div class="metrics">' + metrics.join('') + '</div>')
             + renderSection('WHY and WHAT', 'Activation thesis', whyWhatHTML)
             + renderSection('Strategic Pitch', 'Outbound narrative', pitchHTML)
@@ -1644,7 +1702,7 @@ const isForesightContext = (link) => {
             </div>
         </div>
 
-        {/* GENERAL SUMMARY — plain prose, no inline links (links shown in AI Diagnosis) */}
+        {/* GENERAL SUMMARY — strict factual snapshot with evidence citations */}
         {data.general_summary && (
             <div className="bg-slate-800/40 p-8 rounded-2xl border border-slate-600/30 backdrop-blur-sm">
                 <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
@@ -1659,7 +1717,7 @@ const isForesightContext = (link) => {
                 <div>
                     {data.general_summary.split(/\n\n+/).map((para, pi) => (
                         <p key={pi} className={`text-slate-200 leading-relaxed text-base font-light${pi > 0 ? " mt-4" : ""}`}>
-                            {para}
+                            <EvidenceCitedText text={para} evidenceManifest={data.evidence_manifest} />
                         </p>
                     ))}
                 </div>
@@ -1671,25 +1729,36 @@ const isForesightContext = (link) => {
             <button onClick={() => setActiveTab("activation")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${activeTab === "activation" ? "bg-cyan-500/20 border-cyan-400/40 text-cyan-200" : "bg-white/5 border-white/10 text-slate-400"}`}>Activation</button>
         </div>
 
-        {activeTab === "diagnosis" && (
+        {activeTab === "diagnosis" && (<>
         <div className="ai-diagnosis-section bg-slate-800/40 p-8 rounded-2xl border border-slate-600/30 backdrop-blur-sm">
             <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
             <ShieldCheck className="text-indigo-400" />
             AI Diagnosis
             </h3>
             <p className="text-slate-200 leading-relaxed whitespace-pre-line text-base font-light">
-                <HighlightText text={data.summary_text} />
+                <EvidenceCitedText text={data.summary_text} evidenceManifest={data.evidence_manifest} />
             </p>
             {data.evidence_based_risks && data.evidence_based_risks.length > 0 && (
                 <div className="mt-5">
                     <p className="text-[11px] font-bold text-rose-300 uppercase tracking-wider mb-2">Evidence-Based Risks</p>
                     <ul className="space-y-2">
-                        {data.evidence_based_risks.map((risk, i) => (<li key={i} className="text-sm text-slate-300 bg-black/20 border border-white/10 rounded-lg p-3">{risk}</li>))}
+                        {data.evidence_based_risks.map((risk, i) => (<li key={i} className="text-sm text-slate-300 bg-black/20 border border-white/10 rounded-lg p-3"><EvidenceCitedText text={risk} evidenceManifest={data.evidence_manifest} /></li>))}
                     </ul>
                 </div>
             )}
         </div>
+        {data.strategic_synthesis && (
+            <div className="bg-cyan-500/5 p-8 rounded-2xl border border-cyan-400/20 backdrop-blur-sm">
+                <h3 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+                    <Sparkles className="text-cyan-300" size={22} />
+                    Strategic Synthesis
+                </h3>
+                <p className="text-slate-200 leading-relaxed whitespace-pre-line text-base font-light">
+                    <EvidenceCitedText text={data.strategic_synthesis} evidenceManifest={data.evidence_manifest} />
+                </p>
+            </div>
         )}
+        </>)}
 
         {/* REALITY CHECKLIST SECTION */}
         {data.reality_checklist && data.reality_checklist.length > 0 && (
@@ -2277,7 +2346,7 @@ const isForesightContext = (link) => {
                         Detailed Forensic Report
                     </h3>
                     <p className="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">
-                        Deep diagnostic with evidence and stakeholder context
+                        Deep diagnostic with current evidence and reasoning trace
                     </p>
                     <div>
                         {data.detailed_report.split(/\n\n+/).map((block, pi) => {
@@ -2291,7 +2360,7 @@ const isForesightContext = (link) => {
                             }
                             return (
                                 <p key={pi} className={`text-slate-200 leading-relaxed text-sm font-light${pi > 0 ? " mt-4" : ""}`}>
-                                    {block}
+                                    <EvidenceCitedText text={block} evidenceManifest={data.evidence_manifest} />
                                 </p>
                             );
                         })}

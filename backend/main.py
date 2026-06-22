@@ -22,7 +22,7 @@ import anthropic
 
 from scanner_one import analyze_intent
 from scanner_two import (
-    x_ray_search, extract_json_from_text, run_self_analysis, financial_health_search,
+    x_ray_search, extract_json_from_text, financial_health_search,
     compute_financial_index, migrate_financial_sub_scores,
     prepare_historical_revalidation_candidate, historical_source_can_revalidate,
     collapse_active_evidence,
@@ -55,6 +55,7 @@ from llm_clients import call_anthropic_text, call_json_model_chain, call_openai_
 from buying_potential import BuyingPotentialError, generate_buying_potential_report, load_service_portfolio_kb, validate_service_portfolio_kb
 from company_evidence import CompanyEvidenceError, build_company_evidence_database
 from company_source_ledger import CompanySourceLedgerError, build_company_source_ledger
+from evidence_graph import attach_evidence_graph, build_evidence_manifest, evidence_prompt_packet
 
 # VERIFICATION LOG: v5.4.0 - Extended Thinking + Search Budget Upgrade
 print("Starting Adaptability Scanner Backend (v5.4.0 - Extended Thinking + Search Budget Upgrade)...", flush=True)
@@ -436,7 +437,7 @@ def _ai_readiness_prompt_note(state: dict) -> str:
 
 
 def _build_fact_check_scan_payload(data: dict) -> dict:
-    """Compact internal scan payload used to verify scanner-process observations."""
+    """Current-run payload for verification; never exposes cross-scan trends."""
     data = data or {}
     evidence_links = data.get("evidence_links") or []
     checklist = data.get("reality_checklist") or []
@@ -499,7 +500,12 @@ def _build_fact_check_scan_payload(data: dict) -> dict:
     foresight_forces = []
     foresight_data = data.get("strategic_foresight") or {}
     if isinstance(foresight_data, dict):
-        raw_forces = foresight_data.get("forces") or foresight_data.get("strategic_forces") or []
+        raw_forces = (
+            foresight_data.get("forces")
+            or foresight_data.get("dimension_forces")
+            or foresight_data.get("strategic_forces")
+            or []
+        )
         for force in raw_forces[:10]:
             if not isinstance(force, dict):
                 continue
@@ -548,6 +554,17 @@ def _build_fact_check_scan_payload(data: dict) -> dict:
         },
         "evidence_based_risks": data.get("evidence_based_risks") or [],
         "sample_reality_findings": sample_findings,
+        "evidence_graph_version": data.get("evidence_graph_version"),
+        "current_claim_ids": [
+            item.get("claim_id") for item in (data.get("claim_graph") or [])
+            if isinstance(item, dict) and item.get("phase") == "jury_reality"
+        ],
+        "temporal_contract": "current_scan_only",
+        "prohibited_reasoning": [
+            "cross-scan score trends",
+            "cross-scan intent-reality gap changes",
+            "changes in Scanner confidence, diagnosis, archetype or classification",
+        ],
     }
 
 
@@ -2646,10 +2663,8 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
   - Structure: exactly 3-4 core paragraphs, each covering a distinct KB dimension (e.g. overall position
     & operating model / strategy & culture / service portfolio & AI readiness / financial context).
     Separate paragraphs with \n\n in the JSON string — this is required for rendering.
-  - If SCAN DATA includes "AI DIAGNOSIS FORESIGHT INPUTS", add exactly one final foresight implication paragraph of 3-5 sentences after the core diagnosis.
-  - The final foresight paragraph must phrase forces as external pressure or market context, not as company facts, unless company-specific evidence above supports the fact.
-  - If no qualified foresight inputs exist, do not force a future paragraph.
-  - Target length: 250-375 words without foresight inputs; 325-475 words when the optional foresight paragraph is present.
+  - Do not add foresight implications here. External pressures belong only in Strategic Synthesis.
+  - Target length: 250-375 words.
   - First sentence: State the archetype and what defines this company's position.
   - Body: Map 3-4 key findings to specific KB dimensions. For each finding, connect the evidence
     to the KB pattern it reveals.
@@ -3557,7 +3572,7 @@ def _execute_scan_pipeline(
         # Budget allocation:
         #   Reality check: capped so it cannot consume the core synthesis slot
         #   Financial:     120s (parallel with reality, non-blocking)
-        #   Self-analysis: only if remaining > 120s
+        #   No cross-scan score analysis: historical runs seed URLs only
         #   Synthesis:     protected core budget with adaptive fallback chain
         #   Final outputs: protected reserve for fact-check, General Summary,
         #                  save/index; Detailed Report is optional when time is tight.
@@ -3646,38 +3661,25 @@ def _execute_scan_pipeline(
         intent_results = analyze_intent(combined_text)
         print(f"   ✅ [Scanner 1] Intent analysis complete in {int((time.time() - s1_start) * 1000)}ms → Score: {intent_results['score']}/100")
 
-        # --- LOAD PREVIOUS SCANS (multi-scan history lookback, up to 3) ---
+        # --- LOAD PREVIOUS SOURCE CACHE ---
+        # Previous Scanner outputs are not longitudinal company evidence. Model,
+        # prompt and gate changes make old scores, diagnoses and classifications
+        # incomparable. Only source URLs/content may be reused, and Scanner 2 must
+        # reset and freshly verify their trust state before analysis.
         previous_context = None
         existing_data = None
         try:
             existing_data = storage.get_company_data(companyName)
             if existing_data and existing_data.get("lastUpdated"):
-                # Most recent scan (full data available)
                 previous_context = {
                     "last_scanned": existing_data.get("lastUpdated"),
-                    "previous_intent": existing_data.get("intent_score"),
-                    "previous_reality": existing_data.get("reality_score"),
-                    "previous_confidence": existing_data.get("confidence_score"),
-                    "previous_findings": existing_data.get("reality_checklist", [])[:10],
-                    "previous_evidence": existing_data.get("evidence_links", [])[:8],
-                    "previous_washing": existing_data.get("washing_type"),
-                    "previous_summary": existing_data.get("summary_text", ""),
-                    "previous_detailed_report": existing_data.get("detailed_report", ""),
+                    "previous_evidence": existing_data.get("evidence_links", [])[:24],
+                    "context_contract": "source_discovery_only",
                 }
-
-                # Older scans from enriched history (up to 2 more, newest first)
-                raw_history = existing_data.get("history", [])
-                older_scans = []
-                for entry in reversed(raw_history):
-                    if entry.get("summary_text") and len(entry["summary_text"]) > 20:
-                        older_scans.append(entry)
-                    if len(older_scans) >= 2:
-                        break
-                if older_scans:
-                    previous_context["scan_history"] = older_scans
-
-                scan_count = 1 + len(older_scans)
-                print(f"   [History] {scan_count} previous scan(s) found (latest: {existing_data.get('lastUpdated')}). Enabling rescan mode.")
+                print(
+                    f"   [History] Previous source cache found (latest: {existing_data.get('lastUpdated')}). "
+                    "Scores, summaries and diagnoses excluded from current reasoning."
+                )
             else:
                 print(f"   [History] No previous scan found. Running first-time analysis.")
         except Exception as e:
@@ -3772,46 +3774,37 @@ def _execute_scan_pipeline(
                     f"(elapsed={reality_elapsed}s, internal_budget={reality_budget}s, "
                     f"outer_timeout={reality_outer_timeout}s, scan_budget={_budget_snapshot()})"
                 )
-                # PARTIAL UPDATE: reuse existing reality data if available
-                if existing_data and existing_data.get("reality_score") is not None:
-                    print(f"   🔄 [Scanner 2] Reusing previous reality data (score: {existing_data['reality_score']}, confidence: {existing_data.get('confidence_score', 0)})")
-                    reality_results = {
-                        "score": existing_data["reality_score"],
-                        "checklist": existing_data.get("reality_checklist", []),
-                        "links": existing_data.get("evidence_links", []),
-                        "key_people": existing_data.get("key_people", []),
-                        "is_simulated": False,
-                        "confidence_score": existing_data.get("confidence_score", 0),
-                        "washing_flag": existing_data.get("washing_flag", False),
-                        "washing_type": existing_data.get("washing_type"),
-                        "reused_from_previous": True,
-                    }
-                else:
-                    reality_results = { "score": 50, "checklist": [], "links": [], "key_people": [], "is_simulated": True, "confidence_score": 0, "washing_flag": False }
+                # Prior Scanner conclusions are not longitudinal company facts.
+                # Historical URLs already entered Scanner 2 as candidate seeds;
+                # never resurrect an old score, checklist, diagnosis, or verdict.
+                print("   ⚠️ [Scanner 2] Current reality unavailable; previous scans remain source-discovery cache only.")
+                reality_results = {
+                    "score": 50,
+                    "checklist": [],
+                    "links": [],
+                    "key_people": [],
+                    "is_simulated": True,
+                    "confidence_score": 0,
+                    "washing_flag": False,
+                    "current_reality_unavailable": True,
+                    "history_reuse_policy": "source_urls_only",
+                }
 
-            # Financial search is non-blocking — if it fails, use existing data or defaults
+            # Financial search is non-blocking. Prior Scanner financial scores are
+            # not a valid substitute for a failed current lookup.
             try:
                 financial_results = financial_future.result(timeout=120)
             except Exception as e:
                 print(f"   [Financial Health] Failed (non-critical): {e}")
-                if existing_data and existing_data.get("financial_index") is not None:
-                    print(f"   🔄 [Financial Health] Reusing previous financial data (index: {existing_data['financial_index']})")
-                    financial_results = {
-                        "financial_index": existing_data["financial_index"],
-                        "sub_scores": migrate_financial_sub_scores(existing_data.get("financial_sub_scores", {})),
-                        "financial_findings": existing_data.get("financial_findings", []),
-                        "financial_confidence": existing_data.get("financial_confidence", 0),
-                        "is_simulated": False,
-                        "reused_from_previous": True,
-                    }
-                else:
-                    financial_results = {
-                        "financial_index": None,
-                        "sub_scores": {"revenue_trend": None, "profitability": None, "financial_stability": None, "investment_signal": None},
-                        "financial_findings": [],
-                        "financial_confidence": 0,
-                        "is_simulated": True
-                    }
+                financial_results = {
+                    "financial_index": None,
+                    "sub_scores": {"revenue_trend": None, "profitability": None, "financial_stability": None, "investment_signal": None},
+                    "financial_findings": [],
+                    "financial_confidence": 0,
+                    "is_simulated": True,
+                    "current_financial_unavailable": True,
+                    "history_reuse_policy": "disabled",
+                }
 
         if (
             reality_results.get("is_simulated")
@@ -3892,47 +3885,9 @@ def _execute_scan_pipeline(
         if _s2_empty:
             print(f"   ⚠️ [Scanner 2] Empty result detected (score=0, confidence=0) — will flag scan_quality='empty_reality'")
 
-        # --- SCORE DRIFT DIAGNOSTIC ---
-        # Detects large score swings between rescans for diagnostic purposes.
-        # Does NOT dampen scores — Opus is the Final Judge and its score is authoritative.
-        # When delta >= 25 within 7 days, triggers Self-Analysis to understand why.
-        if previous_context and previous_context.get("previous_reality") is not None:
-            prev_reality = previous_context["previous_reality"]
-            new_reality = reality_results["score"]
-            drift_threshold = 25  # Matches the rescan trigger threshold in scanner_two
-
-            try:
-                last_scanned = previous_context.get("last_scanned", "")
-                days_since = (datetime.utcnow() - datetime.fromisoformat(last_scanned)).days
-            except (ValueError, TypeError):
-                days_since = 999  # If parsing fails, don't apply guard
-
-            if days_since < 7 and isinstance(prev_reality, (int, float)):
-                raw_delta = new_reality - prev_reality
-                if abs(raw_delta) >= drift_threshold:
-                    print(f"   ⚠️ [Drift Diagnostic] Large score change in {days_since}d window: {prev_reality} → {new_reality} (delta {raw_delta}). Opus will be final judge.")
-                    reality_results["large_drift_detected"] = True
-                    reality_results["drift_delta"] = raw_delta
-
-                    # --- SELF-ANALYSIS: Why did the scanner produce different results? ---
-                    # Only run if we have enough time remaining (need ~120s for synthesis)
-                    sa_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
-                    if sa_remaining > 120:
-                        print(f"   🔄 [Self-Analysis] Triggered: score delta {raw_delta} within {days_since}d. ({int(sa_remaining)}s remaining)")
-                        sa_start = time.time()
-                        self_analysis = run_self_analysis(
-                            company_name=companyName,
-                            previous_scan_data=previous_context,
-                            current_scan_data=reality_results,
-                            days_since_last=days_since
-                        )
-                        if self_analysis:
-                            reality_results["self_analysis"] = self_analysis
-                            print(f"   ✅ [Self-Analysis] Complete in {int((time.time() - sa_start) * 1000)}ms → Cause: {self_analysis.get('primary_cause', '?')}")
-                        else:
-                            print(f"   ⚠️ [Self-Analysis] No result ({int((time.time() - sa_start) * 1000)}ms)")
-                    else:
-                        print(f"   ⏰ [Self-Analysis] Skipped — only {int(sa_remaining)}s remaining (need 120s for synthesis)")
+        # Cross-scan score drift is intentionally not analyzed. Scanner telemetry
+        # can change after model/prompt revisions and is not a company trend.
+        reality_results["cross_scan_reasoning"] = "disabled"
 
         gap = intent_results["score"] - reality_results["score"]
         confidence = reality_results.get("confidence_score", 50)
@@ -4150,6 +4105,9 @@ def _execute_scan_pipeline(
             _append_scan_log(job_id, "Generating synthesis")
         summary = "AI Summary Unavailable"
         pitch = "Pitch Unavailable"
+        strategic_synthesis = ""
+        generation_company_manifest = []
+        generation_manifest = []
         evidence_based_risks = []
         why_proposals = []
         what_proposals = []
@@ -4164,14 +4122,15 @@ def _execute_scan_pipeline(
                 synthesis_source_pool = company_evidence_candidates + (reality_results.get("links") or []) + financial_evidence_links
                 verified_links = _analysis_evidence_links(synthesis_source_pool)
 
-                def _fmt_evidence_link(l):
-                    tier = l.get('claim_tier', 'D')
-                    scope = l.get('entity_scope', 'unknown')
-                    scope_tag = f"[{scope}]" if scope != 'unknown' else ''
-                    prefix = f"[{tier}]{scope_tag}"
-                    return f"{prefix} {l.get('title', 'Unknown')}: {l.get('source_quote') or l.get('snippet', '')}"
-
-                evidence_list = '\n'.join([_fmt_evidence_link(l) for l in verified_links[:20]])
+                # Freeze the current-reality evidence packet before generation.
+                # Stable EVD IDs are the contract between diagnosis and audit;
+                # the verifier later receives this same canonical manifest.
+                generation_company_manifest = build_evidence_manifest(verified_links, [])
+                evidence_list = evidence_prompt_packet(
+                    generation_company_manifest,
+                    kind="company_evidence",
+                    limit=24,
+                )
                 low_evidence_context = ""
                 _sufficiency_preview = _evidence_sufficiency_state(synthesis_source_pool, financial_evidence_links)
                 if _sufficiency_preview.get("status") != "complete":
@@ -4225,83 +4184,8 @@ def _execute_scan_pipeline(
                     ) if findings else 'No specific findings'
                     financial_context = f"FINANCIAL HEALTH CONTEXT (do NOT cite numeric scores — the index is displayed separately): {findings_text}. You may reference financial health qualitatively (e.g. 'declining revenue', 'strong profitability') but never mention specific index numbers."
 
-                # Trend context (only when rescan — now multi-point)
-                trend_context = ""
-                if previous_context:
-                    prev_i = previous_context.get("previous_intent", "N/A")
-                    prev_r = previous_context.get("previous_reality", "N/A")
-                    prev_date = previous_context.get("last_scanned", "unknown")
-                    if isinstance(prev_r, (int, float)) and isinstance(reality_results["score"], (int, float)):
-                        delta = reality_results["score"] - prev_r
-                        if delta > 5:
-                            direction = "IMPROVING"
-                        elif delta < -5:
-                            direction = "DECLINING"
-                        else:
-                            direction = "STABLE"
-                    else:
-                        direction = "UNKNOWN"
-
-                    # Build multi-point trend line from scan_history
-                    trend_points = []
-                    scan_history = previous_context.get("scan_history", [])
-                    for older in reversed(scan_history):  # oldest first
-                        od = older.get("date", "?")
-                        oi = older.get("intent_score", "?")
-                        or_ = older.get("reality_score", "?")
-                        trend_points.append(f"  {od}: Intent {oi}, Reality {or_}")
-                    trend_points.append(f"  {prev_date}: Intent {prev_i}, Reality {prev_r}")
-                    trend_points.append(f"  NOW: (current scan — scores determined by your independent evaluation)")
-                    trend_line = "\n".join(trend_points)
-
-                    trend_context = f"""TREND DATA (RESCAN — {len(trend_points)} data points):
-Score trajectory (oldest → newest):
-{trend_line}
-Overall direction: {direction}
-Include the trend trajectory in the summary. Note persistent patterns or turning points."""
-
-                # Previous scan context for richer synthesis
-                prev_synthesis_block = ""
-                if previous_context:
-                    prev_summary = previous_context.get("previous_summary", "")
-                    prev_findings = previous_context.get("previous_findings", [])
-                    prev_evidence = previous_context.get("previous_evidence", [])
-
-                    parts = []
-                    if prev_summary:
-                        # Strip any TAC-xxx / DIM-xxx codes that may exist in old stored summaries
-                        parts.append(f"Previous Summary:\n{_strip_tac_codes(prev_summary)}")
-                        parts.append("NOTE: The previous summary above may have used deprecated internal codes (TAC-xxx, DIM-xxx). Do NOT reproduce any such codes in the new summary — always write the full concept name.")
-                    if prev_findings:
-                        findings_lines = []
-                        verified_prev_findings = [
-                            f for f in prev_findings
-                            if isinstance(f, dict) and f.get("found") and is_generation_eligible_source(f)
-                        ]
-                        for f in verified_prev_findings[:10]:
-                            sentiment = f.get("sentiment", "neutral")
-                            query = f.get("query", f.get("label", "Unknown"))
-                            found = f.get("found", False)
-                            findings_lines.append(f"  [{sentiment.upper()}] {query} (found={found})")
-                        if findings_lines:
-                            parts.append(f"Previous Findings:\n" + "\n".join(findings_lines))
-                    prev_evidence = _analysis_evidence_links(prev_evidence)
-                    if prev_evidence:
-                        ev_lines = [f"  - {e.get('title', '?')}: {(e.get('source_quote') or e.get('snippet', ''))[:100]}" for e in prev_evidence[:8]]
-                        parts.append(f"Previous Evidence Sources:\n" + "\n".join(ev_lines))
-
-                    if parts:
-                        prev_synthesis_block = f"""
-### PREVIOUS SCAN CONTEXT (for narrative continuity)
-{chr(10).join(parts)}
-Use this to maintain consistency. If issues from previous scan are still present, note them as persistent.
-If new evidence shows improvement, highlight the positive trajectory."""
-
-                # Foresight context (only when foresight data was generated)
-                foresight_context = ""
-                if foresight_data:
-                    from strategic_foresight import format_foresight_for_synthesis
-                    foresight_context = format_foresight_for_synthesis(foresight_data, companyName, company_domain)
+                # Previous scans are source-discovery caches only. Their scores,
+                # diagnoses and classifications never enter company reasoning.
 
                 # Build constraint-driven context for pitch and proposals
                 _neg_items = [
@@ -4311,10 +4195,11 @@ If new evidence shows improvement, highlight the positive trajectory."""
                 negative_summary = "\n".join([f"- {item.get('query', '')}: {item.get('snippet', 'No detail')}" for item in _neg_items[:6]])
                 negative_findings_context = f"\nKey Negative Findings (Scanner 2):\n{negative_summary}" if negative_summary else ""
 
-                scan_synthesis_guardrails = _shared_prompt_guardrails(include_diagnostic=True, include_foresight=True, include_claim_tier=True)
+                scan_synthesis_guardrails = _shared_prompt_guardrails(include_diagnostic=True, include_foresight=False, include_claim_tier=True)
                 synthesis_prompt = f"""You are a senior organizational analyst conducting a forensic modernization assessment.
 You are conservative and evidence-bound. You would rather say "insufficient evidence" than risk a wrong claim. Your credibility depends on never overstating.
-Your task: synthesize scanner evidence into a precise, evidence-grounded diagnosis using the Knowledge Base framework below.
+Your task: synthesize CURRENT company evidence into a precise, evidence-grounded diagnosis using the Knowledge Base framework below.
+This phase establishes current reality only. Do not use macro foresight, stakeholder discovery, prior Scanner scores, prior diagnoses, or cross-scan trends.
 
 ### SHARED EVIDENCE / DIAGNOSIS / FORESIGHT GUARDRAILS
 {scan_synthesis_guardrails}
@@ -4326,6 +4211,8 @@ If evidence is thin, say so — a short honest analysis beats a long fabricated 
 1. NEVER fabricate findings — if evidence is thin, SAY SO.
 2. NEVER invent organizational or people problems (leadership gaps, succession issues, morale claims, unfilled roles).
 3. Every claim must trace to specific evidence in the SCAN DATA below. No evidence = no claim.
+   End each factual premise with its stable evidence ID, for example [EVD-ABC123DEF456].
+   A diagnostic conclusion may be new reasoning, but it must cite the premise IDs used to reach it.
 4. Do NOT extrapolate small signals into sweeping assessments (e.g., a Jira mention in a job ad does NOT reveal corporate strategy).
 5. SCOPE & SOURCE QUALIFICATION — CRITICAL:
    - NARROW SCOPE: When an evidence item describes a limited population (a master's thesis, a single-department survey, a regional pilot, a study of N participants), you MUST include a scope qualifier in the same sentence (e.g., "in a survey of HR personnel", "in a 100-respondent study", "according to a master's thesis"). Never present a narrow-scope statistic as a company-wide truth.
@@ -4357,10 +4244,7 @@ Intent Data: {intent_narrative}
 {financial_context}
 {low_evidence_context}
 {ai_readiness_context}
-{trend_context}
-{foresight_context}
 {negative_findings_context}
-{prev_synthesis_block}
 
 {contradictions_block}
 ### ANALYSIS PROTOCOL
@@ -4392,10 +4276,8 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
   - Structure: exactly 3-4 core paragraphs, each covering a distinct KB dimension (e.g. overall position
     & operating model / strategy & culture / service portfolio & AI readiness / financial context).
     Separate paragraphs with \n\n in the JSON string — this is required for rendering.
-  - If SCAN DATA includes "AI DIAGNOSIS FORESIGHT INPUTS", add exactly one final foresight implication paragraph of 3-5 sentences after the core diagnosis.
-  - The final foresight paragraph must phrase forces as external pressure or market context, not as company facts, unless company-specific evidence above supports the fact.
-  - If no qualified foresight inputs exist, do not force a future paragraph.
-  - Target length: 250-375 words without foresight inputs; 325-475 words when the optional foresight paragraph is present.
+  - Do not add foresight implications here. External pressures belong only in Strategic Synthesis.
+  - Target length: 250-375 words.
   - First sentence: State the archetype and what defines this company's position.
   - Body: Map 3-4 key findings to specific KB dimensions. For each finding, connect the evidence
     to the KB pattern it reveals (e.g., "Job postings emphasize hierarchical reporting lines,
@@ -4406,6 +4288,7 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
   - If confidence < 50, state it: "Limited public evidence constrains this assessment."
   - If washing detected, name it: "{washing_type or 'Modernization Washing'}" with the specific gap.
   - Do NOT cite numeric scores in the text — scores display separately in the UI.
+  - Cite the stable [EVD-*] premise IDs after every material factual or diagnostic sentence.
   - Do NOT fabricate findings. If evidence is sparse, acknowledge gaps rather than inventing patterns.
   - TEMPORAL PRECISION: When evidence contains the same metric for different periods (e.g. Q1 vs full-year, 2024 vs 2025), always use the most recent FULL-YEAR / ANNUAL figure — not interim or quarterly snapshots. If only a quarterly figure is available, label it explicitly (e.g. "as of Q1 2025"). Never present a quarterly number as if it were the annual result. Do not write that a metric is unpublished or unavailable if the evidence or financial context contains that metric for the latest annual period.
   - ORGANIZATIONAL CLAIMS PROHIBITION: NEVER claim or imply leadership gaps, unfilled executive roles, succession planning issues, management vacancies, or organizational restructuring unless the evidence EXPLICITLY states this. The absence of a person in scanner results does NOT mean the role is vacant — it means the scanner didn't find them. Do NOT invent risk factors about people, roles, or organizational structure to add analytical depth. If the evidence doesn't mention an organizational problem, the problem does not exist for this analysis.
@@ -4428,7 +4311,7 @@ Generate 2-4 neutral risk bullets in a JSON array named evidence_based_risks.
 ### OUTPUT
 Respond with valid JSON only. Required fields:
 {{"diagnostic_summary": "...", "evidence_based_risks": ["..."], "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
-Note: diagnostic_summary must contain \n\n between paragraphs (3-4 core paragraphs plus one optional final foresight implication paragraph).
+Note: diagnostic_summary must contain \n\n between 3-4 current-reality paragraphs. Do not add a foresight paragraph.
 Do NOT generate commercial_pitch, why_proposals, or what_proposals in this call. Those are generated later from the locked diagnosis and Knowledge Base."""
 
                 # --- Diagnosis synthesis with fallback chain: Opus 4.8 → GPT 5.5 → Sonnet 4.6 ---
@@ -4696,7 +4579,15 @@ Do NOT generate commercial_pitch, why_proposals, or what_proposals in this call.
                          # only the locked diagnosis, risks, evidence, and KB.
                          _activation_left = _synthesis_budget_left()
                          if summary and _activation_left > 45:
-                             activation_prompt = f"""You are writing the Strategic Activation layer for {companyName}.
+                             generation_graph_input = {
+                                 "evidence_links": verified_links,
+                                 "foresight_links": foresight_links,
+                                 "strategic_foresight": foresight_data or {},
+                             }
+                             attach_evidence_graph(generation_graph_input)
+                             generation_manifest = generation_graph_input.get("evidence_manifest", [])
+                             activation_evidence_packet = evidence_prompt_packet(generation_manifest, limit=40)
+                             activation_prompt = f"""You are writing the Strategic Synthesis and Activation layer for {companyName}.
 The AI Diagnosis below is LOCKED. The Knowledge Base is the mandatory baseline. You may turn the diagnosis into WHY/WHAT proposals and a concise pitch, but you may not introduce new facts.
 
 ### KNOWLEDGE BASE BASELINE — MANDATORY
@@ -4715,8 +4606,8 @@ Diagnosis:
 Evidence-based risks:
 {json.dumps(evidence_based_risks, ensure_ascii=False)}
 
-### GENERATION-ELIGIBLE EVIDENCE PACKET
-{evidence_list}
+### IMMUTABLE EVIDENCE MANIFEST
+{activation_evidence_packet}
 {negative_findings_context}
 {foresight_context}
 
@@ -4727,6 +4618,11 @@ Evidence-based risks:
 4. If evidence is thin, produce one strong pair instead of two weak pairs.
 5. WHY1 must pair with WHAT1. If you produce WHY2, produce WHAT2 for the same theme.
 6. Keep activation suggestive but evidence-bound: proposals, not promises.
+7. Write strategic_synthesis as the explicit reasoning bridge between CURRENT COMPANY REALITY and EXTERNAL FORESIGHT PRESSURES.
+8. A macro pressure never proves that the company has acted. Use modal language such as "may increase pressure", "creates a question", or "could affect".
+9. Preserve contradictions between current-reality premises; explain what they may mean instead of averaging them away.
+10. Do not compare Scanner outputs across scans or discuss Scanner performance.
+11. Cite company premises with [EVD-*] and macro premises with [FOR-*]. Every material synthesis sentence must cite the IDs it uses.
 
 ### PITCH
 Write a direct cold-outreach message to a C-level executive at {companyName}.
@@ -4743,7 +4639,7 @@ Generate 1-2 WHY statements and 1-2 WHAT statements.
 
 ### OUTPUT
 Respond with valid JSON only:
-{{"commercial_pitch": "...", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."]}}"""
+{{"strategic_synthesis": "...", "commercial_pitch": "...", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."]}}"""
 
                              activation_text = ""
                              activation_timeout = min(75, max(35, _activation_left - 20))
@@ -4808,6 +4704,7 @@ Respond with valid JSON only:
                                  if activation_payload:
                                      activation_json = json.loads(activation_payload, strict=False)
                                      pitch = activation_json.get("commercial_pitch", activation_json.get("pitch", pitch)) or pitch
+                                     strategic_synthesis = activation_json.get("strategic_synthesis", "") or strategic_synthesis
                                      why_proposals = activation_json.get("why_proposals", why_proposals) or why_proposals
                                      what_proposals = activation_json.get("what_proposals", what_proposals) or what_proposals
                                      if pitch or why_proposals or what_proposals:
@@ -4921,6 +4818,7 @@ Respond with valid JSON only:
             "stakeholder_enrichment_skipped": stakeholder_enrichment_skipped,
             "stakeholder_intelligence_mode": "buying_insight_only",
             "summary_text": _strip_tac_codes(summary),
+            "strategic_synthesis": _strip_tac_codes(strategic_synthesis),
             "pitch_text": pitch,
             "evidence_based_risks": evidence_based_risks,
             "why_proposals": why_proposals,
@@ -4929,9 +4827,6 @@ Respond with valid JSON only:
             "history": history,
             "is_simulated": reality_results.get("is_simulated", False),
             "uploaded_docs": uploaded_doc_names,
-            "drift_guard_applied": reality_results.get("drift_guard_applied", False),
-            "raw_score_before_dampening": reality_results.get("raw_score_before_dampening"),
-            "self_analysis": reality_results.get("self_analysis"),
             "financial_index": financial_results.get("financial_index"),
             "financial_sub_scores": financial_results.get("sub_scores", {}),
             "financial_findings": financial_results.get("financial_findings", []),
@@ -4939,7 +4834,15 @@ Respond with valid JSON only:
             "strategic_foresight": foresight_data,
             "foresight_links": foresight_links,
             "scan_quality": scan_quality,
+            # Exact bibliography supplied to generation. Verification uses this
+            # frozen packet instead of reconstructing a different bibliography.
+            "generation_evidence_manifest": generation_manifest or generation_company_manifest,
         }
+
+        # One immutable manifest is shared by generation, verification and the
+        # report. Canonical duplicate resolution ensures that a successful
+        # current verification outranks a transient failed retrieval.
+        attach_evidence_graph(full_data)
 
         # --- REALITY CHECK: Hallucination Detection ---
         summary_check = validate_summary(
@@ -4995,23 +4898,48 @@ Respond with valid JSON only:
                 company_name=companyName,
                 pitch_text=full_data.get("pitch_text", ""),
                 scan_payload=_build_fact_check_scan_payload(full_data),
-                analysis_sections={"evidence_based_risks": full_data.get("evidence_based_risks") or []},
-                document_label="AI Diagnosis and Evidence-Based Risks",
+                analysis_sections={
+                    "evidence_based_risks": full_data.get("evidence_based_risks") or [],
+                    "strategic_synthesis": full_data.get("strategic_synthesis") or "",
+                },
+                document_label="AI Diagnosis, Evidence-Based Risks, and Strategic Synthesis",
                 foresight_links=full_data.get("foresight_links", []),
+                evidence_manifest=full_data.get("generation_evidence_manifest", []),
+                claim_graph=full_data.get("claim_graph", []),
             )
         full_data["ai_verification"] = {
             "verified": fact_check["verified"],
+            "verification_status": fact_check.get("verification_status", "unavailable"),
             "fact_check_skipped": fact_check.get("fact_check_skipped", False),
             "false_claims": fact_check["false_claims"],
             "false_claims_detailed": fact_check.get("false_claims_detailed", []),
             "model": fact_check["fact_check_model"],
             "time_ms": fact_check["fact_check_time_ms"],
+            "evidence_handoff_failures": fact_check.get("evidence_handoff_failures", []),
         }
 
         if fact_check.get("fact_check_skipped"):
             # --- SKIPPED: Budget exhausted or all fact-check models failed. Summary is unverified. ---
             _fc_skip_reason = "budget exhausted" if fact_check.get("fact_check_model") == "skipped_budget" else "all models failed"
             print(f"   ⚠️ [Fact-Check] Skipped ({_fc_skip_reason}) — summary stored as UNVERIFIED ({fact_check['fact_check_time_ms']}ms)")
+            if scan_quality == "complete":
+                scan_quality = "unverified"
+        elif fact_check.get("verification_status") == "failed_handoff" or fact_check.get("evidence_handoff_failures"):
+            # The verifier did not receive one or more evidence records cited by
+            # generation. This is a pipeline integrity failure, not proof that the
+            # claim or its source is fabricated. Preserve both without correction
+            # or purging and make the unverified state explicit for the report.
+            handoff_failures = fact_check.get("evidence_handoff_failures", [])
+            print(
+                f"   ⚠️ [Fact-Check] Evidence handoff failed for "
+                f"{len(handoff_failures)} reference(s) — preserving analysis and sources as UNVERIFIED"
+            )
+            full_data["ai_verification"]["verified"] = False
+            full_data["ai_verification"]["verification_status"] = "failed_handoff"
+            full_data["ai_verification"]["note"] = (
+                "Verification could not resolve every cited evidence record. "
+                "No claim correction or evidence purge was applied."
+            )
             if scan_quality == "complete":
                 scan_quality = "unverified"
         elif fact_check["verified"]:
@@ -5041,6 +4969,9 @@ Respond with valid JSON only:
             corrected_risks = corrected_sections.get("evidence_based_risks")
             if isinstance(corrected_risks, list):
                 full_data["evidence_based_risks"] = corrected_risks
+            corrected_synthesis = corrected_sections.get("strategic_synthesis")
+            if isinstance(corrected_synthesis, str) and corrected_synthesis.strip():
+                full_data["strategic_synthesis"] = _strip_tac_codes(corrected_synthesis)
             resynth_ms = 0
             resynth_model_used = fact_check.get("fact_check_model", "")
 
@@ -5347,6 +5278,8 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                     prior_summaries["general_summary"] = full_data["general_summary"]
                 if full_data.get("summary_text"):
                     prior_summaries["ai_summary"] = full_data["summary_text"]
+                if full_data.get("strategic_synthesis"):
+                    prior_summaries["strategic_synthesis"] = full_data["strategic_synthesis"]
                 why_what_parts = []
                 if full_data.get("why_proposals"):
                     why_what_parts.append("Why: " + "; ".join(full_data["why_proposals"]))
@@ -5369,6 +5302,10 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                 print(f"   ⚠️ [Detailed Report] Failed: {dr_err} — skipping")
 
         if dr_text:
+            # The report verifier must see the exact bibliography used by the
+            # report generator and a claim graph that includes the report itself.
+            full_data["detailed_report"] = dr_text
+            attach_evidence_graph(full_data)
             _dr_fc_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
             if _dr_fc_remaining >= 55:
                 print(f"   🔍 [Detailed Report Fact-Check] Section-level verification ({int(_dr_fc_remaining)}s remaining)...")
@@ -5379,13 +5316,18 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                     scan_payload=_build_fact_check_scan_payload(full_data),
                     document_label="Detailed Forensic Report",
                     foresight_links=full_data.get("foresight_links", []),
+                    evidence_manifest=full_data.get("evidence_manifest", []),
+                    claim_graph=full_data.get("claim_graph", []),
                 )
                 if dr_check.get("corrected_summary"):
                     dr_text = dr_check["corrected_summary"]
+                    full_data["detailed_report"] = dr_text
                 full_data["detailed_report_verification"] = {
                     "verified": dr_check.get("verified", False),
+                    "verification_status": dr_check.get("verification_status", "unavailable"),
                     "fact_check_skipped": dr_check.get("fact_check_skipped", False),
                     "false_claims": dr_check.get("false_claims", []),
+                    "evidence_handoff_failures": dr_check.get("evidence_handoff_failures", []),
                     "model": dr_check.get("fact_check_model", ""),
                 }
             else:
@@ -5410,6 +5352,8 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
 
         # Sync final scan quality before save.
         full_data["scan_quality"] = scan_quality
+        # Refresh the graph after General Summary and Detailed Report are added.
+        attach_evidence_graph(full_data)
 
         # --- STEP 4: SAVE ---
         if saveToDatabase:

@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 from finland_list import TOP_100_COMPANIES, get_company_metadata
 from scanner_one import analyze_intent
-from scanner_two import x_ray_search, extract_json_from_text, run_self_analysis, financial_health_search, migrate_financial_sub_scores, _validate_key_people
+from scanner_two import x_ray_search, extract_json_from_text, financial_health_search, migrate_financial_sub_scores, _validate_key_people
 from knowledge_base import get_evolving_framework
 from storage import BlobStorage
 from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, purge_false_evidence, _call_openai_text
@@ -281,7 +281,10 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
             intent_results = analyze_intent(scraped_text)
             print(f"   [{company_name}] Intent Score: {intent_results['score']}")
 
-            # 2b. LOAD PREVIOUS SCANS (multi-scan history lookback, up to 3)
+            # 2b. LOAD PREVIOUS SOURCE CACHE
+            # Previous Scanner outputs are not a longitudinal company dataset.
+            # Only candidate source URLs may seed the current scan, and their
+            # trust state is reset and freshly verified by Scanner 2.
             previous_context = None
             existing_company_data = None
             try:
@@ -289,27 +292,10 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
                 if existing_company_data and existing_company_data.get("lastUpdated"):
                     previous_context = {
                         "last_scanned": existing_company_data.get("lastUpdated"),
-                        "previous_intent": existing_company_data.get("intent_score"),
-                        "previous_reality": existing_company_data.get("reality_score"),
-                        "previous_confidence": existing_company_data.get("confidence_score"),
-                        "previous_findings": existing_company_data.get("reality_checklist", [])[:10],
-                        "previous_evidence": existing_company_data.get("evidence_links", [])[:8],
-                        "previous_washing": existing_company_data.get("washing_type"),
-                        "previous_summary": existing_company_data.get("summary_text", ""),
+                        "previous_evidence": existing_company_data.get("evidence_links", [])[:24],
+                        "context_contract": "source_discovery_only",
                     }
-
-                    raw_history = existing_company_data.get("history", [])
-                    older_scans = []
-                    for entry in reversed(raw_history):
-                        if entry.get("summary_text") and len(entry["summary_text"]) > 20:
-                            older_scans.append(entry)
-                        if len(older_scans) >= 2:
-                            break
-                    if older_scans:
-                        previous_context["scan_history"] = older_scans
-
-                    scan_count = 1 + len(older_scans)
-                    print(f"   [{company_name}] Rescan mode: {scan_count} previous scan(s)")
+                    print(f"   [{company_name}] Previous source cache loaded; prior scores and narratives excluded")
             except Exception:
                 pass
 
@@ -331,78 +317,27 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
                     reality_results = reality_future.result(timeout=350)
                 except Exception as e:
                     print(f"   [{company_name}] ❌ Reality search failed: {e}")
-                    if existing_company_data and existing_company_data.get("reality_score") is not None:
-                        print(f"   [{company_name}] 🔄 Reusing previous reality data (score: {existing_company_data['reality_score']})")
-                        reality_results = {
-                            "score": existing_company_data["reality_score"],
-                            "checklist": existing_company_data.get("reality_checklist", []),
-                            "links": existing_company_data.get("evidence_links", []),
-                            "key_people": existing_company_data.get("key_people", []),
-                            "is_simulated": False,
-                            "confidence_score": existing_company_data.get("confidence_score", 0),
-                            "washing_flag": existing_company_data.get("washing_flag", False),
-                            "washing_type": existing_company_data.get("washing_type"),
-                            "reused_from_previous": True,
-                        }
-                    else:
-                        reality_results = {"score": 50, "checklist": [], "links": [], "key_people": [], "is_simulated": True, "confidence_score": 0, "washing_flag": False}
+                    reality_results = {
+                        "score": 50,
+                        "checklist": [],
+                        "links": [],
+                        "key_people": [],
+                        "is_simulated": True,
+                        "confidence_score": 0,
+                        "washing_flag": False,
+                        "current_reality_unavailable": True,
+                    }
 
                 try:
                     financial_results = financial_future.result(timeout=120)
                 except Exception as e:
                     print(f"   [{company_name}] Financial Health failed (non-critical): {e}")
-                    if existing_company_data and existing_company_data.get("financial_index") is not None:
-                        print(f"   [{company_name}] 🔄 Reusing previous financial data (index: {existing_company_data['financial_index']})")
-                        financial_results = {
-                            "financial_index": existing_company_data["financial_index"],
-                            "sub_scores": migrate_financial_sub_scores(existing_company_data.get("financial_sub_scores", {})),
-                            "financial_findings": existing_company_data.get("financial_findings", []),
-                            "financial_confidence": existing_company_data.get("financial_confidence", 0),
-                            "is_simulated": False,
-                            "reused_from_previous": True,
-                        }
-                    else:
-                        financial_results = {"financial_index": None, "sub_scores": {}, "financial_findings": [], "financial_confidence": 0, "is_simulated": True}
+                    financial_results = {"financial_index": None, "sub_scores": {}, "financial_findings": [], "financial_confidence": 0, "is_simulated": True}
 
             print(f"   [{company_name}] Reality Score: {reality_results['score']}")
             if financial_results.get("financial_index") is not None:
                 print(f"   [{company_name}] Financial Index: {financial_results['financial_index']}/100")
 
-            # --- SCORE DRIFT DIAGNOSTIC ---
-            # Detects large score swings between rescans for diagnostic purposes.
-            # Does NOT dampen scores — Opus is the Final Judge and its score is authoritative.
-            # When delta >= 25 within 7 days, triggers Self-Analysis to understand why.
-            if previous_context and previous_context.get("previous_reality") is not None:
-                prev_reality = previous_context["previous_reality"]
-                new_reality = reality_results["score"]
-                drift_threshold = 25  # Matches live scan threshold
-
-                try:
-                    last_scanned = previous_context.get("last_scanned", "")
-                    days_since = (datetime.utcnow() - datetime.fromisoformat(last_scanned)).days
-                except (ValueError, TypeError):
-                    days_since = 999
-
-                if days_since < 7 and isinstance(prev_reality, (int, float)):
-                    raw_delta = new_reality - prev_reality
-                    if abs(raw_delta) >= drift_threshold:
-                        print(f"   [{company_name}] ⚠️ [Drift Diagnostic] Large score change in {days_since}d window: {prev_reality} → {new_reality} (delta {raw_delta}). Opus will be final judge.")
-                        reality_results["large_drift_detected"] = True
-                        reality_results["drift_delta"] = raw_delta
-
-                        print(f"   [{company_name}] 🔄 [Self-Analysis] Triggered: score delta {raw_delta} within {days_since}d.")
-                        sa_start = time.time()
-                        self_analysis = run_self_analysis(
-                            company_name=company_name,
-                            previous_scan_data=previous_context,
-                            current_scan_data=reality_results,
-                            days_since_last=days_since
-                        )
-                        if self_analysis:
-                            reality_results["self_analysis"] = self_analysis
-                            print(f"   [{company_name}] ✅ [Self-Analysis] Complete in {int((time.time() - sa_start) * 1000)}ms → Cause: {self_analysis.get('primary_cause', '?')}")
-                        else:
-                            print(f"   [{company_name}] ⚠️ [Self-Analysis] No result ({int((time.time() - sa_start) * 1000)}ms)")
 
             gap = intent_results["score"] - reality_results["score"]
             confidence = reality_results.get("confidence_score", 50)
@@ -549,62 +484,6 @@ def run_batch_seed(real_xray_mode=True, limit=None, progress_callback=None, max_
                         ) if findings else 'No specific findings'
                         financial_context = f"FINANCIAL HEALTH CONTEXT (do NOT cite numeric scores — the index is displayed separately): {findings_text}. You may reference financial health qualitatively (e.g. 'declining revenue', 'strong profitability') but never mention specific index numbers."
 
-                    prev_synthesis_block = ""
-                    if previous_context:
-                        prev_summary = previous_context.get("previous_summary", "")
-                        prev_findings = previous_context.get("previous_findings", [])
-                        prev_evidence = previous_context.get("previous_evidence", [])
-
-                        parts = []
-                        if prev_summary:
-                            parts.append(f"Previous Summary:\n{prev_summary}")
-                        if prev_findings:
-                            findings_lines = []
-                            for f in prev_findings[:10]:
-                                sentiment = f.get("sentiment", "neutral")
-                                query = f.get("query", f.get("label", "Unknown"))
-                                found = f.get("found", False)
-                                findings_lines.append(f"  [{sentiment.upper()}] {query} (found={found})")
-                            parts.append(f"Previous Findings:\n" + "\n".join(findings_lines))
-                        if prev_evidence:
-                            ev_lines = [f"  - {e.get('title', '?')}: {e.get('snippet', '')[:100]}" for e in prev_evidence[:8]]
-                            parts.append(f"Previous Evidence Sources:\n" + "\n".join(ev_lines))
-
-                        if parts:
-                            prev_synthesis_block = f"""
-### PREVIOUS SCAN CONTEXT (for narrative continuity)
-{chr(10).join(parts)}
-Use this to maintain consistency. If issues from previous scan are still present, note them as persistent.
-If new evidence shows improvement, highlight the positive trajectory."""
-
-                    trend_block = ""
-                    if previous_context:
-                        prev_r = previous_context.get("previous_reality", "N/A")
-                        prev_i = previous_context.get("previous_intent", "N/A")
-                        prev_date = previous_context.get("last_scanned", "unknown")
-                        if isinstance(prev_r, (int, float)):
-                            delta = reality_results["score"] - prev_r
-                            direction = "IMPROVING" if delta > 5 else ("DECLINING" if delta < -5 else "STABLE")
-                        else:
-                            direction = "UNKNOWN"
-
-                        trend_points = []
-                        scan_history = previous_context.get("scan_history", [])
-                        for older in reversed(scan_history):
-                            od = older.get("date", "?")
-                            oi = older.get("intent_score", "?")
-                            or_ = older.get("reality_score", "?")
-                            trend_points.append(f"  {od}: Intent {oi}, Reality {or_}")
-                        trend_points.append(f"  {prev_date}: Intent {prev_i}, Reality {prev_r}")
-                        trend_points.append(f"  NOW: (current scan — scores determined by your independent evaluation)")
-                        trend_line = "\n".join(trend_points)
-
-                        trend_block = f"""TREND DATA (RESCAN — {len(trend_points)} data points):
-Score trajectory (oldest → newest):
-{trend_line}
-Overall direction: {direction}
-Include the trend trajectory in the summary. Note persistent patterns or turning points."""
-
                     # Foresight context (only when foresight data was generated)
                     foresight_context = ""
                     if foresight_data:
@@ -650,10 +529,8 @@ Evidence Found: {evidence_list}
 Intent Data: {intent_narrative}
 {washing_context}
 {financial_context}
-{trend_block}
 {foresight_context}
 {negative_findings_context}
-{prev_synthesis_block}
 
 ### ANALYSIS PROTOCOL
 
