@@ -755,13 +755,13 @@ const isForesightContext = (link) => {
             + renderMetric('Confidence', formatScore(exportData.confidence_score ?? exportData.scan_quality?.confidence_score ?? exportData.evidence_sufficiency?.score, '%'), 'evidence confidence')
             + renderMetric('Credibility Mix', 'H' + credibility.high + ' M' + credibility.medium + ' L' + credibility.low + ' U' + credibility.unknown, 'high/medium/low/unknown')
             + renderMetric('Contradictions', contradictionWarnings.length || 'None', 'stored warnings')
-            + renderMetric('Unsupported Flags', hallucinationWarnings.length || 'None', 'hallucination checks')
+            + renderMetric('Audit Notes', hallucinationWarnings.length || 'None', 'inference and methodology checks')
             + renderMetric('Quality Notes', qualityNotes.length || 'None', 'format/style checks')
             + '</div>'
             + (isLowEvidenceMode ? '<div class="callout amber"><h3>' + escapeHTML(lowEvidenceLabel || 'Low promoted evidence') + '</h3><p>Promoted source-register evidence is limited. The report may still use verified structured financial findings and internal scanner observations, but precise external company claims require source-backed support.</p></div>' : '')
             + (contradictionWarnings.length ? '<div class="callout amber"><h3>Contradiction Warnings</h3>' + renderList(contradictionWarnings) + '</div>' : '<p class="muted">No contradiction warnings detected.</p>')
             + (wrongEntityWarnings.length ? '<div class="callout"><h3>Wrong-Entity Warnings</h3>' + renderList(wrongEntityWarnings) + '</div>' : '<p class="muted">No wrong-entity evidence detected.</p>')
-            + (hallucinationWarnings.length ? '<div class="callout"><h3>Hallucination / Unsupported-Claim Flags</h3>' + renderList(hallucinationWarnings) + '</div>' : '<p class="muted">No hallucination or unsupported-claim flags detected.</p>')
+            + (hallucinationWarnings.length ? '<div class="callout"><h3>Inference / Methodology Audit Notes</h3>' + renderList(hallucinationWarnings) + '</div>' : '<p class="muted">No inference or methodology audit notes detected.</p>')
             + (qualityNotes.length ? '<div class="callout cyan"><h3>Quality Notes</h3>' + renderList(qualityNotes) + '</div>' : '<p class="muted">No format or style notes detected.</p>');
         var sourceTable = evidencePool.length ? '<div class="table-wrap source-register-wrap"><table class="source-register"><thead><tr><th>Ref</th><th>Stable ID</th><th>Source</th><th>Type</th><th>URL</th><th>Verification</th><th>Entity / Scope</th><th>Support</th><th>Exact Passage</th><th>Claim IDs</th></tr></thead><tbody>'
             + evidencePool.map(function(link) {
@@ -1171,7 +1171,7 @@ const isForesightContext = (link) => {
             renderMetric('Unknown Entity', unknownEntitySources, 'not promoted'),
             renderMetric('Company Evidence', companyEvidencePool.length, 'Company-specific sources'),
             renderMetric('Foresight Context', foresightContextEligible + '/' + foresightEvidencePool.length, 'Eligible macro context'),
-            renderMetric('Unsupported Flags', unsupportedClaimCount, 'Hallucination and false-claim checks'),
+            renderMetric('Audit Notes', unsupportedClaimCount, 'Inference and methodology checks'),
             renderMetric('Washing Flag', exportData.washing_flag ? 'Yes' : 'No', exportData.washing_type || 'Narrative vs evidence'),
             renderMetric('Carried Forward', carriedForward ? 'Yes' : 'No', 'Previous-scan evidence')
         ];
