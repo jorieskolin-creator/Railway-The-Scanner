@@ -66,7 +66,7 @@ def test_coverage_score_rewards_verified_diverse_balanced_sources():
 def test_forensic_timing_has_separate_discovery_and_postprocess_budgets():
     assert scanner_two.FORENSIC_ACQUISITION_CEILING_SECONDS == 135
     assert scanner_two.FORENSIC_EXTRACTION_RECOVERY_CEILING_SECONDS == 35
-    assert scanner_two.FORENSIC_JURY_ANALYSIS_CEILING_SECONDS == 95
+    assert scanner_two.FORENSIC_JURY_ANALYSIS_CEILING_SECONDS == 150
     assert scanner_two.FORENSIC_POSTPROCESS_RESERVE_SECONDS == 30
 
 
@@ -337,6 +337,83 @@ def test_jury_can_support_claim_from_source_content_when_model_quote_is_poor():
     assert finding["content_verified"] is True
     assert "data center lifecycle services" in finding["source_quote"]
     assert "market leader" not in finding["source_quote"]
+
+
+def test_jury_salvages_verified_source_by_promoting_narrow_source_claim():
+    jury = "SERVICE PORTFOLIO JURY (Delivery Reality)"
+    supplied = _finding(
+        "https://example.fi/services/lifecycle", jury,
+        snippet="Example Oy is a market-leading AI service operator with four service tiers.",
+        fetched_excerpt=(
+            "Example Oy offers lifecycle services, maintenance, modernization, "
+            "and support for industrial customers."
+        ),
+        verified=True,
+        url_verified=True,
+        content_readable=True,
+        content_verified=True,
+        entity_verified=True,
+        entity_match_status="exact",
+        content_entity_match_status="exact",
+        entity_scope="canonical_group",
+        entity_mentioned=True,
+        source_type="official_service_evidence",
+    )
+    result = scanner_two._merge_forensic_jury_results(
+        {"confidence_score": 20, "findings": []},
+        [{
+            "jury": jury,
+            "status": "completed",
+            "provider": "gpt-5.5",
+            "packet_urls": [supplied["url"]],
+            "packets": [supplied],
+            "data": {
+                "findings": [{
+                    "url": supplied["url"],
+                    "supported_claim": "Example Oy operates four AI-enabled service tiers across all industrial customers.",
+                    "source_quote": supplied["snippet"],
+                    "support_level": "exact",
+                    "title": "Lifecycle services",
+                    "found": True,
+                }],
+                "confidence_score": 80,
+            },
+        }],
+        {jury: []},
+    )
+
+    finding = result["findings"][0]
+    assert finding["claim_narrowed_from_jury"] is True
+    assert finding["support_method"].startswith("source_derived_narrow_claim")
+    assert finding["claim_support_status"] == "supported"
+    assert finding["analysis_verified"] is True
+    assert "lifecycle services" in finding["supported_claim"]
+    assert "four AI-enabled" in finding["original_jury_claim"]
+
+
+def test_non_document_asset_urls_are_rejected_before_jury_analysis(monkeypatch):
+    def fake_verify_url(url, *_args, **_kwargs):
+        return {
+            "verified": True,
+            "content_readable": True,
+            "company_mentioned": True,
+            "content_excerpt": "Example Oy service icon asset.",
+        }
+
+    monkeypatch.setattr(scanner_two, "_verify_url", fake_verify_url)
+    gated, stats = scanner_two._prevalidate_acquisition_results([
+        {
+            "jury": "SERVICE PORTFOLIO JURY (Delivery Reality)",
+            "sources": [{
+                "url": "https://example.fi/assets/service-icon.png",
+                "snippet": "Example Oy service icon asset.",
+            }],
+        }
+    ], "Example Oy", recovery_seconds=0)
+
+    assert gated[0]["sources"] == []
+    assert stats["non_document_asset"] == 1
+    assert gated[0]["pre_jury_rejected"][0]["reason"] == "non_document_asset"
 
 
 def test_generic_landing_page_is_context_only_even_if_jury_calls_it_exact():

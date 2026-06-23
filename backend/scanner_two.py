@@ -222,6 +222,25 @@ def _canonical_evidence_url(url: str) -> str:
         return str(url).strip().lower().rstrip("/")
 
 
+_NON_DOCUMENT_ASSET_EXTENSIONS = (
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".bmp",
+    ".tif", ".tiff", ".avif", ".css", ".js", ".mjs", ".map",
+    ".woff", ".woff2", ".ttf", ".eot", ".otf", ".mp4", ".mov", ".avi",
+    ".webm", ".mp3", ".wav", ".zip", ".rar", ".7z",
+)
+
+
+def _is_non_document_asset_url(url: str) -> bool:
+    """Reject icons, images and static assets before they become evidence."""
+    if not url:
+        return False
+    try:
+        path = (urlparse(str(url)).path or "").lower()
+    except Exception:
+        path = str(url or "").lower()
+    return any(path.endswith(extension) for extension in _NON_DOCUMENT_ASSET_EXTENSIONS)
+
+
 _HISTORICAL_VERDICT_FIELDS = (
     "promotion_status", "generation_eligible", "analysis_verified",
     "claim_support_status", "support_level", "entity_match_status",
@@ -324,6 +343,8 @@ def prepare_historical_revalidation_candidate(record: dict, source_database="pre
 def historical_source_can_revalidate(record: dict) -> bool:
     """Allow stale verdicts to be ignored, but retain known hard safety failures."""
     if not isinstance(record, dict) or not record.get("url"):
+        return False
+    if _is_non_document_asset_url(str(record.get("url") or "")):
         return False
     if record.get("wrong_entity_true") or record.get("entity_match_status") == "wrong":
         return False
@@ -481,7 +502,7 @@ def _is_generic_context_page(url: str) -> bool:
         return False
     if path in {"/", "/fi", "/en", "/sv", "/careers", "/jobs", "/services", "/service"}:
         return True
-    return bool(re.search(r"/(careers|jobs|services?|case-studies|references|customers)/?$", path))
+    return bool(re.search(r"/(careers|jobs|case-studies|references|customers)/?$", path))
 
 
 def _normalize_passage(value: str) -> str:
@@ -703,6 +724,132 @@ def _is_atomic_supported_claim(claim: str) -> bool:
     return True
 
 
+_JURY_SOURCE_DERIVED_TERMS = {
+    "ARCHITECTURAL JURY (Engineering Reality)": (
+        "api", "platform", "architecture", "developer", "integration", "software",
+        "digital", "automation", "system", "technical", "engineering",
+    ),
+    "STRATEGIC JURY (Business Model, Procurement & Customer Experience)": (
+        "strategy", "investment", "customer", "procurement", "partnership",
+        "market", "growth", "portfolio", "business", "contract", "acquisition",
+    ),
+    "CULTURAL JURY (Talent & Psychological Safety)": (
+        "career", "jobs", "workforce", "employees", "culture", "training",
+        "safety", "people", "talent", "skills", "leadership",
+    ),
+    "AI & DATA JURY (Future Readiness)": (
+        "ai", "data", "analytics", "machine learning", "cloud", "digital",
+        "automation", "cyber", "iot", "artificial intelligence",
+    ),
+    "SERVICE PORTFOLIO JURY (Delivery Reality)": (
+        "service", "services", "solution", "solutions", "support", "maintenance",
+        "lifecycle", "modernization", "installation", "operations", "delivery",
+    ),
+}
+
+_SOURCE_DERIVED_NOISE_RE = re.compile(
+    r"\b(cookie|privacy policy|terms of use|javascript|browser|subscribe|newsletter|"
+    r"copyright|all rights reserved|skip to|menu|search|login|sign in|"
+    r"eväste|tietosuoja|käyttöehdot|tilaa uutiskirje)\b",
+    re.I,
+)
+
+
+def _packet_can_yield_source_claim(packet: dict) -> bool:
+    if not isinstance(packet, dict):
+        return False
+    if _is_non_document_asset_url(str(packet.get("url") or "")):
+        return False
+    if packet.get("url_verified") is not True and packet.get("verified") is not True:
+        return False
+    if packet.get("content_readable") is not True and packet.get("content_verified") is not True:
+        return False
+    if packet.get("wrong_entity_true") is True:
+        return False
+    entity_status = str(
+        packet.get("content_entity_match_status")
+        or packet.get("entity_match_status")
+        or ""
+    ).lower()
+    return packet.get("entity_verified") is True or entity_status in {"exact", "scoped"}
+
+
+def _source_sentence_candidates(text: str) -> list[str]:
+    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not normalized:
+        return []
+    raw_sentences = re.split(r"(?<=[.!?])\s+|(?:\n|•|\|)+", normalized)
+    candidates = []
+    for sentence in raw_sentences:
+        sentence = re.sub(r"\s+", " ", sentence).strip(" -–—\t")
+        if len(sentence) < 45 or len(sentence) > 320:
+            continue
+        if _SOURCE_DERIVED_NOISE_RE.search(sentence):
+            continue
+        if not re.search(r"[A-Za-zÅÄÖåäö]{4,}", sentence):
+            continue
+        candidates.append(sentence)
+    return candidates
+
+
+def _source_sentence_score(sentence: str, packet: dict, jury: str) -> int:
+    text = sentence.lower()
+    score = 0
+    try:
+        host_tokens = [
+            token for token in (urlparse(str(packet.get("url") or "")).netloc or "").lower().split(".")
+            if token and token not in {"www", "new", "com", "fi", "en", "sv"}
+        ]
+    except Exception:
+        host_tokens = []
+    if any(token and token in text for token in host_tokens):
+        score += 5
+    title = str(packet.get("title") or "").lower()
+    if title and any(term in text for term in re.findall(r"[a-zåäö][a-zåäö\-]{4,}", title)):
+        score += 2
+    source_type = str(packet.get("source_type") or "").lower()
+    if any(term in source_type for term in ("official", "service", "case", "annual", "investor", "procurement")):
+        score += 2
+    for term in _JURY_SOURCE_DERIVED_TERMS.get(jury, ()):
+        if term in text:
+            score += 2
+    if re.search(r"\b(offers?|provides?|describes?|includes?|supports?|announced|reports?|states?|"
+                 r"tarjoaa|sisältää|kertoo|kuvaa|julkisti)\b", text, re.I):
+        score += 2
+    if re.search(r"(?<!\w)[€$]?\d[\d.,]*%?", sentence):
+        score += 1
+    return score
+
+
+def _derive_narrow_claim_from_source(packet: dict, jury: str):
+    """Create a narrower source-supported claim when the jury claim overreaches.
+
+    This is deliberately source-first: it only uses verified/readable packet
+    content and returns a claim that can be matched back to the source passage.
+    """
+    if not _packet_can_yield_source_claim(packet):
+        return None
+    packet_text = str(
+        packet.get("fetched_excerpt")
+        or packet.get("cached_excerpt")
+        or packet.get("snippet")
+        or ""
+    ).strip()
+    candidates = _source_sentence_candidates(packet_text)
+    if not candidates:
+        return None
+    best = max(candidates, key=lambda sentence: _source_sentence_score(sentence, packet, jury))
+    if _source_sentence_score(best, packet, jury) < 2:
+        return None
+    claim = best.rstrip(".") + "."
+    if not _is_atomic_supported_claim(claim):
+        return None
+    supported, passage, method = _claim_supported_by_source_text(claim, claim, packet_text, "exact")
+    if not supported:
+        return None
+    return claim, (passage or best)[:1200], f"source_derived_narrow_claim:{method}"
+
+
 def _prevalidate_acquisition_results(
     acquisition_results: list,
     company_name: str,
@@ -769,6 +916,7 @@ def _prevalidate_acquisition_results(
     stats = {
         "input": len(sources), "passed": 0, "dead_or_soft_404": 0,
         "wrong_entity": 0, "unreadable": 0, "quote_not_found": 0,
+        "non_document_asset": 0,
         "firecrawl_attempted": len(firecrawl_results), "firecrawl_recovered": 0,
         "firecrawl_failed": 0, "firecrawl_skipped_by_cap": max(0, len(recovery_candidates) - len(selected_recovery)),
         "firecrawl_unavailable": bool(recovery_candidates and not firecrawl_configured),
@@ -778,6 +926,14 @@ def _prevalidate_acquisition_results(
         kept = []
         rejected = list(lane.get("pre_jury_rejected", []) or [])
         for source in lane.get("sources", []) or []:
+            if _is_non_document_asset_url(str(source.get("url") or "")):
+                stats["non_document_asset"] += 1
+                rejected.append({
+                    "url": source.get("url"),
+                    "reason": "non_document_asset",
+                    "stage": "pre_jury_gate",
+                })
+                continue
             checked = url_results.get(source.get("url"), {})
             source["url_verified"] = checked.get("verified") is True
             source["verified"] = source["url_verified"]
@@ -923,16 +1079,36 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
                     or packet.get("cached_excerpt")
                     or ""
                 )
+                original_supported_claim = supported_claim
+                original_source_quote = source_quote
+                original_support_level = support_level
                 claim_supported, supporting_passage, support_method = _claim_supported_by_source_text(
                     supported_claim,
                     source_quote,
                     packet_text,
                     support_level,
                 )
+                claim_narrowed_from_jury = False
                 if not supported_claim or not _is_atomic_supported_claim(supported_claim) or not claim_supported:
+                    narrowed = _derive_narrow_claim_from_source(packet, jury)
+                    if narrowed:
+                        supported_claim, supporting_passage, support_method = narrowed
+                        source_quote = supporting_passage
+                        support_level = "exact"
+                        claim_supported = True
+                        claim_narrowed_from_jury = True
+                    else:
+                        rejected.append({
+                            "url": item.get("url"),
+                            "reason": "Jury claim was bundled or materially exceeded the fetched source content.",
+                            "jury": jury,
+                            "support_method": support_method,
+                        })
+                        continue
+                if not claim_supported:
                     rejected.append({
                         "url": item.get("url"),
-                        "reason": "Jury claim was bundled or materially exceeded the fetched source content.",
+                        "reason": "Jury claim was not supported by fetched source content.",
                         "jury": jury,
                         "support_method": support_method,
                     })
@@ -950,6 +1126,15 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
                 normalized["source_quote"] = supporting_passage[:1200]
                 normalized["support_level"] = support_level
                 normalized["support_method"] = support_method
+                normalized["claim_narrowed_from_jury"] = claim_narrowed_from_jury
+                if claim_narrowed_from_jury:
+                    normalized["original_jury_claim"] = original_supported_claim[:1200]
+                    normalized["original_jury_quote"] = original_source_quote[:1200]
+                    normalized["original_jury_support_level"] = original_support_level
+                    normalized["verification_reason"] = (
+                        "Jury claim overreached; promoted a narrower claim derived directly "
+                        "from verified source content."
+                    )
                 normalized["source_status"] = "jury_accepted" if support_level == "exact" else f"jury_{support_level}"
                 normalized["analysis_verified"] = support_level == "exact"
                 normalized["claim_support_status"] = "supported" if support_level == "exact" else support_level
@@ -3205,6 +3390,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         f"   🛡️ [Forensic Pre-Jury Gate] {pre_jury_stats['passed']}/{pre_jury_stats['input']} packets passed; "
         f"dead/soft-404={pre_jury_stats['dead_or_soft_404']}, wrong_entity={pre_jury_stats['wrong_entity']}, "
         f"unreadable={pre_jury_stats['unreadable']}, quote_not_found={pre_jury_stats.get('quote_not_found', 0)}; "
+        f"non_document_asset={pre_jury_stats.get('non_document_asset', 0)}; "
         f"Firecrawl recovered={pre_jury_stats.get('firecrawl_recovered', 0)}/"
         f"{pre_jury_stats.get('firecrawl_attempted', 0)}, skipped_by_cap="
         f"{pre_jury_stats.get('firecrawl_skipped_by_cap', 0)}."
