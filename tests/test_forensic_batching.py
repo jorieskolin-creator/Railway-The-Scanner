@@ -290,6 +290,55 @@ def test_jury_uses_current_quote_match_as_content_verification():
     assert finding["claim_support_status"] == "supported"
 
 
+def test_jury_can_support_claim_from_source_content_when_model_quote_is_poor():
+    jury = "SERVICE PORTFOLIO JURY (Delivery Reality)"
+    supplied = _finding(
+        "https://example.fi/services/data-centers", jury,
+        snippet="Example Oy is a global market leader with unmatched delivery impact.",
+        fetched_excerpt=(
+            "Example Oy provides data center lifecycle services, including modernization, "
+            "maintenance, installation support, and service agreements for data center operators."
+        ),
+        verified=True,
+        url_verified=True,
+        content_readable=True,
+        content_verified=False,
+        entity_verified=True,
+        entity_match_status="exact",
+        content_entity_match_status="exact",
+        entity_scope="canonical_group",
+        entity_mentioned=True,
+    )
+    result = scanner_two._merge_forensic_jury_results(
+        {"confidence_score": 20, "findings": []},
+        [{
+            "jury": jury,
+            "status": "completed",
+            "provider": "gpt-5.5",
+            "packet_urls": [supplied["url"]],
+            "packets": [supplied],
+            "data": {
+                "findings": [{
+                    "url": supplied["url"],
+                    "supported_claim": "Example Oy provides data center lifecycle services.",
+                    "source_quote": "Example Oy is a global market leader with unmatched delivery impact.",
+                    "support_level": "exact",
+                    "title": "Data center services",
+                    "found": True,
+                }],
+                "confidence_score": 80,
+            },
+        }],
+        {jury: []},
+    )
+
+    finding = result["findings"][0]
+    assert finding["support_method"] == "source_content_passage"
+    assert finding["content_verified"] is True
+    assert "data center lifecycle services" in finding["source_quote"]
+    assert "market leader" not in finding["source_quote"]
+
+
 def test_generic_landing_page_is_context_only_even_if_jury_calls_it_exact():
     jury = "CULTURAL JURY (Talent & Psychological Safety)"
     supplied = _finding(
@@ -482,7 +531,7 @@ def test_new_canonical_verdict_replaces_old_active_record_and_keeps_audit_histor
     )
 
 
-def test_pre_jury_gate_rejects_unbound_acquisition_quote(monkeypatch):
+def test_pre_jury_gate_keeps_source_when_acquisition_snippet_is_only_a_hint(monkeypatch):
     monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
     jury = "AI & DATA JURY (Future Readiness)"
     source = _finding(
@@ -511,9 +560,10 @@ def test_pre_jury_gate_rejects_unbound_acquisition_quote(monkeypatch):
         "Example Oy",
     )
 
-    assert lanes[0]["sources"] == []
+    assert len(lanes[0]["sources"]) == 1
     assert stats["quote_not_found"] == 1
-    assert lanes[0]["pre_jury_rejected"][0]["reason"] == "quote_not_found"
+    assert lanes[0]["sources"][0]["passage_hint_status"] == "snippet_not_found_in_source_content"
+    assert lanes[0]["pre_jury_rejected"] == []
 
 
 def test_pre_jury_gate_selectively_recovers_passage_with_firecrawl(monkeypatch):

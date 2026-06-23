@@ -651,6 +651,44 @@ def _claim_matches_quote(claim: str, quote: str, support_level: str) -> bool:
     return overlap >= threshold and len(claim_terms & quote_terms) >= min(3, len(claim_terms))
 
 
+def _claim_supported_by_source_text(
+    claim: str,
+    source_quote: str,
+    packet_text: str,
+    support_level: str,
+) -> tuple[bool, str, str]:
+    """Validate a claim against source content, using quotes as anchors only.
+
+    Acquisition snippets and jury quotes are useful to find the right passage,
+    but the evidence is the fetched or cached source text itself. If the quoted
+    passage is imperfect, fall back to a claim-centered passage from the source
+    before rejecting the finding.
+    """
+    text = str(packet_text or "").strip()
+    claim_text = str(claim or "").strip()
+    quote_text = str(source_quote or "").strip()
+    if not claim_text or not text:
+        return False, quote_text, "missing_claim_or_source_text"
+
+    if quote_text and _quote_matches_packet(
+        quote_text,
+        text,
+        require_verbatim=support_level == "exact",
+    ) and _claim_matches_quote(claim_text, quote_text, support_level):
+        return True, quote_text, "jury_quote"
+
+    passage = _relevant_passage(claim_text, text, limit=1600).strip()
+    if _claim_matches_quote(claim_text, passage, support_level):
+        return True, passage, "source_content_passage"
+
+    if support_level in {"partial", "context_only"}:
+        hint_passage = _relevant_passage(quote_text or claim_text, text, limit=1600).strip()
+        if _claim_matches_quote(claim_text, hint_passage, support_level):
+            return True, hint_passage, "source_content_context"
+
+    return False, quote_text or passage, "source_content_unsupported"
+
+
 def _is_atomic_supported_claim(claim: str) -> bool:
     """Reject clearly bundled claims so the jury must emit separate findings."""
     text = str(claim or "").strip()
@@ -786,7 +824,7 @@ def _prevalidate_acquisition_results(
                 recovered = firecrawl_results.get(source.get("url"), {})
                 recovered_text = str(recovered.get("text") or "")
                 recovered_match = _quote_match_details(str(source.get("snippet") or ""), recovered_text)
-                if recovered.get("ok") and recovered_match["matched"]:
+                if recovered.get("ok") and (recovered_match["matched"] or not source["content_readable"]):
                     source["content_readable"] = True
                     provider = recovered.get("provider") or "firecrawl"
                     source["extraction_provider"] = provider
@@ -800,7 +838,10 @@ def _prevalidate_acquisition_results(
                     if source.get("url") in firecrawl_results:
                         stats["firecrawl_failed"] += 1
                         source["extraction_recovery_reason"] = recovered.get("reason") or "passage_not_found"
-                    reason = "unreadable" if not source["content_readable"] else "quote_not_found"
+                    reason = "unreadable" if not source["content_readable"] else ""
+                    if not reason:
+                        stats["quote_not_found"] += 1
+                        source["passage_hint_status"] = "snippet_not_found_in_source_content"
             if reason:
                 stats.setdefault(reason, 0)
                 stats[reason] += 1
@@ -882,15 +923,18 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
                     or packet.get("cached_excerpt")
                     or ""
                 )
-                if not supported_claim or not _is_atomic_supported_claim(supported_claim) or not _quote_matches_packet(
+                claim_supported, supporting_passage, support_method = _claim_supported_by_source_text(
+                    supported_claim,
                     source_quote,
                     packet_text,
-                    require_verbatim=support_level == "exact",
-                ) or not _claim_matches_quote(supported_claim, source_quote, support_level):
+                    support_level,
+                )
+                if not supported_claim or not _is_atomic_supported_claim(supported_claim) or not claim_supported:
                     rejected.append({
                         "url": item.get("url"),
-                        "reason": "Jury claim was bundled, lacked a source-bound quote, or materially exceeded the quote.",
+                        "reason": "Jury claim was bundled or materially exceeded the fetched source content.",
                         "jury": jury,
+                        "support_method": support_method,
                     })
                     continue
                 if packet.get("generic_context_page") and support_level == "exact":
@@ -902,9 +946,10 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
                 normalized["category"] = jury
                 normalized["label"] = supported_claim[:300]
                 normalized["supported_claim"] = supported_claim
-                normalized["snippet"] = source_quote[:1200]
-                normalized["source_quote"] = source_quote[:1200]
+                normalized["snippet"] = supporting_passage[:1200]
+                normalized["source_quote"] = supporting_passage[:1200]
                 normalized["support_level"] = support_level
+                normalized["support_method"] = support_method
                 normalized["source_status"] = "jury_accepted" if support_level == "exact" else f"jury_{support_level}"
                 normalized["analysis_verified"] = support_level == "exact"
                 normalized["claim_support_status"] = "supported" if support_level == "exact" else support_level
@@ -913,11 +958,11 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
                 normalized["verified"] = packet.get("verified") is True
                 normalized["url_verified"] = packet.get("url_verified") is True
                 normalized["content_readable"] = packet.get("content_readable") is True
-                # The quote has just been matched against freshly fetched packet
-                # content above. This is current content verification, independent
-                # of any historical verdict carried only in verification_history.
+                # The supporting passage has just been matched against freshly
+                # fetched/cached packet content above. Acquisition snippets and
+                # jury quotes are only anchors; source content is the evidence.
                 normalized["content_verified"] = (
-                    packet.get("content_verified") is True or bool(source_quote)
+                    packet.get("content_verified") is True or bool(supporting_passage)
                 )
                 normalized["entity_verified"] = packet.get("entity_verified") is True
                 normalized["entity_match_status"] = packet.get("entity_match_status") or "unknown"
@@ -1161,9 +1206,10 @@ For every promoted finding, verify from the supplied excerpt/content:
 
 Seeded material is candidate evidence, never inherited truth. Reject wrong-entity, generic,
 unsupported, stale, soft-404, or merely adjacent packets. Hiring is a weak signal, not deployment proof.
-Write the SMALLEST claim the packet actually supports. `source_quote` must be copied verbatim from
-`fetched_or_cached_content`, not invented, paraphrased, or copied only from an unconfirmed
-`acquired_quote`. Grade support as:
+`acquired_quote` is only a discovery hint; it is not evidence by itself. Judge claims from
+`fetched_or_cached_content`. Write the SMALLEST claim the source content actually supports.
+`source_quote` should be the best exact passage you can find in `fetched_or_cached_content`, not
+invented, paraphrased, or copied only from an unconfirmed `acquired_quote`. Grade support as:
 - exact: quote directly supports the whole claim,
 - partial: quote supports only part; phrase as a cautious signal,
 - context_only: identity/general background only, not a company capability fact,
