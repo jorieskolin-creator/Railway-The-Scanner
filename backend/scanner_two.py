@@ -11,7 +11,18 @@ from datetime import date, datetime
 from urllib.parse import urlparse
 import anthropic
 from knowledge_base import get_evolving_framework
-from source_quality import assess_evidence_quality, confidence_quality_penalty, annotate_evidence_links, filter_admissible_sources, evidence_sufficiency_score, classify_generation_context, apply_language_metadata
+from source_quality import (
+    assess_evidence_quality,
+    confidence_quality_penalty,
+    annotate_evidence_links,
+    filter_admissible_sources,
+    evidence_sufficiency_score,
+    classify_generation_context,
+    apply_language_metadata,
+    apply_analysis_verification,
+    is_generation_eligible_source,
+    is_scoped_context_source,
+)
 from entity_identity import build_entity_context_block, entity_search_terms
 from llm_clients import call_anthropic_text, call_json_model_chain, call_openai_text
 from gemini_client import call_gemini_forensic_text, gemini_api_key
@@ -1173,6 +1184,8 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
                 # Only current packet verification is authoritative here. Old
                 # verdicts remain confined to verification_history.
                 normalized.update(current_company_verification(packet))
+                normalized["jury_status"] = "completed"
+                normalized = apply_analysis_verification(normalized)
                 accepted.append(mark_verified_company_evidence(normalized))
             rejected.extend(payload.get("rejected_evidence", []) or [])
             if accepted:
@@ -1184,7 +1197,12 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
                     fallback = dict(item)
                     fallback["category"] = jury
                     fallback["source_status"] = "seeded_analysis_pending"
+                    fallback["jury_status"] = "unjudged_due_timeout"
                     fallback["analysis_verified"] = False
+                    fallback["generation_eligible"] = False
+                    fallback["promotion_status"] = "unjudged_due_timeout"
+                    fallback["source_use_status"] = "unjudged_due_timeout"
+                    fallback["claim_support_status"] = "unjudged_due_timeout"
                     fallback["claim_support_pending"] = True
                     accepted.append(fallback)
         findings, _ = _merge_findings(findings, accepted)
@@ -1200,6 +1218,28 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
     result["confidence_score"] = round(sum(confidences) / len(confidences)) if confidences else min(35, baseline.get("confidence_score", 20))
     result["reality_score_adjustment"] = round(sum(adjustments) / len(adjustments)) if adjustments else 0
     result["forensic_jury_status"] = statuses
+    result["forensic_resolution_metrics"] = {
+        "source_coverage_count": len([
+            item for item in findings
+            if item.get("url") and (item.get("verified") is True or item.get("url_verified") is True)
+        ]),
+        "judged_jury_coverage": {
+            jury: len([
+                item for item in findings
+                if _finding_jury(item) == jury
+                and item.get("jury_status") == "completed"
+                and item.get("source_use_status") in {"supported_fact", "scoped_context", "company_statement"}
+            ])
+            for jury in FORENSIC_JURIES
+        },
+        "promoted_fact_count": len([item for item in findings if is_generation_eligible_source(item)]),
+        "scoped_context_count": len([item for item in findings if is_scoped_context_source(item)]),
+        "unjudged_timeout_count": len([
+            item for item in findings
+            if item.get("source_use_status") == "unjudged_due_timeout"
+            or item.get("jury_status") == "unjudged_due_timeout"
+        ]),
+    }
     result["rejected_evidence"] = rejected
     accepted_seed_urls = {
         _canonical_evidence_url(item.get("url"))
@@ -3525,7 +3565,12 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         jury: len([finding for finding in data.get("findings", []) if _finding_jury(finding) == jury])
         for jury in FORENSIC_JURIES
     }
-    missing_juries = [jury for jury, count in jury_counts.items() if count == 0]
+    resolution_metrics = data.get("forensic_resolution_metrics") or {}
+    judged_jury_coverage = resolution_metrics.get("judged_jury_coverage") or {}
+    missing_juries = [
+        jury for jury in FORENSIC_JURIES
+        if int(judged_jury_coverage.get(jury) or 0) == 0
+    ]
     fresh_supported_targets = {}
     for jury in FORENSIC_JURIES:
         supported = [
@@ -3558,6 +3603,13 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         f"source coverage {source_coverage['score']}/100 (promotion pending)."
     )
     print(f"   📚 [Forensic Juries] {jury_counts}")
+    print(
+        "   🧾 [Forensic Resolution] "
+        f"judged={judged_jury_coverage}, "
+        f"facts={resolution_metrics.get('promoted_fact_count', 0)}, "
+        f"scoped_context={resolution_metrics.get('scoped_context_count', 0)}, "
+        f"unjudged_timeout={resolution_metrics.get('unjudged_timeout_count', 0)}"
+    )
     seed_lifecycle = data.get("seed_lifecycle") or {}
     print(
         "   🧭 [Seed Lifecycle] "

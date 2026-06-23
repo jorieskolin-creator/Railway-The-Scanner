@@ -17,8 +17,11 @@ from source_quality import (  # noqa: E402
     PROMOTION_DISPLAY_ONLY,
     PROMOTION_EXCLUDED,
     PROMOTION_GENERATION_ELIGIBLE,
+    PROMOTION_SCOPED_CONTEXT,
+    PROMOTION_UNJUDGED_TIMEOUT,
     apply_analysis_verification,
     is_generation_eligible_source,
+    is_scoped_context_source,
 )
 
 
@@ -327,4 +330,90 @@ def test_content_verdict_never_overrides_explicit_wrong_entity():
     assert link["analysis_verified"] is False
     assert link["generation_eligible"] is False
     assert link["promotion_status"] == PROMOTION_EXCLUDED
+    assert is_generation_eligible_source(link) is False
+
+
+def test_official_partial_support_becomes_scoped_context_not_fact_proof():
+    link = apply_analysis_verification(
+        _source(
+            title="ABB service",
+            url="https://new.abb.com/service/fi",
+            snippet="ABB presents service offerings for installed industrial systems.",
+            source_quote="ABB presents lifecycle service offerings for installed industrial systems.",
+            source_type="service_page",
+            source_credibility="medium",
+            content_entity_match_status="exact",
+            entity_match_status="exact",
+            entity_verified=True,
+            entity_scope="canonical_group",
+            claim_support_status="partial",
+            content_verified=True,
+            content_readable=True,
+        ),
+        company_domain="https://abb.com",
+        company_name="ABB Oy",
+    )
+
+    assert link["analysis_verified"] is False
+    assert link["generation_eligible"] is False
+    assert link["promotion_status"] == PROMOTION_SCOPED_CONTEXT
+    assert link["source_use_status"] == "scoped_context"
+    assert link["verification_reason"] == "scoped_context_partial_support"
+    assert is_scoped_context_source(link) is True
+    assert is_generation_eligible_source(link) is False
+
+
+def test_official_unsupported_context_stays_display_only_not_scoped():
+    link = apply_analysis_verification(
+        _source(
+            title="ABB service",
+            url="https://new.abb.com/service/fi",
+            snippet="ABB service landing page.",
+            source_quote="ABB service landing page.",
+            source_type="service_page",
+            source_credibility="medium",
+            content_entity_match_status="exact",
+            entity_match_status="exact",
+            entity_verified=True,
+            entity_scope="canonical_group",
+            claim_support_status="unsupported",
+            content_verified=True,
+            content_readable=True,
+        ),
+        company_domain="https://abb.com",
+        company_name="ABB Oy",
+    )
+
+    assert link["analysis_verified"] is False
+    assert link["generation_eligible"] is False
+    assert link["promotion_status"] == PROMOTION_DISPLAY_ONLY
+    assert link["source_use_status"] == "unsupported"
+    assert is_scoped_context_source(link) is False
+
+
+def test_unjudged_timeout_is_distinct_from_display_only_and_coverage():
+    link = apply_analysis_verification(
+        _source(
+            title="ABB service",
+            url="https://new.abb.com/service/fi",
+            snippet="ABB service landing page.",
+            source_quote="ABB service landing page.",
+            source_type="service_page",
+            content_entity_match_status="exact",
+            entity_match_status="exact",
+            entity_verified=True,
+            entity_scope="canonical_group",
+            claim_support_status="unjudged_due_timeout",
+            content_verified=True,
+            content_readable=True,
+        ),
+        company_domain="https://abb.com",
+        company_name="ABB Oy",
+    )
+
+    assert link["analysis_verified"] is False
+    assert link["generation_eligible"] is False
+    assert link["promotion_status"] == PROMOTION_UNJUDGED_TIMEOUT
+    assert link["source_use_status"] == "unjudged_due_timeout"
+    assert is_scoped_context_source(link) is False
     assert is_generation_eligible_source(link) is False

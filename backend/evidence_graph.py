@@ -57,6 +57,7 @@ def _truth_score(item: dict, kind: str) -> int:
     score += 8 if item.get("entity_verified") is True or item.get("entity_match_status") in {"exact", "verified"} else 0
     score += 8 if item.get("claim_support_status") in {"exact", "supported", "partial"} else 0
     score += 10 if item.get("generation_eligible") is True else 0
+    score += 6 if item.get("promotion_status") == "scoped_context" else 0
     score += 10 if kind == "foresight" and item.get("foresight_context_eligible") is True else 0
     score += min(len(_content(item)) // 250, 5)
     score -= 20 if item.get("wrong_entity") is True or item.get("entity_match_status") == "wrong" else 0

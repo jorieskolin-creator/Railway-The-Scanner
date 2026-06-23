@@ -1,6 +1,6 @@
 
 const { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Tooltip: RechartsTooltip, LineChart, Line, XAxis, YAxis, CartesianGrid, ReferenceLine } = (window as any).Recharts;
-const { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash, RefreshCw, XCircle, Search, Zap, Scale, Activity, Download, Copy, FileJson, FileCode, Check, Eye, AlertOctagon, Info, Sparkles, TrendingUp } = (window as any).Lucide;
+const { ExternalLink, CheckCircle, AlertTriangle, ShieldCheck, ServerCrash, RefreshCw, XCircle, Search, Zap, Scale, Activity, Download, Copy, FileJson, FileCode, Check, Eye, AlertOctagon, Info, Sparkles, TrendingUp, BookOpen } = (window as any).Lucide;
 const React = (window as any).React;
 const { useRef, useState, useEffect } = React;
 
@@ -186,6 +186,11 @@ const isForesightContext = (link) => {
     return link?.entity_verified === true || contentStatus === 'exact' || contentStatus === 'scoped';
   };
   const isClaimSupported = (link) => String(link?.claim_support_status || '').toLowerCase() === 'supported' && !isVerificationConflict(link);
+  const isScopedContext = (link) => {
+    const promotion = String(link?.promotion_status || '').toLowerCase();
+    const useStatus = String(link?.source_use_status || '').toLowerCase();
+    return promotion === 'scoped_context' || useStatus === 'scoped_context' || useStatus === 'company_statement';
+  };
   const isAnalysisVerified = (link) => (
     link?.analysis_verified === true
     && link?.promotion_status === 'generation_eligible'
@@ -201,7 +206,9 @@ const isForesightContext = (link) => {
   };
   const getPromotionLabel = (link) => {
     if (isAnalysisVerified(link)) return 'Verified for analysis';
+    if (isScopedContext(link)) return 'Usable scoped context';
     if (isVerificationConflict(link)) return 'Blocked: verification conflict';
+    if (link?.promotion_status === 'unjudged_due_timeout' || link?.source_use_status === 'unjudged_due_timeout') return 'Unjudged due timeout';
     if (link?.promotion_status === 'excluded') return 'Excluded';
     if (link?.promotion_status === 'display_only') return 'Display only';
     return '';
@@ -298,10 +305,11 @@ const isForesightContext = (link) => {
   const claimSupportedCount = companyEvidenceTrustPool.filter((link) => isClaimSupported(link)).length;
   const analysisVerifiedCount = companyEvidenceTrustPool.filter((link) => isAnalysisVerified(link)).length;
   const generationEligibleCount = companyEvidenceTrustPool.filter((link) => isAnalysisVerified(link) && link.generation_eligible === true).length;
+  const scopedContextCount = companyEvidenceTrustPool.filter((link) => isScopedContext(link)).length;
   const evidenceSufficiency = typeof data.evidence_sufficiency === 'object' && data.evidence_sufficiency !== null ? data.evidence_sufficiency : null;
   const lowEvidenceLabel = data.low_evidence_label || evidenceSufficiency?.label || '';
   const isLowEvidenceMode = data.low_evidence_mode === true || !!lowEvidenceLabel;
-  const displayOnlyCount = companyEvidenceTrustPool.filter((link) => link.promotion_status === 'display_only' || link.claim_support_status === 'unsupported').length;
+  const displayOnlyCount = companyEvidenceTrustPool.filter((link) => !isScopedContext(link) && (link.promotion_status === 'display_only' || link.claim_support_status === 'unsupported')).length;
   const verificationConflictCount = companyEvidenceTrustPool.filter((link) => isVerificationConflict(link)).length;
   const wrongEntityCount = companyEvidenceTrustPool.filter((link) => isWrongEntity(link)).length;
   const unknownEntityCount = companyEvidenceTrustPool.filter((link) => isUnknownOrWeakEntity(link)).length;
@@ -313,8 +321,8 @@ const isForesightContext = (link) => {
       || link.url_verified === false
       || cred === 'low'
       || (!!link.url && cred === 'unknown')
-      || ['unsupported', 'unchecked', 'unavailable', 'partial'].includes(support)
-      || ['display_only', 'excluded'].includes(promotion)
+      || (!isScopedContext(link) && ['unsupported', 'unchecked', 'unavailable', 'partial'].includes(support))
+      || (!isScopedContext(link) && ['display_only', 'excluded'].includes(promotion))
       || isVerificationConflict(link)
       || isWrongEntity(link)
       || isUnknownOrWeakEntity(link);
@@ -599,6 +607,11 @@ const isForesightContext = (link) => {
         var isClaimSupported = function(link) {
             return link && String(link.claim_support_status || '').toLowerCase() === 'supported' && !isVerificationConflict(link);
         };
+        var isScopedContext = function(link) {
+            var promotion = String(link && link.promotion_status || '').toLowerCase();
+            var useStatus = String(link && link.source_use_status || '').toLowerCase();
+            return promotion === 'scoped_context' || useStatus === 'scoped_context' || useStatus === 'company_statement';
+        };
         var isAnalysisSafe = function(link) {
             return link && link.analysis_verified === true && link.promotion_status === 'generation_eligible' && link.generation_eligible === true && isEntitySafe(link) && isClaimSupported(link);
         };
@@ -617,12 +630,13 @@ const isForesightContext = (link) => {
         var entityVerifiedSources = companyEvidencePool.filter(function(link) { return isEntitySafe(link) && !isWrongEntity(link); }).length;
         var claimSupportedSources = companyEvidencePool.filter(isClaimSupported).length;
         var generationEligibleSources = companyEvidencePool.filter(function(link) { return isAnalysisSafe(link) && link.generation_eligible === true; }).length;
+        var scopedContextSources = companyEvidencePool.filter(isScopedContext).length;
         var evidenceSufficiency = exportData.evidence_sufficiency && typeof exportData.evidence_sufficiency === 'object' ? exportData.evidence_sufficiency : null;
         var lowEvidenceLabel = exportData.low_evidence_label || (evidenceSufficiency && evidenceSufficiency.label) || '';
         var isLowEvidenceMode = exportData.low_evidence_mode === true || !!lowEvidenceLabel;
         var verificationConflictSources = companyEvidencePool.filter(isVerificationConflict).length;
         var displayOnlySources = companyEvidencePool.filter(function(link) {
-            return link && (link.promotion_status === 'display_only' || link.claim_support_status === 'unsupported');
+            return link && !isScopedContext(link) && (link.promotion_status === 'display_only' || link.claim_support_status === 'unsupported');
         }).length;
         var wrongEntitySources = companyEvidencePool.filter(isWrongEntity).length;
         var unknownEntitySources = companyEvidencePool.filter(isUnknownEntity).length;
@@ -635,8 +649,8 @@ const isForesightContext = (link) => {
                 || link.url_verified === false
                 || cred === 'low'
                 || ((link.url || link.source_url) && cred === 'unknown')
-                || ['unsupported', 'unchecked', 'unavailable', 'partial'].indexOf(support) >= 0
-                || ['display_only', 'excluded'].indexOf(promotion) >= 0
+                || (!isScopedContext(link) && ['unsupported', 'unchecked', 'unavailable', 'partial'].indexOf(support) >= 0)
+                || (!isScopedContext(link) && ['display_only', 'excluded'].indexOf(promotion) >= 0)
                 || isVerificationConflict(link)
                 || isWrongEntity(link)
                 || isUnknownEntity(link)
@@ -694,6 +708,7 @@ const isForesightContext = (link) => {
             renderMetric('Target Entity Verified', entityVerifiedSources, 'right company/scope'),
             renderMetric('Claim Supported', claimSupportedSources, 'source backs claim'),
             renderMetric('Generation Eligible', generationEligibleSources, 'safe for prose'),
+            renderMetric('Scoped Context', scopedContextSources, 'analysis premise'),
             renderMetric('Source Register', isLowEvidenceMode ? (lowEvidenceLabel || 'Low evidence') : 'Complete', isLowEvidenceMode ? 'cautious prose mode' : 'promoted evidence available'),
             renderMetric('Display / Unsupported', displayOnlySources, 'audit only'),
             renderMetric('Wrong Entity', wrongEntitySources, 'blocked sources'),
@@ -730,6 +745,7 @@ const isForesightContext = (link) => {
             + renderMetric('Target Entity Verified', entityVerifiedSources, 'right company or explicit scope')
             + renderMetric('Claim Supported', claimSupportedSources, 'source content backs claim')
             + renderMetric('Generation Eligible', generationEligibleSources, 'safe for prose')
+            + renderMetric('Scoped Context', scopedContextSources, 'analysis premise')
             + renderMetric('Source Register', isLowEvidenceMode ? (lowEvidenceLabel || 'Low evidence') : 'Complete', isLowEvidenceMode ? 'cautious prose mode' : 'promoted evidence available')
             + renderMetric('Display / Unsupported', displayOnlySources, 'audit only')
             + renderMetric('Wrong Entity', wrongEntitySources, 'blocked sources')
@@ -752,11 +768,19 @@ const isForesightContext = (link) => {
                 var url = link.url || link.source_url || '';
                 var sourceName = link.title || link.source || link.source_title || link.fp_theme || 'Evidence source';
                 var quote = link.exact_passage || link.source_quote || link.source_says || link.snippet || link.description || link.summary || '';
-                var analysis = isAnalysisSafe(link) ? 'Verified for analysis' : (isVerificationConflict(link) ? 'Blocked: verification conflict' : (link.promotion_status || link.verification_reason || link.entity_match_reason || 'Display only'));
+                var analysis = isAnalysisSafe(link)
+                    ? 'Verified for analysis'
+                    : (isScopedContext(link)
+                        ? 'Usable scoped context'
+                        : (isVerificationConflict(link)
+                            ? 'Blocked: verification conflict'
+                            : ((link.promotion_status === 'unjudged_due_timeout' || link.source_use_status === 'unjudged_due_timeout')
+                                ? 'Unjudged due timeout'
+                                : (link.promotion_status || link.verification_reason || link.entity_match_reason || 'Display only'))));
                 var entity = link.entity_verified === true ? 'verified' : (link.content_entity_match_status || link.entity_match_status || 'unknown');
                 var verification = link.url_verified === false || link.verified === false ? 'failed' : (link.content_verified === true || link.source_readable === true ? 'content verified' : analysis);
                 var claims = Array.isArray(link.associated_claim_ids) ? link.associated_claim_ids.join(', ') : '';
-                return '<tr id="evidence-' + escapeHTML(link.evidence_id || '') + '"><td>' + escapeHTML(link.report_ref || '') + '</td><td>' + escapeHTML(link.evidence_id || '') + '</td><td>' + escapeHTML(sourceName) + '</td><td>' + escapeHTML(link.evidence_kind || link.source_type || link.origin || '') + '</td><td>' + (url ? '<a href="' + escapeHTML(url) + '">' + escapeHTML(url) + '</a>' : '') + '</td><td>' + escapeHTML(verification) + '</td><td>' + escapeHTML(entity) + '</td><td>' + escapeHTML(link.claim_support_status || (link.foresight_context_eligible === true ? 'macro context' : '')) + '</td><td>' + escapeHTML(String(quote).slice(0, 700)) + '</td><td>' + escapeHTML(claims) + '</td></tr>';
+                return '<tr id="evidence-' + escapeHTML(link.evidence_id || '') + '"><td>' + escapeHTML(link.report_ref || '') + '</td><td>' + escapeHTML(link.evidence_id || '') + '</td><td>' + escapeHTML(sourceName) + '</td><td>' + escapeHTML(link.evidence_kind || link.source_type || link.origin || '') + '</td><td>' + (url ? '<a href="' + escapeHTML(url) + '">' + escapeHTML(url) + '</a>' : '') + '</td><td>' + escapeHTML(verification) + '</td><td>' + escapeHTML(entity) + '</td><td>' + escapeHTML(link.source_use_status || link.claim_support_status || (link.foresight_context_eligible === true ? 'macro context' : '')) + '</td><td>' + escapeHTML(String(quote).slice(0, 700)) + '</td><td>' + escapeHTML(claims) + '</td></tr>';
             }).join('') + '</tbody></table></div>' : '<p class="muted">No evidence links were available in this export.</p>';
         function checklistMarkerState(item) {
             var source = String(item.source_type || item.source || '').toLowerCase();
@@ -1069,6 +1093,11 @@ const isForesightContext = (link) => {
         const isClaimSupported = function(link) {
             return link && String(link.claim_support_status || '').toLowerCase() === 'supported' && !isVerificationConflict(link);
         };
+        const isScopedContext = function(link) {
+            const promotion = String(link?.promotion_status || '').toLowerCase();
+            const useStatus = String(link?.source_use_status || '').toLowerCase();
+            return promotion === 'scoped_context' || useStatus === 'scoped_context' || useStatus === 'company_statement';
+        };
         const isAnalysisSafe = function(link) {
             return link && link.analysis_verified === true && link.promotion_status === 'generation_eligible' && link.generation_eligible === true && isEntitySafe(link) && isClaimSupported(link);
         };
@@ -1089,8 +1118,9 @@ const isForesightContext = (link) => {
         const generationEligibleSources = companyEvidencePool.filter(function(link) {
             return isAnalysisSafe(link) && link.generation_eligible === true;
         }).length;
+        const scopedContextSources = companyEvidencePool.filter(isScopedContext).length;
         const displayOnlySources = companyEvidencePool.filter(function(link) {
-            return link && (link.promotion_status === 'display_only' || link.claim_support_status === 'unsupported');
+            return link && !isScopedContext(link) && (link.promotion_status === 'display_only' || link.claim_support_status === 'unsupported');
         }).length;
         const wrongEntitySources = companyEvidencePool.filter(isWrongEntity).length;
         const unknownEntitySources = companyEvidencePool.filter(isUnknownEntity).length;
@@ -1103,8 +1133,8 @@ const isForesightContext = (link) => {
                 || link.url_verified === false
                 || cred === 'low'
                 || (!cred && (link.url || link.link))
-                || ['unsupported', 'unchecked', 'unavailable', 'partial'].includes(support)
-                || ['display_only', 'excluded'].includes(promotion)
+                || (!isScopedContext(link) && ['unsupported', 'unchecked', 'unavailable', 'partial'].includes(support))
+                || (!isScopedContext(link) && ['display_only', 'excluded'].includes(promotion))
                 || isWrongEntity(link)
                 || isUnknownEntity(link)
             );
@@ -1134,6 +1164,7 @@ const isForesightContext = (link) => {
             renderMetric('URL Verified Sources', verifiedSources, weakSources + ' weak/unverified'),
             renderMetric('Analysis Verified', analysisVerifiedSources, 'content supports claim'),
             renderMetric('Generation Eligible', generationEligibleSources, 'safe for prose'),
+            renderMetric('Scoped Context', scopedContextSources, 'analysis premise'),
             renderMetric('Source Register', isLowEvidenceMode ? (lowEvidenceLabel || 'Low evidence') : 'Complete', isLowEvidenceMode ? 'cautious prose mode' : 'promoted evidence available'),
             renderMetric('Display / Unsupported', displayOnlySources, 'audit only'),
             renderMetric('Wrong Entity', wrongEntitySources, 'blocked sources'),
@@ -1574,6 +1605,14 @@ const isForesightContext = (link) => {
                     <p className="text-3xl font-black text-cyan-300">{generationEligibleCount}</p>
                     <p className="text-[10px] text-slate-500 mt-1">safe for prose</p>
                 </div>
+                <div className="bg-black/20 p-4 rounded-xl border border-emerald-500/20">
+                    <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Scoped Context</span>
+                        <BookOpen size={14} className="text-emerald-300" />
+                    </div>
+                    <p className="text-3xl font-black text-emerald-300">{scopedContextCount}</p>
+                    <p className="text-[10px] text-slate-500 mt-1">analysis premise</p>
+                </div>
                 <div className="bg-black/20 p-4 rounded-xl border border-amber-500/20">
                     <div className="flex items-center justify-between mb-2">
                         <span className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Weak / Unverified</span>
@@ -1938,6 +1977,7 @@ const isForesightContext = (link) => {
                                         {getPromotionLabel(link) && (
                                             <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono shrink-0 ${
                                                 isAnalysisVerified(link) ? 'bg-teal-500/20 text-teal-300' :
+                                                isScopedContext(link) ? 'bg-emerald-500/20 text-emerald-300' :
                                                 isVerificationConflict(link) ? 'bg-fuchsia-500/20 text-fuchsia-300' :
                                                 link.promotion_status === 'excluded' ? 'bg-rose-500/20 text-rose-300' :
                                                 'bg-slate-700/60 text-slate-400'

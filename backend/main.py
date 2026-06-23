@@ -40,6 +40,7 @@ from source_quality import (
     assess_source_scope,
     annotate_evidence_links,
     is_generation_eligible_source,
+    is_scoped_context_source,
     is_foresight_context_eligible_source,
     infer_source_type,
     assess_source_credibility,
@@ -316,6 +317,13 @@ def _evidence_sufficiency_state(evidence_links: list, financial_links: list) -> 
         if is_generation_eligible_source(link)
         and (link.get("url") or link.get("source_url") or "").rstrip("/").lower() not in financial_urls
     )
+    scoped_context_total = sum(1 for link in evidence_links or [] if is_scoped_context_source(link))
+    scoped_context_nonfinancial = sum(
+        1
+        for link in evidence_links or []
+        if is_scoped_context_source(link)
+        and (link.get("url") or link.get("source_url") or "").rstrip("/").lower() not in financial_urls
+    )
     label = ""
     status = "complete"
     if promoted_total == 0 and promoted_financial == 0:
@@ -334,6 +342,8 @@ def _evidence_sufficiency_state(evidence_links: list, financial_links: list) -> 
         "promoted_nonfinancial_sources": promoted_nonfinancial,
         "promoted_financial_sources": promoted_financial,
         "promoted_total_sources": promoted_total,
+        "scoped_context_sources": scoped_context_total,
+        "scoped_context_nonfinancial_sources": scoped_context_nonfinancial,
     }
 
 
@@ -460,8 +470,15 @@ def _build_fact_check_scan_payload(data: dict) -> dict:
     evidence_counts = {
         "total": len(evidence_links),
         "generation_eligible": sum(1 for item in evidence_links if is_generation_eligible_source(item)),
+        "scoped_context": sum(1 for item in evidence_links if is_scoped_context_source(item)),
         "analysis_verified": sum(1 for item in evidence_links if item.get("analysis_verified") is True),
         "display_only": sum(1 for item in evidence_links if item.get("promotion_status") == "display_only"),
+        "unjudged_due_timeout": sum(
+            1
+            for item in evidence_links
+            if item.get("promotion_status") == "unjudged_due_timeout"
+            or item.get("source_use_status") == "unjudged_due_timeout"
+        ),
         "excluded": sum(1 for item in evidence_links if item.get("promotion_status") == "excluded"),
         "wrong_entity": sum(1 for item in evidence_links if item.get("wrong_entity") is True or item.get("entity_match_status") == "wrong"),
         "unknown_entity": sum(1 for item in evidence_links if item.get("entity_match_status") in {"unknown", "weak"}),
@@ -478,8 +495,12 @@ def _build_fact_check_scan_payload(data: dict) -> dict:
             "sentiment": item.get("sentiment"),
             "source_type": item.get("source_type"),
             "promotion_status": item.get("promotion_status"),
+            "source_use_status": item.get("source_use_status"),
+            "jury_status": item.get("jury_status"),
+            "support_level": item.get("support_level"),
             "analysis_verified": item.get("analysis_verified"),
             "generation_eligible": is_generation_eligible_source(item),
+            "scoped_context": is_scoped_context_source(item),
         })
 
     financial_findings = []

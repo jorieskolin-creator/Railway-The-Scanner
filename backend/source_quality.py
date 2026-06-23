@@ -73,10 +73,31 @@ ANALYSIS_SUPPORT_PARTIAL = "partial"
 ANALYSIS_SUPPORT_UNSUPPORTED = "unsupported"
 ANALYSIS_SUPPORT_UNCHECKED = "unchecked"
 ANALYSIS_SUPPORT_UNAVAILABLE = "unavailable"
+ANALYSIS_SUPPORT_SCOPED_CONTEXT = "scoped_context"
+ANALYSIS_SUPPORT_COMPANY_STATEMENT = "company_statement"
+ANALYSIS_SUPPORT_CONTEXT_ONLY = "context_only"
+ANALYSIS_SUPPORT_UNJUDGED_TIMEOUT = "unjudged_due_timeout"
 
 PROMOTION_GENERATION_ELIGIBLE = "generation_eligible"
+PROMOTION_SCOPED_CONTEXT = "scoped_context"
+PROMOTION_UNJUDGED_TIMEOUT = "unjudged_due_timeout"
 PROMOTION_DISPLAY_ONLY = "display_only"
 PROMOTION_EXCLUDED = "excluded"
+
+SCOPED_CONTEXT_SOURCE_TYPES = COMPANY_SPECIFIC_SOURCE_TYPES | {
+    "service_page",
+    "product_page",
+    "solution_page",
+    "technology_page",
+    "developer_portal",
+    "technical_artifact",
+    "official_operating_evidence",
+    "careers_page",
+    "job_ad_tech_stack",
+    "customer_story",
+    "reference_case",
+    "case_page",
+}
 
 
 # === DOMAIN AUTHORITY TIERS ===
@@ -979,6 +1000,7 @@ def apply_analysis_verification(link: dict, company_domain: str = "", company_na
     reason = ""
     promotion = PROMOTION_DISPLAY_ONLY
     analysis_verified = False
+    source_use_status = "audit_only"
 
     entity_status = str(link.get("entity_match_status") or "").lower()
     content_entity_status = str(link.get("content_entity_match_status") or entity_status or "").lower()
@@ -1013,22 +1035,60 @@ def apply_analysis_verification(link: dict, company_domain: str = "", company_na
     }
     if entity_status == "scoped" and entity_scope == ENTITY_SCOPE_UNKNOWN:
         entity_scope = ENTITY_SCOPE_LOCAL_LEGAL_ENTITY
+        link["entity_scope"] = entity_scope
+    elif entity_status == "exact" and entity_scope == ENTITY_SCOPE_UNKNOWN:
+        entity_scope = ENTITY_SCOPE_CANONICAL_GROUP
+        link["entity_scope"] = entity_scope
+
+    def _scoped_context_safe() -> bool:
+        """Company-scoped context may support diagnosis/synthesis, not hard facts."""
+        if context_only:
+            return False
+        if link.get("wrong_entity") is True or link.get("entity_scope") == ENTITY_SCOPE_WRONG_ENTITY:
+            return False
+        if link.get("verification_conflict") is True or link.get("quote_mismatch") is True:
+            return False
+        if link.get("verified") is not True and link.get("url_verified") is not True:
+            return False
+        if link.get("content_verified") is not True and link.get("content_readable") is not True and link.get("source_readable") is not True:
+            return False
+        if link.get("source_credibility") == "low":
+            return False
+        if not entity_verified or content_entity_status not in {"exact", "scoped"}:
+            return False
+        if entity_scope in {"", ENTITY_SCOPE_UNKNOWN, ENTITY_SCOPE_WRONG_ENTITY}:
+            return False
+        if support_status in {ANALYSIS_SUPPORT_UNSUPPORTED, ANALYSIS_SUPPORT_UNAVAILABLE, ANALYSIS_SUPPORT_UNJUDGED_TIMEOUT}:
+            return False
+        source_type = str(link.get("source_type") or link.get("type") or "").lower()
+        if source_type in SCOPED_CONTEXT_SOURCE_TYPES:
+            return True
+        url_domain = _get_domain(url)
+        if company_domain and url_domain and _domain_matches_set(url_domain, {company_domain}):
+            return True
+        if link.get("official_source") is True or link.get("source_database") == "company_evidence_db":
+            return True
+        return False
 
     if link.get("manual_override") is True:
         reason = "manual_override"
         promotion = PROMOTION_GENERATION_ELIGIBLE
         analysis_verified = True
+        source_use_status = "supported_fact"
     elif not ok:
         reason = admissibility_reason
         promotion = PROMOTION_EXCLUDED if admissibility_reason in {"wrong_entity_true", "url_not_verified"} else PROMOTION_DISPLAY_ONLY
+        source_use_status = "wrong_entity" if admissibility_reason == "wrong_entity_true" else "dead_or_unreadable" if admissibility_reason == "url_not_verified" else "audit_only"
     elif not url:
         reason = "missing_url"
     elif link.get("verified") is not True and link.get("url_verified") is not True:
         reason = "url_not_verified"
         promotion = PROMOTION_EXCLUDED
+        source_use_status = "dead_or_unreadable"
     elif link.get("entity_scope") == ENTITY_SCOPE_WRONG_ENTITY or link.get("wrong_entity") is True:
         reason = "wrong_entity"
         promotion = PROMOTION_EXCLUDED
+        source_use_status = "wrong_entity"
     elif link.get("verification_conflict") is True:
         reason = "verification_conflict"
     elif link.get("quote_mismatch") is True:
@@ -1036,6 +1096,7 @@ def apply_analysis_verification(link: dict, company_domain: str = "", company_na
     elif entity_status == "wrong" or content_entity_status == "wrong":
         reason = "wrong_entity"
         promotion = PROMOTION_EXCLUDED
+        source_use_status = "wrong_entity"
         link["wrong_entity"] = True
         link["entity_match"] = "wrong"
     elif content_entity_known and content_entity_status == "weak" and not context_only:
@@ -1060,18 +1121,47 @@ def apply_analysis_verification(link: dict, company_domain: str = "", company_na
         reason = "verified_for_analysis"
         promotion = PROMOTION_GENERATION_ELIGIBLE
         analysis_verified = True
+        source_use_status = "supported_fact"
     elif support_status == ANALYSIS_SUPPORT_PARTIAL:
-        reason = "partial_support"
+        if _scoped_context_safe():
+            reason = "scoped_context_partial_support"
+            promotion = PROMOTION_SCOPED_CONTEXT
+            source_use_status = "scoped_context"
+        else:
+            reason = "partial_support"
+    elif support_status in {ANALYSIS_SUPPORT_SCOPED_CONTEXT, ANALYSIS_SUPPORT_CONTEXT_ONLY, ANALYSIS_SUPPORT_COMPANY_STATEMENT}:
+        if _scoped_context_safe():
+            reason = "verified_scoped_context"
+            promotion = PROMOTION_SCOPED_CONTEXT
+            source_use_status = (
+                "company_statement"
+                if support_status == ANALYSIS_SUPPORT_COMPANY_STATEMENT
+                else "scoped_context"
+            )
+        else:
+            reason = "context_not_safe_for_analysis"
     elif support_status == ANALYSIS_SUPPORT_UNSUPPORTED:
         reason = "claim_unsupported"
+        source_use_status = "unsupported"
     elif support_status == ANALYSIS_SUPPORT_UNAVAILABLE:
         reason = "content_unavailable"
+        source_use_status = "dead_or_unreadable"
+    elif support_status == ANALYSIS_SUPPORT_UNJUDGED_TIMEOUT:
+        reason = "unjudged_due_timeout"
+        promotion = PROMOTION_UNJUDGED_TIMEOUT
+        source_use_status = "unjudged_due_timeout"
     else:
-        reason = "claim_unchecked"
+        if _scoped_context_safe():
+            reason = "verified_scoped_context_unchecked_claim"
+            promotion = PROMOTION_SCOPED_CONTEXT
+            source_use_status = "scoped_context"
+        else:
+            reason = "claim_unchecked"
 
     link["analysis_verified"] = analysis_verified
     link["promotion_status"] = promotion
     link["generation_eligible"] = promotion == PROMOTION_GENERATION_ELIGIBLE and analysis_verified is True
+    link["source_use_status"] = source_use_status
     link["verification_reason"] = reason
     if analysis_verified and not link.get("analysis_verified_at"):
         link["analysis_verified_at"] = datetime.utcnow().isoformat()
@@ -1111,6 +1201,24 @@ def is_generation_eligible_source(link: dict) -> bool:
         and str(link.get("claim_support_status") or "").lower() == ANALYSIS_SUPPORT_SUPPORTED
         and entity_ok
     )
+
+
+def is_scoped_context_source(link: dict) -> bool:
+    """True when a company source may support bounded diagnosis/synthesis premises."""
+    if not isinstance(link, dict):
+        return False
+    if link.get("promotion_status") != PROMOTION_SCOPED_CONTEXT:
+        return False
+    if link.get("generation_eligible") is True:
+        return False
+    if link.get("wrong_entity") is True or str(link.get("entity_match_status") or "").lower() == "wrong":
+        return False
+    if link.get("verified") is not True and link.get("url_verified") is not True:
+        return False
+    if link.get("content_verified") is not True and link.get("content_readable") is not True and link.get("source_readable") is not True:
+        return False
+    entity_status = str(link.get("content_entity_match_status") or link.get("entity_match_status") or "").lower()
+    return entity_status in {"exact", "scoped"} or link.get("entity_verified") is True
 
 
 def is_foresight_context_eligible_source(link: dict) -> bool:
