@@ -290,7 +290,7 @@ def test_official_company_source_repairs_legacy_low_credibility_without_claim_by
     assert link["generation_eligible"] is True
 
 
-def test_official_company_source_still_requires_supported_content():
+def test_official_company_source_still_requires_supported_content_for_fact_promotion():
     link = apply_analysis_verification(
         _source(
             title="Palvelut | ABB",
@@ -311,7 +311,9 @@ def test_official_company_source_still_requires_supported_content():
     assert link["source_credibility"] == "medium"
     assert link["analysis_verified"] is False
     assert link["generation_eligible"] is False
-    assert link["verification_reason"] == "claim_unsupported"
+    assert link["promotion_status"] == PROMOTION_SCOPED_CONTEXT
+    assert link["source_use_status"] == "scoped_context"
+    assert link["verification_reason"] == "official_scoped_context_claim_overreach"
 
 
 def test_content_verdict_never_overrides_explicit_wrong_entity():
@@ -363,13 +365,44 @@ def test_official_partial_support_becomes_scoped_context_not_fact_proof():
     assert is_generation_eligible_source(link) is False
 
 
-def test_official_unsupported_context_stays_display_only_not_scoped():
+def test_official_unsupported_service_page_becomes_scoped_context_when_claim_overreaches():
     link = apply_analysis_verification(
         _source(
             title="ABB service",
             url="https://new.abb.com/service/fi",
             snippet="ABB service landing page.",
             source_quote="ABB service landing page.",
+            source_type="service_page",
+            source_credibility="medium",
+            content_entity_match_status="exact",
+            entity_match_status="exact",
+            entity_verified=True,
+            entity_scope="canonical_group",
+            claim_support_status="unsupported",
+            content_verified=True,
+            content_readable=True,
+        ),
+        company_domain="https://abb.com",
+        company_name="ABB Oy",
+    )
+
+    assert link["analysis_verified"] is False
+    assert link["generation_eligible"] is False
+    assert link["promotion_status"] == PROMOTION_SCOPED_CONTEXT
+    assert link["source_use_status"] == "scoped_context"
+    assert link["verification_reason"] == "official_scoped_context_claim_overreach"
+    assert link["original_claim_support_status"] == "unsupported"
+    assert link["claim_support_status"] == "scoped_context"
+    assert is_scoped_context_source(link) is True
+
+
+def test_third_party_unsupported_context_stays_display_only_not_scoped():
+    link = apply_analysis_verification(
+        _source(
+            title="Generic service page",
+            url="https://example.com/service",
+            snippet="A generic service landing page.",
+            source_quote="A generic service landing page.",
             source_type="service_page",
             source_credibility="medium",
             content_entity_match_status="exact",

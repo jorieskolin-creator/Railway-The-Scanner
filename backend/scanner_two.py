@@ -215,7 +215,7 @@ FORENSIC_ACQUISITION_CEILING_SECONDS = 135
 FORENSIC_ACQUISITION_REPAIR_CEILING_SECONDS = 85
 FORENSIC_EXTRACTION_RECOVERY_CEILING_SECONDS = 35
 FORENSIC_FIRECRAWL_MAX_URLS = 6
-FORENSIC_JURY_ANALYSIS_CEILING_SECONDS = 150
+FORENSIC_JURY_ANALYSIS_CEILING_SECONDS = 180
 FORENSIC_JURY_GPT_TIMEOUT_SECONDS = 105
 FORENSIC_JURY_SONNET_TIMEOUT_SECONDS = 45
 FORENSIC_GEMINI_TIMEOUT_SECONDS = 100
@@ -228,6 +228,122 @@ FORENSIC_STRUCTURAL_JURIES = {
     "ARCHITECTURAL JURY (Engineering Reality)",
     *FORENSIC_HEAVY_JURIES,
 }
+
+FORENSIC_JURY_GPT_TIMEOUTS = {
+    "STRATEGIC JURY (Business Model, Procurement & Customer Experience)": 170,
+    "SERVICE PORTFOLIO JURY (Delivery Reality)": 170,
+    "ARCHITECTURAL JURY (Engineering Reality)": 135,
+    "AI & DATA JURY (Future Readiness)": 105,
+    "CULTURAL JURY (Talent & Psychological Safety)": 95,
+}
+
+FORENSIC_JURY_SONNET_TIMEOUTS = {
+    "STRATEGIC JURY (Business Model, Procurement & Customer Experience)": 75,
+    "SERVICE PORTFOLIO JURY (Delivery Reality)": 75,
+    "ARCHITECTURAL JURY (Engineering Reality)": 60,
+    "AI & DATA JURY (Future Readiness)": 50,
+    "CULTURAL JURY (Talent & Psychological Safety)": 45,
+}
+
+FORENSIC_REPAIR_TIMEOUTS = {
+    "STRATEGIC JURY (Business Model, Procurement & Customer Experience)": 75,
+    "SERVICE PORTFOLIO JURY (Delivery Reality)": 75,
+    "ARCHITECTURAL JURY (Engineering Reality)": 65,
+    "AI & DATA JURY (Future Readiness)": 55,
+    "CULTURAL JURY (Talent & Psychological Safety)": 45,
+}
+
+
+def _rebrand_search_aliases(company_name: str, domain_hint: str = "") -> list[str]:
+    """Return narrowly scoped aliases for carve-outs/rebrands without broadening every scan."""
+    base = clean_company_name_for_search(company_name or "")
+    domain = (domain_hint or "").lower().removeprefix("www.")
+    aliases: list[str] = []
+
+    def add(value: str):
+        value = re.sub(r"\s+", " ", str(value or "")).strip()
+        if value and value.lower() not in {item.lower() for item in aliases}:
+            aliases.append(value)
+
+    add(company_name)
+    add(base)
+    if domain:
+        add(domain)
+
+    # Generic carve-out/rebrand phrasing is useful as a hint, but still anchored
+    # to the current entity name so it does not pollute source acquisition.
+    for phrase in ("rebrand", "carve-out", "former", "acquired by", "standalone"):
+        if base:
+            add(f"{base} {phrase}")
+
+    if "vivicta" in f"{company_name} {domain}".lower():
+        for value in (
+            "Vivicta",
+            "Vivicta Oy",
+            "vivicta.com",
+            "Tietoevry Tech Services",
+            "Tietoevry Tech Services carve-out",
+            "former Tietoevry Tech Services",
+            "Agilitas Vivicta",
+            "Agilitas Tietoevry Tech Services",
+            "Agilitas technology services carve-out",
+            "Nordic technology services carve-out Vivicta",
+        ):
+            add(value)
+    return aliases[:14]
+
+
+def _rebrand_alias_block(company_name: str, domain_hint: str = "") -> str:
+    aliases = _rebrand_search_aliases(company_name, domain_hint)
+    if len(aliases) <= 1:
+        return ""
+    return (
+        "    REBRAND / CARVE-OUT SEARCH TERMS: Use these only when they clearly refer to "
+        "the same target entity, former name, owner context, or official domain: "
+        + ", ".join(f'"{alias}"' for alias in aliases[:12])
+        + "\n"
+    )
+
+
+def _official_domain_candidate_paths(domain_hint: str, company_name: str = "") -> list[str]:
+    """Official-domain pages worth deterministic prefetch before model search."""
+    domain = (domain_hint or "").strip().lower().removeprefix("www.")
+    if not domain or "." not in domain:
+        return []
+    paths = [
+        "/", "/about", "/about-us", "/company", "/services", "/service",
+        "/solutions", "/products", "/customers", "/customer-stories",
+        "/references", "/news", "/insights", "/press", "/media", "/careers",
+        "/contact", "/fi", "/fi/about", "/fi/tietoa-meista", "/fi/palvelut",
+        "/fi/ratkaisut", "/fi/tuotteet", "/fi/uutiset", "/fi/ura", "/fi/yhteystiedot",
+    ]
+    if "vivicta" in f"{domain} {company_name}".lower():
+        paths.extend([
+            "/about-vivicta", "/news", "/services", "/solutions",
+            "/tietoevry-tech-services", "/agilitas",
+        ])
+    seen = set()
+    urls = []
+    for path in paths:
+        url = f"https://{domain}{path}"
+        key = _canonical_evidence_url(url)
+        if key and key not in seen:
+            seen.add(key)
+            urls.append(url)
+    return urls[:18]
+
+
+def _official_prefetch_category(url: str) -> str:
+    path = (urlparse(url).path or "").lower()
+    if any(token in path for token in ("/service", "/palvelut", "/solutions", "/ratkaisut", "/products", "/tuotteet", "/customers", "/references")):
+        return "SERVICE PORTFOLIO JURY (Delivery Reality)"
+    if any(token in path for token in ("/news", "/press", "/media", "/insights", "/about", "/company", "/tietoa", "/contact", "/yhteystiedot")):
+        return "STRATEGIC JURY (Business Model, Procurement & Customer Experience)"
+    if any(token in path for token in ("/careers", "/ura", "/jobs")):
+        return "CULTURAL JURY (Talent & Psychological Safety)"
+    if any(token in path for token in ("/developer", "/api", "/data", "/ai", "/cloud")):
+        return "AI & DATA JURY (Future Readiness)"
+    return "STRATEGIC JURY (Business Model, Procurement & Customer Experience)"
 
 
 def _canonical_evidence_url(url: str) -> str:
@@ -1427,6 +1543,30 @@ def _assess_jury_acquisition_readiness(acquisition_results: list, routed_seeds: 
             "rejected_reasons": rejected_reasons,
         }
     return readiness
+
+
+def _prioritize_weak_juries(weak_juries: list, readiness: dict) -> list:
+    """Spend small repair windows on the lanes that most affect synthesis."""
+    priority = {
+        "STRATEGIC JURY (Business Model, Procurement & Customer Experience)": 110,
+        "SERVICE PORTFOLIO JURY (Delivery Reality)": 105,
+        "ARCHITECTURAL JURY (Engineering Reality)": 85,
+        "AI & DATA JURY (Future Readiness)": 75,
+        "CULTURAL JURY (Talent & Psychological Safety)": 60,
+    }
+
+    def _score(jury_name: str) -> tuple:
+        status = readiness.get(jury_name, {}) or {}
+        fresh_gap = max(0, int(status.get("required_fresh") or 0) - int(status.get("fresh") or 0))
+        total_gap = max(0, int(status.get("required_total") or 0) - int(status.get("total") or 0))
+        rejected = int(status.get("rejected") or 0)
+        return (
+            priority.get(jury_name, 50) + fresh_gap * 12 + total_gap * 6 + min(rejected, 6),
+            fresh_gap,
+            total_gap,
+        )
+
+    return sorted(weak_juries or [], key=_score, reverse=True)
 
 
 def _build_jury_repair_prompt(
@@ -3065,6 +3205,71 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             return "ARCHITECTURAL JURY (Engineering Reality)"
         return "Company Evidence DB / Historical Evidence"
 
+    def _direct_official_prefetch_candidates(domain_hint_value: str, limit: int = 8) -> list:
+        """Fetch a small official-domain page set before model search."""
+        urls = _official_domain_candidate_paths(domain_hint_value, company_name)
+        if not urls:
+            return []
+        candidates = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(urls))) as pool:
+            futures = {pool.submit(_verify_url, url, 5, company_name): url for url in urls}
+            for future in concurrent.futures.as_completed(futures):
+                url = futures[future]
+                try:
+                    check = future.result(timeout=7) or {}
+                except Exception:
+                    check = {}
+                if check.get("verified") is not True or check.get("content_readable") is not True:
+                    continue
+                if check.get("company_mentioned") is False:
+                    continue
+                path = (urlparse(url).path or "/").strip("/") or "homepage"
+                category = _official_prefetch_category(url)
+                excerpt = _seed_excerpt(check.get("content_excerpt"), 2400)
+                title = f"Official {path.replace('-', ' ').replace('_', ' ')} page"
+                candidates.append(mark_company_candidate({
+                    "category": category,
+                    "label": f"Revalidate official domain source: {title}"[:140],
+                    "title": title,
+                    "url": url,
+                    "snippet": "",
+                    "semantic_hint": excerpt[:700],
+                    "source_quote": "",
+                    "cached_excerpt": "",
+                    "fetched_excerpt": excerpt,
+                    "source_type": "official_company_source",
+                    "source_database": "official_domain_prefetch",
+                    "official_source": True,
+                    "found": True,
+                    "sentiment": "neutral",
+                    "is_recent": False,
+                    "forensic_seed_source": True,
+                    "forensic_provenance": "official_domain_prefetch",
+                    "source_status": "seed_revalidated",
+                    "verification_reason": "Official-domain page prefetched for Scanner jury revalidation.",
+                    "seed_url_verified": True,
+                    "seed_entity_mentioned": check.get("company_mentioned"),
+                    "url_verified": True,
+                    "verified": True,
+                    "content_readable": True,
+                    "content_verified": True,
+                    "entity_mentioned": check.get("company_mentioned"),
+                    "entity_match_status": "exact" if check.get("company_mentioned") is True else "unknown",
+                    "content_entity_match_status": "exact" if check.get("company_mentioned") is True else "unknown",
+                    "entity_scope": "canonical_group" if check.get("company_mentioned") is True else "unknown",
+                    "entity_verified": check.get("company_mentioned") is True,
+                    "analysis_verified": False,
+                    "generation_eligible": False,
+                    "allowed_as_fact": False,
+                    "buying_evidence_eligible": False,
+                    "promotion_status": "candidate_revalidation_pending",
+                    "claim_support_status": "pending_jury_verification",
+                    "support_level": "pending",
+                }))
+                if len(candidates) >= limit:
+                    break
+        return candidates
+
     def _is_previous_seedable(source):
         if not historical_source_can_revalidate(source):
             return False
@@ -3304,6 +3509,9 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             + "\n"
         )
     domain_hint = get_clean_domain(company_url) if company_url else f"{search_name.lower().replace(' ', '')}.fi"
+    rebrand_alias_block = _rebrand_alias_block(company_name, domain_hint)
+    if rebrand_alias_block:
+        search_alias_block += rebrand_alias_block
 
     # --- TIER 2: PRE-FETCH VERIFIED DATA (parallel, non-blocking) ---
     prh_data = None
@@ -3478,7 +3686,28 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
     # --- PHASE 1: SEEDED TRIAGE + FIVE PARALLEL JURY ACQUISITIONS ---
     baseline = _build_seeded_forensic_fallback("pre_acquisition_baseline")
+    official_prefetch = _direct_official_prefetch_candidates(domain_hint)
+    if official_prefetch:
+        existing_seed_urls = {
+            _canonical_evidence_url(item.get("url"))
+            for item in baseline.get("findings", []) or []
+            if item.get("url")
+        }
+        additions = [
+            item for item in official_prefetch
+            if _canonical_evidence_url(item.get("url")) not in existing_seed_urls
+        ]
+        if additions:
+            baseline["findings"] = additions + (baseline.get("findings", []) or [])
+            baseline["_official_prefetch_seed_count"] = len(additions)
+            print(
+                f"   🧭 [Forensic Seed] Added {len(additions)} official-domain prefetch source(s) "
+                "before model acquisition."
+            )
     coverage = baseline.get("_baseline_coverage") or _compute_forensic_coverage([], domain_hint)
+    if official_prefetch:
+        coverage = _compute_forensic_coverage(baseline.get("findings", []), domain_hint)
+        baseline["_baseline_coverage"] = coverage
     routed_seeds = _route_seed_findings(baseline.get("findings", []))
     acquisition_ceiling = min(
         FORENSIC_ACQUISITION_CEILING_SECONDS,
@@ -3531,7 +3760,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 provider = "gpt-5.5-web-fallback"
                 payload = execute_with_openai_web(
                     prompt,
-                    timeout_cap=min(55, remaining),
+                    timeout_cap=min(FORENSIC_REPAIR_TIMEOUTS.get(jury_name, 55), remaining),
                     purpose=f"jury fallback: {jury_name}",
                     search_context_size="low",
                     allow_repair=False,
@@ -3597,10 +3826,19 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     repair_results = []
     if weak_juries and repair_ceiling >= 35:
         repair_deadline = time.time() + repair_ceiling
+        prioritized_weak_juries = _prioritize_weak_juries(weak_juries, readiness)
+        max_repair_lanes = 1 if repair_ceiling < 60 else 2 if repair_ceiling < 110 else min(3, len(prioritized_weak_juries))
+        repair_target_juries = prioritized_weak_juries[:max_repair_lanes]
+        skipped_repair_juries = prioritized_weak_juries[max_repair_lanes:]
         print(
             f"   🔁 [Forensic Acquisition] Targeted repair search for {len(weak_juries)} weak jury lane(s); "
-            f"ceiling {repair_ceiling}s."
+            f"ceiling {repair_ceiling}s; targeting {len(repair_target_juries)} critical lane(s)."
         )
+        if skipped_repair_juries:
+            print(
+                "   ⏭️ [Forensic Acquisition] Repair deferred for lower-priority weak lane(s): "
+                + ", ".join(jury.split(" JURY")[0] for jury in skipped_repair_juries)
+            )
 
         def _repair_one_jury(jury_name):
             lane_started = time.time()
@@ -3621,7 +3859,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             if remaining >= 25:
                 payload = execute_with_openai_web(
                     repair_prompt,
-                    timeout_cap=min(55, remaining),
+                    timeout_cap=min(FORENSIC_REPAIR_TIMEOUTS.get(jury_name, 55), remaining),
                     purpose=f"jury acquisition repair: {jury_name}",
                     search_context_size="low",
                     allow_repair=False,
@@ -3634,8 +3872,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             )
             return {"jury": jury_name, "provider": provider, "status": status, "sources": sources}
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(3, len(weak_juries))) as pool:
-            futures = {pool.submit(_repair_one_jury, jury): jury for jury in weak_juries}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(max_repair_lanes, len(repair_target_juries))) as pool:
+            futures = {pool.submit(_repair_one_jury, jury): jury for jury in repair_target_juries}
             done, pending = concurrent.futures.wait(futures, timeout=repair_ceiling)
             for future in pending:
                 future.cancel()
@@ -3713,7 +3951,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         provider = "gpt-5.5"
         remaining = max(1, int(analysis_deadline - time.time()))
         try:
-            gpt_timeout = min(FORENSIC_JURY_GPT_TIMEOUT_SECONDS, remaining)
+            gpt_timeout = min(FORENSIC_JURY_GPT_TIMEOUTS.get(jury_name, FORENSIC_JURY_GPT_TIMEOUT_SECONDS), remaining)
             text = _hard_timeout_call(
                 f"{jury_name} gpt-5.5 no-web jury analysis",
                 gpt_timeout,
@@ -3731,7 +3969,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             if remaining >= 15:
                 provider = "claude-sonnet-4-6"
                 try:
-                    sonnet_timeout = min(FORENSIC_JURY_SONNET_TIMEOUT_SECONDS, remaining)
+                    sonnet_timeout = min(FORENSIC_JURY_SONNET_TIMEOUTS.get(jury_name, FORENSIC_JURY_SONNET_TIMEOUT_SECONDS), remaining)
                     text = _hard_timeout_call(
                         f"{jury_name} claude-sonnet-4-6 no-web jury analysis",
                         sonnet_timeout,

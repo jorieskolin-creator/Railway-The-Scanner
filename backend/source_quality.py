@@ -326,13 +326,14 @@ LOW_CREDIBILITY_PATTERNS = [
 
 
 def _get_domain(url: str) -> str:
-    """Extract clean domain from URL."""
+    """Extract clean domain from a URL or bare hostname."""
     if not url:
         return ""
     try:
-        parsed = urlparse(url)
-        domain = (parsed.netloc or "").lower().replace("www.", "")
-        return domain
+        value = str(url).strip().lower()
+        parsed = urlparse(value)
+        domain = parsed.netloc or parsed.path.split("/", 1)[0]
+        return domain.replace("www.", "").strip()
     except Exception:
         return ""
 
@@ -1040,7 +1041,7 @@ def apply_analysis_verification(link: dict, company_domain: str = "", company_na
         entity_scope = ENTITY_SCOPE_CANONICAL_GROUP
         link["entity_scope"] = entity_scope
 
-    def _scoped_context_safe() -> bool:
+    def _scoped_context_safe(allow_unsupported: bool = False) -> bool:
         """Company-scoped context may support diagnosis/synthesis, not hard facts."""
         if context_only:
             return False
@@ -1058,17 +1059,48 @@ def apply_analysis_verification(link: dict, company_domain: str = "", company_na
             return False
         if entity_scope in {"", ENTITY_SCOPE_UNKNOWN, ENTITY_SCOPE_WRONG_ENTITY}:
             return False
-        if support_status in {ANALYSIS_SUPPORT_UNSUPPORTED, ANALYSIS_SUPPORT_UNAVAILABLE, ANALYSIS_SUPPORT_UNJUDGED_TIMEOUT}:
+        unsupported_blockers = {ANALYSIS_SUPPORT_UNAVAILABLE, ANALYSIS_SUPPORT_UNJUDGED_TIMEOUT}
+        if not allow_unsupported:
+            unsupported_blockers.add(ANALYSIS_SUPPORT_UNSUPPORTED)
+        if support_status in unsupported_blockers:
             return False
         source_type = str(link.get("source_type") or link.get("type") or "").lower()
         if source_type in SCOPED_CONTEXT_SOURCE_TYPES:
             return True
         url_domain = _get_domain(url)
-        if company_domain and url_domain and _domain_matches_set(url_domain, {company_domain}):
+        normalized_company_domain = _get_domain(company_domain)
+        if normalized_company_domain and url_domain and _domain_matches_set(url_domain, {normalized_company_domain}):
             return True
         if link.get("official_source") is True or link.get("source_database") == "company_evidence_db":
             return True
         return False
+
+    def _official_scoped_context_source() -> bool:
+        """Official company pages can be useful context even when a claim overreaches."""
+        parsed_path = (urlparse(url).path or "").lower()
+        if re.search(r"\.(png|jpe?g|gif|svg|webp|ico|css|js|woff2?|ttf|eot)$", parsed_path):
+            return False
+        source_type = str(link.get("source_type") or link.get("type") or "").lower()
+        path_context = any(token in parsed_path for token in (
+            "/about", "/company", "/service", "/services", "/solution", "/solutions",
+            "/product", "/products", "/news", "/press", "/insight", "/customer",
+            "/case", "/reference", "/career", "/jobs", "/developer", "/api",
+            "/palvel", "/uutis", "/ratkais", "/tuotte", "/ura",
+        ))
+        url_domain = _get_domain(url)
+        normalized_company_domain = _get_domain(company_domain)
+        domain_official = bool(
+            normalized_company_domain
+            and url_domain
+            and _domain_matches_set(url_domain, {normalized_company_domain})
+        )
+        declared_official = link.get("official_source") is True or link.get("source_database") in {
+            "company_evidence_db", "official_domain_prefetch"
+        }
+        return bool(
+            (domain_official or declared_official)
+            and (source_type in SCOPED_CONTEXT_SOURCE_TYPES or path_context)
+        )
 
     if link.get("manual_override") is True:
         reason = "manual_override"
@@ -1141,8 +1173,15 @@ def apply_analysis_verification(link: dict, company_domain: str = "", company_na
         else:
             reason = "context_not_safe_for_analysis"
     elif support_status == ANALYSIS_SUPPORT_UNSUPPORTED:
-        reason = "claim_unsupported"
-        source_use_status = "unsupported"
+        if _official_scoped_context_source() and _scoped_context_safe(allow_unsupported=True):
+            link["original_claim_support_status"] = ANALYSIS_SUPPORT_UNSUPPORTED
+            link["claim_support_status"] = ANALYSIS_SUPPORT_SCOPED_CONTEXT
+            reason = "official_scoped_context_claim_overreach"
+            promotion = PROMOTION_SCOPED_CONTEXT
+            source_use_status = "scoped_context"
+        else:
+            reason = "claim_unsupported"
+            source_use_status = "unsupported"
     elif support_status == ANALYSIS_SUPPORT_UNAVAILABLE:
         reason = "content_unavailable"
         source_use_status = "dead_or_unreadable"

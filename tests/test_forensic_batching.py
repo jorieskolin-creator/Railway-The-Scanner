@@ -66,7 +66,7 @@ def test_coverage_score_rewards_verified_diverse_balanced_sources():
 def test_forensic_timing_has_separate_discovery_and_postprocess_budgets():
     assert scanner_two.FORENSIC_ACQUISITION_CEILING_SECONDS == 135
     assert scanner_two.FORENSIC_EXTRACTION_RECOVERY_CEILING_SECONDS == 35
-    assert scanner_two.FORENSIC_JURY_ANALYSIS_CEILING_SECONDS == 150
+    assert scanner_two.FORENSIC_JURY_ANALYSIS_CEILING_SECONDS == 180
     assert scanner_two.FORENSIC_POSTPROCESS_RESERVE_SECONDS == 30
 
 
@@ -81,6 +81,21 @@ def test_each_acquisition_prompt_is_jury_scoped_and_excludes_people_search():
         assert "copied word-for-word" in prompt
         other_juries = [name for name in scanner_two.FORENSIC_JURIES if name != jury]
         assert all(f"\n    {other}" not in prompt for other in other_juries)
+
+
+def test_vivicta_acquisition_prompt_includes_rebrand_aliases():
+    aliases = scanner_two._rebrand_alias_block("Vivicta", "vivicta.com")
+    prompt = scanner_two._build_jury_acquisition_prompt(
+        "Vivicta",
+        "vivicta.com",
+        "STRATEGIC JURY (Business Model, Procurement & Customer Experience)",
+        "Target entity: Vivicta",
+        aliases,
+    )
+
+    assert "Tietoevry Tech Services" in prompt
+    assert "Agilitas" in prompt
+    assert "carve-out" in prompt
 
 
 def test_quote_matching_handles_punctuation_without_accepting_paraphrase():
