@@ -98,6 +98,78 @@ def test_vivicta_acquisition_prompt_includes_rebrand_aliases():
     assert "carve-out" in prompt
 
 
+def test_official_domain_discovery_parses_homepage_and_sitemap_links(monkeypatch):
+    class FakeResponse:
+        def __init__(self, text: str, status_code: int = 200):
+            self.text = text
+            self.status_code = status_code
+
+    homepage = """
+        <html>
+          <a href="/en/services">Services</a>
+          <a href="/en/solutions/cloud">Cloud solutions</a>
+          <a href="/en/about">About us</a>
+          <a href="/privacy">Privacy</a>
+          <a href="/assets/logo.png">Logo</a>
+          <a href="https://external.example/news">External</a>
+        </html>
+    """
+    sitemap = """
+        <urlset>
+          <url><loc>https://www.vivicta.com/en/news/company-update</loc></url>
+          <url><loc>https://www.vivicta.com/en/careers</loc></url>
+          <url><loc>https://www.vivicta.com/assets/social-card.jpg</loc></url>
+        </urlset>
+    """
+
+    def fake_get(url, *_args, **_kwargs):
+        if url.endswith("/sitemap.xml"):
+            return FakeResponse(sitemap)
+        if url.endswith("/sitemap_index.xml"):
+            return FakeResponse("", 404)
+        return FakeResponse(homepage)
+
+    monkeypatch.setattr(scanner_two.http_requests, "get", fake_get)
+
+    urls = scanner_two._discover_official_domain_urls("vivicta.com", "Vivicta", limit=12)
+
+    assert "https://vivicta.com/en/services" in urls
+    assert "https://vivicta.com/en/solutions/cloud" in urls
+    assert "https://www.vivicta.com/en/news/company-update" in urls
+    assert "https://www.vivicta.com/en/careers" in urls
+    assert all("privacy" not in url for url in urls)
+    assert all(not url.endswith((".png", ".jpg")) for url in urls)
+    assert all("external.example" not in url for url in urls)
+
+
+def test_official_prefetch_categories_cover_service_careers_and_technology_pages():
+    assert (
+        scanner_two._official_prefetch_category("https://vivicta.com/en/services")
+        == "SERVICE PORTFOLIO JURY (Delivery Reality)"
+    )
+    assert (
+        scanner_two._official_prefetch_category("https://vivicta.com/en/careers")
+        == "CULTURAL JURY (Talent & Psychological Safety)"
+    )
+    assert (
+        scanner_two._official_prefetch_category("https://vivicta.com/en/developers/api")
+        == "AI & DATA JURY (Future Readiness)"
+    )
+
+
+def test_acquisition_prompt_treats_model_web_search_as_gap_fill_after_official_prefetch():
+    prompt = scanner_two._build_jury_acquisition_prompt(
+        "Vivicta",
+        "vivicta.com",
+        "SERVICE PORTFOLIO JURY (Delivery Reality)",
+        "Target entity: Vivicta",
+    )
+
+    assert "prefetches real links from the official domain homepage/sitemap" in prompt
+    assert "mainly for missing official pages" in prompt
+    assert "third-party validation" in prompt
+
+
 def test_quote_matching_handles_punctuation_without_accepting_paraphrase():
     quote = "Example Oy launched an AI-enabled customer-service platform in 2026."
     extracted = "Example Oy launched an AI enabled customer service platform in 2026."

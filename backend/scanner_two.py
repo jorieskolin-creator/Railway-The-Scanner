@@ -8,7 +8,7 @@ import unicodedata
 import requests as http_requests
 import concurrent.futures
 from datetime import date, datetime
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse, urldefrag
 import anthropic
 from knowledge_base import get_evolving_framework
 from source_quality import (
@@ -311,16 +311,24 @@ def _official_domain_candidate_paths(domain_hint: str, company_name: str = "") -
     if not domain or "." not in domain:
         return []
     paths = [
-        "/", "/about", "/about-us", "/company", "/services", "/service",
-        "/solutions", "/products", "/customers", "/customer-stories",
-        "/references", "/news", "/insights", "/press", "/media", "/careers",
-        "/contact", "/fi", "/fi/about", "/fi/tietoa-meista", "/fi/palvelut",
-        "/fi/ratkaisut", "/fi/tuotteet", "/fi/uutiset", "/fi/ura", "/fi/yhteystiedot",
+        "/", "/en/", "/fi/", "/se/", "/no/",
+        "/about", "/about-us", "/company", "/strategy", "/values", "/services", "/service",
+        "/solutions", "/offerings", "/capabilities", "/products", "/customers",
+        "/customer-stories", "/references", "/cases", "/news", "/insights", "/press",
+        "/media", "/careers", "/jobs", "/contact",
+        "/en/about", "/en/about-us", "/en/company", "/en/strategy", "/en/values",
+        "/en/services", "/en/service", "/en/solutions", "/en/offerings",
+        "/en/capabilities", "/en/customers", "/en/customer-stories", "/en/references",
+        "/en/cases", "/en/news", "/en/insights", "/en/careers", "/en/jobs",
+        "/en/contact", "/fi/about", "/fi/tietoa-meista", "/fi/strategia",
+        "/fi/arvot", "/fi/palvelut", "/fi/ratkaisut", "/fi/tuotteet", "/fi/uutiset",
+        "/fi/ura", "/fi/tyopaikat", "/fi/yhteystiedot",
     ]
     if "vivicta" in f"{domain} {company_name}".lower():
         paths.extend([
-            "/about-vivicta", "/news", "/services", "/solutions",
-            "/tietoevry-tech-services", "/agilitas",
+            "/en/about-vivicta", "/en/news", "/en/services", "/en/solutions",
+            "/en/values", "/en/careers", "/about-vivicta", "/news", "/services",
+            "/solutions", "/values", "/tietoevry-tech-services", "/agilitas",
         ])
     seen = set()
     urls = []
@@ -333,16 +341,159 @@ def _official_domain_candidate_paths(domain_hint: str, company_name: str = "") -
     return urls[:18]
 
 
+_OFFICIAL_LINK_POSITIVE_PATTERNS = (
+    "about", "company", "strategy", "values", "purpose", "service", "services",
+    "solution", "solutions", "offering", "offerings", "capabilit", "product",
+    "customer", "reference", "case", "news", "insight", "press", "media",
+    "career", "careers", "job", "jobs", "contact", "developer", "api", "data",
+    "ai", "cloud", "cyber", "palvel", "ratkais", "tuotte", "uutis", "ura",
+    "tyopaik", "arvot", "strategia", "yhteystiedot",
+)
+
+
+_OFFICIAL_LINK_NEGATIVE_PATTERNS = (
+    "privacy", "cookie", "terms", "accessibility", "sitemap", "login", "search",
+    "subscribe", "newsletter", "rss", "share", "mailto:", "tel:",
+)
+
+
+def _official_url_score(url: str, company_name: str = "") -> int:
+    """Rank official-domain links so real nav pages beat guessed/utility URLs."""
+    if not url or _is_non_document_asset_url(url):
+        return -100
+    parsed = urlparse(url)
+    path = (parsed.path or "/").lower()
+    query = (parsed.query or "").lower()
+    full = f"{path}?{query}"
+    if any(token in full for token in _OFFICIAL_LINK_NEGATIVE_PATTERNS):
+        return -50
+    score = 0
+    if path in {"", "/", "/en", "/en/", "/fi", "/fi/", "/se", "/se/", "/no", "/no/"}:
+        score += 35
+    if re.match(r"^/(en|fi|se|no)(/|$)", path):
+        score += 8
+    for token in _OFFICIAL_LINK_POSITIVE_PATTERNS:
+        if token in path:
+            score += 24
+    if "vivicta" in f"{url} {company_name}".lower():
+        score += 8
+    depth = len([part for part in path.split("/") if part])
+    if depth <= 3:
+        score += 10
+    elif depth > 6:
+        score -= 12
+    if query:
+        score -= 8
+    return score
+
+
+def _same_domain_official_link(base_url: str, href: str, domain: str) -> str:
+    href = str(href or "").strip()
+    if not href or href.startswith(("#", "mailto:", "tel:", "javascript:")):
+        return ""
+    try:
+        absolute, _fragment = urldefrag(urljoin(base_url, href))
+        parsed = urlparse(absolute)
+        host = parsed.netloc.lower().removeprefix("www.")
+        if host != domain:
+            return ""
+        if parsed.scheme not in {"http", "https"}:
+            return ""
+        return absolute
+    except Exception:
+        return ""
+
+
+def _extract_official_links_from_html(html: str, base_url: str, domain: str, limit: int = 80) -> list[str]:
+    """Extract same-domain links from static homepage/sitemap HTML."""
+    links = []
+    seen = set()
+    for match in re.finditer(r'''(?:href|src)=["']([^"']+)["']''', str(html or ""), flags=re.I):
+        url = _same_domain_official_link(base_url, match.group(1), domain)
+        key = _canonical_evidence_url(url)
+        if not key or key in seen or _is_non_document_asset_url(url):
+            continue
+        seen.add(key)
+        links.append(url)
+        if len(links) >= limit:
+            break
+    for match in re.finditer(r"<loc>\s*([^<\s]+)\s*</loc>", str(html or ""), flags=re.I):
+        url = _same_domain_official_link(base_url, match.group(1), domain)
+        key = _canonical_evidence_url(url)
+        if not key or key in seen or _is_non_document_asset_url(url):
+            continue
+        seen.add(key)
+        links.append(url)
+        if len(links) >= limit:
+            break
+    return links
+
+
+def _discover_official_domain_urls(domain_hint: str, company_name: str = "", limit: int = 32) -> list[str]:
+    """Use actual official navigation/sitemap links before broad model search.
+
+    This is intentionally shallow: homepage, common language roots, and sitemap
+    files only. It gives the scanner a deterministic official source pack
+    without turning live scans into a crawler.
+    """
+    domain = (domain_hint or "").strip().lower().removeprefix("www.")
+    if not domain or "." not in domain:
+        return []
+    seeds = _official_domain_candidate_paths(domain, company_name)
+    bases = [f"https://{domain}/", f"https://{domain}/en/"]
+    if domain.endswith(".fi"):
+        bases.append(f"https://{domain}/fi/")
+    fetched_links = []
+    for base in bases[:3]:
+        try:
+            resp = http_requests.get(
+                base,
+                timeout=6,
+                allow_redirects=True,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; AdaptabilityScanner/1.0)"},
+            )
+            if resp.status_code < 400:
+                fetched_links.extend(_extract_official_links_from_html(resp.text or "", resp.url or base, domain, 90))
+        except Exception:
+            continue
+    for sitemap in (f"https://{domain}/sitemap.xml", f"https://{domain}/sitemap_index.xml"):
+        try:
+            resp = http_requests.get(
+                sitemap,
+                timeout=6,
+                allow_redirects=True,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; AdaptabilityScanner/1.0)"},
+            )
+            if resp.status_code < 400:
+                fetched_links.extend(_extract_official_links_from_html(resp.text or "", sitemap, domain, 120))
+        except Exception:
+            continue
+
+    seen = set()
+    candidates = []
+    for url in list(seeds) + fetched_links:
+        key = _canonical_evidence_url(url)
+        if not key or key in seen or _is_non_document_asset_url(url):
+            continue
+        score = _official_url_score(url, company_name)
+        if score < 0:
+            continue
+        seen.add(key)
+        candidates.append((score, url))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return [url for _score, url in candidates[:limit]]
+
+
 def _official_prefetch_category(url: str) -> str:
     path = (urlparse(url).path or "").lower()
-    if any(token in path for token in ("/service", "/palvelut", "/solutions", "/ratkaisut", "/products", "/tuotteet", "/customers", "/references")):
-        return "SERVICE PORTFOLIO JURY (Delivery Reality)"
-    if any(token in path for token in ("/news", "/press", "/media", "/insights", "/about", "/company", "/tietoa", "/contact", "/yhteystiedot")):
-        return "STRATEGIC JURY (Business Model, Procurement & Customer Experience)"
-    if any(token in path for token in ("/careers", "/ura", "/jobs")):
-        return "CULTURAL JURY (Talent & Psychological Safety)"
-    if any(token in path for token in ("/developer", "/api", "/data", "/ai", "/cloud")):
+    if any(token in path for token in ("/developer", "/api", "/data", "/ai", "/cloud", "/cyber")):
         return "AI & DATA JURY (Future Readiness)"
+    if any(token in path for token in ("/service", "/palvelut", "/solutions", "/ratkaisut", "/products", "/tuotteet", "/customers", "/references", "/offerings", "/capabilities", "/cases")):
+        return "SERVICE PORTFOLIO JURY (Delivery Reality)"
+    if any(token in path for token in ("/career", "/careers", "/ura", "/jobs", "/tyopaikat")):
+        return "CULTURAL JURY (Talent & Psychological Safety)"
+    if any(token in path for token in ("/news", "/press", "/media", "/insights", "/about", "/company", "/strategy", "/values", "/tietoa", "/contact", "/yhteystiedot", "/strategia", "/arvot")):
+        return "STRATEGIC JURY (Business Model, Procurement & Customer Experience)"
     return "STRATEGIC JURY (Business Model, Procurement & Customer Experience)"
 
 
@@ -1481,6 +1632,9 @@ This is source acquisition, not analysis. Search the approved registry below in 
 Prioritize sources published or updated within 24 months, while allowing current official registry,
 legal, procurement, developer, careers, and living documentation pages without a visible date.
 Do not search for people, stakeholders, profiles, emails, or contact details.
+The scanner separately prefetches real links from the official domain homepage/sitemap. Use web search
+mainly for missing official pages, direct canonical pages, third-party validation, contradictions,
+and fresh developments; avoid broad search-result pages and generic snippets.
 
 ENTITY:
 {entity_context}
@@ -3205,13 +3359,13 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             return "ARCHITECTURAL JURY (Engineering Reality)"
         return "Company Evidence DB / Historical Evidence"
 
-    def _direct_official_prefetch_candidates(domain_hint_value: str, limit: int = 8) -> list:
+    def _direct_official_prefetch_candidates(domain_hint_value: str, limit: int = 16) -> list:
         """Fetch a small official-domain page set before model search."""
-        urls = _official_domain_candidate_paths(domain_hint_value, company_name)
+        urls = _discover_official_domain_urls(domain_hint_value, company_name, limit=max(limit * 3, 36))
         if not urls:
             return []
         candidates = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(urls))) as pool:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(10, len(urls))) as pool:
             futures = {pool.submit(_verify_url, url, 5, company_name): url for url in urls}
             for future in concurrent.futures.as_completed(futures):
                 url = futures[future]
@@ -3226,18 +3380,25 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 path = (urlparse(url).path or "/").strip("/") or "homepage"
                 category = _official_prefetch_category(url)
                 excerpt = _seed_excerpt(check.get("content_excerpt"), 2400)
-                title = f"Official {path.replace('-', ' ').replace('_', ' ')} page"
+                title = f"Official {path.replace('/', ' / ').replace('-', ' ').replace('_', ' ')} page"
+                source_type = "official_company_source"
+                if category == "SERVICE PORTFOLIO JURY (Delivery Reality)":
+                    source_type = "official_service_or_capability_page"
+                elif category == "CULTURAL JURY (Talent & Psychological Safety)":
+                    source_type = "official_careers_or_values_page"
+                elif category == "AI & DATA JURY (Future Readiness)":
+                    source_type = "official_technology_or_developer_page"
                 candidates.append(mark_company_candidate({
                     "category": category,
                     "label": f"Revalidate official domain source: {title}"[:140],
                     "title": title,
                     "url": url,
-                    "snippet": "",
+                    "snippet": excerpt[:900],
                     "semantic_hint": excerpt[:700],
-                    "source_quote": "",
+                    "source_quote": excerpt[:900],
                     "cached_excerpt": "",
                     "fetched_excerpt": excerpt,
-                    "source_type": "official_company_source",
+                    "source_type": source_type,
                     "source_database": "official_domain_prefetch",
                     "official_source": True,
                     "found": True,

@@ -51,6 +51,9 @@ COMPANY_SPECIFIC_SOURCE_TYPES = {
     "company_news",
     "company_filing",
     "official_company_source",
+    "official_service_or_capability_page",
+    "official_careers_or_values_page",
+    "official_technology_or_developer_page",
 }
 
 CONTEXT_ONLY_SOURCE_TYPES = {
@@ -97,6 +100,9 @@ SCOPED_CONTEXT_SOURCE_TYPES = COMPANY_SPECIFIC_SOURCE_TYPES | {
     "customer_story",
     "reference_case",
     "case_page",
+    "official_service_or_capability_page",
+    "official_careers_or_values_page",
+    "official_technology_or_developer_page",
 }
 
 
