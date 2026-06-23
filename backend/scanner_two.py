@@ -212,6 +212,7 @@ JURY_SOURCE_TARGETS = {
 
 FORENSIC_POSTPROCESS_RESERVE_SECONDS = 30
 FORENSIC_ACQUISITION_CEILING_SECONDS = 135
+FORENSIC_ACQUISITION_REPAIR_CEILING_SECONDS = 85
 FORENSIC_EXTRACTION_RECOVERY_CEILING_SECONDS = 35
 FORENSIC_FIRECRAWL_MAX_URLS = 6
 FORENSIC_JURY_ANALYSIS_CEILING_SECONDS = 150
@@ -219,6 +220,14 @@ FORENSIC_JURY_GPT_TIMEOUT_SECONDS = 105
 FORENSIC_JURY_SONNET_TIMEOUT_SECONDS = 45
 FORENSIC_GEMINI_TIMEOUT_SECONDS = 100
 FORENSIC_JURIES = tuple(JURY_SOURCE_TARGETS.keys())
+FORENSIC_HEAVY_JURIES = {
+    "STRATEGIC JURY (Business Model, Procurement & Customer Experience)",
+    "SERVICE PORTFOLIO JURY (Delivery Reality)",
+}
+FORENSIC_STRUCTURAL_JURIES = {
+    "ARCHITECTURAL JURY (Engineering Reality)",
+    *FORENSIC_HEAVY_JURIES,
+}
 
 
 def _canonical_evidence_url(url: str) -> str:
@@ -1028,6 +1037,51 @@ def _prevalidate_acquisition_results(
     return gated_results, stats
 
 
+def _merge_acquisition_lanes(primary_results: list, repair_results: list) -> list:
+    """Append validated repair packets to their original lanes without URL duplicates."""
+    by_jury = {item.get("jury"): dict(item) for item in primary_results or []}
+    for jury_name in FORENSIC_JURIES:
+        by_jury.setdefault(jury_name, {"jury": jury_name, "provider": None, "status": "missing", "sources": []})
+    for lane in repair_results or []:
+        jury = lane.get("jury")
+        if jury not in by_jury:
+            continue
+        existing = by_jury[jury]
+        seen = {
+            _canonical_evidence_url(source.get("url"))
+            for source in existing.get("sources", []) or []
+            if isinstance(source, dict)
+        }
+        additions = []
+        for source in lane.get("sources", []) or []:
+            key = _canonical_evidence_url((source or {}).get("url"))
+            if key and key not in seen:
+                source = dict(source)
+                source["acquisition_repair"] = True
+                additions.append(source)
+                seen.add(key)
+        existing["sources"] = list(existing.get("sources", []) or []) + additions
+        existing["pre_jury_rejected"] = list(existing.get("pre_jury_rejected", []) or []) + list(lane.get("pre_jury_rejected", []) or [])
+        if additions:
+            existing["status"] = "repaired"
+            providers = [p for p in [existing.get("provider"), lane.get("provider")] if p]
+            existing["provider"] = "+".join(dict.fromkeys(providers))
+    return [by_jury[jury] for jury in FORENSIC_JURIES]
+
+
+def _combine_pre_jury_stats(*stats_items: dict) -> dict:
+    combined = {}
+    for stats in stats_items:
+        for key, value in (stats or {}).items():
+            if isinstance(value, bool):
+                combined[key] = bool(combined.get(key)) or value
+            elif isinstance(value, (int, float)):
+                combined[key] = combined.get(key, 0) + value
+            else:
+                combined[key] = value
+    return combined
+
+
 def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seeds: dict) -> dict:
     """Merge judged findings; retain only revalidated seeds when a jury fails."""
     result = {key: value for key, value in (baseline or {}).items() if key != "findings"}
@@ -1324,6 +1378,97 @@ from the linked page itself, not paraphrased from a search-result summary. Use a
 article, report, filing, documentation, or job URL rather than a search page or generic landing page.
 The quote should be 30-120 words and contain the target entity or the exact narrow fact it supports.
 If you cannot obtain a page-bound verbatim passage, omit that source.
+Return ONLY valid JSON:
+{{
+  "jury": {json.dumps(jury_name)},
+  "sources": [
+    {{"url": "https://...", "title": "page title", "verbatim_quote": "exact page passage",
+      "published_at": "YYYY-MM-DD or null", "source_type": "registry source type",
+      "entity_scope_candidate": "company|group|subsidiary|context|unclear",
+      "discovery_query": "query used", "freshness": "fresh|current|evergreen|unknown"}}
+  ]
+}}
+"""
+
+
+def _jury_readiness_requirements(jury_name: str) -> dict:
+    if jury_name in FORENSIC_HEAVY_JURIES:
+        return {"fresh": 2, "total": 4}
+    if jury_name in FORENSIC_STRUCTURAL_JURIES:
+        return {"fresh": 1, "total": 3}
+    return {"fresh": 1, "total": 2}
+
+
+def _assess_jury_acquisition_readiness(acquisition_results: list, routed_seeds: dict) -> dict:
+    """Decide which jury lanes need a bounded acquisition repair pass."""
+    by_jury = {item.get("jury"): item for item in acquisition_results or []}
+    readiness = {}
+    for jury_name in FORENSIC_JURIES:
+        lane = by_jury.get(jury_name, {}) or {}
+        fresh_sources = [s for s in lane.get("sources", []) or [] if isinstance(s, dict) and s.get("url")]
+        seeds = [s for s in routed_seeds.get(jury_name, []) or [] if isinstance(s, dict) and s.get("url")]
+        req = _jury_readiness_requirements(jury_name)
+        fresh_count = len(fresh_sources)
+        total_count = fresh_count + len(seeds)
+        rejected = lane.get("pre_jury_rejected", []) or []
+        rejected_reasons = {}
+        for item in rejected:
+            reason = str((item or {}).get("reason") or "unknown")
+            rejected_reasons[reason] = rejected_reasons.get(reason, 0) + 1
+        weak = fresh_count < req["fresh"] or total_count < req["total"]
+        readiness[jury_name] = {
+            "fresh": fresh_count,
+            "seeds": len(seeds),
+            "total": total_count,
+            "required_fresh": req["fresh"],
+            "required_total": req["total"],
+            "weak": weak,
+            "rejected": len(rejected),
+            "rejected_reasons": rejected_reasons,
+        }
+    return readiness
+
+
+def _build_jury_repair_prompt(
+    search_name: str,
+    domain_hint: str,
+    jury_name: str,
+    lane: dict,
+    readiness: dict,
+    entity_context: str = "",
+    search_aliases: str = "",
+) -> str:
+    rejected = []
+    for item in (lane or {}).get("pre_jury_rejected", []) or []:
+        url = str((item or {}).get("url") or "").strip()
+        reason = str((item or {}).get("reason") or "unknown").strip()
+        if url:
+            rejected.append({"url": url, "reason": reason})
+    rejected = rejected[:12]
+    return f"""Repair weak source acquisition for \"{search_name}\" (official domain: {domain_hint}).
+This lane covers only: {jury_name}
+
+The first acquisition pass was too thin:
+- validated fresh packets: {readiness.get('fresh', 0)} / required {readiness.get('required_fresh', 0)}
+- total packets including revalidated seeds: {readiness.get('total', 0)} / required {readiness.get('required_total', 0)}
+- rejected reasons: {json.dumps(readiness.get('rejected_reasons') or {}, ensure_ascii=False)}
+
+Do a narrow re-search. Do NOT return any rejected URL below, and avoid the same pattern:
+{json.dumps(rejected, ensure_ascii=False)}
+
+ENTITY:
+{entity_context}
+{search_aliases}
+
+{_build_jury_source_registry_block(search_name, domain_hint, (jury_name,))}
+
+Return 2-4 direct, canonical source packets that are likely to survive validation:
+- live article/report/product/service/documentation/procurement/job-detail pages only;
+- no search result pages, generic landing pages, images, icons, PDFs without readable text, or navigation pages;
+- the page itself must mention or clearly scope to the target company, group, or named subsidiary;
+- `verbatim_quote` must be copied from the linked page, not from a search result summary;
+- choose the narrowest page that supports a useful current-state finding for this jury.
+
 Return ONLY valid JSON:
 {{
   "jury": {json.dumps(jury_name)},
@@ -3424,7 +3569,116 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         ]
     acquisition_by_jury = {item["jury"]: item for item in acquisition_results}
 
-    acquisition_results, pre_jury_stats = _prevalidate_acquisition_results(acquisition_results, company_name)
+    acquisition_results, pre_jury_stats_initial = _prevalidate_acquisition_results(acquisition_results, company_name)
+    acquisition_by_jury = {item["jury"]: item for item in acquisition_results}
+    readiness = _assess_jury_acquisition_readiness(acquisition_results, routed_seeds)
+    weak_juries = [jury for jury, status in readiness.items() if status.get("weak")]
+    repaired_juries = []
+    repair_stats = {}
+    if weak_juries:
+        print(
+            "   🧭 [Forensic Acquisition] Readiness after Gemini/precheck: "
+            + "; ".join(
+                f"{jury.split(' JURY')[0]} fresh={readiness[jury]['fresh']}/{readiness[jury]['required_fresh']}, "
+                f"total={readiness[jury]['total']}/{readiness[jury]['required_total']}"
+                for jury in weak_juries
+            )
+        )
+    repair_ceiling = min(
+        FORENSIC_ACQUISITION_REPAIR_CEILING_SECONDS,
+        _phase_remaining(
+            buffer=(
+                FORENSIC_EXTRACTION_RECOVERY_CEILING_SECONDS
+                + FORENSIC_JURY_ANALYSIS_CEILING_SECONDS
+                + FORENSIC_POSTPROCESS_RESERVE_SECONDS
+            )
+        ),
+    )
+    repair_results = []
+    if weak_juries and repair_ceiling >= 35:
+        repair_deadline = time.time() + repair_ceiling
+        print(
+            f"   🔁 [Forensic Acquisition] Targeted repair search for {len(weak_juries)} weak jury lane(s); "
+            f"ceiling {repair_ceiling}s."
+        )
+
+        def _repair_one_jury(jury_name):
+            lane_started = time.time()
+            lane = acquisition_by_jury.get(jury_name, {}) or {}
+            repair_prompt = _build_jury_repair_prompt(
+                search_name,
+                domain_hint,
+                jury_name,
+                lane,
+                readiness.get(jury_name, {}),
+                entity_context_block,
+                search_alias_block,
+            )
+            remaining = max(0, int(repair_deadline - time.time()))
+            payload = None
+            provider = "gpt-5.5-web-repair"
+            status = "repair_budget_skipped"
+            if remaining >= 25:
+                payload = execute_with_openai_web(
+                    repair_prompt,
+                    timeout_cap=min(55, remaining),
+                    purpose=f"jury acquisition repair: {jury_name}",
+                    search_context_size="low",
+                    allow_repair=False,
+                )
+                status = "repair_completed" if payload else "repair_failed"
+            sources = _normalize_acquisition_payload(payload or {}, jury_name, provider)
+            print(
+                f"   {'✅' if sources else '⚠️'} [Forensic Acquisition Repair] {jury_name}: "
+                f"{len(sources)} candidate packet(s), status={status}, elapsed={int(time.time() - lane_started)}s."
+            )
+            return {"jury": jury_name, "provider": provider, "status": status, "sources": sources}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(3, len(weak_juries))) as pool:
+            futures = {pool.submit(_repair_one_jury, jury): jury for jury in weak_juries}
+            done, pending = concurrent.futures.wait(futures, timeout=repair_ceiling)
+            for future in pending:
+                future.cancel()
+                repair_results.append({
+                    "jury": futures[future],
+                    "provider": "gpt-5.5-web-repair",
+                    "status": "repair_shared_deadline",
+                    "sources": [],
+                })
+            for future in done:
+                jury = futures[future]
+                try:
+                    repair_results.append(future.result())
+                except Exception as error:
+                    repair_results.append({
+                        "jury": jury,
+                        "provider": "gpt-5.5-web-repair",
+                        "status": "repair_lane_error",
+                        "sources": [],
+                        "error": repr(error),
+                    })
+        repair_results, repair_stats = _prevalidate_acquisition_results(
+            repair_results,
+            company_name,
+            recovery_seconds=max(10, min(FORENSIC_EXTRACTION_RECOVERY_CEILING_SECONDS, int(_phase_remaining(buffer=FORENSIC_JURY_ANALYSIS_CEILING_SECONDS + FORENSIC_POSTPROCESS_RESERVE_SECONDS)))),
+        )
+        repaired_juries = [
+            lane.get("jury") for lane in repair_results
+            if lane.get("sources")
+        ]
+        acquisition_results = _merge_acquisition_lanes(acquisition_results, repair_results)
+        acquisition_by_jury = {item["jury"]: item for item in acquisition_results}
+        readiness = _assess_jury_acquisition_readiness(acquisition_results, routed_seeds)
+        print(
+            f"   🛠️ [Forensic Acquisition Repair] validated {repair_stats.get('passed', 0)}/"
+            f"{repair_stats.get('input', 0)} repair packet(s); repaired lanes={len(repaired_juries)}."
+        )
+    elif weak_juries:
+        print(
+            f"   ⏭️ [Forensic Acquisition] Repair search skipped; only {repair_ceiling}s available before protected analysis/postprocess reserves."
+        )
+
+    pre_jury_stats = _combine_pre_jury_stats(pre_jury_stats_initial, repair_stats)
     acquisition_by_jury = {item["jury"]: item for item in acquisition_results}
     print(
         f"   🛡️ [Forensic Pre-Jury Gate] {pre_jury_stats['passed']}/{pre_jury_stats['input']} packets passed; "
@@ -3433,7 +3687,9 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         f"non_document_asset={pre_jury_stats.get('non_document_asset', 0)}; "
         f"Firecrawl recovered={pre_jury_stats.get('firecrawl_recovered', 0)}/"
         f"{pre_jury_stats.get('firecrawl_attempted', 0)}, skipped_by_cap="
-        f"{pre_jury_stats.get('firecrawl_skipped_by_cap', 0)}."
+        f"{pre_jury_stats.get('firecrawl_skipped_by_cap', 0)}; "
+        f"repair_validated={repair_stats.get('passed', 0) if repair_stats else 0}, "
+        f"weak_after_repair={len([jury for jury, status in readiness.items() if status.get('weak')])}."
     )
 
     # --- PHASE 2: FIVE PARALLEL NO-WEB JURY ANALYSES ---
