@@ -203,7 +203,9 @@ FORENSIC_POSTPROCESS_RESERVE_SECONDS = 30
 FORENSIC_ACQUISITION_CEILING_SECONDS = 135
 FORENSIC_EXTRACTION_RECOVERY_CEILING_SECONDS = 35
 FORENSIC_FIRECRAWL_MAX_URLS = 6
-FORENSIC_JURY_ANALYSIS_CEILING_SECONDS = 95
+FORENSIC_JURY_ANALYSIS_CEILING_SECONDS = 150
+FORENSIC_JURY_GPT_TIMEOUT_SECONDS = 105
+FORENSIC_JURY_SONNET_TIMEOUT_SECONDS = 45
 FORENSIC_GEMINI_TIMEOUT_SECONDS = 100
 FORENSIC_JURIES = tuple(JURY_SOURCE_TARGETS.keys())
 
@@ -2620,6 +2622,9 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             print(f"   ⏰ [Forensic Scan] {label} hard deadline reached after {timeout_sec}s")
             return None
         finally:
+            # Do not wait for a provider call that ignored its native timeout. The
+            # caller treats this as excluded-by-deadline, so late provider output
+            # cannot be merged into this forensic phase.
             pool.shutdown(wait=False)
 
     def _seed_excerpt(value, limit=520):
@@ -3125,19 +3130,22 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
     acquisition_results = []
     if acquisition_ceiling >= 20:
-        pool = concurrent.futures.ThreadPoolExecutor(max_workers=5)
-        futures = {pool.submit(_acquire_one_jury, jury): jury for jury in FORENSIC_JURIES}
-        done, pending = concurrent.futures.wait(futures, timeout=acquisition_ceiling)
-        for future in done:
-            jury = futures[future]
-            try:
-                acquisition_results.append(future.result())
-            except Exception as error:
-                acquisition_results.append({"jury": jury, "provider": None, "status": "lane_error", "sources": [], "error": repr(error)})
-        for future in pending:
-            future.cancel()
-            acquisition_results.append({"jury": futures[future], "provider": None, "status": "group_timeout", "sources": []})
-        pool.shutdown(wait=False)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+            futures = {pool.submit(_acquire_one_jury, jury): jury for jury in FORENSIC_JURIES}
+            done, pending = concurrent.futures.wait(futures, timeout=acquisition_ceiling)
+            if pending:
+                print(
+                    f"   ⚠️ [Forensic Acquisition] {len(pending)} lane(s) still in flight at group ceiling; "
+                    "waiting for provider-native deadlines before pre-jury gate."
+                )
+                concurrent.futures.wait(pending)
+                done = set(futures.keys())
+            for future in done:
+                jury = futures[future]
+                try:
+                    acquisition_results.append(future.result())
+                except Exception as error:
+                    acquisition_results.append({"jury": jury, "provider": None, "status": "lane_error", "sources": [], "error": repr(error)})
     else:
         acquisition_results = [
             {"jury": jury, "provider": None, "status": "budget_skipped", "sources": []}
@@ -3177,11 +3185,17 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         provider = "gpt-5.5"
         remaining = max(1, int(analysis_deadline - time.time()))
         try:
-            text = call_openai_text(
-                prompt, model="gpt-5.5", max_output_tokens=6500,
-                timeout=min(70, remaining), web_search=False,
+            gpt_timeout = min(FORENSIC_JURY_GPT_TIMEOUT_SECONDS, remaining)
+            text = _hard_timeout_call(
+                f"{jury_name} gpt-5.5 no-web jury analysis",
+                gpt_timeout,
+                lambda: call_openai_text(
+                    prompt, model="gpt-5.5", max_output_tokens=6500,
+                    timeout=max(1, min(gpt_timeout - 5, gpt_timeout)), web_search=False,
+                ),
             )
-            payload = _parse_provider_payload(text)
+            if text:
+                payload = _parse_provider_payload(text)
         except Exception as error:
             print(f"   ⚠️ [Forensic Analysis] {jury_name} GPT failed: {type(error).__name__}: {error}")
         if not payload:
@@ -3189,11 +3203,17 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             if remaining >= 15:
                 provider = "claude-sonnet-4-6"
                 try:
-                    text = call_anthropic_text(
-                        prompt, model="claude-sonnet-4-6", max_tokens=6500,
-                        timeout=min(35, remaining), web_search=False,
+                    sonnet_timeout = min(FORENSIC_JURY_SONNET_TIMEOUT_SECONDS, remaining)
+                    text = _hard_timeout_call(
+                        f"{jury_name} claude-sonnet-4-6 no-web jury analysis",
+                        sonnet_timeout,
+                        lambda: call_anthropic_text(
+                            prompt, model="claude-sonnet-4-6", max_tokens=6500,
+                            timeout=max(1, min(sonnet_timeout - 5, sonnet_timeout)), web_search=False,
+                        ),
                     )
-                    payload = _parse_provider_payload(text)
+                    if text:
+                        payload = _parse_provider_payload(text)
                 except Exception as error:
                     print(f"   ⚠️ [Forensic Analysis] {jury_name} Sonnet failed: {type(error).__name__}: {error}")
         accepted = len((payload or {}).get("findings", []) or [])
@@ -3212,19 +3232,22 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
     jury_results = []
     if analysis_ceiling >= 15:
-        pool = concurrent.futures.ThreadPoolExecutor(max_workers=5)
-        futures = {pool.submit(_analyze_one_jury, jury): jury for jury in FORENSIC_JURIES}
-        done, pending = concurrent.futures.wait(futures, timeout=analysis_ceiling)
-        for future in done:
-            jury = futures[future]
-            try:
-                jury_results.append(future.result())
-            except Exception as error:
-                jury_results.append({"jury": jury, "provider": None, "status": "lane_error", "data": None, "error": repr(error)})
-        for future in pending:
-            future.cancel()
-            jury_results.append({"jury": futures[future], "provider": None, "status": "group_timeout", "data": None})
-        pool.shutdown(wait=False)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+            futures = {pool.submit(_analyze_one_jury, jury): jury for jury in FORENSIC_JURIES}
+            done, pending = concurrent.futures.wait(futures, timeout=analysis_ceiling)
+            if pending:
+                print(
+                    f"   ⚠️ [Forensic Analysis] {len(pending)} jury call(s) still in flight at group ceiling; "
+                    "waiting for lane hard deadlines before merge."
+                )
+                concurrent.futures.wait(pending)
+                done = set(futures.keys())
+            for future in done:
+                jury = futures[future]
+                try:
+                    jury_results.append(future.result())
+                except Exception as error:
+                    jury_results.append({"jury": jury, "provider": None, "status": "lane_error", "data": None, "error": repr(error)})
     else:
         jury_results = [
             {"jury": jury, "provider": None, "status": "budget_skipped", "data": None}

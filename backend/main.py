@@ -4587,6 +4587,17 @@ Do NOT generate commercial_pitch, why_proposals, or what_proposals in this call.
                              attach_evidence_graph(generation_graph_input)
                              generation_manifest = generation_graph_input.get("evidence_manifest", [])
                              activation_evidence_packet = evidence_prompt_packet(generation_manifest, limit=40)
+                             foresight_context = ""
+                             if foresight_data:
+                                 try:
+                                     from strategic_foresight import format_foresight_for_synthesis
+                                     foresight_context = format_foresight_for_synthesis(
+                                         foresight_data,
+                                         companyName,
+                                         company_domain,
+                                     )
+                                 except Exception as fs_err:
+                                     print(f"   ⚠️ [Activation] Foresight context unavailable: {type(fs_err).__name__}: {fs_err}")
                              activation_prompt = f"""You are writing the Strategic Synthesis and Activation layer for {companyName}.
 The AI Diagnosis below is LOCKED. The Knowledge Base is the mandatory baseline. You may turn the diagnosis into WHY/WHAT proposals and a concise pitch, but you may not introduce new facts.
 
@@ -4868,15 +4879,10 @@ Respond with valid JSON only:
             print(f"   ✅ [Reality Check] Summary OK (score {summary_check['score']}/100)")
 
         # --- AI FACT-CHECK: Always runs in Deep Scan (heuristic is diagnostic only) ---
-        # Core insight: the problem is EVIDENCE CONTAMINATION, not hallucination.
-        # Checking summary against stored evidence is circular when evidence itself may be wrong.
-        # Independent GPT/Claude fact-check verifies claims against generation-eligible evidence.
-        #
-        # Single-pass pipeline (no loops, no eternal fact-checking):
-        #   1. Fact-check once → if clean, DONE (original synthesis stands)
-        #   2. If false claims → correction is produced by a provider-separated correction call
-        #      → purge contaminated evidence → apply corrected summary → DONE
-        #   No second fact-check after correction — fact-checker fixes what it finds.
+        # General Summary remains the strict factual layer. AI Diagnosis, risks and
+        # Strategic Synthesis are inference layers: the verifier may flag unsupported
+        # premises or weak reasoning, but it must not purge valid evidence or replace
+        # the whole analysis with a factual correction.
         _fc_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
         if _fc_remaining < 60:
             print(f"   ⏭ [Fact-Check] Budget < 60s remaining ({int(_fc_remaining)}s) — skipping, summary stored as unverified")
@@ -4942,261 +4948,72 @@ Respond with valid JSON only:
             )
             if scan_quality == "complete":
                 scan_quality = "unverified"
-        elif fact_check["verified"]:
-            # --- CLEAN: No false claims found. Original synthesis stands. Done. ---
-            print(f"   ✅ [Fact-Check] Summary verified — no false claims ({fact_check['fact_check_time_ms']}ms)")
-        else:
-            # --- FALSE CLAIMS FOUND: Apply corrected summary from fact-check + purge evidence ---
-            # The fact-checker produced the corrected summary in the correction stage.
-            # If fact-checker didn't produce a corrected summary, fall back to separate re-synthesis.
-            print(f"   ⚠️ [Fact-Check] {len(fact_check['false_claims'])} false claim(s) found ({fact_check['fact_check_time_ms']}ms):")
-            for claim in fact_check["false_claims"]:
-                print(f"      - {claim}")
-
-            # Step 1: Purge contaminated evidence sources
-            print(f"   🗑️ [Purge] Removing contaminated evidence from stored data...")
-            detailed_claims = fact_check.get("false_claims_detailed", [])
-            purge_result = purge_false_evidence(
-                full_data,
-                fact_check["false_claims"],
-                detailed_claims=detailed_claims,
-            )
-
-            # Step 2: Apply corrected summary from fact-check (or fall back to separate re-synthesis)
-            corrected_summary = fact_check.get("corrected_summary", "")
-            corrected_pitch = fact_check.get("corrected_pitch", "")
-            corrected_sections = fact_check.get("corrected_sections") or {}
-            corrected_risks = corrected_sections.get("evidence_based_risks")
-            if isinstance(corrected_risks, list):
-                full_data["evidence_based_risks"] = corrected_risks
-            corrected_synthesis = corrected_sections.get("strategic_synthesis")
-            if isinstance(corrected_synthesis, str) and corrected_synthesis.strip():
-                full_data["strategic_synthesis"] = _strip_tac_codes(corrected_synthesis)
-            resynth_ms = 0
-            resynth_model_used = fact_check.get("fact_check_model", "")
-
-            _kp_before_fc = len(full_data.get("key_people") or [])
-
-            if corrected_summary:
-                # --- Fact-checker produced corrected summary — use it directly ---
-                print(f"   ✅ [Fact-Check] Using corrected summary from independent fact-checker ({len(corrected_summary.split())} words)")
-                corrected_summary = _apply_deterministic_corrections(corrected_summary, detailed_claims)
-                full_data["summary_text"] = _strip_tac_codes(corrected_summary)
-                if corrected_pitch:
-                    corrected_pitch = _apply_deterministic_corrections(corrected_pitch, detailed_claims)
-                    full_data["pitch_text"] = corrected_pitch
-                    print(f"   ✅ [Fact-Check] Also applied corrected pitch ({len(corrected_pitch.split())} words)")
-
-                full_data["re_synthesis"] = {
-                    "was_resynthesized": True,
-                    "false_claims_found": fact_check["false_claims"],
-                    "evidence_purged": purge_result,
-                    "resynth_model": resynth_model_used,
-                    "resynth_time_ms": fact_check.get("fact_check_time_ms", 0),
-                    "method": "fact_check_inline_correction",
-                }
-                # Mark as verified — fact-checker fixed what it found.
-                # SINGLE-PASS GUARANTEE: No second fact-check runs here.
-                full_data["ai_verification"]["verified"] = True
-                full_data["ai_verification"]["false_claims"] = []
-                full_data["ai_verification"]["note"] = "Corrected by independent GPT/Claude fact-checker"
-                # Clear stale washing flags
-                full_data["washing_flag"] = False
-                full_data["washing_type"] = None
-                print(f"   ✅ [Fact-Check] Cleared washing flags (false claims corrected by fact-checker)")
-
-                # Verify key_people survived the correction. It is a compatibility field
-                # used by Admin/manual workflows and Buying Insight inputs.
-                _kp_after_fc = len(full_data.get("key_people") or [])
-                if _kp_after_fc != _kp_before_fc:
-                    print(f"   ⚠️ [Fact-Check] key_people compatibility count changed during correction: {_kp_before_fc} → {_kp_after_fc} stakeholder(s)")
-                elif _kp_after_fc == 0:
-                    print(f"   ℹ️ [Fact-Check] key_people compatibility field is empty after correction")
-                else:
-                    print(f"   ✅ [Fact-Check] key_people compatibility field preserved: {_kp_after_fc} stakeholder(s)")
-
+        elif fact_check["verified"] or fact_check.get("false_claims"):
+            if fact_check["verified"]:
+                # --- CLEAN: No false claims found. Original synthesis stands. Done. ---
+                print(f"   ✅ [Fact-Check] Summary verified — no false claims ({fact_check['fact_check_time_ms']}ms)")
             else:
-                # --- Fallback: Fact-checker didn't produce corrected summary → separate re-synthesis ---
-                _resynth_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
-                if _resynth_remaining < 60:
-                    print(f"   ⏭ [Re-Synthesis] Budget < 60s ({int(_resynth_remaining)}s) — skipping re-synthesis, saving with false claims flagged")
-                    full_data["re_synthesis"] = {
-                        "was_resynthesized": False,
-                        "false_claims_found": fact_check["false_claims"],
-                        "evidence_purged": purge_result,
-                        "reason": "Budget exhausted — re-synthesis skipped",
-                    }
-                    _do_resynth = False
-                else:
-                    print(f"   ⚠️ [Fact-Check] No corrected summary from fact-checker — falling back to separate re-synthesis")
-                    print(f"   🔄 [Re-Synthesis] GPT/Claude full re-synthesis from cleaned evidence ({int(_resynth_remaining)}s remaining)...")
-                    resynth_start = time.time()
-                    _do_resynth = True
-
-                if _do_resynth:
-                    # Rebuild evidence list from purged data
-                    clean_evidence_links = full_data.get("evidence_links", [])
-                    clean_verified = _analysis_evidence_links(clean_evidence_links)
-                    clean_evidence_list = ', '.join([f"{l.get('title', 'Unknown')}: {l.get('source_quote') or l.get('snippet', '')}" for l in clean_verified[:20]])
-
-                    # Note which claims were removed (with verified corrections when available)
-                    removed_claims_lines = []
-                    detailed_map = {}
-                    for dc in detailed_claims:
-                        detailed_map[dc.get("claim", "")] = dc.get("correction", "")
-                    for c in fact_check["false_claims"]:
-                        line = f"- {c}"
-                        corr = detailed_map.get(c, "")
-                        if corr:
-                            line += f"\n  → VERIFIED CORRECTION: {corr}"
-                        removed_claims_lines.append(line)
-                    removed_claims_note = "\n".join(removed_claims_lines)
-
-                    # Strip the old (contaminated) "Evidence Found:" line from the original
-                    # synthesis_prompt so the LLM only sees the cleaned evidence list below.
-                    import re as _re
-                    clean_resynthesis_guardrails = _shared_prompt_guardrails(include_diagnostic=True, include_foresight=True, include_claim_tier=True)
-                    clean_synthesis_prompt = _re.sub(
-                        r'Evidence Found: .+', 'Evidence Found: [see CLEANED evidence below]',
-                        synthesis_prompt, count=1
+                # AI Diagnosis, risks, and Strategic Synthesis are inference
+                # outputs. They should be audited for supported premises and
+                # reasoning quality, but they must not be replaced wholesale by a
+                # strict factual correction. General Summary remains the hard
+                # factual correction layer.
+                print(f"   ⚠️ [Fact-Check] {len(fact_check['false_claims'])} inference audit issue(s) found ({fact_check['fact_check_time_ms']}ms):")
+                for claim in fact_check["false_claims"]:
+                    print(f"      - {claim}")
+                corrected_summary = fact_check.get("corrected_summary", "")
+                if corrected_summary:
+                    print(
+                        f"   🧭 [Fact-Check] Correction suggestion retained for audit "
+                        f"({len(corrected_summary.split())} words); original inference text preserved"
                     )
-
-                    resynth_prompt = f"""{clean_synthesis_prompt}
-
-### SHARED EVIDENCE / DIAGNOSIS / FORESIGHT GUARDRAILS
-{clean_resynthesis_guardrails}
-
-CRITICAL CONTEXT — FACT-CHECK CORRECTIONS:
-The previous synthesis contained false claims that were detected by an independent fact-checker
-The following claims were FALSE and must NOT appear in your output:
-{removed_claims_note}
-
-Where a VERIFIED CORRECTION is provided above, use that exact corrected fact instead of the false claim.
-For numeric/qualifier errors, use the exact verified value — do not round, approximate, or hedge.
-
-The contaminated evidence sources have been removed. You are now working with CLEANED evidence only:
-Evidence Found: {clean_evidence_list}
-
-Generate a completely fresh synthesis from this cleaned evidence set. Do NOT reference or
-re-introduce any of the false claims listed above. Build your narrative only from the
-verified evidence provided.
-
-CRITICAL: Do not just rephrase the false claims. You must act as if the concepts mentioned in the false claims above do not exist for this company at all — unless a VERIFIED CORRECTION is provided, in which case use that exact correction. If the cleaned evidence does not explicitly state a fact, remain silent on that topic."""
-
-                    resynth_text = ""
-                    resynth_model_used = ""
-                    # Primary: GPT 5.5
-                    try:
-                        print(f"   🔄 [Re-Synthesis] Attempting gpt-5.5...")
-                        resynth_text = _call_openai_text(resynth_prompt, model="gpt-5.5", max_output_tokens=12000, timeout=120)
-                        resynth_model_used = "gpt-5.5"
-                        resynth_ms = int((time.time() - resynth_start) * 1000)
-                        print(f"   ✅ [Re-Synthesis] GPT 5.5 re-synthesis complete ({resynth_ms}ms)")
-                    except Exception as gpt_err:
-                        print(f"   ❌ [Re-Synthesis] GPT 5.5 failed: {gpt_err}")
-
-                    # Fallback: Claude Sonnet 4.6 (independent provider — survives OpenAI outages)
-                    if not resynth_text:
-                        try:
-                            print(f"   🔄 [Re-Synthesis] Falling back to Claude Sonnet 4.6...")
-                            m_start = time.time()
-                            sonnet_resp = claude_client.messages.create(
-                                model="claude-sonnet-4-6",
-                                max_tokens=4000,
-                                messages=[{"role": "user", "content": resynth_prompt}],
-                            )
-                            for block in sonnet_resp.content:
-                                if getattr(block, 'type', None) == 'text':
-                                    resynth_text = block.text
-                                    break
-                            resynth_model_used = "claude-sonnet-4-6"
-                            resynth_ms = int((time.time() - m_start) * 1000)
-                            print(f"   ✅ [Re-Synthesis] Claude Sonnet 4.6 re-synthesis complete ({resynth_ms}ms)")
-                        except Exception as sonnet_err:
-                            resynth_ms = int((time.time() - resynth_start) * 1000)
-                            print(f"   ❌ [Re-Synthesis] Claude Sonnet 4.6 failed: {sonnet_err} ({resynth_ms}ms)")
-
-                    if resynth_text:
-                        resynth_payload = extract_json_from_text(resynth_text)
-                        if resynth_payload:
-                            resynth_json = json.loads(resynth_payload, strict=False)
-                            new_summary = resynth_json.get("diagnostic_summary", resynth_json.get("summary", ""))
-                            new_pitch = resynth_json.get("commercial_pitch", resynth_json.get("pitch", ""))
-
-                            if new_summary:
-                                new_summary = _apply_deterministic_corrections(new_summary, detailed_claims)
-                                full_data["summary_text"] = _strip_tac_codes(new_summary)
-                            if new_pitch:
-                                new_pitch = _apply_deterministic_corrections(new_pitch, detailed_claims)
-                                full_data["pitch_text"] = new_pitch
-                            new_risks = resynth_json.get("evidence_based_risks", [])
-                            if isinstance(new_risks, list) and new_risks:
-                                full_data["evidence_based_risks"] = new_risks
-                            new_why = resynth_json.get("why_proposals", [])
-                            new_what = resynth_json.get("what_proposals", [])
-                            if new_why and isinstance(new_why, list):
-                                full_data["why_proposals"] = new_why
-                            if new_what and isinstance(new_what, list):
-                                full_data["what_proposals"] = new_what
-
-                            # Update reality score if the re-synthesis re-evaluated it
-                            resynth_reality = resynth_json.get("reality_score")
-                            if resynth_reality is not None and isinstance(resynth_reality, (int, float)):
-                                resynth_reality = max(0, min(100, int(resynth_reality)))
-                                reality_results["score"] = resynth_reality
-                                full_data["reality_score"] = resynth_reality
-                                # Recalculate gap and archetype
-                                gap = intent_results["score"] - resynth_reality
-                                full_data["reality_gap"] = gap
-                                if resynth_reality >= 50:
-                                    archetype = "Thriving" if fin_for_archetype >= 50 else "Modernizing"
-                                else:
-                                    archetype = "Cash Cow" if fin_for_archetype >= 50 else "At Risk"
-                                full_data["archetype"] = archetype
-                                # Re-evaluate washing flag
-                                if resynth_reality >= intent_results["score"]:
-                                    full_data["washing_flag"] = False
-                                    full_data["washing_type"] = None
-
-                            # Verify archetype from re-synthesis
-                            resynth_archetype = resynth_json.get("archetype")
-                            final_reality = full_data["reality_score"]
-                            expected_archetype = ("Thriving" if fin_for_archetype >= 50 else "Modernizing") if final_reality >= 50 else ("Cash Cow" if fin_for_archetype >= 50 else "At Risk")
-                            if resynth_archetype and resynth_archetype != expected_archetype:
-                                print(f"   ⚖️ [Re-Synthesis] Archetype '{resynth_archetype}' → corrected to '{expected_archetype}'")
-                                valid_archetypes = ["Thriving", "Modernizing", "Cash Cow", "At Risk"]
-                                for wrong_label in valid_archetypes:
-                                    if wrong_label == expected_archetype:
-                                        continue
-                                    full_data["summary_text"] = full_data["summary_text"].replace(wrong_label, expected_archetype)
-
-                            print(f"   ✅ [Re-Synthesis] Full re-synthesis applied from cleaned evidence")
-
-                        full_data["re_synthesis"] = {
-                            "was_resynthesized": True,
-                            "false_claims_found": fact_check["false_claims"],
-                            "evidence_purged": purge_result,
-                            "resynth_model": resynth_model_used or "gpt-5.5",
-                            "resynth_time_ms": resynth_ms,
-                            "method": "separate_re_synthesis_fallback",
-                        }
-                        # Mark as verified after re-synthesis — built from clean evidence.
-                        # SINGLE-PASS GUARANTEE: No second fact-check runs here.
-                        full_data["ai_verification"]["verified"] = True
-                        full_data["ai_verification"]["false_claims"] = []
-                        full_data["ai_verification"]["note"] = "Re-synthesized from cleaned evidence after fact-check (single-pass fallback)"
-                        # Clear stale washing flags
-                        full_data["washing_flag"] = False
-                        full_data["washing_type"] = None
-                        print(f"   ✅ [Re-Synthesis] Cleared washing flags (false claims removed, fresh synthesis)")
-                    else:
-                        print(f"   ⚠️ [Re-Synthesis] Could not re-synthesize — saving with false claims flagged")
-                        full_data["re_synthesis"] = {
-                            "was_resynthesized": False,
-                            "false_claims_found": fact_check["false_claims"],
-                            "evidence_purged": purge_result,
-                            "reason": "GPT/Claude re-synthesis failed",
-                        }
+                full_data["re_synthesis"] = {
+                    "was_resynthesized": False,
+                    "false_claims_found": fact_check["false_claims"],
+                    "false_claims_detailed": fact_check.get("false_claims_detailed", []),
+                    "suggested_corrected_summary": _strip_tac_codes(corrected_summary) if corrected_summary else "",
+                    "suggested_corrected_pitch": fact_check.get("corrected_pitch", "") or "",
+                    "suggested_corrected_sections": fact_check.get("corrected_sections") or {},
+                    "evidence_purged": {"removed": 0, "skipped": True, "reason": "inference_audit_preserved_sources"},
+                    "resynth_model": fact_check.get("fact_check_model", ""),
+                    "resynth_time_ms": fact_check.get("fact_check_time_ms", 0),
+                    "method": "inference_audit_preserved_original",
+                }
+                full_data["ai_verification"]["verified"] = False
+                full_data["ai_verification"]["verification_status"] = (
+                    fact_check.get("verification_status") or "inference_audit_requires_review"
+                )
+                full_data["ai_verification"]["note"] = (
+                    "AI Diagnosis and Strategic Synthesis were preserved for inference audit. "
+                    "General Summary remains the strict factual correction layer."
+                )
+                if scan_quality == "complete":
+                    scan_quality = "unverified"
+        else:
+            # Defensive fallback for an inconclusive verifier response. Older
+            # pipeline code used to purge evidence and rewrite the whole diagnosis
+            # here; inference outputs must instead be preserved and marked
+            # unverified for review.
+            print(f"   ⚠️ [Fact-Check] Inconclusive inference audit ({fact_check['fact_check_time_ms']}ms); preserving analysis and sources")
+            full_data["re_synthesis"] = {
+                "was_resynthesized": False,
+                "false_claims_found": fact_check.get("false_claims", []),
+                "false_claims_detailed": fact_check.get("false_claims_detailed", []),
+                "evidence_purged": {"removed": 0, "skipped": True, "reason": "inference_audit_inconclusive"},
+                "resynth_model": fact_check.get("fact_check_model", ""),
+                "resynth_time_ms": fact_check.get("fact_check_time_ms", 0),
+                "method": "inference_audit_inconclusive_preserved_original",
+            }
+            full_data["ai_verification"]["verified"] = False
+            full_data["ai_verification"]["verification_status"] = (
+                fact_check.get("verification_status") or "inference_audit_inconclusive"
+            )
+            full_data["ai_verification"]["note"] = (
+                "Inference verification was inconclusive. Analysis and evidence were preserved; "
+                "no corrective rewrite or evidence purge was applied."
+            )
+            if scan_quality == "complete":
+                scan_quality = "unverified"
 
         # --- STEP 3.5: GENERAL SUMMARY ---
         # General Summary: Plain-language narrative (225-275 words) from already-verified data.
