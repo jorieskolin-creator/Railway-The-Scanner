@@ -205,6 +205,32 @@ def build_claim_graph(data: dict, manifest: list[dict]) -> tuple[list[dict], lis
                 if source_id and source_id.startswith("FOR-"):
                     ids.append(source_id)
         claims.append(_claim_record(text, "foresight", ids, "foresight_context", index, scope="macro", support="context"))
+    for index, signal in enumerate(data.get("evidence_absence_signals") or [], 1):
+        if not isinstance(signal, dict):
+            continue
+        text = signal.get("safe_wording") or signal.get("description") or ""
+        if not text:
+            continue
+        claims.append(_claim_record(
+            text,
+            "evidence_absence",
+            [],
+            "absence_of_promoted_evidence",
+            index,
+            support="deterministic_evidence_state",
+            scope="scanner_evidence_state",
+            confidence=signal.get("severity_hint"),
+            reasoning=(
+                "Promoted evidence count is a deterministic Scanner source-register state. "
+                "It may support proof-gap reasoning but never proves the capability is absent."
+            ),
+            signal_id=signal.get("signal_id"),
+            dimension=signal.get("dimension"),
+            promoted_evidence_count=signal.get("promoted_evidence_count"),
+            candidate_source_count=signal.get("candidate_source_count"),
+            verification_contract=signal.get("verification_contract"),
+            citation_status="not_source_claim",
+        ))
     narrative_fields = (
         ("summary_text", "diagnosis", "diagnostic_inference"),
         ("strategic_synthesis", "strategic_synthesis", "strategic_synthesis"),

@@ -56,6 +56,7 @@ from buying_potential import BuyingPotentialError, generate_buying_potential_rep
 from company_evidence import CompanyEvidenceError, build_company_evidence_database
 from company_source_ledger import CompanySourceLedgerError, build_company_source_ledger
 from evidence_graph import attach_evidence_graph, build_evidence_manifest, evidence_prompt_packet
+from evidence_absence import build_evidence_absence_signals, format_absence_signals_for_prompt
 
 # VERIFICATION LOG: v5.4.0 - Extended Thinking + Search Budget Upgrade
 print("Starting Adaptability Scanner Backend (v5.4.0 - Extended Thinking + Search Budget Upgrade)...", flush=True)
@@ -552,6 +553,11 @@ def _build_fact_check_scan_payload(data: dict) -> dict:
                 "strategic inference and is not proof of company action or deployment."
             ),
         },
+        "evidence_absence_signals": data.get("evidence_absence_signals") or [],
+        "evidence_absence_contract": (
+            "Absence-of-promoted-evidence signals are deterministic Scanner evidence-state findings. "
+            "They support cautious proof-gap reasoning, not claims that a capability is absent."
+        ),
         "evidence_based_risks": data.get("evidence_based_risks") or [],
         "sample_reality_findings": sample_findings,
         "evidence_graph_version": data.get("evidence_graph_version"),
@@ -4108,6 +4114,8 @@ def _execute_scan_pipeline(
         strategic_synthesis = ""
         generation_company_manifest = []
         generation_manifest = []
+        evidence_absence_signals = []
+        evidence_absence_context = ""
         evidence_based_risks = []
         why_proposals = []
         what_proposals = []
@@ -4148,6 +4156,14 @@ def _execute_scan_pipeline(
                     reality_results.get("checklist", []),
                 )
                 ai_readiness_context = _ai_readiness_prompt_note(ai_readiness_evidence)
+                evidence_absence_signals = build_evidence_absence_signals(
+                    intent_results.get("breakdown", []),
+                    synthesis_source_pool,
+                    reality_results.get("checklist", []),
+                    foresight_links,
+                    financial_evidence_links,
+                )
+                evidence_absence_context = format_absence_signals_for_prompt(evidence_absence_signals)
                 # Run contradiction detection on the same evidence pool. Block
                 # is empty when no quantitative disagreements are found, so the
                 # injected slot stays harmless on clean cases.
@@ -4244,6 +4260,7 @@ Intent Data: {intent_narrative}
 {financial_context}
 {low_evidence_context}
 {ai_readiness_context}
+{evidence_absence_context}
 {negative_findings_context}
 
 {contradictions_block}
@@ -4583,6 +4600,7 @@ Do NOT generate commercial_pitch, why_proposals, or what_proposals in this call.
                                  "evidence_links": verified_links,
                                  "foresight_links": foresight_links,
                                  "strategic_foresight": foresight_data or {},
+                                 "evidence_absence_signals": evidence_absence_signals,
                              }
                              attach_evidence_graph(generation_graph_input)
                              generation_manifest = generation_graph_input.get("evidence_manifest", [])
@@ -4621,6 +4639,7 @@ Evidence-based risks:
 {activation_evidence_packet}
 {negative_findings_context}
 {foresight_context}
+{evidence_absence_context}
 
 ### ACTIVATION RULES
 1. Use the Knowledge Base terminology and proposal logic as the baseline.
@@ -4634,6 +4653,7 @@ Evidence-based risks:
 9. Preserve contradictions between current-reality premises; explain what they may mean instead of averaging them away.
 10. Do not compare Scanner outputs across scans or discuss Scanner performance.
 11. Cite company premises with [EVD-*] and macro premises with [FOR-*]. Every material synthesis sentence must cite the IDs it uses.
+12. If you use an absence-of-promoted-evidence signal, phrase it as an evidence/proof gap, never as proof that the capability is absent.
 
 ### PITCH
 Write a direct cold-outreach message to a C-level executive at {companyName}.
@@ -4796,6 +4816,13 @@ Respond with valid JSON only:
             managed_evidence_links,
             reality_results.get("checklist", []),
         )
+        final_evidence_absence_signals = build_evidence_absence_signals(
+            intent_results.get("breakdown", []),
+            managed_evidence_links,
+            reality_results.get("checklist", []),
+            foresight_links,
+            financial_evidence_links,
+        )
 
         full_data = {
             "id": result_id,
@@ -4823,7 +4850,9 @@ Respond with valid JSON only:
             "low_evidence_label": evidence_sufficiency.get("label", ""),
             "dimension_evidence_notes": {
                 "ai_readiness": ai_readiness_evidence,
+                "absence_signals": final_evidence_absence_signals,
             },
+            "evidence_absence_signals": final_evidence_absence_signals,
             "ai_readiness_evidence_note": ai_readiness_evidence.get("warning", ""),
             "key_people": key_people,
             "stakeholder_enrichment_skipped": stakeholder_enrichment_skipped,
