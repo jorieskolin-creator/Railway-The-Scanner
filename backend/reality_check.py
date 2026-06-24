@@ -118,6 +118,120 @@ def _is_supported_structured_financial_payload_claim(text: str, scan_payload: di
     return len(words) >= 4 and sum(1 for w in words[:10] if w in payload_text) >= 4
 
 
+_AUDIT_NOTE_LABELS = {
+    "wording_precision_note": "Wording precision",
+    "citation_scope_note": "Citation scope",
+    "structured_payload_supported": "Structured payload supported",
+    "inference_scope_note": "Inference scope",
+    "evidence_handoff_failure": "Evidence handoff",
+}
+
+
+def _is_actual_scanner_process_observation(text: str, reasoning: str = "") -> bool:
+    """Return true only for Scanner process/telemetry claims, not ordinary diagnostic inferences."""
+    combined = f"{text or ''} {reasoning or ''}".lower()
+    if _SCAN_HISTORY_RE.search(combined):
+        return True
+    process_markers = (
+        "scanner", "scan payload", "source register", "source gate", "reality check",
+        "evidence packet", "generation-eligible", "analysis-verified", "display-only",
+        "wrong-entity", "intent score", "reality score", "confidence score",
+        "ambition score", "source manager", "forensic scan", "jury coverage",
+        "previous scan", "prior scan", "across scans", "score trajectory",
+    )
+    return any(marker in combined for marker in process_markers)
+
+
+def _classify_fact_check_issue(fc: dict, scan_payload: dict | None) -> tuple[str, bool]:
+    """
+    Convert model fact-check labels into materiality-aware issue types.
+
+    Returns (issue_type, is_blocking). Only blocking issues should feed
+    correction/removal logic; the rest are audit notes.
+    """
+    claim_text = str(fc.get("claim") or "")
+    error_type = str(fc.get("error_type") or "").strip().lower()
+    claim_class = str(fc.get("claim_class") or "").strip().lower()
+    support_level = str(fc.get("support_level") or "unsupported").strip().lower()
+    missing_premise = str(fc.get("missing_or_contradicted_premise") or "").strip()
+    reasoning = str(fc.get("reasoning") or "")
+    wrong_value = str(fc.get("wrong_value") or "").strip()
+    correct_value = str(fc.get("correct_value") or "").strip()
+    combined = f"{claim_text} {reasoning} {missing_premise}".lower()
+
+    if error_type == "evidence handoff failure":
+        return "evidence_handoff_failure", False
+
+    if _is_supported_structured_financial_payload_claim(claim_text, scan_payload):
+        return "structured_payload_supported", False
+
+    if _SCAN_HISTORY_RE.search(claim_text):
+        return "blocking_false_claim", True
+
+    if error_type == "prohibited scanner observation":
+        if _is_actual_scanner_process_observation(claim_text, reasoning):
+            return "blocking_false_claim", True
+        return "inference_scope_note", False
+
+    if claim_class == "structured_financial_payload_fact":
+        if support_level in {"exact", "partial"}:
+            return "structured_payload_supported", False
+        return "blocking_false_claim", True
+
+    # Harmless lexical precision should be visible but not make a good report
+    # fail. This catches cases like enterprise application/applications.
+    if (
+        any(marker in combined for marker in (
+            "singular", "plural", "wording", "phrasing", "label wording",
+            "enumerated wording", "exact wording", "terminology",
+            "should match the verified page", "source lists",
+        ))
+        and not wrong_value
+        and not correct_value
+    ):
+        return "wording_precision_note", False
+
+    # A source supporting a narrower claim is an audit/scope note unless the
+    # generated statement has a wrong value/entity/date or material contradiction.
+    if support_level in {"partial", "context_only"} and any(marker in combined for marker in (
+        "narrower", "partially support", "partially supported", "generally right",
+        "context", "scope", "overstates", "overstated", "not cleanly as a direct quote",
+    )):
+        if wrong_value or correct_value or "wrong entity" in combined:
+            return "blocking_false_claim", True
+        return "citation_scope_note", False
+
+    if claim_class in {"macro_foresight_context", "strategic_inference"}:
+        if support_level in {"exact", "partial", "context_only"}:
+            return "inference_scope_note", False
+        if "absent from the payload" in combined or "not present in the scan payload" in combined:
+            return "inference_scope_note", False
+
+    # Diagnostic statements about limited evidence/proof gaps are synthesis
+    # notes, not external facts, unless they smuggle in a concrete unsupported
+    # value/entity/date.
+    if re.search(
+        r'public evidence is limited|limited public evidence|remains? unverified|proof gap|'
+        r'evidence gap|available evidence|not independently verified|no measurable|'
+        r'insufficient public evidence|no public evidence',
+        combined,
+        re.IGNORECASE,
+    ):
+        if wrong_value or correct_value:
+            return "blocking_false_claim", True
+        return "inference_scope_note", False
+
+    return "blocking_false_claim", True
+
+
+def _format_audit_note(issue_type: str, claim_text: str, reasoning: str = "") -> str:
+    label = _AUDIT_NOTE_LABELS.get(issue_type, issue_type.replace("_", " ").title())
+    note = f"[{label}] {claim_text}".strip()
+    if reasoning:
+        note += f" — {reasoning}"
+    return note
+
+
 def _strip_code_fences(text):
     """Strip markdown code fences (```json ... ```) from LLM responses."""
     if not text:
@@ -1078,8 +1192,12 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
     if not summary_text:
         return {
             "verified": True,
+            "verification_status": "verified",
             "false_claims": [],
             "false_claims_detailed": [],
+            "audit_notes": [],
+            "audit_notes_detailed": [],
+            "evidence_handoff_failures": [],
             "corrected_summary": "",
             "corrected_pitch": "",
             "corrected_sections": {},
@@ -1105,6 +1223,8 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
 
     all_claims = []
     all_claims_detailed = []
+    audit_notes = []
+    audit_notes_detailed = []
     handoff_failures = []
 
     # Build company domain pattern for self-referential detection
@@ -1129,6 +1249,20 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
                     "missing_evidence_ids": missing_premise,
                     "reasoning": reasoning,
                 })
+                audit_notes.append(_format_audit_note("evidence_handoff_failure", claim_text, reasoning))
+                audit_notes_detailed.append({
+                    "type": "evidence_handoff_failure",
+                    "claim": claim_text,
+                    "issue_type": "evidence_handoff_failure",
+                    "error_type": error_type,
+                    "claim_class": claim_class,
+                    "support_level": support_level,
+                    "missing_or_contradicted_premise": missing_premise,
+                    "reasoning": reasoning,
+                    "source_urls": source_urls,
+                    "source_indices": source_indices,
+                    "source_ids": (fc.get("source_ids") or []) if isinstance(fc, dict) else [],
+                })
                 print(f"      [Fact-Check] Evidence handoff failure; preserving analysis for re-audit: {claim_text[:80]}...")
                 continue
 
@@ -1139,7 +1273,21 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
                 claim_class = "internal_scanner_observation"
 
             if not source_indices and _is_supported_structured_financial_payload_claim(claim_text, scan_payload):
-                print(f"      [Fact-Check] Skipping structured financial payload claim: {claim_text[:70]}...")
+                audit_notes.append(_format_audit_note("structured_payload_supported", claim_text, reasoning))
+                audit_notes_detailed.append({
+                    "type": "audit_note",
+                    "issue_type": "structured_payload_supported",
+                    "claim": claim_text,
+                    "error_type": error_type,
+                    "claim_class": claim_class or "structured_financial_payload_fact",
+                    "support_level": "exact",
+                    "missing_or_contradicted_premise": "",
+                    "reasoning": reasoning or "Supported by structured financial payload.",
+                    "source_urls": source_urls,
+                    "source_indices": source_indices,
+                    "source_ids": (fc.get("source_ids") or []) if isinstance(fc, dict) else [],
+                })
+                print(f"      [Fact-Check] Structured financial payload supports claim: {claim_text[:70]}...")
                 continue
 
             # Scanner-process observations are checked against the internal
@@ -1233,9 +1381,42 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
             wrong_value = (fc.get("wrong_value") or "") if isinstance(fc, dict) else ""
             correct_value = (fc.get("correct_value") or "") if isinstance(fc, dict) else ""
 
+            issue_type, is_blocking = _classify_fact_check_issue({
+                "claim": claim_text,
+                "error_type": error_type,
+                "claim_class": claim_class,
+                "support_level": support_level,
+                "missing_or_contradicted_premise": missing_premise,
+                "reasoning": reasoning,
+                "wrong_value": wrong_value,
+                "correct_value": correct_value,
+            }, scan_payload)
+
+            if not is_blocking:
+                audit_notes.append(_format_audit_note(issue_type, claim_text, reasoning))
+                audit_notes_detailed.append({
+                    "type": "audit_note",
+                    "issue_type": issue_type,
+                    "claim": claim_text,
+                    "error_type": error_type,
+                    "claim_class": claim_class,
+                    "support_level": support_level,
+                    "missing_or_contradicted_premise": missing_premise,
+                    "reasoning": reasoning,
+                    "correction": correction,
+                    "source_urls": source_urls,
+                    "source_indices": source_indices,
+                    "source_ids": (fc.get("source_ids") or []) if isinstance(fc, dict) else [],
+                })
+                print(f"      [Fact-Check] Non-blocking {issue_type}: {claim_text[:80]}...")
+                if reasoning:
+                    print(f"        Reasoning: {reasoning}")
+                continue
+
             all_claims.append(claim_text)
             all_claims_detailed.append({
                 "type": "false_claim",
+                "issue_type": "blocking_false_claim",
                 "claim": claim_text,
                 "error_type": error_type,
                 "claim_class": claim_class,
@@ -1267,17 +1448,21 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
         verification_status = "failed_handoff"
     elif all_claims:
         verification_status = "failed"
+    elif audit_notes:
+        verification_status = "verified_with_audit_notes"
     else:
         verification_status = "verified"
 
     return {
         # verified=False when skipped: an unverified summary must not be treated
         # as clean. It stays unmodified but is flagged so callers can handle it.
-        "verified": verification_status == "verified",
+        "verified": verification_status in {"verified", "verified_with_audit_notes"},
         "verification_status": verification_status,
         "fact_check_skipped": fact_check_skipped,
         "false_claims": all_claims[:10],
         "false_claims_detailed": all_claims_detailed[:10],
+        "audit_notes": audit_notes[:20],
+        "audit_notes_detailed": audit_notes_detailed[:20],
         "evidence_handoff_failures": handoff_failures[:10],
         "corrected_summary": corrected_summary,
         "corrected_pitch": corrected_pitch,

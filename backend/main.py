@@ -4941,6 +4941,8 @@ Respond with valid JSON only:
                 "fact_check_skipped": True,
                 "false_claims": [],
                 "false_claims_detailed": [],
+                "audit_notes": [],
+                "audit_notes_detailed": [],
                 "fact_check_model": "skipped_budget",
                 "fact_check_time_ms": 0,
             }
@@ -4969,6 +4971,8 @@ Respond with valid JSON only:
             "fact_check_skipped": fact_check.get("fact_check_skipped", False),
             "false_claims": fact_check["false_claims"],
             "false_claims_detailed": fact_check.get("false_claims_detailed", []),
+            "audit_notes": fact_check.get("audit_notes", []),
+            "audit_notes_detailed": fact_check.get("audit_notes_detailed", []),
             "model": fact_check["fact_check_model"],
             "time_ms": fact_check["fact_check_time_ms"],
             "evidence_handoff_failures": fact_check.get("evidence_handoff_failures", []),
@@ -5001,7 +5005,14 @@ Respond with valid JSON only:
         elif fact_check["verified"] or fact_check.get("false_claims"):
             if fact_check["verified"]:
                 # --- CLEAN: No false claims found. Original synthesis stands. Done. ---
-                print(f"   ✅ [Fact-Check] Summary verified — no false claims ({fact_check['fact_check_time_ms']}ms)")
+                audit_count = len(fact_check.get("audit_notes", []))
+                if audit_count:
+                    print(
+                        f"   ✅ [Fact-Check] Summary verified with {audit_count} non-blocking audit note(s) "
+                        f"({fact_check['fact_check_time_ms']}ms)"
+                    )
+                else:
+                    print(f"   ✅ [Fact-Check] Summary verified — no false claims ({fact_check['fact_check_time_ms']}ms)")
             else:
                 # AI Diagnosis, risks, and Strategic Synthesis are inference
                 # outputs. They should be audited for supported premises and
@@ -5021,6 +5032,8 @@ Respond with valid JSON only:
                     "was_resynthesized": False,
                     "false_claims_found": fact_check["false_claims"],
                     "false_claims_detailed": fact_check.get("false_claims_detailed", []),
+                    "audit_notes": fact_check.get("audit_notes", []),
+                    "audit_notes_detailed": fact_check.get("audit_notes_detailed", []),
                     "suggested_corrected_summary": _strip_tac_codes(corrected_summary) if corrected_summary else "",
                     "suggested_corrected_pitch": fact_check.get("corrected_pitch", "") or "",
                     "suggested_corrected_sections": fact_check.get("corrected_sections") or {},

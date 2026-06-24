@@ -121,3 +121,42 @@ def test_foresight_cannot_prove_present_company_deployment(monkeypatch):
 
     assert len(result["false_claims"]) == 1
     assert result["false_claims"][0]["claim_class"] == "external_company_fact"
+
+
+def test_wording_precision_mismatch_is_non_blocking():
+    issue_type, blocking = reality_check._classify_fact_check_issue({
+        "claim": "Vivicta covers enterprise applications and cloud services.",
+        "claim_class": "external_company_fact",
+        "error_type": "Contradiction",
+        "support_level": "partial",
+        "reasoning": "The supported source lists 'enterprise application' singular, not 'enterprise applications'.",
+    }, scan_payload={})
+
+    assert issue_type == "wording_precision_note"
+    assert blocking is False
+
+
+def test_structured_financial_payload_support_is_non_blocking():
+    issue_type, blocking = reality_check._classify_fact_check_issue({
+        "claim": "Vivicta reported operating profit of 3.2 million euros.",
+        "claim_class": "structured_financial_payload_fact",
+        "error_type": "Contradiction",
+        "support_level": "unsupported",
+        "reasoning": "The displayed source snippet does not repeat operating profit.",
+    }, scan_payload={"financial_payload": {"operating_profit": "3.2 million euros"}})
+
+    assert issue_type == "structured_payload_supported"
+    assert blocking is False
+
+
+def test_cross_scan_scanner_observation_remains_blocking():
+    issue_type, blocking = reality_check._classify_fact_check_issue({
+        "claim": "The intent gap widened across previous scans.",
+        "claim_class": "internal_scanner_observation",
+        "error_type": "Prohibited Scanner Observation",
+        "support_level": "unsupported",
+        "reasoning": "This compares current output with previous scans.",
+    }, scan_payload={})
+
+    assert issue_type == "blocking_false_claim"
+    assert blocking is True

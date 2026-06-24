@@ -356,11 +356,15 @@ const isForesightContext = (link) => {
       ? `Summary length outside target range (${wordCount} words, expected 325-475)`
       : null;
   };
-  const rawHallucinationFlags = normalizeTrustList(
-    data.hallucination_flags,
+  const rawBlockingFlags = normalizeTrustList(
     data.ai_verification?.false_claims,
     data.ai_verification?.unsupported_claims,
     data.general_summary_false_claims
+  );
+  const rawAuditFlags = normalizeTrustList(
+    data.hallucination_flags,
+    data.ai_verification?.audit_notes,
+    data.re_synthesis?.audit_notes
   );
   const aiReadinessEvidenceNote = data.ai_readiness_evidence_note
     || data.dimension_evidence_notes?.ai_readiness?.warning
@@ -369,9 +373,10 @@ const isForesightContext = (link) => {
     data.quality_notes,
     data.scan_quality?.quality_notes,
     aiReadinessEvidenceNote,
-    rawHallucinationFlags.map(normalizeSummaryLengthNote).filter(Boolean)
+    rawBlockingFlags.concat(rawAuditFlags).map(normalizeSummaryLengthNote).filter(Boolean)
   );
-  const hallucinationFlags = rawHallucinationFlags.filter((flag) => getSummaryLengthWordCount(flag) == null);
+  const blockingFlags = rawBlockingFlags.filter((flag) => getSummaryLengthWordCount(flag) == null);
+  const hallucinationFlags = rawAuditFlags.filter((flag) => getSummaryLengthWordCount(flag) == null);
   const wrongEntityWarnings = evidenceTrustPool
     .filter((link) => isWrongEntity(link))
     .map((link) => `${link.title || link.source || link.url || 'Evidence source'}: ${String(link.entity_match_reason || link.verification_reason || 'wrong entity').replace(/_/g, ' ')}`);
@@ -667,11 +672,15 @@ const isForesightContext = (link) => {
             exportData.contradictions,
             exportData.contradiction_warnings
         );
-        var hallucinationWarnings = normalizeList(
-            exportData.hallucination_flags,
+        var blockingWarnings = normalizeList(
             exportData.ai_verification && exportData.ai_verification.false_claims,
             exportData.ai_verification && exportData.ai_verification.unsupported_claims,
             exportData.general_summary_false_claims
+        );
+        var hallucinationWarnings = normalizeList(
+            exportData.hallucination_flags,
+            exportData.ai_verification && exportData.ai_verification.audit_notes,
+            exportData.re_synthesis && exportData.re_synthesis.audit_notes
         );
         var getSummaryLengthWordCount = function(note) {
             var match = String(note || '').match(/Summary (?:unusually long|length outside target range) \((\d+) words, expected 325-(?:375|475)\)/i);
@@ -688,8 +697,11 @@ const isForesightContext = (link) => {
             exportData.scan_quality && exportData.scan_quality.quality_notes,
             exportData.ai_readiness_evidence_note,
             exportData.dimension_evidence_notes && exportData.dimension_evidence_notes.ai_readiness && exportData.dimension_evidence_notes.ai_readiness.warning,
-            hallucinationWarnings.map(normalizeSummaryLengthNote).filter(Boolean)
+            blockingWarnings.concat(hallucinationWarnings).map(normalizeSummaryLengthNote).filter(Boolean)
         );
+        blockingWarnings = blockingWarnings.filter(function(note) {
+            return getSummaryLengthWordCount(note) === null;
+        });
         hallucinationWarnings = hallucinationWarnings.filter(function(note) {
             return getSummaryLengthWordCount(note) === null;
         });
@@ -755,12 +767,14 @@ const isForesightContext = (link) => {
             + renderMetric('Confidence', formatScore(exportData.confidence_score ?? exportData.scan_quality?.confidence_score ?? exportData.evidence_sufficiency?.score, '%'), 'evidence confidence')
             + renderMetric('Credibility Mix', 'H' + credibility.high + ' M' + credibility.medium + ' L' + credibility.low + ' U' + credibility.unknown, 'high/medium/low/unknown')
             + renderMetric('Contradictions', contradictionWarnings.length || 'None', 'stored warnings')
+            + renderMetric('Blocking Issues', blockingWarnings.length || 'None', 'material false claims')
             + renderMetric('Audit Notes', hallucinationWarnings.length || 'None', 'inference and methodology checks')
             + renderMetric('Quality Notes', qualityNotes.length || 'None', 'format/style checks')
             + '</div>'
             + (isLowEvidenceMode ? '<div class="callout amber"><h3>' + escapeHTML(lowEvidenceLabel || 'Low promoted evidence') + '</h3><p>Promoted source-register evidence is limited. The report may still use verified structured financial findings and internal scanner observations, but precise external company claims require source-backed support.</p></div>' : '')
             + (contradictionWarnings.length ? '<div class="callout amber"><h3>Contradiction Warnings</h3>' + renderList(contradictionWarnings) + '</div>' : '<p class="muted">No contradiction warnings detected.</p>')
             + (wrongEntityWarnings.length ? '<div class="callout"><h3>Wrong-Entity Warnings</h3>' + renderList(wrongEntityWarnings) + '</div>' : '<p class="muted">No wrong-entity evidence detected.</p>')
+            + (blockingWarnings.length ? '<div class="callout rose"><h3>Blocking Issues</h3>' + renderList(blockingWarnings) + '</div>' : '<p class="muted">No blocking false claims detected.</p>')
             + (hallucinationWarnings.length ? '<div class="callout"><h3>Inference / Methodology Audit Notes</h3>' + renderList(hallucinationWarnings) + '</div>' : '<p class="muted">No inference or methodology audit notes detected.</p>')
             + (qualityNotes.length ? '<div class="callout cyan"><h3>Quality Notes</h3>' + renderList(qualityNotes) + '</div>' : '<p class="muted">No format or style notes detected.</p>');
         var sourceTable = evidencePool.length ? '<div class="table-wrap source-register-wrap"><table class="source-register"><thead><tr><th>Ref</th><th>Stable ID</th><th>Source</th><th>Type</th><th>URL</th><th>Verification</th><th>Entity / Scope</th><th>Support</th><th>Exact Passage</th><th>Claim IDs</th></tr></thead><tbody>'
@@ -1147,10 +1161,12 @@ const isForesightContext = (link) => {
         const isSummaryLengthWarning = function(note) {
             return /Summary (?:unusually long|length outside target range) \(\d+ words, expected 325-(?:375|475)\)/i.test(String(note || ''));
         };
-        const unsupportedClaimCount = (Array.isArray(exportData.hallucination_flags) ? exportData.hallucination_flags.filter(function(flag) { return !isSummaryLengthWarning(flag); }).length : 0)
-            + (Array.isArray(exportData.ai_verification?.false_claims) ? exportData.ai_verification.false_claims.length : 0)
+        const blockingIssueCount = (Array.isArray(exportData.ai_verification?.false_claims) ? exportData.ai_verification.false_claims.length : 0)
             + (Array.isArray(exportData.ai_verification?.unsupported_claims) ? exportData.ai_verification.unsupported_claims.length : 0)
             + (Array.isArray(exportData.general_summary_false_claims) ? exportData.general_summary_false_claims.length : 0);
+        const auditNoteCount = (Array.isArray(exportData.hallucination_flags) ? exportData.hallucination_flags.filter(function(flag) { return !isSummaryLengthWarning(flag); }).length : 0)
+            + (Array.isArray(exportData.ai_verification?.audit_notes) ? exportData.ai_verification.audit_notes.length : 0)
+            + (Array.isArray(exportData.re_synthesis?.audit_notes) ? exportData.re_synthesis.audit_notes.length : 0);
         const evidenceSufficiency = exportData.evidence_sufficiency && typeof exportData.evidence_sufficiency === 'object' ? exportData.evidence_sufficiency : null;
         const lowEvidenceLabel = exportData.low_evidence_label || (evidenceSufficiency && evidenceSufficiency.label) || '';
         const isLowEvidenceMode = exportData.low_evidence_mode === true || !!lowEvidenceLabel;
@@ -1171,7 +1187,8 @@ const isForesightContext = (link) => {
             renderMetric('Unknown Entity', unknownEntitySources, 'not promoted'),
             renderMetric('Company Evidence', companyEvidencePool.length, 'Company-specific sources'),
             renderMetric('Foresight Context', foresightContextEligible + '/' + foresightEvidencePool.length, 'Eligible macro context'),
-            renderMetric('Audit Notes', unsupportedClaimCount, 'Inference and methodology checks'),
+            renderMetric('Blocking Issues', blockingIssueCount, 'Material false claims'),
+            renderMetric('Audit Notes', auditNoteCount, 'Inference and methodology checks'),
             renderMetric('Washing Flag', exportData.washing_flag ? 'Yes' : 'No', exportData.washing_type || 'Narrative vs evidence'),
             renderMetric('Carried Forward', carriedForward ? 'Yes' : 'No', 'Previous-scan evidence')
         ];
@@ -1708,19 +1725,34 @@ const isForesightContext = (link) => {
                         <p className="text-xs text-slate-500">None detected.</p>
                     )}
                 </div>
-                <div className={`p-4 rounded-xl border ${hallucinationFlags.length > 0 ? 'bg-rose-500/10 border-rose-500/30' : 'bg-black/20 border-white/5'}`}>
+                <div className={`p-4 rounded-xl border ${blockingFlags.length > 0 ? 'bg-rose-500/10 border-rose-500/30' : 'bg-black/20 border-white/5'}`}>
                     <div className="flex items-center gap-2 mb-2">
-                        <AlertOctagon size={14} className={hallucinationFlags.length > 0 ? 'text-rose-400' : 'text-slate-500'} />
-                        <span className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Unsupported Claim Flags</span>
+                        <AlertOctagon size={14} className={blockingFlags.length > 0 ? 'text-rose-400' : 'text-slate-500'} />
+                        <span className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Blocking Issues</span>
                     </div>
-                    {hallucinationFlags.length > 0 ? (
+                    {blockingFlags.length > 0 ? (
                         <div className="space-y-1.5">
-                            {hallucinationFlags.slice(0, 5).map((flag, i) => (
+                            {blockingFlags.slice(0, 5).map((flag, i) => (
                                 <p key={i} className="text-[11px] text-rose-100/90 leading-relaxed font-mono">- {flag}</p>
                             ))}
                         </div>
                     ) : (
-                        <p className="text-xs text-slate-500">No hallucination or unsupported-claim flags reported.</p>
+                        <p className="text-xs text-slate-500">No blocking false claims reported.</p>
+                    )}
+                </div>
+                <div className={`p-4 rounded-xl border ${hallucinationFlags.length > 0 ? 'bg-amber-500/10 border-amber-500/30' : 'bg-black/20 border-white/5'}`}>
+                    <div className="flex items-center gap-2 mb-2">
+                        <Info size={14} className={hallucinationFlags.length > 0 ? 'text-amber-300' : 'text-slate-500'} />
+                        <span className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Inference / Methodology Audit Notes</span>
+                    </div>
+                    {hallucinationFlags.length > 0 ? (
+                        <div className="space-y-1.5">
+                            {hallucinationFlags.slice(0, 5).map((flag, i) => (
+                                <p key={i} className="text-[11px] text-amber-100/90 leading-relaxed font-mono">- {flag}</p>
+                            ))}
+                        </div>
+                    ) : (
+                        <p className="text-xs text-slate-500">No inference or methodology audit notes reported.</p>
                     )}
                 </div>
                 <div className={`p-4 rounded-xl border ${qualityNotes.length > 0 ? 'bg-sky-500/10 border-sky-500/30' : 'bg-black/20 border-white/5'}`}>
