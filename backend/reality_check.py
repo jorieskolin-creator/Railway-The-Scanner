@@ -59,7 +59,8 @@ try:
     from source_quality import (
         annotate_evidence_links, filter_admissible_sources,
         is_boilerplate_snippet, is_title_echo, tier_snippet_bounds, describe_source,
-        is_generation_eligible_source, is_foresight_context_eligible_source,
+        is_generation_eligible_source, is_analysis_premise_source,
+        is_foresight_context_eligible_source,
     )
 except Exception:  # Keep reality_check import-safe in minimal deployments.
     annotate_evidence_links = None
@@ -69,6 +70,7 @@ except Exception:  # Keep reality_check import-safe in minimal deployments.
     tier_snippet_bounds = None
     describe_source = None
     is_generation_eligible_source = None
+    is_analysis_premise_source = None
     is_foresight_context_eligible_source = None
 
 # Regex for detecting scan history references in fact-check claims.
@@ -806,11 +808,15 @@ def _build_fact_check_source_pack(evidence_links=None, foresight_links=None, evi
                 "claim_type": record.get("claim_type") or "company_fact",
                 "theme": record.get("theme") or record.get("dimension") or "",
                 "company_specific": record.get("company_specific", True),
+                "analysis_support_mode": record.get("analysis_support_mode"),
+                "source_context_status": record.get("source_context_status"),
                 "verification_state": {
                     "url_verified": record.get("url_verified", record.get("verified")),
                     "content_verified": record.get("content_verified", record.get("source_readable")),
                     "entity_match_status": record.get("entity_match_status"),
                     "claim_support_status": record.get("claim_support_status"),
+                    "source_context_status": record.get("source_context_status"),
+                    "analysis_support_mode": record.get("analysis_support_mode"),
                     "foresight_context_eligible": record.get("foresight_context_eligible"),
                 },
             })
@@ -831,7 +837,9 @@ def _build_fact_check_source_pack(evidence_links=None, foresight_links=None, evi
         if not content:
             return
         if evidence_kind == "company_evidence":
-            if is_generation_eligible_source and not is_generation_eligible_source(link):
+            if is_analysis_premise_source and not is_analysis_premise_source(link):
+                return
+            if not is_analysis_premise_source and is_generation_eligible_source and not is_generation_eligible_source(link):
                 return
             tier = (link.get("claim_tier") or "D").upper()
             if tier_snippet_bounds is None:

@@ -16,6 +16,7 @@ import anthropic
 from llm_clients import CLAUDE_OPUS_MODEL, call_openai_text
 from source_quality import (
     assess_source_scope, is_generation_eligible_source,
+    is_analysis_premise_source, source_analysis_support_mode,
     is_foresight_context_eligible_source,
 )
 from contradiction_detector import detect_contradictions
@@ -91,7 +92,7 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
             l.get("verified") is True
             and l.get("url")
             and not _is_legal_page(l.get("url", ""))
-            and is_generation_eligible_source(l)
+            and is_analysis_premise_source(l)
         ):
             continue
         title = (l.get("title", "Source") or "Source")[:80]
@@ -106,6 +107,11 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
             "evidence_id": f"E{len(verified_links) + 1}",
             "title": title,
             "url": l.get("url", ""),
+            "analysis_support_mode": source_analysis_support_mode(l),
+            "can_support_hard_fact": is_generation_eligible_source(l),
+            "source_context_status": l.get("source_context_status", ""),
+            "claim_support_status": l.get("claim_support_status", ""),
+            "source_use_status": l.get("source_use_status", ""),
             "semantic_hint": semantic_hint,
             "source_content": source_content,
             "snippet": source_content,
@@ -151,7 +157,7 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
         for item in full_data.get("reality_checklist", [])
         if item.get("found")
         and item.get("url")
-        and is_generation_eligible_source(item)
+        and is_analysis_premise_source(item)
         and not _is_legal_page(item.get("url", ""))
     ][:12]
 
@@ -292,6 +298,8 @@ FINAL SECTION — heading "Verdict" (~100-150 words)
 MANDATORY RULES:
 1. WORD COUNT: {_WORD_MIN}-{_WORD_MAX} words. Count carefully. This is non-negotiable.
 2. EVIDENCE-FIRST: Every factual or diagnostic claim must be supported by a named evidence_id or structured financial field. `semantic_hint` is routing metadata only; support must come from `source_content`.
+   - evidence_links with analysis_support_mode="hard_fact" may support direct factual claims.
+   - evidence_links with analysis_support_mode="scoped_context" may support bounded interpretation, positioning, proof-gap analysis, service/capability context, and diagnostic premises only. Use cautious wording such as "public company material indicates" or "the source supports positioning/context"; do not treat it as independent proof of a precise outcome, deployment, metric, or performance claim.
 3. PLAIN LANGUAGE: Do not use any of these terms: {forbidden}. Use descriptive business language instead.
 4. NO SCORES: Do not mention score names, score numbers, or internal metrics in prose.
 5. SOURCE REFERENCES: When citing evidence, use source titles naturally in text. Do NOT include URLs — those display separately.
@@ -300,7 +308,7 @@ MANDATORY RULES:
    - CLAIM TIER (INTERNAL — never write tier codes in output): Evidence items carry a "claim_tier" field for your calibration only. Choose verbs to match: company self-claims → "states"/"positions itself as"; filed accounts → "disclosed"/"announced"; independent verification → "reported"/"confirmed"; weak signals → "suggests"/"may indicate"; foresight/trend context → "could create risk/opportunity". NEVER write tier codes ([A], [B], [C], [D], [E]) or the word "tier" in the output.
    - NARROW SCOPE: When citing a finding from a narrow-scope source (master's thesis, single-department survey, regional pilot), you MUST include a scope qualifier in the same sentence. Never present a narrow-scope statistic as a company-wide truth.
    - ANTI-EXTRAPOLATION: NEVER extrapolate a narrow-scope finding into a macro-trend or section-level diagnosis.
-   - SELF-REPORTED DATA: For company self-claims, qualify every assertion ("The company states...", "According to the company..."). Do not omit specific numbers, but never present them as independently verified.
+   - SELF-REPORTED DATA: For company self-claims, qualify every assertion ("The company states...", "According to the company..."). Do not omit specific numbers when they are directly supported, but never present them as independently verified. Raw company-owned material is usable only through the scoped-context lane unless can_support_hard_fact=true.
    - ENTITY SCOPE: entity_scope="canonical_group" may support target-company claims. entity_scope="local_legal_entity", "subsidiary", "former_name", or "parent_owner" must be qualified in the same sentence and must not be promoted into unqualified company-wide evidence.
 8. BALANCING CONTRADICTIONS & PROPORTIONALITY — CRITICAL:
    - If a top-level "contradictions" array is present in the payload, EACH listed contradiction MUST be addressed in the prose — cite both sides with their respective scope ("broad"/"narrow") and source titles, in the same sentence or adjacent sentences. Silently picking one side is a violation of this rule.

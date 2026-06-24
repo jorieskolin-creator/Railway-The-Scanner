@@ -1315,6 +1315,89 @@ def is_scoped_context_source(link: dict) -> bool:
     return entity_status in {"exact", "scoped"} or link.get("entity_verified") is True
 
 
+_ANALYSIS_CONTEXT_OK = {
+    SOURCE_CONTEXT_VALID_COMPANY,
+    SOURCE_CONTEXT_SCOPED,
+    SOURCE_CONTEXT_VALID_CONTEXT_UNUSED,
+}
+
+_ANALYSIS_CONTEXT_BAD = {
+    SOURCE_CONTEXT_WRONG_ENTITY,
+    SOURCE_CONTEXT_DEAD_OR_UNREADABLE,
+    SOURCE_CONTEXT_OUT_OF_CONTEXT,
+}
+
+
+def _has_verified_source_content(link: dict) -> bool:
+    return (
+        link.get("content_verified") is True
+        or link.get("content_readable") is True
+        or link.get("source_readable") is True
+    )
+
+
+def _has_company_entity_scope(link: dict) -> bool:
+    entity_status = str(link.get("entity_match_status") or "").lower()
+    content_entity_status = str(link.get("content_entity_match_status") or entity_status or "").lower()
+    entity_scope = str(link.get("entity_scope") or ENTITY_SCOPE_UNKNOWN).lower()
+    if link.get("wrong_entity") is True or entity_status == "wrong" or content_entity_status == "wrong":
+        return False
+    if link.get("entity_verified") is True and entity_scope != ENTITY_SCOPE_WRONG_ENTITY:
+        return True
+    return (
+        content_entity_status in {"exact", "scoped"}
+        and entity_scope not in {"", ENTITY_SCOPE_UNKNOWN, ENTITY_SCOPE_WRONG_ENTITY}
+    )
+
+
+def is_analysis_premise_source(link: dict) -> bool:
+    """True when a source can feed diagnosis/synthesis without proving hard facts.
+
+    This deliberately separates source validity from claim support. A source may
+    be useful scoped context even when a generated claim overreached and the
+    claim-source relation was marked unsupported_for_this_claim.
+    """
+    if is_generation_eligible_source(link):
+        return True
+    if not isinstance(link, dict):
+        return False
+    if str(link.get("claim_type") or "").lower() == "foresight_context" or link.get("company_specific") is False:
+        return False
+    source_context = str(link.get("source_context_status") or "").lower()
+    source_use = str(link.get("source_use_status") or "").lower()
+    promotion = str(link.get("promotion_status") or "").lower()
+    if source_context in _ANALYSIS_CONTEXT_BAD:
+        return False
+    if link.get("verification_conflict") is True:
+        return False
+    valid_context = (
+        is_scoped_context_source(link)
+        or source_context in _ANALYSIS_CONTEXT_OK
+        or promotion == PROMOTION_SCOPED_CONTEXT
+        or source_use == PROMOTION_SCOPED_CONTEXT
+    )
+    if not valid_context:
+        return False
+    if source_use in {"wrong_entity", "dead_or_unreadable", "unjudged_due_timeout"}:
+        return False
+    if source_use == "audit_only" and source_context not in _ANALYSIS_CONTEXT_OK:
+        return False
+    if link.get("verified") is not True and link.get("url_verified") is not True:
+        return False
+    if not _has_verified_source_content(link):
+        return False
+    return _has_company_entity_scope(link)
+
+
+def source_analysis_support_mode(link: dict) -> str:
+    """Return how a source may be used by generation prompts."""
+    if is_generation_eligible_source(link):
+        return "hard_fact"
+    if is_analysis_premise_source(link):
+        return "scoped_context"
+    return "excluded"
+
+
 def is_foresight_context_eligible_source(link: dict) -> bool:
     """True when a macro source may feed foresight synthesis, not company facts."""
     if not isinstance(link, dict):

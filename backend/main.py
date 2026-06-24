@@ -40,6 +40,8 @@ from source_quality import (
     assess_source_scope,
     annotate_evidence_links,
     is_generation_eligible_source,
+    is_analysis_premise_source,
+    source_analysis_support_mode,
     is_scoped_context_source,
     is_foresight_context_eligible_source,
     infer_source_type,
@@ -153,7 +155,19 @@ def _build_contradictions_block(verified_links: list, company_name: str) -> str:
 
 def _analysis_evidence_links(links: list) -> list:
     """Sources allowed to feed generated analysis, not merely live URLs."""
-    return [l for l in (links or []) if is_generation_eligible_source(l)]
+    selected = []
+    for link in links or []:
+        if not is_analysis_premise_source(link):
+            continue
+        enriched = dict(link)
+        mode = source_analysis_support_mode(enriched)
+        enriched["analysis_support_mode"] = mode
+        enriched["analysis_premise"] = True
+        enriched["can_support_hard_fact"] = mode == "hard_fact"
+        if mode == "scoped_context":
+            enriched.setdefault("bounded_use_note", "Use for bounded diagnosis/synthesis context only; not proof of a precise hard fact.")
+        selected.append(enriched)
+    return selected
 
 
 def _company_evidence_db_scanner_candidates(company_evidence: dict | None, limit: int = 20) -> tuple[list[dict], dict]:
@@ -443,11 +457,15 @@ def _evidence_sufficiency_state(evidence_links: list, financial_links: list) -> 
         if is_generation_eligible_source(link)
         and (link.get("url") or link.get("source_url") or "").rstrip("/").lower() not in financial_urls
     )
-    scoped_context_total = sum(1 for link in evidence_links or [] if is_scoped_context_source(link))
+    scoped_context_total = sum(
+        1
+        for link in evidence_links or []
+        if source_analysis_support_mode(link) == "scoped_context"
+    )
     scoped_context_nonfinancial = sum(
         1
         for link in evidence_links or []
-        if is_scoped_context_source(link)
+        if source_analysis_support_mode(link) == "scoped_context"
         and (link.get("url") or link.get("source_url") or "").rstrip("/").lower() not in financial_urls
     )
     label = ""
@@ -4330,11 +4348,13 @@ def _execute_scan_pipeline(
                 if _sufficiency_preview.get("status") != "complete":
                     low_evidence_context = (
                         f"LOW-EVIDENCE MODE: {_sufficiency_preview['label']}. "
-                        f"Promoted source-register evidence is limited "
+                        f"Promoted hard-fact source-register evidence is limited "
                         f"({_sufficiency_preview['promoted_company_sources']} source(s); "
-                        f"{_sufficiency_preview['promoted_financial_sources']} financial source(s)). "
-                        "You may use verified structured financial findings, but must state that public evidence is limited "
-                        "and avoid precise company claims unless explicitly supported by the source text."
+                        f"{_sufficiency_preview['promoted_financial_sources']} financial source(s); "
+                        f"{_sufficiency_preview.get('scoped_context_sources', 0)} scoped-context source(s)). "
+                        "You may use verified structured financial findings and scoped context for bounded diagnosis, "
+                        "but must state when hard public proof is limited and avoid precise company claims unless "
+                        "explicitly supported by hard-fact source text."
                     )
                 ai_readiness_evidence = _ai_readiness_evidence_state(
                     intent_results.get("breakdown", []),
@@ -4415,6 +4435,9 @@ If evidence is thin, say so — a short honest analysis beats a long fabricated 
 3. Every claim must trace to specific evidence in the SCAN DATA below. No evidence = no claim.
    End each factual premise with its stable evidence ID, for example [EVD-ABC123DEF456].
    A diagnostic conclusion may be new reasoning, but it must cite the premise IDs used to reach it.
+   Evidence marked mode=scoped_context may support bounded interpretation, positioning, proof gaps,
+   and capability context only. It cannot prove precise hard facts, outcomes, deployments, employee
+   counts, revenue, or performance unless the same record is marked mode=hard_fact.
 4. Do NOT extrapolate small signals into sweeping assessments (e.g., a Jira mention in a job ad does NOT reveal corporate strategy).
 5. SCOPE & SOURCE QUALIFICATION — CRITICAL:
    - NARROW SCOPE: When an evidence item describes a limited population (a master's thesis, a single-department survey, a regional pilot, a study of N participants), you MUST include a scope qualifier in the same sentence (e.g., "in a survey of HR personnel", "in a 100-respondent study", "according to a master's thesis"). Never present a narrow-scope statistic as a company-wide truth.
@@ -4440,6 +4463,7 @@ Financial Health Index: {fin_for_archetype} ({"actual financial index" if fin_sc
 Summary Confidence: {confidence}/100
 
 Evidence Found: {evidence_list}
+Evidence modes: mode=hard_fact can support factual premises. mode=scoped_context can support bounded diagnosis/synthesis premises only; phrase it as "public company material indicates", "the source supports positioning/context", or "hard proof remains limited".
 Intent Data: {intent_narrative}
 {doc_context}
 {washing_context}

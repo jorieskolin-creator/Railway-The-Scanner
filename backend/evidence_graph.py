@@ -149,9 +149,20 @@ def evidence_prompt_packet(manifest: list[dict], kind: str | None = None, limit:
     lines = []
     for row in rows[:limit]:
         passage = (row.get("exact_passage") or "").strip().replace("\n", " ")
+        mode = row.get("analysis_support_mode") or row.get("source_use_status") or row.get("promotion_status") or ""
+        context = row.get("source_context_status") or ""
+        support = row.get("claim_support_status") or ""
+        meta = " | ".join(
+            part for part in (
+                f"mode={mode}" if mode else "",
+                f"source_context={context}" if context else "",
+                f"claim_support={support}" if support else "",
+            )
+            if part
+        )
         lines.append(
             f"[{row['evidence_id']}] {row.get('title') or row.get('name') or 'Source'} | "
-            f"{row.get('canonical_url') or row.get('url') or ''} | {passage[:1200]}"
+            f"{row.get('canonical_url') or row.get('url') or ''} | {meta} | {passage[:1200]}"
         )
     return "\n".join(lines)
 

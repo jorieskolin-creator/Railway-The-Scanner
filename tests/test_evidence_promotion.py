@@ -23,8 +23,10 @@ from source_quality import (  # noqa: E402
     SOURCE_CONTEXT_SCOPED,
     SOURCE_CONTEXT_VALID_CONTEXT_UNUSED,
     apply_analysis_verification,
+    is_analysis_premise_source,
     is_generation_eligible_source,
     is_scoped_context_source,
+    source_analysis_support_mode,
 )
 
 
@@ -483,6 +485,35 @@ def test_non_official_claim_overreach_can_remain_valid_context_unused():
     assert link["generation_eligible"] is False
     assert link["claim_support_status"] == ANALYSIS_SUPPORT_UNSUPPORTED_FOR_CLAIM
     assert link["source_context_status"] == SOURCE_CONTEXT_VALID_CONTEXT_UNUSED
+    assert is_analysis_premise_source(link) is True
+    assert source_analysis_support_mode(link) == "scoped_context"
+
+
+def test_scoped_context_is_analysis_premise_not_hard_fact():
+    link = apply_analysis_verification(
+        _source(
+            title="ABB service page",
+            url="https://new.abb.com/service/fi",
+            snippet="ABB describes service capabilities for customers.",
+            source_quote="ABB describes service capabilities for customers.",
+            source_type="service_page",
+            source_credibility="medium",
+            content_entity_match_status="exact",
+            entity_match_status="exact",
+            entity_verified=True,
+            entity_scope="canonical_group",
+            claim_support_status="unsupported",
+            content_verified=True,
+            content_readable=True,
+        ),
+        company_domain="https://abb.com",
+        company_name="ABB Oy",
+    )
+
+    assert link["generation_eligible"] is False
+    assert is_generation_eligible_source(link) is False
+    assert is_analysis_premise_source(link) is True
+    assert source_analysis_support_mode(link) == "scoped_context"
 
 
 def test_unjudged_timeout_is_distinct_from_display_only_and_coverage():
