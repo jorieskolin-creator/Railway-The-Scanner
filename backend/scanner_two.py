@@ -23,7 +23,12 @@ from source_quality import (
     is_generation_eligible_source,
     is_scoped_context_source,
 )
-from entity_identity import build_entity_context_block, entity_search_terms
+from entity_identity import (
+    build_entity_context_block,
+    entity_search_terms,
+    ENTITY_SCOPE_LOCAL_LEGAL_ENTITY,
+    ENTITY_SCOPE_UNKNOWN,
+)
 from llm_clients import call_anthropic_text, call_json_model_chain, call_openai_text
 from gemini_client import call_gemini_forensic_text, gemini_api_key
 from evidence_contracts import (
@@ -245,6 +250,18 @@ FORENSIC_JURY_SONNET_TIMEOUTS = {
     "AI & DATA JURY (Future Readiness)": 50,
     "CULTURAL JURY (Talent & Psychological Safety)": 45,
 }
+
+STRATEGIC_JURY_NAME = "STRATEGIC JURY (Business Model, Procurement & Customer Experience)"
+SERVICE_PORTFOLIO_JURY_NAME = "SERVICE PORTFOLIO JURY (Delivery Reality)"
+JURY_SPLIT_PACKET_THRESHOLD_DEFAULT = 16
+JURY_SPLIT_PACKET_THRESHOLDS = {
+    STRATEGIC_JURY_NAME: 12,
+    SERVICE_PORTFOLIO_JURY_NAME: 12,
+    "ARCHITECTURAL JURY (Engineering Reality)": 14,
+    "AI & DATA JURY (Future Readiness)": 16,
+    "CULTURAL JURY (Talent & Psychological Safety)": 16,
+}
+JURY_SPLIT_MAX_CHUNKS = 3
 
 FORENSIC_REPAIR_TIMEOUTS = {
     "STRATEGIC JURY (Business Model, Procurement & Customer Experience)": 75,
@@ -1138,6 +1155,176 @@ def _derive_narrow_claim_from_source(packet: dict, jury: str):
     return claim, (passage or best)[:1200], f"source_derived_narrow_claim:{method}"
 
 
+def _is_official_company_context_packet(packet: dict) -> bool:
+    """Official target-domain pages may be scoped context after current verification.
+
+    Company Evidence DB can also contain outbound references, so this deliberately
+    checks for company-owned/official provenance rather than accepting every
+    stored evidence source as official.
+    """
+    if not isinstance(packet, dict) or not packet.get("url"):
+        return False
+    if packet.get("origin_relation") == "official_page_outbound_reference":
+        return False
+    if packet.get("wrong_entity") is True or packet.get("wrong_entity_true") is True:
+        return False
+    path = (urlparse(str(packet.get("url") or "")).path or "").lower()
+    if _is_non_document_asset_url(str(packet.get("url") or "")):
+        return False
+    page_context = any(token in path for token in (
+        "/about", "/company", "/service", "/services", "/solution", "/solutions",
+        "/product", "/products", "/news", "/press", "/insight", "/customer",
+        "/case", "/reference", "/career", "/jobs", "/developer", "/api",
+        "/palvel", "/uutis", "/ratkais", "/tuotte", "/ura",
+    ))
+    source_type = str(packet.get("source_type") or packet.get("type") or "").lower()
+    official_type = any(token in source_type for token in (
+        "official", "company_website", "service", "capability", "careers",
+        "technology", "developer", "company_news", "company_press",
+    ))
+    official_provenance = (
+        packet.get("official_source") is True
+        or packet.get("source_database") == "official_domain_prefetch"
+        or packet.get("source_database") == "company_evidence_db"
+    )
+    return bool(official_provenance and (page_context or official_type))
+
+
+def _inherit_official_context_scope(normalized: dict, packet: dict) -> dict:
+    """Prevent verified official pages from being stranded as unknown-entity context."""
+    if not _is_official_company_context_packet(packet):
+        return normalized
+    if normalized.get("url_verified") is not True and normalized.get("verified") is not True:
+        return normalized
+    if (
+        normalized.get("content_verified") is not True
+        and normalized.get("content_readable") is not True
+        and not normalized.get("source_quote")
+    ):
+        return normalized
+    if normalized.get("wrong_entity") is True or normalized.get("wrong_entity_true") is True:
+        return normalized
+
+    entity_status = str(normalized.get("entity_match_status") or "").lower()
+    content_status = str(normalized.get("content_entity_match_status") or "").lower()
+    if entity_status in {"", "unknown", "pending", "weak"}:
+        normalized["entity_match_status"] = "scoped"
+        normalized["entity_match"] = "scoped"
+    if content_status in {"", "unknown", "pending", "weak"}:
+        normalized["content_entity_match_status"] = "scoped"
+    if str(normalized.get("entity_scope") or ENTITY_SCOPE_UNKNOWN).lower() in {"", ENTITY_SCOPE_UNKNOWN}:
+        normalized["entity_scope"] = ENTITY_SCOPE_LOCAL_LEGAL_ENTITY
+    normalized["entity_verified"] = True
+    normalized.setdefault("official_context_scope_inherited", True)
+    return normalized
+
+
+def _strategic_packet_group(packet: dict) -> str:
+    text = " ".join(str(packet.get(key) or "") for key in (
+        "title", "source_type", "snippet", "cached_excerpt", "fetched_excerpt", "url",
+    )).lower()
+    if any(term in text for term in (
+        "customer", "cx", "experience", "nps", "reference", "case", "asiakas",
+        "service", "services", "palvel", "solution", "delivery",
+    )):
+        return "customer_experience"
+    if any(term in text for term in (
+        "procurement", "tender", "contract", "hankinta", "supplier", "partner",
+        "partnership", "ecosystem", "supply",
+    )):
+        return "procurement_partnerships"
+    return "business_model"
+
+
+def _service_packet_group(packet: dict) -> str:
+    text = " ".join(str(packet.get(key) or "") for key in (
+        "title", "source_type", "snippet", "cached_excerpt", "fetched_excerpt", "url",
+    )).lower()
+    if any(term in text for term in (
+        "reference", "case", "customer", "asiakastarina", "referenssi", "analyst",
+        "gartner", "forrester", "isg", "procurement", "contract", "hankinta",
+    )):
+        return "delivery_proof"
+    if any(term in text for term in (
+        "service", "services", "palvel", "support", "maintenance", "lifecycle",
+        "modernization", "managed", "operations", "delivery",
+    )):
+        return "service_capability"
+    return "portfolio_context"
+
+
+def _chunk_packets(packets: list, max_chunks: int = JURY_SPLIT_MAX_CHUNKS) -> list[tuple[str, list]]:
+    packets = list(packets or [])
+    if not packets:
+        return []
+    chunk_count = min(max_chunks, max(1, round(len(packets) / 8)))
+    if chunk_count <= 1:
+        return [("full", packets)]
+    chunk_size = max(1, (len(packets) + chunk_count - 1) // chunk_count)
+    return [
+        (f"part_{index + 1}", packets[index:index + chunk_size])
+        for index in range(0, len(packets), chunk_size)
+    ][:max_chunks]
+
+
+def _split_jury_packets(jury_name: str, packets: list) -> list[tuple[str, list]]:
+    packets = list(packets or [])
+    threshold = JURY_SPLIT_PACKET_THRESHOLDS.get(jury_name, JURY_SPLIT_PACKET_THRESHOLD_DEFAULT)
+    if len(packets) <= threshold:
+        return [("full", packets)]
+    if jury_name == STRATEGIC_JURY_NAME:
+        buckets = {
+            "business_model": [],
+            "procurement_partnerships": [],
+            "customer_experience": [],
+        }
+        for packet in packets:
+            buckets[_strategic_packet_group(packet)].append(packet)
+        chunks = [(name, items) for name, items in buckets.items() if items]
+        return chunks[:JURY_SPLIT_MAX_CHUNKS] if len(chunks) > 1 else _chunk_packets(packets)
+    if jury_name == SERVICE_PORTFOLIO_JURY_NAME:
+        buckets = {
+            "service_capability": [],
+            "delivery_proof": [],
+            "portfolio_context": [],
+        }
+        for packet in packets:
+            buckets[_service_packet_group(packet)].append(packet)
+        chunks = [(name, items) for name, items in buckets.items() if items]
+        return chunks[:JURY_SPLIT_MAX_CHUNKS] if len(chunks) > 1 else _chunk_packets(packets)
+    return _chunk_packets(packets)
+
+
+def _merge_jury_payloads(jury_name: str, payloads: list[dict]) -> dict | None:
+    payloads = [payload for payload in payloads if isinstance(payload, dict)]
+    if not payloads:
+        return None
+    merged = {
+        "jury": jury_name,
+        "findings": [],
+        "rejected_evidence": [],
+        "contradictions": [],
+        "missing_coverage": [],
+        "confidence_score": 0,
+        "reality_score_adjustment": 0,
+        "split_analysis": len(payloads) > 1,
+    }
+    confidences = []
+    adjustments = []
+    for payload in payloads:
+        merged["findings"].extend(payload.get("findings", []) or [])
+        merged["rejected_evidence"].extend(payload.get("rejected_evidence", []) or [])
+        merged["contradictions"].extend(payload.get("contradictions", []) or [])
+        merged["missing_coverage"].extend(payload.get("missing_coverage", []) or [])
+        if payload.get("confidence_score") is not None:
+            confidences.append(payload.get("confidence_score") or 0)
+        if payload.get("reality_score_adjustment") is not None:
+            adjustments.append(payload.get("reality_score_adjustment") or 0)
+    merged["confidence_score"] = round(sum(confidences) / len(confidences)) if confidences else 0
+    merged["reality_score_adjustment"] = round(sum(adjustments) / len(adjustments)) if adjustments else 0
+    return merged
+
+
 def _prevalidate_acquisition_results(
     acquisition_results: list,
     company_name: str,
@@ -1546,6 +1733,7 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
                 # Only current packet verification is authoritative here. Old
                 # verdicts remain confined to verification_history.
                 normalized.update(current_company_verification(packet))
+                normalized = _inherit_official_context_scope(normalized, packet)
                 normalized["jury_status"] = "completed"
                 normalized = apply_analysis_verification(normalized)
                 accepted.append(mark_verified_company_evidence(normalized))
@@ -1573,6 +1761,18 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
             "status": lane.get("status") or ("completed" if payload else "degraded"),
             "provider": lane.get("provider"),
             "accepted": len(accepted),
+            "payload_findings": len((payload or {}).get("findings", []) or []),
+            "resolved_usable": len([
+                item for item in accepted
+                if item.get("source_use_status") in {"supported_fact", "scoped_context", "company_statement"}
+                or item.get("promotion_status") == "scoped_context"
+            ]),
+            "exact_fact": len([item for item in accepted if is_generation_eligible_source(item)]),
+            "scoped_context": len([
+                item for item in accepted
+                if is_scoped_context_source(item) or item.get("source_use_status") == "scoped_context"
+            ]),
+            "company_statement": len([item for item in accepted if item.get("source_use_status") == "company_statement"]),
             "rejected": len((payload or {}).get("rejected_evidence", []) or []),
         })
     result["findings"] = findings
@@ -1580,20 +1780,79 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
     result["confidence_score"] = round(sum(confidences) / len(confidences)) if confidences else min(35, baseline.get("confidence_score", 20))
     result["reality_score_adjustment"] = round(sum(adjustments) / len(adjustments)) if adjustments else 0
     result["forensic_jury_status"] = statuses
+    accepted_by_jury = {
+        jury: len([
+            item for item in findings
+            if _finding_jury(item) == jury
+            and item.get("jury_status") == "completed"
+        ])
+        for jury in FORENSIC_JURIES
+    }
+    usable_by_jury = {
+        jury: len([
+            item for item in findings
+            if _finding_jury(item) == jury
+            and item.get("jury_status") == "completed"
+            and (
+                item.get("source_use_status") in {"supported_fact", "scoped_context", "company_statement"}
+                or item.get("promotion_status") == "scoped_context"
+            )
+        ])
+        for jury in FORENSIC_JURIES
+    }
+    exact_fact_by_jury = {
+        jury: len([
+            item for item in findings
+            if _finding_jury(item) == jury and is_generation_eligible_source(item)
+        ])
+        for jury in FORENSIC_JURIES
+    }
+    scoped_context_by_jury = {
+        jury: len([
+            item for item in findings
+            if _finding_jury(item) == jury
+            and (is_scoped_context_source(item) or item.get("source_use_status") == "scoped_context")
+        ])
+        for jury in FORENSIC_JURIES
+    }
+    company_statement_by_jury = {
+        jury: len([
+            item for item in findings
+            if _finding_jury(item) == jury and item.get("source_use_status") == "company_statement"
+        ])
+        for jury in FORENSIC_JURIES
+    }
+    status_by_jury = {item.get("jury"): item for item in statuses if item.get("jury")}
+    missing_jury_reasons = {}
+    for jury in FORENSIC_JURIES:
+        status = status_by_jury.get(jury) or {}
+        if accepted_by_jury.get(jury):
+            if exact_fact_by_jury.get(jury):
+                missing_jury_reasons[jury] = "judged_exact_fact_support"
+            elif scoped_context_by_jury.get(jury) or company_statement_by_jury.get(jury):
+                missing_jury_reasons[jury] = "judged_scoped_context_only"
+            else:
+                missing_jury_reasons[jury] = "judged_no_final_promotion"
+        elif status.get("status") in {"analysis_failed", "lane_error", "budget_skipped"}:
+            missing_jury_reasons[jury] = status.get("status")
+        elif status.get("status") == "no_evidence":
+            missing_jury_reasons[jury] = "no_evidence"
+        elif status.get("payload_findings"):
+            missing_jury_reasons[jury] = "payload_findings_rejected"
+        else:
+            missing_jury_reasons[jury] = "no_jury_result"
+
     result["forensic_resolution_metrics"] = {
         "source_coverage_count": len([
             item for item in findings
             if item.get("url") and (item.get("verified") is True or item.get("url_verified") is True)
         ]),
-        "judged_jury_coverage": {
-            jury: len([
-                item for item in findings
-                if _finding_jury(item) == jury
-                and item.get("jury_status") == "completed"
-                and item.get("source_use_status") in {"supported_fact", "scoped_context", "company_statement"}
-            ])
-            for jury in FORENSIC_JURIES
-        },
+        "judged_jury_coverage": accepted_by_jury,
+        "usable_jury_coverage": usable_by_jury,
+        "exact_fact_jury_coverage": exact_fact_by_jury,
+        "scoped_context_jury_coverage": scoped_context_by_jury,
+        "company_statement_jury_coverage": company_statement_by_jury,
+        "missing_jury_reasons": missing_jury_reasons,
         "promoted_fact_count": len([item for item in findings if is_generation_eligible_source(item)]),
         "scoped_context_count": len([item for item in findings if is_scoped_context_source(item)]),
         "unjudged_timeout_count": len([
@@ -4168,52 +4427,82 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         packets = fresh + seeds
         if not packets:
             return {"jury": jury_name, "provider": None, "status": "no_evidence", "data": None}
-        prompt = _build_jury_analysis_prompt(search_name, jury_name, packets)
-        lane_started = time.time()
-        payload = None
-        provider = "gpt-5.5"
-        remaining = max(1, int(analysis_deadline - time.time()))
-        try:
-            gpt_timeout = min(FORENSIC_JURY_GPT_TIMEOUTS.get(jury_name, FORENSIC_JURY_GPT_TIMEOUT_SECONDS), remaining)
-            text = _hard_timeout_call(
-                f"{jury_name} gpt-5.5 no-web jury analysis",
-                gpt_timeout,
-                lambda: call_openai_text(
-                    prompt, model="gpt-5.5", max_output_tokens=6500,
-                    timeout=max(1, min(gpt_timeout - 5, gpt_timeout)), web_search=False,
-                ),
-            )
-            if text:
-                payload = _parse_provider_payload(text)
-        except Exception as error:
-            print(f"   ⚠️ [Forensic Analysis] {jury_name} GPT failed: {type(error).__name__}: {error}")
-        if not payload:
-            remaining = max(0, int(analysis_deadline - time.time()))
-            if remaining >= 15:
-                provider = "claude-sonnet-4-6"
-                try:
-                    sonnet_timeout = min(FORENSIC_JURY_SONNET_TIMEOUTS.get(jury_name, FORENSIC_JURY_SONNET_TIMEOUT_SECONDS), remaining)
+
+        def _run_jury_prompt(chunk_packets: list, chunk_label: str = "") -> tuple[dict | None, str]:
+            prompt = _build_jury_analysis_prompt(search_name, jury_name, chunk_packets)
+            provider_name = "gpt-5.5"
+            chunk_payload = None
+            remaining = max(1, int(analysis_deadline - time.time()))
+            try:
+                base_timeout = FORENSIC_JURY_GPT_TIMEOUTS.get(jury_name, FORENSIC_JURY_GPT_TIMEOUT_SECONDS)
+                if chunk_label and chunk_label != "full":
+                    base_timeout = min(base_timeout, 75)
+                gpt_timeout = min(base_timeout, remaining)
+                if gpt_timeout >= 15:
                     text = _hard_timeout_call(
-                        f"{jury_name} claude-sonnet-4-6 no-web jury analysis",
-                        sonnet_timeout,
-                        lambda: call_anthropic_text(
-                            prompt, model="claude-sonnet-4-6", max_tokens=6500,
-                            timeout=max(1, min(sonnet_timeout - 5, sonnet_timeout)), web_search=False,
+                        f"{jury_name} {chunk_label or 'full'} gpt-5.5 no-web jury analysis",
+                        gpt_timeout,
+                        lambda: call_openai_text(
+                            prompt, model="gpt-5.5", max_output_tokens=6500,
+                            timeout=max(1, min(gpt_timeout - 5, gpt_timeout)), web_search=False,
                         ),
                     )
                     if text:
-                        payload = _parse_provider_payload(text)
-                except Exception as error:
-                    print(f"   ⚠️ [Forensic Analysis] {jury_name} Sonnet failed: {type(error).__name__}: {error}")
+                        chunk_payload = _parse_provider_payload(text)
+            except Exception as error:
+                print(f"   ⚠️ [Forensic Analysis] {jury_name} {chunk_label or 'full'} GPT failed: {type(error).__name__}: {error}")
+            if not chunk_payload:
+                remaining = max(0, int(analysis_deadline - time.time()))
+                if remaining >= 20:
+                    provider_name = "claude-sonnet-4-6"
+                    try:
+                        sonnet_base = FORENSIC_JURY_SONNET_TIMEOUTS.get(jury_name, FORENSIC_JURY_SONNET_TIMEOUT_SECONDS)
+                        if chunk_label and chunk_label != "full":
+                            sonnet_base = min(sonnet_base, 45)
+                        sonnet_timeout = min(sonnet_base, remaining)
+                        text = _hard_timeout_call(
+                            f"{jury_name} {chunk_label or 'full'} claude-sonnet-4-6 no-web jury analysis",
+                            sonnet_timeout,
+                            lambda: call_anthropic_text(
+                                prompt, model="claude-sonnet-4-6", max_tokens=6500,
+                                timeout=max(1, min(sonnet_timeout - 5, sonnet_timeout)), web_search=False,
+                            ),
+                        )
+                        if text:
+                            chunk_payload = _parse_provider_payload(text)
+                    except Exception as error:
+                        print(f"   ⚠️ [Forensic Analysis] {jury_name} {chunk_label or 'full'} Sonnet failed: {type(error).__name__}: {error}")
+            return chunk_payload, provider_name
+
+        lane_started = time.time()
+        payload = None
+        provider = "gpt-5.5"
+        split_labels = []
+        split_chunks = _split_jury_packets(jury_name, packets)
+        if len(split_chunks) > 1:
+            payloads = []
+            for chunk_label, chunk_packets in split_chunks:
+                remaining = int(analysis_deadline - time.time())
+                if remaining < 20:
+                    break
+                chunk_payload, chunk_provider = _run_jury_prompt(chunk_packets, chunk_label)
+                provider = chunk_provider if not payloads else f"{provider}+{chunk_provider}"
+                split_labels.append(chunk_label)
+                if chunk_payload:
+                    payloads.append(chunk_payload)
+            payload = _merge_jury_payloads(jury_name, payloads)
+        else:
+            payload, provider = _run_jury_prompt(packets)
         accepted = len((payload or {}).get("findings", []) or [])
         print(
             f"   {'✅' if payload else '⚠️'} [Forensic Analysis] {jury_name}: {accepted} accepted finding(s), "
-            f"provider={provider}, elapsed={int(time.time() - lane_started)}s."
+            f"provider={provider}, elapsed={int(time.time() - lane_started)}s"
+            f"{', split=' + ','.join(split_labels) if split_labels else ''}."
         )
         return {
             "jury": jury_name,
             "provider": provider,
-            "status": "completed" if payload else "analysis_failed",
+            "status": "completed_split" if payload and split_labels else "completed" if payload else "analysis_failed",
             "data": payload,
             "packet_urls": [item.get("url") for item in packets if item.get("url")],
             "packets": packets,
@@ -4284,9 +4573,15 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     }
     resolution_metrics = data.get("forensic_resolution_metrics") or {}
     judged_jury_coverage = resolution_metrics.get("judged_jury_coverage") or {}
+    missing_jury_reasons = resolution_metrics.get("missing_jury_reasons") or {}
     missing_juries = [
         jury for jury in FORENSIC_JURIES
         if int(judged_jury_coverage.get(jury) or 0) == 0
+        and missing_jury_reasons.get(jury) not in {
+            "judged_exact_fact_support",
+            "judged_scoped_context_only",
+            "judged_no_final_promotion",
+        }
     ]
     fresh_supported_targets = {}
     for jury in FORENSIC_JURIES:
@@ -4323,10 +4618,20 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     print(
         "   🧾 [Forensic Resolution] "
         f"judged={judged_jury_coverage}, "
+        f"usable={resolution_metrics.get('usable_jury_coverage', {})}, "
+        f"exact={resolution_metrics.get('exact_fact_jury_coverage', {})}, "
+        f"scoped={resolution_metrics.get('scoped_context_jury_coverage', {})}, "
         f"facts={resolution_metrics.get('promoted_fact_count', 0)}, "
         f"scoped_context={resolution_metrics.get('scoped_context_count', 0)}, "
         f"unjudged_timeout={resolution_metrics.get('unjudged_timeout_count', 0)}"
     )
+    if missing_jury_reasons:
+        coverage_notes = {
+            jury: reason for jury, reason in missing_jury_reasons.items()
+            if reason not in {"judged_exact_fact_support"}
+        }
+        if coverage_notes:
+            print(f"   🧭 [Forensic Coverage Notes] {coverage_notes}")
     seed_lifecycle = data.get("seed_lifecycle") or {}
     print(
         "   🧭 [Seed Lifecycle] "
