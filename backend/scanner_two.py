@@ -222,6 +222,8 @@ FORENSIC_ACQUISITION_REPAIR_CEILING_SECONDS = 85
 FORENSIC_EXTRACTION_RECOVERY_CEILING_SECONDS = 35
 FORENSIC_FIRECRAWL_MAX_URLS = 6
 FORENSIC_JURY_ANALYSIS_CEILING_SECONDS = 180
+FORENSIC_STRONG_BASELINE_FIRST_PASS_FLOOR_SECONDS = 95
+FORENSIC_GPT_FALLBACK_MIN_SECONDS = 40
 FORENSIC_JURY_GPT_TIMEOUT_SECONDS = 105
 FORENSIC_JURY_SONNET_TIMEOUT_SECONDS = 45
 FORENSIC_GEMINI_TIMEOUT_SECONDS = 100
@@ -256,7 +258,7 @@ SERVICE_PORTFOLIO_JURY_NAME = "SERVICE PORTFOLIO JURY (Delivery Reality)"
 JURY_SPLIT_PACKET_THRESHOLD_DEFAULT = 16
 JURY_SPLIT_PACKET_THRESHOLDS = {
     STRATEGIC_JURY_NAME: 12,
-    SERVICE_PORTFOLIO_JURY_NAME: 12,
+    SERVICE_PORTFOLIO_JURY_NAME: 8,
     "ARCHITECTURAL JURY (Engineering Reality)": 14,
     "AI & DATA JURY (Future Readiness)": 16,
     "CULTURAL JURY (Talent & Psychological Safety)": 16,
@@ -1268,11 +1270,65 @@ def _service_packet_group(packet: dict) -> str:
     return "portfolio_context"
 
 
+def _packet_analysis_priority(packet: dict, jury_name: str = "") -> int:
+    """Rank packets before no-web jury analysis; trust still resets inside the jury."""
+    if not isinstance(packet, dict):
+        return -100
+    score = 0
+    url = str(packet.get("url") or "")
+    text = " ".join(str(packet.get(key) or "") for key in (
+        "title", "source_type", "snippet", "cached_excerpt", "fetched_excerpt",
+        "source_context_status", "source_use_status", "promotion_status",
+        "forensic_provenance", "source_database", "url",
+    )).lower()
+    if _is_non_document_asset_url(url):
+        score -= 30
+    if packet.get("content_readable") is True or packet.get("content_verified") is True:
+        score += 8
+    if packet.get("url_verified") is True or packet.get("seed_url_verified") is True:
+        score += 5
+    if packet.get("entity_verified") is True or str(packet.get("entity_match_status") or "").lower() in {
+        "verified", "exact", "scoped",
+    }:
+        score += 5
+    if _is_official_company_context_packet(packet):
+        score += 8
+    if any(token in text for token in ("scoped_context", "valid_company_context", "supported_fact")):
+        score += 6
+    if packet.get("fetched_excerpt") or packet.get("cached_excerpt"):
+        score += 4
+    if packet.get("forensic_provenance") == "fresh_acquisition":
+        score += 3
+    if packet.get("source_database") == "company_evidence_db":
+        score += 2
+    if any(token in text for token in ("wrong_entity", "dead", "soft-404", "unreadable", "asset", "icon")):
+        score -= 12
+    if jury_name == SERVICE_PORTFOLIO_JURY_NAME:
+        if any(token in text for token in (
+            "service", "services", "palvel", "delivery", "managed", "support",
+            "application", "cloud", "cyber", "data", "ai", "customer", "reference",
+            "case", "developer", "api",
+        )):
+            score += 6
+        if any(token in text for token in ("generic", "landing", "home page", "front page")):
+            score -= 3
+    return score
+
+
+def _prioritize_jury_packets(jury_name: str, packets: list, limit: int = 24) -> list:
+    ranked = sorted(
+        [packet for packet in packets or [] if isinstance(packet, dict)],
+        key=lambda packet: _packet_analysis_priority(packet, jury_name),
+        reverse=True,
+    )
+    return ranked[:limit]
+
+
 def _chunk_packets(packets: list, max_chunks: int = JURY_SPLIT_MAX_CHUNKS) -> list[tuple[str, list]]:
     packets = list(packets or [])
     if not packets:
         return []
-    chunk_count = min(max_chunks, max(1, round(len(packets) / 8)))
+    chunk_count = min(max_chunks, max(1, (len(packets) + 7) // 8))
     if chunk_count <= 1:
         return [("full", packets)]
     chunk_size = max(1, (len(packets) + chunk_count - 1) // chunk_count)
@@ -1283,7 +1339,7 @@ def _chunk_packets(packets: list, max_chunks: int = JURY_SPLIT_MAX_CHUNKS) -> li
 
 
 def _split_jury_packets(jury_name: str, packets: list) -> list[tuple[str, list]]:
-    packets = list(packets or [])
+    packets = _prioritize_jury_packets(jury_name, list(packets or []))
     threshold = JURY_SPLIT_PACKET_THRESHOLDS.get(jury_name, JURY_SPLIT_PACKET_THRESHOLD_DEFAULT)
     if len(packets) <= threshold:
         return [("full", packets)]
@@ -1305,7 +1361,11 @@ def _split_jury_packets(jury_name: str, packets: list) -> list[tuple[str, list]]
         }
         for packet in packets:
             buckets[_service_packet_group(packet)].append(packet)
-        chunks = [(name, items) for name, items in buckets.items() if items]
+        chunks = [
+            (name, _prioritize_jury_packets(jury_name, items, limit=8))
+            for name, items in buckets.items()
+            if items
+        ]
         return chunks[:JURY_SPLIT_MAX_CHUNKS] if len(chunks) > 1 else _chunk_packets(packets)
     return _chunk_packets(packets)
 
@@ -2044,9 +2104,25 @@ def _build_jury_acquisition_prompt(
             f"{acquisition_focus}\n"
             "Stay inside this focus. Do not try to cover every Strategic subtopic in this call.\n"
         )
+    jury_hint = ""
+    if jury_name == SERVICE_PORTFOLIO_JURY_NAME:
+        jury_hint = (
+            "\nSERVICE PORTFOLIO SOURCE TACTIC:\n"
+            "Prefer direct official pages for services, capabilities, solution areas, customer/reference "
+            "context, developer/API pages, and delivery/proof pages. Avoid stale press archives, image/icon "
+            "assets, generic home pages, search pages, and pages that only prove the company exists.\n"
+        )
+    elif jury_name == STRATEGIC_JURY_NAME:
+        jury_hint = (
+            "\nSTRATEGIC SOURCE TACTIC:\n"
+            "Prefer current official strategy/about/news pages, transaction/ownership context, customer or "
+            "partner proof, procurement/public-award records, and market-facing positioning pages. Avoid "
+            "broad archive pages unless they contain a current, page-bound passage.\n"
+        )
     return f"""Acquire CURRENT SOURCE MATERIAL for \"{search_name}\" (official domain: {domain_hint}).
 This lane covers only: {jury_name}
 {focus_block}
+{jury_hint}
 
 This is source acquisition, not analysis. Search the approved registry below in Finnish and English.
 Prioritize sources published or updated within 24 months, while allowing current official registry,
@@ -4295,12 +4371,19 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         baseline["_baseline_coverage"] = coverage
     routed_seeds = _route_seed_findings(baseline.get("findings", []))
     baseline_missing_juries = set(coverage.get("missing_juries") or [])
+    strong_seed_baseline = (
+        len(baseline.get("findings", []) or []) >= 16
+        and len(coverage.get("jury_coverage") or {}) >= 4
+        and int(coverage.get("score") or 0) >= 50
+    )
     critical_missing_juries = baseline_missing_juries.intersection(FORENSIC_STRUCTURAL_JURIES)
     acquisition_target_ceiling = FORENSIC_ACQUISITION_CEILING_SECONDS
     if critical_missing_juries:
         acquisition_target_ceiling = FORENSIC_ACQUISITION_EXTENDED_CEILING_SECONDS
     elif baseline_missing_juries:
         acquisition_target_ceiling = min(150, FORENSIC_ACQUISITION_EXTENDED_CEILING_SECONDS)
+    elif strong_seed_baseline:
+        acquisition_target_ceiling = max(acquisition_target_ceiling, 150)
     if len(baseline.get("findings", []) or []) >= 22 and baseline_missing_juries:
         acquisition_target_ceiling = max(acquisition_target_ceiling, 155)
     early_repair_reserve = 45
@@ -4308,6 +4391,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         early_repair_reserve = 70
     elif baseline_missing_juries:
         early_repair_reserve = 60
+    elif strong_seed_baseline:
+        early_repair_reserve = 35
     acquisition_ceiling = min(
         acquisition_target_ceiling,
         _phase_remaining(
@@ -4322,7 +4407,10 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     )
     acquisition_run_ceiling = acquisition_ceiling
     if acquisition_ceiling > early_repair_reserve + 45:
-        acquisition_run_ceiling = max(45, acquisition_ceiling - early_repair_reserve)
+        run_floor = FORENSIC_STRONG_BASELINE_FIRST_PASS_FLOOR_SECONDS if strong_seed_baseline else 45
+        acquisition_run_ceiling = max(run_floor, acquisition_ceiling - early_repair_reserve)
+        if acquisition_run_ceiling > acquisition_ceiling - 25:
+            acquisition_run_ceiling = max(45, acquisition_ceiling - 25)
     acquisition_started = time.time()
     acquisition_deadline = acquisition_started + acquisition_run_ceiling
     acquisition_specs = []
@@ -4374,7 +4462,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 print(f"   ⚠️ [Forensic Acquisition] {jury_name} Gemini {status}: {type(error).__name__}: {error}")
         if not payload:
             remaining = max(0, int(acquisition_deadline - time.time()))
-            if remaining >= 20:
+            if remaining >= FORENSIC_GPT_FALLBACK_MIN_SECONDS:
                 provider = "gpt-5.5-web-fallback"
                 payload = execute_with_openai_web(
                     prompt,
@@ -4384,6 +4472,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     allow_repair=False,
                 )
                 status = "fallback_completed" if payload else "fallback_failed"
+            elif remaining > 0:
+                status = f"fallback_skipped_low_budget_{remaining}s"
         sources = _normalize_acquisition_payload(payload or {}, jury_name, provider)
         print(
             f"   {'✅' if sources else '⚠️'} [Forensic Acquisition] {jury_name}"
@@ -4476,7 +4566,14 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     if weak_juries and repair_ceiling >= 25:
         repair_deadline = time.time() + repair_ceiling
         prioritized_weak_juries = _prioritize_weak_juries(weak_juries, readiness)
-        max_repair_lanes = 1 if repair_ceiling < 60 else 2 if repair_ceiling < 110 else min(3, len(prioritized_weak_juries))
+        if repair_ceiling < 60:
+            max_repair_lanes = 1
+        elif len(weak_juries) >= len(FORENSIC_JURIES) and repair_ceiling >= 85:
+            max_repair_lanes = min(3, len(prioritized_weak_juries))
+        elif repair_ceiling < 110:
+            max_repair_lanes = 2
+        else:
+            max_repair_lanes = min(3, len(prioritized_weak_juries))
         repair_target_juries = prioritized_weak_juries[:max_repair_lanes]
         skipped_repair_juries = prioritized_weak_juries[max_repair_lanes:]
         print(
