@@ -156,7 +156,7 @@ def _analysis_evidence_links(links: list) -> list:
     return [l for l in (links or []) if is_generation_eligible_source(l)]
 
 
-def _company_evidence_db_scanner_candidates(company_evidence: dict | None, limit: int = 10) -> tuple[list[dict], dict]:
+def _company_evidence_db_scanner_candidates(company_evidence: dict | None, limit: int = 20) -> tuple[list[dict], dict]:
     """
     Convert Company Evidence DB records into neutral Scanner source candidates.
 
@@ -165,9 +165,13 @@ def _company_evidence_db_scanner_candidates(company_evidence: dict | None, limit
     """
     stats = {
         "candidates": 0,
+        "evaluated": 0,
+        "eligible_before_limit": 0,
         "cached_extracts": 0,
         "skipped": 0,
         "skip_reasons": {},
+        "jury_counts": {},
+        "limit": limit,
     }
     if not isinstance(company_evidence, dict):
         return [], stats
@@ -176,9 +180,107 @@ def _company_evidence_db_scanner_candidates(company_evidence: dict | None, limit
         stats["skipped"] += 1
         stats["skip_reasons"][reason] = stats["skip_reasons"].get(reason, 0) + 1
 
-    candidates = []
+    jury_terms = {
+        "ARCHITECTURAL JURY (Engineering Reality)": (
+            "architecture", "engineering", "developer", "api", "integration",
+            "application", "platform", "cloud", "systems", "technical",
+        ),
+        "AI & DATA JURY (Future Readiness)": (
+            "ai", "artificial intelligence", "data", "analytics", "automation",
+            "cyber", "security", "technology", "digital", "cloud",
+        ),
+        "SERVICE PORTFOLIO JURY (Delivery Reality)": (
+            "service", "services", "solution", "solutions", "delivery",
+            "customer", "case", "reference", "support", "managed",
+        ),
+        "STRATEGIC JURY (Business Model, Procurement & Customer Experience)": (
+            "strategy", "about", "news", "press", "investor", "acquisition",
+            "partnership", "procurement", "tender", "customer experience",
+            "sustainability", "financial", "annual",
+        ),
+        "CULTURAL JURY (Talent & Psychological Safety)": (
+            "career", "careers", "jobs", "hiring", "culture", "values",
+            "people", "employee", "workplace", "talent", "hr",
+        ),
+    }
+
+    def jury_hint(record: dict, candidate: dict, cached_excerpt: str) -> str:
+        token = " ".join(str(value or "") for value in (
+            record.get("title"), record.get("source_title"), record.get("source_type"),
+            record.get("source_category"), record.get("provider_record_type"),
+            record.get("reference_context"), candidate.get("url"), cached_excerpt[:500],
+        )).lower()
+        best = ("", 0)
+        for jury_name, terms in jury_terms.items():
+            score = sum(1 for term in terms if term in token)
+            if score > best[1]:
+                best = (jury_name, score)
+        return best[0]
+
+    def seed_score(record: dict, candidate: dict, cached_excerpt: str, hinted_jury: str) -> int:
+        token = " ".join(str(value or "") for value in (
+            candidate.get("url"), record.get("source_type"), record.get("source_category"),
+            record.get("origin_relation"), record.get("publisher_independence"),
+            record.get("entity_match_status"), record.get("verification_reason"),
+        )).lower()
+        score = 0
+        if candidate.get("url"):
+            score += 10
+        if cached_excerpt:
+            score += 30
+            if len(cached_excerpt) > 350:
+                score += 8
+        if hinted_jury:
+            score += 12
+        if "official" in token or record.get("official_domain_source") is True:
+            score += 18
+        if "official_page_outbound_reference" in token:
+            score += 12
+        if any(word in token for word in ("exact", "verified", "entity_verified", "canonical")):
+            score += 12
+        if any(word in token for word in ("service", "technology", "about", "newsroom", "press", "financial", "careers")):
+            score += 8
+        if "independent_external_evidence" in token:
+            score += 10
+        if any(word in token for word in ("display_only", "unsupported", "unknown")):
+            score -= 3
+        return score
+
+    def select_diverse(candidates_in: list[dict]) -> list[dict]:
+        ranked = sorted(candidates_in, key=lambda item: item.get("scanner_seed_score", 0), reverse=True)
+        selected = []
+        selected_keys = set()
+        per_jury = {}
+
+        def add(item: dict) -> bool:
+            key = item.get("_dedupe_key")
+            if not key or key in selected_keys or len(selected) >= limit:
+                return False
+            jury = item.get("scanner_jury_hint") or "unknown"
+            if per_jury.get(jury, 0) >= 6:
+                return False
+            selected.append(item)
+            selected_keys.add(key)
+            per_jury[jury] = per_jury.get(jury, 0) + 1
+            return True
+
+        # First guarantee breadth where the Evidence DB has candidates.
+        for jury_name in jury_terms:
+            for item in ranked:
+                if item.get("scanner_jury_hint") == jury_name and add(item):
+                    break
+        # Then fill by score, while preventing one jury from crowding out all others.
+        for item in ranked:
+            add(item)
+            if len(selected) >= limit:
+                break
+
+        return selected
+
+    eligible_candidates = []
     seen = set()
     for record in company_evidence.get("records") or []:
+        stats["evaluated"] += 1
         if not isinstance(record, dict):
             skip("invalid_record")
             continue
@@ -264,12 +366,24 @@ def _company_evidence_db_scanner_candidates(company_evidence: dict | None, limit
             "original_entity_match_status": record.get("entity_match_status"),
             "original_verification_reason": record.get("verification_reason"),
         }
-        candidates.append(candidate)
-        stats["candidates"] += 1
+        hint = jury_hint(record, candidate, cached_excerpt)
+        candidate["scanner_jury_hint"] = hint
+        candidate["scanner_seed_score"] = seed_score(record, candidate, cached_excerpt, hint)
+        candidate["_dedupe_key"] = dedupe_key
+        eligible_candidates.append(candidate)
+        stats["eligible_before_limit"] += 1
         if cached_excerpt:
             stats["cached_extracts"] += 1
-        if len(candidates) >= limit:
-            break
+
+    candidates = select_diverse(eligible_candidates)
+    stats["candidates"] = len(candidates)
+    stats["selected"] = len(candidates)
+    stats["limit_reached"] = len(eligible_candidates) > len(candidates)
+    stats["cached_extracts"] = sum(1 for candidate in candidates if candidate.get("cached_excerpt"))
+    for candidate in candidates:
+        jury = candidate.get("scanner_jury_hint") or "unknown"
+        stats["jury_counts"][jury] = stats["jury_counts"].get(jury, 0) + 1
+        candidate.pop("_dedupe_key", None)
 
     return candidates, stats
 
@@ -3731,21 +3845,46 @@ def _execute_scan_pipeline(
             if evidence_lookup.get("exists"):
                 company_evidence_candidates, evidence_stats = _company_evidence_db_scanner_candidates(
                     evidence_lookup.get("database"),
-                    limit=10,
+                    limit=20,
                 )
                 company_evidence_cached_extracts = int(evidence_stats.get("cached_extracts", 0) or 0)
                 if company_evidence_candidates:
                     if previous_context is None:
                         previous_context = {}
                     previous_context["company_evidence_db_candidates"] = company_evidence_candidates
+                    jury_counts = evidence_stats.get("jury_counts") or {}
+                    previous_context["company_evidence_db_jury_counts"] = jury_counts
+                    previous_context["company_evidence_db_missing_juries"] = [
+                        jury for jury in (
+                            "ARCHITECTURAL JURY (Engineering Reality)",
+                            "STRATEGIC JURY (Business Model, Procurement & Customer Experience)",
+                            "CULTURAL JURY (Talent & Psychological Safety)",
+                            "AI & DATA JURY (Future Readiness)",
+                            "SERVICE PORTFOLIO JURY (Delivery Reality)",
+                        )
+                        if not jury_counts.get(jury)
+                    ]
                     skipped = evidence_stats.get("skipped", 0)
                     skip_reasons = evidence_stats.get("skip_reasons", {})
                     print(
-                        f"   [Company Evidence DB] Loaded {evidence_stats.get('candidates', 0)} candidate source(s), "
-                        f"{evidence_stats.get('cached_extracts', 0)} cached extract(s), {skipped} skipped."
+                        f"   [Company Evidence DB] Loaded {evidence_stats.get('candidates', 0)} ranked candidate source(s) "
+                        f"from {evidence_stats.get('eligible_before_limit', 0)} eligible / "
+                        f"{evidence_stats.get('evaluated', 0)} evaluated record(s), "
+                        f"{evidence_stats.get('cached_extracts', 0)} cached extract(s), {skipped} skipped; "
+                        f"jury coverage {len(jury_counts)}/5."
                     )
+                    if evidence_stats.get("limit_reached"):
+                        print(
+                            f"   [Company Evidence DB] Selection capped at top {evidence_stats.get('limit')} "
+                            "after score/diversity ranking."
+                        )
                     if skip_reasons:
                         print(f"   [Company Evidence DB] Skipped reasons: {skip_reasons}")
+                    if previous_context["company_evidence_db_missing_juries"]:
+                        print(
+                            "   [Company Evidence DB] Seed coverage missing jury lane(s): "
+                            + ", ".join(jury.split(" JURY")[0] for jury in previous_context["company_evidence_db_missing_juries"])
+                        )
                 else:
                     skipped = evidence_stats.get("skipped", 0)
                     print(f"   [Company Evidence DB] Database found, but no Scanner-safe candidate sources available ({skipped} skipped).")
@@ -3772,12 +3911,26 @@ def _execute_scan_pipeline(
         reality_budget = max(180, min(REALITY_PHASE_MAX_BUDGET, reality_budget))
         reality_outer_timeout = reality_budget + 10  # small buffer over internal budget
         scanner_research_loops = 2
-        if len(company_evidence_candidates) >= 8 and company_evidence_cached_extracts >= 6:
+        evidence_jury_counts = (previous_context or {}).get("company_evidence_db_jury_counts", {}) if isinstance(previous_context, dict) else {}
+        evidence_missing_juries = (previous_context or {}).get("company_evidence_db_missing_juries", []) if isinstance(previous_context, dict) else []
+        if (
+            len(company_evidence_candidates) >= 14
+            and company_evidence_cached_extracts >= 10
+            and len(evidence_jury_counts) >= 5
+            and not evidence_missing_juries
+        ):
             scanner_research_loops = 1
+            previous_context["company_evidence_db_strong_coverage"] = True
             print(
-                f"   [Company Evidence DB] Strong cached source coverage detected "
+                f"   [Company Evidence DB] Strong jury-aware cached source coverage detected "
                 f"({len(company_evidence_candidates)} candidates, {company_evidence_cached_extracts} cached extracts) "
                 "→ limiting live re-search loops."
+            )
+        elif company_evidence_candidates:
+            print(
+                f"   [Company Evidence DB] Cached source coverage is partial "
+                f"({len(company_evidence_candidates)} candidates, {company_evidence_cached_extracts} cached extracts, "
+                f"{len(evidence_jury_counts)}/5 juries) → keeping targeted live discovery active."
             )
         # Get employee count for stakeholder seniority filtering
         _scan_meta = get_company_metadata(companyName) or {}

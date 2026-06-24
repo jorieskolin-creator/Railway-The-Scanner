@@ -212,6 +212,7 @@ JURY_SOURCE_TARGETS = {
 
 FORENSIC_POSTPROCESS_RESERVE_SECONDS = 30
 FORENSIC_ACQUISITION_CEILING_SECONDS = 135
+FORENSIC_ACQUISITION_EXTENDED_CEILING_SECONDS = 165
 FORENSIC_ACQUISITION_REPAIR_CEILING_SECONDS = 85
 FORENSIC_EXTRACTION_RECOVERY_CEILING_SECONDS = 35
 FORENSIC_FIRECRAWL_MAX_URLS = 6
@@ -3527,6 +3528,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             host = get_clean_domain(url)
             official = bool(domain_hint and host and (host == domain_hint or host.endswith(f".{domain_hint}")))
             return (
+                int(candidate.get("scanner_seed_score") or 0),
+                1 if candidate.get("scanner_jury_hint") else 0,
                 1 if excerpt else 0,
                 1 if official else 0,
                 1 if candidate.get("url_verified") or candidate.get("content_verified") else 0,
@@ -3560,7 +3563,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         ]
         skipped_company_candidates = len(company_evidence_candidates) - len(eligible_company_candidates)
         ranked_candidates = sorted(eligible_company_candidates, key=_candidate_rank, reverse=True)
-        for idx, candidate in enumerate(ranked_candidates[:16], start=1):
+        for idx, candidate in enumerate(ranked_candidates[:20], start=1):
             url = candidate.get("url") or candidate.get("source_url") or ""
             semantic_hint = _seed_excerpt(
                 candidate.get("source_quote") or candidate.get("snippet")
@@ -3581,7 +3584,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             title = candidate.get("title") or candidate.get("source_title") or url or f"Company Evidence DB source {idx}"
             safe_label = f"Revalidate cached source: {str(title)[:90]}"
             seed_findings.append({
-                "category": _seed_category(source_type, candidate.get("source_category") or ""),
+                "category": candidate.get("scanner_jury_hint") or _seed_category(source_type, candidate.get("source_category") or ""),
                 "label": safe_label,
                 "found": True,
                 "sentiment": "neutral",
@@ -3591,6 +3594,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 "url": url,
                 "is_recent": False,
                 "source_database": "company_evidence_db",
+                "scanner_jury_hint": candidate.get("scanner_jury_hint"),
+                "scanner_seed_score": candidate.get("scanner_seed_score"),
                 "forensic_seed_source": True,
                 "source_status": "candidate_revalidation_pending",
                 "verification_reason": "Seeded from Company Evidence DB for Scanner revalidation before fresh discovery.",
@@ -3626,9 +3631,9 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 })
                 seed_findings.append(candidate)
                 historical_seed_count += 1
-                if len(seed_findings) >= 16:
+                if len(seed_findings) >= 28:
                     break
-            if len(seed_findings) >= 16:
+            if len(seed_findings) >= 28:
                 break
 
         # URL checks are deterministic and concurrent, outside the model budget.
@@ -3910,10 +3915,26 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         coverage = _compute_forensic_coverage(baseline.get("findings", []), domain_hint)
         baseline["_baseline_coverage"] = coverage
     routed_seeds = _route_seed_findings(baseline.get("findings", []))
+    baseline_missing_juries = set(coverage.get("missing_juries") or [])
+    critical_missing_juries = baseline_missing_juries.intersection(FORENSIC_STRUCTURAL_JURIES)
+    acquisition_target_ceiling = FORENSIC_ACQUISITION_CEILING_SECONDS
+    if critical_missing_juries:
+        acquisition_target_ceiling = FORENSIC_ACQUISITION_EXTENDED_CEILING_SECONDS
+    elif baseline_missing_juries:
+        acquisition_target_ceiling = min(150, FORENSIC_ACQUISITION_EXTENDED_CEILING_SECONDS)
+    if len(baseline.get("findings", []) or []) >= 22 and baseline_missing_juries:
+        acquisition_target_ceiling = max(acquisition_target_ceiling, 155)
+    early_repair_reserve = 0
+    if critical_missing_juries:
+        early_repair_reserve = 60
+    elif baseline_missing_juries:
+        early_repair_reserve = 45
     acquisition_ceiling = min(
-        FORENSIC_ACQUISITION_CEILING_SECONDS,
+        acquisition_target_ceiling,
         _phase_remaining(
             buffer=(
+                early_repair_reserve
+                +
                 FORENSIC_EXTRACTION_RECOVERY_CEILING_SECONDS
                 + FORENSIC_JURY_ANALYSIS_CEILING_SECONDS
                 + FORENSIC_POSTPROCESS_RESERVE_SECONDS
@@ -3925,7 +3946,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     print(
         f"   🔍 [Forensic Acquisition] Five parallel jury lanes for {company_name}: "
         f"{acquisition_ceiling}s group ceiling; Gemini primary, GPT-5.5 web fallback; "
-        f"baseline {coverage['score']}/100 across {len(coverage['jury_coverage'])}/5 juries."
+        f"baseline {coverage['score']}/100 across {len(coverage['jury_coverage'])}/5 juries"
+        f"{'; reserved repair '+str(early_repair_reserve)+'s' if early_repair_reserve else ''}."
     )
 
     def _parse_provider_payload(text):
@@ -4025,7 +4047,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         ),
     )
     repair_results = []
-    if weak_juries and repair_ceiling >= 35:
+    if weak_juries and repair_ceiling >= 25:
         repair_deadline = time.time() + repair_ceiling
         prioritized_weak_juries = _prioritize_weak_juries(weak_juries, readiness)
         max_repair_lanes = 1 if repair_ceiling < 60 else 2 if repair_ceiling < 110 else min(3, len(prioritized_weak_juries))
