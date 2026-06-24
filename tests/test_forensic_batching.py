@@ -79,8 +79,33 @@ def test_each_acquisition_prompt_is_jury_scoped_and_excludes_people_search():
         assert "Do not search for people" in prompt
         assert "verbatim_quote" in prompt
         assert "copied word-for-word" in prompt
+        assert "Return 2-3 high-quality canonical URLs only" in prompt
         other_juries = [name for name in scanner_two.FORENSIC_JURIES if name != jury]
         assert all(f"\n    {other}" not in prompt for other in other_juries)
+
+
+def test_replacement_prompt_avoids_failed_urls_and_stays_jury_scoped():
+    jury = "SERVICE PORTFOLIO JURY (Delivery Reality)"
+    prompt = scanner_two._build_jury_replacement_prompt(
+        "Example Oy",
+        "example.fi",
+        jury,
+        {
+            "pre_jury_rejected": [
+                {"url": "https://example.fi/search?q=services", "reason": "dead_or_soft_404"},
+                {"url": "https://cdn.example.fi/icon.png", "reason": "non_document_asset"},
+            ]
+        },
+        2,
+        "capability/services",
+        "Target entity: Example Oy",
+    )
+
+    assert f"This lane covers only: {jury}" in prompt
+    assert "Need 2 validated" in prompt
+    assert "Do not return rejected URLs" in prompt
+    assert "https://example.fi/search?q=services" in prompt
+    assert "Return ONLY valid JSON with 1-3 sources" in prompt
 
 
 def test_vivicta_acquisition_prompt_includes_rebrand_aliases():

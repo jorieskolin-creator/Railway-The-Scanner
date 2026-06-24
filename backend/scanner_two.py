@@ -227,6 +227,8 @@ FORENSIC_GPT_FALLBACK_MIN_SECONDS = 40
 FORENSIC_JURY_GPT_TIMEOUT_SECONDS = 105
 FORENSIC_JURY_SONNET_TIMEOUT_SECONDS = 45
 FORENSIC_GEMINI_TIMEOUT_SECONDS = 100
+FORENSIC_LANE_REPLACEMENT_MIN_SECONDS = 30
+FORENSIC_LANE_REPLACEMENT_TIMEOUT_SECONDS = 42
 FORENSIC_JURIES = tuple(JURY_SOURCE_TARGETS.keys())
 FORENSIC_HEAVY_JURIES = {
     "STRATEGIC JURY (Business Model, Procurement & Customer Experience)",
@@ -271,6 +273,14 @@ FORENSIC_REPAIR_TIMEOUTS = {
     "ARCHITECTURAL JURY (Engineering Reality)": 65,
     "AI & DATA JURY (Future Readiness)": 55,
     "CULTURAL JURY (Talent & Psychological Safety)": 45,
+}
+
+FORENSIC_LANE_REPLACEMENT_ATTEMPTS = {
+    "STRATEGIC JURY (Business Model, Procurement & Customer Experience)": 2,
+    "SERVICE PORTFOLIO JURY (Delivery Reality)": 2,
+    "ARCHITECTURAL JURY (Engineering Reality)": 1,
+    "AI & DATA JURY (Future Readiness)": 1,
+    "CULTURAL JURY (Talent & Psychological Safety)": 1,
 }
 
 STRATEGIC_ACQUISITION_FOCI = (
@@ -2144,7 +2154,93 @@ from the linked page itself, not paraphrased from a search-result summary. Use a
 article, report, filing, documentation, or job URL rather than a search page or generic landing page.
 The quote should be 30-120 words and contain the target entity or the exact narrow fact it supports.
 If you cannot obtain a page-bound verbatim passage, omit that source.
+Return 2-3 high-quality canonical URLs only. Quality is better than volume; a short list of live,
+page-bound sources is better than many broad or stale candidates.
 Return ONLY valid JSON:
+{{
+  "jury": {json.dumps(jury_name)},
+  "sources": [
+    {{"url": "https://...", "title": "page title", "verbatim_quote": "exact page passage",
+      "published_at": "YYYY-MM-DD or null", "source_type": "registry source type",
+      "entity_scope_candidate": "company|group|subsidiary|context|unclear",
+      "discovery_query": "query used", "freshness": "fresh|current|evergreen|unknown"}}
+  ]
+}}
+"""
+
+
+def _lane_fresh_target(jury_name: str, focus_key: str = "full") -> int:
+    """Minimum validated fresh packets needed before a lane leaves acquisition."""
+    if focus_key and focus_key != "full":
+        return 1
+    if jury_name in FORENSIC_HEAVY_JURIES:
+        return 2
+    return 1
+
+
+def _summarize_pre_jury_rejections(lane: dict) -> dict:
+    reasons = {}
+    for item in (lane or {}).get("pre_jury_rejected", []) or []:
+        reason = str((item or {}).get("reason") or "unknown")
+        reasons[reason] = reasons.get(reason, 0) + 1
+    return reasons
+
+
+def _build_jury_replacement_prompt(
+    search_name: str,
+    domain_hint: str,
+    jury_name: str,
+    lane: dict,
+    target_valid: int,
+    focus_label: str = "",
+    entity_context: str = "",
+    search_aliases: str = "",
+) -> str:
+    rejected = []
+    rejected_hosts = []
+    for item in (lane or {}).get("pre_jury_rejected", []) or []:
+        url = str((item or {}).get("url") or "").strip()
+        reason = str((item or {}).get("reason") or "unknown").strip()
+        if url:
+            rejected.append({"url": url, "reason": reason})
+            host = get_clean_domain(url)
+            if host and host not in rejected_hosts:
+                rejected_hosts.append(host)
+    rejected = rejected[:12]
+    rejected_hosts = rejected_hosts[:10]
+    focus_block = ""
+    if focus_label:
+        focus_block = (
+            "\nFOCUS FOR THIS REPLACEMENT:\n"
+            f"{focus_label}\n"
+            "Stay inside this focus. Do not broaden into other juries.\n"
+        )
+    return f"""Replace failed source packets for \"{search_name}\" (official domain: {domain_hint}).
+This lane covers only: {jury_name}
+{focus_block}
+
+The previous source packets failed deterministic precheck. Need {target_valid} validated, canonical source packet(s).
+Do not return rejected URLs or repeat rejected URL patterns.
+
+Rejected URLs:
+{json.dumps(rejected, ensure_ascii=False)}
+
+Rejected hosts/patterns to avoid unless a different direct canonical page clearly fixes the issue:
+{json.dumps(rejected_hosts, ensure_ascii=False)}
+
+ENTITY:
+{entity_context}
+{search_aliases}
+
+{_build_jury_source_registry_block(search_name, domain_hint, (jury_name,))}
+
+Return only direct source pages likely to pass validation:
+- official-domain service/about/news/case/careers/developer pages when relevant;
+- authoritative third-party pages only when the target company, group, or named subsidiary is clearly scoped;
+- no search pages, archive indexes, image/icon assets, generic landing pages, social/contact pages, or stale redirects;
+- `verbatim_quote` must be copied from the linked page itself and contain the entity or narrow fact/context.
+
+Return ONLY valid JSON with 1-3 sources:
 {{
   "jury": {json.dumps(jury_name)},
   "sources": [
@@ -4475,18 +4571,159 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             elif remaining > 0:
                 status = f"fallback_skipped_low_budget_{remaining}s"
         sources = _normalize_acquisition_payload(payload or {}, jury_name, provider)
-        print(
-            f"   {'✅' if sources else '⚠️'} [Forensic Acquisition] {jury_name}"
-            f"{' / '+focus_key if focus_key != 'full' else ''}: {len(sources)} source packet(s), "
-            f"provider={provider}, status={status}, elapsed={int(time.time() - lane_started)}s."
-        )
-        return {
+        lane = {
             "jury": jury_name,
             "acquisition_focus": focus_key,
             "provider": provider,
             "status": status,
             "sources": sources,
         }
+        target_valid = _lane_fresh_target(jury_name, focus_key)
+        replacement_attempts_allowed = FORENSIC_LANE_REPLACEMENT_ATTEMPTS.get(jury_name, 1)
+
+        def _validate_lane(current_lane: dict, label: str) -> tuple[dict, dict]:
+            remaining_for_recovery = max(0, int(acquisition_deadline - time.time()))
+            gated, stats = _prevalidate_acquisition_results(
+                [current_lane],
+                company_name,
+                official_domain=domain_hint,
+                recovery_seconds=max(0, min(12, remaining_for_recovery)),
+            )
+            validated = gated[0] if gated else dict(current_lane)
+            reasons = _summarize_pre_jury_rejections(validated)
+            print(
+                f"   🧪 [Forensic Acquisition Gate] {jury_name}"
+                f"{' / '+focus_key if focus_key != 'full' else ''} {label}: "
+                f"{stats.get('passed', 0)}/{stats.get('input', 0)} valid; "
+                f"rejected={reasons or {}}."
+            )
+            return validated, stats
+
+        lane_stats = {"input": len(sources), "passed": len(sources)}
+        if sources:
+            lane, lane_stats = _validate_lane(lane, "initial")
+
+        def _append_replacement_sources(current_lane: dict, replacement_lane: dict, attempt_number: int) -> int:
+            seen = {
+                _canonical_evidence_url(source.get("url"))
+                for source in current_lane.get("sources", []) or []
+                if isinstance(source, dict)
+            }
+            additions = []
+            for source in replacement_lane.get("sources", []) or []:
+                key = _canonical_evidence_url((source or {}).get("url"))
+                if not key or key in seen:
+                    continue
+                normalized = dict(source)
+                normalized["acquisition_replacement"] = True
+                normalized["replacement_attempt"] = attempt_number
+                if focus_key and focus_key != "full":
+                    normalized["acquisition_focus"] = focus_key
+                additions.append(normalized)
+                seen.add(key)
+            current_lane["sources"] = list(current_lane.get("sources", []) or []) + additions
+            current_lane["pre_jury_rejected"] = (
+                list(current_lane.get("pre_jury_rejected", []) or [])
+                + list(replacement_lane.get("pre_jury_rejected", []) or [])
+            )
+            if additions:
+                providers = [
+                    p for p in [current_lane.get("provider"), replacement_lane.get("provider")]
+                    if p
+                ]
+                current_lane["provider"] = "+".join(dict.fromkeys(providers))
+                current_lane["status"] = "completed_with_replacement"
+            return len(additions)
+
+        attempts_used = 0
+        while (
+            len(lane.get("sources", []) or []) < target_valid
+            and attempts_used < replacement_attempts_allowed
+        ):
+            remaining = max(0, int(acquisition_deadline - time.time()))
+            if remaining < FORENSIC_LANE_REPLACEMENT_MIN_SECONDS:
+                break
+            attempts_used += 1
+            replacement_prompt = _build_jury_replacement_prompt(
+                search_name,
+                domain_hint,
+                jury_name,
+                lane,
+                target_valid,
+                focus_label,
+                entity_context_block,
+                search_alias_block,
+            )
+            replacement_provider = "gemini-3.1-pro-preview"
+            replacement_payload = None
+            replacement_status = "provider_unavailable"
+            if gemini_api_key():
+                try:
+                    replacement_text = call_gemini_forensic_text(
+                        replacement_prompt,
+                        timeout=min(FORENSIC_LANE_REPLACEMENT_TIMEOUT_SECONDS, remaining),
+                    )
+                    replacement_payload = _parse_provider_payload(replacement_text)
+                    replacement_status = "completed" if replacement_payload else "invalid_json"
+                except Exception as error:
+                    replacement_status = (
+                        "provider_timeout"
+                        if "timeout" in type(error).__name__.lower() or "timeout" in str(error).lower()
+                        else "provider_error"
+                    )
+                    print(
+                        f"   ⚠️ [Forensic Acquisition Replacement] {jury_name} Gemini "
+                        f"{replacement_status}: {type(error).__name__}: {error}"
+                    )
+            remaining = max(0, int(acquisition_deadline - time.time()))
+            if not replacement_payload and remaining >= FORENSIC_GPT_FALLBACK_MIN_SECONDS:
+                replacement_provider = "gpt-5.5-web-replacement"
+                replacement_payload = execute_with_openai_web(
+                    replacement_prompt,
+                    timeout_cap=min(FORENSIC_LANE_REPLACEMENT_TIMEOUT_SECONDS, remaining),
+                    purpose=f"jury acquisition replacement: {jury_name}",
+                    search_context_size="low",
+                    allow_repair=False,
+                )
+                replacement_status = "fallback_completed" if replacement_payload else "fallback_failed"
+            replacement_sources = _normalize_acquisition_payload(
+                replacement_payload or {},
+                jury_name,
+                replacement_provider,
+            )
+            replacement_lane = {
+                "jury": jury_name,
+                "acquisition_focus": focus_key,
+                "provider": replacement_provider,
+                "status": replacement_status,
+                "sources": replacement_sources,
+            }
+            if replacement_sources:
+                replacement_lane, _replacement_stats = _validate_lane(
+                    replacement_lane,
+                    f"replacement_{attempts_used}",
+                )
+            added = _append_replacement_sources(lane, replacement_lane, attempts_used)
+            print(
+                f"   {'✅' if added else '⚠️'} [Forensic Acquisition Replacement] {jury_name}"
+                f"{' / '+focus_key if focus_key != 'full' else ''}: "
+                f"attempt={attempts_used}, added_valid={added}, status={replacement_status}, "
+                f"valid_now={len(lane.get('sources', []) or [])}/{target_valid}."
+            )
+            if not replacement_sources and not added:
+                break
+
+        lane["lane_quality_target"] = target_valid
+        lane["lane_replacement_attempts"] = attempts_used
+        lane["lane_quality_gate_passed"] = len(lane.get("sources", []) or []) >= target_valid
+        print(
+            f"   {'✅' if lane.get('sources') else '⚠️'} [Forensic Acquisition] {jury_name}"
+            f"{' / '+focus_key if focus_key != 'full' else ''}: "
+            f"{len(lane.get('sources', []) or [])} validated source packet(s), "
+            f"target={target_valid}, provider={lane.get('provider')}, status={lane.get('status')}, "
+            f"replacements={attempts_used}, elapsed={int(time.time() - lane_started)}s."
+        )
+        return lane
 
     acquisition_results = []
     if acquisition_run_ceiling >= 20:
