@@ -215,7 +215,7 @@ JURY_SOURCE_TARGETS = {
 }
 
 
-FORENSIC_POSTPROCESS_RESERVE_SECONDS = 30
+FORENSIC_POSTPROCESS_RESERVE_SECONDS = 45
 FORENSIC_ACQUISITION_CEILING_SECONDS = 135
 FORENSIC_ACQUISITION_EXTENDED_CEILING_SECONDS = 165
 FORENSIC_ACQUISITION_REPAIR_CEILING_SECONDS = 85
@@ -4579,7 +4579,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             "sources": sources,
         }
         target_valid = _lane_fresh_target(jury_name, focus_key)
-        replacement_attempts_allowed = FORENSIC_LANE_REPLACEMENT_ATTEMPTS.get(jury_name, 1)
+        replacement_attempts_allowed = 0
 
         def _validate_lane(current_lane: dict, label: str) -> tuple[dict, dict]:
             remaining_for_recovery = max(0, int(acquisition_deadline - time.time()))
@@ -4721,7 +4721,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             f"{' / '+focus_key if focus_key != 'full' else ''}: "
             f"{len(lane.get('sources', []) or [])} validated source packet(s), "
             f"target={target_valid}, provider={lane.get('provider')}, status={lane.get('status')}, "
-            f"replacements={attempts_used}, elapsed={int(time.time() - lane_started)}s."
+            f"inline_replacements={attempts_used}, elapsed={int(time.time() - lane_started)}s."
         )
         return lane
 
@@ -4823,62 +4823,185 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 + ", ".join(jury.split(" JURY")[0] for jury in skipped_repair_juries)
             )
 
+        def _lane_dead_or_provider_failed(jury_name: str, lane: dict, status: dict) -> bool:
+            reasons = status.get("rejected_reasons") or {}
+            rejected_count = int(status.get("rejected") or 0)
+            lane_status = str((lane or {}).get("status") or "").lower()
+            if "provider_error" in lane_status or "provider_timeout" in lane_status:
+                return True
+            if rejected_count <= 0:
+                return False
+            hard_failures = sum(
+                int(reasons.get(reason) or 0)
+                for reason in ("dead_or_soft_404", "non_document_asset", "wrong_entity")
+            )
+            return int(status.get("fresh") or 0) <= 0 and hard_failures >= rejected_count
+
+        def _validate_repair_candidate(candidate_lane: dict, label: str) -> tuple[dict, dict]:
+            remaining_for_recovery = max(0, int(repair_deadline - time.time()))
+            gated, stats = _prevalidate_acquisition_results(
+                [candidate_lane],
+                company_name,
+                official_domain=domain_hint,
+                recovery_seconds=max(0, min(10, remaining_for_recovery)),
+            )
+            validated = gated[0] if gated else dict(candidate_lane)
+            reasons = _summarize_pre_jury_rejections(validated)
+            print(
+                f"   🧪 [Forensic Acquisition Repair Gate] {candidate_lane.get('jury')} {label}: "
+                f"{stats.get('passed', 0)}/{stats.get('input', 0)} valid; rejected={reasons or {}}."
+            )
+            return validated, stats
+
         def _repair_one_jury(jury_name):
             lane_started = time.time()
             lane = acquisition_by_jury.get(jury_name, {}) or {}
-            repair_prompt = _build_jury_repair_prompt(
-                search_name,
-                domain_hint,
-                jury_name,
-                lane,
-                readiness.get(jury_name, {}),
-                entity_context_block,
-                search_alias_block,
-            )
-            remaining = max(0, int(repair_deadline - time.time()))
-            payload = None
-            provider = "gpt-5.5-web-repair"
-            status = "repair_budget_skipped"
-            if remaining >= 25:
-                payload = execute_with_openai_web(
-                    repair_prompt,
-                    timeout_cap=min(FORENSIC_REPAIR_TIMEOUTS.get(jury_name, 55), remaining),
-                    purpose=f"jury acquisition repair: {jury_name}",
-                    search_context_size="low",
-                    allow_repair=False,
+            lane_readiness = readiness.get(jury_name, {}) or {}
+            providers = []
+            statuses = []
+            sources = []
+
+            def _current_valid_count() -> int:
+                return len(lane.get("sources", []) or []) + len(sources)
+
+            def _still_weak() -> bool:
+                required_fresh = int(lane_readiness.get("required_fresh") or 1)
+                required_total = int(lane_readiness.get("required_total") or required_fresh)
+                seeded_total = int(lane_readiness.get("seeds") or 0)
+                return _current_valid_count() < required_fresh or (_current_valid_count() + seeded_total) < required_total
+
+            skip_gemini = _lane_dead_or_provider_failed(jury_name, lane, lane_readiness)
+            if not skip_gemini and gemini_api_key():
+                remaining = max(0, int(repair_deadline - time.time()))
+                if remaining >= FORENSIC_LANE_REPLACEMENT_MIN_SECONDS:
+                    gemini_prompt = _build_jury_replacement_prompt(
+                        search_name,
+                        domain_hint,
+                        jury_name,
+                        lane,
+                        max(1, min(2, int(lane_readiness.get("required_fresh") or 1))),
+                        "",
+                        entity_context_block,
+                        search_alias_block,
+                    )
+                    gemini_payload = None
+                    gemini_status = "provider_unavailable"
+                    try:
+                        gemini_text = call_gemini_forensic_text(
+                            gemini_prompt,
+                            timeout=min(FORENSIC_LANE_REPLACEMENT_TIMEOUT_SECONDS, remaining),
+                        )
+                        gemini_payload = _parse_provider_payload(gemini_text)
+                        gemini_status = "gemini_repair_completed" if gemini_payload else "gemini_repair_invalid_json"
+                    except Exception as error:
+                        gemini_status = (
+                            "gemini_repair_timeout"
+                            if "timeout" in type(error).__name__.lower() or "timeout" in str(error).lower()
+                            else "gemini_repair_provider_error"
+                        )
+                        print(
+                            f"   ⚠️ [Forensic Acquisition Repair] {jury_name} Gemini "
+                            f"{gemini_status}: {type(error).__name__}: {error}"
+                        )
+                    gemini_sources = _normalize_acquisition_payload(
+                        gemini_payload or {},
+                        jury_name,
+                        "gemini-3.1-pro-preview-repair",
+                    )
+                    if gemini_sources:
+                        gemini_lane, _gemini_stats = _validate_repair_candidate(
+                            {
+                                "jury": jury_name,
+                                "provider": "gemini-3.1-pro-preview-repair",
+                                "status": gemini_status,
+                                "sources": gemini_sources,
+                            },
+                            "gemini_round_1",
+                        )
+                        gemini_sources = list(gemini_lane.get("sources", []) or [])
+                    sources.extend(gemini_sources)
+                    providers.append("gemini-3.1-pro-preview-repair")
+                    statuses.append(gemini_status)
+                    print(
+                        f"   {'✅' if gemini_sources else '⚠️'} [Forensic Acquisition Repair] {jury_name}: "
+                        f"gemini_round_1 added={len(gemini_sources)}, status={gemini_status}, "
+                        f"valid_now={_current_valid_count()}."
+                    )
+
+            if _still_weak():
+                repair_prompt = _build_jury_repair_prompt(
+                    search_name,
+                    domain_hint,
+                    jury_name,
+                    lane,
+                    lane_readiness,
+                    entity_context_block,
+                    search_alias_block,
                 )
-                status = "repair_completed" if payload else "repair_failed"
-            sources = _normalize_acquisition_payload(payload or {}, jury_name, provider)
+                remaining = max(0, int(repair_deadline - time.time()))
+                gpt_payload = None
+                gpt_status = "gpt_repair_budget_skipped"
+                if remaining >= 25:
+                    gpt_payload = execute_with_openai_web(
+                        repair_prompt,
+                        timeout_cap=min(FORENSIC_REPAIR_TIMEOUTS.get(jury_name, 55), remaining),
+                        purpose=f"jury acquisition repair: {jury_name}",
+                        search_context_size="low",
+                        allow_repair=False,
+                    )
+                    gpt_status = "gpt_repair_completed" if gpt_payload else "gpt_repair_failed"
+                gpt_sources = _normalize_acquisition_payload(
+                    gpt_payload or {},
+                    jury_name,
+                    "gpt-5.5-web-repair",
+                )
+                if gpt_sources:
+                    gpt_lane, _gpt_stats = _validate_repair_candidate(
+                        {
+                            "jury": jury_name,
+                            "provider": "gpt-5.5-web-repair",
+                            "status": gpt_status,
+                            "sources": gpt_sources,
+                        },
+                        "gpt_round_2",
+                    )
+                    gpt_sources = list(gpt_lane.get("sources", []) or [])
+                sources.extend(gpt_sources)
+                providers.append("gpt-5.5-web-repair")
+                statuses.append(gpt_status)
+                print(
+                    f"   {'✅' if gpt_sources else '⚠️'} [Forensic Acquisition Repair] {jury_name}: "
+                    f"gpt_round_2 added={len(gpt_sources)}, status={gpt_status}, "
+                    f"valid_now={_current_valid_count()}."
+                )
+
+            provider = "+".join(dict.fromkeys([p for p in providers if p])) or "repair_skipped"
+            status = "+".join([s for s in statuses if s]) or "repair_not_attempted"
             print(
                 f"   {'✅' if sources else '⚠️'} [Forensic Acquisition Repair] {jury_name}: "
-                f"{len(sources)} candidate packet(s), status={status}, elapsed={int(time.time() - lane_started)}s."
+                f"{len(sources)} validated candidate packet(s), status={status}, elapsed={int(time.time() - lane_started)}s."
             )
             return {"jury": jury_name, "provider": provider, "status": status, "sources": sources}
 
-        pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(max_repair_lanes, len(repair_target_juries)))
-        futures = {pool.submit(_repair_one_jury, jury): jury for jury in repair_target_juries}
-        done, pending = concurrent.futures.wait(futures, timeout=repair_ceiling)
-        for future in pending:
-            future.cancel()
-            repair_results.append({
-                "jury": futures[future],
-                "provider": "gpt-5.5-web-repair",
-                "status": "repair_shared_deadline",
-                "sources": [],
-            })
-        for future in done:
-            jury = futures[future]
+        for jury in repair_target_juries:
+            if time.time() >= repair_deadline:
+                repair_results.append({
+                    "jury": jury,
+                    "provider": "sequential_repair",
+                    "status": "repair_shared_deadline",
+                    "sources": [],
+                })
+                continue
             try:
-                repair_results.append(future.result())
+                repair_results.append(_repair_one_jury(jury))
             except Exception as error:
                 repair_results.append({
                     "jury": jury,
-                    "provider": "gpt-5.5-web-repair",
+                    "provider": "sequential_repair",
                     "status": "repair_lane_error",
                     "sources": [],
                     "error": repr(error),
                 })
-        pool.shutdown(wait=False, cancel_futures=True)
         repair_results, repair_stats = _prevalidate_acquisition_results(
             repair_results,
             company_name,
@@ -5417,20 +5540,18 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         if postprocess_remaining >= 8 and url_verified >= 1:
             try:
                 from source_claim_validator import validate_source_claims
-                max_claim_checks = 12 if postprocess_remaining >= 18 else 6
-                scv_result = _hard_timeout_call(
-                    "forensic source-claim validation",
-                    postprocess_remaining,
-                    lambda: validate_source_claims(
-                        raw_findings,
-                        max_checks=max_claim_checks,
-                        max_workers=4,
-                        company_name=company_name,
-                        company_domain=company_domain,
-                    ),
+                max_claim_checks = 10 if postprocess_remaining >= 30 else 6
+                scv_result = validate_source_claims(
+                    raw_findings,
+                    max_checks=max_claim_checks,
+                    max_workers=3,
+                    company_name=company_name,
+                    company_domain=company_domain,
+                    time_budget_seconds=max(5, postprocess_remaining - 3),
                 )
-                if not scv_result:
-                    raise TimeoutError("source-claim validation exceeded post-processing deadline")
+                data["source_claim_validation_partial"] = bool(scv_result.get("partial"))
+                data["source_claim_validation_checked"] = int(scv_result.get("checked") or 0)
+                data["source_claim_validation_timed_out_pairs"] = int(scv_result.get("timed_out_pairs") or 0)
                 raw_findings = annotate_evidence_links(raw_findings, company_domain, company_name)
                 if scv_result["irrelevant"] > 0:
                     # Penalise confidence for irrelevant sources

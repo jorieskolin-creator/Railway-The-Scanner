@@ -660,6 +660,7 @@ def validate_source_claims(
     model_chain=None,
     company_name: str = "",
     company_domain: str = "",
+    time_budget_seconds: int | None = None,
 ) -> dict:
     """
     Validate that verified evidence sources actually support their claimed snippets.
@@ -710,16 +711,22 @@ def validate_source_claims(
 
     start = time.time()
     results = {}
+    deadline = time.time() + max(1, int(time_budget_seconds)) if time_budget_seconds else None
+    timed_out_pairs = 0
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_item = {}
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+    future_to_item = {}
+    try:
         for url, snippet, item in to_check:
+            if deadline and time.time() >= deadline:
+                timed_out_pairs += 1
+                continue
             future = executor.submit(
                 _check_relevance,
                 url,
                 snippet,
                 client,
-                10,
+                min(10, max(3, int((deadline - time.time()) if deadline else 10))),
                 model_chain,
                 company_name=company_name,
                 company_domain=company_domain,
@@ -727,60 +734,87 @@ def validate_source_claims(
             )
             future_to_item[future] = (url, snippet, item)
 
-        for future in concurrent.futures.as_completed(future_to_item):
-            url, snippet, item = future_to_item[future]
-            try:
-                result = future.result(timeout=15)
-            except Exception:
-                result = {"relevance_score": -1, "relevant": True, "reason": "Timeout"}
-            results[url] = result
+        as_completed_timeout = max(1, deadline - time.time()) if deadline else None
+        try:
+            completed_iter = concurrent.futures.as_completed(
+                future_to_item,
+                timeout=as_completed_timeout,
+            )
+            for future in completed_iter:
+                if deadline and time.time() >= deadline:
+                    break
+                url, snippet, item = future_to_item[future]
+                try:
+                    result = future.result(timeout=1)
+                except Exception:
+                    result = {"relevance_score": -1, "relevant": True, "reason": "Timeout"}
+                results[url] = result
 
-            # Annotate the finding with relevance data
-            if result["relevance_score"] >= 0:
-                item["claim_relevance"] = result["relevance_score"]
-            item["content_relevance_score"] = result["relevance_score"]
-            support_status = result.get("claim_support_status", "unchecked")
-            if support_status == "unsupported":
-                support_status = "unsupported_for_this_claim"
-            item["claim_support_status"] = support_status
-            item["claim_relation_status"] = support_status
-            item["content_verified"] = result.get("content_verified") is True
-            item["content_verification_reason"] = result.get("reason", "")
-            item["verification_model"] = result.get("verification_model", item.get("verification_model"))
-            for key in (
-                "entity_match_status", "entity_match_reason", "canonical_source_host",
-                "content_entity_match_status", "content_entity_match_reason",
-                "entity_verified", "entity_name_found", "verification_conflict",
-                "quote_mismatch", "verification_reviewed_by", "verification_review_reason",
-                "verification_disagreement", "primary_verification_model",
-                "secondary_verification_model", "verification_review_error",
-            ):
-                if key in result and result.get(key) not in (None, ""):
-                    item[key] = result[key]
-            if result.get("entity_scope") and not item.get("entity_scope"):
-                item["entity_scope"] = result["entity_scope"]
-            if result.get("entity_match_status") == "wrong":
-                item["wrong_entity"] = True
-                item["entity_match"] = "wrong"
-            if result.get("content_entity_match_status") == "wrong":
-                item["wrong_entity"] = True
-                item["entity_match"] = "wrong"
-            if result.get("source_quote"):
-                item["source_quote"] = result["source_quote"]
-            entity_status = str(result.get("content_entity_match_status") or result.get("entity_match_status") or "").lower()
-            if item.get("wrong_entity") is True or entity_status == "wrong":
-                item["source_context_status"] = "wrong_entity"
-                item["claim_irrelevant"] = True
-            elif item.get("content_verified") is not True and support_status in {"unavailable", "unchecked"}:
-                item["source_context_status"] = "dead_or_unreadable"
-            elif support_status == "supported":
-                item["source_context_status"] = "valid_company_context"
-                item["claim_irrelevant"] = False
-            elif entity_status in {"exact", "scoped"} or result.get("entity_verified") is True:
-                item["source_context_status"] = "valid_company_context"
-                item["claim_irrelevant"] = False
-            else:
-                item["source_context_status"] = "out_of_context"
+                # Annotate the finding with relevance data
+                if result["relevance_score"] >= 0:
+                    item["claim_relevance"] = result["relevance_score"]
+                item["content_relevance_score"] = result["relevance_score"]
+                support_status = result.get("claim_support_status", "unchecked")
+                if support_status == "unsupported":
+                    support_status = "unsupported_for_this_claim"
+                item["claim_support_status"] = support_status
+                item["claim_relation_status"] = support_status
+                item["content_verified"] = result.get("content_verified") is True
+                item["content_verification_reason"] = result.get("reason", "")
+                item["verification_model"] = result.get("verification_model", item.get("verification_model"))
+                for key in (
+                    "entity_match_status", "entity_match_reason", "canonical_source_host",
+                    "content_entity_match_status", "content_entity_match_reason",
+                    "entity_verified", "entity_name_found", "verification_conflict",
+                    "quote_mismatch", "verification_reviewed_by", "verification_review_reason",
+                    "verification_disagreement", "primary_verification_model",
+                    "secondary_verification_model", "verification_review_error",
+                ):
+                    if key in result and result.get(key) not in (None, ""):
+                        item[key] = result[key]
+                if result.get("entity_scope") and not item.get("entity_scope"):
+                    item["entity_scope"] = result["entity_scope"]
+                if result.get("entity_match_status") == "wrong":
+                    item["wrong_entity"] = True
+                    item["entity_match"] = "wrong"
+                if result.get("content_entity_match_status") == "wrong":
+                    item["wrong_entity"] = True
+                    item["entity_match"] = "wrong"
+                if result.get("source_quote"):
+                    item["source_quote"] = result["source_quote"]
+                entity_status = str(result.get("content_entity_match_status") or result.get("entity_match_status") or "").lower()
+                if item.get("wrong_entity") is True or entity_status == "wrong":
+                    item["source_context_status"] = "wrong_entity"
+                    item["claim_irrelevant"] = True
+                elif item.get("content_verified") is not True and support_status in {"unavailable", "unchecked"}:
+                    item["source_context_status"] = "dead_or_unreadable"
+                elif support_status == "supported":
+                    item["source_context_status"] = "valid_company_context"
+                    item["claim_irrelevant"] = False
+                elif entity_status in {"exact", "scoped"} or result.get("entity_verified") is True:
+                    item["source_context_status"] = "valid_company_context"
+                    item["claim_irrelevant"] = False
+                else:
+                    item["source_context_status"] = "out_of_context"
+        except concurrent.futures.TimeoutError:
+            pass
+    finally:
+        pending = [future for future in future_to_item if not future.done()]
+        timed_out_pairs += len(pending)
+        for future in pending:
+            future.cancel()
+        executor.shutdown(wait=False, cancel_futures=True)
+
+    # Mark unstarted/uncompleted pairs as partial instead of letting a late
+    # background check mutate evidence after postprocess metrics are finalized.
+    checked_urls = set(results)
+    for url, _snippet, item in to_check:
+        if url in checked_urls:
+            continue
+        item.setdefault("claim_support_status", "claim_support_pending")
+        item.setdefault("claim_relation_status", "claim_support_pending")
+        item["source_claim_validation_partial"] = True
+        item.setdefault("source_context_status", "valid_company_context")
 
     elapsed_ms = int((time.time() - start) * 1000)
 
@@ -803,13 +837,19 @@ def validate_source_claims(
 
     source_context_failed = sorted(set(wrong_entity + entity_failed))
 
+    partial = len(results) < len(to_check)
+    if partial:
+        print(
+            f"   ⚠️ [Source-Claim] partial validation: checked {checked}/{len(to_check)}, "
+            f"timed_out_pairs={max(timed_out_pairs, len(to_check) - checked)} ({elapsed_ms}ms)"
+        )
     if claim_failed:
         print(f"   ⚠️ [Source-Claim] {len(claim_failed)}/{checked} source/claim relation(s) unsupported ({elapsed_ms}ms)")
         for url in claim_failed:
             reason = results[url].get("reason", "")
             score = results[url].get("relevance_score", "?")
             print(f"      🔴 {url} (score: {score}/100) — {reason}")
-    elif checked > 0:
+    elif checked > 0 and not partial:
         print(f"   ✅ [Source-Claim] {checked}/{checked} verified sources support their claims ({elapsed_ms}ms)")
 
     return {
@@ -821,6 +861,8 @@ def validate_source_claims(
         "quote_mismatch": len(quote_mismatch),
         "flagged_urls": claim_failed,
         "source_context_failed": source_context_failed,
+        "partial": partial,
+        "timed_out_pairs": max(timed_out_pairs, len(to_check) - checked),
         "elapsed_ms": elapsed_ms,
     }
 
