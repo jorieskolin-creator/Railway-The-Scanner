@@ -150,6 +150,38 @@ TRIGGER_EVENT_KEYWORDS = (
     "expansion", "launch", "appointment", "appointed", "strategy", "transform",
     "yrityskauppa", "kumppanuus", "sopimus", "investointi", "laajent", "nimitys",
 )
+OUTBOUND_REFERENCE_SOURCE_TYPES = {
+    "about", "services", "references", "newsroom", "sustainability",
+    "investor", "careers", "procurement", "homepage", "official_page",
+}
+OUTBOUND_BLOCKED_HOST_FRAGMENTS = (
+    "facebook.com", "instagram.com", "linkedin.com", "twitter.com", "x.com",
+    "youtube.com", "youtu.be", "tiktok.com", "cookiebot.com", "onetrust.com",
+    "google-analytics.com", "googletagmanager.com", "doubleclick.net",
+    "addthis.com", "sharethis.com", "mailto:", "tel:",
+)
+OUTBOUND_BLOCKED_PATH_MARKERS = (
+    "/login", "/signin", "/sign-in", "/register", "/search", "/tag/", "/tags/",
+    "/cookie", "/privacy", "/terms", "/wp-json", "/feed", "/rss",
+)
+OUTBOUND_BLOCKED_EXTENSIONS = (
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".css", ".js",
+    ".woff", ".woff2", ".ttf", ".eot", ".mp4", ".webm", ".mov", ".zip",
+)
+PR_DISTRIBUTION_HOSTS = (
+    "cision.com", "news.cision.com", "prnewswire.com", "businesswire.com",
+    "globenewswire.com", "cisionwire.com", "sttinfo.fi", "newsroom.cision.com",
+)
+INDEPENDENT_PUBLIC_HOSTS = (
+    "europa.eu", "oecd.org", "worldbank.org", "weforum.org", "stat.fi",
+    "prh.fi", "hankintailmoitukset.fi", "hilma.fi", "ted.europa.eu",
+    "sec.gov", "ft.com", "reuters.com", "bloomberg.com", "yle.fi",
+    "kauppalehti.fi", "talouselama.fi", "tekniikkatalous.fi",
+)
+PARTNER_VENDOR_MARKERS = (
+    "partner", "partners", "vendor", "case", "customer", "client", "success",
+    "reference", "marketplace", "technology-partner", "customer-story",
+)
 ROLE_DEMAND_MAP = {
     "ai_data_cloud_platform": {
         "keywords": ("ai", "tekoäly", "genai", "copilot", "agent", "data", "analytics", "cloud", "azure", "aws", "gcp", "platform", "devops", "architecture"),
@@ -264,6 +296,11 @@ def _domain_like(value: str) -> bool:
 
 def _same_or_subdomain(host: str, official_host: str) -> bool:
     return bool(host and official_host and (host == official_host or host.endswith("." + official_host)))
+
+
+def _host_matches_any(host: str, patterns: tuple[str, ...]) -> bool:
+    host = (host or "").lower()
+    return any(host == pattern or host.endswith("." + pattern) for pattern in patterns if pattern)
 
 
 def _company_tokens(company_name: str) -> list[str]:
@@ -617,6 +654,130 @@ def _homepage_links(base_url: str, limit: int = 80) -> list[str]:
         return links
     except Exception:
         return []
+
+
+def _is_outbound_reference_candidate(url: str, official_host: str) -> bool:
+    clean = _normalize_url(url)
+    if not clean or not official_host:
+        return False
+    parsed = urlparse(clean)
+    host = _host(clean)
+    if not parsed.scheme.startswith("http") or not host:
+        return False
+    if _same_or_subdomain(host, official_host):
+        return False
+    value = clean.lower()
+    if any(fragment in value for fragment in OUTBOUND_BLOCKED_HOST_FRAGMENTS):
+        return False
+    path = parsed.path.lower()
+    if any(path.endswith(ext) for ext in OUTBOUND_BLOCKED_EXTENSIONS):
+        return False
+    if any(marker in path for marker in OUTBOUND_BLOCKED_PATH_MARKERS):
+        return False
+    return True
+
+
+def _outbound_references_from_html(raw_html: str, base_url: str, official_host: str, limit: int = 80) -> list[dict]:
+    if not raw_html:
+        return []
+    soup = BeautifulSoup(raw_html, "html.parser")
+    refs = []
+    seen = set()
+    for tag in soup.find_all("a", href=True):
+        href = str(tag.get("href") or "").strip()
+        if not href or href.startswith(("#", "mailto:", "tel:", "javascript:")):
+            continue
+        clean = _normalize_url(href, base_url)
+        if not _is_outbound_reference_candidate(clean, official_host):
+            continue
+        key = clean.rstrip("/").lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        anchor = _clip(tag.get_text(" ", strip=True), 220)
+        parent_text = _clip(tag.parent.get_text(" ", strip=True) if tag.parent else "", 500)
+        refs.append({
+            "external_url": clean,
+            "anchor_text": anchor,
+            "reference_context": parent_text or anchor,
+            "extraction_provider": "direct_html",
+        })
+        if len(refs) >= limit:
+            break
+    return refs
+
+
+def _outbound_references_from_text(text: str, base_url: str, official_host: str, limit: int = 80) -> list[dict]:
+    """Extract external references from Firecrawl/Jina markdown or text snippets."""
+    if not text or not official_host:
+        return []
+    refs = []
+    seen = set()
+    markdown_pattern = r"\[([^\]]{0,220})\]\((https?://[^)\s]+|/[^)\s]+)\)"
+    for label, url in re.findall(markdown_pattern, text):
+        clean = _normalize_url(url, base_url)
+        if not _is_outbound_reference_candidate(clean, official_host):
+            continue
+        key = clean.rstrip("/").lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        refs.append({
+            "external_url": clean,
+            "anchor_text": _clip(label, 220),
+            "reference_context": _clip(label, 500),
+            "extraction_provider": "firecrawl_markdown",
+        })
+        if len(refs) >= limit:
+            return refs
+    for match in re.findall(r"https?://[^\s)\"']+", text):
+        clean = _normalize_url(str(match).strip().strip("<>").rstrip(".,;"), base_url)
+        if not _is_outbound_reference_candidate(clean, official_host):
+            continue
+        key = clean.rstrip("/").lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        refs.append({
+            "external_url": clean,
+            "anchor_text": "",
+            "reference_context": "",
+            "extraction_provider": "plain_text_url",
+        })
+        if len(refs) >= limit:
+            break
+    return refs
+
+
+def _official_page_outbound_material(url: str) -> dict:
+    """Best-effort official-page material for outbound link extraction only."""
+    material = {"text": "", "html": "", "providers": []}
+    if _firecrawl_headers():
+        try:
+            resp = requests.post(
+                "https://api.firecrawl.dev/v1/scrape",
+                headers=_firecrawl_headers(),
+                json={"url": url, "formats": ["markdown", "html"]},
+                timeout=35,
+            )
+            if resp.status_code in (200, 201):
+                data = resp.json().get("data") or resp.json()
+                material["text"] = data.get("markdown") or data.get("content") or ""
+                material["html"] = data.get("html") or ""
+                material["providers"].append("firecrawl")
+        except Exception as exc:
+            print(f"   ⚠️ [Company Evidence] Firecrawl outbound extraction exception: {exc}", flush=True)
+    try:
+        resp = requests.get(url, headers={"User-Agent": "The-Scanner Company Evidence Builder/1.0"}, timeout=15)
+        if 200 <= resp.status_code < 400 and resp.text:
+            material["html"] = material.get("html") or resp.text
+            if not material.get("text"):
+                _title, direct_text = _html_to_text(resp.text)
+                material["text"] = direct_text
+            material["providers"].append("direct")
+    except Exception:
+        pass
+    return material
 
 
 def _links_from_text(text: str, base_url: str, limit: int = 80) -> list[str]:
@@ -994,6 +1155,243 @@ def _candidate_record(idx: int, company_name: str, company_url: str, url: str) -
         "text_excerpt": _clip(text, 1800),
         **verified,
     }
+
+
+def _outbound_reference_enabled() -> bool:
+    return _env_bool("COMPANY_EVIDENCE_OUTBOUND_REFERENCES", default=True)
+
+
+def _outbound_publisher_classification(url: str, title: str, text: str, reference_context: str = "") -> dict:
+    host = _host(url)
+    value = f"{url} {title} {reference_context} {text[:1200]}".lower()
+    if _host_matches_any(host, PR_DISTRIBUTION_HOSTS) or any(term in value for term in ("press release", "lehdistötiedote", "pörssitiedote", "cision")):
+        return {
+            "source_category": "company_distributed_material",
+            "publisher_type": "press_release_distribution",
+            "publisher_independence": "company_distributed",
+            "boundary": "Company-distributed material can support what the company announced, but is not independent proof of the claim.",
+        }
+    if _host_matches_any(host, INDEPENDENT_PUBLIC_HOSTS):
+        return {
+            "source_category": "independent_external_evidence",
+            "publisher_type": "regulator_registry_research_or_media",
+            "publisher_independence": "independent",
+            "boundary": "External source is independent of the company link, but still requires entity and claim validation before use.",
+        }
+    if any(marker in value for marker in PARTNER_VENDOR_MARKERS):
+        return {
+            "source_category": "partner_or_vendor_context",
+            "publisher_type": "partner_vendor_or_customer_context",
+            "publisher_independence": "partner_or_vendor",
+            "boundary": "Partner/vendor/customer material is useful scoped context, not independent proof unless the claim is explicitly limited.",
+        }
+    if any(term in value for term in ("regulation", "standard", "directive", "procurement", "tender", "public report", "research report")):
+        return {
+            "source_category": "independent_external_evidence",
+            "publisher_type": "public_or_research_context",
+            "publisher_independence": "independent",
+            "boundary": "External public/research material can support independent context after entity and claim validation.",
+        }
+    return {
+        "source_category": "partner_or_vendor_context",
+        "publisher_type": "unknown_external_reference",
+        "publisher_independence": "unknown_or_contextual",
+        "boundary": "External reference was found from an official company page; treat as a lead until independently validated.",
+    }
+
+
+def _outbound_reference_record(
+    idx: int,
+    company_name: str,
+    company_url: str,
+    originating_page: str,
+    candidate: dict,
+) -> dict:
+    external_url = _normalize_url(candidate.get("external_url"))
+    fetched = _fetch_source(external_url)
+    text = fetched.get("text") or ""
+    title = fetched.get("title") or candidate.get("anchor_text") or external_url
+    tokens = _company_tokens(company_name)
+    text_l = f"{title} {text}".lower()
+    contains_entity = any(token in text_l for token in tokens)
+    classification = _outbound_publisher_classification(
+        external_url,
+        title,
+        text,
+        candidate.get("reference_context") or candidate.get("anchor_text") or "",
+    )
+    source_category = classification["source_category"]
+    content_verified = bool(fetched.get("content_verified"))
+    page_not_found = bool(fetched.get("page_not_found"))
+    url_verified = bool(fetched.get("url_verified"))
+    entity_verified = bool(content_verified and contains_entity)
+    unsafe = source_category == "irrelevant_or_unsafe"
+    blocked = bool(page_not_found or not url_verified or unsafe)
+    allowed_as_fact = bool(
+        source_category == "independent_external_evidence"
+        and url_verified
+        and content_verified
+        and entity_verified
+        and not blocked
+    )
+    allowed_as_hypothesis = bool(
+        not allowed_as_fact
+        and source_category in {"partner_or_vendor_context", "company_distributed_material", "independent_external_evidence"}
+        and url_verified
+        and content_verified
+        and entity_verified
+        and not blocked
+    )
+    allowed_as_discovery_question = bool(
+        not blocked
+        and url_verified
+        and content_verified
+        and entity_verified
+        and source_category in {"partner_or_vendor_context", "company_distributed_material", "independent_external_evidence"}
+    )
+    internal_only = bool(not (allowed_as_fact or allowed_as_hypothesis or allowed_as_discovery_question))
+    if allowed_as_fact:
+        sales_use = "allowed_as_fact"
+        promotion_status = "generation_eligible"
+    elif allowed_as_hypothesis:
+        sales_use = "allowed_as_hypothesis"
+        promotion_status = "scoped_context"
+    elif allowed_as_discovery_question:
+        sales_use = "allowed_as_discovery_question"
+        promotion_status = "scoped_context"
+    elif blocked:
+        sales_use = "blocked"
+        promotion_status = "blocked"
+    else:
+        sales_use = "internal_only"
+        promotion_status = "audit_only"
+    if blocked:
+        reason = "external_reference_unreadable_or_blocked"
+    elif not entity_verified:
+        reason = "external_page_does_not_confirm_target_entity"
+    elif allowed_as_fact:
+        reason = "independent_external_entity_evidence"
+    else:
+        reason = "company_selected_external_context_requires_scoped_use"
+    content_hash = hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest() if text else ""
+    return {
+        "id": f"CED-{idx:02d}",
+        "company_name": company_name,
+        "company_url": company_url,
+        "url": external_url,
+        "external_url": external_url,
+        "external_host": _host(external_url),
+        "origin_relation": "official_page_outbound_reference",
+        "originating_company_page": originating_page,
+        "reference_context": _clip(candidate.get("reference_context") or candidate.get("anchor_text"), 700),
+        "company_claim_vs_external_evidence_boundary": classification["boundary"],
+        "provider": fetched.get("provider") or "none",
+        "provider_record_type": "official_outbound_reference",
+        "title": title,
+        "fetched_at": datetime.utcnow().isoformat(),
+        "content_hash": content_hash,
+        "extraction_confidence": 80 if fetched.get("provider") == "firecrawl" else (70 if fetched.get("provider") == "jina" else (55 if content_verified else 0)),
+        "source_freshness": "current_fetch",
+        "text_excerpt": _clip(text, 1800),
+        "source_quote": _quote_for_entity(text, tokens),
+        "source_category": source_category,
+        "source_type": "external_reference",
+        "publisher_type": classification["publisher_type"],
+        "publisher_independence": classification["publisher_independence"],
+        "canonical_source_host": _host(external_url),
+        "target_fields": ("external validation", "partner context", "public proof", "company-selected reference boundary"),
+        "context_only": not allowed_as_fact,
+        "url_verified": url_verified,
+        "content_verified": content_verified,
+        "page_not_found": page_not_found,
+        "entity_verified": entity_verified,
+        "entity_match_status": "exact" if entity_verified else ("unknown" if url_verified else "wrong"),
+        "claim_support_status": "supported" if allowed_as_fact else ("contextual" if allowed_as_hypothesis or allowed_as_discovery_question else "unchecked"),
+        "analysis_verified": bool(allowed_as_fact or allowed_as_hypothesis or allowed_as_discovery_question),
+        "generation_eligible": allowed_as_fact,
+        "buying_evidence_eligible": bool(allowed_as_fact or allowed_as_hypothesis or allowed_as_discovery_question),
+        "promotion_status": promotion_status,
+        "verification_reason": reason,
+        "allowed_as_fact": allowed_as_fact,
+        "allowed_as_hypothesis": allowed_as_hypothesis,
+        "allowed_as_discovery_question": allowed_as_discovery_question,
+        "internal_only": internal_only,
+        "blocked": blocked,
+        "sales_use": sales_use,
+        "wrong_entity": False,
+    }
+
+
+def _discover_outbound_references(
+    records: list[dict],
+    company_name: str,
+    company_url: str,
+    *,
+    start_idx: int,
+) -> tuple[list[dict], dict]:
+    diagnostics = {
+        "enabled": _outbound_reference_enabled(),
+        "official_pages_checked": 0,
+        "outbound_candidates_found": 0,
+        "records_added": 0,
+        "independent_external_evidence": 0,
+        "partner_or_vendor_context": 0,
+        "company_distributed_material": 0,
+        "excluded_candidates": 0,
+        "providers": [],
+    }
+    if not diagnostics["enabled"]:
+        return [], diagnostics
+    official_host = _host(company_url)
+    max_records = max(0, min(30, int(os.environ.get("COMPANY_EVIDENCE_MAX_OUTBOUND_REFERENCES", "12"))))
+    max_pages = max(1, min(10, int(os.environ.get("COMPANY_EVIDENCE_MAX_OUTBOUND_PAGES", "6"))))
+    if max_records <= 0:
+        return [], diagnostics
+    official_records = [
+        record for record in records
+        if record.get("url")
+        and record.get("url_verified")
+        and _same_or_subdomain(_host(record.get("url")), official_host)
+        and str(record.get("source_type") or "").lower() in OUTBOUND_REFERENCE_SOURCE_TYPES
+        and str(record.get("source_type") or "").lower() != "leadership"
+    ][:max_pages]
+    candidates: list[dict] = []
+    seen = set()
+    for record in official_records:
+        page_url = record.get("url")
+        diagnostics["official_pages_checked"] += 1
+        material = _official_page_outbound_material(page_url)
+        diagnostics["providers"].extend(material.get("providers") or [])
+        page_refs = []
+        page_refs.extend(_outbound_references_from_html(material.get("html") or "", page_url, official_host, limit=20))
+        page_refs.extend(_outbound_references_from_text(material.get("text") or "", page_url, official_host, limit=20))
+        for ref in page_refs:
+            clean = _normalize_url(ref.get("external_url"))
+            key = clean.rstrip("/").lower() if clean else ""
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            ref["originating_company_page"] = page_url
+            candidates.append(ref)
+            if len(candidates) >= max_records * 2:
+                break
+        if len(candidates) >= max_records * 2:
+            break
+    diagnostics["outbound_candidates_found"] = len(candidates)
+    outbound_records = []
+    for ref in candidates:
+        if len(outbound_records) >= max_records:
+            break
+        record = _outbound_reference_record(start_idx + len(outbound_records), company_name, company_url, ref.get("originating_company_page") or company_url, ref)
+        if record.get("source_category") == "irrelevant_or_unsafe":
+            diagnostics["excluded_candidates"] += 1
+            continue
+        outbound_records.append(record)
+        category = record.get("source_category") or "unknown"
+        diagnostics[category] = diagnostics.get(category, 0) + 1
+    diagnostics["records_added"] = len(outbound_records)
+    diagnostics["providers"] = sorted(set(diagnostics["providers"]))
+    return outbound_records, diagnostics
 
 
 def _coresignal_key() -> str:
@@ -2165,6 +2563,7 @@ def _stats(records: list[dict]) -> dict:
     source_categories = {}
     sales_use_counts = {}
     provider_record_types = {}
+    outbound_categories = {}
     for record in records:
         category = record.get("source_category") or "unknown"
         source_categories[category] = source_categories.get(category, 0) + 1
@@ -2173,6 +2572,8 @@ def _stats(records: list[dict]) -> dict:
         provider_record_type = record.get("provider_record_type")
         if provider_record_type:
             provider_record_types[provider_record_type] = provider_record_types.get(provider_record_type, 0) + 1
+        if record.get("origin_relation") == "official_page_outbound_reference":
+            outbound_categories[category] = outbound_categories.get(category, 0) + 1
     return {
         "candidate_sources": len(records),
         "url_verified": sum(1 for r in records if r.get("url_verified")),
@@ -2196,6 +2597,8 @@ def _stats(records: list[dict]) -> dict:
         "coresignal_technology_records": sum(1 for r in records if r.get("provider_record_type") == "technology_signal"),
         "coresignal_stakeholder_candidates": sum(1 for r in records if r.get("provider_record_type") == "stakeholder_candidate"),
         "coresignal_sales_usable": sum(1 for r in records if r.get("provider") == "coresignal" and r.get("sales_use") in {"allowed_as_hypothesis", "allowed_as_discovery_question"}),
+        "outbound_reference_records": sum(1 for r in records if r.get("origin_relation") == "official_page_outbound_reference"),
+        "outbound_reference_categories": outbound_categories,
     }
 
 
@@ -2234,6 +2637,8 @@ def render_company_evidence_html(database: dict) -> str:
             f"<td>{html.escape(rec.get('source_category') or '')}</td>"
             f"<td>{html.escape(rec.get('source_type') or '')}</td>"
             f"<td><a href=\"{html.escape(rec.get('url') or '')}\">{html.escape(_clip(rec.get('title') or rec.get('url'), 90))}</a></td>"
+            f"<td>{html.escape(rec.get('origin_relation') or '')}</td>"
+            f"<td>{html.escape(rec.get('publisher_independence') or '')}</td>"
             f"<td>{html.escape(rec.get('provider') or '')}</td>"
             f"<td>{html.escape(rec.get('sales_use') or '')}</td>"
             f"<td>{html.escape(rec.get('verification_reason') or '')}</td>"
@@ -2262,11 +2667,12 @@ th{{color:#93c5fd;text-transform:uppercase;font-size:12px;letter-spacing:.08em}}
 <span class="pill">Entity verified: {stats.get('entity_verified', 0)}</span>
 <span class="pill">Coresignal: {stats.get('coresignal_records', 0)}</span>
 <span class="pill">Stakeholders: {stats.get('coresignal_stakeholder_candidates', 0)}</span>
+<span class="pill">Outbound refs: {stats.get('outbound_reference_records', 0)}</span>
 <span class="pill">404 / not found: {stats.get('page_not_found', 0)}</span>
 <span class="pill">Display-only / blocked: {stats.get('display_only_or_blocked', 0)}</span>
 </div>
 {"<ul>" + warnings + "</ul>" if warnings else ""}
-<table><thead><tr><th>ID</th><th>Category</th><th>Type</th><th>Source</th><th>Provider</th><th>Sales use</th><th>Reason</th></tr></thead>
+<table><thead><tr><th>ID</th><th>Category</th><th>Type</th><th>Source</th><th>Origin</th><th>Independence</th><th>Provider</th><th>Sales use</th><th>Reason</th></tr></thead>
 <tbody>{''.join(rows)}</tbody></table>
 </body></html>"""
 
@@ -2289,6 +2695,15 @@ def build_company_evidence_database(company_data: dict, *, stage_callback=None) 
     records = []
     for idx, url in enumerate(urls, start=1):
         records.append(_candidate_record(idx, company_name, company_url, url))
+    if stage_callback:
+        stage_callback("discover_outbound_references", 55, "Discovering official-page outbound reference candidates")
+    outbound_records, outbound_diagnostics = _discover_outbound_references(
+        records,
+        company_name,
+        company_url,
+        start_idx=len(records) + 1,
+    )
+    records.extend(outbound_records)
     coresignal_records, coresignal_diagnostics, coresignal_warnings = _coresignal_records(
         enriched_company_data,
         start_idx=len(records) + 1,
@@ -2308,13 +2723,17 @@ def build_company_evidence_database(company_data: dict, *, stage_callback=None) 
             "firecrawl_enabled": bool(_firecrawl_headers()),
             "jina_enabled": True,
             "direct_fetch_enabled": True,
+            "official_outbound_reference_discovery_enabled": bool(outbound_diagnostics.get("enabled")),
             "coresignal_enabled": bool(coresignal_diagnostics.get("enabled")),
             "coresignal_queried": bool(coresignal_diagnostics.get("queried")),
         },
         "acquisition_policy": {
-            "mode": "official_domain_source_target_registry_plus_optional_coresignal",
+            "mode": "official_domain_source_target_registry_plus_outbound_references_plus_optional_coresignal",
             "max_urls": max_urls,
+            "official_outbound_reference_discovery": bool(outbound_diagnostics.get("enabled")),
+            "max_outbound_references": max(0, min(30, int(os.environ.get("COMPANY_EVIDENCE_MAX_OUTBOUND_REFERENCES", "12")))),
             "broad_web_search": False,
+            "recursive_external_crawling": False,
             "social_scraping": False,
             "contact_scraping": False,
             "coresignal_enabled": bool(coresignal_diagnostics.get("enabled")),
@@ -2324,6 +2743,7 @@ def build_company_evidence_database(company_data: dict, *, stage_callback=None) 
         "provider_status": {
             "coresignal": coresignal_diagnostics,
             "prh": identity_enrichment,
+            "official_outbound_references": outbound_diagnostics,
         },
         "records": records,
         "stats": stats,

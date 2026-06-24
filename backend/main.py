@@ -188,6 +188,8 @@ def _company_evidence_db_scanner_candidates(company_evidence: dict | None, limit
         source_type = str(record.get("source_type") or "").lower()
         sales_use = str(record.get("sales_use") or "").lower()
         entity_status = str(record.get("entity_match_status") or "").lower()
+        origin_relation = str(record.get("origin_relation") or "").lower()
+        publisher_independence = str(record.get("publisher_independence") or "").lower()
 
         if record.get("blocked") is True:
             skip("blocked")
@@ -210,7 +212,10 @@ def _company_evidence_db_scanner_candidates(company_evidence: dict | None, limit
         if sales_use in {"internal_only", "blocked"} or source_type.startswith("coresignal_stakeholder"):
             skip("sales_only")
             continue
-        if record.get("context_only") is True:
+        if publisher_independence in {"unsafe", "unsafe_or_irrelevant"}:
+            skip("unsafe_external_reference")
+            continue
+        if record.get("context_only") is True and origin_relation != "official_page_outbound_reference":
             skip("context_only")
             continue
 
@@ -247,6 +252,13 @@ def _company_evidence_db_scanner_candidates(company_evidence: dict | None, limit
             "source_database": "company_evidence_db",
             "provider": record.get("provider"),
             "provider_record_type": record.get("provider_record_type"),
+            "origin_relation": record.get("origin_relation"),
+            "originating_company_page": record.get("originating_company_page"),
+            "external_host": record.get("external_host"),
+            "publisher_type": record.get("publisher_type"),
+            "publisher_independence": record.get("publisher_independence"),
+            "reference_context": record.get("reference_context"),
+            "company_claim_vs_external_evidence_boundary": record.get("company_claim_vs_external_evidence_boundary"),
             "fetched_at": record.get("fetched_at") or record.get("last_checked") or record.get("generated_at"),
             "content_hash": record.get("content_hash"),
             "original_entity_match_status": record.get("entity_match_status"),
