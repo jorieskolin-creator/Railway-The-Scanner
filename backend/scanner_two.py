@@ -264,12 +264,27 @@ JURY_SPLIT_PACKET_THRESHOLDS = {
 JURY_SPLIT_MAX_CHUNKS = 3
 
 FORENSIC_REPAIR_TIMEOUTS = {
-    "STRATEGIC JURY (Business Model, Procurement & Customer Experience)": 75,
-    "SERVICE PORTFOLIO JURY (Delivery Reality)": 75,
+    "STRATEGIC JURY (Business Model, Procurement & Customer Experience)": 95,
+    "SERVICE PORTFOLIO JURY (Delivery Reality)": 85,
     "ARCHITECTURAL JURY (Engineering Reality)": 65,
     "AI & DATA JURY (Future Readiness)": 55,
     "CULTURAL JURY (Talent & Psychological Safety)": 45,
 }
+
+STRATEGIC_ACQUISITION_FOCI = (
+    (
+        "business_model_ownership",
+        "business model, ownership, carve-out/rebrand, filings, strategy, investor or corporate positioning evidence",
+    ),
+    (
+        "procurement_partnerships",
+        "procurement records, partner announcements, ecosystem proof, customer or supplier relationships",
+    ),
+    (
+        "customer_experience_market_proof",
+        "customer experience, market-facing proof, references, customer stories, service promises, and public market evidence",
+    ),
+)
 
 
 def _rebrand_search_aliases(company_name: str, domain_hint: str = "") -> list[str]:
@@ -1328,6 +1343,7 @@ def _merge_jury_payloads(jury_name: str, payloads: list[dict]) -> dict | None:
 def _prevalidate_acquisition_results(
     acquisition_results: list,
     company_name: str,
+    official_domain: str = "",
     recovery_seconds: int = FORENSIC_EXTRACTION_RECOVERY_CEILING_SECONDS,
 ) -> tuple[list, dict]:
     """Gate fresh packets before expensive jury analysis."""
@@ -1347,6 +1363,14 @@ def _prevalidate_acquisition_results(
                 except Exception:
                     url_results[url] = {}
 
+    normalized_official_domain = get_clean_domain(official_domain or "")
+
+    def _official_domain_source(url: str) -> bool:
+        if not normalized_official_domain:
+            return False
+        host = get_clean_domain(url or "")
+        return bool(host and (host == normalized_official_domain or host.endswith("." + normalized_official_domain)))
+
     recovery_candidates = []
     for source in sources:
         checked = url_results.get(source.get("url"), {})
@@ -1357,7 +1381,7 @@ def _prevalidate_acquisition_results(
         source["_precheck_company_mentioned"] = checked.get("company_mentioned")
         if (
             checked.get("verified") is True
-            and checked.get("company_mentioned") is not False
+            and (checked.get("company_mentioned") is not False or _official_domain_source(source.get("url") or ""))
             and len(str(source.get("snippet") or "").strip()) >= 40
             and (checked.get("content_readable") is not True or not match["matched"])
         ):
@@ -1414,6 +1438,7 @@ def _prevalidate_acquisition_results(
             source["verified"] = source["url_verified"]
             source["content_readable"] = checked.get("content_readable") is True
             source["entity_mentioned"] = checked.get("company_mentioned")
+            official_domain_source = _official_domain_source(source.get("url") or "")
             entity_scope = str(source.get("entity_scope") or "unclear").lower()
             entity_mentioned = checked.get("company_mentioned")
             if entity_mentioned is True:
@@ -1427,15 +1452,29 @@ def _prevalidate_acquisition_results(
                 source["entity_scope"] = entity_scope
                 source["entity_verified"] = True
             elif entity_mentioned is False:
-                source["entity_match_status"] = "wrong"
-                source["content_entity_match_status"] = "wrong"
-                source["entity_scope"] = "wrong_entity"
-                source["entity_verified"] = False
+                if official_domain_source:
+                    source["entity_match_status"] = "scoped"
+                    source["content_entity_match_status"] = "scoped"
+                    source["entity_scope"] = "local_legal_entity"
+                    source["entity_verified"] = True
+                    source["official_domain_scope_inferred"] = True
+                else:
+                    source["entity_match_status"] = "wrong"
+                    source["content_entity_match_status"] = "wrong"
+                    source["entity_scope"] = "wrong_entity"
+                    source["entity_verified"] = False
             else:
-                source["entity_match_status"] = "unknown"
-                source["content_entity_match_status"] = "unknown"
-                source["entity_scope"] = "unknown"
-                source["entity_verified"] = False
+                if official_domain_source:
+                    source["entity_match_status"] = "scoped"
+                    source["content_entity_match_status"] = "scoped"
+                    source["entity_scope"] = "local_legal_entity"
+                    source["entity_verified"] = True
+                    source["official_domain_scope_inferred"] = True
+                else:
+                    source["entity_match_status"] = "unknown"
+                    source["content_entity_match_status"] = "unknown"
+                    source["entity_scope"] = "unknown"
+                    source["entity_verified"] = False
             direct_content = str(checked.get("content_excerpt") or "")
             match = _quote_match_details(str(source.get("snippet") or ""), direct_content)
             source["quote_match_method"] = match["method"]
@@ -1447,7 +1486,7 @@ def _prevalidate_acquisition_results(
             reason = ""
             if not source["url_verified"]:
                 reason = "dead_or_soft_404"
-            elif checked.get("company_mentioned") is False:
+            elif checked.get("company_mentioned") is False and not official_domain_source:
                 reason = "wrong_entity"
             elif len(str(source.get("snippet") or "").strip()) < 40:
                 reason = "unreadable"
@@ -1470,7 +1509,12 @@ def _prevalidate_acquisition_results(
                         stats["firecrawl_failed"] += 1
                         source["extraction_recovery_reason"] = recovered.get("reason") or "passage_not_found"
                     reason = "unreadable" if not source["content_readable"] else ""
-                    if not reason:
+                    if not reason and official_domain_source and source["content_readable"]:
+                        source["passage_hint_status"] = "snippet_not_found_in_official_source_content"
+                        source["source_context_status"] = "scoped_context"
+                        source["claim_support_status"] = "context_only"
+                        source["source_use_status"] = "scoped_context"
+                    elif not reason:
                         stats["quote_not_found"] += 1
                         source["passage_hint_status"] = "snippet_not_found_in_source_content"
             if reason:
@@ -1521,6 +1565,54 @@ def _merge_acquisition_lanes(primary_results: list, repair_results: list) -> lis
             existing["status"] = "repaired"
             providers = [p for p in [existing.get("provider"), lane.get("provider")] if p]
             existing["provider"] = "+".join(dict.fromkeys(providers))
+    return [by_jury[jury] for jury in FORENSIC_JURIES]
+
+
+def _combine_acquisition_lanes(lane_results: list) -> list:
+    """Combine split acquisition lanes back into one lane per jury without repair semantics."""
+    by_jury = {
+        jury_name: {
+            "jury": jury_name,
+            "provider": None,
+            "status": "missing",
+            "sources": [],
+            "pre_jury_rejected": [],
+            "acquisition_focuses": [],
+        }
+        for jury_name in FORENSIC_JURIES
+    }
+    for lane in lane_results or []:
+        jury = lane.get("jury")
+        if jury not in by_jury:
+            continue
+        existing = by_jury[jury]
+        seen = {
+            _canonical_evidence_url(source.get("url"))
+            for source in existing.get("sources", []) or []
+            if isinstance(source, dict)
+        }
+        for source in lane.get("sources", []) or []:
+            key = _canonical_evidence_url((source or {}).get("url"))
+            if not key or key in seen:
+                continue
+            normalized = dict(source)
+            if lane.get("acquisition_focus"):
+                normalized["acquisition_focus"] = lane.get("acquisition_focus")
+            existing["sources"].append(normalized)
+            seen.add(key)
+        existing["pre_jury_rejected"] = (
+            list(existing.get("pre_jury_rejected", []) or [])
+            + list(lane.get("pre_jury_rejected", []) or [])
+        )
+        if lane.get("acquisition_focus"):
+            existing["acquisition_focuses"].append(lane.get("acquisition_focus"))
+        providers = [p for p in [existing.get("provider"), lane.get("provider")] if p]
+        if providers:
+            existing["provider"] = "+".join(dict.fromkeys(providers))
+        if existing.get("sources"):
+            existing["status"] = "completed"
+        elif lane.get("status") and existing.get("status") == "missing":
+            existing["status"] = lane.get("status")
     return [by_jury[jury] for jury in FORENSIC_JURIES]
 
 
@@ -1695,9 +1787,12 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
                 normalized["analysis_verified"] = support_level == "exact"
                 normalized["claim_support_status"] = "supported" if support_level == "exact" else support_level
                 if support_method == "valid_source_context_claim_overreach":
-                    normalized["claim_support_status"] = "unsupported_for_this_claim"
+                    normalized["claim_support_status"] = "context_only"
                     normalized["claim_relation_status"] = "unsupported_for_this_claim"
-                    normalized["source_context_status"] = "valid_company_context"
+                    normalized["source_context_status"] = "scoped_context"
+                    normalized["source_use_status"] = "scoped_context"
+                    normalized["promotion_status"] = "scoped_context"
+                    normalized["analysis_verified"] = False
                 normalized["generation_eligible"] = False
                 normalized["claim_support_pending"] = False
                 normalized["verified"] = packet.get("verified") is True
@@ -1736,6 +1831,22 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
                 normalized = _inherit_official_context_scope(normalized, packet)
                 normalized["jury_status"] = "completed"
                 normalized = apply_analysis_verification(normalized)
+                if (
+                    support_level == "context_only"
+                    and normalized.get("url_verified") is True
+                    and (
+                        normalized.get("content_verified") is True
+                        or normalized.get("content_readable") is True
+                    )
+                    and str(normalized.get("content_entity_match_status") or normalized.get("entity_match_status") or "").lower() in {"exact", "scoped"}
+                    and normalized.get("wrong_entity_true") is not True
+                ):
+                    normalized["promotion_status"] = "scoped_context"
+                    normalized["source_use_status"] = "scoped_context"
+                    normalized["source_context_status"] = "scoped_context"
+                    normalized["claim_support_status"] = "context_only"
+                    normalized["analysis_verified"] = False
+                    normalized["generation_eligible"] = False
                 accepted.append(mark_verified_company_evidence(normalized))
             rejected.extend(payload.get("rejected_evidence", []) or [])
             if accepted:
@@ -1923,10 +2034,19 @@ def _build_jury_acquisition_prompt(
     jury_name: str,
     entity_context: str = "",
     search_aliases: str = "",
+    acquisition_focus: str = "",
 ) -> str:
     """Build a search-only prompt for one independent evidence-acquisition lane."""
+    focus_block = ""
+    if acquisition_focus:
+        focus_block = (
+            "\nFOCUS FOR THIS ACQUISITION LANE:\n"
+            f"{acquisition_focus}\n"
+            "Stay inside this focus. Do not try to cover every Strategic subtopic in this call.\n"
+        )
     return f"""Acquire CURRENT SOURCE MATERIAL for \"{search_name}\" (official domain: {domain_hint}).
 This lane covers only: {jury_name}
+{focus_block}
 
 This is source acquisition, not analysis. Search the approved registry below in Finnish and English.
 Prioritize sources published or updated within 24 months, while allowing current official registry,
@@ -4183,11 +4303,11 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         acquisition_target_ceiling = min(150, FORENSIC_ACQUISITION_EXTENDED_CEILING_SECONDS)
     if len(baseline.get("findings", []) or []) >= 22 and baseline_missing_juries:
         acquisition_target_ceiling = max(acquisition_target_ceiling, 155)
-    early_repair_reserve = 0
+    early_repair_reserve = 45
     if critical_missing_juries:
-        early_repair_reserve = 60
+        early_repair_reserve = 70
     elif baseline_missing_juries:
-        early_repair_reserve = 45
+        early_repair_reserve = 60
     acquisition_ceiling = min(
         acquisition_target_ceiling,
         _phase_remaining(
@@ -4200,13 +4320,24 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             )
         ),
     )
+    acquisition_run_ceiling = acquisition_ceiling
+    if acquisition_ceiling > early_repair_reserve + 45:
+        acquisition_run_ceiling = max(45, acquisition_ceiling - early_repair_reserve)
     acquisition_started = time.time()
-    acquisition_deadline = acquisition_started + acquisition_ceiling
+    acquisition_deadline = acquisition_started + acquisition_run_ceiling
+    acquisition_specs = []
+    for jury_name in FORENSIC_JURIES:
+        if jury_name == STRATEGIC_JURY_NAME:
+            for focus_key, focus_label in STRATEGIC_ACQUISITION_FOCI:
+                acquisition_specs.append((jury_name, focus_key, focus_label))
+        else:
+            acquisition_specs.append((jury_name, "full", ""))
     print(
-        f"   🔍 [Forensic Acquisition] Five parallel jury lanes for {company_name}: "
-        f"{acquisition_ceiling}s group ceiling; Gemini primary, GPT-5.5 web fallback; "
+        f"   🔍 [Forensic Acquisition] {len(acquisition_specs)} parallel acquisition lane(s) across five juries for {company_name}: "
+        f"{acquisition_run_ceiling}s search ceiling + {max(0, acquisition_ceiling - acquisition_run_ceiling)}s reserved repair; "
+        "Gemini primary, GPT-5.5 web fallback; "
         f"baseline {coverage['score']}/100 across {len(coverage['jury_coverage'])}/5 juries"
-        f"{'; reserved repair '+str(early_repair_reserve)+'s' if early_repair_reserve else ''}."
+        "."
     )
 
     def _parse_provider_payload(text):
@@ -4218,10 +4349,15 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         except json.JSONDecodeError:
             return None
 
-    def _acquire_one_jury(jury_name):
+    def _acquire_one_jury(jury_name, focus_key="full", focus_label=""):
         lane_started = time.time()
         prompt = _build_jury_acquisition_prompt(
-            search_name, domain_hint, jury_name, entity_context_block, search_alias_block
+            search_name,
+            domain_hint,
+            jury_name,
+            entity_context_block,
+            search_alias_block,
+            acquisition_focus=focus_label,
         )
         provider = "gemini-3.1-pro-preview"
         payload = None
@@ -4250,29 +4386,56 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 status = "fallback_completed" if payload else "fallback_failed"
         sources = _normalize_acquisition_payload(payload or {}, jury_name, provider)
         print(
-            f"   {'✅' if sources else '⚠️'} [Forensic Acquisition] {jury_name}: {len(sources)} source packet(s), "
+            f"   {'✅' if sources else '⚠️'} [Forensic Acquisition] {jury_name}"
+            f"{' / '+focus_key if focus_key != 'full' else ''}: {len(sources)} source packet(s), "
             f"provider={provider}, status={status}, elapsed={int(time.time() - lane_started)}s."
         )
-        return {"jury": jury_name, "provider": provider, "status": status, "sources": sources}
+        return {
+            "jury": jury_name,
+            "acquisition_focus": focus_key,
+            "provider": provider,
+            "status": status,
+            "sources": sources,
+        }
 
     acquisition_results = []
-    if acquisition_ceiling >= 20:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
-            futures = {pool.submit(_acquire_one_jury, jury): jury for jury in FORENSIC_JURIES}
-            done, pending = concurrent.futures.wait(futures, timeout=acquisition_ceiling)
-            if pending:
-                print(
-                    f"   ⚠️ [Forensic Acquisition] {len(pending)} lane(s) still in flight at group ceiling; "
-                    "waiting for provider-native deadlines before pre-jury gate."
-                )
-                concurrent.futures.wait(pending)
-                done = set(futures.keys())
-            for future in done:
-                jury = futures[future]
-                try:
-                    acquisition_results.append(future.result())
-                except Exception as error:
-                    acquisition_results.append({"jury": jury, "provider": None, "status": "lane_error", "sources": [], "error": repr(error)})
+    if acquisition_run_ceiling >= 20:
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(7, len(acquisition_specs)))
+        futures = {
+            pool.submit(_acquire_one_jury, jury, focus_key, focus_label): (jury, focus_key)
+            for jury, focus_key, focus_label in acquisition_specs
+        }
+        done, pending = concurrent.futures.wait(futures, timeout=acquisition_run_ceiling)
+        if pending:
+            print(
+                f"   ⚠️ [Forensic Acquisition] {len(pending)} lane(s) hit shared search ceiling; "
+                "excluding them before repair so protected analysis time remains available."
+            )
+            for future in pending:
+                future.cancel()
+                jury, focus_key = futures[future]
+                acquisition_results.append({
+                    "jury": jury,
+                    "acquisition_focus": focus_key,
+                    "provider": None,
+                    "status": "acquisition_shared_deadline",
+                    "sources": [],
+                })
+        for future in done:
+            jury, focus_key = futures[future]
+            try:
+                acquisition_results.append(future.result())
+            except Exception as error:
+                acquisition_results.append({
+                    "jury": jury,
+                    "acquisition_focus": focus_key,
+                    "provider": None,
+                    "status": "lane_error",
+                    "sources": [],
+                    "error": repr(error),
+                })
+        pool.shutdown(wait=False, cancel_futures=True)
+        acquisition_results = _combine_acquisition_lanes(acquisition_results)
     else:
         acquisition_results = [
             {"jury": jury, "provider": None, "status": "budget_skipped", "sources": []}
@@ -4280,7 +4443,11 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         ]
     acquisition_by_jury = {item["jury"]: item for item in acquisition_results}
 
-    acquisition_results, pre_jury_stats_initial = _prevalidate_acquisition_results(acquisition_results, company_name)
+    acquisition_results, pre_jury_stats_initial = _prevalidate_acquisition_results(
+        acquisition_results,
+        company_name,
+        official_domain=domain_hint,
+    )
     acquisition_by_jury = {item["jury"]: item for item in acquisition_results}
     readiness = _assess_jury_acquisition_readiness(acquisition_results, routed_seeds)
     weak_juries = [jury for jury, status in readiness.items() if status.get("weak")]
@@ -4354,32 +4521,34 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             )
             return {"jury": jury_name, "provider": provider, "status": status, "sources": sources}
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(max_repair_lanes, len(repair_target_juries))) as pool:
-            futures = {pool.submit(_repair_one_jury, jury): jury for jury in repair_target_juries}
-            done, pending = concurrent.futures.wait(futures, timeout=repair_ceiling)
-            for future in pending:
-                future.cancel()
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(max_repair_lanes, len(repair_target_juries)))
+        futures = {pool.submit(_repair_one_jury, jury): jury for jury in repair_target_juries}
+        done, pending = concurrent.futures.wait(futures, timeout=repair_ceiling)
+        for future in pending:
+            future.cancel()
+            repair_results.append({
+                "jury": futures[future],
+                "provider": "gpt-5.5-web-repair",
+                "status": "repair_shared_deadline",
+                "sources": [],
+            })
+        for future in done:
+            jury = futures[future]
+            try:
+                repair_results.append(future.result())
+            except Exception as error:
                 repair_results.append({
-                    "jury": futures[future],
+                    "jury": jury,
                     "provider": "gpt-5.5-web-repair",
-                    "status": "repair_shared_deadline",
+                    "status": "repair_lane_error",
                     "sources": [],
+                    "error": repr(error),
                 })
-            for future in done:
-                jury = futures[future]
-                try:
-                    repair_results.append(future.result())
-                except Exception as error:
-                    repair_results.append({
-                        "jury": jury,
-                        "provider": "gpt-5.5-web-repair",
-                        "status": "repair_lane_error",
-                        "sources": [],
-                        "error": repr(error),
-                    })
+        pool.shutdown(wait=False, cancel_futures=True)
         repair_results, repair_stats = _prevalidate_acquisition_results(
             repair_results,
             company_name,
+            official_domain=domain_hint,
             recovery_seconds=max(10, min(FORENSIC_EXTRACTION_RECOVERY_CEILING_SECONDS, int(_phase_remaining(buffer=FORENSIC_JURY_ANALYSIS_CEILING_SECONDS + FORENSIC_POSTPROCESS_RESERVE_SECONDS)))),
         )
         repaired_juries = [
@@ -4436,7 +4605,12 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             try:
                 base_timeout = FORENSIC_JURY_GPT_TIMEOUTS.get(jury_name, FORENSIC_JURY_GPT_TIMEOUT_SECONDS)
                 if chunk_label and chunk_label != "full":
-                    base_timeout = min(base_timeout, 75)
+                    if jury_name == SERVICE_PORTFOLIO_JURY_NAME:
+                        base_timeout = min(base_timeout, 120)
+                    elif jury_name == STRATEGIC_JURY_NAME:
+                        base_timeout = min(base_timeout, 105)
+                    else:
+                        base_timeout = min(base_timeout, 75)
                 gpt_timeout = min(base_timeout, remaining)
                 if gpt_timeout >= 15:
                     text = _hard_timeout_call(
@@ -4458,7 +4632,10 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     try:
                         sonnet_base = FORENSIC_JURY_SONNET_TIMEOUTS.get(jury_name, FORENSIC_JURY_SONNET_TIMEOUT_SECONDS)
                         if chunk_label and chunk_label != "full":
-                            sonnet_base = min(sonnet_base, 45)
+                            if jury_name in {STRATEGIC_JURY_NAME, SERVICE_PORTFOLIO_JURY_NAME}:
+                                sonnet_base = min(sonnet_base, 60)
+                            else:
+                                sonnet_base = min(sonnet_base, 45)
                         sonnet_timeout = min(sonnet_base, remaining)
                         text = _hard_timeout_call(
                             f"{jury_name} {chunk_label or 'full'} claude-sonnet-4-6 no-web jury analysis",
