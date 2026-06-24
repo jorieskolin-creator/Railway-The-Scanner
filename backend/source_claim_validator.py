@@ -739,7 +739,11 @@ def validate_source_claims(
             if result["relevance_score"] >= 0:
                 item["claim_relevance"] = result["relevance_score"]
             item["content_relevance_score"] = result["relevance_score"]
-            item["claim_support_status"] = result.get("claim_support_status", "unchecked")
+            support_status = result.get("claim_support_status", "unchecked")
+            if support_status == "unsupported":
+                support_status = "unsupported_for_this_claim"
+            item["claim_support_status"] = support_status
+            item["claim_relation_status"] = support_status
             item["content_verified"] = result.get("content_verified") is True
             item["content_verification_reason"] = result.get("reason", "")
             item["verification_model"] = result.get("verification_model", item.get("verification_model"))
@@ -763,16 +767,26 @@ def validate_source_claims(
                 item["entity_match"] = "wrong"
             if result.get("source_quote"):
                 item["source_quote"] = result["source_quote"]
-            if result.get("claim_support_status") == "unsupported":
+            entity_status = str(result.get("content_entity_match_status") or result.get("entity_match_status") or "").lower()
+            if item.get("wrong_entity") is True or entity_status == "wrong":
+                item["source_context_status"] = "wrong_entity"
                 item["claim_irrelevant"] = True
-            elif result.get("claim_support_status") == "supported":
+            elif item.get("content_verified") is not True and support_status in {"unavailable", "unchecked"}:
+                item["source_context_status"] = "dead_or_unreadable"
+            elif support_status == "supported":
+                item["source_context_status"] = "valid_company_context"
                 item["claim_irrelevant"] = False
+            elif entity_status in {"exact", "scoped"} or result.get("entity_verified") is True:
+                item["source_context_status"] = "valid_company_context"
+                item["claim_irrelevant"] = False
+            else:
+                item["source_context_status"] = "out_of_context"
 
     elapsed_ms = int((time.time() - start) * 1000)
 
     checked = len(results)
-    flagged = [url for url, r in results.items()
-               if r["relevance_score"] >= 0 and r.get("claim_support_status") == "unsupported"]
+    claim_failed = [url for url, r in results.items()
+                    if r["relevance_score"] >= 0 and r.get("claim_support_status") == "unsupported"]
     wrong_entity = [
         url for url, r in results.items()
         if r.get("entity_match_status") == "wrong" or r.get("content_entity_match_status") == "wrong"
@@ -787,9 +801,11 @@ def validate_source_claims(
         if r.get("quote_mismatch") is True or r.get("verification_conflict") is True
     ]
 
-    if flagged:
-        print(f"   ⚠️ [Source-Claim] {len(flagged)}/{checked} verified sources don't support their claims ({elapsed_ms}ms)")
-        for url in flagged:
+    source_context_failed = sorted(set(wrong_entity + entity_failed))
+
+    if claim_failed:
+        print(f"   ⚠️ [Source-Claim] {len(claim_failed)}/{checked} source/claim relation(s) unsupported ({elapsed_ms}ms)")
+        for url in claim_failed:
             reason = results[url].get("reason", "")
             score = results[url].get("relevance_score", "?")
             print(f"      🔴 {url} (score: {score}/100) — {reason}")
@@ -798,12 +814,13 @@ def validate_source_claims(
 
     return {
         "checked": checked,
-        "irrelevant": len(flagged),
+        "irrelevant": len(source_context_failed),
         "wrong_entity": len(wrong_entity),
         "entity_failed": len(entity_failed),
-        "claim_failed": len(flagged),
+        "claim_failed": len(claim_failed),
         "quote_mismatch": len(quote_mismatch),
-        "flagged_urls": flagged,
+        "flagged_urls": claim_failed,
+        "source_context_failed": source_context_failed,
         "elapsed_ms": elapsed_ms,
     }
 
@@ -888,9 +905,12 @@ def validate_foresight_claims(
 
             if result["relevance_score"] >= 0:
                 force["claim_relevance"] = result["relevance_score"]
-                if not result["relevant"]:
-                    force["claim_irrelevant"] = True
-            force["claim_support_status"] = result.get("claim_support_status", force.get("claim_support_status", "unchecked"))
+            force_support_status = result.get("claim_support_status", force.get("claim_support_status", "unchecked"))
+            if force_support_status == "unsupported":
+                force_support_status = "unsupported_for_this_claim"
+            force["claim_support_status"] = force_support_status
+            force["claim_relation_status"] = force_support_status
+            force["source_context_status"] = "valid_foresight_context"
             force["content_verified"] = result.get("content_verified") is True
             force["content_relevance_score"] = result.get("relevance_score", force.get("content_relevance_score"))
             force["content_verification_reason"] = result.get("reason", "")

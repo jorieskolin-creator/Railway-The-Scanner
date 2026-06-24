@@ -14,11 +14,14 @@ if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
 from source_quality import (  # noqa: E402
+    ANALYSIS_SUPPORT_UNSUPPORTED_FOR_CLAIM,
     PROMOTION_DISPLAY_ONLY,
     PROMOTION_EXCLUDED,
     PROMOTION_GENERATION_ELIGIBLE,
     PROMOTION_SCOPED_CONTEXT,
     PROMOTION_UNJUDGED_TIMEOUT,
+    SOURCE_CONTEXT_SCOPED,
+    SOURCE_CONTEXT_VALID_CONTEXT_UNUSED,
     apply_analysis_verification,
     is_generation_eligible_source,
     is_scoped_context_source,
@@ -69,7 +72,7 @@ def test_live_but_irrelevant_content_is_display_only():
     assert link["analysis_verified"] is False
     assert link["promotion_status"] == PROMOTION_DISPLAY_ONLY
     assert link["generation_eligible"] is False
-    assert link["verification_reason"] == "claim_unsupported"
+    assert link["verification_reason"] == "unsupported_for_this_claim"
     assert is_generation_eligible_source(link) is False
 
 
@@ -392,7 +395,8 @@ def test_official_unsupported_service_page_becomes_scoped_context_when_claim_ove
     assert link["source_use_status"] == "scoped_context"
     assert link["verification_reason"] == "official_scoped_context_claim_overreach"
     assert link["original_claim_support_status"] == "unsupported"
-    assert link["claim_support_status"] == "scoped_context"
+    assert link["claim_support_status"] == ANALYSIS_SUPPORT_UNSUPPORTED_FOR_CLAIM
+    assert link["source_context_status"] == SOURCE_CONTEXT_SCOPED
     assert is_scoped_context_source(link) is True
 
 
@@ -420,8 +424,65 @@ def test_third_party_unsupported_context_stays_display_only_not_scoped():
     assert link["analysis_verified"] is False
     assert link["generation_eligible"] is False
     assert link["promotion_status"] == PROMOTION_DISPLAY_ONLY
-    assert link["source_use_status"] == "unsupported"
+    assert link["source_use_status"] == "unsupported_for_this_claim"
     assert is_scoped_context_source(link) is False
+
+
+def test_claim_overreach_does_not_poison_valid_company_context():
+    link = apply_analysis_verification(
+        _source(
+            title="ABB official developer context",
+            url="https://developer.eu.mybuildings.abb.com/",
+            snippet="Generated claim overreaches into a company-wide platform assertion.",
+            source_quote="ABB Smart Buildings developer portal and API documentation.",
+            source_type="official_technology_or_developer_page",
+            source_credibility="medium",
+            content_entity_match_status="exact",
+            entity_match_status="exact",
+            entity_verified=True,
+            entity_scope="canonical_group",
+            claim_support_status="unsupported",
+            content_verified=True,
+            content_readable=True,
+        ),
+        company_domain="https://abb.com",
+        company_name="ABB Oy",
+    )
+
+    assert link["analysis_verified"] is False
+    assert link["generation_eligible"] is False
+    assert link["claim_support_status"] == ANALYSIS_SUPPORT_UNSUPPORTED_FOR_CLAIM
+    assert link["promotion_status"] == PROMOTION_SCOPED_CONTEXT
+    assert link["source_context_status"] == SOURCE_CONTEXT_SCOPED
+    assert link["source_use_status"] == "scoped_context"
+    assert is_scoped_context_source(link) is True
+
+
+def test_non_official_claim_overreach_can_remain_valid_context_unused():
+    link = apply_analysis_verification(
+        _source(
+            title="Independent ABB context",
+            url="https://www.reuters.com/business/abb-context",
+            snippet="Generated claim asks this source to prove a too-specific operating model.",
+            source_quote="The source discusses ABB in relevant company context.",
+            source_type="news",
+            source_credibility="high",
+            content_entity_match_status="exact",
+            entity_match_status="exact",
+            entity_verified=True,
+            entity_scope="canonical_group",
+            claim_support_status="unsupported",
+            content_verified=True,
+            content_readable=True,
+        ),
+        company_domain="https://abb.com",
+        company_name="ABB Oy",
+    )
+
+    assert link["analysis_verified"] is False
+    assert link["generation_eligible"] is False
+    assert link["claim_support_status"] == ANALYSIS_SUPPORT_UNSUPPORTED_FOR_CLAIM
+    assert link["source_context_status"] == SOURCE_CONTEXT_VALID_CONTEXT_UNUSED
 
 
 def test_unjudged_timeout_is_distinct_from_display_only_and_coverage():

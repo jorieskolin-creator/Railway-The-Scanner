@@ -1430,13 +1430,49 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
                         claim_supported = True
                         claim_narrowed_from_jury = True
                     else:
-                        rejected.append({
-                            "url": item.get("url"),
-                            "reason": "Jury claim was bundled or materially exceeded the fetched source content.",
-                            "jury": jury,
-                            "support_method": support_method,
-                        })
-                        continue
+                        packet_entity_status = str(
+                            packet.get("content_entity_match_status")
+                            or packet.get("entity_match_status")
+                            or ""
+                        ).lower()
+                        packet_is_context = (
+                            packet.get("url_verified") is True
+                            and (
+                                packet.get("content_verified") is True
+                                or packet.get("content_readable") is True
+                                or bool(packet_text)
+                            )
+                            and packet.get("wrong_entity") is not True
+                            and packet_entity_status in {"exact", "scoped"}
+                        )
+                        if packet_is_context:
+                            rejected.append({
+                                "url": item.get("url"),
+                                "reason": "Jury claim overreached; source retained as scoped context.",
+                                "jury": jury,
+                                "support_method": support_method,
+                                "claim_relation_status": "unsupported_for_this_claim",
+                            })
+                            title = str(packet.get("title") or item.get("title") or item.get("source_title") or "Scoped source").strip()
+                            supported_claim = f"Scoped company context for {jury}: {title}"[:300]
+                            supporting_passage = (
+                                _relevant_passage(title, packet_text)
+                                or packet_text[:1200]
+                                or source_quote
+                                or str(packet.get("snippet") or "")
+                            )
+                            source_quote = supporting_passage
+                            support_level = "context_only"
+                            support_method = "valid_source_context_claim_overreach"
+                            claim_supported = True
+                        else:
+                            rejected.append({
+                                "url": item.get("url"),
+                                "reason": "Jury claim was bundled or materially exceeded the fetched source content.",
+                                "jury": jury,
+                                "support_method": support_method,
+                            })
+                            continue
                 if not claim_supported:
                     rejected.append({
                         "url": item.get("url"),
@@ -1470,6 +1506,10 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
                 normalized["source_status"] = "jury_accepted" if support_level == "exact" else f"jury_{support_level}"
                 normalized["analysis_verified"] = support_level == "exact"
                 normalized["claim_support_status"] = "supported" if support_level == "exact" else support_level
+                if support_method == "valid_source_context_claim_overreach":
+                    normalized["claim_support_status"] = "unsupported_for_this_claim"
+                    normalized["claim_relation_status"] = "unsupported_for_this_claim"
+                    normalized["source_context_status"] = "valid_company_context"
                 normalized["generation_eligible"] = False
                 normalized["claim_support_pending"] = False
                 normalized["verified"] = packet.get("verified") is True

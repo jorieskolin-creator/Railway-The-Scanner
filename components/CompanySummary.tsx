@@ -180,7 +180,16 @@ const isForesightContext = (link) => {
   };
   const getSourceSays = (link) => link?.source_says || link?.snippet || link?.description || '';
   const getPossibleRelevance = (link) => link?.possible_relevance || '';
-  const isVerificationConflict = (link) => link?.verification_conflict === true || link?.quote_mismatch === true || link?.claim_irrelevant === true;
+  const isValidSourceContext = (link) => {
+    const sourceStatus = String(link?.source_context_status || '').toLowerCase();
+    return ['valid_company_context', 'valid_foresight_context', 'scoped_context', 'valid_context_unused'].includes(sourceStatus);
+  };
+  const isVerificationConflict = (link) => {
+    if (link?.verification_conflict === true) return true;
+    if (link?.quote_mismatch === true && !isValidSourceContext(link)) return true;
+    if (link?.claim_irrelevant === true && !isValidSourceContext(link)) return true;
+    return false;
+  };
   const isEntityVerified = (link) => {
     const contentStatus = String(link?.content_entity_match_status || link?.entity_match_status || '').toLowerCase();
     return link?.entity_verified === true || contentStatus === 'exact' || contentStatus === 'scoped';
@@ -189,7 +198,7 @@ const isForesightContext = (link) => {
   const isScopedContext = (link) => {
     const promotion = String(link?.promotion_status || '').toLowerCase();
     const useStatus = String(link?.source_use_status || '').toLowerCase();
-    return promotion === 'scoped_context' || useStatus === 'scoped_context' || useStatus === 'company_statement';
+    return promotion === 'scoped_context' || useStatus === 'scoped_context' || useStatus === 'company_statement' || useStatus === 'valid_context_unused' || isValidSourceContext(link);
   };
   const isAnalysisVerified = (link) => (
     link?.analysis_verified === true
@@ -309,7 +318,7 @@ const isForesightContext = (link) => {
   const evidenceSufficiency = typeof data.evidence_sufficiency === 'object' && data.evidence_sufficiency !== null ? data.evidence_sufficiency : null;
   const lowEvidenceLabel = data.low_evidence_label || evidenceSufficiency?.label || '';
   const isLowEvidenceMode = data.low_evidence_mode === true || !!lowEvidenceLabel;
-  const displayOnlyCount = companyEvidenceTrustPool.filter((link) => !isScopedContext(link) && (link.promotion_status === 'display_only' || link.claim_support_status === 'unsupported')).length;
+  const displayOnlyCount = companyEvidenceTrustPool.filter((link) => !isValidSourceContext(link) && !isScopedContext(link) && (link.promotion_status === 'display_only' || ['unsupported', 'unsupported_for_this_claim'].includes(String(link.claim_support_status || '').toLowerCase()))).length;
   const verificationConflictCount = companyEvidenceTrustPool.filter((link) => isVerificationConflict(link)).length;
   const wrongEntityCount = companyEvidenceTrustPool.filter((link) => isWrongEntity(link)).length;
   const unknownEntityCount = companyEvidenceTrustPool.filter((link) => isUnknownOrWeakEntity(link)).length;
@@ -321,7 +330,7 @@ const isForesightContext = (link) => {
       || link.url_verified === false
       || cred === 'low'
       || (!!link.url && cred === 'unknown')
-      || (!isScopedContext(link) && ['unsupported', 'unchecked', 'unavailable', 'partial'].includes(support))
+      || (!isValidSourceContext(link) && !isScopedContext(link) && ['unsupported', 'unsupported_for_this_claim', 'unchecked', 'unavailable', 'partial'].includes(support))
       || (!isScopedContext(link) && ['display_only', 'excluded'].includes(promotion))
       || isVerificationConflict(link)
       || isWrongEntity(link)
@@ -602,8 +611,16 @@ const isForesightContext = (link) => {
         var verifiedSources = companyEvidencePool.filter(function(link) {
             return link && (link.verified === true || link.url_verified === true);
         }).length;
+        var isValidSourceContext = function(link) {
+            var sourceStatus = String(link && link.source_context_status || '').toLowerCase();
+            return ['valid_company_context', 'valid_foresight_context', 'scoped_context', 'valid_context_unused'].indexOf(sourceStatus) >= 0;
+        };
         var isVerificationConflict = function(link) {
-            return link && (link.verification_conflict === true || link.quote_mismatch === true || link.claim_irrelevant === true);
+            if (!link) return false;
+            if (link.verification_conflict === true) return true;
+            if (link.quote_mismatch === true && !isValidSourceContext(link)) return true;
+            if (link.claim_irrelevant === true && !isValidSourceContext(link)) return true;
+            return false;
         };
         var isEntitySafe = function(link) {
             var status = String(link && (link.content_entity_match_status || link.entity_match_status) || '').toLowerCase();
@@ -615,7 +632,7 @@ const isForesightContext = (link) => {
         var isScopedContext = function(link) {
             var promotion = String(link && link.promotion_status || '').toLowerCase();
             var useStatus = String(link && link.source_use_status || '').toLowerCase();
-            return promotion === 'scoped_context' || useStatus === 'scoped_context' || useStatus === 'company_statement';
+            return promotion === 'scoped_context' || useStatus === 'scoped_context' || useStatus === 'company_statement' || useStatus === 'valid_context_unused' || isValidSourceContext(link);
         };
         var isAnalysisSafe = function(link) {
             return link && link.analysis_verified === true && link.promotion_status === 'generation_eligible' && link.generation_eligible === true && isEntitySafe(link) && isClaimSupported(link);
@@ -641,7 +658,8 @@ const isForesightContext = (link) => {
         var isLowEvidenceMode = exportData.low_evidence_mode === true || !!lowEvidenceLabel;
         var verificationConflictSources = companyEvidencePool.filter(isVerificationConflict).length;
         var displayOnlySources = companyEvidencePool.filter(function(link) {
-            return link && !isScopedContext(link) && (link.promotion_status === 'display_only' || link.claim_support_status === 'unsupported');
+            var support = String(link && link.claim_support_status || '').toLowerCase();
+            return link && !isValidSourceContext(link) && !isScopedContext(link) && (link.promotion_status === 'display_only' || ['unsupported', 'unsupported_for_this_claim'].indexOf(support) >= 0);
         }).length;
         var wrongEntitySources = companyEvidencePool.filter(isWrongEntity).length;
         var unknownEntitySources = companyEvidencePool.filter(isUnknownEntity).length;
@@ -654,7 +672,7 @@ const isForesightContext = (link) => {
                 || link.url_verified === false
                 || cred === 'low'
                 || ((link.url || link.source_url) && cred === 'unknown')
-                || (!isScopedContext(link) && ['unsupported', 'unchecked', 'unavailable', 'partial'].indexOf(support) >= 0)
+                || (!isValidSourceContext(link) && !isScopedContext(link) && ['unsupported', 'unsupported_for_this_claim', 'unchecked', 'unavailable', 'partial'].indexOf(support) >= 0)
                 || (!isScopedContext(link) && ['display_only', 'excluded'].indexOf(promotion) >= 0)
                 || isVerificationConflict(link)
                 || isWrongEntity(link)
@@ -1097,8 +1115,16 @@ const isForesightContext = (link) => {
         const foresightContextEligible = foresightEvidencePool.filter(function(link) {
             return link && (link.foresight_context_eligible === true || link.claim_type === 'foresight_context');
         }).length;
+        const isValidSourceContext = function(link) {
+            const sourceStatus = String(link?.source_context_status || '').toLowerCase();
+            return ['valid_company_context', 'valid_foresight_context', 'scoped_context', 'valid_context_unused'].includes(sourceStatus);
+        };
         const isVerificationConflict = function(link) {
-            return link && (link.verification_conflict === true || link.quote_mismatch === true || link.claim_irrelevant === true);
+            if (!link) return false;
+            if (link.verification_conflict === true) return true;
+            if (link.quote_mismatch === true && !isValidSourceContext(link)) return true;
+            if (link.claim_irrelevant === true && !isValidSourceContext(link)) return true;
+            return false;
         };
         const isEntitySafe = function(link) {
             const status = String(link && (link.content_entity_match_status || link.entity_match_status) || '').toLowerCase();
@@ -1110,7 +1136,7 @@ const isForesightContext = (link) => {
         const isScopedContext = function(link) {
             const promotion = String(link?.promotion_status || '').toLowerCase();
             const useStatus = String(link?.source_use_status || '').toLowerCase();
-            return promotion === 'scoped_context' || useStatus === 'scoped_context' || useStatus === 'company_statement';
+            return promotion === 'scoped_context' || useStatus === 'scoped_context' || useStatus === 'company_statement' || useStatus === 'valid_context_unused' || isValidSourceContext(link);
         };
         const isAnalysisSafe = function(link) {
             return link && link.analysis_verified === true && link.promotion_status === 'generation_eligible' && link.generation_eligible === true && isEntitySafe(link) && isClaimSupported(link);
@@ -1134,7 +1160,8 @@ const isForesightContext = (link) => {
         }).length;
         const scopedContextSources = companyEvidencePool.filter(isScopedContext).length;
         const displayOnlySources = companyEvidencePool.filter(function(link) {
-            return link && !isScopedContext(link) && (link.promotion_status === 'display_only' || link.claim_support_status === 'unsupported');
+            const support = String(link?.claim_support_status || '').toLowerCase();
+            return link && !isValidSourceContext(link) && !isScopedContext(link) && (link.promotion_status === 'display_only' || ['unsupported', 'unsupported_for_this_claim'].includes(support));
         }).length;
         const wrongEntitySources = companyEvidencePool.filter(isWrongEntity).length;
         const unknownEntitySources = companyEvidencePool.filter(isUnknownEntity).length;
@@ -1147,7 +1174,7 @@ const isForesightContext = (link) => {
                 || link.url_verified === false
                 || cred === 'low'
                 || (!cred && (link.url || link.link))
-                || (!isScopedContext(link) && ['unsupported', 'unchecked', 'unavailable', 'partial'].includes(support))
+                || (!isValidSourceContext(link) && !isScopedContext(link) && ['unsupported', 'unsupported_for_this_claim', 'unchecked', 'unavailable', 'partial'].includes(support))
                 || (!isScopedContext(link) && ['display_only', 'excluded'].includes(promotion))
                 || isWrongEntity(link)
                 || isUnknownEntity(link)

@@ -86,7 +86,7 @@ def test_cleaner_keeps_live_irrelevant_sources_display_only(monkeypatch):
     assert link["analysis_verified"] is False
     assert link["promotion_status"] == "display_only"
     assert link["generation_eligible"] is False
-    assert link["verification_reason"] == "claim_unsupported"
+    assert link["verification_reason"] == "unsupported_for_this_claim"
     assert data["evidence_cleaning_stats"]["unsupported"] == 1
 
 
