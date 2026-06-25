@@ -33,7 +33,7 @@ from finland_list import TOP_100_COMPANIES, get_company_metadata
 from analyze_scores import run_analysis
 from market_intelligence import compute_market_intelligence
 from knowledge_base import get_evolving_framework
-from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, clean_summary, purge_false_evidence, _call_openai_text
+from reality_check import validate_summary, validate_pitch, ai_fact_check_summary, clean_summary, purge_false_evidence, _call_openai_text, sanitize_inference_wording
 from general_summary import generate_general_summary, fact_check_general_summary
 from source_quality import (
     manage_evidence_sources,
@@ -4725,11 +4725,11 @@ Do NOT generate commercial_pitch, why_proposals, or what_proposals in this call.
                     payload = extract_json_from_text(response_text)
                     if payload:
                          json_data = json.loads(payload, strict=False)
-                         summary = json_data.get("diagnostic_summary", json_data.get("summary", summary))
-                         pitch = json_data.get("commercial_pitch", json_data.get("pitch", pitch)) or pitch
-                         evidence_based_risks = json_data.get("evidence_based_risks", evidence_based_risks) or evidence_based_risks
-                         why_proposals = json_data.get("why_proposals", why_proposals) or why_proposals
-                         what_proposals = json_data.get("what_proposals", what_proposals) or what_proposals
+                         summary = sanitize_inference_wording(json_data.get("diagnostic_summary", json_data.get("summary", summary)))
+                         pitch = sanitize_inference_wording(json_data.get("commercial_pitch", json_data.get("pitch", pitch)) or pitch)
+                         evidence_based_risks = sanitize_inference_wording(json_data.get("evidence_based_risks", evidence_based_risks) or evidence_based_risks)
+                         why_proposals = sanitize_inference_wording(json_data.get("why_proposals", why_proposals) or why_proposals)
+                         what_proposals = sanitize_inference_wording(json_data.get("what_proposals", what_proposals) or what_proposals)
 
                          # --- OPUS SCORE VERIFICATION ---
                          # Opus is the Final Judge for Reality Score. It has the most
@@ -4944,10 +4944,10 @@ Respond with valid JSON only:
                                  activation_payload = extract_json_from_text(activation_text)
                                  if activation_payload:
                                      activation_json = json.loads(activation_payload, strict=False)
-                                     pitch = activation_json.get("commercial_pitch", activation_json.get("pitch", pitch)) or pitch
-                                     strategic_synthesis = activation_json.get("strategic_synthesis", "") or strategic_synthesis
-                                     why_proposals = activation_json.get("why_proposals", why_proposals) or why_proposals
-                                     what_proposals = activation_json.get("what_proposals", what_proposals) or what_proposals
+                                     pitch = sanitize_inference_wording(activation_json.get("commercial_pitch", activation_json.get("pitch", pitch)) or pitch)
+                                     strategic_synthesis = sanitize_inference_wording(activation_json.get("strategic_synthesis", "") or strategic_synthesis)
+                                     why_proposals = sanitize_inference_wording(activation_json.get("why_proposals", why_proposals) or why_proposals)
+                                     what_proposals = sanitize_inference_wording(activation_json.get("what_proposals", what_proposals) or what_proposals)
                                      if pitch or why_proposals or what_proposals:
                                          print(
                                              f"   ✅ [Activation] Grounded activation complete "

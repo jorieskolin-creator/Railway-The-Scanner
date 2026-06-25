@@ -125,8 +125,49 @@ _AUDIT_NOTE_LABELS = {
     "citation_scope_note": "Citation scope",
     "structured_payload_supported": "Structured payload supported",
     "inference_scope_note": "Inference scope",
+    "unsafe_inference_wording": "Inference wording",
     "evidence_handoff_failure": "Evidence handoff",
 }
+
+
+def sanitize_inference_wording(value):
+    """Rewrite over-assertive proof-gap wording without changing hard facts.
+
+    Absence/proof-gap signals are useful diagnostic premises, but they should
+    never be phrased as proof that a company has acted or that a capability is
+    absent. This sanitizer keeps the inference, but turns the unsafe proof
+    wording into a bounded question.
+    """
+    if isinstance(value, list):
+        return [sanitize_inference_wording(v) for v in value]
+    if isinstance(value, dict):
+        return {k: sanitize_inference_wording(v) for k, v in value.items()}
+    if not isinstance(value, str) or not value:
+        return value
+
+    text = value
+
+    def _question(match):
+        premise = (match.group(1) or "").strip()
+        premise = re.sub(r'\s+', ' ', premise).rstrip(" .;:")
+        if not premise:
+            return match.group(0)
+        return f"the unresolved question is whether {premise}"
+
+    text = re.sub(
+        r'\b(?:the\s+)?(?:evidence\s+|proof\s+)?gap\s+(?:is|serves\s+as|acts\s+as)\s+proof\s+that\s+([^.;\n]+)',
+        _question,
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r'\b(?:lack|absence)\s+of\s+(?:public\s+|promoted\s+|verified\s+)?evidence\s+(?:proves|shows|demonstrates)\s+that\s+([^.;\n]+)',
+        _question,
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r'\s+([.;,])', r'\1', text)
+    return text
 
 
 def _is_actual_scanner_process_observation(text: str, reasoning: str = "") -> bool:
@@ -192,6 +233,17 @@ def _classify_fact_check_issue(fc: dict, scan_payload: dict | None) -> tuple[str
         and not correct_value
     ):
         return "wording_precision_note", False
+
+    if re.search(
+        r'\b(?:evidence\s+|proof\s+)?gap\s+(?:is|serves\s+as|acts\s+as)\s+proof\s+that\b'
+        r'|\b(?:lack|absence)\s+of\s+(?:public\s+|promoted\s+|verified\s+)?evidence\s+'
+        r'(?:proves|shows|demonstrates)\s+that\b',
+        combined,
+        re.IGNORECASE,
+    ):
+        if wrong_value or correct_value:
+            return "blocking_false_claim", True
+        return "unsafe_inference_wording", False
 
     # A source supporting a narrower claim is an audit/scope note unless the
     # generated statement has a wrong value/entity/date or material contradiction.

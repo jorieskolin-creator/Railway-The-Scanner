@@ -160,3 +160,34 @@ def test_cross_scan_scanner_observation_remains_blocking():
 
     assert issue_type == "blocking_false_claim"
     assert blocking is True
+
+
+def test_unsafe_proof_gap_wording_is_rewritten_locally():
+    text = (
+        "The gap is proof that global digital and AI signals translate into "
+        "ABB Oy's own operating model."
+    )
+
+    cleaned = reality_check.sanitize_inference_wording(text)
+
+    assert "gap is proof that" not in cleaned.lower()
+    assert (
+        "the unresolved question is whether global digital and AI signals "
+        "translate into ABB Oy's own operating model"
+    ) in cleaned
+
+
+def test_unsafe_proof_gap_wording_is_non_blocking_audit_note():
+    issue_type, blocking = reality_check._classify_fact_check_issue({
+        "claim": (
+            "The gap is proof that global digital and AI signals translate "
+            "into ABB Oy's own operating model."
+        ),
+        "claim_class": "strategic_inference",
+        "error_type": "Fabrication",
+        "support_level": "context_only",
+        "reasoning": "The sentence overstates a proof gap as proof of company action.",
+    }, scan_payload={})
+
+    assert issue_type == "unsafe_inference_wording"
+    assert blocking is False
