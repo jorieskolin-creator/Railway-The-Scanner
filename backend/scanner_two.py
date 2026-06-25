@@ -226,7 +226,16 @@ FORENSIC_STRONG_BASELINE_FIRST_PASS_FLOOR_SECONDS = 95
 FORENSIC_GPT_FALLBACK_MIN_SECONDS = 40
 FORENSIC_JURY_GPT_TIMEOUT_SECONDS = 105
 FORENSIC_JURY_SONNET_TIMEOUT_SECONDS = 45
-FORENSIC_GEMINI_TIMEOUT_SECONDS = 100
+FORENSIC_GEMINI_PRO_SCOUT_SECONDS = 60
+FORENSIC_GPT_REPAIR_SCOUT_SECONDS = 45
+FORENSIC_GEMINI_FLASH_SCOUT_SECONDS = 45
+FORENSIC_PROVIDER_SEQUENCE_SECONDS = (
+    FORENSIC_GEMINI_PRO_SCOUT_SECONDS
+    + FORENSIC_GPT_REPAIR_SCOUT_SECONDS
+    + FORENSIC_GEMINI_FLASH_SCOUT_SECONDS
+)
+FORENSIC_PROVIDER_SEQUENCE_OVERHEAD_SECONDS = 5
+FORENSIC_GEMINI_FAST_FALLBACK_MODEL = "gemini-3.5-flash"
 FORENSIC_LANE_REPLACEMENT_MIN_SECONDS = 30
 FORENSIC_LANE_REPLACEMENT_TIMEOUT_SECONDS = 42
 FORENSIC_JURIES = tuple(JURY_SOURCE_TARGETS.keys())
@@ -4524,7 +4533,18 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         ),
     )
     acquisition_run_ceiling = acquisition_ceiling
-    if acquisition_ceiling > early_repair_reserve + 45:
+    provider_sequence_budget = (
+        FORENSIC_PROVIDER_SEQUENCE_SECONDS + FORENSIC_PROVIDER_SEQUENCE_OVERHEAD_SECONDS
+    )
+    if acquisition_ceiling >= provider_sequence_budget:
+        acquisition_run_ceiling = provider_sequence_budget
+    elif acquisition_ceiling >= FORENSIC_PROVIDER_SEQUENCE_SECONDS:
+        acquisition_run_ceiling = FORENSIC_PROVIDER_SEQUENCE_SECONDS
+    elif acquisition_ceiling >= (
+        FORENSIC_GEMINI_PRO_SCOUT_SECONDS + FORENSIC_GPT_REPAIR_SCOUT_SECONDS
+    ):
+        acquisition_run_ceiling = acquisition_ceiling
+    elif acquisition_ceiling > early_repair_reserve + 45:
         run_floor = FORENSIC_STRONG_BASELINE_FIRST_PASS_FLOOR_SECONDS if strong_seed_baseline else 45
         acquisition_run_ceiling = max(run_floor, acquisition_ceiling - early_repair_reserve)
         if acquisition_run_ceiling > acquisition_ceiling - 25:
@@ -4541,7 +4561,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     print(
         f"   🔍 [Forensic Acquisition] {len(acquisition_specs)} parallel acquisition lane(s) across five juries for {company_name}: "
         f"{acquisition_run_ceiling}s search ceiling + {max(0, acquisition_ceiling - acquisition_run_ceiling)}s reserved repair; "
-        "Gemini primary, GPT-5.5 web fallback; "
+        "Gemini Pro 60s → GPT-5.5 repair 45s → Gemini Flash 45s; "
         f"baseline {coverage['score']}/100 across {len(coverage['jury_coverage'])}/5 juries"
         "."
     )
@@ -4555,6 +4575,86 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         except json.JSONDecodeError:
             return None
 
+    def _provider_error_status(prefix: str, error: Exception) -> str:
+        text = f"{type(error).__name__}: {error}".lower()
+        if "timeout" in text or "deadline" in text:
+            return f"{prefix}_timeout"
+        return f"{prefix}_provider_error"
+
+    def _run_acquisition_provider_sequence(prompt: str, jury_name: str) -> tuple[dict | None, str, str]:
+        """Run bounded forensic discovery: Gemini Pro, GPT repair, then Gemini Flash."""
+        payload = None
+        provider = "gemini-3.1-pro-preview"
+        status = "provider_unavailable"
+
+        if gemini_api_key():
+            remaining = max(0, int(acquisition_deadline - time.time()))
+            if remaining > 0:
+                timeout = min(FORENSIC_GEMINI_PRO_SCOUT_SECONDS, remaining)
+                try:
+                    text = call_gemini_forensic_text(prompt, timeout=timeout)
+                    payload = _parse_provider_payload(text)
+                    if payload:
+                        return payload, provider, "completed"
+                    status = "invalid_json"
+                except Exception as error:
+                    status = _provider_error_status("provider", error)
+                    print(
+                        f"   ⚠️ [Forensic Acquisition] {jury_name} Gemini Pro {status}: "
+                        f"{type(error).__name__}: {error}"
+                    )
+            else:
+                status = "gemini_pro_skipped_no_budget"
+
+        remaining = max(0, int(acquisition_deadline - time.time()))
+        if remaining >= FORENSIC_GPT_REPAIR_SCOUT_SECONDS:
+            provider = "gpt-5.5-web-fallback"
+            try:
+                payload = execute_with_openai_web(
+                    prompt,
+                    timeout_cap=min(FORENSIC_GPT_REPAIR_SCOUT_SECONDS, remaining),
+                    purpose=f"jury fallback: {jury_name}",
+                    search_context_size="low",
+                    allow_repair=False,
+                )
+                if payload:
+                    return payload, provider, "fallback_completed"
+                status = "fallback_failed"
+            except Exception as error:
+                status = _provider_error_status("fallback", error)
+                print(
+                    f"   ⚠️ [Forensic Acquisition] {jury_name} GPT fallback {status}: "
+                    f"{type(error).__name__}: {error}"
+                )
+        elif remaining > 0:
+            status = f"gpt_fallback_skipped_low_budget_{remaining}s"
+
+        if gemini_api_key():
+            remaining = max(0, int(acquisition_deadline - time.time()))
+            if remaining >= FORENSIC_GEMINI_FLASH_SCOUT_SECONDS:
+                provider = FORENSIC_GEMINI_FAST_FALLBACK_MODEL
+                try:
+                    text = call_gemini_forensic_text(
+                        prompt,
+                        model=FORENSIC_GEMINI_FAST_FALLBACK_MODEL,
+                        timeout=min(FORENSIC_GEMINI_FLASH_SCOUT_SECONDS, remaining),
+                        max_output_tokens=4000,
+                    )
+                    payload = _parse_provider_payload(text)
+                    if payload:
+                        return payload, provider, "flash_completed"
+                    status = "flash_invalid_json"
+                except Exception as error:
+                    status = _provider_error_status("flash", error)
+                    print(
+                        f"   ⚠️ [Forensic Acquisition] {jury_name} Gemini Flash {status}: "
+                        f"{type(error).__name__}: {error}"
+                    )
+            elif remaining > 0:
+                status = f"flash_skipped_low_budget_{remaining}s"
+
+        return payload, provider, status
+
     def _acquire_one_jury(jury_name, focus_key="full", focus_label=""):
         lane_started = time.time()
         prompt = _build_jury_acquisition_prompt(
@@ -4565,33 +4665,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             search_alias_block,
             acquisition_focus=focus_label,
         )
-        provider = "gemini-3.1-pro-preview"
-        payload = None
-        status = "provider_unavailable"
-        if gemini_api_key():
-            remaining = max(1, int(acquisition_deadline - time.time()))
-            native_timeout = min(FORENSIC_GEMINI_TIMEOUT_SECONDS, remaining)
-            try:
-                text = call_gemini_forensic_text(prompt, timeout=native_timeout)
-                payload = _parse_provider_payload(text)
-                status = "completed" if payload else "invalid_json"
-            except Exception as error:
-                status = "provider_timeout" if "timeout" in type(error).__name__.lower() or "timeout" in str(error).lower() else "provider_error"
-                print(f"   ⚠️ [Forensic Acquisition] {jury_name} Gemini {status}: {type(error).__name__}: {error}")
-        if not payload:
-            remaining = max(0, int(acquisition_deadline - time.time()))
-            if remaining >= FORENSIC_GPT_FALLBACK_MIN_SECONDS:
-                provider = "gpt-5.5-web-fallback"
-                payload = execute_with_openai_web(
-                    prompt,
-                    timeout_cap=min(FORENSIC_REPAIR_TIMEOUTS.get(jury_name, 55), remaining),
-                    purpose=f"jury fallback: {jury_name}",
-                    search_context_size="low",
-                    allow_repair=False,
-                )
-                status = "fallback_completed" if payload else "fallback_failed"
-            elif remaining > 0:
-                status = f"fallback_skipped_low_budget_{remaining}s"
+        payload, provider, status = _run_acquisition_provider_sequence(prompt, jury_name)
         sources = _normalize_acquisition_payload(payload or {}, jury_name, provider)
         lane = {
             "jury": jury_name,
