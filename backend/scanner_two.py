@@ -2074,8 +2074,9 @@ def _build_jury_source_registry_block(search_name: str, domain_hint: str, jury_n
     """Render source targets as a compact acquisition registry for the web-search prompt."""
     lines = [
         "SOURCE TARGET REGISTRY (candidate acquisition only — not automatic evidence):",
-        "Search broadly, store more, promote narrowly. A source is allowed for analysis only after URL, content, target-entity, and claim-support verification pass.",
-        "Do not increase search count because the registry is larger; combine adjacent targets and prioritize the highest-trust route for each jury.",
+        "Find candidate URLs only. Scanner, not the search model, decides liveness, readability, entity scope, and claim support.",
+        "Do not increase source count because the registry is larger; combine adjacent targets and return only the highest-trust direct page(s) for this jury.",
+        "Returning zero sources is acceptable when no direct page-bound source is available; weak URLs are worse than empty output.",
     ]
     selected = set(jury_names or JURY_SOURCE_TARGETS.keys())
     for jury_name, targets in JURY_SOURCE_TARGETS.items():
@@ -2107,6 +2108,11 @@ def _build_jury_acquisition_prompt(
     acquisition_focus: str = "",
 ) -> str:
     """Build a search-only prompt for one independent evidence-acquisition lane."""
+    source_limit = "1"
+    if acquisition_focus:
+        source_limit = "1"
+    elif jury_name in FORENSIC_HEAVY_JURIES:
+        source_limit = "1-2"
     focus_block = ""
     if acquisition_focus:
         focus_block = (
@@ -2129,18 +2135,20 @@ def _build_jury_acquisition_prompt(
             "partner proof, procurement/public-award records, and market-facing positioning pages. Avoid "
             "broad archive pages unless they contain a current, page-bound passage.\n"
         )
-    return f"""Acquire CURRENT SOURCE MATERIAL for \"{search_name}\" (official domain: {domain_hint}).
+    return f"""Acquire CURRENT SOURCE CANDIDATES for \"{search_name}\" (official domain: {domain_hint}).
 This lane covers only: {jury_name}
 {focus_block}
 {jury_hint}
 
-This is source acquisition, not analysis. Search the approved registry below in Finnish and English.
+This is source acquisition, not verification and not analysis. Search the approved registry below in Finnish and English.
 Prioritize sources published or updated within 24 months, while allowing current official registry,
 legal, procurement, developer, careers, and living documentation pages without a visible date.
 Do not search for people, stakeholders, profiles, emails, or contact details.
 The scanner separately prefetches real links from the official domain homepage/sitemap. Use web search
 mainly for missing official pages, direct canonical pages, third-party validation, contradictions,
 and fresh developments; avoid broad search-result pages and generic snippets.
+Do not optimize for speed or completion. Optimize for validation survival. If you cannot find a direct,
+page-bound source that is likely to pass deterministic Scanner checks, return an empty sources array.
 
 ENTITY:
 {entity_context}
@@ -2154,8 +2162,14 @@ from the linked page itself, not paraphrased from a search-result summary. Use a
 article, report, filing, documentation, or job URL rather than a search page or generic landing page.
 The quote should be 30-120 words and contain the target entity or the exact narrow fact it supports.
 If you cannot obtain a page-bound verbatim passage, omit that source.
-Return 2-3 high-quality canonical URLs only. Quality is better than volume; a short list of live,
-page-bound sources is better than many broad or stale candidates.
+Before returning a source, run this self-check and omit the source if any item fails:
+- direct canonical page, not search/archive/index/navigation page;
+- likely live and readable as an article/report/service/case/procurement/job-detail/documentation page;
+- not an image/icon/asset, social/contact/login/cookie/tracking URL, or generic home page;
+- target company, group, named subsidiary, or official domain is clearly scoped;
+- useful for this exact jury, not merely evidence that the company exists;
+- `verbatim_quote` is copied from the page itself.
+Return {source_limit} high-quality canonical URL(s) only. Quality is better than volume.
 Return ONLY valid JSON:
 {{
   "jury": {json.dumps(jury_name)},
@@ -2215,12 +2229,15 @@ def _build_jury_replacement_prompt(
             f"{focus_label}\n"
             "Stay inside this focus. Do not broaden into other juries.\n"
         )
+    source_limit = max(1, min(2, int(target_valid or 1)))
     return f"""Replace failed source packets for \"{search_name}\" (official domain: {domain_hint}).
 This lane covers only: {jury_name}
 {focus_block}
 
 The previous source packets failed deterministic precheck. Need {target_valid} validated, canonical source packet(s).
 Do not return rejected URLs or repeat rejected URL patterns.
+If the rejected host/path was an archive, search page, asset path, or dead press item, do not return another
+page with the same pattern. Empty output is better than a likely failed replacement.
 
 Rejected URLs:
 {json.dumps(rejected, ensure_ascii=False)}
@@ -2239,8 +2256,10 @@ Return only direct source pages likely to pass validation:
 - authoritative third-party pages only when the target company, group, or named subsidiary is clearly scoped;
 - no search pages, archive indexes, image/icon assets, generic landing pages, social/contact pages, or stale redirects;
 - `verbatim_quote` must be copied from the linked page itself and contain the entity or narrow fact/context.
+Before output, self-check each candidate for direct page, likely liveness/readability, target scope, exact page quote,
+and usefulness for this exact jury. Omit any candidate that is only a search-result snippet or broad context.
 
-Return ONLY valid JSON with 1-3 sources:
+Return ONLY valid JSON with up to {source_limit} source(s):
 {{
   "jury": {json.dumps(jury_name)},
   "sources": [
@@ -2331,6 +2350,7 @@ def _build_jury_repair_prompt(
         if url:
             rejected.append({"url": url, "reason": reason})
     rejected = rejected[:12]
+    repair_limit = max(1, min(2, int(readiness.get('required_fresh') or 1)))
     return f"""Repair weak source acquisition for \"{search_name}\" (official domain: {domain_hint}).
 This lane covers only: {jury_name}
 
@@ -2339,7 +2359,7 @@ The first acquisition pass was too thin:
 - total packets including revalidated seeds: {readiness.get('total', 0)} / required {readiness.get('required_total', 0)}
 - rejected reasons: {json.dumps(readiness.get('rejected_reasons') or {}, ensure_ascii=False)}
 
-Do a narrow re-search. Do NOT return any rejected URL below, and avoid the same pattern:
+Do a narrow re-search. Do NOT return any rejected URL below, and avoid the same host/path pattern:
 {json.dumps(rejected, ensure_ascii=False)}
 
 ENTITY:
@@ -2348,12 +2368,14 @@ ENTITY:
 
 {_build_jury_source_registry_block(search_name, domain_hint, (jury_name,))}
 
-Return 2-4 direct, canonical source packets that are likely to survive validation:
+Return up to {repair_limit} direct, canonical source packet(s) that are likely to survive validation:
 - live article/report/product/service/documentation/procurement/job-detail pages only;
 - no search result pages, generic landing pages, images, icons, PDFs without readable text, or navigation pages;
 - the page itself must mention or clearly scope to the target company, group, or named subsidiary;
 - `verbatim_quote` must be copied from the linked page, not from a search result summary;
 - choose the narrowest page that supports a useful current-state finding for this jury.
+Self-check before returning: direct page, likely live/readable, scoped to target, useful for this exact jury,
+and quote copied from the page. If no source survives that check, return an empty sources array.
 
 Return ONLY valid JSON:
 {{
