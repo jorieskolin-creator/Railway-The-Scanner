@@ -37,6 +37,11 @@ from evidence_contracts import (
     mark_company_candidate,
     mark_verified_company_evidence,
 )
+from evidence_packaging import (
+    build_jury_evidence_packages,
+    build_subdimension_coverage,
+    render_packages_for_prompt,
+)
 
 # --- HELPER: IMPROVE SEARCH RECALL ---
 def clean_company_name_for_search(name):
@@ -1453,17 +1458,19 @@ def _prevalidate_acquisition_results(
     recovery_candidates = []
     for source in sources:
         checked = url_results.get(source.get("url"), {})
+        proof_hint = str(source.get("provider_quote_candidate") or "")
+        routing_hint = str(source.get("semantic_snippet") or source.get("snippet") or proof_hint or "")
         match = _quote_match_details(
-            str(source.get("snippet") or ""),
+            proof_hint,
             str(checked.get("content_excerpt") or ""),
         )
         source["_precheck_company_mentioned"] = checked.get("company_mentioned")
         if (
             checked.get("verified") is True
             and (checked.get("company_mentioned") is not False or _official_domain_source(source.get("url") or ""))
-            and len(str(source.get("snippet") or "").strip()) >= 40
-            and (checked.get("content_readable") is not True or not match["matched"])
+            and (checked.get("content_readable") is not True or (proof_hint and not match["matched"]))
         ):
+            source["_recovery_hint"] = proof_hint or routing_hint
             recovery_candidates.append(source)
 
     firecrawl_results = {}
@@ -1555,11 +1562,13 @@ def _prevalidate_acquisition_results(
                     source["entity_scope"] = "unknown"
                     source["entity_verified"] = False
             direct_content = str(checked.get("content_excerpt") or "")
-            match = _quote_match_details(str(source.get("snippet") or ""), direct_content)
+            proof_hint = str(source.get("provider_quote_candidate") or "")
+            routing_hint = str(source.get("semantic_snippet") or source.get("snippet") or proof_hint or "")
+            match = _quote_match_details(proof_hint, direct_content)
             source["quote_match_method"] = match["method"]
             source["quote_match_score"] = round(float(match["score"]), 3)
             source["extraction_provider"] = "direct"
-            source["fetched_excerpt"] = _relevant_passage(str(source.get("snippet") or ""), direct_content)
+            source["fetched_excerpt"] = _relevant_passage(routing_hint or proof_hint, direct_content)
             if checked.get("extracted_date"):
                 source["extracted_date"] = str(checked["extracted_date"])
             reason = ""
@@ -1567,35 +1576,38 @@ def _prevalidate_acquisition_results(
                 reason = "dead_or_soft_404"
             elif checked.get("company_mentioned") is False and not official_domain_source:
                 reason = "wrong_entity"
-            elif len(str(source.get("snippet") or "").strip()) < 40:
-                reason = "unreadable"
-            elif not source["content_readable"] or not match["matched"]:
+            elif not source["content_readable"]:
                 recovered = firecrawl_results.get(source.get("url"), {})
                 recovered_text = str(recovered.get("text") or "")
-                recovered_match = _quote_match_details(str(source.get("snippet") or ""), recovered_text)
-                if recovered.get("ok") and (recovered_match["matched"] or not source["content_readable"]):
+                recovered_match = _quote_match_details(proof_hint, recovered_text)
+                if recovered.get("ok") and recovered_text:
                     source["content_readable"] = True
                     provider = recovered.get("provider") or "firecrawl"
                     source["extraction_provider"] = provider
                     source["quote_match_method"] = f"{provider}_{recovered_match['method']}"
                     source["quote_match_score"] = round(float(recovered_match["score"]), 3)
                     source["fetched_excerpt"] = _relevant_passage(
-                        str(source.get("snippet") or ""), recovered_text
+                        routing_hint or proof_hint, recovered_text
                     )
                     stats["firecrawl_recovered"] += 1
                 else:
                     if source.get("url") in firecrawl_results:
                         stats["firecrawl_failed"] += 1
                         source["extraction_recovery_reason"] = recovered.get("reason") or "passage_not_found"
-                    reason = "unreadable" if not source["content_readable"] else ""
-                    if not reason and official_domain_source and source["content_readable"]:
-                        source["passage_hint_status"] = "snippet_not_found_in_official_source_content"
-                        source["source_context_status"] = "scoped_context"
-                        source["claim_support_status"] = "context_only"
-                        source["source_use_status"] = "scoped_context"
-                    elif not reason:
-                        stats["quote_not_found"] += 1
-                        source["passage_hint_status"] = "snippet_not_found_in_source_content"
+                    reason = "unreadable"
+            elif proof_hint and not match["matched"]:
+                stats["quote_not_found"] += 1
+                source["passage_hint_status"] = (
+                    "provider_quote_not_found_in_official_source_content"
+                    if official_domain_source else "provider_quote_not_found_in_source_content"
+                )
+                source["claim_support_status"] = "pending_jury_verification"
+            if not reason and source["content_readable"]:
+                source["source_context_status"] = (
+                    "scoped_context" if official_domain_source else "valid_company_context"
+                )
+                source["claim_support_status"] = source.get("claim_support_status") or "pending_jury_verification"
+                source["source_use_status"] = source.get("source_use_status") or "valid_context_unused"
             if reason:
                 stats.setdefault(reason, 0)
                 stats[reason] += 1
@@ -2166,26 +2178,31 @@ ENTITY:
 {_build_jury_source_registry_block(search_name, domain_hint, (jury_name,))}
 
 Return only source packets that mention or clearly scope to the target company, group, or named subsidiary.
-Do not infer a claim from a title. `verbatim_quote` is mandatory and must be copied word-for-word
-from the linked page itself, not paraphrased from a search-result summary. Use a direct canonical
-article, report, filing, documentation, or job URL rather than a search page or generic landing page.
-The quote should be 30-120 words and contain the target entity or the exact narrow fact it supports.
-If you cannot obtain a page-bound verbatim passage, omit that source.
+You are a URL scout, not the verifier. Do not infer a claim from a title. Use a direct canonical
+article, report, filing, documentation, service page, or job URL rather than a search page or generic
+landing page. Provide a short discovery rationale explaining why the source might matter.
+`verbatim_quote` is optional. Include it only when you can copy it word-for-word from the linked page.
+Scanner will fetch the page and extract passages deterministically; your quote/snippet is never proof.
 Before returning a source, run this self-check and omit the source if any item fails:
 - direct canonical page, not search/archive/index/navigation page;
 - likely live and readable as an article/report/service/case/procurement/job-detail/documentation page;
 - not an image/icon/asset, social/contact/login/cookie/tracking URL, or generic home page;
 - target company, group, named subsidiary, or official domain is clearly scoped;
 - useful for this exact jury, not merely evidence that the company exists;
-- `verbatim_quote` is copied from the page itself.
+- if `verbatim_quote` is present, it is copied from the page itself.
 Return {source_limit} high-quality canonical URL(s) only. Quality is better than volume.
 Return ONLY valid JSON:
 {{
   "jury": {json.dumps(jury_name)},
   "sources": [
-    {{"url": "https://...", "title": "page title", "verbatim_quote": "exact page passage",
+    {{"url": "https://...", "title": "page title",
+      "discovery_rationale": "why this direct page may help this jury",
+      "semantic_snippet": "brief routing summary; not evidence",
+      "verbatim_quote": "optional exact page passage or null",
       "published_at": "YYYY-MM-DD or null", "source_type": "registry source type",
       "entity_scope_candidate": "company|group|subsidiary|context|unclear",
+      "expected_subdimensions": ["service portfolio", "customer proof"],
+      "source_intent": "official context|implementation proof|outcome proof|contradiction|independent corroboration",
       "discovery_query": "query used", "freshness": "fresh|current|evergreen|unknown"}}
   ]
 }}
@@ -2264,17 +2281,23 @@ Return only direct source pages likely to pass validation:
 - official-domain service/about/news/case/careers/developer pages when relevant;
 - authoritative third-party pages only when the target company, group, or named subsidiary is clearly scoped;
 - no search pages, archive indexes, image/icon assets, generic landing pages, social/contact pages, or stale redirects;
-- `verbatim_quote` must be copied from the linked page itself and contain the entity or narrow fact/context.
-Before output, self-check each candidate for direct page, likely liveness/readability, target scope, exact page quote,
-and usefulness for this exact jury. Omit any candidate that is only a search-result snippet or broad context.
+- `verbatim_quote` is optional and should be present only when copied from the linked page itself.
+Scanner will fetch and verify page content. Before output, self-check each candidate for direct page,
+likely liveness/readability, target scope, and usefulness for this exact jury. Omit any candidate that
+is only a search-result snippet or broad context.
 
 Return ONLY valid JSON with up to {source_limit} source(s):
 {{
   "jury": {json.dumps(jury_name)},
   "sources": [
-    {{"url": "https://...", "title": "page title", "verbatim_quote": "exact page passage",
+    {{"url": "https://...", "title": "page title",
+      "discovery_rationale": "why this replacement may help this jury",
+      "semantic_snippet": "brief routing summary; not evidence",
+      "verbatim_quote": "optional exact page passage or null",
       "published_at": "YYYY-MM-DD or null", "source_type": "registry source type",
       "entity_scope_candidate": "company|group|subsidiary|context|unclear",
+      "expected_subdimensions": ["procurement", "customer proof"],
+      "source_intent": "official context|implementation proof|outcome proof|contradiction|independent corroboration",
       "discovery_query": "query used", "freshness": "fresh|current|evergreen|unknown"}}
   ]
 }}
@@ -2381,18 +2404,22 @@ Return up to {repair_limit} direct, canonical source packet(s) that are likely t
 - live article/report/product/service/documentation/procurement/job-detail pages only;
 - no search result pages, generic landing pages, images, icons, PDFs without readable text, or navigation pages;
 - the page itself must mention or clearly scope to the target company, group, or named subsidiary;
-- `verbatim_quote` must be copied from the linked page, not from a search result summary;
 - choose the narrowest page that supports a useful current-state finding for this jury.
 Self-check before returning: direct page, likely live/readable, scoped to target, useful for this exact jury,
-and quote copied from the page. If no source survives that check, return an empty sources array.
+and no repeated failed URL pattern. If no source survives that check, return an empty sources array.
 
 Return ONLY valid JSON:
 {{
   "jury": {json.dumps(jury_name)},
   "sources": [
-    {{"url": "https://...", "title": "page title", "verbatim_quote": "exact page passage",
+    {{"url": "https://...", "title": "page title",
+      "discovery_rationale": "why this replacement may help this jury",
+      "semantic_snippet": "brief routing summary; not evidence",
+      "verbatim_quote": "optional exact page passage or null",
       "published_at": "YYYY-MM-DD or null", "source_type": "registry source type",
       "entity_scope_candidate": "company|group|subsidiary|context|unclear",
+      "expected_subdimensions": ["AI deployment"],
+      "source_intent": "official context|implementation proof|outcome proof|contradiction|independent corroboration",
       "discovery_query": "query used", "freshness": "fresh|current|evergreen|unknown"}}
   ]
 }}
@@ -2416,15 +2443,25 @@ def _normalize_acquisition_payload(payload: dict, jury_name: str, provider: str)
         if not key or key in seen:
             continue
         seen.add(key)
-        quote = str(
-            item.get("verbatim_quote") or item.get("quote") or item.get("snippet") or item.get("source_quote") or ""
+        quote = str(item.get("verbatim_quote") or item.get("quote") or item.get("source_quote") or "").strip()
+        semantic_snippet = str(
+            item.get("semantic_snippet")
+            or item.get("discovery_rationale")
+            or item.get("snippet")
+            or quote
+            or ""
         ).strip()
         normalized.append({
             "category": jury_name,
             "label": str(item.get("label") or item.get("title") or "Fresh evidence candidate")[:180],
             "title": str(item.get("title") or url)[:300],
             "url": url,
-            "snippet": quote[:1800],
+            "snippet": semantic_snippet[:1800],
+            "semantic_snippet": semantic_snippet[:1800],
+            "provider_quote_candidate": quote[:1800],
+            "discovery_rationale": str(item.get("discovery_rationale") or semantic_snippet)[:900],
+            "source_intent": item.get("source_intent") or "",
+            "expected_subdimensions": item.get("expected_subdimensions") or [],
             "published_at": item.get("published_at"),
             "source_type": item.get("source_type") or "web_source",
             "entity_scope": item.get("entity_scope_candidate") or item.get("entity_scope") or "unclear",
@@ -2467,23 +2504,11 @@ def _route_seed_findings(findings: list) -> dict:
 
 
 def _build_jury_analysis_prompt(search_name: str, jury_name: str, packets: list) -> str:
-    compact = []
-    for item in packets[:18]:
-        compact.append({
-            "url": item.get("url"),
-            "title": item.get("title"),
-            "acquired_quote": str(item.get("snippet") or "")[:1200],
-            "fetched_or_cached_content": str(
-                item.get("fetched_excerpt") or item.get("cached_excerpt") or item.get("snippet") or ""
-            )[:2600],
-            "published_at": item.get("published_at"),
-            "source_type": item.get("source_type"),
-            "entity_scope_candidate": item.get("entity_scope"),
-            "provenance": item.get("forensic_provenance") or item.get("source_database"),
-            "url_revalidated": item.get("seed_url_verified") or item.get("url_verified"),
-        })
+    packages = build_jury_evidence_packages(jury_name, packets, max_packages=10)
+    coverage = build_subdimension_coverage(jury_name, packages)
+    compact = render_packages_for_prompt(packages, max_packages=10)
     return f"""Act as {jury_name} for the forensic review of \"{search_name}\".
-Do NOT browse the web. Judge only the supplied source packets.
+Do NOT browse the web. Judge only the supplied evidence packages.
 
 For every promoted finding, verify from the supplied excerpt/content:
 1. target entity and legal/group/subsidiary scope,
@@ -2493,10 +2518,10 @@ For every promoted finding, verify from the supplied excerpt/content:
 
 Seeded material is candidate evidence, never inherited truth. Reject wrong-entity, generic,
 unsupported, stale, soft-404, or merely adjacent packets. Hiring is a weak signal, not deployment proof.
-`acquired_quote` is only a discovery hint; it is not evidence by itself. Judge claims from
-`fetched_or_cached_content`. Write the SMALLEST claim the source content actually supports.
-`source_quote` should be the best exact passage you can find in `fetched_or_cached_content`, not
-invented, paraphrased, or copied only from an unconfirmed `acquired_quote`. Grade support as:
+`semantic_snippet_for_routing_only` is only a discovery/routing hint; it is not evidence by itself.
+Judge claims from `source_content_excerpt` and `source_supported_propositions`. Write the SMALLEST
+claim the source content actually supports. `source_quote` should be the best exact passage you can
+find in `source_content_excerpt` or the proposition passage, not invented or paraphrased. Grade support as:
 - exact: quote directly supports the whole claim,
 - partial: quote supports only part; phrase as a cautious signal,
 - context_only: identity/general background only, not a company capability fact,
@@ -2510,7 +2535,10 @@ Precise figures, named systems/APIs/platforms, projects, outcomes, and specific 
 `exact` support. Generic home, careers, service, reference-index, and case-study-index pages are
 context_only unless the supplied quote itself states the complete narrow fact.
 
-SOURCE PACKETS:
+SUBDIMENSION COVERAGE BEFORE JURY:
+{json.dumps(coverage, ensure_ascii=False)}
+
+EVIDENCE PACKAGES:
 {json.dumps(compact, ensure_ascii=False)}
 
 Return ONLY valid JSON:
@@ -2520,6 +2548,8 @@ Return ONLY valid JSON:
     {{"category": {json.dumps(jury_name)}, "supported_claim": "minimal source-supported claim", "found": true,
       "sentiment": "positive|neutral|negative", "source_quote": "exact supplied quote", "title": "source title",
       "url": "https://...", "is_recent": true, "source_type": "type",
+      "evidence_package_id": "PKG-...", "proposition_ids": ["PROP-..."],
+      "subdimensions": ["covered subdimension"],
       "entity_scope": "company|group|subsidiary|context", "source_verdict": "accepted",
       "support_level": "exact|partial|context_only", "confidence": 0}}
   ],
@@ -5149,6 +5179,13 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         packets = fresh + seeds
         if not packets:
             return {"jury": jury_name, "provider": None, "status": "no_evidence", "data": None}
+        preview_packages = build_jury_evidence_packages(jury_name, packets, max_packages=10)
+        preview_coverage = build_subdimension_coverage(jury_name, preview_packages)
+        print(
+            f"   📦 [Jury Evidence Package] {jury_name}: "
+            f"{len(preview_packages)} package(s); covered={len(preview_coverage.get('covered', []))}, "
+            f"weak={len(preview_coverage.get('weak', []))}, missing={len(preview_coverage.get('missing', []))}."
+        )
 
         def _run_jury_prompt(chunk_packets: list, chunk_label: str = "") -> tuple[dict | None, str]:
             prompt = _build_jury_analysis_prompt(search_name, jury_name, chunk_packets)

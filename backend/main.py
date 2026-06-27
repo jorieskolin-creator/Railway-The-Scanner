@@ -182,6 +182,7 @@ def _company_evidence_db_scanner_candidates(company_evidence: dict | None, limit
         "evaluated": 0,
         "eligible_before_limit": 0,
         "cached_extracts": 0,
+        "governed_admitted": 0,
         "skipped": 0,
         "skip_reasons": {},
         "jury_counts": {},
@@ -357,6 +358,17 @@ def _company_evidence_db_scanner_candidates(company_evidence: dict | None, limit
 
         # Deliberately do not copy generation_eligible, promotion_status,
         # allowed_as_fact, or analysis_verified from the Company Evidence DB.
+        governed_admission = bool(
+            cached_excerpt
+            and record.get("blocked") is not True
+            and record.get("wrong_entity") is not True
+            and record.get("page_not_found") is not True
+            and record.get("soft_404") is not True
+            and record.get("is_stale") is not True
+            and provider_record_type != "stakeholder_candidate"
+            and source_category != "stakeholder_candidate"
+            and sales_use not in {"internal_only", "blocked"}
+        )
         candidate = {
             "title": record.get("title") or record.get("source_title") or url or "Company Evidence DB source",
             "url": url,
@@ -379,6 +391,11 @@ def _company_evidence_db_scanner_candidates(company_evidence: dict | None, limit
             "content_hash": record.get("content_hash"),
             "original_entity_match_status": record.get("entity_match_status"),
             "original_verification_reason": record.get("verification_reason"),
+            "evidence_admission_status": "governed_candidate_admitted" if governed_admission else "candidate_needs_revalidation",
+            "evidence_admission_reason": (
+                "active_current_scoped_cached_company_evidence"
+                if governed_admission else "scanner_must_revalidate_before_use"
+            ),
         }
         hint = jury_hint(record, candidate, cached_excerpt)
         candidate["scanner_jury_hint"] = hint
@@ -388,12 +405,18 @@ def _company_evidence_db_scanner_candidates(company_evidence: dict | None, limit
         stats["eligible_before_limit"] += 1
         if cached_excerpt:
             stats["cached_extracts"] += 1
+        if governed_admission:
+            stats["governed_admitted"] += 1
 
     candidates = select_diverse(eligible_candidates)
     stats["candidates"] = len(candidates)
     stats["selected"] = len(candidates)
     stats["limit_reached"] = len(eligible_candidates) > len(candidates)
     stats["cached_extracts"] = sum(1 for candidate in candidates if candidate.get("cached_excerpt"))
+    stats["governed_admitted"] = sum(
+        1 for candidate in candidates
+        if candidate.get("evidence_admission_status") == "governed_candidate_admitted"
+    )
     for candidate in candidates:
         jury = candidate.get("scanner_jury_hint") or "unknown"
         stats["jury_counts"][jury] = stats["jury_counts"].get(jury, 0) + 1
@@ -3888,7 +3911,9 @@ def _execute_scan_pipeline(
                         f"   [Company Evidence DB] Loaded {evidence_stats.get('candidates', 0)} ranked candidate source(s) "
                         f"from {evidence_stats.get('eligible_before_limit', 0)} eligible / "
                         f"{evidence_stats.get('evaluated', 0)} evaluated record(s), "
-                        f"{evidence_stats.get('cached_extracts', 0)} cached extract(s), {skipped} skipped; "
+                        f"{evidence_stats.get('cached_extracts', 0)} cached extract(s), "
+                        f"{evidence_stats.get('governed_admitted', 0)} governed admission(s), "
+                        f"{skipped} skipped; "
                         f"jury coverage {len(jury_counts)}/5."
                     )
                     if evidence_stats.get("limit_reached"):

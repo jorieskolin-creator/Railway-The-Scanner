@@ -12,6 +12,7 @@ COMPANY_EVIDENCE_CANDIDATE = "company_evidence_candidate/v1"
 VERIFIED_COMPANY_EVIDENCE = "verified_company_evidence/v1"
 CENTRAL_FORESIGHT_SIGNAL = "central_foresight_signal/v1"
 COMPANY_FORESIGHT_INTERPRETATION = "company_foresight_interpretation/v1"
+JURY_EVIDENCE_PACKAGE = "jury_evidence_package/v1"
 
 
 COMPANY_VERDICT_FIELDS = {
@@ -126,3 +127,9 @@ def mark_company_foresight_interpretation(record: dict) -> dict:
     interpretation["requires_company_specific_corroboration"] = True
     interpretation["not_evidence_of_deployment"] = True
     return interpretation
+
+
+def mark_jury_evidence_package(record: dict) -> dict:
+    package = deepcopy(record) if isinstance(record, dict) else {}
+    package["evidence_contract"] = JURY_EVIDENCE_PACKAGE
+    return package
