@@ -69,6 +69,203 @@ SOURCE_ROLE_KEYWORDS = {
     "independent_corroboration": ("registry", "analyst", "public procurement", "award", "database"),
 }
 
+WEAK_GENERIC_TERMS = {
+    "brand",
+    "culture",
+    "customer",
+    "market",
+    "people",
+    "strategy",
+    "values",
+}
+
+
+SEMANTIC_PATTERN_FAMILIES = {
+    STRATEGIC_JURY: {
+        "ownership_change": {
+            "subdimensions": ("business_model_ownership",),
+            "indicators": (
+                "acquisition",
+                "carve-out",
+                "divestment",
+                "new owner",
+                "ownership change",
+                "private equity",
+                "separate company",
+                "spin-off",
+                "transaction",
+            ),
+            "behavior": "ownership or transaction context",
+        },
+        "investment_thesis": {
+            "subdimensions": ("business_model_ownership", "strategic_investment"),
+            "indicators": (
+                "growth platform",
+                "investment thesis",
+                "strategic investment",
+                "value creation",
+                "portfolio company",
+                "growth company",
+                "long-term owner",
+            ),
+            "behavior": "investor logic or value-creation thesis",
+        },
+        "growth_program": {
+            "subdimensions": ("strategic_investment", "market_financial_change"),
+            "indicators": (
+                "growth program",
+                "expand capacity",
+                "capacity expansion",
+                "market expansion",
+                "new market",
+                "growth strategy",
+                "scale up",
+                "international expansion",
+            ),
+            "behavior": "growth, scale, or market expansion direction",
+        },
+        "partnership_logic": {
+            "subdimensions": ("procurement_partnerships",),
+            "indicators": (
+                "strategic partner",
+                "partner ecosystem",
+                "supplier partnership",
+                "framework agreement",
+                "procurement model",
+                "sourcing model",
+                "preferred supplier",
+                "alliance",
+            ),
+            "behavior": "partner, supplier, or procurement logic",
+        },
+        "customer_segment_focus": {
+            "subdimensions": ("customer_experience", "market_financial_change"),
+            "indicators": (
+                "customer segment",
+                "target customers",
+                "enterprise customers",
+                "industrial customers",
+                "customer base",
+                "market-facing",
+                "customer promise",
+                "customer experience",
+            ),
+            "behavior": "customer or market-positioning focus",
+        },
+    },
+    CULTURAL_JURY: {
+        "decision_autonomy": {
+            "subdimensions": ("leadership_model", "employee_experience"),
+            "indicators": (
+                "autonomous teams",
+                "decision autonomy",
+                "empowered teams",
+                "low hierarchy",
+                "make decisions",
+                "freedom to decide",
+                "self-organizing",
+                "self-directed",
+            ),
+            "behavior": "decision autonomy or empowerment language",
+        },
+        "team_responsibility": {
+            "subdimensions": ("employee_experience", "leadership_model"),
+            "indicators": (
+                "take responsibility",
+                "team responsibility",
+                "end-to-end responsibility",
+                "accountable teams",
+                "ownership mindset",
+                "everyone takes responsibility",
+                "responsible teams",
+            ),
+            "behavior": "team accountability or responsibility framing",
+        },
+        "safety_trust": {
+            "subdimensions": ("leadership_model", "employee_experience"),
+            "indicators": (
+                "psychological safety",
+                "safe to speak",
+                "open feedback",
+                "trust and transparency",
+                "trusted environment",
+                "speak up",
+                "inclusive culture",
+            ),
+            "behavior": "trust, safety, or openness signal",
+        },
+        "learning_reskilling": {
+            "subdimensions": ("learning_reskilling",),
+            "indicators": (
+                "reskilling",
+                "upskilling",
+                "learning culture",
+                "continuous learning",
+                "training program",
+                "competence development",
+                "career development",
+                "academy",
+            ),
+            "behavior": "learning or capability development signal",
+        },
+        "workforce_change": {
+            "subdimensions": ("workforce_movement", "workforce_friction"),
+            "indicators": (
+                "restructuring",
+                "change negotiations",
+                "layoffs",
+                "hiring campaign",
+                "recruitment drive",
+                "workforce reduction",
+                "new roles",
+                "talent shortage",
+            ),
+            "behavior": "workforce change or friction signal",
+        },
+        "employee_promise": {
+            "subdimensions": ("employee_experience",),
+            "indicators": (
+                "employee promise",
+                "employer promise",
+                "employee value proposition",
+                "work-life balance",
+                "flexible work",
+                "meaningful work",
+                "career path",
+            ),
+            "behavior": "employee promise or employer-positioning signal",
+        },
+    },
+    ARCHITECTURAL_JURY: {
+        "accountability_governance": {
+            "subdimensions": ("operating_model", "decision_rights"),
+            "indicators": (
+                "accountability",
+                "process owner",
+                "business owner",
+                "governance model",
+                "decision rights",
+                "approval process",
+                "responsibility matrix",
+            ),
+            "behavior": "accountability, governance, or decision-rights signal",
+        },
+        "delivery_model": {
+            "subdimensions": ("operating_model", "engineering_delivery"),
+            "indicators": (
+                "delivery model",
+                "operating model",
+                "end-to-end delivery",
+                "cross-functional teams",
+                "business units",
+                "process ownership",
+                "production scaling",
+            ),
+            "behavior": "operating or delivery-model signal",
+        },
+    },
+}
+
 
 def _clean_text(value: object, limit: int | None = None) -> str:
     text = re.sub(r"\s+", " ", str(value or "")).strip()
@@ -112,8 +309,8 @@ def source_text(record: dict, limit: int = 5000) -> str:
     return ""
 
 
-def route_subdimensions(jury_name: str, record: dict) -> list[str]:
-    haystack = _clean_text(
+def _routing_haystack(record: dict, content_limit: int = 5000) -> str:
+    return _clean_text(
         " ".join(
             str(record.get(field) or "")
             for field in (
@@ -128,11 +325,86 @@ def route_subdimensions(jury_name: str, record: dict) -> list[str]:
                 "cached_excerpt",
                 "snippet",
             )
-        ).lower()
+        )
+        + " "
+        + source_text(record, content_limit)
     )
+
+
+def semantic_pattern_matches(jury_name: str, record: dict) -> list[dict]:
+    """Return concrete semantic behavior patterns detected in a source.
+
+    These patterns are intentionally stronger than broad keywords such as
+    "strategy" or "culture": they represent business behaviors a Jury may
+    cautiously reason about as scoped context.
+    """
+    haystack = _routing_haystack(record, 7000).lower()
     matches = []
+    for family, spec in SEMANTIC_PATTERN_FAMILIES.get(jury_name, {}).items():
+        hits = []
+        score = 0
+        for indicator in spec.get("indicators", ()):
+            if indicator in haystack:
+                hits.append(indicator)
+                score += 2 if " " in indicator or "-" in indicator else 1
+        if not hits:
+            continue
+        if score >= 4:
+            confidence = "high"
+        elif score >= 2:
+            confidence = "medium"
+        else:
+            confidence = "low"
+        matches.append(
+            {
+                "pattern_family": family,
+                "behavior": spec.get("behavior") or family.replace("_", " "),
+                "subdimensions": list(spec.get("subdimensions", ())),
+                "matched_indicators": hits[:6],
+                "pattern_score": score,
+                "pattern_confidence": confidence,
+            }
+        )
+    matches.sort(key=lambda item: item.get("pattern_score", 0), reverse=True)
+    return matches
+
+
+def _pattern_rejection_reason(jury_name: str, record: dict, patterns: list[dict]) -> str | None:
+    if patterns:
+        return None
+    if jury_name not in {STRATEGIC_JURY, CULTURAL_JURY, ARCHITECTURAL_JURY}:
+        return None
+    haystack = _routing_haystack(record, 2500).lower()
+    weak_hits = [term for term in WEAK_GENERIC_TERMS if term in haystack]
+    if len(weak_hits) >= 2:
+        return "generic_brand_language"
+    if weak_hits:
+        return "weak_pattern_match"
+    return None
+
+
+def route_subdimensions(jury_name: str, record: dict) -> list[str]:
+    haystack = _routing_haystack(record, 5000).lower()
+    matches = []
+    pattern_scores = {}
+    for pattern in semantic_pattern_matches(jury_name, record):
+        if pattern.get("pattern_score", 0) < 2:
+            continue
+        for subdimension in pattern.get("subdimensions", []) or []:
+            pattern_scores[subdimension] = max(
+                pattern_scores.get(subdimension, 0),
+                int(pattern.get("pattern_score", 0)) + 3,
+            )
     for subdimension, terms in JURY_SUBDIMENSIONS.get(jury_name, {}).items():
-        score = sum(1 for term in terms if term in haystack)
+        score = 0
+        for term in terms:
+            if term not in haystack:
+                continue
+            if jury_name in {STRATEGIC_JURY, CULTURAL_JURY} and term in WEAK_GENERIC_TERMS:
+                score += 0.25
+            else:
+                score += 1
+        score += pattern_scores.get(subdimension, 0)
         if score:
             matches.append((subdimension, score))
     matches.sort(key=lambda item: item[1], reverse=True)
@@ -168,6 +440,28 @@ def infer_source_role(record: dict) -> str:
     return "scoped_context"
 
 
+def _independence_label(record: dict) -> str:
+    text = _clean_text(
+        " ".join(
+            str(record.get(field) or "")
+            for field in (
+                "publisher_independence",
+                "source_type",
+                "source_database",
+                "forensic_provenance",
+                "url",
+            )
+        ).lower()
+    )
+    if record.get("official_domain_scope_inferred") or "official" in text:
+        return "company_stated"
+    if any(term in text for term in ("registry", "public procurement", "analyst", "media", "research", "database")):
+        return "independent_or_third_party"
+    if any(term in text for term in ("partner", "vendor", "customer")):
+        return "partner_or_vendor_context"
+    return "unknown"
+
+
 def _support_level(record: dict) -> str:
     level = str(record.get("support_level") or record.get("claim_support_status") or "").lower()
     if level in {"exact", "supported"}:
@@ -181,29 +475,58 @@ def extract_source_propositions(record: dict, jury_name: str, max_props: int = 2
     text = source_text(record, 3200)
     if not text:
         return []
+    patterns = semantic_pattern_matches(jury_name, record)
+    pattern_rejection = _pattern_rejection_reason(jury_name, record, patterns)
     subdimensions = route_subdimensions(jury_name, record) or ["current_state_context"]
     role = infer_source_role(record)
     support_level = _support_level(record)
+    independence = _independence_label(record)
     title = _clean_text(record.get("title") or record.get("label") or _host(record.get("url") or ""), 160)
     passage = text[:900]
+    if patterns:
+        primary = patterns[0]
+        behavior = primary.get("behavior") or primary.get("pattern_family", "bounded current-state context")
+        claim = f"{title} can inform {behavior} for {', '.join(subdimensions[:2])}."
+        source_role = "scoped_context" if role == "official_context" else role
+        can_support = [
+            "bounded diagnosis premise",
+            "scoped current-state interpretation",
+            f"{independence.replace('_', ' ')} context",
+        ]
+        cannot_support = [
+            "independent proof of practiced behavior unless corroborated by third-party or outcome evidence",
+            "precise hard facts not present in the fetched content",
+            "company-wide maturity, autonomy, culture, or operating-model performance from brand language alone",
+        ]
+    else:
+        claim = f"{title} provides {role.replace('_', ' ')} for {', '.join(subdimensions[:2])}."
+        source_role = role
+        can_support = [
+            "bounded diagnosis premise",
+            "scoped context",
+            "current-state jury interpretation",
+        ]
+        cannot_support = [
+            "independent proof of effectiveness unless the passage states outcomes",
+            "precise hard facts not present in the fetched content",
+            "company-wide deployment from a narrow service or subsidiary page",
+        ]
+        if pattern_rejection:
+            cannot_support.append(pattern_rejection)
     propositions = [
         {
             "proposition_id": f"PROP-{hashlib.sha1((str(record.get('url')) + title + subdimensions[0]).encode('utf-8')).hexdigest()[:10]}",
-            "claim": f"{title} provides {role.replace('_', ' ')} for {', '.join(subdimensions[:2])}.",
+            "claim": claim,
             "support_level": support_level,
             "source_passage": passage,
-            "source_role": role,
+            "source_role": source_role,
+            "source_independence": independence,
             "subdimensions": subdimensions[:2],
-            "can_support": [
-                "bounded diagnosis premise",
-                "scoped context",
-                "current-state jury interpretation",
-            ],
-            "cannot_support": [
-                "independent proof of effectiveness unless the passage states outcomes",
-                "precise hard facts not present in the fetched content",
-                "company-wide deployment from a narrow service or subsidiary page",
-            ],
+            "semantic_patterns": patterns[:3],
+            "routing_basis": "semantic_pattern" if patterns else "keyword_or_metadata",
+            "routing_warning": pattern_rejection,
+            "can_support": can_support,
+            "cannot_support": cannot_support,
         }
     ]
     if max_props > 1 and len(subdimensions) > 2:
@@ -214,7 +537,11 @@ def extract_source_propositions(record: dict, jury_name: str, max_props: int = 2
                 "support_level": "context_only",
                 "source_passage": passage[:700],
                 "source_role": role,
+                "source_independence": independence,
                 "subdimensions": [subdimensions[2]],
+                "semantic_patterns": patterns[:3],
+                "routing_basis": "semantic_pattern" if patterns else "keyword_or_metadata",
+                "routing_warning": pattern_rejection,
                 "can_support": ["secondary context"],
                 "cannot_support": ["standalone hard fact"],
             }
@@ -224,6 +551,7 @@ def extract_source_propositions(record: dict, jury_name: str, max_props: int = 2
 
 def _package_score(record: dict, jury_name: str) -> int:
     text = source_text(record, 1000)
+    patterns = semantic_pattern_matches(jury_name, record)
     score = 0
     if record.get("url_verified") or record.get("seed_url_verified"):
         score += 18
@@ -243,6 +571,10 @@ def _package_score(record: dict, jury_name: str) -> int:
     if _host(record.get("url") or "") and record.get("official_domain_scope_inferred"):
         score += 8
     score += min(18, len(route_subdimensions(jury_name, record)) * 6)
+    if patterns:
+        score += min(18, sum(int(pattern.get("pattern_score", 0)) for pattern in patterns[:2]))
+    elif _pattern_rejection_reason(jury_name, record, patterns):
+        score -= 6
     if record.get("freshness") in {"fresh", "current"} or record.get("is_recent"):
         score += 4
     if "image/" in str(record.get("content_type") or "").lower():
@@ -264,6 +596,9 @@ def build_jury_evidence_packages(jury_name: str, packets: list[dict], max_packag
         if not propositions:
             continue
         subdimensions = sorted({dim for prop in propositions for dim in prop.get("subdimensions", [])})
+        patterns = semantic_pattern_matches(jury_name, packet)
+        routing_basis = "semantic_pattern" if patterns else "keyword_or_metadata"
+        routing_warning = _pattern_rejection_reason(jury_name, packet, patterns)
         role = infer_source_role(packet)
         package = {
             "package_id": f"PKG-{hashlib.sha1((jury_name + key).encode('utf-8')).hexdigest()[:10]}",
@@ -280,6 +615,9 @@ def build_jury_evidence_packages(jury_name: str, packets: list[dict], max_packag
             "freshness": packet.get("freshness") or ("current" if packet.get("is_recent") else "unknown"),
             "subdimensions": subdimensions,
             "evidence_role": role,
+            "semantic_patterns": patterns[:4],
+            "routing_basis": routing_basis,
+            "routing_warning": routing_warning,
             "semantic_snippet": _clean_text(packet.get("semantic_snippet") or packet.get("snippet") or "", 700),
             "fetched_or_cached_content": source_text(packet, 2200),
             "propositions": propositions,
@@ -353,6 +691,9 @@ def render_packages_for_prompt(packages: list[dict], max_packages: int = 10) -> 
                 "content_readable": package.get("content_readable"),
                 "evidence_role": package.get("evidence_role"),
                 "subdimensions": package.get("subdimensions"),
+                "routing_basis": package.get("routing_basis"),
+                "routing_warning": package.get("routing_warning"),
+                "semantic_patterns": package.get("semantic_patterns"),
                 "semantic_snippet_for_routing_only": package.get("semantic_snippet"),
                 "source_content_excerpt": package.get("fetched_or_cached_content"),
                 "source_supported_propositions": package.get("propositions"),

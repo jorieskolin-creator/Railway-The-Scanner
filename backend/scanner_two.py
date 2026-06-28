@@ -2531,6 +2531,10 @@ capabilities, outcomes, or time periods into separate findings even when they sh
 For an official company source, an exact scoped statement may be accepted as a company-reported fact
 when phrased with attribution (for example, "ABB states..." or "ABB lists..."). It is not independent
 proof of effectiveness, adoption, market impact, or achieved outcomes.
+For Strategic, Cultural, and Operating Model evidence, `semantic_patterns` describe possible business
+behaviors detected from ordinary company vocabulary. Treat these as scoped context only unless the
+source passage directly proves a hard fact. Generic brand/value language without concrete behavioral
+detail should remain weak or context_only.
 Precise figures, named systems/APIs/platforms, projects, outcomes, and specific hiring claims require
 `exact` support. Generic home, careers, service, reference-index, and case-study-index pages are
 context_only unless the supplied quote itself states the complete narrow fact.
@@ -5181,10 +5185,20 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             return {"jury": jury_name, "provider": None, "status": "no_evidence", "data": None}
         preview_packages = build_jury_evidence_packages(jury_name, packets, max_packages=10)
         preview_coverage = build_subdimension_coverage(jury_name, preview_packages)
+        semantic_pattern_packages = [
+            package for package in preview_packages
+            if package.get("routing_basis") == "semantic_pattern"
+        ]
+        routing_warnings = {}
+        for package in preview_packages:
+            warning = package.get("routing_warning")
+            if warning:
+                routing_warnings[warning] = routing_warnings.get(warning, 0) + 1
         print(
             f"   📦 [Jury Evidence Package] {jury_name}: "
             f"{len(preview_packages)} package(s); covered={len(preview_coverage.get('covered', []))}, "
-            f"weak={len(preview_coverage.get('weak', []))}, missing={len(preview_coverage.get('missing', []))}."
+            f"weak={len(preview_coverage.get('weak', []))}, missing={len(preview_coverage.get('missing', []))}; "
+            f"semantic_patterns={len(semantic_pattern_packages)}, routing_warnings={routing_warnings}."
         )
 
         def _run_jury_prompt(chunk_packets: list, chunk_label: str = "") -> tuple[dict | None, str]:
