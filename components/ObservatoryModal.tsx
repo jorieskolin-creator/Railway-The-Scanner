@@ -61,38 +61,38 @@ const renderEvidenceRefsHtml = (refs: string[]): string => {
 
 const stripMarkdownEmphasis = (text: string): string => (text || "").replace(/\*\*/g, "");
 
-const splitObservatorySubject = (text: string): { subject: string; body: string } | null => {
+const isObservatoryHeadingBlock = (text: string): boolean => {
   const clean = stripMarkdownEmphasis(text || "").trim();
-  const patterns = [
-    /^((?:Now|Next 12 months|Prepare|12-36 months|Position|24-60 months)\s*\([^)]{2,40}\)\.)\s+(.+)$/i,
-    /^((?:Section\s+\d+\s+[—-]\s+[^.:\n]{4,90})(?:\.|:))\s+(.+)$/i,
-    /^((?:\d+\s+[—-]\s+[^:.\n]{4,90})(?:\.|:))\s+(.+)$/i,
-  ];
-  for (const pattern of patterns) {
-    const match = clean.match(pattern);
-    if (match) return { subject: match[1].trim(), body: match[2].trim() };
-  }
-  return null;
+  if (clean.length > 120) return false;
+  return !/[.!?]\s+\S/.test(clean);
 };
 
-const renderObservatoryParagraph = (text: string) => {
-  const clean = stripMarkdownEmphasis(text);
-  const split = splitObservatorySubject(clean);
-  if (!split) return <span>{clean}</span>;
-  return (
-    <>
-      <strong className="font-semibold text-slate-200">{split.subject}</strong>
-      {" "}{split.body}
-    </>
+const shouldRenderObservatoryEmphasis = (text: string): boolean => {
+  const clean = (text || "").trim();
+  if (!clean) return false;
+  if (clean.length > 140) return false;
+  if ((clean.match(/[.!?]/g) || []).length > 1) return false;
+  return true;
+};
+
+const renderInlineMarkdown = (text: string) => {
+  const segments = (text || "").split(/(\*\*[^*]+\*\*)/);
+  return segments.map((seg: string, i: number) => {
+    if (seg.startsWith("**") && seg.endsWith("**")) {
+      const inner = seg.slice(2, -2);
+      if (shouldRenderObservatoryEmphasis(inner)) {
+        return <strong key={i} className="text-slate-100 font-semibold">{inner}</strong>;
+      }
+      return <span key={i}>{inner}</span>;
+    }
+    return <span key={i}>{seg}</span>;
+  });
+};
+
+const markdownInlineToHtml = (text: string): string =>
+  (text || "").replace(/\*\*([^*]+)\*\*/g, (_match, inner) =>
+    shouldRenderObservatoryEmphasis(inner) ? `<strong>${inner}</strong>` : inner
   );
-};
-
-const observatoryParagraphToHtml = (text: string): string => {
-  const clean = stripMarkdownEmphasis(text);
-  const split = splitObservatorySubject(clean);
-  if (!split) return clean;
-  return `<strong>${split.subject}</strong> ${split.body}`;
-};
 
 const normalizeObservatoryEssayText = (text: string): string => {
   if (!text) return "";
@@ -116,10 +116,10 @@ const markdownToHtml = (text: string): string => {
     const t = block.trim();
     if (!t) return '';
     if (/^-{3,}$/.test(t)) return '<hr>';
-    if (t.startsWith('### ')) return `<h3>${stripMarkdownEmphasis(t.slice(4))}</h3>`;
-    if (t.startsWith('## ')) return `<h2>${stripMarkdownEmphasis(t.slice(3))}</h2>`;
-    if (t.startsWith('# ')) return `<h1>${stripMarkdownEmphasis(t.slice(2))}</h1>`;
-    const html = observatoryParagraphToHtml(t.replace(/\n/g, ' '));
+    if (t.startsWith('### ') && isObservatoryHeadingBlock(t.slice(4))) return `<h3>${stripMarkdownEmphasis(t.slice(4))}</h3>`;
+    if (t.startsWith('## ') && isObservatoryHeadingBlock(t.slice(3))) return `<h2>${stripMarkdownEmphasis(t.slice(3))}</h2>`;
+    if (t.startsWith('# ') && isObservatoryHeadingBlock(t.slice(2))) return `<h1>${stripMarkdownEmphasis(t.slice(2))}</h1>`;
+    const html = markdownInlineToHtml(t.replace(/^#{1,3}\s+/, '').replace(/\n/g, ' '));
     return `<p>${html}</p>`;
   }).join('\n');
   return `${body}${renderEvidenceRefsHtml(refs)}`;
@@ -427,23 +427,23 @@ const formatEssayText = (text: string) => {
     // Skip raw horizontal rules
     if (/^-{3,}$/.test(trimmed)) return <hr key={i} className="border-slate-700/40 my-6" />;
     // Headers
-    if (trimmed.startsWith("## ")) {
+    if (trimmed.startsWith("## ") && isObservatoryHeadingBlock(trimmed.replace(/^##\s*/, ""))) {
       return (
         <h3 key={i} className="text-base font-bold text-slate-100 mt-6 mb-3 border-b border-white/10 pb-1">
           {trimmed.replace(/^##\s*/, "")}
         </h3>
       );
     }
-    if (trimmed.startsWith("# ")) {
+    if (trimmed.startsWith("# ") && isObservatoryHeadingBlock(trimmed.replace(/^#\s*/, ""))) {
       return (
         <h2 key={i} className="text-lg font-bold text-slate-50 mt-6 mb-3">
           {trimmed.replace(/^#\s*/, "")}
         </h2>
       );
     }
-    const rendered = renderObservatoryParagraph(trimmed);
+    const rendered = renderInlineMarkdown(trimmed.replace(/^#{1,3}\s+/, ""));
     return (
-      <p key={i} className="text-[13px] text-slate-300 leading-relaxed mb-4 font-normal" style={{ fontWeight: 400 }}>
+      <p key={i} className="text-[13px] text-slate-300 leading-relaxed mb-3">
         {rendered}
       </p>
     );
