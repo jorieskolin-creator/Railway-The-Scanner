@@ -29,11 +29,41 @@ const OBS_CATEGORY_COLORS: Record<string, string> = {
 // HTML EXPORT
 // ═══════════════════════════════════════════════════════════════════════════════
 
+const OBSERVATORY_EVIDENCE_ID_SOURCE = String.raw`(?:L[123]-CLAIM-\d+|FINDING-[A-Z0-9]+|DOMAIN-[A-Z]+-[A-Z0-9]+|PORTFOLIO-[A-Z-]+-[A-Z0-9]+|EVD-[A-Z0-9]+|FOR-[A-Z0-9]+|KB-[A-Z0-9-]+|CON-[A-Z0-9]+)`;
+const OBSERVATORY_EVIDENCE_ID_RE = new RegExp(`\\b${OBSERVATORY_EVIDENCE_ID_SOURCE}\\b`, "g");
+const OBSERVATORY_EVIDENCE_PAREN_RE = new RegExp(`\\s*\\((?:\\s*${OBSERVATORY_EVIDENCE_ID_SOURCE}\\s*(?:[;,]\\s*)?)+\\)`, "g");
+
+const extractObservatoryEvidenceRefs = (text: string): string[] => {
+  if (!text) return [];
+  const refs = text.match(OBSERVATORY_EVIDENCE_ID_RE) || [];
+  return Array.from(new Set(refs));
+};
+
+const stripObservatoryInlineEvidenceRefs = (text: string): string => {
+  if (!text) return "";
+  return text
+    .replace(OBSERVATORY_EVIDENCE_PAREN_RE, "")
+    .replace(OBSERVATORY_EVIDENCE_ID_RE, "")
+    .replace(/\(\s*[,;:\s]*\)/g, "")
+    .replace(/\s+([,.;:])/g, "$1")
+    .replace(/([(\[])\s+/g, "$1")
+    .replace(/\s+([)\]])/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+};
+
+const renderEvidenceRefsHtml = (refs: string[]): string => {
+  if (!refs.length) return "";
+  return `<div class="evidence-refs"><div class="evidence-refs-title">Evidence references</div><div class="evidence-ref-list">${refs.map(ref => `<span>${ref}</span>`).join("")}</div></div>`;
+};
+
 const markdownToHtml = (text: string): string => {
   if (!text) return '';
+  const refs = extractObservatoryEvidenceRefs(text);
+  const cleanText = stripObservatoryInlineEvidenceRefs(text);
   // Split into paragraph blocks (double newline or more)
-  const blocks = text.split(/\n\n+/);
-  return blocks.map(block => {
+  const blocks = cleanText.split(/\n\n+/);
+  const body = blocks.map(block => {
     const t = block.trim();
     if (!t) return '';
     if (/^-{3,}$/.test(t)) return '<hr>';
@@ -48,6 +78,7 @@ const markdownToHtml = (text: string): string => {
     }
     return `<p>${html}</p>`;
   }).join('\n');
+  return `${body}${renderEvidenceRefsHtml(refs)}`;
 };
 
 const exportObservatoryHtml = (data: any, marketIntelData?: any) => {
@@ -57,7 +88,7 @@ const exportObservatoryHtml = (data: any, marketIntelData?: any) => {
   const confidenceRows = [
     ['Macro-force evidence', data.confidence?.macro_force_evidence],
     ['Company portfolio pattern', data.confidence?.company_portfolio_pattern],
-    ['Strategic interpretation', data.confidence?.strategic_interpretation],
+    ['Interpretation verification', data.confidence?.strategic_interpretation],
   ].filter(([, value]) => value);
   const kbManifest = data.input_manifest?.central_foresight_kb || {};
   const portfolioManifest = data.input_manifest?.company_portfolio || {};
@@ -65,7 +96,12 @@ const exportObservatoryHtml = (data: any, marketIntelData?: any) => {
     <div class="section">
       <h2>Evidence &amp; Confidence</h2>
       <div class="meta">
-        ${confidenceRows.map(([label, value]: any) => `<div class="meta-item"><strong>${label}</strong>: ${value.score}/100 (${value.status})</div>`).join('')}
+        ${confidenceRows.map(([label, value]: any) => {
+          const unavailable = value.status === "unavailable";
+          const scoreText = unavailable ? "Unavailable" : `${value.score}/100`;
+          const statusText = unavailable ? "not checked" : value.status;
+          return `<div class="meta-item"><strong>${label}</strong>: ${scoreText} (${statusText})</div>`;
+        }).join('')}
       </div>
       <p>Central KB eligible: ${kbManifest.records_eligible || 0}/${kbManifest.records_total || 0}; excluded: ${kbManifest.records_excluded || 0}. Company foresight eligible: ${portfolioManifest.foresight_records_eligible || 0}/${portfolioManifest.foresight_records_total || 0}.</p>
     </div>` : '';
@@ -214,6 +250,10 @@ const exportObservatoryHtml = (data: any, marketIntelData?: any) => {
     .essay p strong:first-child { color: white; }
     .essay strong { color: #f1f5f9; }
     .essay hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
+    .evidence-refs { margin-top: 20px; padding-top: 14px; border-top: 1px solid rgba(148,163,184,0.18); }
+    .evidence-refs-title { color: var(--text-dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
+    .evidence-ref-list { display: flex; flex-wrap: wrap; gap: 6px; }
+    .evidence-ref-list span { color: var(--text-dim); border: 1px solid rgba(148,163,184,0.2); background: rgba(15,23,42,0.5); border-radius: 999px; padding: 2px 7px; font-size: 10px; font-family: monospace; }
 
     .domain-dossier { border-top: 1px solid var(--border); padding: 24px 28px; }
     .domain-dossier:first-child { border-top: none; }
@@ -335,8 +375,10 @@ const LAYER_DESCRIPTIONS: Record<string, string> = {
 
 const formatEssayText = (text: string) => {
   if (!text) return null;
-  const parts = text.split(/\n+/);
-  return parts.map((part: string, i: number) => {
+  const refs = extractObservatoryEvidenceRefs(text);
+  const cleanText = stripObservatoryInlineEvidenceRefs(text);
+  const parts = cleanText.split(/\n+/);
+  const renderedParts = parts.map((part: string, i: number) => {
     const trimmed = part.trim();
     if (!trimmed) return null;
     // Skip raw horizontal rules
@@ -369,6 +411,20 @@ const formatEssayText = (text: string) => {
       </p>
     );
   });
+  if (refs.length === 0) return renderedParts;
+  return [
+    ...renderedParts,
+    <div key="observatory-evidence-refs" className="mt-5 pt-3 border-t border-white/10">
+      <div className="text-[9px] uppercase tracking-[0.12em] text-slate-500 mb-2">Evidence references</div>
+      <div className="flex flex-wrap gap-1.5">
+        {refs.map((ref) => (
+          <span key={ref} className="px-2 py-0.5 rounded-full border border-white/10 bg-black/20 text-[9px] font-mono text-slate-500">
+            {ref}
+          </span>
+        ))}
+      </div>
+    </div>
+  ];
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -403,7 +459,7 @@ const ObservatoryGovernance = ({ data }: { data: any }) => {
   const rows = [
     ["Macro-force evidence", confidence.macro_force_evidence],
     ["Company portfolio pattern", confidence.company_portfolio_pattern],
-    ["Strategic interpretation", confidence.strategic_interpretation],
+    ["Interpretation verification", confidence.strategic_interpretation],
   ].filter(([, value]) => value);
   if (rows.length === 0 && !manifest.generated_at) return null;
 
@@ -414,8 +470,12 @@ const ObservatoryGovernance = ({ data }: { data: any }) => {
           <div key={label} className="border border-white/5 rounded p-2 bg-black/20">
             <div className="text-[9px] uppercase tracking-wide text-slate-500">{label}</div>
             <div className="flex items-baseline gap-2 mt-1">
-              <span className="text-sm font-bold text-slate-200">{value.score}/100</span>
-              <span className="text-[9px] font-mono text-slate-400">{value.status}</span>
+              <span className="text-sm font-bold text-slate-200">
+                {value.status === "unavailable" ? "Unavailable" : `${value.score}/100`}
+              </span>
+              <span className="text-[9px] font-mono text-slate-400">
+                {value.status === "unavailable" ? "not checked" : value.status}
+              </span>
             </div>
             <div className="text-[9px] text-slate-500 mt-1">{value.basis}</div>
           </div>

@@ -712,7 +712,10 @@ def _build_confidence_summary(data: dict, verifications: list) -> dict:
         "strategic_interpretation": {
             "score": interpretation_score,
             "status": interpretation_status,
-            "basis": f"{verified} verified, {failed} failed, {unavailable} unavailable outputs",
+            "basis": (
+                f"{verified} interpretation outputs verified, {failed} failed, "
+                f"{unavailable} not checked/unavailable"
+            ),
         },
     }
 
