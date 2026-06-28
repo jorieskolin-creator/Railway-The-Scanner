@@ -29,9 +29,10 @@ const OBS_CATEGORY_COLORS: Record<string, string> = {
 // HTML EXPORT
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const OBSERVATORY_EVIDENCE_ID_SOURCE = String.raw`(?:L[123]-CLAIM-\d+|FINDING-[A-Z0-9]+|DOMAIN-[A-Z]+-[A-Z0-9]+|PORTFOLIO-[A-Z-]+-[A-Z0-9]+|EVD-[A-Z0-9]+|FOR-[A-Z0-9]+|KB-[A-Z0-9-]+|CON-[A-Z0-9]+)`;
+const OBSERVATORY_EVIDENCE_ID_SOURCE = String.raw`(?:L[123]-CLAIM-\d+|FINDING-[A-Z0-9]+|DOMAIN-[A-Z0-9-]+|PORTFOLIO-[A-Z0-9-]+|EVD-[A-Z0-9]+|FOR-[A-Z0-9]+|KB-[A-Z0-9-]+|CON-[A-Z0-9]+|(?=[A-F0-9]*[A-F])[A-F0-9]{8,12})`;
 const OBSERVATORY_EVIDENCE_ID_RE = new RegExp(`\\b${OBSERVATORY_EVIDENCE_ID_SOURCE}\\b`, "g");
 const OBSERVATORY_EVIDENCE_PAREN_RE = new RegExp(`\\s*\\((?:\\s*${OBSERVATORY_EVIDENCE_ID_SOURCE}\\s*(?:[;,]\\s*)?)+\\)`, "g");
+const OBSERVATORY_EVIDENCE_MIXED_PAREN_RE = new RegExp(`\\s*\\((?:\\s*(?:${OBSERVATORY_EVIDENCE_ID_SOURCE}|versus|vs\\.?|and|[,;:])\\s*)+\\)`, "gi");
 
 const extractObservatoryEvidenceRefs = (text: string): string[] => {
   if (!text) return [];
@@ -42,9 +43,10 @@ const extractObservatoryEvidenceRefs = (text: string): string[] => {
 const stripObservatoryInlineEvidenceRefs = (text: string): string => {
   if (!text) return "";
   return text
+    .replace(OBSERVATORY_EVIDENCE_MIXED_PAREN_RE, "")
     .replace(OBSERVATORY_EVIDENCE_PAREN_RE, "")
     .replace(OBSERVATORY_EVIDENCE_ID_RE, "")
-    .replace(/\(\s*[,;:\s]*\)/g, "")
+    .replace(/\(\s*(?:[,;:\s]|versus|vs\.?|and)*\)/gi, "")
     .replace(/\s+([,.;:])/g, "$1")
     .replace(/([(\[])\s+/g, "$1")
     .replace(/\s+([)\]])/g, "$1")
@@ -59,18 +61,38 @@ const renderEvidenceRefsHtml = (refs: string[]): string => {
 
 const stripMarkdownEmphasis = (text: string): string => (text || "").replace(/\*\*/g, "");
 
-const renderInlineMarkdown = (text: string) => {
-  const segments = (text || "").split(/(\*\*[^*]+\*\*)/);
-  return segments.map((seg: string, i: number) => {
-    if (seg.startsWith("**") && seg.endsWith("**")) {
-      return <strong key={i} className="font-semibold text-slate-200">{seg.slice(2, -2)}</strong>;
-    }
-    return <span key={i}>{seg}</span>;
-  });
+const splitObservatorySubject = (text: string): { subject: string; body: string } | null => {
+  const clean = stripMarkdownEmphasis(text || "").trim();
+  const patterns = [
+    /^((?:Now|Next 12 months|Prepare|12-36 months|Position|24-60 months)\s*\([^)]{2,40}\)\.)\s+(.+)$/i,
+    /^((?:Section\s+\d+\s+[—-]\s+[^.:\n]{4,90})(?:\.|:))\s+(.+)$/i,
+    /^((?:\d+\s+[—-]\s+[^:.\n]{4,90})(?:\.|:))\s+(.+)$/i,
+  ];
+  for (const pattern of patterns) {
+    const match = clean.match(pattern);
+    if (match) return { subject: match[1].trim(), body: match[2].trim() };
+  }
+  return null;
 };
 
-const markdownInlineToHtml = (text: string): string =>
-  (text || "").replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+const renderObservatoryParagraph = (text: string) => {
+  const clean = stripMarkdownEmphasis(text);
+  const split = splitObservatorySubject(clean);
+  if (!split) return <span>{clean}</span>;
+  return (
+    <>
+      <strong className="font-semibold text-slate-200">{split.subject}</strong>
+      {" "}{split.body}
+    </>
+  );
+};
+
+const observatoryParagraphToHtml = (text: string): string => {
+  const clean = stripMarkdownEmphasis(text);
+  const split = splitObservatorySubject(clean);
+  if (!split) return clean;
+  return `<strong>${split.subject}</strong> ${split.body}`;
+};
 
 const normalizeObservatoryEssayText = (text: string): string => {
   if (!text) return "";
@@ -97,7 +119,7 @@ const markdownToHtml = (text: string): string => {
     if (t.startsWith('### ')) return `<h3>${stripMarkdownEmphasis(t.slice(4))}</h3>`;
     if (t.startsWith('## ')) return `<h2>${stripMarkdownEmphasis(t.slice(3))}</h2>`;
     if (t.startsWith('# ')) return `<h1>${stripMarkdownEmphasis(t.slice(2))}</h1>`;
-    const html = markdownInlineToHtml(t.replace(/\n/g, ' '));
+    const html = observatoryParagraphToHtml(t.replace(/\n/g, ' '));
     return `<p>${html}</p>`;
   }).join('\n');
   return `${body}${renderEvidenceRefsHtml(refs)}`;
@@ -419,7 +441,7 @@ const formatEssayText = (text: string) => {
         </h2>
       );
     }
-    const rendered = renderInlineMarkdown(trimmed);
+    const rendered = renderObservatoryParagraph(trimmed);
     return (
       <p key={i} className="text-[13px] text-slate-300 leading-relaxed mb-4 font-normal" style={{ fontWeight: 400 }}>
         {rendered}
