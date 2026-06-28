@@ -107,6 +107,126 @@ def _apply_deterministic_corrections(text: str, detailed_claims: list) -> str:
     return text
 
 
+def _activation_list(value) -> list[str]:
+    """Normalize activation WHY/WHAT aliases into a compact string list."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return [cleaned] if cleaned else []
+    if isinstance(value, dict):
+        for key in ("text", "proposal", "description", "summary", "claim"):
+            if value.get(key):
+                return _activation_list(value.get(key))
+        bits = [str(v).strip() for v in value.values() if isinstance(v, str) and v.strip()]
+        return [" — ".join(bits)] if bits else []
+    if isinstance(value, list):
+        items: list[str] = []
+        for item in value:
+            items.extend(_activation_list(item))
+        return [item for item in items if item][:3]
+    return []
+
+
+def _first_activation_value(payload: dict, keys: tuple[str, ...], default=None):
+    for key in keys:
+        value = payload.get(key)
+        if value not in (None, "", [], {}):
+            return value
+    return default
+
+
+def _parse_activation_json(text: str) -> dict | None:
+    """Parse activation output even when the model wraps JSON in prose/fences."""
+    if not text:
+        return None
+    candidates: list[str] = []
+    extracted = extract_json_from_text(text)
+    if extracted:
+        candidates.append(extracted)
+    stripped = re.sub(r"```(?:json)?\s*|\s*```", "", text.strip(), flags=re.IGNORECASE)
+    if stripped and stripped not in candidates:
+        candidates.append(stripped)
+
+    # Brace-balanced fallback: extract the first complete JSON object.
+    start = stripped.find("{")
+    if start >= 0:
+        depth = 0
+        in_string = False
+        escape = False
+        for idx, ch in enumerate(stripped[start:], start=start):
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    candidates.append(stripped[start:idx + 1])
+                    break
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate, strict=False)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            continue
+    return None
+
+
+def _normalize_activation_payload(payload: dict, prior: dict | None = None) -> dict:
+    """Accept current and legacy activation aliases without changing meaning."""
+    prior = prior or {}
+    synthesis = _first_activation_value(payload, (
+        "strategic_synthesis", "synthesis", "strategic_activation",
+        "strategic_summary", "activation_summary",
+    ), prior.get("strategic_synthesis", ""))
+    pitch = _first_activation_value(payload, (
+        "commercial_pitch", "pitch", "pitch_text", "activation_pitch",
+    ), prior.get("pitch", ""))
+    why = _first_activation_value(payload, (
+        "why_proposals", "why", "why_items", "why_points", "why_questions",
+    ), prior.get("why_proposals", []))
+    what = _first_activation_value(payload, (
+        "what_proposals", "what", "what_items", "what_points", "what_actions",
+    ), prior.get("what_proposals", []))
+    return {
+        "strategic_synthesis": sanitize_inference_wording(str(synthesis or "").strip()),
+        "pitch": sanitize_inference_wording(str(pitch or "").strip()),
+        "why_proposals": sanitize_inference_wording(_activation_list(why)),
+        "what_proposals": sanitize_inference_wording(_activation_list(what)),
+    }
+
+
+def _plain_text_activation_fallback(text: str, prior: dict | None = None) -> dict:
+    """Last-resort non-empty activation when a model returned useful prose, not JSON."""
+    prior = prior or {}
+    cleaned = re.sub(r"```(?:json)?|```", "", text or "", flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    if not cleaned:
+        return _normalize_activation_payload({}, prior)
+    paragraphs = [p.strip(" -•\t") for p in re.split(r"\n\s*\n|\n[-•]\s*", cleaned) if p.strip()]
+    first = paragraphs[0] if paragraphs else cleaned
+    second = paragraphs[1] if len(paragraphs) > 1 else first
+    third = paragraphs[2] if len(paragraphs) > 2 else second
+    return _normalize_activation_payload({
+        "strategic_synthesis": prior.get("strategic_synthesis") or first[:1800],
+        "commercial_pitch": prior.get("pitch") if prior.get("pitch") not in {"", "Pitch Unavailable"} else third[:900],
+        "why_proposals": prior.get("why_proposals") or [first[:500]],
+        "what_proposals": prior.get("what_proposals") or [second[:500]],
+    }, prior)
+
+
 def _build_contradictions_block(verified_links: list, company_name: str) -> str:
     """Run contradiction detection on the verified-evidence pool feeding the
     AI Diagnosis synthesis prompt and return a prompt-ready block.
@@ -4966,20 +5086,52 @@ Respond with valid JSON only:
                                      print(f"   ❌ [Activation] Claude Sonnet 4.6 failed: {act_sonnet_err}")
 
                              if activation_text:
-                                 activation_payload = extract_json_from_text(activation_text)
-                                 if activation_payload:
-                                     activation_json = json.loads(activation_payload, strict=False)
-                                     pitch = sanitize_inference_wording(activation_json.get("commercial_pitch", activation_json.get("pitch", pitch)) or pitch)
-                                     strategic_synthesis = sanitize_inference_wording(activation_json.get("strategic_synthesis", "") or strategic_synthesis)
-                                     why_proposals = sanitize_inference_wording(activation_json.get("why_proposals", why_proposals) or why_proposals)
-                                     what_proposals = sanitize_inference_wording(activation_json.get("what_proposals", what_proposals) or what_proposals)
-                                     if pitch or why_proposals or what_proposals:
-                                         print(
-                                             f"   ✅ [Activation] Grounded activation complete "
-                                             f"(why={len(why_proposals)}, what={len(what_proposals)}, pitch={'yes' if pitch else 'no'})"
+                                 prior_activation = {
+                                     "strategic_synthesis": strategic_synthesis,
+                                     "pitch": "" if pitch == "Pitch Unavailable" else pitch,
+                                     "why_proposals": why_proposals,
+                                     "what_proposals": what_proposals,
+                                 }
+                                 activation_json = _parse_activation_json(activation_text)
+                                 if not activation_json and _synthesis_budget_left() > 25:
+                                     try:
+                                         repair_timeout = min(30, max(15, _synthesis_budget_left() - 10))
+                                         print(f"   🔧 [Activation] JSON parse failed; trying cheap JSON repair (timeout: {repair_timeout}s)...")
+                                         repair_prompt = f"""Convert the following Strategic Activation output into STRICT JSON only.
+Do not add facts. Preserve the meaning. Required keys:
+{{"strategic_synthesis": "...", "commercial_pitch": "...", "why_proposals": ["..."], "what_proposals": ["..."]}}
+
+TEXT TO REPAIR:
+{activation_text[:7000]}"""
+                                         repaired_text = call_openai_text(
+                                             repair_prompt,
+                                             model="gpt-5.4",
+                                             max_output_tokens=1800,
+                                             timeout=repair_timeout,
                                          )
+                                         activation_json = _parse_activation_json(repaired_text)
+                                     except Exception as repair_err:
+                                         print(f"   ⚠️ [Activation] JSON repair failed: {type(repair_err).__name__}: {repair_err}")
+
+                                 if activation_json:
+                                     activation_norm = _normalize_activation_payload(activation_json, prior_activation)
                                  else:
-                                     print("   ⚠️ [Activation] Could not parse activation JSON — leaving WHY/WHAT/Pitch empty")
+                                     print("   ⚠️ [Activation] Could not parse activation JSON — using plain-text fallback")
+                                     activation_norm = _plain_text_activation_fallback(activation_text, prior_activation)
+
+                                 if activation_norm.get("pitch"):
+                                     pitch = activation_norm["pitch"]
+                                 if activation_norm.get("strategic_synthesis"):
+                                     strategic_synthesis = activation_norm["strategic_synthesis"]
+                                 if activation_norm.get("why_proposals"):
+                                     why_proposals = activation_norm["why_proposals"]
+                                 if activation_norm.get("what_proposals"):
+                                     what_proposals = activation_norm["what_proposals"]
+                                 if pitch or why_proposals or what_proposals or strategic_synthesis:
+                                     print(
+                                         f"   ✅ [Activation] Grounded activation complete "
+                                         f"(why={len(why_proposals)}, what={len(what_proposals)}, pitch={'yes' if pitch and pitch != 'Pitch Unavailable' else 'no'}, synthesis={'yes' if strategic_synthesis else 'no'})"
+                                     )
                          elif summary:
                              print(f"   ⏭ [Activation] Budget < 45s before final reserve ({_activation_left}s) — skipping WHY/WHAT/Pitch")
 

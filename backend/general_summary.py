@@ -23,7 +23,7 @@ import time
 from source_quality import (
     assess_source_scope, infer_source_type, compute_claim_tier, describe_source,
     is_boilerplate_snippet, is_title_echo, tier_snippet_bounds,
-    is_generation_eligible_source,
+    is_generation_eligible_source, is_analysis_premise_source,
 )
 from contradiction_detector import detect_contradictions
 from prompts import PROMPT_VERSION, build_shared_guardrails
@@ -271,6 +271,47 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
             "source_label": describe_source(l),
         })
 
+    # Attributed company context is not hard factual proof. It lets the General
+    # Summary say what verified company material describes (domain, service
+    # areas, ownership/context) without falling back to Scanner-status language
+    # such as "limited promoted evidence". These items must be attributed in
+    # prose and must not support diagnosis, readiness or risk claims here.
+    attributed_company_context = []
+    for l in _dict_items_only(full_data.get("evidence_links", []), "evidence_links"):
+        if len(attributed_company_context) >= 8:
+            break
+        if l in _all_evidence:
+            continue
+        if l.get("verified") is not True and l.get("url_verified") is not True:
+            continue
+        if not l.get("url") or _is_legal_page(l.get("url", "")) or l.get("wrong_entity"):
+            continue
+        if not is_analysis_premise_source(l):
+            continue
+        snippet_raw = (l.get("semantic_snippet") or l.get("source_quote") or l.get("snippet") or "").strip()
+        title = (l.get("title", "Company context source") or "Company context source")[:90]
+        if (
+            len(snippet_raw) < 50
+            or is_title_echo(snippet_raw, title)
+            or is_boilerplate_snippet(snippet_raw)
+        ):
+            continue
+        scoped_link = apply_entity_scope(dict(l), company_name)
+        attributed_company_context.append({
+            "evidence_id": l.get("evidence_id", ""),
+            "citation": l.get("citation", ""),
+            "title": title,
+            "context_snippet": snippet_raw[:650],
+            "source_use_status": l.get("source_use_status") or l.get("promotion_status") or "",
+            "source_context_status": l.get("source_context_status") or "",
+            "entity_scope": scoped_link.get("entity_scope", "unknown"),
+            "source_label": describe_source(l),
+            "usage_rule": (
+                "Use only as attributed company context, e.g. 'company material states/lists/describes'. "
+                "Do not present as independent proof or as diagnosis."
+            ),
+        })
+
     # Key jury findings — descriptions only, no URLs, no legal pages.
     # Checklist items are Scanner 2 analysis findings; they do NOT carry a url field
     # (urls live on raw_findings / evidence_links, not the checklist).  Requiring
@@ -385,6 +426,7 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
         },
         "key_findings": key_findings,
         "evidence_links": verified_links,
+        "attributed_company_context": attributed_company_context,
         "financial_findings": fin_findings,
         "financial_index": full_data.get("financial_index"),
         "evidence_sufficiency": full_data.get("evidence_sufficiency") or {},
@@ -399,7 +441,7 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
 def _build_prompt(payload: dict, company_name: str) -> str:
     forbidden = ", ".join(_FORBIDDEN_TERMS)
     summary_guardrails = _general_summary_guardrails()
-    return f"""You are writing the General Summary section of a forensic B2B intelligence report about {company_name}. Your role in this section is to write a facts-only business snapshot: what the supplied evidence establishes about the company right now. Do not analyze causes, infer implications, diagnose maturity, evaluate readiness, give advice, make recommendations, or project future outcomes.
+    return f"""You are writing the General Summary section of a forensic B2B intelligence report about {company_name}. Your role in this section is to write an evidence-based business snapshot: what the supplied evidence establishes about the company right now. This is a facts-only summary, not analysis. Do not analyze causes, infer implications, diagnose maturity, evaluate readiness, give advice, make recommendations, or project future outcomes.
 
 This section differs from nearby report sections:
 - AI Diagnosis owns deeper interpretation, risk framing, recommendations, and projected consequences.
@@ -416,7 +458,11 @@ EVIDENCE — the ONLY material you may reference. Every sentence you write must 
 {json.dumps(payload, ensure_ascii=False, indent=2)}
 
 WRITING APPROACH:
-Organize the evidence into a coherent narrative that gives a C-level reader an immediate factual snapshot. Stay in the present and past tense: report what has happened and what currently exists. You may group related facts for readability, but do not turn their combination into a new analytical conclusion. Do not project outcomes, consequences, trajectories, pressures, opportunities, or risks; those belong in the AI Diagnosis and foresight sections.
+Organize the evidence into a coherent narrative that gives a C-level reader an immediate factual snapshot. Start from verified company facts: what the company is, its domain, latest supported financial facts, documented ownership/entity scope, and concrete company-described services or capabilities. Stay in the present and past tense: report what has happened and what currently exists. You may group related facts for readability, but do not turn their combination into a new analytical conclusion. Do not project outcomes, consequences, trajectories, pressures, opportunities, or risks; those belong in the AI Diagnosis and foresight sections.
+
+The payload may include attributed_company_context. This is valid only for compact company-description wording such as "company material states", "the company lists", or "public company material describes". It is not independent proof and it must not be used for readiness, maturity, risk, pressure, or recommendation claims.
+
+Prefer a compact company snapshot over audit wording. Do not lead with or dwell on "limited evidence", "insufficient promoted evidence", empty fields, source-count language, or Scanner status. Mention evidence limitations only after you have stated the verified company facts and only if the payload gives a reader-facing limitation that matters; phrase it as an open evidence question, not as a diagnosis.
 
 The summary should answer four questions, only where the payload supports them:
 1. What is the company's current verified business context?
@@ -430,7 +476,7 @@ MANDATORY RULES:
 
 2. FACTUAL DISCIPLINE — CRITICAL:
    - EVIDENCE-ONLY: Every factual claim must be directly traceable to a specific item in the EVIDENCE above. If you cannot point to the specific evidence item that supports a statement, do not write it. Never supplement with knowledge from outside the provided data.
-   - LOW-EVIDENCE MODE: If low_evidence_mode=true or low_evidence_label is present, explicitly acknowledge limited promoted public evidence and keep all claims cautious. Do not let structured checklist findings substitute for source-backed company facts.
+   - LOW-EVIDENCE MODE: If low_evidence_mode=true or low_evidence_label is present, keep all claims cautious. Acknowledge limited public evidence only after presenting any supported company identity, financial, and company-described context. Do not let structured checklist findings substitute for source-backed company facts.
    - Only write about things that actually happened or currently exist. Do not present hypothetical, conditional, or future-tense scenarios as facts.
    - Terms of Service, legal disclaimers, and privacy policies describe hypothetical situations ("if X happens, Y occurs") — these are NOT evidence of real events. If a snippet sounds like a legal clause, ignore it entirely.
    - Do not infer events from the absence of evidence. If something is not clearly documented as having occurred, do not write that it occurred.
@@ -467,7 +513,7 @@ MANDATORY RULES:
    - Use precise, neutral language. Prefer concrete descriptions over characterisations. Instead of "aggressively pivoting toward AI," write "has established a dedicated AI business unit and deployed Copilot to N users."
 
 6. OPENING SENTENCE — MANDATORY:
-   - Open with the single most significant current observed fact from key_findings or evidence_links — prioritise a strategic event, structural change, or operational signal over a financial figure.
+   - Open with the single most significant current observed fact from key_findings, evidence_links, attributed_company_context, or financial_findings — prioritise company identity/domain, a strategic event, structural change, service/capability context, or operational signal over a financial figure.
    - Never open with a revenue figure, profit margin, or financial ratio.
    - Never open with a number. Never open with a narrative characterisation — anchor on a specific, verifiable data point.
 
@@ -611,10 +657,12 @@ Your task is narrow: compare the SUMMARY against the PAYLOAD and identify factua
 Rules:
 - Use ONLY the PAYLOAD as source material. Do not use outside knowledge.
 - A claim is supported when it can be traced to a specific current payload item, financial finding, contradiction, or evidence snippet.
+- attributed_company_context supports only attributed company-description statements, such as what company material states, lists, or describes. It does not support independent proof, diagnosis, readiness, risk, pressure, or recommendation claims.
 - Never infer a company trend from previous Scanner scores, gaps, diagnoses, or classifications.
 - Do not flag wording differences or factual grouping that introduces no new conclusion.
 - General Summary is facts-only. Flag causal explanations, readiness judgments, pressure/resilience interpretations, risk/opportunity statements, recommendations, and projected consequences even when they sound plausible, unless the payload explicitly states that exact documented fact.
 - Do flag invented events, invented people, invented figures, wrong entity claims, unqualified local-entity claims, and future claims presented as facts.
+- People lists belong in the Stakeholder List section, not the General Summary. Flag named stakeholder inventories unless they document a material leadership, ownership, acquisition, carve-out, or governance event in the payload.
 - If the summary says something broader than the payload supports, flag it and explain the scope problem.
 
 PAYLOAD:

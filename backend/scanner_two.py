@@ -1814,7 +1814,10 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
                                 or bool(packet_text)
                             )
                             and packet.get("wrong_entity") is not True
-                            and packet_entity_status in {"exact", "scoped"}
+                            and (
+                                packet_entity_status in {"exact", "scoped"}
+                                or _is_official_company_context_packet(packet)
+                            )
                         )
                         if packet_is_context:
                             rejected.append({
