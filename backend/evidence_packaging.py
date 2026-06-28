@@ -13,6 +13,8 @@ import re
 from urllib.parse import urlparse
 
 from evidence_contracts import mark_jury_evidence_package
+from source_parser import parse_source
+from source_parser import source_text as parsed_source_text
 
 
 ARCHITECTURAL_JURY = "ARCHITECTURAL JURY (Engineering Reality)"
@@ -289,24 +291,28 @@ def _host(url: str) -> str:
 
 
 def source_text(record: dict, limit: int = 5000) -> str:
-    text = _clean_text(
-        record.get("fetched_excerpt")
-        or record.get("cached_excerpt")
-        or record.get("text_excerpt")
-        or record.get("markdown_excerpt")
-        or record.get("source_quote")
-        or record.get("provider_quote_candidate")
-        or "",
-        limit,
-    )
-    if text:
-        return text
-    # Historical Scanner records sometimes only have `snippet`; fresh
-    # acquisition records use it as a semantic routing hint, so keep it out of
-    # evidence packages unless it came from a non-fresh source lifecycle.
-    if record.get("source_status") != "fresh_discovery":
-        return _clean_text(record.get("snippet") or "", limit)
-    return ""
+    return _clean_text(parsed_source_text(record, limit), limit)
+
+
+def _parser_query_terms(jury_name: str, record: dict) -> tuple[str, ...]:
+    terms: list[str] = []
+    for words in JURY_SUBDIMENSIONS.get(jury_name, {}).values():
+        terms.extend(words)
+    for pattern in semantic_pattern_matches(jury_name, record)[:4]:
+        terms.extend(pattern.get("matched_indicators") or [])
+        terms.extend(pattern.get("subdimensions") or [])
+        if pattern.get("behavior"):
+            terms.append(pattern["behavior"])
+    role = infer_source_role(record)
+    terms.append(role.replace("_", " "))
+    deduped = []
+    seen = set()
+    for term in terms:
+        cleaned = str(term or "").strip().lower()
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            deduped.append(cleaned)
+    return tuple(deduped[:80])
 
 
 def _routing_haystack(record: dict, content_limit: int = 5000) -> str:
@@ -472,9 +478,11 @@ def _support_level(record: dict) -> str:
 
 
 def extract_source_propositions(record: dict, jury_name: str, max_props: int = 2) -> list[dict]:
-    text = source_text(record, 3200)
+    parsed = parse_source(record, jury_name=jury_name, query_terms=_parser_query_terms(jury_name, record))
+    text = parsed.get("content_text") or ""
     if not text:
         return []
+    support_passages = parsed.get("support_passages") or []
     patterns = semantic_pattern_matches(jury_name, record)
     pattern_rejection = _pattern_rejection_reason(jury_name, record, patterns)
     subdimensions = route_subdimensions(jury_name, record) or ["current_state_context"]
@@ -482,7 +490,9 @@ def extract_source_propositions(record: dict, jury_name: str, max_props: int = 2
     support_level = _support_level(record)
     independence = _independence_label(record)
     title = _clean_text(record.get("title") or record.get("label") or _host(record.get("url") or ""), 160)
-    passage = text[:900]
+    primary_passage = support_passages[0] if support_passages else {}
+    passage = _clean_text(primary_passage.get("text") or text, 1200)
+    passage_id = primary_passage.get("passage_id")
     if patterns:
         primary = patterns[0]
         behavior = primary.get("behavior") or primary.get("pattern_family", "bounded current-state context")
@@ -519,6 +529,7 @@ def extract_source_propositions(record: dict, jury_name: str, max_props: int = 2
             "claim": claim,
             "support_level": support_level,
             "source_passage": passage,
+            "support_passage_id": passage_id,
             "source_role": source_role,
             "source_independence": independence,
             "subdimensions": subdimensions[:2],
@@ -535,7 +546,8 @@ def extract_source_propositions(record: dict, jury_name: str, max_props: int = 2
                 "proposition_id": f"PROP-{hashlib.sha1((str(record.get('url')) + title + subdimensions[2]).encode('utf-8')).hexdigest()[:10]}",
                 "claim": f"The same source may also inform {subdimensions[2]}.",
                 "support_level": "context_only",
-                "source_passage": passage[:700],
+                "source_passage": _clean_text((support_passages[1] if len(support_passages) > 1 else primary_passage).get("text") or passage, 900),
+                "support_passage_id": (support_passages[1] if len(support_passages) > 1 else primary_passage).get("passage_id"),
                 "source_role": role,
                 "source_independence": independence,
                 "subdimensions": [subdimensions[2]],
@@ -592,6 +604,9 @@ def build_jury_evidence_packages(jury_name: str, packets: list[dict], max_packag
         if not key or key in seen:
             continue
         seen.add(key)
+        parsed = parse_source(packet, jury_name=jury_name, query_terms=_parser_query_terms(jury_name, packet))
+        if parsed.get("source_format") == "asset" or "empty_content" in (parsed.get("parse_warnings") or []):
+            continue
         propositions = extract_source_propositions(packet, jury_name)
         if not propositions:
             continue
@@ -618,9 +633,15 @@ def build_jury_evidence_packages(jury_name: str, packets: list[dict], max_packag
             "semantic_patterns": patterns[:4],
             "routing_basis": routing_basis,
             "routing_warning": routing_warning,
-            "semantic_snippet": _clean_text(packet.get("semantic_snippet") or packet.get("snippet") or "", 700),
-            "fetched_or_cached_content": source_text(packet, 2200),
+            "parsed_source_id": parsed.get("parsed_source_id"),
+            "source_format": parsed.get("source_format"),
+            "parse_warnings": parsed.get("parse_warnings"),
+            "parsed_source_summary": parsed.get("parsed_source_summary"),
+            "semantic_snippet": parsed.get("semantic_snippet"),
+            "support_passages": parsed.get("support_passages"),
+            "fetched_or_cached_content": parsed.get("content_excerpt"),
             "propositions": propositions,
+            "safe_propositions": propositions,
             "allowed_uses": sorted({item for prop in propositions for item in prop.get("can_support", [])}),
             "limitations": sorted({item for prop in propositions for item in prop.get("cannot_support", [])}),
             "portfolio_value": _package_score(packet, jury_name),
@@ -695,8 +716,11 @@ def render_packages_for_prompt(packages: list[dict], max_packages: int = 10) -> 
                 "routing_warning": package.get("routing_warning"),
                 "semantic_patterns": package.get("semantic_patterns"),
                 "semantic_snippet_for_routing_only": package.get("semantic_snippet"),
+                "parsed_source_summary": package.get("parsed_source_summary"),
+                "support_passages": package.get("support_passages"),
                 "source_content_excerpt": package.get("fetched_or_cached_content"),
                 "source_supported_propositions": package.get("propositions"),
+                "safe_propositions": package.get("safe_propositions"),
                 "allowed_uses": package.get("allowed_uses"),
                 "limitations": package.get("limitations"),
             }

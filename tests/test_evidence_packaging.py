@@ -43,7 +43,11 @@ def test_jury_package_uses_fetched_content_not_semantic_snippet_as_proof():
     assert package["propositions"]
     assert "managed operations" in package["propositions"][0]["source_passage"]
     assert package["semantic_snippet"] == source["semantic_snippet"]
-    assert "semantic_snippet_for_routing_only" in render_packages_for_prompt(packages)[0]
+    rendered = render_packages_for_prompt(packages)[0]
+    assert "semantic_snippet_for_routing_only" in rendered
+    assert "parsed_source_summary" in rendered
+    assert "support_passages" in rendered
+    assert "safe_propositions" in rendered
 
 
 def test_subdimension_coverage_tracks_weak_and_missing_areas():
@@ -157,3 +161,46 @@ def test_operating_model_accountability_routes_architecture_context():
     package = packages[0]
     assert package["routing_basis"] == "semantic_pattern"
     assert {"operating_model", "decision_rights"} & set(package["subdimensions"])
+
+
+def test_parser_selects_late_relevant_support_passage():
+    filler = "General introduction about the company history and public website. " * 35
+    relevant = (
+        "The services portfolio includes lifecycle maintenance, spare parts, field service, "
+        "and customer support for vehicles in operation. The page describes delivery reality "
+        "rather than only a marketing slogan."
+    )
+    source = {
+        "url": "https://www.example.com/services",
+        "title": "Services",
+        "fetched_excerpt": filler + relevant,
+        "url_verified": True,
+        "content_readable": True,
+        "entity_verified": True,
+        "official_domain_scope_inferred": True,
+        "source_context_status": "scoped_context",
+    }
+
+    packages = build_jury_evidence_packages(SERVICE_JURY, [source])
+
+    assert len(packages) == 1
+    package = packages[0]
+    passages = package["support_passages"]
+    assert 1 <= len(passages) <= 4
+    joined = " ".join(passage["text"] for passage in passages)
+    assert "lifecycle maintenance" in joined
+    assert "lifecycle maintenance" in package["propositions"][0]["source_passage"]
+
+
+def test_asset_sources_are_not_packaged_for_jury():
+    source = {
+        "url": "https://www.example.com/assets/service-icon.png",
+        "title": "Service icon",
+        "content_type": "image/png",
+        "fetched_excerpt": "service delivery customer support",
+        "url_verified": True,
+        "content_readable": True,
+        "entity_verified": True,
+    }
+
+    assert build_jury_evidence_packages(SERVICE_JURY, [source]) == []

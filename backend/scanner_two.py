@@ -2519,9 +2519,11 @@ For every promoted finding, verify from the supplied excerpt/content:
 Seeded material is candidate evidence, never inherited truth. Reject wrong-entity, generic,
 unsupported, stale, soft-404, or merely adjacent packets. Hiring is a weak signal, not deployment proof.
 `semantic_snippet_for_routing_only` is only a discovery/routing hint; it is not evidence by itself.
-Judge claims from `source_content_excerpt` and `source_supported_propositions`. Write the SMALLEST
-claim the source content actually supports. `source_quote` should be the best exact passage you can
-find in `source_content_excerpt` or the proposition passage, not invented or paraphrased. Grade support as:
+Each package has passed deterministic parser/router normalization. Use `parsed_source_summary` only
+to understand page scope. Judge claims from `support_passages`, `safe_propositions`, and
+`source_content_excerpt`. Write the SMALLEST claim the source content actually supports.
+`source_quote` should be the best exact passage you can find in `support_passages`,
+`source_content_excerpt`, or the proposition passage, not invented or paraphrased. Grade support as:
 - exact: quote directly supports the whole claim,
 - partial: quote supports only part; phrase as a cautious signal,
 - context_only: identity/general background only, not a company capability fact,
