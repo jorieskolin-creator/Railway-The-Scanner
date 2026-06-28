@@ -94,9 +94,45 @@ const markdownInlineToHtml = (text: string): string =>
     shouldRenderObservatoryEmphasis(inner) ? `<strong>${inner}</strong>` : inner
   );
 
+const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const OBSERVATORY_PROSE_LEAD_LABELS = [
+  "Strategic inference / scenario hypothesis",
+  "Strategic inference",
+  "Scenario hypothesis",
+  "Anticipation",
+  "Participation",
+  "Futures Literacy",
+  "The first convergence",
+  "A second convergence",
+  "The second convergence",
+  "The third convergence",
+  "The first asymmetry",
+  "The second asymmetry",
+  "The third asymmetry",
+  "The fourth asymmetry",
+  "The contrarian hypothesis",
+  "The implication",
+  "The urgent thinking shift",
+];
+
+const OBSERVATORY_PROSE_LEAD_LABEL_RE = new RegExp(
+  `(^|\\n|[.!?]\\s+)(${OBSERVATORY_PROSE_LEAD_LABELS.map(escapeRegExp).join("|")})(?=\\s|:)`,
+  "g"
+);
+
+const emphasizeObservatoryProseLabels = (text: string): string => {
+  if (!text) return "";
+  return text.replace(OBSERVATORY_PROSE_LEAD_LABEL_RE, (_match, prefix: string, label: string) => {
+    const needsParagraphBreak = Boolean(prefix && prefix !== "\n" && prefix.trim().length > 0);
+    const normalizedPrefix = prefix === "\n" ? "\n\n" : needsParagraphBreak ? `${prefix.trimEnd()}\n\n` : prefix;
+    return `${normalizedPrefix}**${label}**`;
+  });
+};
+
 const normalizeObservatoryEssayText = (text: string): string => {
   if (!text) return "";
-  return stripObservatoryInlineEvidenceRefs(text)
+  return emphasizeObservatoryProseLabels(stripObservatoryInlineEvidenceRefs(text))
     .replace(/\r\n?/g, "\n")
     .replace(/([^\n])\s+(#{1,3}\s+)/g, "$1\n\n$2")
     .replace(/\s+\*\*([^*]{3,120}?\.)\*\*/g, "\n\n**$1** ")
