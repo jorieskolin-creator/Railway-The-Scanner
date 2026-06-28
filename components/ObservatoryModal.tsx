@@ -59,6 +59,19 @@ const renderEvidenceRefsHtml = (refs: string[]): string => {
 
 const stripMarkdownEmphasis = (text: string): string => (text || "").replace(/\*\*/g, "");
 
+const renderInlineMarkdown = (text: string) => {
+  const segments = (text || "").split(/(\*\*[^*]+\*\*)/);
+  return segments.map((seg: string, i: number) => {
+    if (seg.startsWith("**") && seg.endsWith("**")) {
+      return <strong key={i} className="font-semibold text-slate-200">{seg.slice(2, -2)}</strong>;
+    }
+    return <span key={i}>{seg}</span>;
+  });
+};
+
+const markdownInlineToHtml = (text: string): string =>
+  (text || "").replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+
 const normalizeObservatoryEssayText = (text: string): string => {
   if (!text) return "";
   return stripObservatoryInlineEvidenceRefs(text)
@@ -84,7 +97,7 @@ const markdownToHtml = (text: string): string => {
     if (t.startsWith('### ')) return `<h3>${stripMarkdownEmphasis(t.slice(4))}</h3>`;
     if (t.startsWith('## ')) return `<h2>${stripMarkdownEmphasis(t.slice(3))}</h2>`;
     if (t.startsWith('# ')) return `<h1>${stripMarkdownEmphasis(t.slice(2))}</h1>`;
-    const html = stripMarkdownEmphasis(t.replace(/\n/g, ' '));
+    const html = markdownInlineToHtml(t.replace(/\n/g, ' '));
     return `<p>${html}</p>`;
   }).join('\n');
   return `${body}${renderEvidenceRefsHtml(refs)}`;
@@ -256,6 +269,7 @@ const exportObservatoryHtml = (data: any, marketIntelData?: any) => {
     .essay h2 { font-size: 16px; margin: 32px 0 14px; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
     .essay h3 { font-size: 14px; margin: 24px 0 10px; color: white; font-weight: 600; }
     .essay p { font-size: 14px; color: var(--text); margin-bottom: 18px; line-height: 1.8; font-weight: 400; }
+    .essay p strong { color: #e2e8f0; font-weight: 600; }
     .essay hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
     .evidence-refs { margin-top: 20px; padding-top: 14px; border-top: 1px solid rgba(148,163,184,0.18); }
     .evidence-refs-title { color: var(--text-dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
@@ -405,7 +419,7 @@ const formatEssayText = (text: string) => {
         </h2>
       );
     }
-    const rendered = <span>{stripMarkdownEmphasis(trimmed)}</span>;
+    const rendered = renderInlineMarkdown(trimmed);
     return (
       <p key={i} className="text-[13px] text-slate-300 leading-relaxed mb-4 font-normal" style={{ fontWeight: 400 }}>
         {rendered}
