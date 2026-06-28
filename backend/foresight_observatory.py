@@ -713,8 +713,9 @@ def _build_confidence_summary(data: dict, verifications: list) -> dict:
             "score": interpretation_score,
             "status": interpretation_status,
             "basis": (
-                f"{verified} interpretation outputs verified, {failed} failed, "
-                f"{unavailable} not checked/unavailable"
+                "Interpretation verification not available"
+                if interpretation_status == "unavailable"
+                else f"{verified} interpretation outputs verified, {failed} failed"
             ),
         },
     }

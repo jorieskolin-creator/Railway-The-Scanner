@@ -57,6 +57,8 @@ const renderEvidenceRefsHtml = (refs: string[]): string => {
   return `<div class="evidence-refs"><div class="evidence-refs-title">Evidence references</div><div class="evidence-ref-list">${refs.map(ref => `<span>${ref}</span>`).join("")}</div></div>`;
 };
 
+const stripMarkdownEmphasis = (text: string): string => (text || "").replace(/\*\*/g, "");
+
 const markdownToHtml = (text: string): string => {
   if (!text) return '';
   const refs = extractObservatoryEvidenceRefs(text);
@@ -67,15 +69,10 @@ const markdownToHtml = (text: string): string => {
     const t = block.trim();
     if (!t) return '';
     if (/^-{3,}$/.test(t)) return '<hr>';
-    if (t.startsWith('### ')) return `<h3>${t.slice(4).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</h3>`;
-    if (t.startsWith('## ')) return `<h2>${t.slice(3).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</h2>`;
-    if (t.startsWith('# ')) return `<h1>${t.slice(2).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</h1>`;
-    // Regular paragraph: apply bold markers, then bold the first sentence
-    let html = t.replace(/\n/g, ' ').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    // If no bold exists yet, bold the first sentence (up to first period+space or first period+end)
-    if (!html.includes('<strong>')) {
-      html = html.replace(/^([^.]+\.)(\s|$)/, '<strong>$1</strong>$2');
-    }
+    if (t.startsWith('### ')) return `<h3>${stripMarkdownEmphasis(t.slice(4))}</h3>`;
+    if (t.startsWith('## ')) return `<h2>${stripMarkdownEmphasis(t.slice(3))}</h2>`;
+    if (t.startsWith('# ')) return `<h1>${stripMarkdownEmphasis(t.slice(2))}</h1>`;
+    const html = stripMarkdownEmphasis(t.replace(/\n/g, ' '));
     return `<p>${html}</p>`;
   }).join('\n');
   return `${body}${renderEvidenceRefsHtml(refs)}`;
@@ -247,8 +244,6 @@ const exportObservatoryHtml = (data: any, marketIntelData?: any) => {
     .essay h2 { font-size: 16px; margin: 32px 0 14px; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
     .essay h3 { font-size: 14px; margin: 24px 0 10px; color: white; font-weight: 600; }
     .essay p { font-size: 14px; color: var(--text); margin-bottom: 18px; line-height: 1.8; }
-    .essay p strong:first-child { color: white; }
-    .essay strong { color: #f1f5f9; }
     .essay hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
     .evidence-refs { margin-top: 20px; padding-top: 14px; border-top: 1px solid rgba(148,163,184,0.18); }
     .evidence-refs-title { color: var(--text-dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
@@ -398,13 +393,7 @@ const formatEssayText = (text: string) => {
         </h2>
       );
     }
-    // Bold text within paragraphs
-    const rendered = trimmed.split(/(\*\*[^*]+\*\*)/).map((seg: string, j: number) => {
-      if (seg.startsWith("**") && seg.endsWith("**")) {
-        return <strong key={j} className="text-slate-100 font-semibold">{seg.slice(2, -2)}</strong>;
-      }
-      return <span key={j}>{seg}</span>;
-    });
+    const rendered = <span>{stripMarkdownEmphasis(trimmed)}</span>;
     return (
       <p key={i} className="text-[13px] text-slate-300 leading-relaxed mb-3">
         {rendered}
@@ -477,7 +466,9 @@ const ObservatoryGovernance = ({ data }: { data: any }) => {
                 {value.status === "unavailable" ? "not checked" : value.status}
               </span>
             </div>
-            <div className="text-[9px] text-slate-500 mt-1">{value.basis}</div>
+            {value.status !== "unavailable" && (
+              <div className="text-[9px] text-slate-500 mt-1">{value.basis}</div>
+            )}
           </div>
         ))}
       </div>
