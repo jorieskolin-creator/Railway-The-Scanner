@@ -49,7 +49,6 @@ def _build_prompt(
     theme_descriptions: dict,
     available_sources: list,
     intent_reality_gap: list = None,
-    stakeholder_attention: dict = None,
     archetype_distribution: list = None,
 ) -> str:
     """Build the v1 Cross-Impact Matrix Interpretation prompt.
@@ -90,14 +89,6 @@ def _build_prompt(
         )
     else:
         gap_block = "(not provided — omit the intent-reality cross-reference)"
-
-    if stakeholder_attention and stakeholder_attention.get("matrix_text"):
-        stake_block = stakeholder_attention["matrix_text"]
-        unchampioned = stakeholder_attention.get("unchampioned_dimensions") or []
-        if unchampioned:
-            stake_block += f"\nDimensions without senior champions: {', '.join(unchampioned)}"
-    else:
-        stake_block = "(not provided — omit the stakeholder cross-reference)"
 
     if archetype_distribution:
         arch_lines = [
@@ -150,9 +141,6 @@ Optional cross-reference data:
 Intent-Reality Gap:
 {gap_block}
 
-Stakeholder Attention Map:
-{stake_block}
-
 Archetype Distribution:
 {arch_block}
 
@@ -182,10 +170,10 @@ Step 5 — Cross-analysis: compare distribution shapes of the top themes
 (different routing, compounding pressure, contrast between concentrated and
 diffuse).
 
-Step 6 — Optional cross-reference. If any of Intent-Reality Gap, Stakeholder
-Attention, or Archetype Distribution is provided (not "(not provided ...)"),
-look for misalignment between where matrix pressure lands and where leadership
-attention or self-assessment sits.
+Step 6 — Optional cross-reference. If Intent-Reality Gap or Archetype
+Distribution is provided (not "(not provided ...)"), look for misalignment
+between where matrix pressure lands and where company self-assessment,
+portfolio health, or archetype concentration sits.
 
 -----
 
@@ -238,15 +226,15 @@ that names the second-order implication of the pattern: not what the data
 says, but what the pattern means about the portfolio's coherence, strategic
 clarity, or adaptive capacity. This is the line a reader should remember.
 Paragraph 4 (only if any optional cross-reference data was provided): Connect
-the matrix pattern to the intent-reality gap, stakeholder attention, or
-archetype distribution. Cite specific numbers from the cross-reference data.
+the matrix pattern to the intent-reality gap or archetype distribution. Cite
+specific numbers from the cross-reference data.
 
 [SECTION: HOW TO USE THIS INTERPRETATION]
 Two short paragraphs. Paragraph 1: Read densities relative to one another, not
 as absolute counts. Notice absences as well as presences. Paragraph 2: The
 matrix establishes where structural pressure is consolidating; the rest of the
-report — gap analysis, stakeholder map, archetype distribution, forensic
-diagnostic — refines those findings into actionable terrain.
+report — gap analysis, archetype distribution, and forensic diagnostic —
+refines those findings into actionable terrain.
 
 [SECTION: SOURCES]
 One sentence stating that this interpretation draws on the following sources,
@@ -334,7 +322,6 @@ def verify_numeric_claims(text: str, matrix_data: list) -> dict:
 
 def build_available_sources(
     intent_reality_gap: list = None,
-    stakeholder_attention: dict = None,
     archetype_distribution: list = None,
 ) -> list:
     """Build the source-label list from what is actually being injected. The
@@ -346,8 +333,6 @@ def build_available_sources(
     ]
     if intent_reality_gap:
         sources.append("Intent-Reality Gap analysis")
-    if stakeholder_attention and stakeholder_attention.get("matrix_text"):
-        sources.append("Stakeholder Attention Map")
     if archetype_distribution:
         sources.append("Archetype Distribution")
     return sources
@@ -376,10 +361,7 @@ def generate_cross_impact_interpretation(
       }
     """
     # Lazy import to avoid pulling provider clients at module load.
-    from foresight_observatory import (
-        _generate_with_verification,
-        _aggregate_stakeholder_dynamics,
-    )
+    from foresight_observatory import _generate_with_verification
 
     # 1. Build inputs from existing computations (no new scoring or scraping).
     cross_impact_flat = compute_cross_impact(company_details)
@@ -389,13 +371,9 @@ def generate_cross_impact_interpretation(
 
     gap_patterns = compute_gap_patterns(company_details)
     archetype_distribution = compute_archetype_flow(dashboard_data)
-    stakeholder_data = _aggregate_stakeholder_dynamics(company_details, gap_patterns)
-    if not stakeholder_data.get("matrix_text"):
-        stakeholder_data = None  # signal "not provided"
 
     available_sources = build_available_sources(
         intent_reality_gap=gap_patterns,
-        stakeholder_attention=stakeholder_data,
         archetype_distribution=archetype_distribution,
     )
 
@@ -405,7 +383,6 @@ def generate_cross_impact_interpretation(
         theme_descriptions=theme_descriptions,
         available_sources=available_sources,
         intent_reality_gap=gap_patterns,
-        stakeholder_attention=stakeholder_data,
         archetype_distribution=archetype_distribution,
     )
     source_summary = (
