@@ -59,10 +59,22 @@ const renderEvidenceRefsHtml = (refs: string[]): string => {
 
 const stripMarkdownEmphasis = (text: string): string => (text || "").replace(/\*\*/g, "");
 
+const normalizeObservatoryEssayText = (text: string): string => {
+  if (!text) return "";
+  return stripObservatoryInlineEvidenceRefs(text)
+    .replace(/\r\n?/g, "\n")
+    .replace(/([^\n])\s+(#{1,3}\s+)/g, "$1\n\n$2")
+    .replace(/\s+\*\*([^*]{3,120}?\.)\*\*/g, "\n\n**$1** ")
+    .replace(/\s+\*\*([^*]{3,90}?)\*\*/g, "\n\n**$1** ")
+    .replace(/[^\S\n]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+};
+
 const markdownToHtml = (text: string): string => {
   if (!text) return '';
   const refs = extractObservatoryEvidenceRefs(text);
-  const cleanText = stripObservatoryInlineEvidenceRefs(text);
+  const cleanText = normalizeObservatoryEssayText(text);
   // Split into paragraph blocks (double newline or more)
   const blocks = cleanText.split(/\n\n+/);
   const body = blocks.map(block => {
@@ -86,7 +98,7 @@ const exportObservatoryHtml = (data: any, marketIntelData?: any) => {
     ['Macro-force evidence', data.confidence?.macro_force_evidence],
     ['Company portfolio pattern', data.confidence?.company_portfolio_pattern],
     ['Interpretation verification', data.confidence?.strategic_interpretation],
-  ].filter(([, value]) => value);
+  ].filter(([label, value]) => value && !(label === 'Interpretation verification' && value.status === 'unavailable'));
   const kbManifest = data.input_manifest?.central_foresight_kb || {};
   const portfolioManifest = data.input_manifest?.company_portfolio || {};
   const governanceHtml = confidenceRows.length ? `
@@ -243,7 +255,7 @@ const exportObservatoryHtml = (data: any, marketIntelData?: any) => {
     .essay h1 { font-size: 20px; margin: 32px 0 14px; color: white; }
     .essay h2 { font-size: 16px; margin: 32px 0 14px; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
     .essay h3 { font-size: 14px; margin: 24px 0 10px; color: white; font-weight: 600; }
-    .essay p { font-size: 14px; color: var(--text); margin-bottom: 18px; line-height: 1.8; }
+    .essay p { font-size: 14px; color: var(--text); margin-bottom: 18px; line-height: 1.8; font-weight: 400; }
     .essay hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
     .evidence-refs { margin-top: 20px; padding-top: 14px; border-top: 1px solid rgba(148,163,184,0.18); }
     .evidence-refs-title { color: var(--text-dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 8px; }
@@ -371,8 +383,8 @@ const LAYER_DESCRIPTIONS: Record<string, string> = {
 const formatEssayText = (text: string) => {
   if (!text) return null;
   const refs = extractObservatoryEvidenceRefs(text);
-  const cleanText = stripObservatoryInlineEvidenceRefs(text);
-  const parts = cleanText.split(/\n+/);
+  const cleanText = normalizeObservatoryEssayText(text);
+  const parts = cleanText.split(/\n\n+|\n(?=#{1,3}\s)/);
   const renderedParts = parts.map((part: string, i: number) => {
     const trimmed = part.trim();
     if (!trimmed) return null;
@@ -395,7 +407,7 @@ const formatEssayText = (text: string) => {
     }
     const rendered = <span>{stripMarkdownEmphasis(trimmed)}</span>;
     return (
-      <p key={i} className="text-[13px] text-slate-300 leading-relaxed mb-3">
+      <p key={i} className="text-[13px] text-slate-300 leading-relaxed mb-4 font-normal" style={{ fontWeight: 400 }}>
         {rendered}
       </p>
     );
@@ -449,7 +461,7 @@ const ObservatoryGovernance = ({ data }: { data: any }) => {
     ["Macro-force evidence", confidence.macro_force_evidence],
     ["Company portfolio pattern", confidence.company_portfolio_pattern],
     ["Interpretation verification", confidence.strategic_interpretation],
-  ].filter(([, value]) => value);
+  ].filter(([label, value]) => value && !(label === "Interpretation verification" && value.status === "unavailable"));
   if (rows.length === 0 && !manifest.generated_at) return null;
 
   return (
