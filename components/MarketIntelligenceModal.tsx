@@ -181,6 +181,10 @@ th { text-align: left; padding: 8px 10px; color: var(--text-muted); font-weight:
 td { padding: 6px 10px; border-bottom: 1px solid rgba(51,65,85,0.3); color: var(--text); }
 table.matrix th { text-align: center; font-size: 11px; }
 table.matrix td { font-family: monospace; font-size: 11px; color: var(--text-muted); text-align: center; }
+.evidence-refs { margin-top: 18px; padding-top: 12px; border-top: 1px solid rgba(148,163,184,0.18); }
+.evidence-refs-title { color: var(--text-dim); font-size: 9px; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 8px; }
+.evidence-ref-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.evidence-ref-list span { padding: 2px 8px; border-radius: 999px; border: 1px solid rgba(148,163,184,0.16); background: rgba(15,23,42,0.35); color: var(--text-dim); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9px; line-height: 1.5; }
 .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 10px; font-family: monospace; background: var(--bg); border: 1px solid var(--border); color: var(--text-muted); margin: 2px; }
 .badge-critical { color: var(--rose); border-color: rgba(251,113,133,0.3); }
 .badge-sleepwalking { color: var(--amber); border-color: rgba(251,191,36,0.3); }
@@ -224,6 +228,72 @@ const escapeMiHtml = (value: any) => String(value == null ? '' : value)
   .replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;')
   .replace(/'/g, '&#39;');
+
+const MI_NARRATIVE_EVIDENCE_ID_SOURCE = String.raw`(?:L[123]-CLAIM-\d+|FINDING-[A-Z0-9]+|DOMAIN-[A-Z0-9-]+|PORTFOLIO-[A-Z0-9-]+|EVD-[A-Z0-9]+|FOR-[A-Z0-9]+|KB-[A-Z0-9-]+|CON-[A-Z0-9]+|(?=[A-F0-9]*[A-F])[A-F0-9]{8,12})`;
+const MI_NARRATIVE_EVIDENCE_ID_RE = new RegExp(`\\b${MI_NARRATIVE_EVIDENCE_ID_SOURCE}\\b`, "g");
+const MI_NARRATIVE_EVIDENCE_PAREN_RE = new RegExp(`\\s*\\((?:\\s*${MI_NARRATIVE_EVIDENCE_ID_SOURCE}\\s*(?:[;,]\\s*)?)+\\)`, "g");
+const MI_NARRATIVE_EVIDENCE_MIXED_PAREN_RE = new RegExp(`\\s*\\((?:\\s*(?:${MI_NARRATIVE_EVIDENCE_ID_SOURCE}|versus|vs\\.?|and|[,;:])\\s*)+\\)`, "gi");
+
+const extractMiNarrativeEvidenceRefs = (text: string): string[] => {
+  if (!text) return [];
+  return Array.from(new Set(text.match(MI_NARRATIVE_EVIDENCE_ID_RE) || []));
+};
+
+const stripMiNarrativeEvidenceRefs = (text: string): string => {
+  if (!text) return "";
+  return text
+    .replace(MI_NARRATIVE_EVIDENCE_MIXED_PAREN_RE, "")
+    .replace(MI_NARRATIVE_EVIDENCE_PAREN_RE, "")
+    .replace(MI_NARRATIVE_EVIDENCE_ID_RE, "")
+    .replace(/\(\s*(?:[,;:\s]|versus|vs\.?|and)*\)/gi, "")
+    .replace(/\s+([,.;:])/g, "$1")
+    .replace(/([(\[])\s+/g, "$1")
+    .replace(/\s+([)\]])/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+};
+
+const renderMiEvidenceRefsHtml = (refs: string[]): string => {
+  if (!refs.length) return "";
+  return `<div class="evidence-refs"><div class="evidence-refs-title">Evidence references</div><div class="evidence-ref-list">${refs.map(ref => `<span>${escapeMiHtml(ref)}</span>`).join("")}</div></div>`;
+};
+
+const shouldRenderMiEmphasis = (text: string): boolean => {
+  const clean = (text || "").trim();
+  if (!clean) return false;
+  if (clean.length > 140) return false;
+  if ((clean.match(/[.!?]/g) || []).length > 1) return false;
+  return true;
+};
+
+const renderMiInlineMarkdownHtml = (text: string): string => {
+  const segments = String(text || "").split(/(\*\*[^*]+\*\*)/);
+  return segments.map((segment) => {
+    if (segment.startsWith("**") && segment.endsWith("**")) {
+      const inner = segment.slice(2, -2);
+      return shouldRenderMiEmphasis(inner) ? `<strong>${escapeMiHtml(inner)}</strong>` : escapeMiHtml(inner);
+    }
+    return escapeMiHtml(segment);
+  }).join("");
+};
+
+const renderMiNarrativeMarkdownHtml = (text: string): string => {
+  if (!text) return "";
+  const refs = extractMiNarrativeEvidenceRefs(text);
+  const cleanText = stripMiNarrativeEvidenceRefs(text);
+  const body = cleanText.split(/\n\n+/).map((b: string) => {
+    const s = b.trim();
+    if (!s) return "";
+    if (/^-{3,}$/.test(s)) return '<hr style="border:none;border-top:1px solid #334155;margin:24px 0">';
+    if (s.startsWith('### ')) return `<h3 style="font-size:14px;margin:20px 0 8px;color:#c4b5fd">${renderMiInlineMarkdownHtml(s.slice(4))}</h3>`;
+    if (s.startsWith('## ')) return `<h2>${renderMiInlineMarkdownHtml(s.slice(3))}</h2>`;
+    if (s.startsWith('# ')) return `<h1 style="font-size:20px;margin:24px 0 10px;color:white">${renderMiInlineMarkdownHtml(s.slice(2))}</h1>`;
+    let h = renderMiInlineMarkdownHtml(s.replace(/\n/g, ' '));
+    if (!h.includes('<strong>')) h = h.replace(/^([^.]+\.)(\s|$)/, '<strong>$1</strong>$2');
+    return `<p style="font-size:13px;line-height:1.8;margin-bottom:16px">${h}</p>`;
+  }).join('\n');
+  return `${body}${renderMiEvidenceRefsHtml(refs)}`;
+};
 
 // Adaptation Capacity x Future Vulnerability scatter for the static HTML export.
 // Mirrors the in-app Recharts version: dots colored by segment, dashed
@@ -594,6 +664,7 @@ const buildCrossImpactHtml = (crossImpact: any[]): string => {
 // per-theme distribution bars, cell chips with density + % of row, prose paragraphs.
 const buildCrossImpactInterpretationHtml = (interpretation: any, crossImpact: any[]): string => {
   if (!interpretation?.text) return '';
+  const narrativeRefs = extractMiNarrativeEvidenceRefs(interpretation.text);
   const dims = ["Operating Model", "Service Portfolio", "Values", "Strategy", "AI Readiness"];
   const matrix: Record<string, Record<string, number>> = {};
   for (const item of crossImpact || []) {
@@ -688,11 +759,13 @@ const buildCrossImpactInterpretationHtml = (interpretation: any, crossImpact: an
       continue;
     }
     if (inSubblock) paraSinceSubblock += 1;
+    const cleanedLine = stripMiNarrativeEvidenceRefs(line);
+    if (!cleanedLine) continue;
     const emphasise = inSubblock && paraSinceSubblock === 2;
     const paraStyle = emphasise
       ? 'font-size:12px;line-height:1.7;color:#e0e7ff;font-weight:600;margin:8px 0'
       : 'font-size:12px;line-height:1.7;color:rgba(203,213,225,0.9);margin:8px 0';
-    blocks.push(`<p style="${paraStyle}">${line}</p>`);
+    blocks.push(`<p style="${paraStyle}">${renderMiInlineMarkdownHtml(cleanedLine)}</p>`);
   }
 
   const meta = (interpretation.sources_used?.length || interpretation.model)
@@ -701,7 +774,7 @@ const buildCrossImpactInterpretationHtml = (interpretation: any, crossImpact: an
         ${interpretation.numeric_check ? `<span>Numeric check: ${interpretation.numeric_check.passed ? 'passed' : `${(interpretation.numeric_check.fabricated || []).length} flagged`}</span>` : ''}
         ${interpretation.model ? `<span>Model: ${interpretation.model}</span>` : ''}
       </div>` : '';
-  return blocks.join('') + meta;
+  return blocks.join('') + renderMiEvidenceRefsHtml(narrativeRefs) + meta;
 };
 
 // C1 — Concentration vs Volume table for HTML export. Static replacement for the
@@ -874,21 +947,11 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
     // Observatory Layer 2 Sections 3 & 4 — Three Horizons + Contrarian Signal
     if (observatoryData?.finland_analysis?.text) {
       const fullText = observatoryData.finland_analysis.text;
-      const mdToHtml = (t: string) => t.split(/\n\n+/).map((b: string) => {
-        const s = b.trim(); if (!s) return '';
-        if (/^-{3,}$/.test(s)) return '<hr style="border:none;border-top:1px solid #334155;margin:24px 0">';
-        if (s.startsWith('### ')) return `<h3 style="font-size:14px;margin:20px 0 8px;color:#c4b5fd">${s.slice(4).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</h3>`;
-        if (s.startsWith('## ')) return `<h2>${s.slice(3).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</h2>`;
-        let h = s.replace(/\n/g, ' ').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-        if (!h.includes('<strong>')) h = h.replace(/^([^.]+\.)(\s|$)/, '<strong>$1</strong>$2');
-        return `<p style="font-size:13px;line-height:1.8;margin-bottom:16px">${h}</p>`;
-      }).join('\n');
-
       const s3Match = fullText.match(/##\s*Section\s*3[^\n]*\n([\s\S]*?)(?=##\s*Section\s*4|$)/i);
       if (s3Match) {
         const section3 = s3Match[1].trim().replace(/^-{3,}\s*/gm, '').trim();
         if (section3) {
-          content += `<div class="section" style="border-color:rgba(167,139,250,0.3)"><h2 style="color:#a78bfa">Three Horizons for Finland</h2><p style="font-size:10px;color:#64748b;margin-bottom:16px">Strategic Foresight Observatory — Where Finland is heading across three timeframes</p>${mdToHtml(section3)}</div>`;
+          content += `<div class="section" style="border-color:rgba(167,139,250,0.3)"><h2 style="color:#a78bfa">Three Horizons for Finland</h2><p style="font-size:10px;color:#64748b;margin-bottom:16px">Strategic Foresight Observatory — Where Finland is heading across three timeframes</p>${renderMiNarrativeMarkdownHtml(section3)}</div>`;
         }
       }
       if (opportunityMapSectionHtml) {
@@ -898,7 +961,7 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
       if (s4Match) {
         const section4 = s4Match[1].trim().replace(/^-{3,}\s*/gm, '').trim();
         if (section4) {
-          content += `<div class="section" style="border-color:rgba(244,63,94,0.3)"><h2 style="color:#fb7185">The Contrarian Signal: Finland's Dangerous Assumption</h2><p style="font-size:10px;color:#64748b;margin-bottom:16px">Strategic Foresight Observatory — The uncomfortable truth the data reveals</p>${mdToHtml(section4)}</div>`;
+          content += `<div class="section" style="border-color:rgba(244,63,94,0.3)"><h2 style="color:#fb7185">The Contrarian Signal: Finland's Dangerous Assumption</h2><p style="font-size:10px;color:#64748b;margin-bottom:16px">Strategic Foresight Observatory — The uncomfortable truth the data reveals</p>${renderMiNarrativeMarkdownHtml(section4)}</div>`;
         }
       }
     } else if (opportunityMapSectionHtml) {
@@ -953,16 +1016,7 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
 
     // 8. Finnish Economy Force Map (last)
     if (observatoryData?.finland_analysis?.text) {
-      const mdToHtml = (t: string) => t.split(/\n\n+/).map(b => {
-        const s = b.trim(); if (!s) return '';
-        if (/^-{3,}$/.test(s)) return '<hr style="border:none;border-top:1px solid #334155;margin:24px 0">';
-        if (s.startsWith('## ')) return `<h2>${s.slice(3).replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</h2>`;
-        if (s.startsWith('# ')) return `<h1 style="font-size:20px;margin:24px 0 10px;color:white">${s.slice(2)}</h1>`;
-        let h = s.replace(/\n/g, ' ').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-        if (!h.includes('<strong>')) h = h.replace(/^([^.]+\.)(\s|$)/, '<strong>$1</strong>$2');
-        return `<p style="font-size:13px;line-height:1.8;margin-bottom:16px">${h}</p>`;
-      }).join('\n');
-      content += `<div class="section" style="border-color:rgba(167,139,250,0.3)"><h2 style="color:#a78bfa">Finnish Economy Force Map</h2><p style="font-size:10px;color:#64748b;margin-bottom:16px">Strategic Foresight Observatory — How global forces reshape Finnish business</p>${mdToHtml(observatoryData.finland_analysis.text)}</div>`;
+      content += `<div class="section" style="border-color:rgba(167,139,250,0.3)"><h2 style="color:#a78bfa">Finnish Economy Force Map</h2><p style="font-size:10px;color:#64748b;margin-bottom:16px">Strategic Foresight Observatory — How global forces reshape Finnish business</p>${renderMiNarrativeMarkdownHtml(observatoryData.finland_analysis.text)}</div>`;
     }
   }
 

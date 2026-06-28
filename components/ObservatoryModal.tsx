@@ -479,7 +479,7 @@ const formatEssayText = (text: string) => {
     }
     const rendered = renderInlineMarkdown(trimmed.replace(/^#{1,3}\s+/, ""));
     return (
-      <p key={i} className="text-[13px] text-slate-300 leading-relaxed mb-3">
+      <p key={i} className="text-sm text-slate-300 leading-[1.8] mb-4 font-normal">
         {rendered}
       </p>
     );
