@@ -116,6 +116,19 @@ const OBSERVATORY_PROSE_LEAD_LABELS = [
   "The urgent thinking shift",
 ];
 
+const OBSERVATORY_SECTION_HEADINGS = [
+  "Domain Reality Check",
+  "Forces by Timescale",
+  "The Own Race Opportunity",
+  "Contrarian Signal",
+  "Contrarian Signal (Genius Forecasting)",
+  "The Finnish Force Map",
+  "The Adaptability Gap",
+  "Three Horizons for Finland",
+  "Finland's Dangerous Assumption",
+  "Finland’s Dangerous Assumption",
+];
+
 const OBSERVATORY_PROSE_LEAD_LABEL_RE = new RegExp(
   `(^|\\n|[.!?]\\s+)(${OBSERVATORY_PROSE_LEAD_LABELS.map(escapeRegExp).join("|")})(?=\\s|:)`,
   "g"
@@ -135,27 +148,134 @@ const normalizeObservatoryEssayText = (text: string): string => {
   return emphasizeObservatoryProseLabels(stripObservatoryInlineEvidenceRefs(text))
     .replace(/\r\n?/g, "\n")
     .replace(/([^\n])\s+(#{1,3}\s+)/g, "$1\n\n$2")
-    .replace(/\s+\*\*([^*]{3,120}?\.)\*\*/g, "\n\n**$1** ")
-    .replace(/\s+\*\*([^*]{3,90}?)\*\*/g, "\n\n**$1** ")
+    .replace(/\s+(\d+\s+[—-]\s+)/g, "\n\n$1")
+    .replace(/\*\*([^*]{1,90})\*\*\s+:/g, "**$1**:")
+    .replace(/\*([^*\n]{1,80})\*/g, "$1")
     .replace(/[^\S\n]{2,}/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 };
 
+type ObservatoryNarrativeBlock = {
+  type: "heading" | "paragraph" | "hr";
+  text?: string;
+  level?: 1 | 2 | 3;
+};
+
+const normalizeObservatoryHeadingText = (value: string): string => {
+  const clean = stripMarkdownEmphasis(value || "")
+    .replace(/^#{1,3}\s*/, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[.:]\s*$/, "");
+  if (!clean) return "";
+  if (clean === clean.toUpperCase() && /[A-Z]/.test(clean)) {
+    return clean.toLowerCase().replace(/\b[\w'’&-]+\b/g, (word) => {
+      if (/^(and|or|the|of|in|for|to|a)$/i.test(word)) return word.toLowerCase();
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    });
+  }
+  return clean;
+};
+
+const splitObservatoryKnownSection = (value: string): { heading: string; rest: string } | null => {
+  const clean = value.trim().replace(/^#{1,3}\s*/, "");
+  const sectionPrefix = clean.match(/^(Section\s+\d+\s+[—-]\s+)/i);
+  if (sectionPrefix) {
+    const afterPrefix = clean.slice(sectionPrefix[0].length);
+    for (const title of OBSERVATORY_SECTION_HEADINGS) {
+      if (afterPrefix.toLowerCase().startsWith(title.toLowerCase())) {
+        return {
+          heading: normalizeObservatoryHeadingText(`${sectionPrefix[1]}${title}`),
+          rest: afterPrefix.slice(title.length).replace(/^[:.\s]+/, "").trim(),
+        };
+      }
+    }
+  }
+
+  const numberPrefix = clean.match(/^(\d+\s+[—-]\s+)/);
+  if (numberPrefix) {
+    const afterPrefix = clean.slice(numberPrefix[0].length);
+    for (const title of OBSERVATORY_SECTION_HEADINGS) {
+      if (afterPrefix.toLowerCase().startsWith(title.toLowerCase())) {
+        return {
+          heading: normalizeObservatoryHeadingText(`${numberPrefix[1]}${title}`),
+          rest: afterPrefix.slice(title.length).replace(/^[:.\s]+/, "").trim(),
+        };
+      }
+    }
+  }
+
+  const numbered = clean.match(/^(\d+\s+[—-]\s+)([^:.]{3,90})(?::|\.)\s+([\s\S]+)$/);
+  if (numbered) {
+    return {
+      heading: normalizeObservatoryHeadingText(`${numbered[1]}${numbered[2]}`),
+      rest: numbered[3].trim(),
+    };
+  }
+
+  for (const title of OBSERVATORY_SECTION_HEADINGS) {
+    if (clean.toLowerCase().startsWith(title.toLowerCase())) {
+      const rest = clean.slice(title.length).replace(/^[:.\s]+/, "").trim();
+      if (rest) return { heading: normalizeObservatoryHeadingText(title), rest };
+    }
+  }
+  return null;
+};
+
+const buildObservatoryNarrativeBlocks = (text: string): ObservatoryNarrativeBlock[] => {
+  const cleanText = normalizeObservatoryEssayText(text);
+  if (!cleanText) return [];
+  const expanded = cleanText
+    .replace(/([^\n])\s+(#{1,3}\s+)/g, "$1\n\n$2")
+    .replace(/\s+(Section\s+\d+\s+[—-]\s+)/gi, "\n\n$1")
+    .replace(/\s+(\d+\s+[—-]\s+)/g, "\n\n$1");
+  const rawBlocks = expanded.split(/\n\n+/);
+  const blocks: ObservatoryNarrativeBlock[] = [];
+
+  rawBlocks.forEach((block) => {
+    const trimmed = block.trim();
+    if (!trimmed) return;
+    if (/^-{3,}$/.test(trimmed)) {
+      blocks.push({ type: "hr" });
+      return;
+    }
+
+    const split = splitObservatoryKnownSection(trimmed);
+    if (split?.heading) {
+      blocks.push({ type: "heading", level: 2, text: split.heading });
+      if (split.rest) blocks.push({ type: "paragraph", text: split.rest });
+      return;
+    }
+
+    if (trimmed.startsWith("### ") && isObservatoryHeadingBlock(trimmed.slice(4))) {
+      blocks.push({ type: "heading", level: 3, text: normalizeObservatoryHeadingText(trimmed.slice(4)) });
+      return;
+    }
+    if (trimmed.startsWith("## ") && isObservatoryHeadingBlock(trimmed.slice(3))) {
+      blocks.push({ type: "heading", level: 2, text: normalizeObservatoryHeadingText(trimmed.slice(3)) });
+      return;
+    }
+    if (trimmed.startsWith("# ") && isObservatoryHeadingBlock(trimmed.slice(2))) {
+      blocks.push({ type: "heading", level: 1, text: normalizeObservatoryHeadingText(trimmed.slice(2)) });
+      return;
+    }
+
+    blocks.push({ type: "paragraph", text: trimmed.replace(/^#{1,3}\s+/, "").replace(/\n/g, " ") });
+  });
+  return blocks;
+};
+
 const markdownToHtml = (text: string): string => {
   if (!text) return '';
   const refs = extractObservatoryEvidenceRefs(text);
-  const cleanText = normalizeObservatoryEssayText(text);
-  // Split into paragraph blocks (double newline or more)
-  const blocks = cleanText.split(/\n\n+/);
-  const body = blocks.map(block => {
-    const t = block.trim();
-    if (!t) return '';
-    if (/^-{3,}$/.test(t)) return '<hr>';
-    if (t.startsWith('### ') && isObservatoryHeadingBlock(t.slice(4))) return `<h3>${stripMarkdownEmphasis(t.slice(4))}</h3>`;
-    if (t.startsWith('## ') && isObservatoryHeadingBlock(t.slice(3))) return `<h2>${stripMarkdownEmphasis(t.slice(3))}</h2>`;
-    if (t.startsWith('# ') && isObservatoryHeadingBlock(t.slice(2))) return `<h1>${stripMarkdownEmphasis(t.slice(2))}</h1>`;
-    const html = markdownInlineToHtml(t.replace(/^#{1,3}\s+/, '').replace(/\n/g, ' '));
+  const body = buildObservatoryNarrativeBlocks(text).map(block => {
+    if (block.type === "hr") return '<hr>';
+    if (block.type === "heading") {
+      const tag = block.level === 1 ? "h1" : block.level === 3 ? "h3" : "h2";
+      return `<${tag}>${block.text || ""}</${tag}>`;
+    }
+    const html = markdownInlineToHtml(block.text || "");
     return `<p>${html}</p>`;
   }).join('\n');
   return `${body}${renderEvidenceRefsHtml(refs)}`;
@@ -455,29 +575,23 @@ const LAYER_DESCRIPTIONS: Record<string, string> = {
 const formatEssayText = (text: string) => {
   if (!text) return null;
   const refs = extractObservatoryEvidenceRefs(text);
-  const cleanText = normalizeObservatoryEssayText(text);
-  const parts = cleanText.split(/\n\n+|\n(?=#{1,3}\s)/);
-  const renderedParts = parts.map((part: string, i: number) => {
-    const trimmed = part.trim();
-    if (!trimmed) return null;
-    // Skip raw horizontal rules
-    if (/^-{3,}$/.test(trimmed)) return <hr key={i} className="border-slate-700/40 my-6" />;
-    // Headers
-    if (trimmed.startsWith("## ") && isObservatoryHeadingBlock(trimmed.replace(/^##\s*/, ""))) {
-      return (
-        <h3 key={i} className="text-base font-bold text-slate-100 mt-6 mb-3 border-b border-white/10 pb-1">
-          {trimmed.replace(/^##\s*/, "")}
-        </h3>
-      );
-    }
-    if (trimmed.startsWith("# ") && isObservatoryHeadingBlock(trimmed.replace(/^#\s*/, ""))) {
+  const renderedParts = buildObservatoryNarrativeBlocks(text).map((block: ObservatoryNarrativeBlock, i: number) => {
+    if (block.type === "hr") return <hr key={i} className="border-slate-700/40 my-6" />;
+    if (block.type === "heading" && block.level === 1) {
       return (
         <h2 key={i} className="text-lg font-bold text-slate-50 mt-6 mb-3">
-          {trimmed.replace(/^#\s*/, "")}
+          {block.text}
         </h2>
       );
     }
-    const rendered = renderInlineMarkdown(trimmed.replace(/^#{1,3}\s+/, ""));
+    if (block.type === "heading") {
+      return (
+        <h3 key={i} className="text-base font-bold text-slate-100 mt-6 mb-3 border-b border-white/10 pb-1">
+          {block.text}
+        </h3>
+      );
+    }
+    const rendered = renderInlineMarkdown(block.text || "");
     return (
       <p key={i} className="text-sm text-slate-300 leading-[1.8] mb-4 font-normal">
         {rendered}
@@ -509,6 +623,7 @@ const VerificationBadge = ({ verification }: { verification: any }) => {
   const status = verification.status || (verification.passed === true ? "verified" : verification.passed === false ? "failed" : "unavailable");
   const passed = status === "verified";
   const unavailable = status === "unavailable";
+  if (unavailable) return null;
   const issues = verification.issues || [];
   const violations = verification.tech_framing_violations || [];
   return (

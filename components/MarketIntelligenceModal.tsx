@@ -277,19 +277,197 @@ const renderMiInlineMarkdownHtml = (text: string): string => {
   }).join("");
 };
 
+type MiNarrativeBlock = {
+  type: "heading" | "paragraph" | "hr";
+  text?: string;
+  level?: 1 | 2 | 3;
+};
+
+const MI_NARRATIVE_SECTION_HEADINGS = [
+  "The Finnish Force Map",
+  "The Adaptability Gap",
+  "Three Horizons for Finland",
+  "Finland's Dangerous Assumption",
+  "Finland’s Dangerous Assumption",
+  "Domain Reality Check",
+  "Forces by Timescale",
+  "The Own Race Opportunity",
+  "Contrarian Signal",
+  "Contrarian Signal (Genius Forecasting)",
+];
+
+const MI_NARRATIVE_LEAD_LABELS = [
+  "Strategic inference / scenario hypothesis",
+  "Strategic inference",
+  "Scenario hypothesis",
+  "Anticipation",
+  "Participation",
+  "Futures Literacy",
+  "The first convergence",
+  "A second convergence",
+  "The second convergence",
+  "The third convergence",
+  "The first asymmetry",
+  "The second asymmetry",
+  "The third asymmetry",
+  "The fourth asymmetry",
+  "The contrarian hypothesis",
+  "The implication",
+  "The urgent thinking shift",
+  "Act Now",
+  "Prepare",
+  "Position",
+  "Next 12 months",
+  "12-36 months",
+  "24-60 months",
+];
+
+const escapeMiRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const MI_NARRATIVE_LEAD_LABEL_RE = new RegExp(
+  `(^|\\n|[.!?]\\s+)(${MI_NARRATIVE_LEAD_LABELS.map(escapeMiRegExp).join("|")})(?=\\s|:)`,
+  "g"
+);
+
+const normalizeMiNarrativeHeadingText = (value: string): string => {
+  const clean = String(value || "")
+    .replace(/\*\*/g, "")
+    .replace(/^#{1,3}\s*/, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[.:]\s*$/, "");
+  if (!clean) return "";
+  if (clean === clean.toUpperCase() && /[A-Z]/.test(clean)) {
+    return clean.toLowerCase().replace(/\b[\w'’&-]+\b/g, (word) => {
+      if (/^(and|or|the|of|in|for|to|a)$/i.test(word)) return word.toLowerCase();
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    });
+  }
+  return clean;
+};
+
+const emphasizeMiNarrativeLeadLabels = (text: string): string => {
+  if (!text) return "";
+  return text.replace(MI_NARRATIVE_LEAD_LABEL_RE, (_match, prefix: string, label: string) => {
+    const needsBreak = Boolean(prefix && prefix !== "\n" && prefix.trim().length > 0);
+    const normalizedPrefix = prefix === "\n" ? "\n\n" : needsBreak ? `${prefix.trimEnd()}\n\n` : prefix;
+    return `${normalizedPrefix}**${label}**`;
+  });
+};
+
+const splitMiKnownSection = (value: string): { heading: string; rest: string } | null => {
+  const clean = value.trim().replace(/^#{1,3}\s*/, "");
+  const sectionPrefix = clean.match(/^(Section\s+\d+\s+[—-]\s+)/i);
+  if (sectionPrefix) {
+    const afterPrefix = clean.slice(sectionPrefix[0].length);
+    for (const title of MI_NARRATIVE_SECTION_HEADINGS) {
+      if (afterPrefix.toLowerCase().startsWith(title.toLowerCase())) {
+        return {
+          heading: normalizeMiNarrativeHeadingText(`${sectionPrefix[1]}${title}`),
+          rest: afterPrefix.slice(title.length).replace(/^[:.\s]+/, "").trim(),
+        };
+      }
+    }
+  }
+
+  const numberPrefix = clean.match(/^(\d+\s+[—-]\s+)/);
+  if (numberPrefix) {
+    const afterPrefix = clean.slice(numberPrefix[0].length);
+    for (const title of MI_NARRATIVE_SECTION_HEADINGS) {
+      if (afterPrefix.toLowerCase().startsWith(title.toLowerCase())) {
+        return {
+          heading: normalizeMiNarrativeHeadingText(`${numberPrefix[1]}${title}`),
+          rest: afterPrefix.slice(title.length).replace(/^[:.\s]+/, "").trim(),
+        };
+      }
+    }
+  }
+
+  const numbered = clean.match(/^(\d+\s+[—-]\s+)([^:.]{3,90})(?::|\.)\s+([\s\S]+)$/);
+  if (numbered) {
+    return {
+      heading: normalizeMiNarrativeHeadingText(`${numbered[1]}${numbered[2]}`),
+      rest: numbered[3].trim(),
+    };
+  }
+
+  for (const title of MI_NARRATIVE_SECTION_HEADINGS) {
+    if (clean.toLowerCase().startsWith(title.toLowerCase())) {
+      const rest = clean.slice(title.length).replace(/^[:.\s]+/, "").trim();
+      if (rest) return { heading: normalizeMiNarrativeHeadingText(title), rest };
+    }
+  }
+  return null;
+};
+
+const normalizeMiNarrativeText = (text: string): string => {
+  if (!text) return "";
+  return emphasizeMiNarrativeLeadLabels(stripMiNarrativeEvidenceRefs(text))
+    .replace(/\r\n?/g, "\n")
+    .replace(/([^\n])\s+(#{1,3}\s+)/g, "$1\n\n$2")
+    .replace(/\s+(Section\s+\d+\s+[—-]\s+)/gi, "\n\n$1")
+    .replace(/\s+(\d+\s+[—-]\s+)/g, "\n\n$1")
+    .replace(/\*\*([^*]{1,90})\*\*\s+:/g, "**$1**:")
+    .replace(/\*([^*\n]{1,80})\*/g, "$1")
+    .replace(/[^\S\n]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+};
+
+const buildMiNarrativeBlocks = (text: string): MiNarrativeBlock[] => {
+  const cleanText = normalizeMiNarrativeText(text);
+  if (!cleanText) return [];
+  const blocks: MiNarrativeBlock[] = [];
+  cleanText.split(/\n\n+/).forEach((block) => {
+    const s = block.trim();
+    if (!s) return;
+    if (/^-{3,}$/.test(s)) {
+      blocks.push({ type: "hr" });
+      return;
+    }
+
+    const split = splitMiKnownSection(s);
+    if (split?.heading) {
+      blocks.push({ type: "heading", level: 2, text: split.heading });
+      if (split.rest) blocks.push({ type: "paragraph", text: split.rest });
+      return;
+    }
+
+    const bareHeading = s.replace(/^#{1,3}\s*/, "");
+    const isShortHeading = bareHeading.length <= 120 && !/[.!?]\s+\S/.test(bareHeading);
+    if (s.startsWith("### ") && isShortHeading) {
+      blocks.push({ type: "heading", level: 3, text: normalizeMiNarrativeHeadingText(bareHeading) });
+      return;
+    }
+    if (s.startsWith("## ") && isShortHeading) {
+      blocks.push({ type: "heading", level: 2, text: normalizeMiNarrativeHeadingText(bareHeading) });
+      return;
+    }
+    if (s.startsWith("# ") && isShortHeading) {
+      blocks.push({ type: "heading", level: 1, text: normalizeMiNarrativeHeadingText(bareHeading) });
+      return;
+    }
+
+    blocks.push({ type: "paragraph", text: s.replace(/^#{1,3}\s+/, "").replace(/\n/g, " ") });
+  });
+  return blocks;
+};
+
 const renderMiNarrativeMarkdownHtml = (text: string): string => {
   if (!text) return "";
   const refs = extractMiNarrativeEvidenceRefs(text);
-  const cleanText = stripMiNarrativeEvidenceRefs(text);
-  const body = cleanText.split(/\n\n+/).map((b: string) => {
-    const s = b.trim();
-    if (!s) return "";
-    if (/^-{3,}$/.test(s)) return '<hr style="border:none;border-top:1px solid #334155;margin:24px 0">';
-    if (s.startsWith('### ')) return `<h3 style="font-size:14px;margin:20px 0 8px;color:#c4b5fd">${renderMiInlineMarkdownHtml(s.slice(4))}</h3>`;
-    if (s.startsWith('## ')) return `<h2>${renderMiInlineMarkdownHtml(s.slice(3))}</h2>`;
-    if (s.startsWith('# ')) return `<h1 style="font-size:20px;margin:24px 0 10px;color:white">${renderMiInlineMarkdownHtml(s.slice(2))}</h1>`;
-    let h = renderMiInlineMarkdownHtml(s.replace(/\n/g, ' '));
-    if (!h.includes('<strong>')) h = h.replace(/^([^.]+\.)(\s|$)/, '<strong>$1</strong>$2');
+  const body = buildMiNarrativeBlocks(text).map((block) => {
+    if (block.type === "hr") return '<hr style="border:none;border-top:1px solid #334155;margin:24px 0">';
+    if (block.type === "heading") {
+      if (block.level === 1) {
+        return `<h1 style="font-size:20px;margin:24px 0 10px;color:white">${renderMiInlineMarkdownHtml(block.text || "")}</h1>`;
+      }
+      if (block.level === 3) {
+        return `<h3 style="font-size:14px;margin:20px 0 8px;color:#c4b5fd">${renderMiInlineMarkdownHtml(block.text || "")}</h3>`;
+      }
+      return `<h2>${renderMiInlineMarkdownHtml(block.text || "")}</h2>`;
+    }
+    const h = renderMiInlineMarkdownHtml(block.text || "");
     return `<p style="font-size:13px;line-height:1.8;margin-bottom:16px">${h}</p>`;
   }).join('\n');
   return `${body}${renderMiEvidenceRefsHtml(refs)}`;
@@ -685,21 +863,14 @@ const buildCrossImpactInterpretationHtml = (interpretation: any, crossImpact: an
   const lines = interpretation.text.split(/\n+/);
   const blocks: string[] = [];
   // Mirror the in-app rendering: meta sections (HOW TO USE, SOURCES) get a
-  // muted style; the second paragraph after each [THEME:]/[CELL:] inside the
-  // VERTICAL/HORIZONTAL sections is bolded as the interpretive payoff.
-  let currentSection = '';
-  let inAnalyticalSection = false;
-  let inSubblock = false;
-  let paraSinceSubblock = 0;
+  // muted style. Narrative prose stays normal weight; short labels inside the
+  // prose carry the emphasis instead of turning whole paragraphs into walls.
   for (const raw of lines) {
     const line = raw.trim();
     if (!line) continue;
     const sectionMatch = line.match(/^\[\s*SECTION\s*:\s*(.+?)\s*\]$/i);
     if (sectionMatch) {
-      currentSection = sectionMatch[1];
-      inAnalyticalSection = /VERTICAL|HORIZONTAL/i.test(currentSection);
-      inSubblock = false;
-      paraSinceSubblock = 0;
+      const currentSection = sectionMatch[1];
       const isMeta = /^\s*(how\s+to\s+use|sources)\b/i.test(currentSection);
       const headerStyle = isMeta
         ? 'color:#94a3b8;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid rgba(148,163,184,0.18)'
@@ -739,8 +910,6 @@ const buildCrossImpactInterpretationHtml = (interpretation: any, crossImpact: an
         bar = `<div style="margin-top:6px;max-width:480px"><div style="height:8px;display:flex;background:rgba(15,23,42,0.6);border:1px solid rgba(51,65,85,0.6);border-radius:3px;overflow:hidden">${segments}</div><div style="margin-top:4px">${legend}</div></div>`;
       }
       blocks.push(`<div style="margin:14px 0 6px"><div><strong style="color:#e0e7ff;font-size:12px">${theme}</strong>${totalChip}${shapeChip}</div>${bar}</div>`);
-      inSubblock = inAnalyticalSection;
-      paraSinceSubblock = 0;
       continue;
     }
     if (/^\[\s*CELL\s*:/i.test(line)) {
@@ -754,17 +923,11 @@ const buildCrossImpactInterpretationHtml = (interpretation: any, crossImpact: an
       const rankChip = rank ? `<span style="margin-right:8px;padding:1px 6px;border-radius:3px;background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.3);color:#fde68a;font-family:ui-monospace,monospace;font-size:9px">#${rank}</span>` : '';
       const densityChip = density ? `<span title="${rowPct !== null ? `${rowPct}% of ${theme} row total (${rowTotal})` : ''}" style="margin-left:8px;padding:2px 8px;border-radius:4px;background:rgba(15,23,42,0.6);border:1px solid rgba(51,65,85,0.6);color:#cbd5e1;font-family:ui-monospace,monospace;font-size:11px">density ${density}${rowPct !== null ? ` <span style="color:#64748b">(${rowPct}% of row)</span>` : ''}</span>` : '';
       blocks.push(`<div style="margin:14px 0 6px;font-size:12px">${rankChip}<strong style="color:#e0e7ff">${theme || cellRaw}</strong>${dimension ? ` <span style="color:#64748b">x</span> <strong style="color:#6ee7b7">${dimension}</strong>` : ''}${densityChip}</div>`);
-      inSubblock = inAnalyticalSection;
-      paraSinceSubblock = 0;
       continue;
     }
-    if (inSubblock) paraSinceSubblock += 1;
     const cleanedLine = stripMiNarrativeEvidenceRefs(line);
     if (!cleanedLine) continue;
-    const emphasise = inSubblock && paraSinceSubblock === 2;
-    const paraStyle = emphasise
-      ? 'font-size:12px;line-height:1.7;color:#e0e7ff;font-weight:600;margin:8px 0'
-      : 'font-size:12px;line-height:1.7;color:rgba(203,213,225,0.9);margin:8px 0';
+    const paraStyle = 'font-size:12px;line-height:1.7;color:rgba(203,213,225,0.9);font-weight:400;margin:8px 0';
     blocks.push(`<p style="${paraStyle}">${renderMiInlineMarkdownHtml(cleanedLine)}</p>`);
   }
 
@@ -1582,32 +1745,6 @@ type CIBlock =
 const isMetaSection = (title: string) =>
   /^\s*(how\s+to\s+use|sources)\b/i.test(title || '');
 
-// Within VERTICAL / HORIZONTAL sections, the second paragraph that follows
-// each [THEME:] or [CELL:] subsection carries the interpretive payoff and is
-// rendered bold to make the key takeaway scannable.
-const computeEmphasisParagraphs = (blocks: CIBlock[]): Set<number> => {
-  const out = new Set<number>();
-  let inAnalyticalSection = false;
-  let paraSinceSubblock = 0;
-  let inSubblock = false;
-  blocks.forEach((b, i) => {
-    if (b.kind === 'section') {
-      inAnalyticalSection = /VERTICAL|HORIZONTAL/i.test(b.title || '');
-      paraSinceSubblock = 0;
-      inSubblock = false;
-    } else if (b.kind === 'theme' || b.kind === 'cell') {
-      paraSinceSubblock = 0;
-      inSubblock = inAnalyticalSection;
-    } else if (b.kind === 'paragraph') {
-      if (inSubblock) {
-        paraSinceSubblock += 1;
-        if (paraSinceSubblock === 2) out.add(i);
-      }
-    }
-  });
-  return out;
-};
-
 const parseCrossImpactInterpretation = (text: string): CIBlock[] => {
   const blocks: CIBlock[] = [];
   if (!text) return blocks;
@@ -1641,7 +1778,8 @@ const parseCrossImpactInterpretation = (text: string): CIBlock[] => {
       continue;
     }
 
-    blocks.push({ kind: 'paragraph', text: line });
+    const cleanedLine = stripMiNarrativeEvidenceRefs(line);
+    if (cleanedLine) blocks.push({ kind: 'paragraph', text: cleanedLine });
   }
   return blocks;
 };
@@ -1902,7 +2040,6 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
 
       {crossImpactInterpretationData?.text && (() => {
         const blocks = parseCrossImpactInterpretation(crossImpactInterpretationData.text);
-        const emphasisIdx = computeEmphasisParagraphs(blocks);
         return (
           <div className="mt-6 bg-black/20 rounded-xl border border-indigo-500/20 overflow-hidden">
             <div className="px-5 py-4 border-b border-indigo-500/10 flex items-center justify-between">
@@ -2051,17 +2188,12 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
                     </div>
                   );
                 }
-                const isEmphasis = emphasisIdx.has(i);
                 return (
                   <p
                     key={i}
-                    className={
-                      isEmphasis
-                        ? 'text-[12px] text-indigo-100 font-semibold leading-relaxed mb-3'
-                        : 'text-[12px] text-slate-300/90 leading-relaxed mb-3'
-                    }
+                    className="text-[12px] text-slate-300/90 font-normal leading-relaxed mb-3"
                   >
-                    {b.text}
+                    <span dangerouslySetInnerHTML={{ __html: renderMiInlineMarkdownHtml(b.text) }} />
                   </p>
                 );
               })}
