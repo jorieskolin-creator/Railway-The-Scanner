@@ -60,6 +60,7 @@ from company_evidence import CompanyEvidenceError, build_company_evidence_databa
 from company_source_ledger import CompanySourceLedgerError, build_company_source_ledger
 from evidence_graph import attach_evidence_graph, build_evidence_manifest, evidence_prompt_packet
 from evidence_absence import build_evidence_absence_signals, format_absence_signals_for_prompt
+from evidence_contracts import build_classification_namespaces
 
 # VERIFICATION LOG: v5.4.0 - Extended Thinking + Search Budget Upgrade
 print("Starting Adaptability Scanner Backend (v5.4.0 - Extended Thinking + Search Budget Upgrade)...", flush=True)
@@ -4960,6 +4961,15 @@ Do NOT generate commercial_pitch, why_proposals, or what_proposals in this call.
                              attach_evidence_graph(generation_graph_input)
                              generation_manifest = generation_graph_input.get("evidence_manifest", [])
                              activation_evidence_packet = evidence_prompt_packet(generation_manifest, limit=40)
+                             activation_classification_context = build_classification_namespaces(
+                                 adaptability_archetype=expected_archetype,
+                                 foresight_force_profile={
+                                     "source_contract": "strategic_foresight_macro_context",
+                                     "evidence_kind": "foresight_context",
+                                     "company_fact_eligible": False,
+                                     "not_evidence_of_company_action": True,
+                                 },
+                             )
                              foresight_context = ""
                              if foresight_data:
                                  try:
@@ -4989,6 +4999,9 @@ Diagnosis:
 
 Evidence-based risks:
 {json.dumps(evidence_based_risks, ensure_ascii=False)}
+
+### CLASSIFICATION NAMESPACES
+{json.dumps(activation_classification_context, ensure_ascii=False)}
 
 ### IMMUTABLE EVIDENCE MANIFEST
 {activation_evidence_packet}
@@ -5187,6 +5200,17 @@ TEXT TO REPAIR:
             archetype = "Thriving" if fin_for_archetype >= 50 else "Modernizing"
         else:
             archetype = "Cash Cow" if fin_for_archetype >= 50 else "At Risk"
+        classification_context = build_classification_namespaces(
+            adaptability_archetype=archetype,
+            foresight_force_profile={
+                "source_contract": "strategic_foresight_macro_context",
+                "evidence_kind": "foresight_context",
+                "active_force_count": len((foresight_data or {}).get("forces") or [])
+                + len((foresight_data or {}).get("dimension_forces") or []),
+                "company_fact_eligible": False,
+                "not_evidence_of_company_action": True,
+            },
+        )
 
         # --- SOURCE MANAGEMENT: Merge new evidence with existing, cap at 30 ---
         existing_evidence = existing_data.get("evidence_links", []) if existing_data else []
@@ -5225,6 +5249,11 @@ TEXT TO REPAIR:
             "reality_gap": gap,
             "confidence_score": confidence,
             "archetype": archetype,
+            "classification_context": classification_context,
+            "adaptability_archetype": classification_context["adaptability_archetype"],
+            "favi_vulnerability_segment": classification_context["favi_vulnerability_segment"],
+            "adaptation_capacity_segment": classification_context["adaptation_capacity_segment"],
+            "foresight_force_profile": classification_context["foresight_force_profile"],
             "washing_flag": washing_flag,
             "washing_type": washing_type,
             "intent_breakdown": intent_results["breakdown"],

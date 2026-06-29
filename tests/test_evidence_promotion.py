@@ -26,6 +26,7 @@ from source_quality import (  # noqa: E402
     is_analysis_premise_source,
     is_generation_eligible_source,
     is_scoped_context_source,
+    manage_evidence_sources,
     source_analysis_support_mode,
 )
 
@@ -542,3 +543,48 @@ def test_unjudged_timeout_is_distinct_from_display_only_and_coverage():
     assert link["source_use_status"] == "unjudged_due_timeout"
     assert is_scoped_context_source(link) is False
     assert is_generation_eligible_source(link) is False
+
+
+def test_source_manager_duplicate_keeps_current_lineage_over_legacy_metadata():
+    existing = [_source(
+        url="https://www.example.com/services",
+        title="Old service source",
+        promotion_status=PROMOTION_DISPLAY_ONLY,
+        generation_eligible=False,
+        claim_support_status="unsupported",
+        source_context_status="valid_context_unused",
+        source_quote="Old quote",
+    )]
+    current = _source(
+        url="https://www.example.com/services",
+        title="Current service source",
+        promotion_status=PROMOTION_SCOPED_CONTEXT,
+        generation_eligible=False,
+        claim_support_status="context_only",
+        source_context_status=SOURCE_CONTEXT_SCOPED,
+        source_quote="Current parsed passage",
+        source_id="SRC-current",
+        parsed_source_id="PRS-current",
+        evidence_package_id="PKG-current",
+        support_passage_ids=["PASS-current"],
+        proposition_ids=["PROP-current"],
+        parser_route="direct_html",
+        extraction_quality="medium",
+    )
+
+    result = manage_evidence_sources(
+        existing_links=existing,
+        new_links=[current],
+        company_domain="https://www.example.com",
+        company_name="Example",
+    )
+
+    merged = result["links"][0]
+    assert merged["title"] == "Current service source"
+    assert merged["source_id"] == "SRC-current"
+    assert merged["parsed_source_id"] == "PRS-current"
+    assert merged["evidence_package_id"] == "PKG-current"
+    assert merged["support_passage_ids"] == ["PASS-current"]
+    assert merged["proposition_ids"] == ["PROP-current"]
+    assert merged["claim_support_relationship"]["source_id"] == "SRC-current"
+    assert merged["claim_support_relationship"]["final_decision"] == "analysis_premise"

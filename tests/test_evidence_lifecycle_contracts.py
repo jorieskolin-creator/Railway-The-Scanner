@@ -182,3 +182,37 @@ def test_company_foresight_copy_is_separate_and_does_not_mutate_central_force():
     assert "Example Oy" in links[0]["possible_relevance"]
     assert links[0]["not_evidence_of_deployment"] is True
     assert "evidence_contract" not in force
+
+
+def test_claim_support_relationship_keeps_valid_context_when_one_claim_overreaches():
+    relation = contracts.build_claim_support_relationship({
+        "url": "https://example.fi/services",
+        "source_id": "SRC-service",
+        "evidence_package_id": "PKG-service",
+        "proposition_ids": ["PROP-service"],
+        "source_context_status": "scoped_context",
+        "claim_support_status": "unsupported_for_this_claim",
+        "finding_id": "FND-service",
+    }, claim_id="CLM-overreach")
+
+    assert relation["relationship_id"].startswith("CSR-")
+    assert relation["claim_id"] == "CLM-overreach"
+    assert relation["source_context_status"] == "scoped_context"
+    assert relation["support_status"] == "unsupported_for_this_claim"
+    assert relation["final_decision"] == "analysis_premise"
+
+
+def test_classification_namespaces_block_archetype_as_foresight_force_profile():
+    context = contracts.build_classification_namespaces(
+        adaptability_archetype="Thriving",
+        favi_vulnerability_segment="Future-Ready",
+        adaptation_capacity_segment="High Capacity",
+        foresight_force_profile="Cash Cow",
+    )
+
+    assert context["adaptability_archetype"]["label"] == "Thriving"
+    assert context["favi_vulnerability_segment"]["label"] == "Future-Ready"
+    assert context["adaptation_capacity_segment"]["label"] == "High Capacity"
+    assert context["foresight_force_profile"]["label"] is None
+    assert context["foresight_force_profile"]["blocked_label"] == "Cash Cow"
+    assert context["foresight_force_profile"]["company_fact_eligible"] is False

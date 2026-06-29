@@ -29,6 +29,7 @@ from entity_identity import (
     apply_entity_scope,
     assess_entity_match,
 )
+from evidence_contracts import build_claim_support_relationship
 
 
 # -----------------------------------------------------------------------------
@@ -91,6 +92,32 @@ SOURCE_CONTEXT_VALID_CONTEXT_UNUSED = "valid_context_unused"
 SOURCE_CONTEXT_WRONG_ENTITY = "wrong_entity"
 SOURCE_CONTEXT_DEAD_OR_UNREADABLE = "dead_or_unreadable"
 SOURCE_CONTEXT_OUT_OF_CONTEXT = "out_of_context"
+
+EVIDENCE_LINEAGE_MERGE_FIELDS = (
+    "source_id",
+    "parsed_source_id",
+    "content_hash",
+    "evidence_package_id",
+    "support_passage_ids",
+    "support_passage_id",
+    "proposition_ids",
+    "source_package_lineage",
+    "finding_contract",
+    "finding_id",
+    "claim_support_relationship",
+    "allowed_uses",
+    "cannot_support",
+    "support_passages",
+    "safe_propositions",
+    "parsed_source_summary",
+    "semantic_snippet",
+    "parser_route",
+    "extraction_quality",
+    "source_context_status",
+    "source_use_status",
+    "claim_relation_status",
+    "support_level",
+)
 
 PROMOTION_GENERATION_ELIGIBLE = "generation_eligible"
 PROMOTION_SCOPED_CONTEXT = "scoped_context"
@@ -1623,6 +1650,8 @@ def manage_evidence_sources(
         )
         if all_high_verified:
             final = pool[:MAX_EVIDENCE_SOURCES]
+            for item in final:
+                item.setdefault("claim_support_relationship", build_claim_support_relationship(item))
             high, medium, low, _ = assess_evidence_quality(final, company_domain)
             print(f"   ⭐ [Source Manager] Gold Standard: {MAX_EVIDENCE_SOURCES}/{MAX_EVIDENCE_SOURCES} high-credibility verified sources. Skipping new search.")
             return {
@@ -1686,9 +1715,10 @@ def manage_evidence_sources(
                         "analysis_verified",
                         "verification_reason",
                         "analysis_verified_at",
-                    ):
+                    ) + EVIDENCE_LINEAGE_MERGE_FIELDS:
                         if new_link.get(key) is not None:
                             existing[key] = new_link[key]
+                    existing["claim_support_relationship"] = build_claim_support_relationship(existing)
                     break
             continue
 
@@ -1750,6 +1780,8 @@ def manage_evidence_sources(
     # Final sort: high verified first, then by credibility tier
     pool.sort(key=lambda l: -_eviction_rank(l))
     final = pool[:MAX_EVIDENCE_SOURCES]
+    for item in final:
+        item.setdefault("claim_support_relationship", build_claim_support_relationship(item))
 
     high, medium, low, _ = assess_evidence_quality(final, company_domain)
 

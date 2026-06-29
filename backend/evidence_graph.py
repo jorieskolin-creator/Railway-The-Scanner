@@ -11,6 +11,8 @@ import re
 from datetime import datetime, timezone
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from evidence_contracts import build_claim_support_relationship
+
 
 GRAPH_VERSION = "1.1"
 _TRACKING_KEYS = {"fbclid", "gclid", "mc_cid", "mc_eid"}
@@ -152,6 +154,11 @@ def _source_record(item: dict, kind: str) -> dict:
     record["proposition_ids"] = proposition_ids or _as_list(lineage.get("proposition_ids"))
     record["source_context_status"] = item.get("source_context_status") or item.get("source_use_status") or item.get("promotion_status")
     record["claim_support_status"] = item.get("claim_support_status") or item.get("support_level")
+    relation = item.get("claim_support_relationship") or build_claim_support_relationship(record)
+    record["claim_support_relationship"] = relation
+    record["claim_relation_status"] = item.get("claim_relation_status") or relation.get("support_status")
+    record["finding_id"] = item.get("finding_id")
+    record["finding_contract"] = item.get("finding_contract")
     if kind == "foresight":
         record["requires_company_specific_corroboration"] = True
         record["not_evidence_of_deployment"] = True
@@ -259,6 +266,8 @@ def build_claim_graph(data: dict, manifest: list[dict]) -> tuple[list[dict], lis
             claim_support_status=finding.get("claim_support_status"),
             support_level=finding.get("support_level"),
             finding_contract=finding.get("finding_contract"),
+            finding_id=finding.get("finding_id"),
+            claim_support_relationship=finding.get("claim_support_relationship"),
         ))
     strategic = data.get("strategic_foresight") or {}
     forces = list(strategic.get("forces") or []) + list(strategic.get("dimension_forces") or [])
@@ -417,6 +426,8 @@ def attach_evidence_graph(data: dict) -> dict:
                     "evidence_package_id", "source_id", "parsed_source_id",
                     "support_passage_ids", "proposition_ids", "source_package_lineage",
                     "source_context_status", "claim_support_status",
+                    "claim_relation_status", "finding_id", "finding_contract",
+                    "claim_support_relationship",
                 ):
                     if match.get(key) and not link.get(key):
                         link[key] = match.get(key)

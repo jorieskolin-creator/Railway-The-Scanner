@@ -131,6 +131,14 @@ def test_claim_graph_preserves_jury_package_lineage():
             "support_passage_ids": ["PASS-one"],
             "proposition_ids": ["PROP-one"],
             "finding_contract": "jury_finding/v1",
+            "finding_id": "FND-abc123",
+            "claim_support_relationship": {
+                "relationship_id": "CSR-abc123",
+                "finding_id": "FND-abc123",
+                "source_context_status": "scoped_context",
+                "support_status": "context_only",
+                "final_decision": "analysis_premise",
+            },
         }],
     }
 
@@ -145,4 +153,7 @@ def test_claim_graph_preserves_jury_package_lineage():
     assert claim["evidence_package_id"] == "PKG-abc123"
     assert claim["support_passage_ids"] == ["PASS-one"]
     assert claim["proposition_ids"] == ["PROP-one"]
+    assert claim["finding_id"] == "FND-abc123"
+    assert claim["claim_support_relationship"]["relationship_id"] == "CSR-abc123"
+    assert manifest_row["claim_support_relationship"]["final_decision"] == "analysis_premise"
     assert data["evidence_links"][0]["associated_claim_ids"] == [claim["claim_id"]]

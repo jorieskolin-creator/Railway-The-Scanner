@@ -5625,14 +5625,38 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     if data:
         findings = data.get("findings", [])
         for f in findings:
-            checklist.append({
+            checklist_item = {
                 "category": f.get("category", "General"),
                 "query": f.get("label", "Signal"),
                 "found": f.get("found", False),
                 "sentiment": f.get("sentiment", "neutral"),
                 "is_recent": f.get("is_recent", False),
-                "source_type": "current"
-            })
+                "source_type": "current",
+                "url": f.get("url") or f.get("source_url"),
+                "finding": f.get("supported_claim") or f.get("label") or f.get("title"),
+                "finding_id": f.get("finding_id"),
+                "finding_contract": f.get("finding_contract"),
+                "evidence_package_id": f.get("evidence_package_id"),
+                "proposition_ids": list(f.get("proposition_ids") or []),
+                "support_passage_ids": list(f.get("support_passage_ids") or []),
+                "support_passage_id": f.get("support_passage_id"),
+                "parsed_source_id": f.get("parsed_source_id"),
+                "source_id": f.get("source_id"),
+                "content_hash": f.get("content_hash"),
+                "parser_route": f.get("parser_route"),
+                "extraction_quality": f.get("extraction_quality"),
+                "source_context_status": f.get("source_context_status"),
+                "source_use_status": f.get("source_use_status"),
+                "claim_support_status": f.get("claim_support_status"),
+                "claim_relation_status": f.get("claim_relation_status"),
+                "support_level": f.get("support_level"),
+                "claim_support_relationship": f.get("claim_support_relationship"),
+                "entity_scope": f.get("entity_scope"),
+                "entity_match_status": f.get("entity_match_status"),
+                "content_entity_match_status": f.get("content_entity_match_status"),
+                "source_package_lineage": dict(f.get("source_package_lineage") or {}),
+            }
+            checklist.append({k: v for k, v in checklist_item.items() if v not in (None, [], {})})
 
             if f.get("found") and f.get("url"):
                 raw_findings.append({
@@ -5676,6 +5700,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     "cannot_support": list(f.get("cannot_support") or []),
                     "source_package_lineage": dict(f.get("source_package_lineage") or {}),
                     "finding_contract": f.get("finding_contract"),
+                    "finding_id": f.get("finding_id"),
+                    "claim_support_relationship": f.get("claim_support_relationship"),
                     "historical_revalidation_pending": bool(f.get("historical_revalidation_pending")),
                     "verification_history": list(f.get("verification_history") or []),
                     "revalidated_at": f.get("revalidated_at"),
