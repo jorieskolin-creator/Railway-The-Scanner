@@ -11,6 +11,8 @@ import hashlib
 import re
 from urllib.parse import urlparse
 
+from evidence_contracts import PARSED_SOURCE
+
 
 CONTENT_FIELDS = (
     "fetched_excerpt",
@@ -69,6 +71,13 @@ def _word_limit(text: str, max_words: int) -> str:
     if len(words) <= max_words:
         return " ".join(words)
     return " ".join(words[:max_words]).rstrip(" ,.;:") + "..."
+
+
+def _content_hash(text: str) -> str:
+    cleaned = clean_text(text, 20000)
+    if not cleaned:
+        return ""
+    return hashlib.sha1(cleaned.encode("utf-8")).hexdigest()[:16]
 
 
 def source_text(record: dict, limit: int = 16000) -> str:
@@ -212,12 +221,27 @@ def select_support_passages(
         selected.append(
             {
                 "passage_id": f"PASS-{fingerprint}",
+                "passage_contract": "source_passage/v1",
                 "text": passage,
                 "selection_reason": "query_match" if score > 0 else "lead_context",
                 "score": score,
+                "char_start": start,
+                "char_count": len(passage),
             }
         )
     return selected
+
+
+def _extraction_quality(fmt: str, text: str, passages: list[dict], warnings: list[str]) -> str:
+    if fmt == "asset" or "empty_content" in warnings:
+        return "unusable"
+    if len(text) >= 2500 and len(passages) >= 2:
+        return "rich"
+    if len(text) >= 700 and passages:
+        return "usable"
+    if text:
+        return "thin"
+    return "unknown"
 
 
 def parse_source(record: dict, jury_name: str = "", query_terms: tuple[str, ...] = ()) -> dict:
@@ -240,16 +264,26 @@ def parse_source(record: dict, jury_name: str = "", query_terms: tuple[str, ...]
         passages = select_support_passages(text, query_terms=query_terms)
 
     key = canonical_url(str(record.get("url") or "")) or str(record.get("url") or "")
+    content_hash = _content_hash(text)
+    parsed_source_id = f"PRS-{hashlib.sha1((key + content_hash).encode('utf-8')).hexdigest()[:10]}"
+    source_id = f"SRC-{hashlib.sha1((key or content_hash or repr(sorted(record.items()))).encode('utf-8')).hexdigest()[:10]}"
     return {
-        "parsed_source_id": f"PRS-{hashlib.sha1(key.encode('utf-8')).hexdigest()[:10]}",
+        "parser_contract": PARSED_SOURCE,
+        "source_id": source_id,
+        "parsed_source_id": parsed_source_id,
         "canonical_url": key,
         "source_format": fmt,
+        "content_hash": content_hash,
+        "extraction_quality": _extraction_quality(fmt, text, passages, warnings),
         "content_text": text,
         "content_excerpt": clean_text(text, 4500),
         "parsed_source_summary": parsed_source_summary(record, text),
         "semantic_snippet": semantic_snippet(record, text),
         "support_passages": passages,
+        "support_passage_ids": [item.get("passage_id") for item in passages if item.get("passage_id")],
+        "source_limitations": list(warnings),
         "parse_warnings": warnings,
         "parser_stage": "deterministic_source_parser_v1",
+        "parser_route": fmt,
         "jury_context": jury_name,
     }

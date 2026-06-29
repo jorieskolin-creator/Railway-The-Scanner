@@ -35,6 +35,7 @@ from evidence_contracts import (
     VERIFIED_COMPANY_EVIDENCE,
     current_company_verification,
     mark_company_candidate,
+    mark_jury_finding,
     mark_verified_company_evidence,
 )
 from evidence_packaging import (
@@ -1758,6 +1759,18 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
             _canonical_evidence_url(item.get("url")): item
             for item in lane.get("packets", []) or [] if item.get("url")
         }
+        package_by_id = {}
+        package_by_url = {}
+        try:
+            for package in build_jury_evidence_packages(jury, lane.get("packets", []) or [], max_packages=20):
+                package_id = package.get("package_id")
+                package_url = _canonical_evidence_url(package.get("source_url"))
+                if package_id:
+                    package_by_id[package_id] = package
+                if package_url:
+                    package_by_url[package_url] = package
+        except Exception as error:
+            print(f"   ⚠️ [Jury Evidence Package] lineage rebuild failed for {jury}: {type(error).__name__}: {error}")
         accepted = []
         if payload:
             for item in payload.get("findings", []) or []:
@@ -1860,6 +1873,32 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
                 if support_level == "unsupported":
                     rejected.append({"url": item.get("url"), "reason": "Jury marked claim unsupported.", "jury": jury})
                     continue
+                canonical_item_url = _canonical_evidence_url(item.get("url"))
+                package = (
+                    package_by_id.get(item.get("evidence_package_id"))
+                    or package_by_url.get(canonical_item_url)
+                    or {}
+                )
+                proposition_ids = list(dict.fromkeys(
+                    [
+                        str(value) for value in (
+                            item.get("proposition_ids")
+                            or package.get("proposition_ids")
+                            or [prop.get("proposition_id") for prop in package.get("propositions", []) or []]
+                        )
+                        if value
+                    ]
+                ))
+                support_passage_ids = list(dict.fromkeys(
+                    [
+                        str(value) for value in (
+                            item.get("support_passage_ids")
+                            or package.get("support_passage_ids")
+                            or [passage.get("passage_id") for passage in package.get("support_passages", []) or []]
+                        )
+                        if value
+                    ]
+                ))
                 normalized = dict(item)
                 normalized["category"] = jury
                 normalized["label"] = supported_claim[:300]
@@ -1916,6 +1955,28 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
                 normalized["source_database"] = packet.get("source_database")
                 normalized["forensic_seed_source"] = bool(packet.get("forensic_seed_source"))
                 normalized["packet_source_status"] = packet.get("source_status")
+                normalized["evidence_package_id"] = item.get("evidence_package_id") or package.get("package_id")
+                normalized["proposition_ids"] = proposition_ids
+                normalized["support_passage_ids"] = support_passage_ids
+                normalized["support_passage_id"] = (
+                    item.get("support_passage_id")
+                    or (support_passage_ids[0] if support_passage_ids else None)
+                )
+                normalized["parsed_source_id"] = package.get("parsed_source_id") or packet.get("parsed_source_id")
+                normalized["source_id"] = package.get("source_id") or packet.get("source_id")
+                normalized["content_hash"] = package.get("content_hash") or packet.get("content_hash")
+                normalized["parser_route"] = package.get("parser_route") or packet.get("parser_route")
+                normalized["extraction_quality"] = package.get("extraction_quality") or packet.get("extraction_quality")
+                normalized["safe_propositions"] = package.get("safe_propositions") or package.get("propositions") or []
+                normalized["support_passages"] = package.get("support_passages") or []
+                normalized["allowed_uses"] = package.get("allowed_uses") or []
+                normalized["cannot_support"] = package.get("cannot_support") or package.get("limitations") or []
+                normalized["source_package_lineage"] = package.get("lineage") or {
+                    "source_id": normalized.get("source_id"),
+                    "parsed_source_id": normalized.get("parsed_source_id"),
+                    "support_passage_ids": support_passage_ids,
+                    "proposition_ids": proposition_ids,
+                }
                 normalized["historical_revalidation_pending"] = False
                 normalized["verification_history"] = _merge_verification_history(packet)
                 normalized["revalidated_at"] = datetime.utcnow().isoformat()
@@ -1941,7 +2002,7 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
                     normalized["claim_support_status"] = "context_only"
                     normalized["analysis_verified"] = False
                     normalized["generation_eligible"] = False
-                accepted.append(mark_verified_company_evidence(normalized))
+                accepted.append(mark_verified_company_evidence(mark_jury_finding(normalized)))
             rejected.extend(payload.get("rejected_evidence", []) or [])
             if accepted:
                 confidences.append(payload.get("confidence_score", 0) or 0)
@@ -2557,7 +2618,7 @@ Return ONLY valid JSON:
     {{"category": {json.dumps(jury_name)}, "supported_claim": "minimal source-supported claim", "found": true,
       "sentiment": "positive|neutral|negative", "source_quote": "exact supplied quote", "title": "source title",
       "url": "https://...", "is_recent": true, "source_type": "type",
-      "evidence_package_id": "PKG-...", "proposition_ids": ["PROP-..."],
+      "evidence_package_id": "PKG-...", "proposition_ids": ["PROP-..."], "support_passage_ids": ["PASS-..."],
       "subdimensions": ["covered subdimension"],
       "entity_scope": "company|group|subsidiary|context", "source_verdict": "accepted",
       "support_level": "exact|partial|context_only", "confidence": 0}}
@@ -5597,6 +5658,24 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     "forensic_provenance": f.get("forensic_provenance"),
                     "verification_reason": f.get("verification_reason"),
                     "cached_excerpt": f.get("cached_excerpt"),
+                    "source_context_status": f.get("source_context_status"),
+                    "source_use_status": f.get("source_use_status"),
+                    "claim_relation_status": f.get("claim_relation_status"),
+                    "evidence_package_id": f.get("evidence_package_id"),
+                    "proposition_ids": list(f.get("proposition_ids") or []),
+                    "support_passage_ids": list(f.get("support_passage_ids") or []),
+                    "support_passage_id": f.get("support_passage_id"),
+                    "parsed_source_id": f.get("parsed_source_id"),
+                    "source_id": f.get("source_id"),
+                    "content_hash": f.get("content_hash"),
+                    "parser_route": f.get("parser_route"),
+                    "extraction_quality": f.get("extraction_quality"),
+                    "safe_propositions": list(f.get("safe_propositions") or []),
+                    "support_passages": list(f.get("support_passages") or []),
+                    "allowed_uses": list(f.get("allowed_uses") or []),
+                    "cannot_support": list(f.get("cannot_support") or []),
+                    "source_package_lineage": dict(f.get("source_package_lineage") or {}),
+                    "finding_contract": f.get("finding_contract"),
                     "historical_revalidation_pending": bool(f.get("historical_revalidation_pending")),
                     "verification_history": list(f.get("verification_history") or []),
                     "revalidated_at": f.get("revalidated_at"),

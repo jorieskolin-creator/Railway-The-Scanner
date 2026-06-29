@@ -13,6 +13,11 @@ VERIFIED_COMPANY_EVIDENCE = "verified_company_evidence/v1"
 CENTRAL_FORESIGHT_SIGNAL = "central_foresight_signal/v1"
 COMPANY_FORESIGHT_INTERPRETATION = "company_foresight_interpretation/v1"
 JURY_EVIDENCE_PACKAGE = "jury_evidence_package/v1"
+PARSED_SOURCE = "parsed_source/v1"
+SOURCE_PASSAGE = "source_passage/v1"
+SOURCE_PROPOSITION = "source_proposition/v1"
+JURY_FINDING = "jury_finding/v1"
+SYNTHESIS_CLAIM = "synthesis_claim/v1"
 
 
 COMPANY_VERDICT_FIELDS = {
@@ -133,3 +138,9 @@ def mark_jury_evidence_package(record: dict) -> dict:
     package = deepcopy(record) if isinstance(record, dict) else {}
     package["evidence_contract"] = JURY_EVIDENCE_PACKAGE
     return package
+
+
+def mark_jury_finding(record: dict) -> dict:
+    finding = deepcopy(record) if isinstance(record, dict) else {}
+    finding["finding_contract"] = JURY_FINDING
+    return finding

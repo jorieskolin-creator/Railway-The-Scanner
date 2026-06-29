@@ -41,13 +41,28 @@ def _stable_id(prefix: str, key: str) -> str:
 
 def _content(item: dict) -> str:
     for key in (
-        "fetched_excerpt", "normalized_content", "content_excerpt", "extracted_text",
-        "cached_excerpt", "source_quote", "semantic_snippet", "snippet", "description",
+        "exact_passage", "source_passage", "supporting_passage", "source_quote",
+        "fetched_excerpt", "normalized_content", "content_excerpt", "source_content_excerpt",
+        "fetched_or_cached_content", "extracted_text", "cached_excerpt",
+        "parsed_source_summary", "semantic_snippet", "snippet", "description",
     ):
         value = item.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
+    passages = item.get("support_passages")
+    if isinstance(passages, list):
+        for passage in passages:
+            if isinstance(passage, dict) and isinstance(passage.get("text"), str) and passage["text"].strip():
+                return passage["text"].strip()
     return ""
+
+
+def _as_list(value) -> list:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [item for item in value if item]
+    return [value]
 
 
 def _truth_score(item: dict, kind: str) -> int:
@@ -110,6 +125,33 @@ def _source_record(item: dict, kind: str) -> dict:
         "company_specific": kind != "foresight",
         "claim_type": "foresight_context" if kind == "foresight" else (item.get("claim_type") or "company_fact"),
     })
+    proposition_ids = _as_list(item.get("proposition_ids"))
+    support_passage_ids = _as_list(item.get("support_passage_ids"))
+    if not support_passage_ids and isinstance(item.get("support_passages"), list):
+        support_passage_ids = [
+            passage.get("passage_id") for passage in item.get("support_passages") or []
+            if isinstance(passage, dict) and passage.get("passage_id")
+        ]
+    lineage = dict(item.get("source_package_lineage") or item.get("lineage") or {})
+    if item.get("evidence_package_id"):
+        lineage.setdefault("evidence_package_id", item.get("evidence_package_id"))
+    if item.get("source_id"):
+        lineage.setdefault("source_id", item.get("source_id"))
+    if item.get("parsed_source_id"):
+        lineage.setdefault("parsed_source_id", item.get("parsed_source_id"))
+    if support_passage_ids:
+        lineage.setdefault("support_passage_ids", support_passage_ids)
+    if proposition_ids:
+        lineage.setdefault("proposition_ids", proposition_ids)
+    if lineage:
+        record["source_package_lineage"] = lineage
+    record["evidence_package_id"] = item.get("evidence_package_id") or lineage.get("evidence_package_id")
+    record["source_id"] = item.get("source_id") or lineage.get("source_id")
+    record["parsed_source_id"] = item.get("parsed_source_id") or lineage.get("parsed_source_id")
+    record["support_passage_ids"] = support_passage_ids or _as_list(lineage.get("support_passage_ids"))
+    record["proposition_ids"] = proposition_ids or _as_list(lineage.get("proposition_ids"))
+    record["source_context_status"] = item.get("source_context_status") or item.get("source_use_status") or item.get("promotion_status")
+    record["claim_support_status"] = item.get("claim_support_status") or item.get("support_level")
     if kind == "foresight":
         record["requires_company_specific_corroboration"] = True
         record["not_evidence_of_deployment"] = True
@@ -203,7 +245,21 @@ def build_claim_graph(data: dict, manifest: list[dict]) -> tuple[list[dict], lis
             continue
         url = canonicalize_url(finding.get("url") or finding.get("source_url") or "")
         evidence_ids = [url_to_id[url]] if url in url_to_id else []
-        claims.append(_claim_record(text, "jury_reality", evidence_ids, "company_fact", index, support=finding.get("claim_support_status") or "pending"))
+        claims.append(_claim_record(
+            text,
+            "jury_reality",
+            evidence_ids,
+            "company_fact",
+            index,
+            support=finding.get("claim_support_status") or "pending",
+            evidence_package_id=finding.get("evidence_package_id"),
+            proposition_ids=_as_list(finding.get("proposition_ids")),
+            support_passage_ids=_as_list(finding.get("support_passage_ids")),
+            source_context_status=finding.get("source_context_status") or finding.get("source_use_status"),
+            claim_support_status=finding.get("claim_support_status"),
+            support_level=finding.get("support_level"),
+            finding_contract=finding.get("finding_contract"),
+        ))
     strategic = data.get("strategic_foresight") or {}
     forces = list(strategic.get("forces") or []) + list(strategic.get("dimension_forces") or [])
     for index, force in enumerate(forces, 1):
@@ -355,5 +411,14 @@ def attach_evidence_graph(data: dict) -> dict:
                 link["evidence_id"] = match["evidence_id"]
                 link["report_ref"] = match["report_ref"]
                 link["citation"] = match["citation"]
+                link["associated_claim_ids"] = list(match.get("associated_claim_ids") or [])
+                link.setdefault("exact_passage", match.get("exact_passage"))
+                for key in (
+                    "evidence_package_id", "source_id", "parsed_source_id",
+                    "support_passage_ids", "proposition_ids", "source_package_lineage",
+                    "source_context_status", "claim_support_status",
+                ):
+                    if match.get(key) and not link.get(key):
+                        link[key] = match.get(key)
     data["evidence_graph_created_at"] = datetime.now(timezone.utc).isoformat()
     return data

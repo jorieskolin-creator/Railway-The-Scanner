@@ -204,3 +204,36 @@ def test_asset_sources_are_not_packaged_for_jury():
     }
 
     assert build_jury_evidence_packages(SERVICE_JURY, [source]) == []
+
+
+def test_jury_package_exposes_parser_passage_proposition_lineage():
+    source = {
+        "url": "https://www.example.com/services/platform",
+        "title": "Platform services",
+        "fetched_excerpt": (
+            "Example states that its platform service includes managed operations, "
+            "customer support, lifecycle maintenance, and delivery monitoring. "
+            "The page does not provide audited outcome metrics."
+        ),
+        "url_verified": True,
+        "content_readable": True,
+        "entity_verified": True,
+        "official_domain_scope_inferred": True,
+        "source_context_status": "scoped_context",
+        "claim_support_status": "unsupported_for_this_claim",
+    }
+
+    package = build_jury_evidence_packages(SERVICE_JURY, [source])[0]
+    rendered = render_packages_for_prompt([package])[0]
+
+    assert package["source_id"].startswith("SRC-")
+    assert package["parsed_source_id"].startswith("PRS-")
+    assert package["support_passage_ids"]
+    assert package["proposition_ids"]
+    assert package["lineage"]["source_id"] == package["source_id"]
+    assert package["lineage"]["parsed_source_id"] == package["parsed_source_id"]
+    assert package["source_context_status"] == "scoped_context"
+    assert package["claim_support_status"] == "unsupported_for_this_claim"
+    assert "precise hard facts not present in the fetched content" in package["cannot_support"]
+    assert rendered["evidence_lineage"]["proposition_ids"] == package["proposition_ids"]
+    assert rendered["support_passage_ids"] == package["support_passage_ids"]

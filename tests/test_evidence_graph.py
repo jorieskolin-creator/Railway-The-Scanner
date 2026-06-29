@@ -102,3 +102,47 @@ def test_claim_graph_links_only_explicit_premises_and_all_ids_resolve():
     assert claims[1]["citation_status"] == "missing"
     assert all(evidence_id in {row["evidence_id"] for row in manifest} for evidence_id in claims[0]["evidence_ids"])
 
+
+def test_claim_graph_preserves_jury_package_lineage():
+    data = {
+        "evidence_links": [{
+            "url": "https://example.com/services",
+            "title": "Services",
+            "source_quote": "Example lists lifecycle services and customer support.",
+            "url_verified": True,
+            "content_verified": True,
+            "entity_match_status": "exact",
+            "source_context_status": "scoped_context",
+            "claim_support_status": "context_only",
+            "evidence_package_id": "PKG-abc123",
+            "source_id": "SRC-source1",
+            "parsed_source_id": "PRS-source1",
+            "support_passage_ids": ["PASS-one"],
+            "proposition_ids": ["PROP-one"],
+        }],
+        "reality_checklist": [{
+            "found": True,
+            "finding": "Example has lifecycle services and customer support.",
+            "url": "https://example.com/services",
+            "claim_support_status": "context_only",
+            "support_level": "context_only",
+            "source_context_status": "scoped_context",
+            "evidence_package_id": "PKG-abc123",
+            "support_passage_ids": ["PASS-one"],
+            "proposition_ids": ["PROP-one"],
+            "finding_contract": "jury_finding/v1",
+        }],
+    }
+
+    evidence_graph.attach_evidence_graph(data)
+
+    manifest_row = data["evidence_manifest"][0]
+    claim = data["claim_graph"][0]
+    assert manifest_row["evidence_package_id"] == "PKG-abc123"
+    assert manifest_row["parsed_source_id"] == "PRS-source1"
+    assert manifest_row["support_passage_ids"] == ["PASS-one"]
+    assert manifest_row["proposition_ids"] == ["PROP-one"]
+    assert claim["evidence_package_id"] == "PKG-abc123"
+    assert claim["support_passage_ids"] == ["PASS-one"]
+    assert claim["proposition_ids"] == ["PROP-one"]
+    assert data["evidence_links"][0]["associated_claim_ids"] == [claim["claim_id"]]

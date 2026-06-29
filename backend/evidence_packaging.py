@@ -12,7 +12,7 @@ import hashlib
 import re
 from urllib.parse import urlparse
 
-from evidence_contracts import mark_jury_evidence_package
+from evidence_contracts import SOURCE_PROPOSITION, mark_jury_evidence_package
 from source_parser import parse_source
 from source_parser import source_text as parsed_source_text
 
@@ -493,6 +493,13 @@ def extract_source_propositions(record: dict, jury_name: str, max_props: int = 2
     primary_passage = support_passages[0] if support_passages else {}
     passage = _clean_text(primary_passage.get("text") or text, 1200)
     passage_id = primary_passage.get("passage_id")
+    source_context_status = (
+        record.get("source_context_status")
+        or record.get("source_use_status")
+        or record.get("promotion_status")
+        or "valid_company_context"
+    )
+    claim_support_status = record.get("claim_support_status") or support_level
     if patterns:
         primary = patterns[0]
         behavior = primary.get("behavior") or primary.get("pattern_family", "bounded current-state context")
@@ -526,10 +533,16 @@ def extract_source_propositions(record: dict, jury_name: str, max_props: int = 2
     propositions = [
         {
             "proposition_id": f"PROP-{hashlib.sha1((str(record.get('url')) + title + subdimensions[0]).encode('utf-8')).hexdigest()[:10]}",
+            "proposition_contract": SOURCE_PROPOSITION,
             "claim": claim,
             "support_level": support_level,
+            "claim_support_status": claim_support_status,
+            "source_context_status": source_context_status,
             "source_passage": passage,
             "support_passage_id": passage_id,
+            "parsed_source_id": parsed.get("parsed_source_id"),
+            "source_id": parsed.get("source_id"),
+            "content_hash": parsed.get("content_hash"),
             "source_role": source_role,
             "source_independence": independence,
             "subdimensions": subdimensions[:2],
@@ -537,17 +550,23 @@ def extract_source_propositions(record: dict, jury_name: str, max_props: int = 2
             "routing_basis": "semantic_pattern" if patterns else "keyword_or_metadata",
             "routing_warning": pattern_rejection,
             "can_support": can_support,
-            "cannot_support": cannot_support,
+            "cannot_support": sorted(set(cannot_support + list(parsed.get("source_limitations") or []))),
         }
     ]
     if max_props > 1 and len(subdimensions) > 2:
         propositions.append(
             {
                 "proposition_id": f"PROP-{hashlib.sha1((str(record.get('url')) + title + subdimensions[2]).encode('utf-8')).hexdigest()[:10]}",
+                "proposition_contract": SOURCE_PROPOSITION,
                 "claim": f"The same source may also inform {subdimensions[2]}.",
                 "support_level": "context_only",
+                "claim_support_status": "context_only",
+                "source_context_status": source_context_status,
                 "source_passage": _clean_text((support_passages[1] if len(support_passages) > 1 else primary_passage).get("text") or passage, 900),
                 "support_passage_id": (support_passages[1] if len(support_passages) > 1 else primary_passage).get("passage_id"),
+                "parsed_source_id": parsed.get("parsed_source_id"),
+                "source_id": parsed.get("source_id"),
+                "content_hash": parsed.get("content_hash"),
                 "source_role": role,
                 "source_independence": independence,
                 "subdimensions": [subdimensions[2]],
@@ -555,7 +574,7 @@ def extract_source_propositions(record: dict, jury_name: str, max_props: int = 2
                 "routing_basis": "semantic_pattern" if patterns else "keyword_or_metadata",
                 "routing_warning": pattern_rejection,
                 "can_support": ["secondary context"],
-                "cannot_support": ["standalone hard fact"],
+                "cannot_support": sorted(set(["standalone hard fact"] + list(parsed.get("source_limitations") or []))),
             }
         )
     return propositions[:max_props]
@@ -615,8 +634,21 @@ def build_jury_evidence_packages(jury_name: str, packets: list[dict], max_packag
         routing_basis = "semantic_pattern" if patterns else "keyword_or_metadata"
         routing_warning = _pattern_rejection_reason(jury_name, packet, patterns)
         role = infer_source_role(packet)
+        proposition_ids = [prop.get("proposition_id") for prop in propositions if prop.get("proposition_id")]
+        support_passage_ids = [
+            item.get("passage_id") for item in (parsed.get("support_passages") or [])
+            if item.get("passage_id")
+        ]
+        source_context_status = (
+            packet.get("source_context_status")
+            or packet.get("source_use_status")
+            or packet.get("promotion_status")
+            or "valid_company_context"
+        )
+        claim_support_status = packet.get("claim_support_status") or _support_level(packet)
         package = {
             "package_id": f"PKG-{hashlib.sha1((jury_name + key).encode('utf-8')).hexdigest()[:10]}",
+            "source_id": parsed.get("source_id"),
             "source_url": packet.get("url"),
             "source_title": _clean_text(packet.get("title") or packet.get("label") or packet.get("url"), 220),
             "source_type": packet.get("source_type"),
@@ -634,16 +666,32 @@ def build_jury_evidence_packages(jury_name: str, packets: list[dict], max_packag
             "routing_basis": routing_basis,
             "routing_warning": routing_warning,
             "parsed_source_id": parsed.get("parsed_source_id"),
+            "parser_contract": parsed.get("parser_contract"),
+            "parser_route": parsed.get("parser_route"),
             "source_format": parsed.get("source_format"),
+            "content_hash": parsed.get("content_hash"),
+            "extraction_quality": parsed.get("extraction_quality"),
             "parse_warnings": parsed.get("parse_warnings"),
             "parsed_source_summary": parsed.get("parsed_source_summary"),
             "semantic_snippet": parsed.get("semantic_snippet"),
             "support_passages": parsed.get("support_passages"),
+            "support_passage_ids": support_passage_ids,
             "fetched_or_cached_content": parsed.get("content_excerpt"),
             "propositions": propositions,
+            "proposition_ids": proposition_ids,
             "safe_propositions": propositions,
             "allowed_uses": sorted({item for prop in propositions for item in prop.get("can_support", [])}),
             "limitations": sorted({item for prop in propositions for item in prop.get("cannot_support", [])}),
+            "cannot_support": sorted({item for prop in propositions for item in prop.get("cannot_support", [])}),
+            "source_context_status": source_context_status,
+            "claim_support_status": claim_support_status,
+            "claim_relation_status": packet.get("claim_relation_status"),
+            "lineage": {
+                "source_id": parsed.get("source_id"),
+                "parsed_source_id": parsed.get("parsed_source_id"),
+                "support_passage_ids": support_passage_ids,
+                "proposition_ids": proposition_ids,
+            },
             "portfolio_value": _package_score(packet, jury_name),
             "original_packet_index": idx,
         }
@@ -703,6 +751,8 @@ def render_packages_for_prompt(packages: list[dict], max_packages: int = 10) -> 
         rendered.append(
             {
                 "package_id": package.get("package_id"),
+                "source_id": package.get("source_id"),
+                "parsed_source_id": package.get("parsed_source_id"),
                 "url": package.get("source_url"),
                 "title": package.get("source_title"),
                 "source_type": package.get("source_type"),
@@ -718,11 +768,17 @@ def render_packages_for_prompt(packages: list[dict], max_packages: int = 10) -> 
                 "semantic_snippet_for_routing_only": package.get("semantic_snippet"),
                 "parsed_source_summary": package.get("parsed_source_summary"),
                 "support_passages": package.get("support_passages"),
+                "support_passage_ids": package.get("support_passage_ids"),
                 "source_content_excerpt": package.get("fetched_or_cached_content"),
                 "source_supported_propositions": package.get("propositions"),
+                "proposition_ids": package.get("proposition_ids"),
                 "safe_propositions": package.get("safe_propositions"),
                 "allowed_uses": package.get("allowed_uses"),
                 "limitations": package.get("limitations"),
+                "cannot_support": package.get("cannot_support"),
+                "source_context_status": package.get("source_context_status"),
+                "claim_support_status": package.get("claim_support_status"),
+                "evidence_lineage": package.get("lineage"),
             }
         )
     return rendered
