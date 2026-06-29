@@ -18,3 +18,18 @@ View your app in AI Studio: https://ai.studio/apps/drive/1_X7UCBtA1jBQYEAWOdkM8n
 2. Set `OPENAI_API_KEY` / `GPT_API_KEY` and `ANTHROPIC_API_KEY` in [.env.local](.env.local)
 3. Run the app:
    `npm run dev`
+
+## Production Remote Guard
+
+Railway production deploys from `jorieskolin-creator/Railway-The-Scanner` on `main`.
+Before pushing deployment changes, verify this checkout is pointed at the production repo:
+
+```bash
+npm run verify:remote
+```
+
+If the check fails, fix the remote with:
+
+```bash
+git remote set-url origin https://github.com/jorieskolin-creator/Railway-The-Scanner.git
+```
