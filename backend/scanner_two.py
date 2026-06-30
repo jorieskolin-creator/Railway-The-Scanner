@@ -2194,11 +2194,11 @@ def _build_jury_acquisition_prompt(
     acquisition_focus: str = "",
 ) -> str:
     """Build a search-only prompt for one independent evidence-acquisition lane."""
-    source_limit = "1"
+    source_limit = "3"
     if acquisition_focus:
-        source_limit = "1"
+        source_limit = "3"
     elif jury_name in FORENSIC_HEAVY_JURIES:
-        source_limit = "1-2"
+        source_limit = "4"
     focus_block = ""
     if acquisition_focus:
         focus_block = (
@@ -2248,22 +2248,28 @@ article, report, filing, documentation, service page, or job URL rather than a s
 landing page. Provide a short discovery rationale explaining why the source might matter.
 `verbatim_quote` is optional. Include it only when you can copy it word-for-word from the linked page.
 Scanner will fetch the page and extract passages deterministically; your quote/snippet is never proof.
-Before returning a source, run this self-check and omit the source if any item fails:
+Return ranked candidates, not truth. Scanner will keep only candidates that survive deterministic
+URL/readability/entity/page-type checks. Before returning a source, run this page-level survival
+self-check and omit the source if any item fails:
 - direct canonical page, not search/archive/index/navigation page;
 - likely live and readable as an article/report/service/case/procurement/job-detail/documentation page;
 - not an image/icon/asset, social/contact/login/cookie/tracking URL, or generic home page;
 - target company, group, named subsidiary, or official domain is clearly scoped;
 - useful for this exact jury, not merely evidence that the company exists;
 - if `verbatim_quote` is present, it is copied from the page itself.
-Return {source_limit} high-quality canonical URL(s) only. Quality is better than volume.
+Return up to {source_limit} ranked high-quality canonical candidate URL(s). The lane may need only
+1-2 validated packets, but surplus candidates help Scanner choose survivors after deterministic checks.
 Return ONLY valid JSON:
 {{
   "jury": {json.dumps(jury_name)},
   "sources": [
-    {{"url": "https://...", "title": "page title",
+    {{"rank": 1, "url": "https://...", "title": "page title",
       "discovery_rationale": "why this direct page may help this jury",
       "semantic_snippet": "brief routing summary; not evidence",
       "verbatim_quote": "optional exact page passage or null",
+      "survival_check": {{"direct_page": true, "likely_live": true,
+        "target_scoped": true, "not_generic_homepage": true,
+        "jury_fit": "high|medium|low", "risk_reason": "main risk if Scanner rejects this URL"}},
       "published_at": "YYYY-MM-DD or null", "source_type": "registry source type",
       "entity_scope_candidate": "company|group|subsidiary|context|unclear",
       "expected_subdimensions": ["service portfolio", "customer proof"],
@@ -2521,10 +2527,12 @@ def _normalize_acquisition_payload(payload: dict, jury_name: str, provider: str)
             "label": str(item.get("label") or item.get("title") or "Fresh evidence candidate")[:180],
             "title": str(item.get("title") or url)[:300],
             "url": url,
+            "candidate_rank": item.get("rank"),
             "snippet": semantic_snippet[:1800],
             "semantic_snippet": semantic_snippet[:1800],
             "provider_quote_candidate": quote[:1800],
             "discovery_rationale": str(item.get("discovery_rationale") or semantic_snippet)[:900],
+            "survival_check": item.get("survival_check") if isinstance(item.get("survival_check"), dict) else {},
             "source_intent": item.get("source_intent") or "",
             "expected_subdimensions": item.get("expected_subdimensions") or [],
             "published_at": item.get("published_at"),
@@ -4662,7 +4670,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     print(
         f"   🔍 [Forensic Acquisition] {len(acquisition_specs)} parallel acquisition lane(s) across five juries for {company_name}: "
         f"{acquisition_run_ceiling}s search ceiling + {max(0, acquisition_ceiling - acquisition_run_ceiling)}s reserved repair; "
-        "Gemini Pro 60s → GPT-5.5 repair 45s → Gemini Flash 45s; "
+        "Gemini Pro surplus candidates → deterministic gate → GPT-5.5 retry → Gemini Flash last resort; "
         f"baseline {coverage['score']}/100 across {len(coverage['jury_coverage'])}/5 juries"
         "."
     )
@@ -4683,7 +4691,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         return f"{prefix}_provider_error"
 
     def _run_acquisition_provider_sequence(prompt: str, jury_name: str) -> tuple[dict | None, str, str]:
-        """Run bounded forensic discovery: Gemini Pro, GPT repair, then Gemini Flash."""
+        """Run the first acquisition scout. Retries happen after deterministic precheck."""
         payload = None
         provider = "gemini-3.1-pro-preview"
         status = "provider_unavailable"
@@ -4707,53 +4715,6 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             else:
                 status = "gemini_pro_skipped_no_budget"
 
-        remaining = max(0, int(acquisition_deadline - time.time()))
-        if remaining >= FORENSIC_GPT_REPAIR_SCOUT_SECONDS:
-            provider = "gpt-5.5-web-fallback"
-            try:
-                payload = execute_with_openai_web(
-                    prompt,
-                    timeout_cap=min(FORENSIC_GPT_REPAIR_SCOUT_SECONDS, remaining),
-                    purpose=f"jury fallback: {jury_name}",
-                    search_context_size="low",
-                    allow_repair=False,
-                )
-                if payload:
-                    return payload, provider, "fallback_completed"
-                status = "fallback_failed"
-            except Exception as error:
-                status = _provider_error_status("fallback", error)
-                print(
-                    f"   ⚠️ [Forensic Acquisition] {jury_name} GPT fallback {status}: "
-                    f"{type(error).__name__}: {error}"
-                )
-        elif remaining > 0:
-            status = f"gpt_fallback_skipped_low_budget_{remaining}s"
-
-        if gemini_api_key():
-            remaining = max(0, int(acquisition_deadline - time.time()))
-            if remaining >= FORENSIC_GEMINI_FLASH_SCOUT_SECONDS:
-                provider = FORENSIC_GEMINI_FAST_FALLBACK_MODEL
-                try:
-                    text = call_gemini_forensic_text(
-                        prompt,
-                        model=FORENSIC_GEMINI_FAST_FALLBACK_MODEL,
-                        timeout=min(FORENSIC_GEMINI_FLASH_SCOUT_SECONDS, remaining),
-                        max_output_tokens=4000,
-                    )
-                    payload = _parse_provider_payload(text)
-                    if payload:
-                        return payload, provider, "flash_completed"
-                    status = "flash_invalid_json"
-                except Exception as error:
-                    status = _provider_error_status("flash", error)
-                    print(
-                        f"   ⚠️ [Forensic Acquisition] {jury_name} Gemini Flash {status}: "
-                        f"{type(error).__name__}: {error}"
-                    )
-            elif remaining > 0:
-                status = f"flash_skipped_low_budget_{remaining}s"
-
         return payload, provider, status
 
     def _acquire_one_jury(jury_name, focus_key="full", focus_label=""):
@@ -4776,7 +4737,6 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             "sources": sources,
         }
         target_valid = _lane_fresh_target(jury_name, focus_key)
-        replacement_attempts_allowed = 0
 
         def _validate_lane(current_lane: dict, label: str) -> tuple[dict, dict]:
             remaining_for_recovery = max(0, int(acquisition_deadline - time.time()))
@@ -4833,13 +4793,26 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             return len(additions)
 
         attempts_used = 0
-        while (
-            len(lane.get("sources", []) or []) < target_valid
-            and attempts_used < replacement_attempts_allowed
-        ):
+        survival_retry_statuses = []
+
+        def _current_valid_count() -> int:
+            return len(lane.get("sources", []) or [])
+
+        def _needs_survival_retry() -> bool:
+            return _current_valid_count() < target_valid
+
+        def _run_survival_retry(
+            *,
+            retry_provider: str,
+            label: str,
+            timeout_cap: int,
+            model: str = "",
+        ) -> int:
+            nonlocal attempts_used, lane
             remaining = max(0, int(acquisition_deadline - time.time()))
-            if remaining < FORENSIC_LANE_REPLACEMENT_MIN_SECONDS:
-                break
+            if remaining < 25:
+                survival_retry_statuses.append(f"{label}_skipped_low_budget_{remaining}s")
+                return 0
             attempts_used += 1
             replacement_prompt = _build_jury_replacement_prompt(
                 search_name,
@@ -4851,38 +4824,45 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 entity_context_block,
                 search_alias_block,
             )
-            replacement_provider = "gemini-3.1-pro-preview"
             replacement_payload = None
-            replacement_status = "provider_unavailable"
-            if gemini_api_key():
+            replacement_status = f"{label}_unavailable"
+            if retry_provider == "gpt":
+                replacement_provider = "gpt-5.5-web-survival-retry"
                 try:
-                    replacement_text = call_gemini_forensic_text(
+                    replacement_payload = execute_with_openai_web(
                         replacement_prompt,
-                        timeout=min(FORENSIC_LANE_REPLACEMENT_TIMEOUT_SECONDS, remaining),
+                        timeout_cap=min(timeout_cap, remaining),
+                        purpose=f"jury acquisition survival retry: {jury_name}",
+                        search_context_size="low",
+                        allow_repair=False,
                     )
-                    replacement_payload = _parse_provider_payload(replacement_text)
-                    replacement_status = "completed" if replacement_payload else "invalid_json"
+                    replacement_status = "gpt_survival_retry_completed" if replacement_payload else "gpt_survival_retry_failed"
                 except Exception as error:
-                    replacement_status = (
-                        "provider_timeout"
-                        if "timeout" in type(error).__name__.lower() or "timeout" in str(error).lower()
-                        else "provider_error"
-                    )
+                    replacement_status = _provider_error_status("gpt_survival_retry", error)
                     print(
-                        f"   ⚠️ [Forensic Acquisition Replacement] {jury_name} Gemini "
+                        f"   ⚠️ [Forensic Acquisition Survival Retry] {jury_name} GPT "
                         f"{replacement_status}: {type(error).__name__}: {error}"
                     )
-            remaining = max(0, int(acquisition_deadline - time.time()))
-            if not replacement_payload and remaining >= FORENSIC_GPT_FALLBACK_MIN_SECONDS:
-                replacement_provider = "gpt-5.5-web-replacement"
-                replacement_payload = execute_with_openai_web(
-                    replacement_prompt,
-                    timeout_cap=min(FORENSIC_LANE_REPLACEMENT_TIMEOUT_SECONDS, remaining),
-                    purpose=f"jury acquisition replacement: {jury_name}",
-                    search_context_size="low",
-                    allow_repair=False,
-                )
-                replacement_status = "fallback_completed" if replacement_payload else "fallback_failed"
+            else:
+                replacement_provider = model or FORENSIC_GEMINI_FAST_FALLBACK_MODEL
+                if gemini_api_key():
+                    try:
+                        replacement_text = call_gemini_forensic_text(
+                            replacement_prompt,
+                            model=replacement_provider,
+                            timeout=min(timeout_cap, remaining),
+                            max_output_tokens=4000,
+                        )
+                        replacement_payload = _parse_provider_payload(replacement_text)
+                        replacement_status = "gemini_flash_survival_retry_completed" if replacement_payload else "gemini_flash_survival_retry_invalid_json"
+                    except Exception as error:
+                        replacement_status = _provider_error_status("gemini_flash_survival_retry", error)
+                        print(
+                            f"   ⚠️ [Forensic Acquisition Survival Retry] {jury_name} Gemini Flash "
+                            f"{replacement_status}: {type(error).__name__}: {error}"
+                        )
+                else:
+                    replacement_status = "gemini_flash_survival_retry_unavailable"
             replacement_sources = _normalize_acquisition_payload(
                 replacement_payload or {},
                 jury_name,
@@ -4898,20 +4878,40 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             if replacement_sources:
                 replacement_lane, _replacement_stats = _validate_lane(
                     replacement_lane,
-                    f"replacement_{attempts_used}",
+                    f"{label}_{attempts_used}",
                 )
             added = _append_replacement_sources(lane, replacement_lane, attempts_used)
+            survival_retry_statuses.append(replacement_status)
             print(
-                f"   {'✅' if added else '⚠️'} [Forensic Acquisition Replacement] {jury_name}"
+                f"   {'✅' if added else '⚠️'} [Forensic Acquisition Survival Retry] {jury_name}"
                 f"{' / '+focus_key if focus_key != 'full' else ''}: "
-                f"attempt={attempts_used}, added_valid={added}, status={replacement_status}, "
+                f"{label}, attempt={attempts_used}, added_valid={added}, status={replacement_status}, "
                 f"valid_now={len(lane.get('sources', []) or [])}/{target_valid}."
             )
-            if not replacement_sources and not added:
-                break
+            return added
+
+        # Gemini remains the first acquisition scout. If its structurally valid
+        # candidates fail deterministic URL/entity/page-type checks, spend a
+        # bounded lane-local retry on GPT, then Gemini Flash as the last resort.
+        if _needs_survival_retry() and "gpt-5.5" not in str(lane.get("provider") or ""):
+            _run_survival_retry(
+                retry_provider="gpt",
+                label="gpt_round_2",
+                timeout_cap=FORENSIC_GPT_REPAIR_SCOUT_SECONDS,
+            )
+        if _needs_survival_retry():
+            _run_survival_retry(
+                retry_provider="gemini_flash",
+                label="flash_round_3",
+                timeout_cap=FORENSIC_GEMINI_FLASH_SCOUT_SECONDS,
+                model=FORENSIC_GEMINI_FAST_FALLBACK_MODEL,
+            )
 
         lane["lane_quality_target"] = target_valid
         lane["lane_replacement_attempts"] = attempts_used
+        lane["survival_retry_attempts"] = attempts_used
+        if survival_retry_statuses:
+            lane["survival_retry_statuses"] = survival_retry_statuses
         lane["lane_quality_gate_passed"] = len(lane.get("sources", []) or []) >= target_valid
         print(
             f"   {'✅' if lane.get('sources') else '⚠️'} [Forensic Acquisition] {jury_name}"
