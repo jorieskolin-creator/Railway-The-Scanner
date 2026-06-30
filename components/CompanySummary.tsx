@@ -445,9 +445,10 @@ const isForesightContext = (link) => {
 
   // --- CHART DATA PREPARATION ---
   const historyRaw = data.history || [];
+  const hasRealHistory = historyRaw.length > 0;
   let chartData = [];
 
-  if (historyRaw.length > 0) {
+  if (hasRealHistory) {
       chartData = historyRaw.map(h => ({
           date: new Date(h.date).toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
           gap: h.gap
@@ -459,20 +460,10 @@ const isForesightContext = (link) => {
   } else {
       const current = new Date(data.lastUpdated);
       const currentGap = data.reality_gap;
-      chartData = [];
-      for(let i=5; i>=1; i--) {
-          const d = new Date(current);
-          d.setMonth(d.getMonth() - i);
-          const variance = Math.floor(Math.random() * 16) - 8; 
-          chartData.push({
-              date: d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
-              gap: Math.max(-100, Math.min(100, currentGap + variance))
-          });
-      }
-      chartData.push({
+      chartData = [{
           date: current.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
           gap: currentGap
-      });
+      }];
   }
 
   // --- EXPORT LOGIC ---
@@ -1537,8 +1528,11 @@ const isForesightContext = (link) => {
             <div className="bg-white/5 p-5 rounded-2xl border border-white/10 backdrop-blur-md flex flex-col">
                 <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
                 <Activity className="text-cyan-400" size={14} />
-                Integrity Delta Trend (6 Mo)
+                {hasRealHistory ? 'Integrity Delta Trend (6 Mo)' : 'Integrity Delta Snapshot'}
                 </h3>
+                {!hasRealHistory && (
+                    <p className="text-[10px] text-slate-500 mb-2">No real historical series available.</p>
+                )}
                 <div className="flex-grow min-h-[120px]">
                     <ResponsiveContainer width="100%" height="100%">
                         <LineChart data={chartData}>

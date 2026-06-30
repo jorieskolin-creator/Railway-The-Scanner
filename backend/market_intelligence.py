@@ -659,7 +659,7 @@ def compute_demand_intensity(company_details, dashboard_data):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 12. OPPORTUNITY MAP (PRESSURE × READINESS GAP × CAPACITY × CLUSTER SIGNAL)
+# 12. OPPORTUNITY MAP (PRESSURE × READINESS GAP × CAPACITY × CURRENT VULN)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def compute_opportunity_map(dashboard_data, top_causes, favi_companies):
@@ -670,7 +670,9 @@ def compute_opportunity_map(dashboard_data, top_causes, favi_companies):
       2) Low readiness (high readiness gap)
       3) Sufficient financial capacity
       4) Large intent-reality gap (current vulnerability)
-      5) Repeated WHY/WHAT proposal clusters
+    Repeated WHY/WHAT proposal clusters are retained as narrative context, but
+    they do not add score. Generated hypotheses should not increase their own
+    evidence confidence.
     """
     favi_by_company = {c.get("name"): c for c in (favi_companies or []) if c.get("name")}
 
@@ -703,11 +705,10 @@ def compute_opportunity_map(dashboard_data, top_causes, favi_companies):
 
         financial_capacity = min(100.0, fac)
         opportunity_score = (
-            pressure * 0.30 +
+            pressure * 0.35 +
             readiness_gap * 0.25 +
             financial_capacity * 0.15 +
-            current_vulnerability * 0.20 +
-            min(100.0, cluster_signal * 8.0) * 0.10
+            current_vulnerability * 0.25
         )
 
         company_rows.append({
@@ -741,11 +742,10 @@ def compute_opportunity_map(dashboard_data, top_causes, favi_companies):
         avg_vuln = statistics.mean(vals["vuln"]) if vals["vuln"] else 0
         avg_clusters = statistics.mean(vals["clusters"]) if vals["clusters"] else 0
         domain_score = (
-            avg_pressure * 0.30 +
+            avg_pressure * 0.35 +
             avg_gap * 0.25 +
             avg_fac * 0.15 +
-            avg_vuln * 0.20 +
-            min(100.0, avg_clusters * 8.0) * 0.10
+            avg_vuln * 0.25
         )
         domain_results.append({
             "domain": domain,
@@ -760,7 +760,7 @@ def compute_opportunity_map(dashboard_data, top_causes, favi_companies):
     domain_results.sort(key=lambda x: x["opportunity_score"], reverse=True)
 
     return {
-        "formula": "0.30*pressure + 0.25*readiness_gap + 0.15*financial_capacity + 0.20*intent_reality_gap + 0.10*proposal_cluster_signal_scaled",
+        "formula": "0.35*pressure + 0.25*readiness_gap + 0.15*financial_capacity + 0.25*intent_reality_gap; proposal_cluster_signal is context only",
         "domain_rankings": domain_results,
         "company_rankings": company_rows[:50],
     }

@@ -41,6 +41,7 @@ ALLOWED_GATES = {
     "internal_only",
     "blocked",
 }
+EVIDENCE_BASIS_PREFIXES = ("SRC-", "FIN-", "CED-", "LEDGER-", "EVD-")
 
 
 BUYER_ROLE_LENSES = {
@@ -958,6 +959,35 @@ def _activation_pair_text(pair: dict) -> str:
     )
 
 
+def _need_hypothesis_from_signal(signal: dict) -> dict:
+    text = _clip(
+        " | ".join(
+            str(signal.get(key) or "")
+            for key in ("theme", "why", "what", "account_movement", "commercial_pressure")
+            if signal.get(key)
+        ),
+        1400,
+    )
+    pressure_label, pressure, consequence = _infer_pressure(text)
+    play_type = _normalize_play_type(signal.get("sales_play_type") or signal.get("play_type") or signal.get("theme_type"))
+    current_condition = _clip(signal.get("why") or signal.get("account_movement") or text, 420)
+    future_pressure = _clip(pressure if play_type != "current_status" else signal.get("commercial_pressure") or pressure, 420)
+    structural_exposure = _clip(signal.get("theme") or pressure_label, 260)
+    likely_business_consequence = _clip(signal.get("business_consequence") or consequence, 420)
+    what_to_propose = _clip(signal.get("what") or "Validate whether the pressure is real, owned, and commercially relevant before proposing a service path.", 420)
+    why_now_or_soon = _clip(signal.get("timing_relevance") or _infer_timing(text), 360)
+    return {
+        "future_pressure": future_pressure,
+        "current_condition": current_condition,
+        "structural_exposure": structural_exposure,
+        "likely_business_consequence": likely_business_consequence,
+        "why_now_or_soon": why_now_or_soon,
+        "what_to_propose": what_to_propose,
+        "discovery_question": "Where would this pressure become most visible if it starts affecting priorities, operating capacity, or investment choices?",
+        "disqualifier": "Do not advance this as a sales play if the customer confirms no owner, pressure, timing, or business consequence.",
+    }
+
+
 def _service_fit_hints(text: str, services: list[dict], limit: int = 4) -> list[dict]:
     text_l = str(text or "").lower()
     matches = []
@@ -1044,10 +1074,10 @@ def _build_account_signal_map(
         extra: dict | None = None,
     ):
         if len(signals) >= limit:
-            return
+            return None
         text = _clip(text, 900)
         if not text:
-            return
+            return None
         signal_id = f"SIG-{len(signals) + 1:02d}"
         signal = _signal_from_text(
             signal_id,
@@ -1062,6 +1092,7 @@ def _build_account_signal_map(
         if extra:
             signal.update(extra)
         signals.append(signal)
+        return signal
 
     scanner_outputs = _dict(payload_seed.get("scanner_outputs"))
     activation_pairs = [
@@ -1082,7 +1113,7 @@ def _build_account_signal_map(
     for idx, pair in enumerate(activation_pairs[:3], start=1):
         play_type = _normalize_play_type(pair.get("theme_type"))
         text = _activation_pair_text(pair)
-        add_signal(
+        signal = add_signal(
             "scanner_activation_pair",
             text,
             [f"ACT-{idx:02d}"],
@@ -1111,6 +1142,8 @@ def _build_account_signal_map(
                 ),
             },
         )
+        if signal:
+            signal["need_hypothesis"] = _need_hypothesis_from_signal(signal)
 
     for item in _list(payload_seed.get("verified_evidence"))[:8]:
         if not isinstance(item, dict):
@@ -1307,7 +1340,7 @@ def _generation_prompt(payload: dict) -> str:
     return f"""
 You are creating an Admin-only Evidence-Gated Buying Potential & Insight report.
 
-This is NOT confirmed buying intent. It is a sales-intelligence hypothesis based on already stored Scanner data.
+This is NOT confirmed buying intent. It is a falsifiable need-hypothesis engine based on already stored Scanner data.
 Use only the JSON payload below. Do not browse the web. Do not invent services, clients, personal data, dates, financials, partnerships, ownership details, or buying signals.
 
 Evidence contract:
@@ -1316,7 +1349,7 @@ Evidence contract:
 - allowed_as_discovery_question: useful but weak or uncertain signal that should be asked, not asserted.
 - internal_only: useful for sales prep but not safe for customer-facing wording.
 - blocked: unsupported, wrong-entity, sensitive, or overclaiming material.
-- Say "buying potential", never "confirmed buying intent", unless explicit evidence exists in the payload.
+- Say "buying hypothesis", "need hypothesis", or "demand creation potential"; never "confirmed buying intent", unless explicit evidence exists in the payload.
 - Stakeholder notes must remain professional, role-relevant, and source-bound. No private-life profiling.
 
 Return ONLY valid JSON with this schema:
@@ -1327,7 +1360,7 @@ Return ONLY valid JSON with this schema:
   "why_now": [{{"trigger": "...", "interpretation": "...", "gate": "...", "confidence": 0, "evidence_basis": []}}],
   "stakeholder_map": [{{"name": "...", "role": "...", "likely_buying_committee_role": "...", "relevance_rationale": "...", "linked_pressure_themes": [], "linked_service_themes": [], "evidence_basis": "...", "confidence": 0, "allowed_use": "internal_only|allowed_as_discovery_question|allowed_as_hypothesis", "do_not_say": [], "safety_notes": []}}],
   "pain_to_solution_map": [{{"evidence": "...", "interpreted_pressure": "...", "service": "...", "proof_point": "...", "safe_wording": "...", "gate": "...", "confidence": 0, "disqualifiers": []}}],
-  "recommended_sales_plays": [{{"service_or_offer": "...", "why_relevant": "...", "target_stakeholder": "...", "opening_angle": "...", "executive_angle": "...", "technical_angle": "...", "discovery_questions": ["..."], "do_not_say": ["..."], "confidence": 0, "overclaim_risk": "low|medium|high", "evidence_basis": [], "disqualifiers": []}}],
+  "recommended_sales_plays": [{{"service_or_offer": "...", "need_hypothesis": {{"future_pressure": "...", "current_condition": "...", "structural_exposure": "...", "likely_business_consequence": "...", "why_now_or_soon": "...", "what_to_propose": "...", "discovery_question": "...", "disqualifier": "..."}}, "why_relevant": "...", "target_stakeholder": "...", "opening_angle": "...", "executive_angle": "...", "technical_angle": "...", "discovery_questions": ["..."], "do_not_say": ["..."], "confidence": 0, "hypothesis_strength": 0, "score_label": "Sales Play Readiness", "overclaim_risk": "low|medium|high", "evidence_basis": [], "disqualifiers": []}}],
   "sales_spine": {{"account_thesis": "", "strategic_synthesis_basis": "", "top_buying_hypotheses": [], "risk_themes": [], "self_scan_note": ""}},
   "evidence_confidence": {{"strongest_evidence": [], "verified_facts": [], "safe_hypotheses": [], "use_only_as_question": [], "weak_or_missing_evidence": [], "do_not_use_claims": [], "do_not_say": [], "sensitive_claims": [], "claims_as_questions_only": []}},
   "overall_confidence": 0,
@@ -1363,7 +1396,7 @@ BUYING_SECTION_SCHEMAS = {
 """.strip(),
     "sales_plays": """
 {
-  "recommended_sales_plays": [{"play_name": "...", "linked_signal_ids": ["SIG-01"], "activation_pair_index": 1, "play_type": "current_status|foresight_driven|proactive_opportunity", "service_or_offer": "...", "primary_buyer": "...", "secondary_buyers": [], "trigger": "...", "account_thesis": "...", "buying_hypothesis": "...", "trigger_to_offer_bridge": "...", "business_hypothesis": "...", "why_relevant": "...", "target_stakeholder": "...", "first_meeting_objective": "...", "opening_angle": "...", "executive_angle": "...", "technical_angle": "...", "safe_customer_wording": "...", "discovery_questions": ["..."], "discovery_questions_by_role": [{"role": "...", "questions": ["..."]}], "proof_point": "...", "do_not_say": ["..."], "qualification_upgrade_criteria": [], "confidence": 0, "play_score": 0, "play_classification": "strong_account_play|qualified_discovery_play|monitor_soft_discovery|weak_signal|do_not_use", "overclaim_risk": "low|medium|high", "evidence_basis": ["SIG-01"], "disqualifiers": []}],
+  "recommended_sales_plays": [{"play_name": "...", "linked_signal_ids": ["SIG-01"], "activation_pair_index": 1, "play_type": "current_status|foresight_driven|proactive_opportunity", "service_or_offer": "...", "need_hypothesis": {"future_pressure": "...", "current_condition": "...", "structural_exposure": "...", "likely_business_consequence": "...", "why_now_or_soon": "...", "what_to_propose": "...", "discovery_question": "...", "disqualifier": "..."}, "primary_buyer": "...", "secondary_buyers": [], "trigger": "...", "account_thesis": "...", "buying_hypothesis": "...", "trigger_to_offer_bridge": "...", "business_hypothesis": "...", "why_relevant": "...", "target_stakeholder": "...", "first_meeting_objective": "...", "opening_angle": "...", "executive_angle": "...", "technical_angle": "...", "safe_customer_wording": "...", "discovery_questions": ["..."], "discovery_questions_by_role": [{"role": "...", "questions": ["..."]}], "proof_point": "...", "do_not_say": ["..."], "qualification_upgrade_criteria": [], "confidence": 0, "play_score": 0, "hypothesis_strength": 0, "score_label": "Sales Play Readiness", "play_classification": "strong_account_play|qualified_discovery_play|monitor_soft_discovery|weak_signal|do_not_use", "overclaim_risk": "low|medium|high", "evidence_basis": ["SIG-01"], "disqualifiers": []}],
   "model_notes": []
 }
 """.strip(),
@@ -1406,9 +1439,11 @@ BUYING_SECTION_INSTRUCTIONS = {
     "sales_plays": (
         "Create Recommended Growth Plays. Each play must map to one scanner_activation_pair SIG id when available, "
         "preserve activation_pair_index, and classify play_type as current_status, foresight_driven, or proactive_opportunity. "
-        "Each play must name account thesis, buying hypothesis, trigger-to-offer bridge, primary/secondary buyers, "
+        "Each play must include a need_hypothesis with future_pressure, current_condition, structural_exposure, "
+        "likely_business_consequence, why_now_or_soon, what_to_propose, discovery_question, and disqualifier. "
+        "Each play must also name account thesis, buying hypothesis, trigger-to-offer bridge, primary/secondary buyers, "
         "first meeting objective, discovery questions by buyer role, qualification upgrade criteria, disqualifiers, "
-        "safe customer-facing wording, do_not_say notes, and a play score. Do not create a separate conversation-angles section."
+        "safe customer-facing wording, do_not_say notes, and a Sales Play Readiness score. Do not create a separate conversation-angles section."
     ),
     "pressure_evidence": (
         "Summarize Commercial Pressure Signals and evidence confidence. Use account_signal_map first and keep "
@@ -1442,7 +1477,7 @@ You are creating one section of an Admin-only Evidence-Gated Buying Potential & 
 Section: {section}
 Task: {BUYING_SECTION_INSTRUCTIONS[section]}
 
-This is NOT confirmed buying intent. It is a sales-intelligence hypothesis based on already stored Scanner data.
+This is NOT confirmed buying intent. It is a falsifiable need-hypothesis engine based on already stored Scanner data.
 Use only the JSON payload below. Do not browse the web. Do not invent services, clients, personal data, dates, financials, partnerships, ownership details, or buying signals.
 
 Evidence contract:
@@ -1451,7 +1486,7 @@ Evidence contract:
 - allowed_as_discovery_question: useful but weak or uncertain signal that should be asked, not asserted.
 - internal_only: useful for sales prep but not safe for customer-facing wording.
 - blocked: unsupported, wrong-entity, sensitive, or overclaiming material.
-- Say "buying potential", never "confirmed buying intent", unless explicit evidence exists in the payload.
+- Say "buying hypothesis", "need hypothesis", or "demand creation potential"; never "confirmed buying intent", unless explicit evidence exists in the payload.
 - Stakeholder notes must remain professional, role-relevant, and source-bound. No private-life profiling.
 - Strategic Synthesis and scanner_activation_pair signals are the sales spine. Preserve each pair's why/what logic.
 - General Summary is factual context only. AI Diagnosis and evidence_based_risks are internal reasoning and discovery framing, not customer-facing facts.
@@ -1558,7 +1593,7 @@ def _normalize_gate(value: Any, fallback: str = "allowed_as_hypothesis") -> str:
 def _has_basis(item: dict) -> bool:
     basis = item.get("evidence_basis")
     if isinstance(basis, list):
-        return any(str(x).startswith(("SRC-", "FIN-")) for x in basis)
+        return any(str(x).startswith(EVIDENCE_BASIS_PREFIXES) for x in basis)
     return bool(basis)
 
 
@@ -1762,6 +1797,8 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             play["buying_hypothesis"] = play.get("buying_hypothesis") or activation_signal.get("why")
             play["trigger_to_offer_bridge"] = play.get("trigger_to_offer_bridge") or activation_signal.get("what")
             play["account_thesis"] = play.get("account_thesis") or sales_spine.get("account_thesis")
+            if not isinstance(play.get("need_hypothesis"), dict):
+                play["need_hypothesis"] = activation_signal.get("need_hypothesis") or _need_hypothesis_from_signal(activation_signal)
         else:
             play["play_type"] = _normalize_play_type(play.get("play_type"))
         has_service = _service_match_exists(play, service_names)
@@ -1782,6 +1819,29 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         play["buying_hypothesis"] = play.get("buying_hypothesis") or play.get("business_hypothesis") or play.get("why_relevant")
         play["trigger_to_offer_bridge"] = play.get("trigger_to_offer_bridge") or play.get("why_relevant") or play.get("opening_angle")
         play["safe_customer_wording"] = play.get("safe_customer_wording") or play.get("opening_angle") or play.get("executive_angle")
+        if not isinstance(play.get("need_hypothesis"), dict):
+            play["need_hypothesis"] = _need_hypothesis_from_signal({
+                "play_type": play.get("play_type"),
+                "theme": play.get("trigger"),
+                "why": play.get("buying_hypothesis") or play.get("why_relevant"),
+                "what": play.get("trigger_to_offer_bridge") or play.get("service_or_offer"),
+                "account_movement": play.get("account_thesis"),
+                "commercial_pressure": play.get("business_hypothesis"),
+                "business_consequence": play.get("business_hypothesis"),
+            })
+        else:
+            need = play["need_hypothesis"]
+            fallback_need = _need_hypothesis_from_signal({
+                "play_type": play.get("play_type"),
+                "theme": play.get("trigger"),
+                "why": play.get("buying_hypothesis") or play.get("why_relevant"),
+                "what": play.get("trigger_to_offer_bridge") or play.get("service_or_offer"),
+                "account_movement": play.get("account_thesis"),
+                "commercial_pressure": play.get("business_hypothesis"),
+                "business_consequence": play.get("business_hypothesis"),
+            })
+            for key, value in fallback_need.items():
+                need[key] = _clip(need.get(key) or value, 520)
         role_questions = _list(play.get("discovery_questions_by_role"))
         if not role_questions:
             play["discovery_questions_by_role"] = [{
@@ -1790,6 +1850,8 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             }]
         score = _score_play(play, has_signal=has_signal, has_service=has_service, has_question=bool(play["discovery_questions"]))
         play["play_score"] = max(0, min(100, _safe_int(play.get("play_score"), score)))
+        play["hypothesis_strength"] = play["play_score"]
+        play["score_label"] = "Sales Play Readiness"
         play["play_classification"] = play.get("play_classification") or _classify_play_score(play["play_score"])
         if play["play_classification"] in {"weak_signal", "do_not_use"} and play.get("gate") != "blocked":
             play["gate"] = "internal_only"
@@ -1912,7 +1974,7 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         report["overall_confidence"] = min(report["overall_confidence"], 55)
     report["report_type"] = "buying_potential"
     report["generated_at"] = datetime.utcnow().isoformat()
-    report["safety_statement"] = "Buying potential, not confirmed buying intent. Customer-facing use must follow each insight gate."
+    report["safety_statement"] = "Need hypothesis and demand-creation potential, not confirmed buying intent. Customer-facing use must follow each insight gate."
     report["self_scan_context"] = self_scan_context
     report["source_counts"] = {
         "generation_eligible": verified_count,
@@ -1958,8 +2020,8 @@ def _deterministic_buying_report(payload: dict, reason: str) -> dict:
     top_signals = account_signals[:3]
     signal_summary = "; ".join(_clip(signal.get("pressure_type") or signal.get("commercial_pressure"), 120) for signal in top_signals)
     thesis_text = (
-        f"{company_name} shows cautious buying potential where account-specific signals suggest {signal_summary or 'commercial pressure that needs discovery validation'}. "
-        "This is an account opportunity hypothesis, not confirmed buying intent."
+        f"{company_name} shows cautious demand-creation potential where account-specific signals suggest {signal_summary or 'commercial pressure that needs discovery validation'}. "
+        "This is a falsifiable need hypothesis, not confirmed buying intent."
     )
     if thesis_seed:
         thesis_text = f"{thesis_text} Scanner context: {_clip(thesis_seed, 520)}"
@@ -2087,6 +2149,7 @@ def _deterministic_buying_report(payload: dict, reason: str) -> dict:
                 "activation_pair_index": signal.get("activation_pair_index"),
                 "play_type": play_type,
                 "service_or_offer": service_name,
+                "need_hypothesis": signal.get("need_hypothesis") or _need_hypothesis_from_signal(signal),
                 "primary_buyer": primary_buyer,
                 "secondary_buyers": buyer_roles[1:4],
                 "trigger": _clip(signal.get("account_movement"), 220),
@@ -2115,6 +2178,8 @@ def _deterministic_buying_report(payload: dict, reason: str) -> dict:
                 ],
                 "confidence": min(65, _safe_int(signal.get("confidence"), 45)),
                 "play_score": score,
+                "hypothesis_strength": score,
+                "score_label": "Sales Play Readiness",
                 "play_classification": classification,
                 "overclaim_risk": "medium",
                 "evidence_basis": [signal.get("id")],
@@ -2148,6 +2213,16 @@ def _deterministic_buying_report(payload: dict, reason: str) -> dict:
             "activation_pair_index": None,
             "play_type": "proactive_opportunity",
             "service_or_offer": service_name,
+            "need_hypothesis": {
+                "future_pressure": "No reliable future pressure has been confirmed for this service area.",
+                "current_condition": "Stored evidence is too thin for an account-specific need hypothesis.",
+                "structural_exposure": "Unknown until discovery identifies a real owner, pressure, or operating constraint.",
+                "likely_business_consequence": "No business consequence should be asserted before account validation.",
+                "why_now_or_soon": "Timing is not proven; use only as a monitoring or soft-discovery theme.",
+                "what_to_propose": "Validate whether the service area is relevant before proposing an offer.",
+                "discovery_question": "Is this service area connected to any current priority, constraint, or future pressure?",
+                "disqualifier": "Do not advance if the customer confirms no current or emerging pressure in this area.",
+            },
             "primary_buyer": "Role to validate",
             "secondary_buyers": [],
             "trigger": "No strong account-specific trigger available.",
@@ -2177,6 +2252,8 @@ def _deterministic_buying_report(payload: dict, reason: str) -> dict:
             "qualification_upgrade_criteria": ["Find a current account-specific signal", "Identify a buyer owner", "Confirm timing or pain"],
             "confidence": 25,
             "play_score": 25,
+            "hypothesis_strength": 25,
+            "score_label": "Sales Play Readiness",
             "play_classification": "weak_signal",
             "overclaim_risk": "high",
             "evidence_basis": basis,
@@ -2404,7 +2481,7 @@ def generate_buying_potential_report(
         stage_callback("build_payload", 35, "Building Buying Insight prompt payload")
     payload = _build_input_payload(company_data, service_kb, company_evidence, company_source_ledger)
     if stage_callback:
-        stage_callback("generate_report", 45, "Generating Buying Potential report sections")
+        stage_callback("generate_report", 45, "Generating Buying Insight hypothesis sections")
     report = _assemble_section_report(payload, model_mode=model_mode, stage_callback=stage_callback)
     report["model_mode"] = _buying_model_mode(model_mode)
 
@@ -2538,6 +2615,7 @@ def render_buying_potential_html(report: dict) -> str:
         </article>"""
 
     def play_card(item):
+        need = _dict(item.get("need_hypothesis"))
         questions = "".join(f"<li>{_esc(q)}</li>" for q in _list(item.get("discovery_questions"))[:5])
         role_questions = "".join(
             f"<li><b>{_esc(_dict(row).get('role'))}:</b> {_esc('; '.join(_list(_dict(row).get('questions'))[:3]))}</li>"
@@ -2557,6 +2635,13 @@ def render_buying_potential_html(report: dict) -> str:
           <p><b>Buying hypothesis:</b> {_esc(item.get('buying_hypothesis'))}</p>
           <p><b>Trigger-to-offer bridge:</b> {_esc(item.get('trigger_to_offer_bridge'))}</p>
           <p><b>Business hypothesis:</b> {_esc(item.get('business_hypothesis') or item.get('why_relevant'))}</p>
+          <h3>Need Hypothesis</h3>
+          <p><b>Future pressure:</b> {_esc(need.get('future_pressure'))}</p>
+          <p><b>Current condition:</b> {_esc(need.get('current_condition'))}</p>
+          <p><b>Structural exposure:</b> {_esc(need.get('structural_exposure'))}</p>
+          <p><b>Likely consequence:</b> {_esc(need.get('likely_business_consequence'))}</p>
+          <p><b>Why now or soon:</b> {_esc(need.get('why_now_or_soon'))}</p>
+          <p><b>What to propose:</b> {_esc(need.get('what_to_propose'))}</p>
           <p><b>First meeting objective:</b> {_esc(item.get('first_meeting_objective'))}</p>
           <p><b>Opening angle:</b> {_esc(item.get('opening_angle'))}</p>
           <p><b>Executive angle:</b> {_esc(item.get('executive_angle'))}</p>
@@ -2571,7 +2656,7 @@ def render_buying_potential_html(report: dict) -> str:
           <ul>{upgrades or '<li>No upgrade criteria generated.</li>'}</ul>
           <h3>Do Not Say</h3>
           <ul>{do_not_say or '<li>No guardrails generated.</li>'}</ul>
-          <small>Signals: {_esc(', '.join(item.get('linked_signal_ids') or item.get('evidence_basis') or []))} · Classification: {_esc(item.get('play_classification'))} · Score {_esc(item.get('play_score'))}/100 · Confidence {_esc(item.get('confidence'))}/100</small>
+          <small>Signals: {_esc(', '.join(item.get('linked_signal_ids') or item.get('evidence_basis') or []))} · Classification: {_esc(item.get('play_classification'))} · {_esc(item.get('score_label') or 'Sales Play Readiness')} {_esc(item.get('hypothesis_strength') or item.get('play_score'))}/100 · Confidence {_esc(item.get('confidence'))}/100</small>
         </article>"""
 
     return f"""<!doctype html>
@@ -2579,7 +2664,7 @@ def render_buying_potential_html(report: dict) -> str:
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{_esc(company)} — Buying Potential & Insight</title>
+  <title>{_esc(company)} — Buying Hypothesis & Insight</title>
   <style>
     :root {{ --bg:#07111f; --panel:#101b2e; --line:#26344d; --text:#e8eef8; --muted:#8ea0bb; --cyan:#67e8f9; --green:#6ee7b7; --amber:#facc15; --rose:#fb7185; --violet:#a78bfa; }}
     * {{ box-sizing:border-box; }} body {{ margin:0; background:linear-gradient(180deg,#050b15,#0b1628); color:var(--text); font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; line-height:1.55; }}
@@ -2608,7 +2693,7 @@ def render_buying_potential_html(report: dict) -> str:
 <body>
 <main>
   <header>
-    <div class="eyebrow">Buying Potential & Insight · Admin Artifact</div>
+    <div class="eyebrow">Buying Hypothesis & Insight · Admin Artifact</div>
     <h1>{_esc(company)}</h1>
     <p class="lede">{_esc(report.get('safety_statement'))}</p>
     <div class="meta">
@@ -2626,7 +2711,7 @@ def render_buying_potential_html(report: dict) -> str:
   </section>
 
   <section>
-    <h2>Account Opportunity Hypothesis</h2>
+    <h2>Account Need Hypothesis</h2>
     <p>{_esc(thesis.get('text'))}</p>
     <p class="muted">{_esc(thesis.get('rationale'))}</p>
     {_gate_badge(thesis.get('gate'))}
