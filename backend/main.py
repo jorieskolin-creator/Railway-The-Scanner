@@ -129,6 +129,104 @@ def _activation_list(value) -> list[str]:
     return []
 
 
+_ACTIVATION_THEME_TYPES = {
+    "current_status",
+    "foresight_driven",
+    "proactive_opportunity",
+}
+
+
+def _clip_sentence(text: str, limit: int = 520) -> str:
+    """Trim activation prose without cutting words into ragged fragments."""
+    cleaned = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[:limit].rsplit(" ", 1)[0].rstrip(".,;:") + "."
+
+
+def _activation_pair_candidates(payload: dict) -> list[dict]:
+    """Normalize typed activation pair aliases from current and future prompts."""
+    candidates = _first_activation_value(payload, (
+        "activation_pairs", "why_what_pairs", "pairs", "themes",
+    ), [])
+    pairs: list[dict] = []
+    if isinstance(candidates, list):
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            why = _activation_list(_first_activation_value(item, ("why", "why_proposal", "reason"), ""))
+            what = _activation_list(_first_activation_value(item, ("what", "what_proposal", "outcome"), ""))
+            if not why or not what:
+                continue
+            theme_type = str(item.get("theme_type") or item.get("type") or "").strip().lower()
+            if theme_type not in _ACTIVATION_THEME_TYPES:
+                theme_type = "current_status"
+            label = str(item.get("theme") or item.get("label") or item.get("title") or theme_type.replace("_", " ")).strip()
+            pairs.append({
+                "theme_type": theme_type,
+                "theme": label,
+                "why": _clip_sentence(why[0]),
+                "what": _clip_sentence(what[0]),
+            })
+    return pairs
+
+
+def _ensure_activation_pairs(payload: dict, prior: dict | None = None) -> list[dict]:
+    """Return 2-3 paired WHY/WHAT records while preserving legacy arrays.
+
+    The model prompt requires typed pairs, but older responses and stored data
+    expose separate why_proposals / what_proposals arrays. This function keeps
+    both contracts coherent and prevents a thin-evidence scan from collapsing to
+    a single generic sales trigger.
+    """
+    prior = prior or {}
+    pairs = _activation_pair_candidates(payload)
+    if not pairs:
+        whys = _activation_list(_first_activation_value(payload, (
+            "why_proposals", "why", "why_items", "why_points", "why_questions",
+        ), prior.get("why_proposals", [])))
+        whats = _activation_list(_first_activation_value(payload, (
+            "what_proposals", "what", "what_items", "what_points", "what_actions",
+        ), prior.get("what_proposals", [])))
+        count = min(max(len(whys), len(whats)), 3)
+        if count:
+            theme_cycle = ["current_status", "foresight_driven", "proactive_opportunity"]
+            for idx in range(count):
+                why = whys[idx] if idx < len(whys) else whys[-1]
+                what = whats[idx] if idx < len(whats) else whats[-1]
+                pairs.append({
+                    "theme_type": theme_cycle[idx],
+                    "theme": theme_cycle[idx].replace("_", " "),
+                    "why": _clip_sentence(why),
+                    "what": _clip_sentence(what),
+                })
+
+    # If the model returns only one pair, add a second bounded discovery pair
+    # rather than silently weakening the sales-trigger surface.
+    if len(pairs) == 1:
+        synthesis = str(_first_activation_value(payload, (
+            "strategic_synthesis", "synthesis", "strategic_activation",
+            "strategic_summary", "activation_summary",
+        ), prior.get("strategic_synthesis", "")) or "")
+        basis = "the strongest current diagnostic and foresight pressure"
+        if synthesis:
+            basis = _clip_sentence(synthesis, 180).rstrip(".")
+        pairs.append({
+            "theme_type": "proactive_opportunity",
+            "theme": "validated next step",
+            "why": (
+                f"A second sales trigger should validate whether {basis} is material "
+                "enough to create an executive priority, rather than assuming the gap is already proven."
+            ),
+            "what": (
+                "Progress would be observable if discovery identifies a named owner, a concrete business "
+                "pressure, and one measurable operating or commercial outcome to test first."
+            ),
+        })
+
+    return pairs[:3]
+
+
 def _first_activation_value(payload: dict, keys: tuple[str, ...], default=None):
     for key in keys:
         value = payload.get(key)
@@ -195,15 +293,13 @@ def _normalize_activation_payload(payload: dict, prior: dict | None = None) -> d
     pitch = _first_activation_value(payload, (
         "commercial_pitch", "pitch", "pitch_text", "activation_pitch",
     ), prior.get("pitch", ""))
-    why = _first_activation_value(payload, (
-        "why_proposals", "why", "why_items", "why_points", "why_questions",
-    ), prior.get("why_proposals", []))
-    what = _first_activation_value(payload, (
-        "what_proposals", "what", "what_items", "what_points", "what_actions",
-    ), prior.get("what_proposals", []))
+    activation_pairs = _ensure_activation_pairs(payload, prior)
+    why = [pair["why"] for pair in activation_pairs]
+    what = [pair["what"] for pair in activation_pairs]
     return {
         "strategic_synthesis": sanitize_inference_wording(str(synthesis or "").strip()),
         "pitch": sanitize_inference_wording(str(pitch or "").strip()),
+        "activation_pairs": sanitize_inference_wording(activation_pairs),
         "why_proposals": sanitize_inference_wording(_activation_list(why)),
         "what_proposals": sanitize_inference_wording(_activation_list(what)),
     }
@@ -2978,7 +3074,7 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
   - Structure: exactly 3-4 core paragraphs, each covering a distinct KB dimension (e.g. overall position
     & operating model / strategy & culture / service portfolio & AI readiness / financial context).
     Separate paragraphs with \n\n in the JSON string — this is required for rendering.
-  - Do not add foresight implications here. External pressures belong only in Strategic Synthesis.
+  - Do not add foresight implications here. External pressures belong only in the later Strategic Synthesis / Activation call.
   - Target length: 250-375 words.
   - First sentence: State the archetype and what defines this company's position.
   - Body: Map 3-4 key findings to specific KB dimensions. For each finding, connect the evidence
@@ -3892,7 +3988,7 @@ def _execute_scan_pipeline(
         #   Final outputs: protected reserve for fact-check, General Summary,
         #                  save/index; Detailed Report is optional when time is tight.
         SCAN_TOTAL_BUDGET = 900
-        CORE_SYNTHESIS_RESERVE = 180
+        CORE_SYNTHESIS_RESERVE = 220
         FINAL_OUTPUT_RESERVE = 120
         REALITY_PHASE_MAX_BUDGET = 420
         DETAIL_REPORT_FULL_MIN = 120
@@ -4310,6 +4406,21 @@ def _execute_scan_pipeline(
         else:
             archetype = "Cash Cow" if fin_for_archetype_early >= 50 else "At Risk"
 
+        # Freeze the current-reality classification before foresight and
+        # activation consume it. Later synthesis may record a score observation,
+        # but it must not silently rewrite the reality baseline after downstream
+        # reasoning has already used it.
+        frozen_classification_snapshot = {
+            "reality_score": reality_results.get("score"),
+            "financial_health": fin_score_early,
+            "financial_health_for_archetype": fin_for_archetype_early,
+            "adaptability_archetype": archetype,
+            "classification_version": "scanner_current_reality_pre_foresight_v1",
+            "frozen_at": datetime.utcnow().isoformat(),
+            "source": "scanner2_plus_financial_before_foresight",
+        }
+        reality_results["frozen_classification_snapshot"] = frozen_classification_snapshot
+
         # --- STEP 2.7: STRATEGIC FORESIGHT ---
         foresight_data = None
         foresight_links = []
@@ -4467,6 +4578,7 @@ def _execute_scan_pipeline(
         evidence_absence_signals = []
         evidence_absence_context = ""
         evidence_based_risks = []
+        activation_pairs = []
         why_proposals = []
         what_proposals = []
         scan_quality = "empty_reality" if _s2_empty else "complete"  # downgraded if phases are skipped due to time
@@ -4685,7 +4797,7 @@ Generate 2-4 neutral risk bullets in a JSON array named evidence_based_risks.
 Respond with valid JSON only. Required fields:
 {{"diagnostic_summary": "...", "evidence_based_risks": ["..."], "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
 Note: diagnostic_summary must contain \n\n between 3-4 current-reality paragraphs. Do not add a foresight paragraph.
-Do NOT generate commercial_pitch, why_proposals, or what_proposals in this call. Those are generated later from the locked diagnosis and Knowledge Base."""
+Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_proposals in this call. Those are generated later from the locked diagnosis, Knowledge Base, and foresight context."""
 
                 # --- Diagnosis synthesis with fallback chain: Opus 4.8 → GPT 5.5 → Sonnet 4.6 ---
                 # Opus is the judge — it does ONE thing: synthesize. Fallbacks degrade gracefully.
@@ -4877,13 +4989,11 @@ Do NOT generate commercial_pitch, why_proposals, or what_proposals in this call.
                          why_proposals = sanitize_inference_wording(json_data.get("why_proposals", why_proposals) or why_proposals)
                          what_proposals = sanitize_inference_wording(json_data.get("what_proposals", what_proposals) or what_proposals)
 
-                         # --- OPUS SCORE VERIFICATION ---
-                         # Opus is the Final Judge for Reality Score. It has the most
-                         # complete picture: Scanner 1 intent + Scanner 2 evidence +
-                         # its own synthesis. Its score is always authoritative.
-                         # (The 25-point delta threshold in the rescan trigger is a
-                         # separate concern — it flags companies for re-evaluation,
-                         # not score override.)
+                         # --- SYNTHESIS SCORE OBSERVATION ---
+                         # Synthesis may disagree with Scanner 2, but the current
+                         # reality score is frozen before foresight. Record the
+                         # disagreement for audit/recheck instead of rewriting the
+                         # score after downstream reasoning has consumed it.
                          opus_reality = json_data.get("reality_score")
                          opus_intent = json_data.get("intent_score")
                          scanner2_reality = reality_results["score"]
@@ -4896,23 +5006,16 @@ Do NOT generate commercial_pitch, why_proposals, or what_proposals in this call.
                              reality_results["opus_reality_score"] = opus_reality
 
                              if delta_r <= 5:
-                                 # Agreement — Opus confirms Scanner 2's finding
-                                 print(f"   ✅ [Score Verify] Reality: Scanner 2 {scanner2_reality} ≈ Opus {opus_reality} (delta {delta_r}). Final score: {opus_reality}")
+                                 print(f"   ✅ [Score Verify] Reality: Scanner 2 {scanner2_reality} ≈ synthesis {opus_reality} (delta {delta_r}). Frozen score kept: {scanner2_reality}")
                              else:
-                                 # Divergence — Opus is the final judge, log the delta for diagnostics
-                                 print(f"   ⚖️ [Score Verify] Reality: Scanner 2 {scanner2_reality} vs Opus {opus_reality} (delta {delta_r}). Opus is final judge → {opus_reality}")
+                                 print(f"   ⚖️ [Score Verify] Reality: Scanner 2 {scanner2_reality} vs synthesis {opus_reality} (delta {delta_r}). Frozen score kept; re-audit recommended.")
 
-                             reality_results["score"] = opus_reality
-                             reality_results["score_verification"] = "opus_final_judge"
-
-                             # Recalculate gap if score changed
-                             if reality_results["score"] != scanner2_reality:
-                                 gap = intent_results["score"] - reality_results["score"]
-
-                                 # Re-evaluate washing flag
-                                 if reality_results["score"] >= intent_results["score"]:
-                                     washing_flag = False
-                                     washing_type = None
+                             reality_results["score_verification"] = "frozen_before_foresight"
+                             reality_results["synthesis_score_observation"] = {
+                                 "observed_reality_score": opus_reality,
+                                 "delta_from_frozen_score": delta_r,
+                                 "recommended_reaudit": delta_r > 5,
+                             }
 
                          # Intent score is IMMUTABLE — Scanner 1's website analysis is the
                          # sole source of intent. Opus may disagree, but overriding intent
@@ -4951,7 +5054,7 @@ Do NOT generate commercial_pitch, why_proposals, or what_proposals in this call.
                          # call is the strategic judge; this second call activates
                          # only the locked diagnosis, risks, evidence, and KB.
                          _activation_left = _synthesis_budget_left()
-                         if summary and _activation_left > 45:
+                         if summary and _activation_left > 60:
                              generation_graph_input = {
                                  "evidence_links": verified_links,
                                  "foresight_links": foresight_links,
@@ -5013,8 +5116,8 @@ Evidence-based risks:
 1. Use the Knowledge Base terminology and proposal logic as the baseline.
 2. Ground every WHY/WHAT/Pitch claim in the locked diagnosis, risks, or evidence packet above.
 3. Do NOT add new facts, people, metrics, events, client names, partnerships, or timelines.
-4. If evidence is thin, produce one strong pair instead of two weak pairs.
-5. WHY1 must pair with WHAT1. If you produce WHY2, produce WHAT2 for the same theme.
+4. Always produce 2-3 paired WHY/WHAT items. If evidence is thin, frame pairs as validation or discovery triggers instead of omitting them.
+5. WHY1 must pair with WHAT1, WHY2 with WHAT2, and WHY3 with WHAT3 if present.
 6. Keep activation suggestive but evidence-bound: proposals, not promises.
 7. Write strategic_synthesis as the explicit reasoning bridge between CURRENT COMPANY REALITY and EXTERNAL FORESIGHT PRESSURES.
 8. A macro pressure never proves that the company has acted. Use modal language such as "may increase pressure", "creates a question", or "could affect".
@@ -5022,6 +5125,18 @@ Evidence-based risks:
 10. Do not compare Scanner outputs across scans or discuss Scanner performance.
 11. Cite company premises with [EVD-*] and macro premises with [FOR-*]. Every material synthesis sentence must cite the IDs it uses.
 12. If you use an absence-of-promoted-evidence signal, phrase it as an evidence/proof gap, never as proof that the capability is absent.
+13. Treat evidence limits as one qualifier, not the whole thesis. Spend most of the synthesis on bounded interpretation, priorities, and pressure-readiness fit.
+
+### STRATEGIC SYNTHESIS
+Write 300-500 words. This is the deepest company-specific reasoning layer, not a sales pitch.
+It must include:
+- Current adaptation thesis: the company's present position in one clear opening sentence.
+- 2-3 strategic tensions grounded in the locked diagnosis, risks, financial context, or evidence gaps.
+- At least 2 external foresight pressure links, each connected to a current company readiness or proof condition.
+- At least 1 financial-capacity implication.
+- At least 2 time horizons (for example: "next 6-12 months" and "12-36 months").
+- 1 uncertainty or invalidation condition that would change the thesis.
+Do not use section headings inside strategic_synthesis. Write coherent executive prose.
 
 ### PITCH
 Write a direct cold-outreach message to a C-level executive at {companyName}.
@@ -5031,17 +5146,23 @@ Write a direct cold-outreach message to a C-level executive at {companyName}.
 - No generic service names.
 
 ### WHY / WHAT
-Generate 1-2 WHY statements and 1-2 WHAT statements.
+Generate 2-3 paired WHY/WHAT items every time. Do not collapse to one pair because evidence is thin.
 - WHY = the strategic reason to act, tied to a diagnosed weakness and business consequence.
 - WHAT = the observable business effect that would prove progress.
 - Each statement: 1-2 sentences.
+- Each pair must have exactly one theme_type:
+  - current_status: current evidence, operating-model, financial, proof, or portfolio reality.
+  - foresight_driven: external pressure combined with current readiness or uncertainty.
+  - proactive_opportunity: a bounded hypothesis or discovery trigger to validate, not a claim.
+- If evidence is thin, frame the pair as a validation/discovery trigger instead of omitting it.
+- WHY1 pairs with WHAT1, WHY2 with WHAT2, and WHY3 with WHAT3 if present.
 
 ### OUTPUT
 Respond with valid JSON only:
-{{"strategic_synthesis": "...", "commercial_pitch": "...", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."]}}"""
+{{"strategic_synthesis": "...", "commercial_pitch": "...", "activation_pairs": [{{"theme_type": "current_status", "theme": "...", "why": "...", "what": "..."}}, {{"theme_type": "foresight_driven", "theme": "...", "why": "...", "what": "..."}}], "why_proposals": ["...", "..."], "what_proposals": ["...", "..."]}}"""
 
                              activation_text = ""
-                             activation_timeout = min(75, max(35, _activation_left - 20))
+                             activation_timeout = min(95, max(50, _activation_left - 25))
                              try:
                                  print(f"   🔄 [Activation] Generating WHY/WHAT/Pitch from locked diagnosis via gpt-5.5 (timeout: {activation_timeout}s)...")
                                  act_start = time.time()
@@ -5050,7 +5171,7 @@ Respond with valid JSON only:
                                      return _call_openai_text(
                                          activation_prompt,
                                          model="gpt-5.5",
-                                         max_output_tokens=3500,
+                                         max_output_tokens=5000,
                                          timeout=activation_timeout,
                                      )
 
@@ -5067,8 +5188,8 @@ Respond with valid JSON only:
                              except Exception as act_gpt_err:
                                  print(f"   ❌ [Activation] GPT 5.5 failed: {act_gpt_err}")
 
-                             if not activation_text and _synthesis_budget_left() > 35:
-                                 sonnet_activation_timeout = min(60, max(30, _synthesis_budget_left() - 15))
+                             if not activation_text and _synthesis_budget_left() > 50:
+                                 sonnet_activation_timeout = min(75, max(45, _synthesis_budget_left() - 20))
                                  try:
                                      print(f"   🔄 [Activation] Falling back to Claude Sonnet 4.6 (timeout: {sonnet_activation_timeout}s)...")
                                      act_start = time.time()
@@ -5076,7 +5197,7 @@ Respond with valid JSON only:
                                      def _activation_sonnet():
                                          return claude_client.messages.create(
                                              model="claude-sonnet-4-6",
-                                             max_tokens=3000,
+                                             max_tokens=4500,
                                              system="You are a conservative activation writer. Use only the locked diagnosis, evidence packet, and Knowledge Base. Return JSON only.",
                                              messages=[{"role": "user", "content": activation_prompt}],
                                          )
@@ -5102,24 +5223,25 @@ Respond with valid JSON only:
                                  prior_activation = {
                                      "strategic_synthesis": strategic_synthesis,
                                      "pitch": "" if pitch == "Pitch Unavailable" else pitch,
+                                     "activation_pairs": activation_pairs,
                                      "why_proposals": why_proposals,
                                      "what_proposals": what_proposals,
                                  }
                                  activation_json = _parse_activation_json(activation_text)
                                  if not activation_json and _synthesis_budget_left() > 25:
                                      try:
-                                         repair_timeout = min(30, max(15, _synthesis_budget_left() - 10))
+                                         repair_timeout = min(35, max(18, _synthesis_budget_left() - 10))
                                          print(f"   🔧 [Activation] JSON parse failed; trying cheap JSON repair (timeout: {repair_timeout}s)...")
                                          repair_prompt = f"""Convert the following Strategic Activation output into STRICT JSON only.
 Do not add facts. Preserve the meaning. Required keys:
-{{"strategic_synthesis": "...", "commercial_pitch": "...", "why_proposals": ["..."], "what_proposals": ["..."]}}
+{{"strategic_synthesis": "...", "commercial_pitch": "...", "activation_pairs": [{{"theme_type": "current_status|foresight_driven|proactive_opportunity", "theme": "...", "why": "...", "what": "..."}}], "why_proposals": ["..."], "what_proposals": ["..."]}}
 
 TEXT TO REPAIR:
 {activation_text[:7000]}"""
                                          repaired_text = call_openai_text(
                                              repair_prompt,
                                              model="gpt-5.4",
-                                             max_output_tokens=1800,
+                                             max_output_tokens=2600,
                                              timeout=repair_timeout,
                                          )
                                          activation_json = _parse_activation_json(repaired_text)
@@ -5136,6 +5258,8 @@ TEXT TO REPAIR:
                                      pitch = activation_norm["pitch"]
                                  if activation_norm.get("strategic_synthesis"):
                                      strategic_synthesis = activation_norm["strategic_synthesis"]
+                                 if activation_norm.get("activation_pairs"):
+                                     activation_pairs = activation_norm["activation_pairs"]
                                  if activation_norm.get("why_proposals"):
                                      why_proposals = activation_norm["why_proposals"]
                                  if activation_norm.get("what_proposals"):
@@ -5146,7 +5270,7 @@ TEXT TO REPAIR:
                                          f"(why={len(why_proposals)}, what={len(what_proposals)}, pitch={'yes' if pitch and pitch != 'Pitch Unavailable' else 'no'}, synthesis={'yes' if strategic_synthesis else 'no'})"
                                      )
                          elif summary:
-                             print(f"   ⏭ [Activation] Budget < 45s before final reserve ({_activation_left}s) — skipping WHY/WHAT/Pitch")
+                             print(f"   ⏭ [Activation] Budget < 60s before final reserve ({_activation_left}s) — skipping WHY/WHAT/Pitch")
 
                     else:
                          summary = response_text
@@ -5249,6 +5373,7 @@ TEXT TO REPAIR:
             "reality_gap": gap,
             "confidence_score": confidence,
             "archetype": archetype,
+            "frozen_classification_snapshot": reality_results.get("frozen_classification_snapshot", {}),
             "classification_context": classification_context,
             "adaptability_archetype": classification_context["adaptability_archetype"],
             "favi_vulnerability_segment": classification_context["favi_vulnerability_segment"],
@@ -5277,6 +5402,7 @@ TEXT TO REPAIR:
             "strategic_synthesis": _strip_tac_codes(strategic_synthesis),
             "pitch_text": pitch,
             "evidence_based_risks": evidence_based_risks,
+            "activation_pairs": activation_pairs,
             "why_proposals": why_proposals,
             "what_proposals": what_proposals,
             "lastUpdated": new_timestamp,
@@ -5418,32 +5544,46 @@ TEXT TO REPAIR:
                 for claim in fact_check["false_claims"]:
                     print(f"      - {claim}")
                 corrected_summary = fact_check.get("corrected_summary", "")
+                corrected_sections = fact_check.get("corrected_sections") or {}
+                corrected_pitch = fact_check.get("corrected_pitch", "") or ""
                 if corrected_summary:
                     print(
-                        f"   🧭 [Fact-Check] Correction suggestion retained for audit "
-                        f"({len(corrected_summary.split())} words); original inference text preserved"
+                        f"   🧭 [Fact-Check] Applying corrected public AI Diagnosis "
+                        f"({len(corrected_summary.split())} words); original retained in audit metadata"
                     )
+                    full_data["summary_text"] = _strip_tac_codes(sanitize_inference_wording(corrected_summary))
+                if isinstance(corrected_sections, dict):
+                    if corrected_sections.get("strategic_synthesis"):
+                        full_data["strategic_synthesis"] = _strip_tac_codes(
+                            sanitize_inference_wording(corrected_sections["strategic_synthesis"])
+                        )
+                    if corrected_sections.get("evidence_based_risks"):
+                        full_data["evidence_based_risks"] = sanitize_inference_wording(
+                            corrected_sections["evidence_based_risks"]
+                        )
+                if corrected_pitch:
+                    full_data["pitch_text"] = sanitize_inference_wording(corrected_pitch)
                 full_data["re_synthesis"] = {
-                    "was_resynthesized": False,
+                    "was_resynthesized": bool(corrected_summary or corrected_sections or corrected_pitch),
                     "false_claims_found": fact_check["false_claims"],
                     "false_claims_detailed": fact_check.get("false_claims_detailed", []),
                     "audit_notes": fact_check.get("audit_notes", []),
                     "audit_notes_detailed": fact_check.get("audit_notes_detailed", []),
                     "suggested_corrected_summary": _strip_tac_codes(corrected_summary) if corrected_summary else "",
-                    "suggested_corrected_pitch": fact_check.get("corrected_pitch", "") or "",
-                    "suggested_corrected_sections": fact_check.get("corrected_sections") or {},
-                    "evidence_purged": {"removed": 0, "skipped": True, "reason": "inference_audit_preserved_sources"},
+                    "suggested_corrected_pitch": corrected_pitch,
+                    "suggested_corrected_sections": corrected_sections,
+                    "evidence_purged": {"removed": 0, "skipped": True, "reason": "public_text_corrected_without_source_purge"},
                     "resynth_model": fact_check.get("fact_check_model", ""),
                     "resynth_time_ms": fact_check.get("fact_check_time_ms", 0),
-                    "method": "inference_audit_preserved_original",
+                    "method": "public_correction_applied" if (corrected_summary or corrected_sections or corrected_pitch) else "inference_audit_preserved_original",
                 }
                 full_data["ai_verification"]["verified"] = False
                 full_data["ai_verification"]["verification_status"] = (
                     fact_check.get("verification_status") or "inference_audit_requires_review"
                 )
                 full_data["ai_verification"]["note"] = (
-                    "AI Diagnosis and Strategic Synthesis were preserved for inference audit. "
-                    "General Summary remains the strict factual correction layer."
+                    "Blocking inference issues were corrected in public-facing fields when a correction was available. "
+                    "Audit metadata preserves the original finding trail."
                 )
                 if scan_quality == "complete":
                     scan_quality = "unverified"

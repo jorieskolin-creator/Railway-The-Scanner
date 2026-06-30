@@ -22,6 +22,7 @@ from source_quality import (
     apply_analysis_verification,
     is_generation_eligible_source,
     is_scoped_context_source,
+    is_boilerplate_snippet,
 )
 from entity_identity import (
     build_entity_context_block,
@@ -5625,6 +5626,16 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     if data:
         findings = data.get("findings", [])
         for f in findings:
+            _finding_text = " ".join(
+                str(f.get(key) or "")
+                for key in ("supported_claim", "label", "title", "snippet", "source_quote")
+            )
+            if is_boilerplate_snippet(_finding_text):
+                print(
+                    "   🧹 [Evidence Hygiene] Dropped boilerplate/navigation finding: "
+                    f"{str(f.get('title') or f.get('label') or '')[:90]}"
+                )
+                continue
             checklist_item = {
                 "category": f.get("category", "General"),
                 "query": f.get("label", "Signal"),

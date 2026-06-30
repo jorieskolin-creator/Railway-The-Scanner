@@ -782,8 +782,13 @@ _BOILERPLATE_PATTERNS = (
     re.compile(r"\b(accept|manage)\s+(all\s+)?cookies\b", re.I),
     re.compile(r"\bcookie\s+(policy|preferences|settings)\b", re.I),
     re.compile(r"\bprivacy\s+policy\b.*\bterms\b", re.I),
+    re.compile(r"\btoggle\s+navigation\b", re.I),
+    re.compile(r"\b(skip\s+to\s+content|main\s+navigation|site\s+navigation)\b", re.I),
+    re.compile(r"\b(download|discover)\s+the\s+full\s+report\b.*\b(toggle\s+navigation|what\s+we\s+offer)\b", re.I),
+    re.compile(r"\b(home|about\s+us|careers|sustainability|news|contact\s+us|what\s+we\s+offer)\b(?:\s+[|/·-]?\s*){4,}", re.I),
     re.compile(r"\b(read|learn)\s+more\s+(about|here)\b", re.I),
     re.compile(r"\b(sign|log)\s+in\s+to\s+continue\b", re.I),
+    re.compile(r"\b(email|password|username)\b.*\b(sign|log)\s+in\b", re.I),
     re.compile(r"^\s*(home|about|services|contact)\s*[|/]", re.I),
     re.compile(r"\b(404|page\s+not\s+found)\b", re.I),
 )

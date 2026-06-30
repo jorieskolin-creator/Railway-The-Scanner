@@ -125,6 +125,7 @@ _AUDIT_NOTE_LABELS = {
     "citation_scope_note": "Citation scope",
     "structured_payload_supported": "Structured payload supported",
     "inference_scope_note": "Inference scope",
+    "scanner_evidence_state_note": "Scanner evidence state",
     "unsafe_inference_wording": "Inference wording",
     "evidence_handoff_failure": "Evidence handoff",
 }
@@ -213,7 +214,7 @@ def _classify_fact_check_issue(fc: dict, scan_payload: dict | None) -> tuple[str
 
     if error_type == "prohibited scanner observation":
         if _is_actual_scanner_process_observation(claim_text, reasoning):
-            return "blocking_false_claim", True
+            return "scanner_evidence_state_note", False
         return "inference_scope_note", False
 
     if claim_class == "structured_financial_payload_fact":
