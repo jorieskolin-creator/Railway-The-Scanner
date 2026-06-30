@@ -1784,7 +1784,7 @@ const parseCrossImpactInterpretation = (text: string): CIBlock[] => {
   return blocks;
 };
 
-const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretationData = null, onRefreshCrossImpactInterpretation, crossImpactInterpretationLoading = false }: { data: any; observatoryData?: any; crossImpactInterpretationData?: any; onRefreshCrossImpactInterpretation?: () => void; crossImpactInterpretationLoading?: boolean }) => {
+const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretationData = null, pipelineGlobal = null, onRefreshCrossImpactInterpretation, crossImpactInterpretationLoading = false }: { data: any; observatoryData?: any; crossImpactInterpretationData?: any; pipelineGlobal?: any; onRefreshCrossImpactInterpretation?: () => void; crossImpactInterpretationLoading?: boolean }) => {
   const foresights = data.top_foresights || [];
   const crossImpact = data.cross_impact || [];
   const industryRadar = data.industry_radar || [];
@@ -1854,9 +1854,41 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
     });
     return point;
   });
+  const readinessTone = (state?: string) => {
+    if (state === 'ready') return 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30';
+    if (state === 'warning') return 'bg-amber-500/10 text-amber-300 border-amber-500/30';
+    if (state === 'missing') return 'bg-rose-500/10 text-rose-300 border-rose-500/30';
+    if (state === 'running') return 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30';
+    return 'bg-slate-500/10 text-slate-400 border-slate-500/20';
+  };
+  const readinessDate = (value?: string) => {
+    if (!value) return '';
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? String(value).slice(0, 10) : d.toLocaleDateString('fi-FI');
+  };
+  const readinessPill = (item: any, label: string) => (
+    <span title={`${item?.label || label}: ${item?.detail || 'No status'}${item?.recommended_action ? `\n${item.recommended_action}` : ''}`} className={`inline-flex items-center gap-1 rounded border px-2 py-1 text-[9px] font-mono font-bold uppercase tracking-wide ${readinessTone(item?.state)}`}>
+      {label}{item?.updated_at ? ` ${readinessDate(item.updated_at)}` : ''}
+    </span>
+  );
 
   return (
     <div className="space-y-6">
+      {pipelineGlobal && (
+        <div className="bg-black/20 border border-cyan-500/20 rounded-lg p-4">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div>
+              <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide">Foresight Freshness</h4>
+              <p className="text-[10px] text-slate-500 mt-0.5">Advisory status before refreshing foresight-dependent interpretation.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {readinessPill(pipelineGlobal.foresight_kb, 'KB')}
+              {readinessPill(pipelineGlobal.observatory, 'OBS')}
+              {readinessPill(pipelineGlobal.cross_impact, 'MATRIX')}
+            </div>
+          </div>
+        </div>
+      )}
       {/* TOP10 Foresights Pareto */}
       <div className="bg-black/20 border border-white/10 rounded-lg p-4">
         <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-3">TOP {foresights.length} Foresight Themes (Pareto)</h4>
@@ -3170,7 +3202,7 @@ const TABS = [
   { id: 'sweden', label: 'SWEDEN - SUMMARY', icon: Globe },
 ];
 
-const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, onCompanyClick, observatoryData = null, crossImpactInterpretationData = null, onRefreshCrossImpactInterpretation, crossImpactInterpretationLoading = false }: {
+const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, onCompanyClick, observatoryData = null, crossImpactInterpretationData = null, pipelineGlobal = null, onRefreshCrossImpactInterpretation, crossImpactInterpretationLoading = false }: {
   isOpen: boolean;
   data: any;
   loading: boolean;
@@ -3179,6 +3211,7 @@ const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, on
   onCompanyClick: (company: any) => void;
   observatoryData?: any;
   crossImpactInterpretationData?: any;
+  pipelineGlobal?: any;
   onRefreshCrossImpactInterpretation?: () => void;
   crossImpactInterpretationLoading?: boolean;
 }) => {
@@ -3256,7 +3289,7 @@ const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, on
             <>
               {activeTab === 'opportunity' && <OpportunityMapTab data={data} onCompanyClick={onCompanyClick} />}
               {activeTab === 'executive' && <ExecutiveSummaryTab data={data} observatoryData={observatoryData} />}
-              {activeTab === 'future' && <FutureDemandTab data={data} observatoryData={observatoryData} crossImpactInterpretationData={crossImpactInterpretationData} onRefreshCrossImpactInterpretation={onRefreshCrossImpactInterpretation} crossImpactInterpretationLoading={crossImpactInterpretationLoading} />}
+              {activeTab === 'future' && <FutureDemandTab data={data} observatoryData={observatoryData} crossImpactInterpretationData={crossImpactInterpretationData} pipelineGlobal={pipelineGlobal} onRefreshCrossImpactInterpretation={onRefreshCrossImpactInterpretation} crossImpactInterpretationLoading={crossImpactInterpretationLoading} />}
               {activeTab === 'current' && <CurrentDemandTab data={data} />}
               {activeTab === 'favi' && <ForesightVulnerabilityTab data={data} onCompanyClick={onCompanyClick} />}
               {activeTab === 'sweden' && <SwedenSummaryTab data={data} onCompanyClick={onCompanyClick} />}

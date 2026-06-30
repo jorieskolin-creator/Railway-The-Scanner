@@ -110,7 +110,7 @@ const getAdaptationSegment = (company, faviCutoff = 50, facCutoff = 50) => {
   return "Future-Ready";
 };
 
-const CompanySummary = ({ data, faviData, observatoryData = null, isAdmin = false, authToken = '' }) => {
+const CompanySummary = ({ data, faviData, observatoryData = null, companyReadiness = null, pipelineGlobal = null, isAdmin = false, authToken = '' }) => {
   const summaryRef = useRef(null);
   const [copied, setCopied] = useState(false);
   const [pitchCopied, setPitchCopied] = useState(false);
@@ -118,6 +118,25 @@ const CompanySummary = ({ data, faviData, observatoryData = null, isAdmin = fals
   const [activeTab, setActiveTab] = useState("diagnosis");
   const [buyingInsightMeta, setBuyingInsightMeta] = useState(null);
   const companyDisplayName = data?.companyName || data?.company_name || data?.name || '';
+  const readinessTone = (state?: string) => {
+    if (state === 'ready') return 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30';
+    if (state === 'warning') return 'bg-amber-500/10 text-amber-300 border-amber-500/30';
+    if (state === 'missing') return 'bg-rose-500/10 text-rose-300 border-rose-500/30';
+    if (state === 'running') return 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30';
+    return 'bg-slate-500/10 text-slate-400 border-slate-500/20';
+  };
+  const readinessDate = (value?: string) => {
+    if (!value) return '';
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? String(value).slice(0, 10) : d.toLocaleDateString('fi-FI');
+  };
+  const readinessBadge = (key: string, item: any, label: string) => (
+    <div key={key} title={`${item?.label || label}: ${item?.detail || 'No status'}${item?.recommended_action ? `\n${item.recommended_action}` : ''}`} className={`rounded-lg border px-3 py-2 ${readinessTone(item?.state)}`}>
+      <div className="text-[9px] font-mono font-bold uppercase tracking-wider">{label}</div>
+      <div className="text-[10px] mt-1 leading-snug">{item?.detail || 'No status'}</div>
+      {item?.updated_at && <div className="text-[9px] opacity-70 mt-1 font-mono">{readinessDate(item.updated_at)}</div>}
+    </div>
+  );
 
   useEffect(() => {
     if (!isAdmin || !authToken || !companyDisplayName) {
@@ -1413,6 +1432,35 @@ const isForesightContext = (link) => {
 
       {/* CONTENT WRAPPER FOR SNAPSHOT */}
       <div ref={summaryRef} className="space-y-8">
+        {isAdmin && companyReadiness && (
+          <div className="bg-white/5 p-5 rounded-2xl border border-cyan-500/20 backdrop-blur-md">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
+              <div>
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  <Activity className="text-cyan-400" size={16} />
+                  Pipeline Readiness
+                </h3>
+                <p className="text-[10px] text-slate-500 uppercase tracking-wider font-mono mt-1">
+                  Advisory status for separately runnable Admin stages
+                </p>
+              </div>
+              {pipelineGlobal?.foresight_kb && (
+                <div className="flex flex-wrap gap-2">
+                  {readinessBadge('global-fs', pipelineGlobal.foresight_kb, 'Foresight KB')}
+                  {readinessBadge('global-obs', pipelineGlobal.observatory, 'Observatory')}
+                </div>
+              )}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
+              {readinessBadge('scan', companyReadiness.scan, 'Scan')}
+              {readinessBadge('ev', companyReadiness.evidence_verified, 'Evidence Verified')}
+              {readinessBadge('edb', companyReadiness.company_evidence_db, 'Evidence DB')}
+              {readinessBadge('ledger', companyReadiness.source_ledger, 'Source Ledger')}
+              {readinessBadge('act', companyReadiness.activation_pairs, 'Activation Pairs')}
+              {readinessBadge('bi', companyReadiness.buying_insight, 'Buying Insight')}
+            </div>
+          </div>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="bg-white/5 backdrop-blur-md p-6 rounded-2xl border border-white/10 flex flex-col items-center justify-center relative group overflow-hidden">
             <div className="absolute inset-0 bg-indigo-500/10 opacity-0 group-hover:opacity-100 transition-opacity"></div>

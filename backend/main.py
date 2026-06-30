@@ -3883,6 +3883,331 @@ async def get_cross_impact_interpretation(response: Response):
     return data
 
 
+PIPELINE_FRESH_DAYS = 14
+
+
+def _parse_pipeline_dt(value):
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).replace(tzinfo=None)
+    except Exception:
+        return None
+
+
+def _pipeline_item(state: str, label: str, detail: str = "", updated_at=None, stats=None, recommended_action: str = "") -> dict:
+    return {
+        "state": state,
+        "label": label,
+        "detail": detail,
+        "updated_at": updated_at,
+        "stats": stats or {},
+        "recommended_action": recommended_action,
+    }
+
+
+def _index_by_company(items: list[dict]) -> dict[str, dict]:
+    return {
+        str(item.get("companyName") or item.get("company_name") or "").strip().lower(): item
+        for item in (items or [])
+        if isinstance(item, dict) and (item.get("companyName") or item.get("company_name"))
+    }
+
+
+def _newer_than(left, right) -> bool:
+    left_dt = _parse_pipeline_dt(left)
+    right_dt = _parse_pipeline_dt(right)
+    return bool(left_dt and right_dt and left_dt > right_dt)
+
+
+def _days_old(value):
+    dt = _parse_pipeline_dt(value)
+    if not dt:
+        return None
+    return max(0, (datetime.utcnow() - dt).days)
+
+
+def _running_company_job(jobs: dict, company_name: str) -> dict | None:
+    target = str(company_name or "").strip().lower()
+    for job in jobs.values():
+        if job.get("status") in {"queued", "running"} and str(job.get("company") or "").strip().lower() == target:
+            return job
+    return None
+
+
+def _first_running_company_job(lock, jobs: dict, company_name: str) -> dict | None:
+    with lock:
+        job = _running_company_job(jobs, company_name)
+        return dict(job) if job else None
+
+
+def _global_running_item(state: dict, running_label: str):
+    if state.get("is_running"):
+        return _pipeline_item(
+            "running",
+            running_label,
+            state.get("current_theme") or state.get("current_step") or state.get("current_status") or "Running",
+            state.get("started_at"),
+            {"current": state.get("current"), "total": state.get("total")},
+            "Wait for this run to complete before regenerating dependent artifacts.",
+        )
+    return None
+
+
+def _company_pipeline_readiness(company: dict, indexes: dict) -> dict:
+    name = company.get("companyName") or company.get("company_name") or ""
+    latest_scan = company.get("lastUpdated") or company.get("uploaded_at")
+    evidence_stats = company.get("evidence_cleaning_stats") or {}
+    activation_pairs = company.get("activation_pairs") or []
+    why = company.get("why_proposals") or []
+    what = company.get("what_proposals") or []
+    key = str(name).strip().lower()
+
+    evidence_job = _first_running_company_job(_company_evidence_jobs_lock, _company_evidence_jobs, name)
+    ledger_job = _first_running_company_job(_company_source_ledger_jobs_lock, _company_source_ledger_jobs, name)
+    buying_job = _first_running_company_job(_buying_potential_jobs_lock, _buying_potential_jobs, name)
+
+    if latest_scan:
+        scan = _pipeline_item("ready", "Scan", "Latest Scanner record is available.", latest_scan)
+    else:
+        scan = _pipeline_item("missing", "Scan", "No stored Scanner scan timestamp found.", None, recommended_action="Run or refresh Scanner first.")
+
+    analysis_verified = evidence_stats.get("analysis_verified")
+    total_sources = evidence_stats.get("total_sources")
+    unsupported = evidence_stats.get("unsupported")
+    wrong_entity = evidence_stats.get("wrong_entity")
+    if company.get("evidence_cleaned_at"):
+        if analysis_verified:
+            evidence_verified = _pipeline_item(
+                "ready",
+                "Evidence Verified",
+                f"{analysis_verified} analysis-verified source(s).",
+                company.get("evidence_cleaned_at"),
+                evidence_stats,
+            )
+        else:
+            evidence_verified = _pipeline_item(
+                "warning",
+                "Evidence Verified",
+                "Evidence was checked, but no analysis-verified sources were recorded.",
+                company.get("evidence_cleaned_at"),
+                evidence_stats,
+                "Run Verify Evidence or rescan if this company should have stronger public evidence.",
+            )
+    elif total_sources:
+        evidence_verified = _pipeline_item(
+            "warning",
+            "Evidence Verified",
+            f"{total_sources} source(s) present, verification freshness unknown.",
+            None,
+            evidence_stats,
+            "Run Verify Evidence before relying on downstream artifacts.",
+        )
+    else:
+        evidence_verified = _pipeline_item(
+            "missing",
+            "Evidence Verified",
+            "No evidence verification metadata found.",
+            None,
+            evidence_stats,
+            "Run Verify Evidence after scan evidence is available.",
+        )
+    if (unsupported or 0) > 0 or (wrong_entity or 0) > 0:
+        evidence_verified["state"] = "warning"
+        evidence_verified["detail"] += f" Unsupported: {unsupported or 0}; wrong entity: {wrong_entity or 0}."
+
+    evidence_meta = indexes["company_evidence"].get(key)
+    if evidence_job:
+        company_evidence_db = _pipeline_item("running", "Evidence DB", evidence_job.get("stage") or "Running", evidence_job.get("created_at"), evidence_job.get("stats"), "Wait for Evidence DB to complete.")
+    elif evidence_meta:
+        evidence_updated = evidence_meta.get("updated_at")
+        stale = _newer_than(latest_scan, evidence_updated)
+        company_evidence_db = _pipeline_item(
+            "warning" if stale else "ready",
+            "Evidence DB",
+            "Evidence DB is older than the latest scan." if stale else "Company Evidence DB is available.",
+            evidence_updated,
+            evidence_meta.get("stats"),
+            "Rebuild Company Evidence DB so Buying Insight can use fresh source candidates." if stale else "",
+        )
+    else:
+        company_evidence_db = _pipeline_item("missing", "Evidence DB", "No Company Evidence DB artifact found.", None, recommended_action="Build Evidence DB before high-confidence Buying Insight.")
+
+    ledger_meta = indexes["source_ledger"].get(key)
+    ledger_upstream = max([dt for dt in (latest_scan, evidence_meta.get("updated_at") if evidence_meta else None) if dt], default=None)
+    if ledger_job:
+        source_ledger = _pipeline_item("running", "Source Ledger", ledger_job.get("stage") or "Running", ledger_job.get("created_at"), ledger_job.get("stats"), "Wait for Source Ledger to complete.")
+    elif ledger_meta:
+        ledger_updated = ledger_meta.get("updated_at")
+        stale = _newer_than(ledger_upstream, ledger_updated)
+        source_ledger = _pipeline_item(
+            "warning" if stale else "ready",
+            "Source Ledger",
+            "Source Ledger is older than scan/Evidence DB." if stale else "Source Ledger is available.",
+            ledger_updated,
+            ledger_meta.get("stats"),
+            "Combine Evidence again to refresh traceability." if stale else "",
+        )
+    else:
+        source_ledger = _pipeline_item("missing", "Source Ledger", "No Source Ledger artifact found.", None, recommended_action="Combine Evidence after Evidence DB is ready.")
+
+    pair_count = len(activation_pairs) if isinstance(activation_pairs, list) else 0
+    why_count = len(why) if isinstance(why, list) else 0
+    what_count = len(what) if isinstance(what, list) else 0
+    if pair_count >= 2:
+        activation_status = _pipeline_item("ready", "Activation Pairs", f"{pair_count} WHY/WHAT activation pair(s) available.", latest_scan, {"activation_pairs": pair_count})
+    elif pair_count == 1 or (why_count and what_count):
+        activation_status = _pipeline_item("warning", "Activation Pairs", "Activation logic exists but may be thin or legacy-shaped.", latest_scan, {"activation_pairs": pair_count, "why": why_count, "what": what_count}, "Refresh WHY/WHAT if Buying Insight needs a stronger sales spine.")
+    else:
+        activation_status = _pipeline_item("missing", "Activation Pairs", "No activation-pair logic found.", latest_scan, {"activation_pairs": pair_count, "why": why_count, "what": what_count}, "Refresh WHY/WHAT before creating Buying Insight.")
+
+    buying_meta = indexes["buying_insight"].get(key)
+    buying_upstream = max([
+        dt for dt in (
+            latest_scan,
+            evidence_meta.get("updated_at") if evidence_meta else None,
+            ledger_meta.get("updated_at") if ledger_meta else None,
+        )
+        if dt
+    ], default=None)
+    if buying_job:
+        buying_insight = _pipeline_item("running", "Buying Insight", buying_job.get("stage") or "Running", buying_job.get("created_at"), buying_job.get("source_counts"), "Wait for Buying Insight to complete.")
+    elif buying_meta:
+        buying_updated = buying_meta.get("updated_at")
+        stale = _newer_than(buying_upstream, buying_updated)
+        buying_insight = _pipeline_item(
+            "warning" if stale else "ready",
+            "Buying Insight",
+            "Buying Insight is older than one or more upstream artifacts." if stale else f"Buying Insight available, confidence {buying_meta.get('confidence', 'n/a')}.",
+            buying_updated,
+            buying_meta.get("source_counts"),
+            "Regenerate Buying Insight after refreshing upstream evidence." if stale else "",
+        )
+        buying_insight["confidence"] = buying_meta.get("confidence")
+    else:
+        buying_insight = _pipeline_item("missing", "Buying Insight", "No Buying Insight artifact found.", None, recommended_action="Generate Buying Insight when prerequisites are acceptable.")
+
+    return {
+        "scan": scan,
+        "evidence_verified": evidence_verified,
+        "company_evidence_db": company_evidence_db,
+        "source_ledger": source_ledger,
+        "activation_pairs": activation_status,
+        "buying_insight": buying_insight,
+    }
+
+
+@app.get("/admin/pipeline-readiness")
+async def pipeline_readiness(request: Request):
+    """Return advisory readiness/freshness state for Scanner admin pipeline stages."""
+    verify_admin(request)
+    company_summaries = storage.get_all_companies_summary()
+    companies = []
+    for summary in company_summaries:
+        name = summary.get("companyName")
+        detail = storage.get_company_data(name) if name else None
+        companies.append({**summary, **detail} if isinstance(detail, dict) else summary)
+    company_evidence_index = buying_storage.get_company_evidence_index()
+    source_ledger_index = buying_storage.get_company_source_ledger_index()
+    buying_index = buying_storage.get_buying_potential_index()
+    indexes = {
+        "company_evidence": _index_by_company(company_evidence_index),
+        "source_ledger": _index_by_company(source_ledger_index),
+        "buying_insight": _index_by_company(buying_index),
+    }
+
+    try:
+        kb_meta = storage.get_foresight_kb_status()
+    except Exception:
+        kb_meta = {"theme_count": 0, "total_signals": 0, "last_updated": None, "themes": []}
+    try:
+        observatory = storage.get_observatory()
+    except Exception:
+        observatory = None
+    try:
+        cross_impact = storage.get_cross_impact_interpretation()
+    except Exception:
+        cross_impact = None
+
+    with _foresight_kb_lock:
+        harvest_state = dict(_foresight_kb_state)
+    with _observatory_lock:
+        observatory_state = dict(_observatory_state)
+    with _cross_impact_lock:
+        cross_state = dict(_cross_impact_state)
+
+    kb_running = _global_running_item(harvest_state, "Foresight KB")
+    if kb_running:
+        foresight_kb = kb_running
+    elif not kb_meta or not kb_meta.get("theme_count"):
+        foresight_kb = _pipeline_item("missing", "Foresight KB", "No harvested foresight KB themes found.", None, kb_meta or {}, "Harvest KB before refreshing foresight-dependent analysis.")
+    else:
+        age = _days_old(kb_meta.get("last_updated"))
+        stale = age is not None and age > PIPELINE_FRESH_DAYS
+        foresight_kb = _pipeline_item(
+            "warning" if stale else "ready",
+            "Foresight KB",
+            f"{kb_meta.get('theme_count', 0)} theme(s), {kb_meta.get('total_signals', 0)} signal(s)." + (f" Last harvest {age} day(s) ago." if age is not None else ""),
+            kb_meta.get("last_updated"),
+            kb_meta,
+            "Harvest KB if current foresight context matters." if stale else "",
+        )
+
+    obs_running = _global_running_item(observatory_state, "Observatory")
+    observatory_updated = observatory.get("generated_at") if isinstance(observatory, dict) else None
+    if obs_running:
+        observatory_item = obs_running
+    elif not observatory:
+        observatory_item = _pipeline_item("missing", "Observatory", "No Observatory analysis found.", None, recommended_action="Generate Observatory after Foresight KB is ready.")
+    else:
+        stale = _newer_than(kb_meta.get("last_updated") if kb_meta else None, observatory_updated)
+        observatory_item = _pipeline_item(
+            "warning" if stale else "ready",
+            "Observatory",
+            "Observatory is older than the Foresight KB." if stale else "Observatory analysis is available.",
+            observatory_updated,
+            {"model": observatory.get("model")},
+            "Regenerate Observatory after KB harvest." if stale else "",
+        )
+
+    cross_running = _global_running_item(cross_state, "Matrix Interpretation")
+    cross_updated = cross_impact.get("generated_at") if isinstance(cross_impact, dict) else None
+    if cross_running:
+        cross_item = cross_running
+    elif not cross_impact:
+        cross_item = _pipeline_item("missing", "Matrix Interpretation", "No Cross-Impact Matrix Interpretation found.", None, recommended_action="Generate the Matrix Interpretation after Observatory/Foresight context is ready.")
+    else:
+        stale = _newer_than(kb_meta.get("last_updated") if kb_meta else None, cross_updated) or _newer_than(observatory_updated, cross_updated)
+        cross_item = _pipeline_item(
+            "warning" if stale else "ready",
+            "Matrix Interpretation",
+            "Matrix Interpretation is older than Observatory or Foresight KB." if stale else "Matrix Interpretation is available.",
+            cross_updated,
+            {"model": cross_impact.get("model")},
+            "Refresh the Matrix Interpretation." if stale else "",
+        )
+
+    return {
+        "generated_at": datetime.utcnow().isoformat(),
+        "fresh_days": PIPELINE_FRESH_DAYS,
+        "global": {
+            "foresight_kb": foresight_kb,
+            "observatory": observatory_item,
+            "cross_impact": cross_item,
+        },
+        "companies": {
+            company.get("companyName"): _company_pipeline_readiness(company, indexes)
+            for company in companies
+            if company.get("companyName")
+        },
+    }
+
+
 # --- MAIN SCAN ENDPOINT (MULTIPART) ---
 
 

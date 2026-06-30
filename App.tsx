@@ -162,6 +162,9 @@ const App = () => {
  const [sourceLedgerStatus, setSourceLedgerStatus] = useState<any>(null);
  const [buyingInsightCompany, setBuyingInsightCompany] = useState(null);
  const [buyingInsightStatus, setBuyingInsightStatus] = useState<any>(null);
+ const [pipelineReadiness, setPipelineReadiness] = useState(null);
+ const [pipelineReadinessLoading, setPipelineReadinessLoading] = useState(false);
+ const [prepareCompanyName, setPrepareCompanyName] = useState(null);
 
   // MANUAL EDIT STATE
   const [editingCompany, setEditingCompany] = useState(null);  // company name being edited
@@ -170,6 +173,65 @@ const App = () => {
   const [editSaving, setEditSaving] = useState(false);
 
   const prevDataLengthRef = useRef(0);
+
+  const fetchPipelineReadiness = async () => {
+    if (!isAdmin || !authToken) return null;
+    setPipelineReadinessLoading(true);
+    try {
+      const res = await fetch(`/admin/pipeline-readiness?t=${Date.now()}`, { headers: authHeaders() });
+      if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return null; }
+      if (!res.ok) return null;
+      const json = await res.json();
+      setPipelineReadiness(json);
+      return json;
+    } catch (e) {
+      console.warn('Pipeline readiness fetch failed:', e);
+      return null;
+    } finally {
+      setPipelineReadinessLoading(false);
+    }
+  };
+
+  const readinessForCompany = (companyName: string) => {
+    const companies = pipelineReadiness?.companies || {};
+    const direct = companies[companyName];
+    if (direct) return direct;
+    const key = Object.keys(companies).find(k => k.toLowerCase() === String(companyName || '').toLowerCase());
+    return key ? companies[key] : null;
+  };
+
+  const readinessTone = (state?: string) => {
+    if (state === 'ready') return 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30';
+    if (state === 'warning') return 'bg-amber-500/10 text-amber-300 border-amber-500/30';
+    if (state === 'missing') return 'bg-rose-500/10 text-rose-300 border-rose-500/30';
+    if (state === 'running') return 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30';
+    return 'bg-slate-500/10 text-slate-400 border-slate-500/20';
+  };
+
+  const readinessDate = (value?: string) => {
+    if (!value) return '';
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? String(value).slice(0, 10) : d.toLocaleDateString('fi-FI');
+  };
+
+  const readinessChip = (key: string, item: any, label: string) => (
+    <span
+      key={key}
+      title={`${item?.label || label}: ${item?.detail || 'No status'}${item?.updated_at ? `\nUpdated ${readinessDate(item.updated_at)}` : ''}${item?.recommended_action ? `\n${item.recommended_action}` : ''}`}
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[8px] font-mono font-bold uppercase tracking-wide ${readinessTone(item?.state)}`}
+    >
+      {item?.state === 'running' && <Loader2 size={8} className="animate-spin" />}
+      {label}
+    </span>
+  );
+
+  const preflightWarnings = (items: any[], title: string) => {
+    const warnings = items
+      .filter(item => item && ['warning', 'missing', 'running'].includes(item.state))
+      .map(item => `${item.label}: ${item.detail}${item.recommended_action ? `\n  ${item.recommended_action}` : ''}`);
+    if (!warnings.length) return true;
+    return confirm(`${title}\n\n${warnings.map(w => `- ${w}`).join('\n')}\n\nContinue anyway?`);
+  };
 
   const checkHealth = async () => {
       try {
@@ -230,6 +292,14 @@ const App = () => {
   useEffect(() => {
     fetchSummaryData();
   }, []);
+
+  useEffect(() => {
+    if (isAdmin) {
+      fetchPipelineReadiness();
+    } else {
+      setPipelineReadiness(null);
+    }
+  }, [isAdmin, authToken]);
 
   const handleCompanyClick = async (summaryItem) => {
     if (!summaryItem) return;
@@ -313,6 +383,7 @@ const App = () => {
           setIsModalOpen(true);
           fetchSummaryData(true);
           fetchMarketIntelData();
+          fetchPipelineReadiness();
           break;
         }
 
@@ -367,6 +438,9 @@ const App = () => {
   const handleOpenMarketIntel = async () => {
     if (!isAuthenticated) return;
     setIsMarketIntelOpen(true);
+    if (isAdmin) {
+      fetchPipelineReadiness();
+    }
     if (!marketIntelData) {
       await fetchMarketIntelData();
     }
@@ -387,6 +461,7 @@ const App = () => {
       if (res.ok) {
         const result = await res.json();
         setCrossImpactInterpretationData(result);
+        if (isAdmin) fetchPipelineReadiness();
       } else if (res.status === 404) {
         setCrossImpactInterpretationData(null);
       }
@@ -399,6 +474,12 @@ const App = () => {
 
   const handleRefreshCrossImpactInterpretation = async () => {
     if (!isAdmin) return;
+    const readiness = await fetchPipelineReadiness() || pipelineReadiness;
+    const global = readiness?.global || {};
+    if (!preflightWarnings(
+      [global.foresight_kb, global.observatory, global.cross_impact],
+      'Matrix Interpretation preflight warning'
+    )) return;
     setCrossImpactInterpretationLoading(true);
     try {
       const res = await fetch('/admin/generate-cross-impact-interpretation', {
@@ -410,6 +491,7 @@ const App = () => {
         setCrossImpactInterpretationLoading(false);
         return;
       }
+      fetchPipelineReadiness();
       // Poll status until completion
       const pollUntilDone = async () => {
         for (let i = 0; i < 120; i++) {
@@ -428,6 +510,7 @@ const App = () => {
         await fetchCrossImpactInterpretation();
       };
       await pollUntilDone();
+      await fetchPipelineReadiness();
     } catch (e) {
       console.error('Cross-impact regeneration failed:', e);
     } finally {
@@ -442,6 +525,7 @@ const App = () => {
       if (res.ok) {
         const result = await res.json();
         setObservatoryData(result);
+        if (isAdmin) fetchPipelineReadiness();
       }
     } catch (e) {
       console.error('Observatory fetch failed:', e);
@@ -475,6 +559,7 @@ const App = () => {
       if (res.ok) {
         const json = await res.json();
         setDataReviewItems(json.companies || []);
+        fetchPipelineReadiness();
       }
     } catch (e) { console.error(e); alert("Failed to load review data."); }
     finally { setDataReviewLoading(false); }
@@ -546,6 +631,7 @@ const App = () => {
         const reviewRes = await fetch('/admin/review-data', { headers: authHeaders() });
         if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
         fetchSummaryData(true);
+        fetchPipelineReadiness();
       } else {
         alert("Reality Check + Clean request failed.");
       }
@@ -591,6 +677,7 @@ const App = () => {
         const reviewRes = await fetch('/admin/review-data', { headers: authHeaders() });
         if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
         fetchSummaryData(true);
+        fetchPipelineReadiness();
       } else {
         alert("Recalculation failed: " + (await res.text()));
       }
@@ -710,6 +797,7 @@ const App = () => {
       if (res.status === 409) { alert("Foresight KB harvest already in progress."); setForesightKbLoading(false); return; }
       if (res.ok) {
         alert("Foresight KB harvest started! Harvesting 30 themes in background.\nCheck status with the status indicator.");
+        fetchPipelineReadiness();
         // Poll for completion
         const pollInterval = setInterval(async () => {
           try {
@@ -723,8 +811,10 @@ const App = () => {
                 const r = status.harvest.result;
                 if (r && !r.error) {
                   alert(`Foresight KB Harvest Complete!\n\n${r.harvested}/${r.harvested + r.failed} themes harvested\n${r.total_signals} signals stored`);
+                  fetchPipelineReadiness();
                 } else if (r && r.error) {
                   alert(`Foresight KB Harvest Failed: ${r.error}`);
+                  fetchPipelineReadiness();
                 }
               }
             }
@@ -749,6 +839,7 @@ const App = () => {
       if (res.status === 409) { alert((await res.json()).detail); setKbCleanupLoading(false); return; }
       if (res.ok) {
         alert("Foresight KB repair started! Re-verifying URLs and context eligibility in background.");
+        fetchPipelineReadiness();
         const pollInterval = setInterval(async () => {
           try {
             const statusRes = await fetch('/admin/foresight-kb-cleanup-status');
@@ -766,8 +857,10 @@ const App = () => {
                   const markedDead = (r.source_dead ?? r.dead_removed ?? 0) + (r.source_unreadable ?? 0);
                   const writeSkipped = r.themes_write_skipped ?? 0;
                   alert(`Foresight KB Repair Complete!\n\n${metadataRepaired} signals metadata-repaired\n${contextEligible} context-eligible signals\n${needsReview} retained for review\n${notEligible} retained as not context-eligible\n${markedDead} dead/unreadable sources marked\n${r.signals_after} signals retained across ${r.themes_checked} themes${writeSkipped ? `\n${writeSkipped} theme writes skipped to avoid empty files` : ''}`);
+                  fetchPipelineReadiness();
                 } else if (r && r.error) {
                   alert(`Foresight KB Repair Failed: ${r.error}`);
+                  fetchPipelineReadiness();
                 }
               }
             }
@@ -865,6 +958,7 @@ const App = () => {
  const reviewRes = await fetch('/admin/review-data', { headers: authHeaders() });
  if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
  fetchSummaryData(true);
+ await fetchPipelineReadiness();
  };
 
  const handleCleanEvidenceSingle = async (companyName) => {
@@ -890,6 +984,17 @@ const App = () => {
 
  const handleCreateBuyingInsight = async (companyName) => {
  if (!isAdmin) return;
+ const readiness = await fetchPipelineReadiness() || pipelineReadiness;
+ const companyReady = readiness?.companies?.[companyName] || readinessForCompany(companyName);
+ if (companyReady && !preflightWarnings(
+   [
+     companyReady.evidence_verified,
+     companyReady.company_evidence_db,
+     companyReady.source_ledger,
+     companyReady.activation_pairs,
+   ],
+   `Buying Insight preflight for "${companyName}"`
+ )) return;
  setBuyingInsightCompany(companyName);
  setBuyingInsightStatus({ company: companyName, stage: 'queued', progress: 0 });
  try {
@@ -908,6 +1013,7 @@ const App = () => {
  }
  const jobId = json.job_id;
  if (!jobId) throw new Error('Buying Insight job did not return a job id.');
+ fetchPipelineReadiness();
  let finalStatus: any = null;
  let attempts = 0;
  while (attempts < 240) {
@@ -971,6 +1077,7 @@ const App = () => {
  }
  const jobId = json.job_id;
  if (!jobId) throw new Error('Company Evidence DB job did not return a job id.');
+ fetchPipelineReadiness();
  let finalStatus: any = null;
  let attempts = 0;
  while (attempts < 180) {
@@ -1038,6 +1145,7 @@ const App = () => {
  }
  const jobId = json.job_id;
  if (!jobId) throw new Error('Company Source Ledger job did not return a job id.');
+ fetchPipelineReadiness();
  let finalStatus: any = null;
  let attempts = 0;
  while (attempts < 120) {
@@ -2287,6 +2395,7 @@ const App = () => {
                       const isFlaggedSummary = (item.summary_preview || '').includes('[FLAGGED]');
                       const hasUnverifiedClaims = item.ai_verified === false && item.unsupported_claims?.length > 0;
                       const evStats = item.evidence_cleaning_stats || {};
+                      const ready = readinessForCompany(item.companyName);
                       return (
                         <div key={idx} className="space-y-1">
                         <div className={`flex items-center justify-between px-3 py-2 rounded-lg border transition-all ${
@@ -2316,6 +2425,15 @@ const App = () => {
                               {evStats.unsupported != null && <span className="mr-2 text-orange-400/70">UN:{evStats.unsupported}</span>}
                               {item.lastUpdated && <span className="text-slate-600">{item.lastUpdated.split('T')[0]}</span>}
                             </div>
+                            {isAdmin && (
+                              <div className="mt-1 flex flex-wrap items-center gap-1">
+                                {readinessChip('edb', ready?.company_evidence_db, 'EDB')}
+                                {readinessChip('ledger', ready?.source_ledger, 'LEDGER')}
+                                {readinessChip('bi', ready?.buying_insight, 'BI')}
+                                {readinessChip('fs', pipelineReadiness?.global?.foresight_kb, 'FS')}
+                                {readinessChip('act', ready?.activation_pairs, 'ACT')}
+                              </div>
+                            )}
                             {hasFlags && (
                               <div className="mt-1 space-y-0.5">
                                 {evidenceFlags.slice(0, 3).map((flag, fi) => (
@@ -2414,6 +2532,17 @@ const App = () => {
                               </button>
                               <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block z-50 pointer-events-none">
                                 <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 w-72 whitespace-normal shadow-xl">Combine Evidence<br/><span className="text-slate-500">Create shared company source ledger from Scanner, financial, foresight, Evidence DB, and Buying Insight sources. Does not modify normal scan data.{sourceLedgerCompany === item.companyName && sourceLedgerStatus?.stage ? `\n\nNow: ${sourceLedgerStatus.stage} (${sourceLedgerStatus.progress || 0}%)` : ''}</span></div>
+                              </div>
+                            </div>
+                            <div className="relative group/tip">
+                              <button
+                                onClick={() => setPrepareCompanyName(item.companyName)}
+                                className="text-slate-500 hover:text-cyan-200 p-1.5 rounded hover:bg-cyan-500/10 transition-all"
+                              >
+                                <Cpu size={14} />
+                              </button>
+                              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover/tip:block z-50 pointer-events-none">
+                                <div className="bg-[#0f172a] border border-slate-600 rounded-md px-2.5 py-1.5 text-[9px] text-slate-300 w-72 whitespace-normal shadow-xl">Prepare Buying Insight<br/><span className="text-slate-500">Open a readiness checklist with separate action buttons. Nothing runs automatically.</span></div>
                               </div>
                             </div>
                             <div className="relative group/tip">
@@ -2518,6 +2647,58 @@ const App = () => {
         </div>
       )}
 
+      {prepareCompanyName && (() => {
+        const ready = readinessForCompany(prepareCompanyName) || {};
+        const steps = [
+          { key: 'evidence_verified', item: ready.evidence_verified, action: 'Verify Evidence', run: () => handleCleanEvidenceSingle(prepareCompanyName), disabled: cleaningEvidenceCompany === prepareCompanyName },
+          { key: 'company_evidence_db', item: ready.company_evidence_db, action: 'Build Evidence DB', run: () => handleBuildCompanyEvidence(prepareCompanyName), disabled: companyEvidenceCompany === prepareCompanyName },
+          { key: 'source_ledger', item: ready.source_ledger, action: 'Combine Evidence', run: () => handleCombineCompanyEvidence(prepareCompanyName), disabled: sourceLedgerCompany === prepareCompanyName },
+          { key: 'activation_pairs', item: ready.activation_pairs, action: 'Refresh WHY/WHAT', run: () => handleRefreshProposalsSingle(prepareCompanyName), disabled: refreshingProposalsCompany === prepareCompanyName },
+          { key: 'buying_insight', item: ready.buying_insight, action: 'Generate Buying Insight', run: () => handleCreateBuyingInsight(prepareCompanyName), disabled: buyingInsightCompany === prepareCompanyName },
+        ];
+        return (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={() => setPrepareCompanyName(null)} />
+            <div className="relative w-full max-w-2xl bg-[#0f172a] border border-cyan-500/30 rounded-xl shadow-2xl overflow-hidden">
+              <div className="p-4 border-b border-white/10 flex items-center justify-between bg-black/20">
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2"><Cpu size={16} className="text-cyan-300" /> Prepare Buying Insight</h3>
+                  <p className="text-[10px] text-slate-500 mt-1">{prepareCompanyName}</p>
+                </div>
+                <button onClick={() => setPrepareCompanyName(null)} className="text-slate-400 hover:text-white"><X size={16} /></button>
+              </div>
+              <div className="p-4 space-y-2">
+                <div className="flex flex-wrap gap-1 mb-3">
+                  {readinessChip('scan', ready.scan, 'SCAN')}
+                  {readinessChip('fs', pipelineReadiness?.global?.foresight_kb, 'FS')}
+                  {readinessChip('obs', pipelineReadiness?.global?.observatory, 'OBS')}
+                </div>
+                {pipelineReadinessLoading && <div className="text-[10px] text-cyan-300 font-mono">Refreshing readiness...</div>}
+                {steps.map(step => (
+                  <div key={step.key} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-lg border border-white/10 bg-black/20 px-3 py-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        {readinessChip(step.key, step.item, step.item?.label || step.key)}
+                      </div>
+                      <p className="text-xs text-slate-300">{step.item?.detail || 'No readiness status available.'}</p>
+                      {step.item?.updated_at && <p className="text-[9px] text-slate-600 font-mono mt-0.5">Updated {readinessDate(step.item.updated_at)}</p>}
+                      {step.item?.recommended_action && <p className="text-[10px] text-amber-300/80 mt-1">{step.item.recommended_action}</p>}
+                    </div>
+                    <button
+                      onClick={step.run}
+                      disabled={step.disabled}
+                      className="shrink-0 px-3 py-1.5 rounded border border-cyan-500/30 bg-cyan-500/10 hover:bg-cyan-500/20 text-[10px] text-cyan-200 font-mono disabled:opacity-40"
+                    >
+                      {step.disabled ? 'Running...' : step.action}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Login Modal */}
       {isLoginOpen && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -2554,6 +2735,7 @@ const App = () => {
         crossImpactInterpretationData={crossImpactInterpretationData}
         onRefreshCrossImpactInterpretation={isAdmin ? handleRefreshCrossImpactInterpretation : undefined}
         crossImpactInterpretationLoading={crossImpactInterpretationLoading}
+        pipelineGlobal={pipelineReadiness?.global}
       />
 
       <ObservatoryModal
@@ -2578,6 +2760,8 @@ const App = () => {
         isLoading={isLoadingDetails}
         marketIntelData={marketIntelData}
         observatoryData={observatoryData}
+        companyReadiness={selectedCompany ? readinessForCompany(selectedCompany.companyName) : null}
+        pipelineGlobal={pipelineReadiness?.global}
         onClose={() => setIsModalOpen(false)}
         isAdmin={isAdmin}
         authToken={authToken}
