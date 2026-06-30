@@ -239,6 +239,9 @@ FORENSIC_GEMINI_STRONG_BASELINE_SCOUT_SECONDS = 30
 FORENSIC_GPT_REPAIR_SCOUT_SECONDS = 45
 FORENSIC_GEMINI_FLASH_SCOUT_SECONDS = 45
 FORENSIC_GEMINI_ACQUISITION_COOLDOWN_SECONDS = 4
+FORENSIC_GEMINI_PRO_MAX_IN_FLIGHT = 1
+FORENSIC_GEMINI_PRO_OUTPUT_TOKENS = 3000
+FORENSIC_GEMINI_FLASH_OUTPUT_TOKENS = 2500
 FORENSIC_PROVIDER_SEQUENCE_SECONDS = (
     FORENSIC_GEMINI_PRO_SCOUT_SECONDS
     + FORENSIC_GPT_REPAIR_SCOUT_SECONDS
@@ -2565,6 +2568,27 @@ def _seeded_coverage_is_sufficient(jury_name: str, seed_count: int, req: dict) -
     return jury_name not in FORENSIC_FRESH_CRITICAL_JURIES
 
 
+def _current_revalidated_seed_count(seeds: list) -> int:
+    """Count only seeds re-fetched in this scan, so old links cannot circulate untested."""
+    return len([
+        seed for seed in seeds or []
+        if isinstance(seed, dict)
+        and seed.get("url")
+        and seed.get("seed_url_verified") is True
+        and seed.get("seed_entity_mentioned") is not False
+        and seed.get("historical_revalidation_pending") is not True
+    ])
+
+
+def _seeded_coverage_can_skip_live_search(jury_name: str, seeds: list, req: dict) -> bool:
+    """Allow skipping model discovery only after current-run deterministic revalidation."""
+    return _seeded_coverage_is_sufficient(
+        jury_name,
+        _current_revalidated_seed_count(seeds),
+        req,
+    )
+
+
 def _should_attempt_acquisition_repair(jury_name: str, status: dict) -> bool:
     if not status.get("weak"):
         return False
@@ -2593,7 +2617,7 @@ def _assess_jury_acquisition_readiness(acquisition_results: list, routed_seeds: 
         seeds = [s for s in routed_seeds.get(jury_name, []) or [] if isinstance(s, dict) and s.get("url")]
         req = _jury_readiness_requirements(jury_name)
         fresh_count = len(fresh_sources)
-        seed_count = len(seeds)
+        seed_count = _current_revalidated_seed_count(seeds)
         total_count = fresh_count + seed_count
         rejected = lane.get("pre_jury_rejected", []) or []
         rejected_reasons = {}
@@ -4962,17 +4986,41 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             acquisition_run_ceiling = max(45, acquisition_ceiling - 25)
     acquisition_started = time.time()
     acquisition_deadline = acquisition_started + acquisition_run_ceiling
+    strategic_seed_search_reduced = False
     acquisition_specs = []
     for jury_name in FORENSIC_JURIES:
         if jury_name == STRATEGIC_JURY_NAME:
-            for focus_key, focus_label in STRATEGIC_ACQUISITION_FOCI:
+            strategic_foci = list(STRATEGIC_ACQUISITION_FOCI)
+            strategic_req = _jury_readiness_requirements(jury_name)
+            if (
+                strong_seed_baseline
+                and _seeded_coverage_can_skip_live_search(
+                    jury_name,
+                    routed_seeds.get(jury_name, []) or [],
+                    strategic_req,
+                )
+            ):
+                # Keep one fresh-search lane active so strong historical/EDB
+                # coverage reduces provider load without blocking new evidence.
+                strategic_foci = [
+                    focus for focus in strategic_foci
+                    if focus[0] == "procurement_partnerships"
+                ] or strategic_foci[:1]
+                strategic_seed_search_reduced = True
+            for focus_key, focus_label in strategic_foci:
                 acquisition_specs.append((jury_name, focus_key, focus_label))
         else:
             acquisition_specs.append((jury_name, "full", ""))
+    if strategic_seed_search_reduced:
+        print(
+            "   ⏭️ [Forensic Acquisition] Strategic sub-lanes reduced by current-run "
+            "revalidated seed coverage; keeping one fresh Strategic search lane active."
+        )
     print(
         f"   🔍 [Forensic Acquisition] {len(acquisition_specs)} paced acquisition lane(s) across five juries for {company_name}: "
         f"{acquisition_run_ceiling}s search ceiling + {max(0, acquisition_ceiling - acquisition_run_ceiling)}s reserved repair; "
-        f"Gemini Pro surplus candidates with {FORENSIC_GEMINI_ACQUISITION_COOLDOWN_SECONDS}s start cooldown → deterministic gate → GPT-5.5 retry → Gemini Flash last resort; "
+        f"Gemini Pro low-thinking scout max {FORENSIC_GEMINI_PRO_MAX_IN_FLIGHT} in-flight with {FORENSIC_GEMINI_ACQUISITION_COOLDOWN_SECONDS}s start cooldown; "
+        "current revalidated seed lanes skip live Gemini; deterministic gate → GPT-5.5 retry → Gemini Flash last resort; "
         f"baseline {coverage['score']}/100 across {len(coverage['jury_coverage'])}/5 juries"
         "."
     )
@@ -4994,6 +5042,9 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
     gemini_acquisition_lock = threading.Lock()
     gemini_next_start_at = [time.time()]
+    gemini_pro_semaphore = threading.BoundedSemaphore(
+        max(1, int(FORENSIC_GEMINI_PRO_MAX_IN_FLIGHT))
+    )
 
     def _pace_gemini_acquisition(jury_name: str) -> None:
         cooldown = max(0, int(FORENSIC_GEMINI_ACQUISITION_COOLDOWN_SECONDS))
@@ -5040,7 +5091,19 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                             ),
                         )
                     timeout = min(scout_cap, remaining)
-                    text = call_gemini_forensic_text(prompt, timeout=timeout)
+                    acquired_slot = gemini_pro_semaphore.acquire(timeout=max(1, min(8, timeout)))
+                    if not acquired_slot:
+                        status = "gemini_pro_skipped_concurrency_cap"
+                        return payload, provider, status
+                    try:
+                        text = call_gemini_forensic_text(
+                            prompt,
+                            timeout=timeout,
+                            max_output_tokens=FORENSIC_GEMINI_PRO_OUTPUT_TOKENS,
+                            thinking_level="low",
+                        )
+                    finally:
+                        gemini_pro_semaphore.release()
                     payload = _parse_provider_payload(text)
                     if payload:
                         return payload, provider, "completed"
@@ -5058,16 +5121,31 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
     def _acquire_one_jury(jury_name, focus_key="full", focus_label=""):
         lane_started = time.time()
-        prompt = _build_jury_acquisition_prompt(
-            search_name,
-            domain_hint,
-            jury_name,
-            entity_context_block,
-            search_alias_block,
-            acquisition_focus=focus_label,
+        req = _jury_readiness_requirements(jury_name)
+        jury_seeds = routed_seeds.get(jury_name, []) or []
+        seeded_count = _current_revalidated_seed_count(jury_seeds)
+        seeded_sufficient = (
+            focus_key == "full"
+            and _seeded_coverage_can_skip_live_search(jury_name, jury_seeds, req)
         )
-        payload, provider, status = _run_acquisition_provider_sequence(prompt, jury_name)
-        sources = _normalize_acquisition_payload(payload or {}, jury_name, provider)
+        target_valid = 0 if seeded_sufficient else _lane_fresh_target(jury_name, focus_key)
+        provider = "governed-seed" if seeded_sufficient else "gemini-3.1-pro-preview"
+        status = "seeded_sufficient_live_search_skipped" if seeded_sufficient else "provider_unavailable"
+        sources = []
+        if not seeded_sufficient and jury_name == SERVICE_PORTFOLIO_JURY_NAME:
+            provider = "official-prefetch-first"
+            status = "service_portfolio_official_prefetch_first_gemini_deferred"
+        elif not seeded_sufficient:
+            prompt = _build_jury_acquisition_prompt(
+                search_name,
+                domain_hint,
+                jury_name,
+                entity_context_block,
+                search_alias_block,
+                acquisition_focus=focus_label,
+            )
+            payload, provider, status = _run_acquisition_provider_sequence(prompt, jury_name)
+            sources = _normalize_acquisition_payload(payload or {}, jury_name, provider)
         lane = {
             "jury": jury_name,
             "acquisition_focus": focus_key,
@@ -5075,20 +5153,10 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             "status": status,
             "sources": sources,
         }
-        req = _jury_readiness_requirements(jury_name)
-        seeded_count = len([
-            seed for seed in routed_seeds.get(jury_name, []) or []
-            if isinstance(seed, dict) and seed.get("url")
-        ])
-        seeded_sufficient = (
-            focus_key == "full"
-            and _seeded_coverage_is_sufficient(jury_name, seeded_count, req)
-        )
-        target_valid = 0 if seeded_sufficient else _lane_fresh_target(jury_name, focus_key)
         if seeded_sufficient:
             lane["seeded_coverage_sufficient"] = True
             lane["seeded_source_count"] = seeded_count
-            lane["status"] = f"{lane.get('status')}_seeded_sufficient"
+            lane["live_search_skipped"] = True
 
         def _validate_lane(current_lane: dict, label: str) -> tuple[dict, dict]:
             remaining_for_recovery = max(0, int(acquisition_deadline - time.time()))
@@ -5203,7 +5271,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                             replacement_prompt,
                             model=replacement_provider,
                             timeout=min(timeout_cap, remaining),
-                            max_output_tokens=4000,
+                            max_output_tokens=FORENSIC_GEMINI_FLASH_OUTPUT_TOKENS,
+                            thinking_level="low",
                         )
                         replacement_payload = _parse_provider_payload(replacement_text)
                         replacement_status = "gemini_flash_survival_retry_completed" if replacement_payload else "gemini_flash_survival_retry_invalid_json"
@@ -5376,6 +5445,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             )
 
         def _lane_dead_or_provider_failed(jury_name: str, lane: dict, status: dict) -> bool:
+            if jury_name == SERVICE_PORTFOLIO_JURY_NAME:
+                return True
             reasons = status.get("rejected_reasons") or {}
             rejected_count = int(status.get("rejected") or 0)
             lane_status = str((lane or {}).get("status") or "").lower()
@@ -5445,6 +5516,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                         gemini_text = call_gemini_forensic_text(
                             gemini_prompt,
                             timeout=min(FORENSIC_LANE_REPLACEMENT_TIMEOUT_SECONDS, remaining),
+                            max_output_tokens=FORENSIC_GEMINI_PRO_OUTPUT_TOKENS,
+                            thinking_level="low",
                         )
                         gemini_payload = _parse_provider_payload(gemini_text)
                         gemini_status = "gemini_repair_completed" if gemini_payload else "gemini_repair_invalid_json"
