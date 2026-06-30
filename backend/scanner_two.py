@@ -7,6 +7,7 @@ import html as html_lib
 import unicodedata
 import requests as http_requests
 import concurrent.futures
+import threading
 from datetime import date, datetime
 from urllib.parse import urljoin, urlparse, urldefrag
 import anthropic
@@ -236,6 +237,7 @@ FORENSIC_JURY_SONNET_TIMEOUT_SECONDS = 45
 FORENSIC_GEMINI_PRO_SCOUT_SECONDS = 60
 FORENSIC_GPT_REPAIR_SCOUT_SECONDS = 45
 FORENSIC_GEMINI_FLASH_SCOUT_SECONDS = 45
+FORENSIC_GEMINI_ACQUISITION_COOLDOWN_SECONDS = 4
 FORENSIC_PROVIDER_SEQUENCE_SECONDS = (
     FORENSIC_GEMINI_PRO_SCOUT_SECONDS
     + FORENSIC_GPT_REPAIR_SCOUT_SECONDS
@@ -253,6 +255,11 @@ FORENSIC_HEAVY_JURIES = {
 FORENSIC_STRUCTURAL_JURIES = {
     "ARCHITECTURAL JURY (Engineering Reality)",
     *FORENSIC_HEAVY_JURIES,
+}
+FORENSIC_FRESH_CRITICAL_JURIES = {
+    "ARCHITECTURAL JURY (Engineering Reality)",
+    "STRATEGIC JURY (Business Model, Procurement & Customer Experience)",
+    "AI & DATA JURY (Future Readiness)",
 }
 
 FORENSIC_JURY_GPT_TIMEOUTS = {
@@ -2548,6 +2555,33 @@ def _jury_readiness_requirements(jury_name: str) -> dict:
     return {"fresh": 1, "total": 2}
 
 
+def _seeded_coverage_is_sufficient(jury_name: str, seed_count: int, req: dict) -> bool:
+    """Stable lanes can rely on governed stored URLs when fresh public changes are rare."""
+    if seed_count < int(req.get("total") or 0):
+        return False
+    if jury_name == SERVICE_PORTFOLIO_JURY_NAME:
+        return True
+    return jury_name not in FORENSIC_FRESH_CRITICAL_JURIES
+
+
+def _should_attempt_acquisition_repair(jury_name: str, status: dict) -> bool:
+    if not status.get("weak"):
+        return False
+    if not status.get("seeded_sufficient"):
+        return True
+    if jury_name == SERVICE_PORTFOLIO_JURY_NAME:
+        return False
+    if jury_name not in FORENSIC_FRESH_CRITICAL_JURIES:
+        return False
+    reasons = status.get("rejected_reasons") or {}
+    rejected_count = int(status.get("rejected") or 0)
+    hard_failures = sum(
+        int(reasons.get(reason) or 0)
+        for reason in ("dead_or_soft_404", "non_document_asset", "wrong_entity")
+    )
+    return not (rejected_count > 0 and hard_failures >= rejected_count)
+
+
 def _assess_jury_acquisition_readiness(acquisition_results: list, routed_seeds: dict) -> dict:
     """Decide which jury lanes need a bounded acquisition repair pass."""
     by_jury = {item.get("jury"): item for item in acquisition_results or []}
@@ -2558,20 +2592,32 @@ def _assess_jury_acquisition_readiness(acquisition_results: list, routed_seeds: 
         seeds = [s for s in routed_seeds.get(jury_name, []) or [] if isinstance(s, dict) and s.get("url")]
         req = _jury_readiness_requirements(jury_name)
         fresh_count = len(fresh_sources)
-        total_count = fresh_count + len(seeds)
+        seed_count = len(seeds)
+        total_count = fresh_count + seed_count
         rejected = lane.get("pre_jury_rejected", []) or []
         rejected_reasons = {}
         for item in rejected:
             reason = str((item or {}).get("reason") or "unknown")
             rejected_reasons[reason] = rejected_reasons.get(reason, 0) + 1
+        seeded_sufficient = _seeded_coverage_is_sufficient(jury_name, seed_count, req)
         weak = fresh_count < req["fresh"] or total_count < req["total"]
         readiness[jury_name] = {
             "fresh": fresh_count,
-            "seeds": len(seeds),
+            "seeds": seed_count,
             "total": total_count,
             "required_fresh": req["fresh"],
             "required_total": req["total"],
             "weak": weak,
+            "seeded_sufficient": seeded_sufficient,
+            "repair_needed": _should_attempt_acquisition_repair(
+                jury_name,
+                {
+                    "weak": weak,
+                    "seeded_sufficient": seeded_sufficient,
+                    "rejected": len(rejected),
+                    "rejected_reasons": rejected_reasons,
+                },
+            ),
             "rejected": len(rejected),
             "rejected_reasons": rejected_reasons,
         }
@@ -4857,9 +4903,9 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         else:
             acquisition_specs.append((jury_name, "full", ""))
     print(
-        f"   🔍 [Forensic Acquisition] {len(acquisition_specs)} parallel acquisition lane(s) across five juries for {company_name}: "
+        f"   🔍 [Forensic Acquisition] {len(acquisition_specs)} paced acquisition lane(s) across five juries for {company_name}: "
         f"{acquisition_run_ceiling}s search ceiling + {max(0, acquisition_ceiling - acquisition_run_ceiling)}s reserved repair; "
-        "Gemini Pro surplus candidates → deterministic gate → GPT-5.5 retry → Gemini Flash last resort; "
+        f"Gemini Pro surplus candidates with {FORENSIC_GEMINI_ACQUISITION_COOLDOWN_SECONDS}s start cooldown → deterministic gate → GPT-5.5 retry → Gemini Flash last resort; "
         f"baseline {coverage['score']}/100 across {len(coverage['jury_coverage'])}/5 juries"
         "."
     )
@@ -4879,6 +4925,25 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             return f"{prefix}_timeout"
         return f"{prefix}_provider_error"
 
+    gemini_acquisition_lock = threading.Lock()
+    gemini_next_start_at = [time.time()]
+
+    def _pace_gemini_acquisition(jury_name: str) -> None:
+        cooldown = max(0, int(FORENSIC_GEMINI_ACQUISITION_COOLDOWN_SECONDS))
+        if cooldown <= 0:
+            return
+        with gemini_acquisition_lock:
+            now = time.time()
+            wait_seconds = max(0.0, gemini_next_start_at[0] - now)
+            remaining = max(0.0, acquisition_deadline - now)
+            if wait_seconds > 0 and remaining > wait_seconds + 5:
+                print(
+                    f"   🧊 [Forensic Acquisition] Gemini cooldown before {jury_name}: "
+                    f"waiting {wait_seconds:.1f}s to avoid simultaneous provider hits."
+                )
+                time.sleep(wait_seconds)
+            gemini_next_start_at[0] = time.time() + cooldown
+
     def _run_acquisition_provider_sequence(prompt: str, jury_name: str) -> tuple[dict | None, str, str]:
         """Run the first acquisition scout. Retries happen after deterministic precheck."""
         payload = None
@@ -4888,8 +4953,13 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         if gemini_api_key():
             remaining = max(0, int(acquisition_deadline - time.time()))
             if remaining > 0:
-                timeout = min(FORENSIC_GEMINI_PRO_SCOUT_SECONDS, remaining)
                 try:
+                    _pace_gemini_acquisition(jury_name)
+                    remaining = max(0, int(acquisition_deadline - time.time()))
+                    if remaining <= 0:
+                        status = "gemini_pro_skipped_no_budget_after_cooldown"
+                        return payload, provider, status
+                    timeout = min(FORENSIC_GEMINI_PRO_SCOUT_SECONDS, remaining)
                     text = call_gemini_forensic_text(prompt, timeout=timeout)
                     payload = _parse_provider_payload(text)
                     if payload:
@@ -4925,7 +4995,20 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             "status": status,
             "sources": sources,
         }
-        target_valid = _lane_fresh_target(jury_name, focus_key)
+        req = _jury_readiness_requirements(jury_name)
+        seeded_count = len([
+            seed for seed in routed_seeds.get(jury_name, []) or []
+            if isinstance(seed, dict) and seed.get("url")
+        ])
+        seeded_sufficient = (
+            focus_key == "full"
+            and _seeded_coverage_is_sufficient(jury_name, seeded_count, req)
+        )
+        target_valid = 0 if seeded_sufficient else _lane_fresh_target(jury_name, focus_key)
+        if seeded_sufficient:
+            lane["seeded_coverage_sufficient"] = True
+            lane["seeded_source_count"] = seeded_count
+            lane["status"] = f"{lane.get('status')}_seeded_sufficient"
 
         def _validate_lane(current_lane: dict, label: str) -> tuple[dict, dict]:
             remaining_for_recovery = max(0, int(acquisition_deadline - time.time()))
@@ -5102,8 +5185,9 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         if survival_retry_statuses:
             lane["survival_retry_statuses"] = survival_retry_statuses
         lane["lane_quality_gate_passed"] = len(lane.get("sources", []) or []) >= target_valid
+        lane_ok = bool(lane.get("sources")) or target_valid == 0
         print(
-            f"   {'✅' if lane.get('sources') else '⚠️'} [Forensic Acquisition] {jury_name}"
+            f"   {'✅' if lane_ok else '⚠️'} [Forensic Acquisition] {jury_name}"
             f"{' / '+focus_key if focus_key != 'full' else ''}: "
             f"{len(lane.get('sources', []) or [])} validated source packet(s), "
             f"target={target_valid}, provider={lane.get('provider')}, status={lane.get('status')}, "
@@ -5164,6 +5248,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     acquisition_by_jury = {item["jury"]: item for item in acquisition_results}
     readiness = _assess_jury_acquisition_readiness(acquisition_results, routed_seeds)
     weak_juries = [jury for jury, status in readiness.items() if status.get("weak")]
+    repair_candidate_juries = [jury for jury in weak_juries if readiness.get(jury, {}).get("repair_needed")]
     repaired_juries = []
     repair_stats = {}
     if weak_juries:
@@ -5172,6 +5257,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             + "; ".join(
                 f"{jury.split(' JURY')[0]} fresh={readiness[jury]['fresh']}/{readiness[jury]['required_fresh']}, "
                 f"total={readiness[jury]['total']}/{readiness[jury]['required_total']}"
+                f"{' seeded-ok' if readiness[jury].get('seeded_sufficient') else ''}"
                 for jury in weak_juries
             )
         )
@@ -5186,12 +5272,12 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         ),
     )
     repair_results = []
-    if weak_juries and repair_ceiling >= 25:
+    if repair_candidate_juries and repair_ceiling >= 25:
         repair_deadline = time.time() + repair_ceiling
-        prioritized_weak_juries = _prioritize_weak_juries(weak_juries, readiness)
+        prioritized_weak_juries = _prioritize_weak_juries(repair_candidate_juries, readiness)
         if repair_ceiling < 60:
             max_repair_lanes = 1
-        elif len(weak_juries) >= len(FORENSIC_JURIES) and repair_ceiling >= 85:
+        elif len(repair_candidate_juries) >= len(FORENSIC_JURIES) and repair_ceiling >= 85:
             max_repair_lanes = min(3, len(prioritized_weak_juries))
         elif repair_ceiling < 110:
             max_repair_lanes = 2
@@ -5200,7 +5286,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         repair_target_juries = prioritized_weak_juries[:max_repair_lanes]
         skipped_repair_juries = prioritized_weak_juries[max_repair_lanes:]
         print(
-            f"   🔁 [Forensic Acquisition] Targeted repair search for {len(weak_juries)} weak jury lane(s); "
+            f"   🔁 [Forensic Acquisition] Targeted repair search for {len(repair_candidate_juries)} repair-worthy weak jury lane(s); "
             f"ceiling {repair_ceiling}s; targeting {len(repair_target_juries)} critical lane(s)."
         )
         if skipped_repair_juries:
@@ -5407,6 +5493,15 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         print(
             f"   🛠️ [Forensic Acquisition Repair] validated {repair_stats.get('passed', 0)}/"
             f"{repair_stats.get('input', 0)} repair packet(s); repaired lanes={len(repaired_juries)}."
+        )
+    elif weak_juries and not repair_candidate_juries:
+        skipped_seeded = [
+            jury for jury in weak_juries
+            if readiness.get(jury, {}).get("seeded_sufficient")
+        ]
+        print(
+            "   ⏭️ [Forensic Acquisition] Repair search skipped for fresh-only weak lane(s) with sufficient governed seed coverage: "
+            + ", ".join(jury.split(" JURY")[0] for jury in skipped_seeded)
         )
     elif weak_juries:
         print(
@@ -5615,7 +5710,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     postprocess_started = time.time()
     postprocess_deadline = postprocess_started + FORENSIC_POSTPROCESS_RESERVE_SECONDS
     data = _merge_forensic_jury_results(baseline, jury_results, routed_seeds)
-    data["_search_provider"] = "parallel-gemini-acquisition+parallel-jury-analysis"
+    data["_search_provider"] = "paced-gemini-acquisition+parallel-jury-analysis"
     data["forensic_acquisition_status"] = [
         {
             "jury": item.get("jury"),
