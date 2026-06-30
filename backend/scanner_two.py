@@ -228,7 +228,7 @@ FORENSIC_ACQUISITION_EXTENDED_CEILING_SECONDS = 165
 FORENSIC_ACQUISITION_REPAIR_CEILING_SECONDS = 85
 FORENSIC_EXTRACTION_RECOVERY_CEILING_SECONDS = 35
 FORENSIC_FIRECRAWL_MAX_URLS = 6
-FORENSIC_JURY_ANALYSIS_CEILING_SECONDS = 180
+FORENSIC_JURY_ANALYSIS_CEILING_SECONDS = 220
 FORENSIC_STRONG_BASELINE_FIRST_PASS_FLOOR_SECONDS = 95
 FORENSIC_GPT_FALLBACK_MIN_SECONDS = 40
 FORENSIC_JURY_GPT_TIMEOUT_SECONDS = 105
@@ -270,6 +270,8 @@ FORENSIC_JURY_SONNET_TIMEOUTS = {
     "AI & DATA JURY (Future Readiness)": 50,
     "CULTURAL JURY (Talent & Psychological Safety)": 45,
 }
+FORENSIC_JURY_RESCUE_TIMEOUT_SECONDS = 45
+FORENSIC_JURY_RESCUE_MAX_PACKETS = 5
 
 STRATEGIC_JURY_NAME = "STRATEGIC JURY (Business Model, Procurement & Customer Experience)"
 SERVICE_PORTFOLIO_JURY_NAME = "SERVICE PORTFOLIO JURY (Delivery Reality)"
@@ -589,6 +591,103 @@ def _is_non_document_asset_url(url: str) -> bool:
     return any(path.endswith(extension) for extension in _NON_DOCUMENT_ASSET_EXTENSIONS)
 
 
+QUARANTINE_REASON_TOKENS = (
+    "wrong_entity",
+    "soft_404",
+    "page_not_found",
+    "source_dead",
+    "dead_link",
+    "dead_or_soft_404",
+    "blocked",
+    "excluded",
+    "unsupported_for_this_claim",
+)
+
+QUARANTINE_NOISE_TOKENS = (
+    "google maps",
+    "cookie",
+    "consent",
+    "privacy text",
+    "generic github",
+    "personal profile",
+    "generic navigation",
+    "navigation",
+    "generic homepage",
+    "title/metadata alone",
+    "no exact source passage",
+    "contains no exact source passage",
+)
+
+
+def _seed_quarantine_reason(record: dict) -> str:
+    """Return a deterministic reason when a historical seed should not re-enter active selection."""
+    if not isinstance(record, dict):
+        return "invalid_record"
+    url = str(record.get("url") or record.get("source_url") or "").strip()
+    if not url:
+        return "missing_url"
+    if _is_non_document_asset_url(url):
+        return "non_document_asset"
+    if record.get("scanner_seed_quarantined") is True:
+        return str(record.get("scanner_seed_quarantine_reason") or "previously_quarantined")
+    if record.get("wrong_entity_true") or record.get("wrong_entity") is True or record.get("entity_match_status") == "wrong":
+        return "wrong_entity"
+    text = " ".join(
+        str(record.get(key) or "")
+        for key in (
+            "promotion_status",
+            "source_status",
+            "source_audit_status",
+            "exclusion_reason",
+            "page_status",
+            "verification_status",
+            "verification_reason",
+            "claim_relation_status",
+            "claim_support_status",
+            "source_context_status",
+            "source_use_status",
+            "title",
+            "label",
+            "snippet",
+            "source_quote",
+        )
+    ).lower()
+    if any(token in text for token in QUARANTINE_REASON_TOKENS):
+        return "prior_hard_rejection"
+    if any(token in text for token in QUARANTINE_NOISE_TOKENS):
+        return "prior_noise_or_boilerplate_rejection"
+    return ""
+
+
+def _build_seed_quarantine_records(rejections: list, seed_urls: set) -> list:
+    """Persist bad seed verdicts as audit metadata without promoting them as evidence."""
+    records = []
+    seen = set()
+    for item in rejections or []:
+        if not isinstance(item, dict):
+            continue
+        key = _canonical_evidence_url(item.get("url"))
+        if not key or key not in seed_urls or key in seen:
+            continue
+        reason = str(item.get("reason") or "seed_rejected").strip()
+        reason_lower = reason.lower()
+        if (
+            any(token in reason_lower for token in QUARANTINE_REASON_TOKENS)
+            or any(token in reason_lower for token in QUARANTINE_NOISE_TOKENS)
+        ):
+            seen.add(key)
+            records.append({
+                "url": item.get("url"),
+                "canonical_url": key,
+                "jury": item.get("jury"),
+                "reason": reason[:500],
+                "quarantined_at": datetime.utcnow().isoformat(),
+                "scanner_seed_quarantined": True,
+                "active_register_eligible": False,
+            })
+    return records[:30]
+
+
 _HISTORICAL_VERDICT_FIELDS = (
     "promotion_status", "generation_eligible", "analysis_verified",
     "claim_support_status", "support_level", "entity_match_status",
@@ -692,9 +791,7 @@ def historical_source_can_revalidate(record: dict) -> bool:
     """Allow stale verdicts to be ignored, but retain known hard safety failures."""
     if not isinstance(record, dict) or not record.get("url"):
         return False
-    if _is_non_document_asset_url(str(record.get("url") or "")):
-        return False
-    if record.get("wrong_entity_true") or record.get("entity_match_status") == "wrong":
+    if _seed_quarantine_reason(record):
         return False
     status = " ".join(str(record.get(key) or "") for key in (
         "promotion_status", "source_status", "source_audit_status",
@@ -1426,6 +1523,62 @@ def _merge_jury_payloads(jury_name: str, payloads: list[dict]) -> dict | None:
     return merged
 
 
+def _build_jury_rescue_prompt(search_name: str, jury_name: str, packets: list) -> str:
+    """Compact no-web rescue when a full jury call times out or returns no usable payload."""
+    rescue_packets = _prioritize_jury_packets(
+        jury_name,
+        list(packets or []),
+        limit=FORENSIC_JURY_RESCUE_MAX_PACKETS,
+    )
+    packages = build_jury_evidence_packages(
+        jury_name,
+        rescue_packets,
+        max_packages=FORENSIC_JURY_RESCUE_MAX_PACKETS,
+    )
+    package_text = render_packages_for_prompt(packages)
+    return f"""You are a conservative rescue jury for {search_name}.
+
+JURY: {jury_name}
+
+The full jury call failed or returned no usable findings. Use ONLY the supplied packets below.
+No web search. Do not infer beyond the packet text. Do not repair weak evidence by adding new facts.
+
+TASK:
+- Return at most 2 findings.
+- Prefer exact, atomic claims directly supported by a quoted source passage.
+- If a packet is only generic company context, use support_level "context_only" or reject it.
+- If no packet supports an atomic claim, return an empty findings array.
+- Use only URLs that appear in the supplied packets.
+
+EVIDENCE PACKETS:
+{package_text}
+
+Return ONLY valid JSON:
+{{
+  "jury": "{jury_name}",
+  "findings": [
+    {{
+      "category": "{jury_name}",
+      "label": "Atomic supported claim",
+      "supported_claim": "One narrow claim supported by the source passage",
+      "source_quote": "Exact supporting passage from the packet",
+      "title": "Source title",
+      "url": "https://...",
+      "support_level": "exact",
+      "evidence_package_id": "package id if available",
+      "proposition_ids": ["ids if available"],
+      "support_passage_ids": ["ids if available"],
+      "found": true,
+      "sentiment": "neutral",
+      "is_recent": false
+    }}
+  ],
+  "rejected_evidence": [],
+  "confidence_score": 35,
+  "reality_score_adjustment": 0
+}}"""
+
+
 def _prevalidate_acquisition_results(
     acquisition_results: list,
     company_name: str,
@@ -1671,6 +1824,9 @@ def _combine_acquisition_lanes(lane_results: list) -> list:
             "sources": [],
             "pre_jury_rejected": [],
             "acquisition_focuses": [],
+            "survival_retry_attempts": 0,
+            "lane_replacement_attempts": 0,
+            "survival_retry_statuses": [],
         }
         for jury_name in FORENSIC_JURIES
     }
@@ -1699,6 +1855,12 @@ def _combine_acquisition_lanes(lane_results: list) -> list:
         )
         if lane.get("acquisition_focus"):
             existing["acquisition_focuses"].append(lane.get("acquisition_focus"))
+        existing["survival_retry_attempts"] += int(lane.get("survival_retry_attempts") or 0)
+        existing["lane_replacement_attempts"] += int(lane.get("lane_replacement_attempts") or 0)
+        existing["survival_retry_statuses"] = (
+            list(existing.get("survival_retry_statuses", []) or [])
+            + list(lane.get("survival_retry_statuses", []) or [])
+        )
         providers = [p for p in [existing.get("provider"), lane.get("provider")] if p]
         if providers:
             existing["provider"] = "+".join(dict.fromkeys(providers))
@@ -2143,6 +2305,7 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
     for item in seed_rejections:
         reason = str(item.get("reason") or "unspecified")
         rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
+    seed_quarantine_records = _build_seed_quarantine_records(seed_rejections, seed_urls)
     result["seed_lifecycle"] = {
         "selected": len(seed_urls),
         "url_revalidated": len(revalidated_seed_urls),
@@ -2150,7 +2313,9 @@ def _merge_forensic_jury_results(baseline: dict, jury_results: list, routed_seed
         "promoted_to_verified": len(accepted_seed_urls),
         "rejected": len(seed_rejections),
         "rejection_reasons": rejection_reasons,
+        "quarantined": len(seed_quarantine_records),
     }
+    result["scanner_evidence_quarantine"] = seed_quarantine_records
     result["_parallel_jury_forensic"] = True
     result["_seeded_forensic_fallback"] = not any(lane.get("data") for lane in jury_results or [])
     return result
@@ -4046,6 +4211,12 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         or previous_context.get("last_scanned")
     ))
     company_evidence_candidates = (previous_context or {}).get("company_evidence_db_candidates", []) if isinstance(previous_context, dict) else []
+    prior_seed_quarantine = (previous_context or {}).get("scanner_evidence_quarantine", []) if isinstance(previous_context, dict) else []
+    prior_seed_quarantine_urls = {
+        _canonical_evidence_url(item.get("canonical_url") or item.get("url"))
+        for item in prior_seed_quarantine
+        if isinstance(item, dict) and (item.get("canonical_url") or item.get("url"))
+    }
     # Parallel jury acquisition replaces the legacy confidence-driven full-search
     # loop. Coverage affects diagnostics, never whether a jury lane exists.
     max_research_loops = 0
@@ -4208,6 +4379,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         seen_urls = set()
         company_seed_count = 0
         historical_seed_count = 0
+        quarantined_seed_skips = {}
 
         def _candidate_rank(candidate):
             url = candidate.get("url") or candidate.get("source_url") or ""
@@ -4230,12 +4402,18 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         def _company_seed_allowed(candidate):
             if not isinstance(candidate, dict):
                 return False
+            candidate_key = _canonical_evidence_url(candidate.get("url") or candidate.get("source_url"))
+            if candidate_key and candidate_key in prior_seed_quarantine_urls:
+                quarantined_seed_skips["prior_quarantine"] = quarantined_seed_skips.get("prior_quarantine", 0) + 1
+                return False
+            quarantine_reason = _seed_quarantine_reason(candidate)
+            if quarantine_reason:
+                quarantined_seed_skips[quarantine_reason] = quarantined_seed_skips.get(quarantine_reason, 0) + 1
+                return False
             status_token = " ".join(str(candidate.get(key) or "") for key in (
                 "promotion_status", "source_audit_status", "entity_match_status",
                 "verification_status", "page_status", "source_category", "source_type",
             )).lower()
-            if candidate.get("wrong_entity_true") or candidate.get("entity_match_status") == "wrong":
-                return False
             if any(token in status_token for token in (
                 "blocked", "excluded", "soft_404", "page_not_found", "source_dead",
                 "stakeholder_candidate", "stakeholder_only", "sales_only", "context_only",
@@ -4306,6 +4484,14 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             if _scan_age_days(scan.get("date")) >= 90:
                 continue
             for prev_ev in scan.get("evidence", []) or []:
+                prev_key = _canonical_evidence_url(prev_ev.get("url"))
+                if prev_key and prev_key in prior_seed_quarantine_urls:
+                    quarantined_seed_skips["prior_quarantine"] = quarantined_seed_skips.get("prior_quarantine", 0) + 1
+                    continue
+                quarantine_reason = _seed_quarantine_reason(prev_ev)
+                if quarantine_reason:
+                    quarantined_seed_skips[quarantine_reason] = quarantined_seed_skips.get(quarantine_reason, 0) + 1
+                    continue
                 if not _is_previous_seedable(prev_ev):
                     continue
                 url = prev_ev.get("url") or ""
@@ -4376,6 +4562,8 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         confidence = max(20, min(55, round(coverage["score"] * 0.65)))
         if historical_seed_count and not company_seed_count:
             confidence = min(confidence, 35)
+        if quarantined_seed_skips:
+            print(f"   🧹 [Forensic Seed] Quarantined source candidates skipped: {quarantined_seed_skips}")
         print(
             f"   🧭 [Forensic Seed] Baseline ready ({reason}): {company_seed_count} Company Evidence DB, "
             f"{historical_seed_count} historical, {coverage['verified_urls']} URL revalidated; "
@@ -4394,6 +4582,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             "_company_evidence_seed_count": company_seed_count,
             "_historical_seed_count": historical_seed_count,
             "_baseline_coverage": coverage,
+            "_seed_quarantine_skips": quarantined_seed_skips,
         }
 
     search_name = clean_company_name_for_search(company_name)
@@ -5024,6 +5213,9 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             reasons = status.get("rejected_reasons") or {}
             rejected_count = int(status.get("rejected") or 0)
             lane_status = str((lane or {}).get("status") or "").lower()
+            lane_provider = str((lane or {}).get("provider") or "").lower()
+            if "gpt-5.5-web-survival-retry" in lane_provider or int((lane or {}).get("survival_retry_attempts") or 0) > 0:
+                return True
             if "provider_error" in lane_status or "provider_timeout" in lane_status:
                 return True
             if rejected_count <= 0:
@@ -5322,6 +5514,34 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                         print(f"   ⚠️ [Forensic Analysis] {jury_name} {chunk_label or 'full'} Sonnet failed: {type(error).__name__}: {error}")
             return chunk_payload, provider_name
 
+        def _run_rescue_prompt() -> tuple[dict | None, str]:
+            postprocess_guard = FORENSIC_POSTPROCESS_RESERVE_SECONDS + 8
+            remaining_phase = _phase_remaining(buffer=postprocess_guard)
+            if remaining_phase < 18:
+                return None, "gpt-5.5-rescue-skipped-low-budget"
+            rescue_timeout = min(FORENSIC_JURY_RESCUE_TIMEOUT_SECONDS, remaining_phase)
+            prompt = _build_jury_rescue_prompt(search_name, jury_name, packets)
+            try:
+                text = _hard_timeout_call(
+                    f"{jury_name} compact gpt-5.5 no-web rescue jury analysis",
+                    rescue_timeout,
+                    lambda: call_openai_text(
+                        prompt,
+                        model="gpt-5.5",
+                        max_output_tokens=3500,
+                        timeout=max(1, rescue_timeout - 5),
+                        web_search=False,
+                    ),
+                )
+                if text:
+                    rescue_payload = _parse_provider_payload(text)
+                    if rescue_payload:
+                        rescue_payload["jury_rescue"] = True
+                        return rescue_payload, "gpt-5.5-rescue"
+            except Exception as error:
+                print(f"   ⚠️ [Forensic Analysis Rescue] {jury_name} GPT rescue failed: {type(error).__name__}: {error}")
+            return None, "gpt-5.5-rescue-failed"
+
         lane_started = time.time()
         payload = None
         provider = "gpt-5.5"
@@ -5341,6 +5561,17 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             payload = _merge_jury_payloads(jury_name, payloads)
         else:
             payload, provider = _run_jury_prompt(packets)
+        if not (payload or {}).get("findings"):
+            rescue_payload, rescue_provider = _run_rescue_prompt()
+            if rescue_payload:
+                payload = _merge_jury_payloads(jury_name, [payload, rescue_payload]) if payload else rescue_payload
+                provider = f"{provider}+{rescue_provider}" if provider else rescue_provider
+                print(
+                    f"   🛟 [Forensic Analysis Rescue] {jury_name}: "
+                    f"{len(rescue_payload.get('findings', []) or [])} compact finding(s), provider={rescue_provider}."
+                )
+            elif rescue_provider != "gpt-5.5-rescue-skipped-low-budget":
+                provider = f"{provider}+{rescue_provider}" if provider else rescue_provider
         accepted = len((payload or {}).get("findings", []) or [])
         print(
             f"   {'✅' if payload else '⚠️'} [Forensic Analysis] {jury_name}: {accepted} accepted finding(s), "
@@ -5487,6 +5718,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         f"URL revalidated={seed_lifecycle.get('url_revalidated', 0)}, "
         f"promoted to verified={seed_lifecycle.get('promoted_to_verified', 0)}, "
         f"rejected={seed_lifecycle.get('rejected', 0)}, "
+        f"quarantined={seed_lifecycle.get('quarantined', 0)}, "
         f"reasons={seed_lifecycle.get('rejection_reasons', {})}"
     )
     for jury, target in fresh_supported_targets.items():
@@ -5916,6 +6148,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             "forensic_timing": data.get("_forensic_timing", {}),
             "forensic_batch_status": data.get("forensic_batch_status", []),
             "forensic_coverage": data.get("_final_forensic_coverage", {}),
+            "scanner_evidence_quarantine": data.get("scanner_evidence_quarantine", []),
         }
     
     # --- FALLBACK: All models failed — return empty result, never fabricate evidence ---

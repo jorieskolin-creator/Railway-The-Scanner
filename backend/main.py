@@ -4085,6 +4085,7 @@ def _execute_scan_pipeline(
                 previous_context = {
                     "last_scanned": existing_data.get("lastUpdated"),
                     "previous_evidence": existing_data.get("evidence_links", [])[:24],
+                    "scanner_evidence_quarantine": existing_data.get("scanner_evidence_quarantine", [])[:30],
                     "context_contract": "source_discovery_only",
                 }
                 print(
@@ -4267,8 +4268,22 @@ def _execute_scan_pipeline(
             )
         ):
             previous_links = []
+            prior_quarantine_urls = set()
+            for item in (previous_context or {}).get("scanner_evidence_quarantine", []) if previous_context else []:
+                value = str((item or {}).get("canonical_url") or (item or {}).get("url") or "").strip()
+                if not value:
+                    continue
+                parsed = urlparse(value if "://" in value else f"https://{value}")
+                host = parsed.netloc.lower().removeprefix("www.")
+                path = re.sub(r"/+", "/", parsed.path or "/").rstrip("/") or "/"
+                prior_quarantine_urls.add(f"{host}{path}".lower())
             if previous_context:
                 for ev in previous_context.get("previous_evidence", []) or []:
+                    ev_url = str(ev.get("url") or "").strip()
+                    parsed = urlparse(ev_url if "://" in ev_url else f"https://{ev_url}")
+                    ev_key = f"{parsed.netloc.lower().removeprefix('www.')}{(re.sub(r'/+', '/', parsed.path or '/').rstrip('/') or '/')}".lower()
+                    if ev_key in prior_quarantine_urls:
+                        continue
                     if historical_source_can_revalidate(ev):
                         previous_links.append(prepare_historical_revalidation_candidate(ev))
             if previous_links:
@@ -5358,6 +5373,28 @@ TEXT TO REPAIR:
             foresight_links,
             financial_evidence_links,
         )
+        def _quarantine_key(item):
+            value = str((item or {}).get("canonical_url") or (item or {}).get("url") or "").strip()
+            if not value:
+                return ""
+            parsed = urlparse(value if "://" in value else f"https://{value}")
+            host = parsed.netloc.lower().removeprefix("www.")
+            path = re.sub(r"/+", "/", parsed.path or "/").rstrip("/") or "/"
+            return f"{host}{path}".lower()
+
+        scanner_evidence_quarantine = []
+        seen_quarantine = set()
+        for item in (existing_data or {}).get("scanner_evidence_quarantine", []) + reality_results.get("scanner_evidence_quarantine", []):
+            if not isinstance(item, dict):
+                continue
+            key = _quarantine_key(item)
+            if not key or key in seen_quarantine:
+                continue
+            cleaned = dict(item)
+            cleaned.setdefault("canonical_url", key)
+            scanner_evidence_quarantine.append(cleaned)
+            seen_quarantine.add(key)
+        scanner_evidence_quarantine = scanner_evidence_quarantine[-30:]
 
         full_data = {
             "id": result_id,
@@ -5385,6 +5422,7 @@ TEXT TO REPAIR:
             "metrics": intent_results.get("metrics", {}),
             "reality_checklist": reality_results["checklist"],
             "evidence_links": managed_evidence_links,
+            "scanner_evidence_quarantine": scanner_evidence_quarantine,
             "evidence_gold_standard": source_mgmt["gold_standard"],
             "evidence_sufficiency": evidence_sufficiency,
             "low_evidence_mode": evidence_sufficiency.get("status") != "complete",
