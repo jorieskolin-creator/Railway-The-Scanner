@@ -200,6 +200,22 @@ table.matrix td { font-family: monospace; font-size: 11px; color: var(--text-mut
 .bar-track { flex: 1; height: 14px; background: var(--bg); border-radius: 4px; overflow: hidden; position: relative; }
 .bar-fill { height: 100%; border-radius: 4px; }
 .bar-val { font-size: 10px; font-family: monospace; color: var(--text-muted); min-width: 35px; }
+.mi-card { background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; margin-bottom: 24px; padding: 16px; overflow: hidden; }
+.mi-card h2 { border: 0; padding: 0; margin: 0 0 12px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }
+.mi-card p { font-size: 10px; color: var(--text-dim); line-height: 1.6; }
+.theme-desc-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 12px; margin-top: 12px; }
+.theme-desc-row { display: flex; gap: 8px; font-size: 9px; line-height: 1.45; }
+.theme-desc-row strong { white-space: nowrap; }
+.force-map { border-color: rgba(167,139,250,0.22); padding: 0; border-radius: 12px; }
+.force-map-header { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 16px 20px; border-bottom: 1px solid rgba(167,139,250,0.1); }
+.force-map-title { display: flex; align-items: center; gap: 12px; }
+.force-map-icon { width: 32px; height: 32px; border-radius: 8px; background: rgba(139,92,246,0.2); color: #a78bfa; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; }
+.force-map-body { padding: 16px 20px; }
+.force-map-body h3 { font-size: 16px; color: #ede9fe; margin: 24px 0 12px; }
+.force-map-body h4 { font-size: 14px; color: #ddd6fe; margin: 24px 0 12px; padding-bottom: 6px; border-bottom: 1px solid rgba(167,139,250,0.1); }
+.force-map-body p { font-size: 12px; color: rgba(203,213,225,0.9); line-height: 1.7; margin-bottom: 16px; }
+.force-map-body strong { color: #ddd6fe; font-weight: 600; }
+.force-map-footer { padding: 10px 20px; border-top: 1px solid rgba(167,139,250,0.1); display: flex; flex-wrap: wrap; gap: 16px; font-size: 9px; color: #475569; }
 .footer { text-align: center; color: var(--text-dim); font-size: 11px; font-family: monospace; margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--border); }
 @media print {
   body { background: white; color: #1a1a1a; max-width: 100%; padding: 20px; }
@@ -208,6 +224,9 @@ table.matrix td { font-family: monospace; font-size: 11px; color: var(--text-mut
   td, th { color: #333; }
   .badge { background: #f5f5f5; border-color: #ccc; color: #555; }
   .footer { color: #999; border-color: #ddd; }
+  .mi-card, .force-map { background: #fafafa; border-color: #ddd; }
+  .force-map-body p { color: #333; }
+  .theme-desc-row span { color: #555 !important; }
 }`;
 
 const downloadHtml = (html: string, filename: string) => {
@@ -940,8 +959,8 @@ const buildCrossImpactInterpretationHtml = (interpretation: any, crossImpact: an
   return blocks.join('') + renderMiEvidenceRefsHtml(narrativeRefs) + meta;
 };
 
-// C1 — Concentration vs Volume table for HTML export. Static replacement for the
-// in-app Recharts scatter; same data, same per-theme shape classification.
+// C1 — Concentration vs Volume scatter for HTML export. Static SVG equivalent
+// of the in-app Recharts scatter; same data, same per-theme shape classification.
 const buildC1ConcentrationHtml = (crossImpact: any[]): string => {
   if (!crossImpact?.length) return '';
   const dims = ["Operating Model", "Service Portfolio", "Values", "Strategy", "AI Readiness"];
@@ -965,12 +984,100 @@ const buildC1ConcentrationHtml = (crossImpact: any[]): string => {
     else if (topShare < 0.30 && top2Share < 0.55) shape = 'DIFFUSE';
     return { theme, total, topShare: Math.round(topShare * 1000) / 10, dimCount, topDim, shape };
   }).sort((a, b) => b.total - a.total);
-  const tableRows = rows.map(r => {
+
+  const chartW = 760, chartH = 320, mL = 58, mR = 30, mT = 20, mB = 52;
+  const plotW = chartW - mL - mR, plotH = chartH - mT - mB;
+  const maxTotal = Math.max(...rows.map(r => r.total), 1);
+  const xToPx = (x: number) => mL + (Math.max(0, Math.min(maxTotal, x)) / maxTotal) * plotW;
+  const yToPx = (y: number) => mT + plotH - (Math.max(0, Math.min(100, y)) / 100) * plotH;
+  const ticksX = [0, 0.25, 0.5, 0.75, 1].map(t => Math.round(t * maxTotal));
+  const ticksY = [0, 25, 50, 75, 100];
+  const grid = [
+    ...ticksX.map(t => {
+      const x = xToPx(t);
+      return `<line x1="${x}" y1="${mT}" x2="${x}" y2="${mT + plotH}" stroke="#334155" stroke-dasharray="3,3" opacity="0.65"/><text x="${x}" y="${mT + plotH + 16}" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="sans-serif">${t}</text>`;
+    }),
+    ...ticksY.map(t => {
+      const y = yToPx(t);
+      return `<line x1="${mL}" y1="${y}" x2="${mL + plotW}" y2="${y}" stroke="#334155" stroke-dasharray="3,3" opacity="0.65"/><text x="${mL - 8}" y="${y + 3}" text-anchor="end" fill="#94a3b8" font-size="9" font-family="sans-serif">${t}%</text>`;
+    }),
+  ].join('\n');
+  const dots = rows.map((r) => {
     const color = SHAPE_COLORS[r.shape];
-    return `<tr><td style="text-align:left;color:#cbd5e1">${r.theme}</td><td style="text-align:right;font-family:ui-monospace,monospace">${r.total}</td><td style="text-align:right;font-family:ui-monospace,monospace">${r.topShare}%</td><td style="text-align:left;color:#6ee7b7">${r.topDim}</td><td style="text-align:right;font-family:ui-monospace,monospace">${r.dimCount} of 5</td><td style="text-align:center"><span style="padding:1px 8px;border-radius:3px;background:${color}33;border:1px solid ${color}66;color:${color};font-family:ui-monospace,monospace;font-size:10px">${r.shape}</span></td></tr>`;
+    const cx = xToPx(r.total);
+    const cy = yToPx(r.topShare);
+    const radius = 4 + Math.max(0, Math.min(5, r.dimCount)) * 1.8;
+    return `<circle cx="${cx}" cy="${cy}" r="${radius}" fill="${color}" fill-opacity="0.75" stroke="${color}"><title>${escapeMiHtml(r.theme)} — total density ${r.total}; top dimension ${escapeMiHtml(r.topDim)} (${r.topShare}%); dimensions touched ${r.dimCount} of 5; ${r.shape}</title></circle>`;
   }).join('');
+  const labels = rows
+    .filter((r, idx) => idx < 8 || r.total >= maxTotal * 0.65)
+    .map((r) => `<text x="${xToPx(r.total) + 9}" y="${yToPx(r.topShare) - 7}" fill="#cbd5e1" font-size="8" font-family="sans-serif">${escapeMiHtml(r.theme)}</text>`)
+    .join('\n');
+  const axes = [
+    `<text x="${mL + plotW / 2}" y="${chartH - 8}" text-anchor="middle" fill="#94a3b8" font-size="10" font-family="sans-serif">Total density</text>`,
+    `<text x="14" y="${mT + plotH / 2}" text-anchor="middle" transform="rotate(-90 14 ${mT + plotH / 2})" fill="#94a3b8" font-size="10" font-family="sans-serif">Top-dimension share</text>`,
+  ].join('\n');
+  const legend = Object.entries(SHAPE_COLORS).map(([shape, color]) =>
+    `<span><span style="display:inline-block;width:8px;height:8px;border-radius:999px;background:${color};margin-right:5px;vertical-align:middle"></span>${shape}</span>`
+  ).join('');
   return `<p style="font-size:10px;color:#64748b;margin-bottom:10px">X = total density (volume of pressure). Top-share % = share absorbed by the top dimension (concentration). Dimensions touched = number of dimensions with non-zero density. Shape labels follow the same thresholds the interpretation uses (CONCENTRATED if top dim ≥ 35% and top two ≥ 60%; BIMODAL if top two ≥ 60% but top single < 35%; DIFFUSE if top dim < 30% and top two < 55%; SMALL_N when total density < 8).</p>
-  <table><thead><tr><th style="text-align:left">Theme</th><th style="text-align:right">Total</th><th style="text-align:right">Top-dim share</th><th style="text-align:left">Top dim</th><th style="text-align:right">Dimensions touched</th><th style="text-align:center">Shape</th></tr></thead><tbody>${tableRows}</tbody></table>`;
+  <svg viewBox="0 0 ${chartW} ${chartH}" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:${chartW}px;height:auto;display:block;margin:0 auto">${grid}\n${dots}\n${labels}\n${axes}</svg>
+  <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:14px;font-size:9px;color:#94a3b8">${legend}</div>`;
+};
+
+const renderMiForceMapInlineHtml = (text: string): string => {
+  return String(text || '').split(/(\*\*[^*]+\*\*)/).map((seg) => {
+    if (seg.startsWith("**") && seg.endsWith("**")) {
+      return `<strong>${escapeMiHtml(seg.slice(2, -2))}</strong>`;
+    }
+    return escapeMiHtml(seg);
+  }).join('');
+};
+
+const buildFinnishEconomyForceMapHtml = (observatoryData: any): string => {
+  const analysis = observatoryData?.finland_analysis || {};
+  const text = analysis.text || '';
+  if (!text) return '';
+  const generatedAt = observatoryData.generated_at
+    ? new Date(observatoryData.generated_at).toLocaleDateString('en-FI', { day: 'numeric', month: 'short', year: 'numeric' })
+    : '';
+  const body = text.split(/\n+/).map((part: string) => {
+    const trimmed = part.trim();
+    if (!trimmed) return '';
+    if (trimmed === '---') return `<hr style="border:none;border-top:1px solid rgba(167,139,250,0.1);margin:16px 0">`;
+    if (trimmed.startsWith("## ")) return `<h4>${escapeMiHtml(trimmed.replace(/^##\s*/, ""))}</h4>`;
+    if (trimmed.startsWith("# ")) return `<h3>${escapeMiHtml(trimmed.replace(/^#\s*/, ""))}</h3>`;
+    const hasBold = /\*\*[^*]+\*\*/.test(trimmed);
+    if (!hasBold) {
+      const dotIdx = trimmed.indexOf('. ');
+      if (dotIdx > 10 && dotIdx < 150) {
+        return `<p><strong>${escapeMiHtml(trimmed.slice(0, dotIdx + 1))}</strong> ${escapeMiHtml(trimmed.slice(dotIdx + 2))}</p>`;
+      }
+    }
+    return `<p>${renderMiForceMapInlineHtml(trimmed)}</p>`;
+  }).join('');
+  const faviDistribution = analysis.favi_distribution
+    ? Object.entries(analysis.favi_distribution).map(([k, v]: [string, any]) => `${escapeMiHtml(k)}: ${escapeMiHtml(v)}`).join(' · ')
+    : '';
+  const footer = [
+    analysis.domains_analyzed ? `<span>${escapeMiHtml(analysis.domains_analyzed)} domains analyzed</span>` : '',
+    faviDistribution ? `<span>FAVI: ${faviDistribution}</span>` : '',
+    observatoryData.model ? `<span>Model: ${escapeMiHtml(observatoryData.model)}</span>` : '',
+  ].filter(Boolean).join('');
+  return `<div class="section force-map">
+    <div class="force-map-header">
+      <div class="force-map-title">
+        <div class="force-map-icon">◎</div>
+        <div>
+          <h3 style="margin:0;color:#ddd6fe;font-size:14px">Finnish Economy Force Map</h3>
+          <p style="margin:2px 0 0;font-size:10px;color:#64748b">Strategic Foresight Observatory — How global forces reshape Finnish business</p>
+        </div>
+      </div>
+      ${generatedAt ? `<span style="font-size:9px;font-family:ui-monospace,monospace;color:#475569">${generatedAt}</span>` : ''}
+    </div>
+    <div class="force-map-body">${body}</div>
+    ${footer ? `<div class="force-map-footer">${footer}</div>` : ''}
+  </div>`;
 };
 
 // C3 — Theme Momentum bars (reads observatoryData.theme_momentum).
@@ -1133,53 +1240,62 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
   }
 
   if (tabName === 'future') {
-    // 1. Pareto chart
-    content += `<div class="section"><h2>Top ${(data.top_foresights || []).length} Foresight Themes (Pareto)</h2>${buildSvgPareto(data.top_foresights || [])}</div>`;
-
-    // 2. Theme descriptions
+    // 1. Pareto chart + theme descriptions, matching the in-app card.
     if (data.top_foresights?.length) {
       const descs = data.top_foresights.map((f: any) => {
         const col = CATEGORY_COLORS[f.category] || '#6366f1';
         const desc = FORESIGHT_THEME_DESCRIPTIONS[f.theme] || f.category;
-        return `<div style="display:flex;gap:8px;margin:4px 0"><span style="color:${col};font-weight:bold;font-size:11px;white-space:nowrap">${f.theme}:</span><span style="color:#94a3b8;font-size:11px">${desc}</span></div>`;
+        return `<div class="theme-desc-row"><strong style="color:${col}">${escapeMiHtml(f.theme)}:</strong><span style="color:#64748b">${escapeMiHtml(desc)}</span></div>`;
       }).join('');
-      content += `<div class="section"><h2>Theme Descriptions</h2>${descs}</div>`;
+      content += `<div class="mi-card"><h2 style="color:#67e8f9">TOP ${(data.top_foresights || []).length} Foresight Themes (Pareto)</h2>${buildSvgPareto(data.top_foresights || [])}<div class="theme-desc-grid">${descs}</div></div>`;
+    } else {
+      content += `<div class="mi-card"><h2 style="color:#67e8f9">TOP 0 Foresight Themes (Pareto)</h2><div style="color:#64748b;font-size:12px;text-align:center;padding:32px 0">No foresight data available</div></div>`;
     }
 
-    // 3. Cross-Impact Matrix (with subtitle, rank chips, legend, dim descriptions)
+    // 2. Cross-Impact Matrix (with subtitle, rank chips, legend, dim descriptions)
     if (data.cross_impact?.length) {
-      content += `<div class="section"><h2>Theme × Dimension Cross-Impact Matrix</h2>${buildCrossImpactHtml(data.cross_impact)}</div>`;
+      content += `<div class="mi-card"><h2 style="color:#c4b5fd">Theme x Dimension Cross-Impact Matrix</h2>${buildCrossImpactHtml(data.cross_impact)}</div>`;
     }
 
-    // 4. Cross-Impact Matrix Interpretation — placed directly under the matrix
+    // 3. Cross-Impact Matrix Interpretation — placed directly under the matrix
     //    so the export mirrors the new in-app order.
     if (crossImpactInterpretationData?.text && data.cross_impact?.length) {
       const generatedAt = crossImpactInterpretationData.generated_at
         ? new Date(crossImpactInterpretationData.generated_at).toLocaleDateString('en-FI', { day: 'numeric', month: 'short', year: 'numeric' })
         : '';
-      content += `<div class="section" style="border-color:rgba(99,102,241,0.3)">
-        <h2 style="color:#a5b4fc">Cross-Impact Matrix Interpretation</h2>
-        <p style="font-size:10px;color:#64748b;margin-bottom:14px">Where structural pressure consolidates across the Theme x Dimension matrix${generatedAt ? ` — ${generatedAt}` : ''}</p>
+      content += `<div class="section" style="border-color:rgba(99,102,241,0.3);padding:0;border-radius:12px">
+        <div style="padding:16px 20px;border-bottom:1px solid rgba(99,102,241,0.1);display:flex;justify-content:space-between;gap:16px;align-items:center">
+          <div style="display:flex;align-items:center;gap:12px">
+            <div style="width:32px;height:32px;border-radius:8px;background:rgba(99,102,241,0.2);color:#818cf8;display:flex;align-items:center;justify-content:center;font-weight:700">▦</div>
+            <div>
+              <h3 style="margin:0;color:#c7d2fe;font-size:14px">Cross-Impact Matrix Interpretation</h3>
+              <p style="margin:2px 0 0;font-size:10px;color:#64748b">Where structural pressure consolidates across the Theme x Dimension matrix</p>
+            </div>
+          </div>
+          ${generatedAt ? `<span style="font-size:9px;font-family:ui-monospace,monospace;color:#475569">${generatedAt}</span>` : ''}
+        </div>
+        <div style="padding:16px 20px">
         ${buildCrossImpactInterpretationHtml(crossImpactInterpretationData, data.cross_impact)}
+        </div>
       </div>`;
     }
 
-    // 5. C1 — Concentration vs Volume table (replaces the in-app scatter)
+    // 4. C1 — Concentration vs Volume scatter
     if (data.cross_impact?.length) {
-      content += `<div class="section"><h2 style="color:#a5b4fc">Concentration vs Volume — Top 15 Themes</h2>${buildC1ConcentrationHtml(data.cross_impact)}</div>`;
+      content += `<div class="mi-card"><h2 style="color:#a5b4fc">Concentration vs Volume — Top 15 Themes</h2>${buildC1ConcentrationHtml(data.cross_impact)}</div>`;
     }
 
-    // 6. C2 (Domain x Dimension) is intentionally hidden in the app — also
+    // 5. C2 (Domain x Dimension) is intentionally hidden in the app — also
     //    omitted from the export to keep them in sync.
 
-    // 7. C3 — Theme Momentum bars (only present when Observatory has been generated)
+    // 6. C3 — Theme Momentum bars (only present when Observatory has been generated)
     if (observatoryData?.theme_momentum?.length) {
-      content += `<div class="section"><h2 style="color:#67e8f9">Theme Momentum — Top 10 themes by signal volume</h2>${buildThemeMomentumHtml(observatoryData.theme_momentum)}</div>`;
+      content += `<div class="mi-card"><h2 style="color:#67e8f9">Theme Momentum — Top 10 themes by signal volume</h2>${buildThemeMomentumHtml(observatoryData.theme_momentum)}</div>`;
     }
 
-    // 8. Finnish Economy Force Map (last)
+    // 7. Finnish Economy Force Map (last)
     if (observatoryData?.finland_analysis?.text) {
-      content += `<div class="section" style="border-color:rgba(167,139,250,0.3)"><h2 style="color:#a78bfa">Finnish Economy Force Map</h2><p style="font-size:10px;color:#64748b;margin-bottom:16px">Strategic Foresight Observatory — How global forces reshape Finnish business</p>${renderMiNarrativeMarkdownHtml(observatoryData.finland_analysis.text)}</div>`;
+      content += buildFinnishEconomyForceMapHtml(observatoryData);
     }
   }
 
