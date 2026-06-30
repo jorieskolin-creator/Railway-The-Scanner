@@ -5465,7 +5465,8 @@ Evidence-based risks:
 10. Do not compare Scanner outputs across scans or discuss Scanner performance.
 11. Cite company premises with [EVD-*] and macro premises with [FOR-*]. Every material synthesis sentence must cite the IDs it uses.
 12. If you use an absence-of-promoted-evidence signal, phrase it as an evidence/proof gap, never as proof that the capability is absent.
-13. Treat evidence limits as one qualifier, not the whole thesis. Spend most of the synthesis on bounded interpretation, priorities, and pressure-readiness fit.
+13. If partial/contextual support exists, say what is partially supported and what remains unconfirmed; do not write absolute "no source verifies" wording for a broader capability.
+14. Treat evidence limits as one qualifier, not the whole thesis. Spend most of the synthesis on bounded interpretation, priorities, and pressure-readiness fit.
 
 ### STRATEGIC SYNTHESIS
 Write 300-500 words. This is the deepest company-specific reasoning layer, not a sales pitch.
@@ -5747,6 +5748,7 @@ TEXT TO REPAIR:
             "metrics": intent_results.get("metrics", {}),
             "reality_checklist": reality_results["checklist"],
             "evidence_links": managed_evidence_links,
+            "forensic_acquisition_health": reality_results.get("forensic_acquisition_health", {}),
             "scanner_evidence_quarantine": scanner_evidence_quarantine,
             "evidence_gold_standard": source_mgmt["gold_standard"],
             "evidence_sufficiency": evidence_sufficiency,

@@ -555,6 +555,25 @@ const isForesightContext = (link) => {
                 return '<p>' + renderInlineMarkdown(trimmed).replace(/\n/g, '<br>') + '</p>';
             }).join('');
         };
+        var renderStrategicSynthesisParagraphs = function(text) {
+            if (!hasText(text)) return '';
+            var splitLongBlock = function(block) {
+                var trimmed = block.trim();
+                if (trimmed.length < 900) return [trimmed];
+                var chunks = trimmed
+                    .split(/\s+(?=(?:The (?:first|second|third|fourth) tension is|In the next \d|Over \d|AI creates|External agentic|External signals|At the same time|Financially,|The thesis would change|This thesis would change|That pattern suggests)\b)/g)
+                    .map(function(part) { return part.trim(); })
+                    .filter(Boolean);
+                return chunks.length > 1 ? chunks : [trimmed];
+            };
+            return String(text)
+                .split(/\n\n+/)
+                .flatMap(splitLongBlock)
+                .map(function(block) {
+                    return '<p>' + renderInlineMarkdown(block).replace(/\n/g, '<br>') + '</p>';
+                })
+                .join('');
+        };
         var renderReportBlocks = function(text) {
             if (!hasText(text)) return '';
             return String(text).split(/\n\n+/).map(function(block) {
@@ -742,12 +761,17 @@ const isForesightContext = (link) => {
             return (link.title || link.source || link.url || 'Evidence source') + ': ' + String(link.entity_match_reason || link.verification_reason || 'wrong entity').replace(/_/g, ' ');
         });
         var gap = Number(exportData.intent_score || 0) - Number(exportData.reality_score || 0);
+        var acquisitionHealth = exportData.forensic_acquisition_health && typeof exportData.forensic_acquisition_health === 'object'
+            ? exportData.forensic_acquisition_health
+            : {};
         var metrics = [
             renderMetric('Ambition Score', formatScore(exportData.intent_score, '/100'), 'Narrative clarity'),
             renderMetric('Reality Score', formatScore(exportData.reality_score, '/100'), 'Evidence check'),
             renderMetric('Integrity Delta', (gap > 0 ? '+' : '') + Math.round(gap), 'Ambition minus reality'),
             renderMetric('Confidence', formatScore(exportData.confidence_score ?? exportData.scan_quality?.confidence_score ?? exportData.evidence_sufficiency?.score, '%'), 'Model confidence'),
             renderMetric('Financial Health', formatScore(exportData.financial_index, '/100'), 'Adaptation capacity'),
+            renderMetric('Acq Fresh', formatScore(acquisitionHealth.fresh_packets_accepted, '') + '/' + formatScore(acquisitionHealth.fresh_packets_acquired, ''), 'accepted / acquired'),
+            renderMetric('Acq Repair', acquisitionHealth.repair_dependency || 'n/a', acquisitionHealth.confidence_reason || 'acquisition dependency'),
             renderMetric('URL Verified', verifiedSources, weakSources + ' weak/unverified'),
             renderMetric('Content Readable', contentReadableSources, 'readable page text'),
             renderMetric('Target Entity Verified', entityVerifiedSources, 'right company/scope'),
@@ -983,7 +1007,7 @@ const isForesightContext = (link) => {
             + '<header class="hero"><div class="kicker">Master Data HTML Export</div><h1>' + escapeHTML(companyName) + '</h1><p class="page-note">Complete uploadable evidence and analysis package. This file includes collected sources, trust metadata, diagnosis, activation context, foresight analysis, detailed forensic report, and the raw JSON payload.</p><div class="meta">' + headerMeta + '</div></header>\n'
             + renderSection('General Summary', 'Executive context', renderParagraphs(exportData.general_summary))
             + renderSection('AI Diagnosis', 'Interpretation and risks', diagnosisHTML)
-            + renderSection('Strategic Synthesis', 'Current reality × external pressure', renderParagraphs(exportData.strategic_synthesis))
+            + renderSection('Strategic Synthesis', 'Current reality × external pressure', renderStrategicSynthesisParagraphs(exportData.strategic_synthesis))
             + renderSection('Master Metrics', 'All score and trust signals', '<div class="metrics">' + metrics.join('') + '</div>' + breakdownHTML)
             + renderSection('Evidence Trust', 'Source verification and promotion state', trustHTML)
             + renderSection('Strategic Activation', 'WHY, WHAT, and pitch', activationHTML)
@@ -1233,7 +1257,6 @@ const isForesightContext = (link) => {
         const evidenceSufficiency = exportData.evidence_sufficiency && typeof exportData.evidence_sufficiency === 'object' ? exportData.evidence_sufficiency : null;
         const lowEvidenceLabel = exportData.low_evidence_label || (evidenceSufficiency && evidenceSufficiency.label) || '';
         const isLowEvidenceMode = exportData.low_evidence_mode === true || !!lowEvidenceLabel;
-
         const metrics = [
             renderMetric('Ambition Score', formatScore(exportData.intent_score, '/100'), 'Narrative clarity'),
             renderMetric('Reality Score', formatScore(exportData.reality_score, '/100'), 'Evidence check'),

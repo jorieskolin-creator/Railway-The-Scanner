@@ -167,6 +167,30 @@ def sanitize_inference_wording(value):
         text,
         flags=re.IGNORECASE,
     )
+    proof_gap_rewrites = (
+        (
+            r'\b(?:the\s+)?(?:current\s+)?promoted evidence set contains no source verifying\s+([^.;\n]+)',
+            r'the current promoted evidence set does not yet provide enough direct support to confirm \1',
+        ),
+        (
+            r'\bno promoted source directly verifies\s+([^.;\n]+)',
+            r'the promoted source set does not yet provide enough direct support to confirm \1',
+        ),
+        (
+            r'\bno source verifying\s+([^.;\n]+)',
+            r'not enough source support to confirm \1',
+        ),
+        (
+            r'\bdoes not verify broader\s+([^.;\n]+)',
+            r'does not yet independently confirm broader \1',
+        ),
+        (
+            r'\bdoes not verify the breadth of\s+([^.;\n]+)',
+            r'does not yet independently confirm the breadth of \1',
+        ),
+    )
+    for pattern, replacement in proof_gap_rewrites:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
     text = re.sub(r'\s+([.;,])', r'\1', text)
     return text
 

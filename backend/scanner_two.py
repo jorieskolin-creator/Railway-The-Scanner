@@ -235,6 +235,7 @@ FORENSIC_GPT_FALLBACK_MIN_SECONDS = 40
 FORENSIC_JURY_GPT_TIMEOUT_SECONDS = 105
 FORENSIC_JURY_SONNET_TIMEOUT_SECONDS = 45
 FORENSIC_GEMINI_PRO_SCOUT_SECONDS = 60
+FORENSIC_GEMINI_STRONG_BASELINE_SCOUT_SECONDS = 30
 FORENSIC_GPT_REPAIR_SCOUT_SECONDS = 45
 FORENSIC_GEMINI_FLASH_SCOUT_SECONDS = 45
 FORENSIC_GEMINI_ACQUISITION_COOLDOWN_SECONDS = 4
@@ -2624,6 +2625,72 @@ def _assess_jury_acquisition_readiness(acquisition_results: list, routed_seeds: 
     return readiness
 
 
+def _build_acquisition_health(
+    *,
+    acquisition_results: list,
+    readiness: dict,
+    pre_jury_stats: dict,
+    fresh_packets: int = 0,
+    accepted_fresh: int = 0,
+    repaired_juries: list | None = None,
+    seed_lifecycle: dict | None = None,
+    confidence_score: int | None = None,
+    final_mode: str = "",
+) -> dict:
+    """Compact operator-facing summary of acquisition quality and dependency."""
+    rejected_total = sum(len(item.get("pre_jury_rejected", []) or []) for item in acquisition_results or [])
+    retry_attempts = sum(int(item.get("survival_retry_attempts") or 0) for item in acquisition_results or [])
+    provider_statuses = [
+        str(item.get("status") or "")
+        for item in acquisition_results or []
+        if item.get("status")
+    ]
+    provider_failures = [
+        status for status in provider_statuses
+        if any(token in status.lower() for token in ("timeout", "provider_error", "deadline", "failed"))
+    ]
+    weak_after_repair = [
+        jury for jury, status in (readiness or {}).items()
+        if status.get("weak")
+    ]
+    repair_dependency = "none"
+    if retry_attempts or repaired_juries:
+        repair_dependency = "moderate"
+    if len(provider_failures) >= 2 or len(weak_after_repair) >= 3:
+        repair_dependency = "high"
+
+    confidence_reasons = []
+    if accepted_fresh < 3:
+        confidence_reasons.append("few fresh accepted packets")
+    if rejected_total:
+        confidence_reasons.append(f"{rejected_total} pre-jury rejection(s)")
+    if provider_failures:
+        confidence_reasons.append(f"{len(provider_failures)} provider failure/status warning(s)")
+    if weak_after_repair:
+        confidence_reasons.append(f"{len(weak_after_repair)} weak lane(s) after repair")
+    if confidence_score is not None and confidence_score <= 20:
+        confidence_reasons.append("low final evidence confidence")
+    if not confidence_reasons:
+        confidence_reasons.append("fresh acquisition and seeded coverage remained usable")
+
+    return {
+        "fresh_packets_acquired": int(fresh_packets or 0),
+        "fresh_packets_accepted": int(accepted_fresh or 0),
+        "seeded_sources_selected": int((seed_lifecycle or {}).get("selected") or 0),
+        "seeded_sources_promoted": int((seed_lifecycle or {}).get("promoted_to_verified") or 0),
+        "pre_jury_rejected": int(rejected_total or 0),
+        "pre_jury_passed": int((pre_jury_stats or {}).get("passed") or 0),
+        "pre_jury_input": int((pre_jury_stats or {}).get("input") or 0),
+        "survival_retry_attempts": int(retry_attempts or 0),
+        "repair_dependency": repair_dependency,
+        "provider_warning_count": len(provider_failures),
+        "weak_lanes_after_repair": len(weak_after_repair),
+        "weak_lane_names": [jury.split(" JURY")[0] for jury in weak_after_repair],
+        "final_mode": final_mode,
+        "confidence_reason": "; ".join(confidence_reasons[:4]),
+    }
+
+
 def _prioritize_weak_juries(weak_juries: list, readiness: dict) -> list:
     """Spend small repair windows on the lanes that most affect synthesis."""
     priority = {
@@ -4959,7 +5026,20 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     if remaining <= 0:
                         status = "gemini_pro_skipped_no_budget_after_cooldown"
                         return payload, provider, status
-                    timeout = min(FORENSIC_GEMINI_PRO_SCOUT_SECONDS, remaining)
+                    scout_cap = FORENSIC_GEMINI_PRO_SCOUT_SECONDS
+                    if strong_seed_baseline and remaining > 45:
+                        retry_reserve = 28
+                        scout_cap = min(
+                            scout_cap,
+                            max(
+                                20,
+                                min(
+                                    FORENSIC_GEMINI_STRONG_BASELINE_SCOUT_SECONDS,
+                                    remaining - retry_reserve,
+                                ),
+                            ),
+                        )
+                    timeout = min(scout_cap, remaining)
                     text = call_gemini_forensic_text(prompt, timeout=timeout)
                     payload = _parse_provider_payload(text)
                     if payload:
@@ -5310,7 +5390,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 int(reasons.get(reason) or 0)
                 for reason in ("dead_or_soft_404", "non_document_asset", "wrong_entity")
             )
-            return int(status.get("fresh") or 0) <= 0 and hard_failures >= rejected_count
+            return int(status.get("fresh") or 0) < int(status.get("required_fresh") or 1) and hard_failures >= rejected_count
 
         def _validate_repair_candidate(candidate_lane: dict, label: str) -> tuple[dict, dict]:
             remaining_for_recovery = max(0, int(repair_deadline - time.time()))
@@ -5824,6 +5904,16 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             )
     if missing_juries:
         print(f"   ⚠️ [Forensic Juries] Missing judged coverage: {missing_juries}")
+    data["_forensic_acquisition_health"] = _build_acquisition_health(
+        acquisition_results=acquisition_results,
+        readiness=readiness,
+        pre_jury_stats=pre_jury_stats,
+        fresh_packets=fresh_packets,
+        accepted_fresh=accepted_fresh,
+        repaired_juries=repaired_juries,
+        seed_lifecycle=data.get("seed_lifecycle") or {},
+        final_mode=provisional_mode,
+    )
     data["_forensic_timing"] = {
         "acquisition_seconds": round(time.time() - acquisition_started, 2),
         "extraction_recovery_ceiling_seconds": FORENSIC_EXTRACTION_RECOVERY_CEILING_SECONDS,
@@ -6216,6 +6306,17 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         if total_q > 0:
             print(f"   🔍 [Source Quality] {high_q} high, {med_q} medium, {low_q} low credibility sources (quality: {quality_score}/100)")
         confidence = confidence_quality_penalty(confidence, raw_findings, company_domain)
+        data["_forensic_acquisition_health"] = _build_acquisition_health(
+            acquisition_results=acquisition_results,
+            readiness=readiness,
+            pre_jury_stats=pre_jury_stats,
+            fresh_packets=fresh_packets,
+            accepted_fresh=accepted_fresh,
+            repaired_juries=repaired_juries,
+            seed_lifecycle=data.get("seed_lifecycle") or {},
+            confidence_score=int(confidence),
+            final_mode=final_mode,
+        )
 
         postprocess_elapsed = round(time.time() - postprocess_started, 2)
         data.setdefault("_forensic_timing", {})["postprocess_seconds"] = postprocess_elapsed
@@ -6243,6 +6344,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             "forensic_timing": data.get("_forensic_timing", {}),
             "forensic_batch_status": data.get("forensic_batch_status", []),
             "forensic_coverage": data.get("_final_forensic_coverage", {}),
+            "forensic_acquisition_health": data.get("_forensic_acquisition_health", {}),
             "scanner_evidence_quarantine": data.get("scanner_evidence_quarantine", []),
         }
     
