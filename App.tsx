@@ -173,23 +173,41 @@ const App = () => {
   const [editSaving, setEditSaving] = useState(false);
 
   const prevDataLengthRef = useRef(0);
+  const pipelineReadinessFetchedAtRef = useRef(0);
+  const pipelineReadinessRequestRef = useRef<any>(null);
+  const buyingInsightInFlightRef = useRef(new Set<string>());
+  const PIPELINE_READINESS_TTL_MS = 60000;
 
-  const fetchPipelineReadiness = async () => {
+  const fetchPipelineReadiness = async (options: any = {}) => {
     if (!isAdmin || !authToken) return null;
-    setPipelineReadinessLoading(true);
-    try {
-      const res = await fetch(`/admin/pipeline-readiness?t=${Date.now()}`, { headers: authHeaders() });
-      if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return null; }
-      if (!res.ok) return null;
-      const json = await res.json();
-      setPipelineReadiness(json);
-      return json;
-    } catch (e) {
-      console.warn('Pipeline readiness fetch failed:', e);
-      return null;
-    } finally {
-      setPipelineReadinessLoading(false);
+    const force = options?.force === true;
+    const now = Date.now();
+    if (!force && pipelineReadiness && now - pipelineReadinessFetchedAtRef.current < PIPELINE_READINESS_TTL_MS) {
+      return pipelineReadiness;
     }
+    if (pipelineReadinessRequestRef.current) {
+      return pipelineReadinessRequestRef.current;
+    }
+    const request = (async () => {
+      setPipelineReadinessLoading(true);
+      try {
+        const res = await fetch(`/admin/pipeline-readiness?t=${Date.now()}`, { headers: authHeaders() });
+        if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return null; }
+        if (!res.ok) return null;
+        const json = await res.json();
+        pipelineReadinessFetchedAtRef.current = Date.now();
+        setPipelineReadiness(json);
+        return json;
+      } catch (e) {
+        console.warn('Pipeline readiness fetch failed:', e);
+        return null;
+      } finally {
+        pipelineReadinessRequestRef.current = null;
+        setPipelineReadinessLoading(false);
+      }
+    })();
+    pipelineReadinessRequestRef.current = request;
+    return request;
   };
 
   const readinessForCompany = (companyName: string) => {
@@ -295,8 +313,10 @@ const App = () => {
 
   useEffect(() => {
     if (isAdmin) {
-      fetchPipelineReadiness();
+      fetchPipelineReadiness({ force: true });
     } else {
+      pipelineReadinessFetchedAtRef.current = 0;
+      pipelineReadinessRequestRef.current = null;
       setPipelineReadiness(null);
     }
   }, [isAdmin, authToken]);
@@ -383,7 +403,7 @@ const App = () => {
           setIsModalOpen(true);
           fetchSummaryData(true);
           fetchMarketIntelData();
-          fetchPipelineReadiness();
+          fetchPipelineReadiness({ force: true });
           break;
         }
 
@@ -461,7 +481,6 @@ const App = () => {
       if (res.ok) {
         const result = await res.json();
         setCrossImpactInterpretationData(result);
-        if (isAdmin) fetchPipelineReadiness();
       } else if (res.status === 404) {
         setCrossImpactInterpretationData(null);
       }
@@ -491,7 +510,7 @@ const App = () => {
         setCrossImpactInterpretationLoading(false);
         return;
       }
-      fetchPipelineReadiness();
+      fetchPipelineReadiness({ force: true });
       // Poll status until completion
       const pollUntilDone = async () => {
         for (let i = 0; i < 120; i++) {
@@ -510,7 +529,7 @@ const App = () => {
         await fetchCrossImpactInterpretation();
       };
       await pollUntilDone();
-      await fetchPipelineReadiness();
+      await fetchPipelineReadiness({ force: true });
     } catch (e) {
       console.error('Cross-impact regeneration failed:', e);
     } finally {
@@ -525,7 +544,6 @@ const App = () => {
       if (res.ok) {
         const result = await res.json();
         setObservatoryData(result);
-        if (isAdmin) fetchPipelineReadiness();
       }
     } catch (e) {
       console.error('Observatory fetch failed:', e);
@@ -631,7 +649,7 @@ const App = () => {
         const reviewRes = await fetch('/admin/review-data', { headers: authHeaders() });
         if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
         fetchSummaryData(true);
-        fetchPipelineReadiness();
+        fetchPipelineReadiness({ force: true });
       } else {
         alert("Reality Check + Clean request failed.");
       }
@@ -655,6 +673,7 @@ const App = () => {
         const reviewRes = await fetch('/admin/review-data', { headers: authHeaders() });
         if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
         fetchSummaryData(true);
+        fetchPipelineReadiness({ force: true });
       }
     } catch (e) { console.error(e); alert("Recheck failed."); }
     finally { setRecheckLoading(false); }
@@ -677,7 +696,7 @@ const App = () => {
         const reviewRes = await fetch('/admin/review-data', { headers: authHeaders() });
         if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
         fetchSummaryData(true);
-        fetchPipelineReadiness();
+        fetchPipelineReadiness({ force: true });
       } else {
         alert("Recalculation failed: " + (await res.text()));
       }
@@ -797,7 +816,7 @@ const App = () => {
       if (res.status === 409) { alert("Foresight KB harvest already in progress."); setForesightKbLoading(false); return; }
       if (res.ok) {
         alert("Foresight KB harvest started! Harvesting 30 themes in background.\nCheck status with the status indicator.");
-        fetchPipelineReadiness();
+        fetchPipelineReadiness({ force: true });
         // Poll for completion
         const pollInterval = setInterval(async () => {
           try {
@@ -811,10 +830,10 @@ const App = () => {
                 const r = status.harvest.result;
                 if (r && !r.error) {
                   alert(`Foresight KB Harvest Complete!\n\n${r.harvested}/${r.harvested + r.failed} themes harvested\n${r.total_signals} signals stored`);
-                  fetchPipelineReadiness();
+                  fetchPipelineReadiness({ force: true });
                 } else if (r && r.error) {
                   alert(`Foresight KB Harvest Failed: ${r.error}`);
-                  fetchPipelineReadiness();
+                  fetchPipelineReadiness({ force: true });
                 }
               }
             }
@@ -839,7 +858,7 @@ const App = () => {
       if (res.status === 409) { alert((await res.json()).detail); setKbCleanupLoading(false); return; }
       if (res.ok) {
         alert("Foresight KB repair started! Re-verifying URLs and context eligibility in background.");
-        fetchPipelineReadiness();
+        fetchPipelineReadiness({ force: true });
         const pollInterval = setInterval(async () => {
           try {
             const statusRes = await fetch('/admin/foresight-kb-cleanup-status');
@@ -857,10 +876,10 @@ const App = () => {
                   const markedDead = (r.source_dead ?? r.dead_removed ?? 0) + (r.source_unreadable ?? 0);
                   const writeSkipped = r.themes_write_skipped ?? 0;
                   alert(`Foresight KB Repair Complete!\n\n${metadataRepaired} signals metadata-repaired\n${contextEligible} context-eligible signals\n${needsReview} retained for review\n${notEligible} retained as not context-eligible\n${markedDead} dead/unreadable sources marked\n${r.signals_after} signals retained across ${r.themes_checked} themes${writeSkipped ? `\n${writeSkipped} theme writes skipped to avoid empty files` : ''}`);
-                  fetchPipelineReadiness();
+                  fetchPipelineReadiness({ force: true });
                 } else if (r && r.error) {
                   alert(`Foresight KB Repair Failed: ${r.error}`);
-                  fetchPipelineReadiness();
+                  fetchPipelineReadiness({ force: true });
                 }
               }
             }
@@ -958,7 +977,7 @@ const App = () => {
  const reviewRes = await fetch('/admin/review-data', { headers: authHeaders() });
  if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
  fetchSummaryData(true);
- await fetchPipelineReadiness();
+ await fetchPipelineReadiness({ force: true });
  };
 
  const handleCleanEvidenceSingle = async (companyName) => {
@@ -984,6 +1003,10 @@ const App = () => {
 
  const handleCreateBuyingInsight = async (companyName) => {
  if (!isAdmin) return;
+ const companyKey = String(companyName || '').trim().toLowerCase();
+ if (!companyKey || buyingInsightInFlightRef.current.size > 0 || buyingInsightInFlightRef.current.has(companyKey)) return;
+ buyingInsightInFlightRef.current.add(companyKey);
+ try {
  const readiness = await fetchPipelineReadiness() || pipelineReadiness;
  const companyReady = readiness?.companies?.[companyName] || readinessForCompany(companyName);
  if (companyReady && !preflightWarnings(
@@ -997,7 +1020,6 @@ const App = () => {
  )) return;
  setBuyingInsightCompany(companyName);
  setBuyingInsightStatus({ company: companyName, stage: 'queued', progress: 0 });
- try {
  const res = await fetch(`/admin/buying-potential/${encodeURIComponent(companyName)}`, {
  method: 'POST',
  headers: authHeaders()
@@ -1013,7 +1035,7 @@ const App = () => {
  }
  const jobId = json.job_id;
  if (!jobId) throw new Error('Buying Insight job did not return a job id.');
- fetchPipelineReadiness();
+ fetchPipelineReadiness({ force: true });
  let finalStatus: any = null;
  let attempts = 0;
  while (attempts < 240) {
@@ -1050,6 +1072,7 @@ const App = () => {
  console.error(e);
  alert('Buying Insight failed: ' + (e?.message || e));
  } finally {
+ buyingInsightInFlightRef.current.delete(companyKey);
  setBuyingInsightCompany(null);
  setBuyingInsightStatus(null);
  }
@@ -1077,7 +1100,7 @@ const App = () => {
  }
  const jobId = json.job_id;
  if (!jobId) throw new Error('Company Evidence DB job did not return a job id.');
- fetchPipelineReadiness();
+ fetchPipelineReadiness({ force: true });
  let finalStatus: any = null;
  let attempts = 0;
  while (attempts < 180) {
@@ -1145,7 +1168,7 @@ const App = () => {
  }
  const jobId = json.job_id;
  if (!jobId) throw new Error('Company Source Ledger job did not return a job id.');
- fetchPipelineReadiness();
+ fetchPipelineReadiness({ force: true });
  let finalStatus: any = null;
  let attempts = 0;
  while (attempts < 120) {
