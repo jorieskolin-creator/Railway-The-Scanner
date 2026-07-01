@@ -431,6 +431,39 @@ def test_third_party_unsupported_context_stays_display_only_not_scoped():
     assert is_scoped_context_source(link) is False
 
 
+def test_valid_company_context_with_overstrong_claim_becomes_scoped_context():
+    link = apply_analysis_verification(
+        _source(
+            title="Analyst page about Example",
+            url="https://analyst.example.com/reports/example",
+            snippet="Generated claim says Example has company-wide AI operating outcomes.",
+            source_quote="Example describes data and automation services for enterprise modernization.",
+            source_type="analyst_report",
+            source_credibility="medium",
+            content_entity_match_status="exact",
+            entity_match_status="exact",
+            entity_verified=True,
+            entity_scope="canonical_group",
+            claim_support_status="unsupported_for_this_claim",
+            claim_overreach_status="claim_too_strong_source_valid",
+            source_context_status="valid_company_context",
+            content_verified=True,
+            content_readable=True,
+        ),
+        company_domain="https://example.com",
+        company_name="Example",
+    )
+
+    assert link["analysis_verified"] is False
+    assert link["generation_eligible"] is False
+    assert link["promotion_status"] == PROMOTION_SCOPED_CONTEXT
+    assert link["source_use_status"] == "scoped_context"
+    assert link["verification_reason"] == "valid_source_claim_overreach"
+    assert link["original_claim_support_status"] == ANALYSIS_SUPPORT_UNSUPPORTED_FOR_CLAIM
+    assert link["source_context_status"] == SOURCE_CONTEXT_SCOPED
+    assert is_scoped_context_source(link) is True
+
+
 def test_claim_overreach_does_not_poison_valid_company_context():
     link = apply_analysis_verification(
         _source(

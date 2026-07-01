@@ -794,6 +794,12 @@ def validate_source_claims(
                 elif entity_status in {"exact", "scoped"} or result.get("entity_verified") is True:
                     item["source_context_status"] = "valid_company_context"
                     item["claim_irrelevant"] = False
+                    if support_status in {"unsupported_for_this_claim", "unsupported", "partial"}:
+                        item["claim_overreach_status"] = "claim_too_strong_source_valid"
+                        item["claim_rewrite_candidate"] = result.get("source_quote") or _best_source_quote(
+                            result.get("source_quote") or "",
+                            snippet,
+                        )
                 else:
                     item["source_context_status"] = "out_of_context"
         except concurrent.futures.TimeoutError:
@@ -836,6 +842,12 @@ def validate_source_claims(
     ]
 
     source_context_failed = sorted(set(wrong_entity + entity_failed))
+    valid_context_claim_failed = [
+        url for url in claim_failed
+        if url not in source_context_failed
+        and str(results[url].get("content_entity_match_status") or results[url].get("entity_match_status") or "").lower() in {"exact", "scoped"}
+        and results[url].get("content_verified") is True
+    ]
 
     partial = len(results) < len(to_check)
     if partial:
@@ -844,11 +856,16 @@ def validate_source_claims(
             f"timed_out_pairs={max(timed_out_pairs, len(to_check) - checked)} ({elapsed_ms}ms)"
         )
     if claim_failed:
-        print(f"   ⚠️ [Source-Claim] {len(claim_failed)}/{checked} source/claim relation(s) unsupported ({elapsed_ms}ms)")
+        print(
+            f"   ⚠️ [Source-Claim] {len(claim_failed)}/{checked} source/claim relation(s) unsupported "
+            f"({len(valid_context_claim_failed)} valid source context / {len(source_context_failed)} source-context failure; {elapsed_ms}ms)"
+        )
         for url in claim_failed:
             reason = results[url].get("reason", "")
             score = results[url].get("relevance_score", "?")
-            print(f"      🔴 {url} (score: {score}/100) — {reason}")
+            marker = "🟠" if url in valid_context_claim_failed else "🔴"
+            label = "claim too strong; source retained as context" if url in valid_context_claim_failed else "source/context failed"
+            print(f"      {marker} {url} (score: {score}/100, {label}) — {reason}")
     elif checked > 0 and not partial:
         print(f"   ✅ [Source-Claim] {checked}/{checked} verified sources support their claims ({elapsed_ms}ms)")
 
@@ -858,6 +875,7 @@ def validate_source_claims(
         "wrong_entity": len(wrong_entity),
         "entity_failed": len(entity_failed),
         "claim_failed": len(claim_failed),
+        "claim_overreach_valid_context": len(valid_context_claim_failed),
         "quote_mismatch": len(quote_mismatch),
         "flagged_urls": claim_failed,
         "source_context_failed": source_context_failed,

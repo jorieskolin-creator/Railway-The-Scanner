@@ -1157,6 +1157,24 @@ def apply_analysis_verification(link: dict, company_domain: str = "", company_na
             and (source_type in SCOPED_CONTEXT_SOURCE_TYPES or path_context)
         )
 
+    def _validated_company_context_after_claim_overreach() -> bool:
+        """A valid company source should not be discarded only because a generated claim was too strong."""
+        if str(link.get("source_context_status") or "").lower() != "valid_company_context":
+            return False
+        if link.get("wrong_entity") is True or link.get("entity_scope") == ENTITY_SCOPE_WRONG_ENTITY:
+            return False
+        if link.get("verification_conflict") is True:
+            return False
+        if link.get("verified") is not True and link.get("url_verified") is not True:
+            return False
+        if link.get("content_verified") is not True and link.get("content_readable") is not True and link.get("source_readable") is not True:
+            return False
+        if link.get("source_credibility") == "low":
+            return False
+        if not entity_verified or content_entity_status not in {"exact", "scoped"}:
+            return False
+        return bool(link.get("source_quote") or link.get("claim_rewrite_candidate") or link.get("snippet"))
+
     if link.get("manual_override") is True:
         reason = "manual_override"
         promotion = PROMOTION_GENERATION_ELIGIBLE
@@ -1239,6 +1257,12 @@ def apply_analysis_verification(link: dict, company_domain: str = "", company_na
             reason = "official_scoped_context_claim_overreach"
             promotion = PROMOTION_SCOPED_CONTEXT
             source_use_status = "scoped_context"
+        elif support_status == ANALYSIS_SUPPORT_UNSUPPORTED_FOR_CLAIM and _validated_company_context_after_claim_overreach():
+            link["original_claim_support_status"] = support_status
+            reason = "valid_source_claim_overreach"
+            promotion = PROMOTION_SCOPED_CONTEXT
+            source_use_status = "scoped_context"
+            link["source_context_status"] = "scoped"
         else:
             reason = "unsupported_for_this_claim"
             source_use_status = "unsupported_for_this_claim"

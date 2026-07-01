@@ -177,6 +177,14 @@ JURY_SOURCE_TARGETS = {
     ],
     "AI & DATA JURY (Future Readiness)": [
         {
+            "label": "Official AI, data, automation and analytics pages",
+            "query": 'site:{domain_hint} ("AI" OR "artificial intelligence" OR "tekoäly" OR "data platform" OR "data foundation" OR "analytics" OR "automation" OR "machine learning" OR "agentic" OR "governance")',
+            "source_type": "official_ai_data_context",
+            "credibility": "medium",
+            "company_claims": "yes for company-stated AI/data services, operating context, and named capabilities; not proof of deployed outcomes without concrete evidence",
+            "confirmation": "treat as scoped company context unless the page proves a concrete implementation, metric, customer outcome, or named platform deployment",
+        },
+        {
             "label": "Cloud/vendor customer stories and partner directories",
             "query": 'site:aws.amazon.com "{search_name}" ("case study" OR "case studies") OR site:customers.microsoft.com "{search_name}" OR site:cloud.google.com "{search_name}" OR site:sap.com "{search_name}" OR site:salesforce.com "{search_name}" OR site:servicenow.com "{search_name}" OR site:databricks.com "{search_name}" OR site:snowflake.com "{search_name}" OR site:atlassian.com "{search_name}"',
             "source_type": "vendor_case_study",
@@ -317,6 +325,10 @@ FORENSIC_LANE_REPLACEMENT_ATTEMPTS = {
     "ARCHITECTURAL JURY (Engineering Reality)": 1,
     "AI & DATA JURY (Future Readiness)": 1,
     "CULTURAL JURY (Talent & Psychological Safety)": 1,
+}
+
+FORENSIC_SKIP_SONNET_ANALYSIS_FALLBACK_JURIES = {
+    "AI & DATA JURY (Future Readiness)",
 }
 
 STRATEGIC_ACQUISITION_FOCI = (
@@ -6011,7 +6023,12 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 print(f"   ⚠️ [Forensic Analysis] {jury_name} {chunk_label or 'full'} GPT failed: {type(error).__name__}: {error}")
             if not chunk_payload:
                 remaining = max(0, int(analysis_deadline - time.time()))
-                if remaining >= 20:
+                if jury_name in FORENSIC_SKIP_SONNET_ANALYSIS_FALLBACK_JURIES:
+                    print(
+                        f"   ⏭️ [Forensic Analysis] {jury_name} {chunk_label or 'full'} Sonnet fallback skipped; "
+                        "using GPT rescue path for compact conservative findings."
+                    )
+                elif remaining >= 20:
                     provider_name = "claude-sonnet-4-6"
                     try:
                         sonnet_base = FORENSIC_JURY_SONNET_TIMEOUTS.get(jury_name, FORENSIC_JURY_SONNET_TIMEOUT_SECONDS)
@@ -6583,6 +6600,9 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 data["source_claim_validation_partial"] = bool(scv_result.get("partial"))
                 data["source_claim_validation_checked"] = int(scv_result.get("checked") or 0)
                 data["source_claim_validation_timed_out_pairs"] = int(scv_result.get("timed_out_pairs") or 0)
+                data["source_claim_validation_claim_overreach_valid_context"] = int(
+                    scv_result.get("claim_overreach_valid_context") or 0
+                )
                 raw_findings = annotate_evidence_links(raw_findings, company_domain, company_name)
                 if scv_result["irrelevant"] > 0:
                     # Penalise confidence for irrelevant sources
