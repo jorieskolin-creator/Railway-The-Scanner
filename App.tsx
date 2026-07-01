@@ -181,8 +181,10 @@ const App = () => {
   const fetchPipelineReadiness = async (options: any = {}) => {
     if (!isAdmin || !authToken) return null;
     const force = options?.force === true;
+    const refresh = options?.refresh || "";
+    const company = options?.company || "";
     const now = Date.now();
-    if (!force && pipelineReadiness && now - pipelineReadinessFetchedAtRef.current < PIPELINE_READINESS_TTL_MS) {
+    if (!force && !refresh && pipelineReadiness && now - pipelineReadinessFetchedAtRef.current < PIPELINE_READINESS_TTL_MS) {
       return pipelineReadiness;
     }
     if (pipelineReadinessRequestRef.current) {
@@ -191,7 +193,12 @@ const App = () => {
     const request = (async () => {
       setPipelineReadinessLoading(true);
       try {
-        const res = await fetch(`/admin/pipeline-readiness?t=${Date.now()}`, { headers: authHeaders() });
+        const params = new URLSearchParams();
+        params.set('t', String(Date.now()));
+        if (force) params.set('force', 'true');
+        if (refresh) params.set('refresh', refresh);
+        if (company) params.set('company', company);
+        const res = await fetch(`/admin/pipeline-readiness?${params.toString()}`, { headers: authHeaders() });
         if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return null; }
         if (!res.ok) return null;
         const json = await res.json();
@@ -209,6 +216,13 @@ const App = () => {
     pipelineReadinessRequestRef.current = request;
     return request;
   };
+
+  const refreshPipelineCompany = (companyName: string) =>
+    fetchPipelineReadiness({ refresh: 'company', company: companyName });
+  const refreshPipelineGlobal = () =>
+    fetchPipelineReadiness({ refresh: 'global' });
+  const refreshPipelineAll = () =>
+    fetchPipelineReadiness({ refresh: 'all' });
 
   const readinessForCompany = (companyName: string) => {
     const companies = pipelineReadiness?.companies || {};
@@ -313,7 +327,7 @@ const App = () => {
 
   useEffect(() => {
     if (isAdmin) {
-      fetchPipelineReadiness({ force: true });
+      fetchPipelineReadiness();
     } else {
       pipelineReadinessFetchedAtRef.current = 0;
       pipelineReadinessRequestRef.current = null;
@@ -403,7 +417,7 @@ const App = () => {
           setIsModalOpen(true);
           fetchSummaryData(true);
           fetchMarketIntelData();
-          fetchPipelineReadiness({ force: true });
+          refreshPipelineCompany(newResult.companyName);
           break;
         }
 
@@ -510,7 +524,7 @@ const App = () => {
         setCrossImpactInterpretationLoading(false);
         return;
       }
-      fetchPipelineReadiness({ force: true });
+      refreshPipelineGlobal();
       // Poll status until completion
       const pollUntilDone = async () => {
         for (let i = 0; i < 120; i++) {
@@ -529,7 +543,7 @@ const App = () => {
         await fetchCrossImpactInterpretation();
       };
       await pollUntilDone();
-      await fetchPipelineReadiness({ force: true });
+      await refreshPipelineGlobal();
     } catch (e) {
       console.error('Cross-impact regeneration failed:', e);
     } finally {
@@ -649,7 +663,7 @@ const App = () => {
         const reviewRes = await fetch('/admin/review-data', { headers: authHeaders() });
         if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
         fetchSummaryData(true);
-        fetchPipelineReadiness({ force: true });
+        refreshPipelineCompany(companyName);
       } else {
         alert("Reality Check + Clean request failed.");
       }
@@ -673,7 +687,7 @@ const App = () => {
         const reviewRes = await fetch('/admin/review-data', { headers: authHeaders() });
         if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
         fetchSummaryData(true);
-        fetchPipelineReadiness({ force: true });
+        refreshPipelineAll();
       }
     } catch (e) { console.error(e); alert("Recheck failed."); }
     finally { setRecheckLoading(false); }
@@ -696,7 +710,7 @@ const App = () => {
         const reviewRes = await fetch('/admin/review-data', { headers: authHeaders() });
         if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
         fetchSummaryData(true);
-        fetchPipelineReadiness({ force: true });
+        refreshPipelineAll();
       } else {
         alert("Recalculation failed: " + (await res.text()));
       }
@@ -816,7 +830,7 @@ const App = () => {
       if (res.status === 409) { alert("Foresight KB harvest already in progress."); setForesightKbLoading(false); return; }
       if (res.ok) {
         alert("Foresight KB harvest started! Harvesting 30 themes in background.\nCheck status with the status indicator.");
-        fetchPipelineReadiness({ force: true });
+        refreshPipelineGlobal();
         // Poll for completion
         const pollInterval = setInterval(async () => {
           try {
@@ -830,10 +844,10 @@ const App = () => {
                 const r = status.harvest.result;
                 if (r && !r.error) {
                   alert(`Foresight KB Harvest Complete!\n\n${r.harvested}/${r.harvested + r.failed} themes harvested\n${r.total_signals} signals stored`);
-                  fetchPipelineReadiness({ force: true });
+                  refreshPipelineGlobal();
                 } else if (r && r.error) {
                   alert(`Foresight KB Harvest Failed: ${r.error}`);
-                  fetchPipelineReadiness({ force: true });
+                  refreshPipelineGlobal();
                 }
               }
             }
@@ -858,7 +872,7 @@ const App = () => {
       if (res.status === 409) { alert((await res.json()).detail); setKbCleanupLoading(false); return; }
       if (res.ok) {
         alert("Foresight KB repair started! Re-verifying URLs and context eligibility in background.");
-        fetchPipelineReadiness({ force: true });
+        refreshPipelineGlobal();
         const pollInterval = setInterval(async () => {
           try {
             const statusRes = await fetch('/admin/foresight-kb-cleanup-status');
@@ -876,10 +890,10 @@ const App = () => {
                   const markedDead = (r.source_dead ?? r.dead_removed ?? 0) + (r.source_unreadable ?? 0);
                   const writeSkipped = r.themes_write_skipped ?? 0;
                   alert(`Foresight KB Repair Complete!\n\n${metadataRepaired} signals metadata-repaired\n${contextEligible} context-eligible signals\n${needsReview} retained for review\n${notEligible} retained as not context-eligible\n${markedDead} dead/unreadable sources marked\n${r.signals_after} signals retained across ${r.themes_checked} themes${writeSkipped ? `\n${writeSkipped} theme writes skipped to avoid empty files` : ''}`);
-                  fetchPipelineReadiness({ force: true });
+                  refreshPipelineGlobal();
                 } else if (r && r.error) {
                   alert(`Foresight KB Repair Failed: ${r.error}`);
-                  fetchPipelineReadiness({ force: true });
+                  refreshPipelineGlobal();
                 }
               }
             }
@@ -973,11 +987,15 @@ const App = () => {
  return `Sources: ${stats.total_sources ?? 0}\nAnalysis verified: ${stats.analysis_verified ?? 0}\nDisplay-only: ${stats.display_only ?? 0}\nExcluded: ${stats.excluded ?? 0}\nUnsupported: ${stats.unsupported ?? 0}\nWrong entity: ${stats.wrong_entity ?? 0}\nUnknown/weak entity: ${stats.unknown_entity ?? 0}\nDead/unavailable: ${stats.dead_or_unavailable ?? 0}\nUnchecked: ${stats.unchecked ?? 0}\nSource quotes: ${stats.source_quotes ?? 0}\nModel checks: ${validation.checked ?? 0}`;
  };
 
- const refreshReviewAfterAdminAction = async () => {
+ const refreshReviewAfterAdminAction = async (companyName = null) => {
  const reviewRes = await fetch('/admin/review-data', { headers: authHeaders() });
  if (reviewRes.ok) { const reviewJson = await reviewRes.json(); setDataReviewItems(reviewJson.companies || []); }
  fetchSummaryData(true);
- await fetchPipelineReadiness({ force: true });
+ if (companyName) {
+ await refreshPipelineCompany(companyName);
+ } else {
+ await refreshPipelineAll();
+ }
  };
 
  const handleCleanEvidenceSingle = async (companyName) => {
@@ -992,7 +1010,7 @@ const App = () => {
  if (!res.ok) throw new Error(await res.text());
  const json = await res.json();
  alert(`Clean Evidence "${companyName}" complete.\n\n${formatEvidenceCleanSummary(json)}\n\nSummaries and diagnosis were not regenerated.`);
- await refreshReviewAfterAdminAction();
+ await refreshReviewAfterAdminAction(companyName);
  } catch (e) {
  console.error(e);
  alert('Clean Evidence failed: ' + (e?.message || e));
@@ -1035,7 +1053,7 @@ const App = () => {
  }
  const jobId = json.job_id;
  if (!jobId) throw new Error('Buying Insight job did not return a job id.');
- fetchPipelineReadiness({ force: true });
+ refreshPipelineCompany(companyName);
  let finalStatus: any = null;
  let attempts = 0;
  while (attempts < 240) {
@@ -1067,7 +1085,7 @@ const App = () => {
  `Blocked/display-only sources: ${counts.blocked_or_display_only ?? 0}` +
  (warnings.length ? `\n\nWarnings:\n- ${warnings.join('\n- ')}` : '')
  );
- await refreshReviewAfterAdminAction();
+ await refreshReviewAfterAdminAction(companyName);
  } catch (e) {
  console.error(e);
  alert('Buying Insight failed: ' + (e?.message || e));
@@ -1100,7 +1118,7 @@ const App = () => {
  }
  const jobId = json.job_id;
  if (!jobId) throw new Error('Company Evidence DB job did not return a job id.');
- fetchPipelineReadiness({ force: true });
+ refreshPipelineCompany(companyName);
  let finalStatus: any = null;
  let attempts = 0;
  while (attempts < 180) {
@@ -1136,7 +1154,7 @@ const App = () => {
  `Display-only/blocked: ${stats.display_only_or_blocked ?? 0}` +
  (warnings.length ? `\n\nWarnings:\n- ${warnings.join('\n- ')}` : '')
  );
- await refreshReviewAfterAdminAction();
+ await refreshReviewAfterAdminAction(companyName);
  } catch (e) {
  console.error(e);
  alert('Company Evidence DB failed: ' + (e?.message || e));
@@ -1168,7 +1186,7 @@ const App = () => {
  }
  const jobId = json.job_id;
  if (!jobId) throw new Error('Company Source Ledger job did not return a job id.');
- fetchPipelineReadiness({ force: true });
+ refreshPipelineCompany(companyName);
  let finalStatus: any = null;
  let attempts = 0;
  while (attempts < 120) {
@@ -1201,7 +1219,7 @@ const App = () => {
  `Display-only/blocked: ${stats.display_only_or_blocked ?? 0}` +
  (warnings.length ? `\n\nWarnings:\n- ${warnings.join('\n- ')}` : '')
  );
- await refreshReviewAfterAdminAction();
+ await refreshReviewAfterAdminAction(companyName);
  } catch (e) {
  console.error(e);
  alert('Company Source Ledger failed: ' + (e?.message || e));

@@ -470,6 +470,16 @@ class BlobStorage:
         data = self.retrieve_latest_data("index/company_source_ledger")
         return data if isinstance(data, list) else []
 
+    def get_pipeline_readiness_index(self):
+        data = self.retrieve_latest_data("index/pipeline_readiness")
+        return data if isinstance(data, dict) else None
+
+    def save_pipeline_readiness_index(self, snapshot):
+        new_url = self._put("index/pipeline_readiness.json", snapshot)
+        if new_url:
+            self._prune_old_versions("index/pipeline_readiness", keep=3)
+        return new_url
+
     def _update_company_evidence_index(self, metadata):
         with BlobStorage._index_lock:
             index = self.get_company_evidence_index()

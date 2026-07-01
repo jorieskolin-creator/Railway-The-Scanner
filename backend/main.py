@@ -3884,6 +3884,7 @@ async def get_cross_impact_interpretation(response: Response):
 
 
 PIPELINE_FRESH_DAYS = 14
+PIPELINE_READINESS_SNAPSHOT_TTL_SECONDS = 15 * 60
 
 
 def _parse_pipeline_dt(value):
@@ -3957,6 +3958,160 @@ def _global_running_item(state: dict, running_label: str):
             "Wait for this run to complete before regenerating dependent artifacts.",
         )
     return None
+
+
+def _pipeline_indexes() -> dict:
+    company_evidence_index = buying_storage.get_company_evidence_index()
+    source_ledger_index = buying_storage.get_company_source_ledger_index()
+    buying_index = buying_storage.get_buying_potential_index()
+    return {
+        "company_evidence": _index_by_company(company_evidence_index),
+        "source_ledger": _index_by_company(source_ledger_index),
+        "buying_insight": _index_by_company(buying_index),
+    }
+
+
+def _pipeline_company_source_stamps(company: dict, indexes: dict) -> dict:
+    name = company.get("companyName") or company.get("company_name") or ""
+    key = str(name).strip().lower()
+    evidence_meta = indexes.get("company_evidence", {}).get(key) or {}
+    ledger_meta = indexes.get("source_ledger", {}).get(key) or {}
+    buying_meta = indexes.get("buying_insight", {}).get(key) or {}
+    return {
+        "scan": company.get("lastUpdated") or company.get("uploaded_at"),
+        "evidence_verified": company.get("evidence_cleaned_at"),
+        "company_evidence_db": evidence_meta.get("updated_at"),
+        "source_ledger": ledger_meta.get("updated_at"),
+        "buying_insight": buying_meta.get("updated_at"),
+    }
+
+
+def _pipeline_snapshot_is_fresh(snapshot: dict | None) -> bool:
+    if not isinstance(snapshot, dict):
+        return False
+    generated_at = _parse_pipeline_dt(snapshot.get("generated_at"))
+    if not generated_at:
+        return False
+    age_seconds = max(0, (datetime.utcnow() - generated_at).total_seconds())
+    return age_seconds <= PIPELINE_READINESS_SNAPSHOT_TTL_SECONDS
+
+
+def _get_pipeline_snapshot() -> dict | None:
+    try:
+        return storage.get_pipeline_readiness_index()
+    except Exception as exc:
+        print(f"   [Pipeline Readiness] Snapshot read failed: {exc}")
+        return None
+
+
+def _save_pipeline_snapshot(snapshot: dict) -> dict:
+    try:
+        storage.save_pipeline_readiness_index(snapshot)
+    except Exception as exc:
+        print(f"   [Pipeline Readiness] Snapshot save failed: {exc}")
+    return snapshot
+
+
+def _find_company_for_pipeline_readiness(company_name: str) -> dict | None:
+    if not company_name:
+        return None
+    detail = storage.get_company_data(company_name)
+    if isinstance(detail, dict) and detail:
+        return detail
+    summaries = storage.get_all_companies_summary()
+    target = str(company_name or "").strip().lower()
+    for summary in summaries:
+        if str(summary.get("companyName") or "").strip().lower() == target:
+            detail = storage.get_company_data(summary.get("companyName"))
+            return {**summary, **detail} if isinstance(detail, dict) else summary
+    return None
+
+
+def _build_pipeline_global_readiness() -> dict:
+    try:
+        kb_meta = storage.get_foresight_kb_status()
+    except Exception:
+        kb_meta = {"theme_count": 0, "total_signals": 0, "last_updated": None, "themes": []}
+    try:
+        observatory = storage.get_observatory()
+    except Exception:
+        observatory = None
+    try:
+        cross_impact = storage.get_cross_impact_interpretation()
+    except Exception:
+        cross_impact = None
+
+    kb_running = _global_running_item(_current_foresight_kb_state(), "Foresight KB")
+    if kb_running:
+        foresight_kb = kb_running
+    elif not kb_meta or not kb_meta.get("theme_count"):
+        foresight_kb = _pipeline_item("missing", "Foresight KB", "No harvested foresight KB themes found.", None, kb_meta or {}, "Harvest KB before refreshing foresight-dependent analysis.")
+    else:
+        age = _days_old(kb_meta.get("last_updated"))
+        stale = age is not None and age > PIPELINE_FRESH_DAYS
+        foresight_kb = _pipeline_item(
+            "warning" if stale else "ready",
+            "Foresight KB",
+            f"{kb_meta.get('theme_count', 0)} theme(s), {kb_meta.get('total_signals', 0)} signal(s)." + (f" Last harvest {age} day(s) ago." if age is not None else ""),
+            kb_meta.get("last_updated"),
+            kb_meta,
+            "Harvest KB if current foresight context matters." if stale else "",
+        )
+
+    obs_running = _global_running_item(_current_observatory_state(), "Observatory")
+    observatory_updated = observatory.get("generated_at") if isinstance(observatory, dict) else None
+    if obs_running:
+        observatory_item = obs_running
+    elif not observatory:
+        observatory_item = _pipeline_item("missing", "Observatory", "No Observatory analysis found.", None, recommended_action="Generate Observatory after Foresight KB is ready.")
+    else:
+        stale = _newer_than(kb_meta.get("last_updated") if kb_meta else None, observatory_updated)
+        observatory_item = _pipeline_item(
+            "warning" if stale else "ready",
+            "Observatory",
+            "Observatory is older than the Foresight KB." if stale else "Observatory analysis is available.",
+            observatory_updated,
+            {"model": observatory.get("model")},
+            "Regenerate Observatory after KB harvest." if stale else "",
+        )
+
+    cross_running = _global_running_item(_current_cross_impact_state(), "Matrix Interpretation")
+    cross_updated = cross_impact.get("generated_at") if isinstance(cross_impact, dict) else None
+    if cross_running:
+        cross_item = cross_running
+    elif not cross_impact:
+        cross_item = _pipeline_item("missing", "Matrix Interpretation", "No Cross-Impact Matrix Interpretation found.", None, recommended_action="Generate the Matrix Interpretation after Observatory/Foresight context is ready.")
+    else:
+        stale = _newer_than(kb_meta.get("last_updated") if kb_meta else None, cross_updated) or _newer_than(observatory_updated, cross_updated)
+        cross_item = _pipeline_item(
+            "warning" if stale else "ready",
+            "Matrix Interpretation",
+            "Matrix Interpretation is older than Observatory or Foresight KB." if stale else "Matrix Interpretation is available.",
+            cross_updated,
+            {"model": cross_impact.get("model")},
+            "Refresh the Matrix Interpretation." if stale else "",
+        )
+
+    return {
+        "foresight_kb": foresight_kb,
+        "observatory": observatory_item,
+        "cross_impact": cross_item,
+    }
+
+
+def _current_foresight_kb_state() -> dict:
+    with _foresight_kb_lock:
+        return dict(_foresight_kb_state)
+
+
+def _current_observatory_state() -> dict:
+    with _observatory_lock:
+        return dict(_observatory_state)
+
+
+def _current_cross_impact_state() -> dict:
+    with _cross_impact_lock:
+        return dict(_cross_impact_state)
 
 
 def _company_pipeline_readiness(company: dict, indexes: dict) -> dict:
@@ -4092,7 +4247,7 @@ def _company_pipeline_readiness(company: dict, indexes: dict) -> dict:
     else:
         buying_insight = _pipeline_item("missing", "Buying Insight", "No Buying Insight artifact found.", None, recommended_action="Generate Buying Insight when prerequisites are acceptable.")
 
-    return {
+    readiness = {
         "scan": scan,
         "evidence_verified": evidence_verified,
         "company_evidence_db": company_evidence_db,
@@ -4100,112 +4255,109 @@ def _company_pipeline_readiness(company: dict, indexes: dict) -> dict:
         "activation_pairs": activation_status,
         "buying_insight": buying_insight,
     }
+    readiness["_source_stamps"] = _pipeline_company_source_stamps(company, indexes)
+    return readiness
 
 
-@app.get("/admin/pipeline-readiness")
-async def pipeline_readiness(request: Request):
-    """Return advisory readiness/freshness state for Scanner admin pipeline stages."""
-    verify_admin(request)
+def _overlay_company_running_readiness(company_name: str, readiness: dict | None) -> dict:
+    item = dict(readiness or {})
+    evidence_job = _first_running_company_job(_company_evidence_jobs_lock, _company_evidence_jobs, company_name)
+    ledger_job = _first_running_company_job(_company_source_ledger_jobs_lock, _company_source_ledger_jobs, company_name)
+    buying_job = _first_running_company_job(_buying_potential_jobs_lock, _buying_potential_jobs, company_name)
+    if evidence_job:
+        item["company_evidence_db"] = _pipeline_item("running", "Evidence DB", evidence_job.get("stage") or "Running", evidence_job.get("created_at"), evidence_job.get("stats"), "Wait for Evidence DB to complete.")
+    if ledger_job:
+        item["source_ledger"] = _pipeline_item("running", "Source Ledger", ledger_job.get("stage") or "Running", ledger_job.get("created_at"), ledger_job.get("stats"), "Wait for Source Ledger to complete.")
+    if buying_job:
+        item["buying_insight"] = _pipeline_item("running", "Buying Insight", buying_job.get("stage") or "Running", buying_job.get("created_at"), buying_job.get("source_counts"), "Wait for Buying Insight to complete.")
+    return item
+
+
+def _overlay_pipeline_running_state(snapshot: dict) -> dict:
+    data = dict(snapshot or {})
+    global_items = dict(data.get("global") or {})
+    kb_running = _global_running_item(_current_foresight_kb_state(), "Foresight KB")
+    obs_running = _global_running_item(_current_observatory_state(), "Observatory")
+    cross_running = _global_running_item(_current_cross_impact_state(), "Matrix Interpretation")
+    if kb_running:
+        global_items["foresight_kb"] = kb_running
+    if obs_running:
+        global_items["observatory"] = obs_running
+    if cross_running:
+        global_items["cross_impact"] = cross_running
+    data["global"] = global_items
+    companies = dict(data.get("companies") or {})
+    for company_name, readiness in list(companies.items()):
+        companies[company_name] = _overlay_company_running_readiness(company_name, readiness)
+    data["companies"] = companies
+    data["served_at"] = datetime.utcnow().isoformat()
+    return data
+
+
+def _build_pipeline_readiness_snapshot() -> dict:
     company_summaries = storage.get_all_companies_summary()
     companies = []
     for summary in company_summaries:
         name = summary.get("companyName")
         detail = storage.get_company_data(name) if name else None
         companies.append({**summary, **detail} if isinstance(detail, dict) else summary)
-    company_evidence_index = buying_storage.get_company_evidence_index()
-    source_ledger_index = buying_storage.get_company_source_ledger_index()
-    buying_index = buying_storage.get_buying_potential_index()
-    indexes = {
-        "company_evidence": _index_by_company(company_evidence_index),
-        "source_ledger": _index_by_company(source_ledger_index),
-        "buying_insight": _index_by_company(buying_index),
-    }
-
-    try:
-        kb_meta = storage.get_foresight_kb_status()
-    except Exception:
-        kb_meta = {"theme_count": 0, "total_signals": 0, "last_updated": None, "themes": []}
-    try:
-        observatory = storage.get_observatory()
-    except Exception:
-        observatory = None
-    try:
-        cross_impact = storage.get_cross_impact_interpretation()
-    except Exception:
-        cross_impact = None
-
-    with _foresight_kb_lock:
-        harvest_state = dict(_foresight_kb_state)
-    with _observatory_lock:
-        observatory_state = dict(_observatory_state)
-    with _cross_impact_lock:
-        cross_state = dict(_cross_impact_state)
-
-    kb_running = _global_running_item(harvest_state, "Foresight KB")
-    if kb_running:
-        foresight_kb = kb_running
-    elif not kb_meta or not kb_meta.get("theme_count"):
-        foresight_kb = _pipeline_item("missing", "Foresight KB", "No harvested foresight KB themes found.", None, kb_meta or {}, "Harvest KB before refreshing foresight-dependent analysis.")
-    else:
-        age = _days_old(kb_meta.get("last_updated"))
-        stale = age is not None and age > PIPELINE_FRESH_DAYS
-        foresight_kb = _pipeline_item(
-            "warning" if stale else "ready",
-            "Foresight KB",
-            f"{kb_meta.get('theme_count', 0)} theme(s), {kb_meta.get('total_signals', 0)} signal(s)." + (f" Last harvest {age} day(s) ago." if age is not None else ""),
-            kb_meta.get("last_updated"),
-            kb_meta,
-            "Harvest KB if current foresight context matters." if stale else "",
-        )
-
-    obs_running = _global_running_item(observatory_state, "Observatory")
-    observatory_updated = observatory.get("generated_at") if isinstance(observatory, dict) else None
-    if obs_running:
-        observatory_item = obs_running
-    elif not observatory:
-        observatory_item = _pipeline_item("missing", "Observatory", "No Observatory analysis found.", None, recommended_action="Generate Observatory after Foresight KB is ready.")
-    else:
-        stale = _newer_than(kb_meta.get("last_updated") if kb_meta else None, observatory_updated)
-        observatory_item = _pipeline_item(
-            "warning" if stale else "ready",
-            "Observatory",
-            "Observatory is older than the Foresight KB." if stale else "Observatory analysis is available.",
-            observatory_updated,
-            {"model": observatory.get("model")},
-            "Regenerate Observatory after KB harvest." if stale else "",
-        )
-
-    cross_running = _global_running_item(cross_state, "Matrix Interpretation")
-    cross_updated = cross_impact.get("generated_at") if isinstance(cross_impact, dict) else None
-    if cross_running:
-        cross_item = cross_running
-    elif not cross_impact:
-        cross_item = _pipeline_item("missing", "Matrix Interpretation", "No Cross-Impact Matrix Interpretation found.", None, recommended_action="Generate the Matrix Interpretation after Observatory/Foresight context is ready.")
-    else:
-        stale = _newer_than(kb_meta.get("last_updated") if kb_meta else None, cross_updated) or _newer_than(observatory_updated, cross_updated)
-        cross_item = _pipeline_item(
-            "warning" if stale else "ready",
-            "Matrix Interpretation",
-            "Matrix Interpretation is older than Observatory or Foresight KB." if stale else "Matrix Interpretation is available.",
-            cross_updated,
-            {"model": cross_impact.get("model")},
-            "Refresh the Matrix Interpretation." if stale else "",
-        )
-
+    indexes = _pipeline_indexes()
     return {
         "generated_at": datetime.utcnow().isoformat(),
         "fresh_days": PIPELINE_FRESH_DAYS,
-        "global": {
-            "foresight_kb": foresight_kb,
-            "observatory": observatory_item,
-            "cross_impact": cross_item,
-        },
+        "snapshot_ttl_seconds": PIPELINE_READINESS_SNAPSHOT_TTL_SECONDS,
+        "global": _build_pipeline_global_readiness(),
         "companies": {
             company.get("companyName"): _company_pipeline_readiness(company, indexes)
             for company in companies
             if company.get("companyName")
         },
     }
+
+
+def _refresh_pipeline_company_in_snapshot(snapshot: dict | None, company_name: str) -> dict:
+    data = snapshot if isinstance(snapshot, dict) else _build_pipeline_readiness_snapshot()
+    company = _find_company_for_pipeline_readiness(company_name)
+    if company:
+        indexes = _pipeline_indexes()
+        canonical = company.get("companyName") or company.get("company_name") or company_name
+        companies = dict(data.get("companies") or {})
+        companies[canonical] = _company_pipeline_readiness(company, indexes)
+        data["companies"] = companies
+    data["generated_at"] = datetime.utcnow().isoformat()
+    return _save_pipeline_snapshot(data)
+
+
+def _refresh_pipeline_global_in_snapshot(snapshot: dict | None) -> dict:
+    data = snapshot if isinstance(snapshot, dict) else _build_pipeline_readiness_snapshot()
+    data["global"] = _build_pipeline_global_readiness()
+    data["generated_at"] = datetime.utcnow().isoformat()
+    return _save_pipeline_snapshot(data)
+
+
+@app.get("/admin/pipeline-readiness")
+async def pipeline_readiness(request: Request):
+    """Return advisory readiness/freshness state for Scanner admin pipeline stages.
+
+    Default mode serves a materialized snapshot and overlays live running-job
+    status. Use refresh=company&company=... or refresh=global/all after
+    state-changing admin actions.
+    """
+    verify_admin(request)
+    query = request.query_params
+    refresh = str(query.get("refresh") or "").strip().lower()
+    company_name = str(query.get("company") or "").strip()
+    force = str(query.get("force") or "").strip().lower() in {"1", "true", "yes"}
+
+    snapshot = _get_pipeline_snapshot()
+    if refresh == "company" and company_name:
+        snapshot = _refresh_pipeline_company_in_snapshot(snapshot, company_name)
+    elif refresh == "global":
+        snapshot = _refresh_pipeline_global_in_snapshot(snapshot)
+    elif force or refresh == "all" or not _pipeline_snapshot_is_fresh(snapshot):
+        snapshot = _save_pipeline_snapshot(_build_pipeline_readiness_snapshot())
+
+    return _overlay_pipeline_running_state(snapshot or {})
 
 
 # --- MAIN SCAN ENDPOINT (MULTIPART) ---
