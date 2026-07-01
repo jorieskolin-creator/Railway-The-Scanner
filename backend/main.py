@@ -5901,6 +5901,7 @@ TEXT TO REPAIR:
             "reality_checklist": reality_results["checklist"],
             "evidence_links": managed_evidence_links,
             "forensic_acquisition_health": reality_results.get("forensic_acquisition_health", {}),
+            "registry_context": reality_results.get("registry_context", {}),
             "scanner_evidence_quarantine": scanner_evidence_quarantine,
             "evidence_gold_standard": source_mgmt["gold_standard"],
             "evidence_sufficiency": evidence_sufficiency,

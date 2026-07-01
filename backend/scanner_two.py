@@ -9,7 +9,7 @@ import requests as http_requests
 import concurrent.futures
 import threading
 from datetime import date, datetime
-from urllib.parse import urljoin, urlparse, urldefrag
+from urllib.parse import quote, urljoin, urlparse, urldefrag
 import anthropic
 from knowledge_base import get_evolving_framework
 from source_quality import (
@@ -68,6 +68,13 @@ def get_clean_domain(url):
         return domain
     except:
         return ""
+
+
+def brave_search_api_key() -> str:
+    raw = os.environ.get("BRAVE_SEARCH_API_KEY", "")
+    if raw and "=" in raw:
+        raw = raw.split("=", 1)[1]
+    return (raw or "").strip().strip('"').strip("'")
 
 
 # Candidate acquisition registry for Scanner 2. These are search targets, not
@@ -2361,6 +2368,100 @@ def _build_jury_source_registry_block(search_name: str, domain_hint: str, jury_n
     return "\n".join(lines)
 
 
+def _brave_search_candidate_payload(
+    search_name: str,
+    domain_hint: str,
+    jury_name: str,
+    search_aliases: list[str] | None = None,
+    max_queries: int = 2,
+    per_query_count: int = 5,
+) -> tuple[dict | None, str]:
+    """Return untrusted Brave Search URL candidates for one jury lane."""
+    api_key = brave_search_api_key()
+    if not api_key:
+        return None, "brave_search_unavailable_no_key"
+    targets = JURY_SOURCE_TARGETS.get(jury_name) or []
+    if not targets:
+        return None, "brave_search_no_targets"
+    headers = {
+        "X-Subscription-Token": api_key,
+        "Accept": "application/json",
+        "User-Agent": "AdaptabilityScanner/1.0",
+    }
+    aliases = [str(alias).strip() for alias in (search_aliases or []) if str(alias).strip()]
+    alias_suffix = ""
+    if aliases:
+        alias_suffix = " " + " OR ".join(f'"{alias}"' for alias in aliases[:3])
+    sources = []
+    seen = set()
+    statuses = []
+    for target in targets[:max_queries]:
+        query = target["query"].format(search_name=search_name, domain_hint=domain_hint)
+        if alias_suffix and search_name.lower() not in alias_suffix.lower():
+            query = f"({query}) {alias_suffix}"
+        try:
+            resp = http_requests.get(
+                "https://api.search.brave.com/res/v1/web/search",
+                headers=headers,
+                params={
+                    "q": query,
+                    "count": max(1, min(10, int(per_query_count))),
+                    "country": "FI",
+                    "safesearch": "moderate",
+                    "extra_snippets": "true",
+                },
+                timeout=8,
+            )
+            if resp.status_code == 429:
+                statuses.append("rate_limited")
+                continue
+            if resp.status_code != 200:
+                statuses.append(f"http_{resp.status_code}")
+                continue
+            payload = resp.json()
+            results = ((payload.get("web") or {}).get("results") or [])
+            for result in results:
+                url = str(result.get("url") or "").strip()
+                if not url.startswith("http"):
+                    continue
+                key = _canonical_evidence_url(url)
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                snippets = [result.get("description") or ""]
+                snippets.extend(result.get("extra_snippets") or [])
+                semantic_snippet = " ".join(str(s).strip() for s in snippets if str(s).strip())[:1800]
+                sources.append({
+                    "rank": len(sources) + 1,
+                    "url": url,
+                    "title": result.get("title") or url,
+                    "discovery_rationale": f"Brave Search candidate for {target.get('label') or jury_name}.",
+                    "semantic_snippet": semantic_snippet,
+                    "verbatim_quote": None,
+                    "survival_check": {
+                        "direct_page": True,
+                        "likely_live": True,
+                        "target_scoped": False,
+                        "not_generic_homepage": True,
+                        "jury_fit": "medium",
+                        "risk_reason": "Search-result snippets are routing context only; Scanner must verify page content and entity scope.",
+                    },
+                    "published_at": result.get("age") or result.get("page_age") or None,
+                    "source_type": target.get("source_type") or "web_source",
+                    "entity_scope_candidate": "unclear",
+                    "expected_subdimensions": [],
+                    "source_intent": "candidate_discovery",
+                    "discovery_query": query,
+                    "freshness": "unknown",
+                })
+        except Exception as error:
+            statuses.append(type(error).__name__)
+    if not sources:
+        suffix = "_".join(statuses[:3]) if statuses else "no_results"
+        return None, f"brave_search_{suffix}"
+    return {"jury": jury_name, "sources": sources[:8]}, "brave_search_completed"
+
+
 def _build_jury_acquisition_prompt(
     search_name: str,
     domain_hint: str,
@@ -2948,13 +3049,91 @@ Return ONLY valid JSON:
 def _fetch_prh_company_data(company_name: str, timeout: int = 8) -> dict | None:
     """
     Fetch official company data from PRH Open Data API (Finnish Trade Register).
-    Returns structured data: business_id, registration date, business lines, status.
+    Returns structured legal registry context and compact registered notices.
     Returns None on failure (non-blocking).
     """
+    def _description(entries, preferred=("3", "en", "EN", "1", "fi", "FI")):
+        if not isinstance(entries, list):
+            return ""
+        for lang in preferred:
+            for entry in entries:
+                if str(entry.get("languageCode") or "").strip() == lang and entry.get("description"):
+                    return str(entry.get("description") or "").strip()
+        for entry in entries:
+            if entry.get("description"):
+                return str(entry.get("description") or "").strip()
+        return ""
+
+    def _business_id_value(value):
+        if isinstance(value, dict):
+            return str(value.get("value") or "").strip()
+        return str(value or "").strip()
+
+    def _business_id_registration_date(value):
+        if isinstance(value, dict):
+            return value.get("registrationDate")
+        return None
+
+    def _compact_registered_entry(entry):
+        if not isinstance(entry, dict):
+            return None
+        return {
+            "type": entry.get("type"),
+            "register": entry.get("register"),
+            "authority": entry.get("authority"),
+            "description": _description(entry.get("descriptions") or []),
+            "registration_date": entry.get("registrationDate"),
+            "end_date": entry.get("endDate"),
+            "active": not bool(entry.get("endDate")),
+        }
+
+    def _fetch_krek_notices(business_id: str) -> dict:
+        if not business_id:
+            return {"available": False, "notices": []}
+        try:
+            url = f"https://avoindata.prh.fi/opendata-registerednotices-api/v3/{quote(business_id)}"
+            resp = http_requests.get(url, timeout=timeout, headers={
+                "User-Agent": "AdaptabilityScanner/1.0",
+                "Accept": "application/json",
+            })
+            if resp.status_code != 200:
+                return {"available": False, "status_code": resp.status_code, "notices": []}
+            payload = resp.json()
+            notices = []
+            seen_notices = set()
+            for notice in payload.get("publicNotices") or []:
+                if not isinstance(notice, dict):
+                    continue
+                entry_codes = list(notice.get("entryCodes") or [])[:12]
+                notice_key = (
+                    notice.get("registrationDate"),
+                    notice.get("recordNumber"),
+                    notice.get("typeOfRegistration"),
+                    tuple(entry_codes),
+                )
+                if notice_key in seen_notices:
+                    continue
+                seen_notices.add(notice_key)
+                notices.append({
+                    "registration_date": notice.get("registrationDate"),
+                    "record_number": notice.get("recordNumber"),
+                    "type_of_registration": notice.get("typeOfRegistration"),
+                    "entry_codes": entry_codes,
+                })
+            notices.sort(key=lambda item: str(item.get("registration_date") or ""), reverse=True)
+            return {
+                "available": True,
+                "source_url": url,
+                "notices": notices[:12],
+                "notice_count": len(notices),
+            }
+        except Exception as error:
+            return {"available": False, "error": type(error).__name__, "notices": []}
+
     try:
         # Clean name for API search
         search = clean_company_name_for_search(company_name)
-        url = f"https://avoindata.prh.fi/opendata-ytj-api/v3/companies?name={search}&maxResults=3"
+        url = f"https://avoindata.prh.fi/opendata-ytj-api/v3/companies?name={quote(search)}&maxResults=3"
         resp = http_requests.get(url, timeout=timeout, headers={
             "User-Agent": "AdaptabilityScanner/1.0",
             "Accept": "application/json",
@@ -2976,27 +3155,74 @@ def _fetch_prh_company_data(company_name: str, timeout: int = 8) -> dict | None:
                     best = c
                     break
 
-        # Extract useful fields
-        business_id = best.get("businessId", "")
-        reg_date = best.get("registrationDate", "")
-        status = best.get("status", "")
-        company_form = best.get("companyForm", "")
+        business_id = _business_id_value(best.get("businessId"))
+        names = [n for n in (best.get("names") or []) if isinstance(n, dict) and n.get("name")]
+        current_names = [n for n in names if not n.get("endDate")]
+        previous_names = [n for n in names if n.get("endDate")]
+        current_legal_names = [n.get("name") for n in current_names if str(n.get("type") or "") == "1"]
+        parallel_names = [n.get("name") for n in current_names if str(n.get("type") or "") != "1"]
 
-        # Business lines
-        lines = best.get("businessLines", [])
-        active_lines = [bl.get("name", "") for bl in lines if bl.get("name")]
+        main_business = best.get("mainBusinessLine") or {}
+        registered_industry = _description(main_business.get("descriptions") or [])
+        company_forms = best.get("companyForms") or []
+        current_form = next((form for form in company_forms if isinstance(form, dict) and not form.get("endDate")), company_forms[0] if company_forms else {})
+        company_form = _description((current_form or {}).get("descriptions") or []) or (current_form or {}).get("type") or best.get("companyForm") or ""
 
-        # Registered offices
-        addresses = best.get("registeredOffices", [])
-        city = addresses[0].get("city", "") if addresses else ""
+        address = next((addr for addr in (best.get("addresses") or []) if isinstance(addr, dict)), {})
+        post_offices = address.get("postOffices") or []
+        city = ""
+        municipality_code = None
+        for lang in ("1", "3", "2"):
+            office = next((po for po in post_offices if str(po.get("languageCode") or "") == lang), None)
+            if office:
+                city = office.get("city") or ""
+                municipality_code = office.get("municipalityCode")
+                break
+        if not city and post_offices:
+            city = post_offices[0].get("city") or ""
+            municipality_code = post_offices[0].get("municipalityCode")
+
+        registered_entries = [
+            item for item in (_compact_registered_entry(entry) for entry in (best.get("registeredEntries") or []))
+            if item
+        ]
+        krek = _fetch_krek_notices(business_id)
+
+        aliases = []
+        for value in current_legal_names + parallel_names + [n.get("name") for n in previous_names] + ([business_id] if business_id else []):
+            value = str(value or "").strip()
+            if value and value.lower() not in {a.lower() for a in aliases}:
+                aliases.append(value)
 
         return {
+            "source_type": "official_registry",
+            "source_name": "Finnish Patent and Registration Office open data",
+            "entity_scope": "canonical_legal_entity",
+            "source_url": url,
+            "krek_source_url": krek.get("source_url"),
             "business_id": business_id,
-            "registration_date": reg_date,
-            "status": status,
+            "business_id_registration_date": _business_id_registration_date(best.get("businessId")),
+            "registration_date": best.get("registrationDate") or _business_id_registration_date(best.get("businessId")),
+            "current_legal_name": current_legal_names[0] if current_legal_names else (current_names[0].get("name") if current_names else ""),
+            "current_names": [n.get("name") for n in current_names],
+            "previous_names": [n.get("name") for n in previous_names],
+            "parallel_names": parallel_names,
+            "aliases": aliases[:16],
+            "status": best.get("status", ""),
+            "trade_register_status": best.get("tradeRegisterStatus", ""),
             "company_form": company_form,
-            "business_lines": active_lines[:3],
+            "company_form_code": (current_form or {}).get("type"),
+            "registered_industry": registered_industry,
+            "registered_industry_code": main_business.get("type"),
+            "registered_industry_is_administrative": True,
+            "business_lines": [registered_industry] if registered_industry else [],
+            "registered_entries": registered_entries[:12],
+            "registered_notices": krek.get("notices", []),
+            "registered_notice_count": krek.get("notice_count", 0),
+            "registered_notices_available": bool(krek.get("available")),
             "city": city,
+            "municipality_code": municipality_code,
+            "last_modified": best.get("lastModified"),
         }
     except Exception as e:
         print(f"   [PRH] Pre-fetch failed (non-blocking): {e}")
@@ -4759,10 +4985,26 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             parts.append(f"    Finnish Trade Register (PRH): Business ID {prh_data['business_id']}, "
                          f"registered {prh_data.get('registration_date', 'N/A')}, "
                          f"status: {prh_data.get('status', 'N/A')}, "
+                         f"trade register status: {prh_data.get('trade_register_status', 'N/A')}, "
                          f"form: {prh_data.get('company_form', 'N/A')}, "
                          f"city: {prh_data.get('city', 'N/A')}")
-            if prh_data.get("business_lines"):
-                parts.append(f"    Registered business lines: {', '.join(prh_data['business_lines'])}")
+            if prh_data.get("current_legal_name"):
+                parts.append(f"    Current legal name: {prh_data.get('current_legal_name')}")
+            if prh_data.get("previous_names"):
+                parts.append(f"    Previous registered names: {', '.join(prh_data['previous_names'][:6])}")
+            if prh_data.get("parallel_names"):
+                parts.append(f"    Parallel registered names: {', '.join(prh_data['parallel_names'][:6])}")
+            if prh_data.get("registered_industry"):
+                parts.append(
+                    f"    Registered administrative industry: {prh_data.get('registered_industry')} "
+                    f"({prh_data.get('registered_industry_code') or 'no code'})"
+                )
+            if prh_data.get("registered_notices"):
+                latest_notices = [
+                    f"{n.get('registration_date')}: {n.get('type_of_registration') or 'notice'} {n.get('record_number') or ''}".strip()
+                    for n in prh_data.get("registered_notices", [])[:5]
+                ]
+                parts.append(f"    Recent registered notifications (KREK): {'; '.join(latest_notices)}")
         if tech_stack:
             techs = tech_stack.get("technologies", [])
             assessment = tech_stack.get("assessment", "unknown")
@@ -4774,6 +5016,18 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 parts.append(f"    HTTPS: {'Yes' if tech_stack.get('uses_https') else 'No'}")
                 parts.append("    NOTE: This is what the website ACTUALLY runs — compare against their marketing claims.")
         pre_verified_block = "\n".join(parts) + "\n"
+    if prh_data and prh_data.get("aliases"):
+        prh_aliases = [
+            alias for alias in prh_data.get("aliases", [])
+            if alias and alias.lower() != search_name.lower()
+        ]
+        if prh_aliases:
+            search_alias_block += (
+                "    PRH REGISTRY ALIASES: Also search these official legal/previous/parallel names "
+                "and Business ID as candidate-discovery aliases only: "
+                + ", ".join(f'"{alias}"' for alias in prh_aliases[:10])
+                + "\n"
+            )
 
     # Build optional history context (empty string if first scan)
     history_block = _build_previous_context_block(previous_context)
@@ -5132,10 +5386,29 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         provider = "governed-seed" if seeded_sufficient else "gemini-3.1-pro-preview"
         status = "seeded_sufficient_live_search_skipped" if seeded_sufficient else "provider_unavailable"
         sources = []
-        if not seeded_sufficient and jury_name == SERVICE_PORTFOLIO_JURY_NAME:
-            provider = "official-prefetch-first"
-            status = "service_portfolio_official_prefetch_first_gemini_deferred"
-        elif not seeded_sufficient:
+        if not seeded_sufficient:
+            brave_aliases = []
+            if entity_terms:
+                brave_aliases.extend(entity_terms[:4])
+            if prh_data and prh_data.get("aliases"):
+                brave_aliases.extend(prh_data.get("aliases", [])[:8])
+            brave_payload, brave_status = _brave_search_candidate_payload(
+                search_name,
+                domain_hint,
+                jury_name,
+                search_aliases=brave_aliases,
+            )
+            brave_sources = _normalize_acquisition_payload(brave_payload or {}, jury_name, "brave-search")
+            if brave_sources:
+                provider = "brave-search"
+                status = brave_status
+                sources = brave_sources
+            elif jury_name == SERVICE_PORTFOLIO_JURY_NAME:
+                provider = "official-prefetch-first"
+                status = f"service_portfolio_official_prefetch_first_brave_{brave_status}_gemini_deferred"
+            else:
+                status = brave_status
+        if not seeded_sufficient and not sources and jury_name != SERVICE_PORTFOLIO_JURY_NAME:
             prompt = _build_jury_acquisition_prompt(
                 search_name,
                 domain_hint,
@@ -6419,11 +6692,12 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             "forensic_coverage": data.get("_final_forensic_coverage", {}),
             "forensic_acquisition_health": data.get("_forensic_acquisition_health", {}),
             "scanner_evidence_quarantine": data.get("scanner_evidence_quarantine", []),
+            "registry_context": prh_data or {},
         }
     
     # --- FALLBACK: All models failed — return empty result, never fabricate evidence ---
     print(f"   [Scanner 2] All models failed for {company_name}. Returning empty result only because no cached or historical evidence was available.")
-    return { "score": 0, "checklist": [], "links": [], "key_people": [], "is_simulated": True, "confidence_score": 0, "washing_flag": False, "washing_type": None }
+    return { "score": 0, "checklist": [], "links": [], "key_people": [], "is_simulated": True, "confidence_score": 0, "washing_flag": False, "washing_type": None, "registry_context": prh_data or {} }
 
 
 # ==============================================================================
