@@ -65,6 +65,28 @@ from evidence_contracts import build_classification_namespaces
 # VERIFICATION LOG: v5.4.0 - Extended Thinking + Search Budget Upgrade
 print("Starting Adaptability Scanner Backend (v5.4.0 - Extended Thinking + Search Budget Upgrade)...", flush=True)
 
+ARCHETYPE_LABELS = ("Thriving", "Modernizing", "Cash Cow", "At Risk")
+
+
+def strip_archetype_labels_from_text(value):
+    """Keep archetype labels out of written diagnosis/summary prose."""
+    if isinstance(value, list):
+        return [strip_archetype_labels_from_text(item) for item in value]
+    if isinstance(value, dict):
+        return {key: strip_archetype_labels_from_text(item) for key, item in value.items()}
+    text = str(value or "")
+    replacements = {
+        "Thriving": "financially and operationally strong profile",
+        "Modernizing": "modernizing but financially constrained profile",
+        "Cash Cow": "financially capable but operationally under-proven profile",
+        "At Risk": "financially and operationally pressured profile",
+    }
+    for label, replacement in replacements.items():
+        text = re.sub(rf"\b{re.escape(label)}\b", replacement, text)
+        text = re.sub(rf"\b{re.escape(label.upper())}\b", replacement, text)
+    return text
+
+
 def _strip_tac_codes(text: str) -> str:
     """Remove legacy TAC-xxx / DIM-xxx internal codes from summary text.
     Handles three forms that may appear in stored data:
@@ -3027,10 +3049,11 @@ If evidence is thin, say so — a short honest analysis beats a long fabricated 
 ### PRIMARY FRAMEWORK (KNOWLEDGE BASE — MANDATORY)
 {knowledge_context}
 
-You MUST use the terminology, archetypes, and criteria defined in the Knowledge Base above.
+You MUST use the terminology and criteria defined in the Knowledge Base above.
 Every claim in the summary MUST trace back to specific evidence AND map to a Knowledge Base dimension.
 Do NOT invent categories — use ONLY Knowledge Base vocabulary.
 NEVER use internal codes (TAC-xxx, DIM-xxx, etc.) — always write the full concept name.
+Do NOT write adaptability archetype labels in diagnostic_summary, evidence_based_risks, or any prose.
 
 ### SCAN DATA
 Target: {company_name}
@@ -3061,13 +3084,13 @@ Scoring rules:
   - Sum the 5 dimensions → 'reality_score' (0-100).
   - Do NOT evaluate intent_score or financial_index — those are immutable pipeline outputs.
 
-STEP 2 — ARCHETYPE DERIVATION (mechanical, from scores):
-Use YOUR reality_score + Financial Health Index ({fin_for_arch}):
+STEP 2 — ARCHETYPE AUDIT ONLY (mechanical, from scores):
+For internal audit only, derive an 'archetype' JSON field from YOUR reality_score + Financial Health Index ({fin_for_arch}):
   - reality_score >= 50 AND Financial Health Index >= 50 → "Thriving"
   - reality_score >= 50 AND Financial Health Index < 50 → "Modernizing"
   - reality_score < 50 AND Financial Health Index >= 50 → "Cash Cow"
   - reality_score < 50 AND Financial Health Index < 50 → "At Risk"
-This is a mechanical derivation — do not override based on narrative interpretation.
+This is a mechanical derivation for log comparison only. NEVER mention the archetype label in diagnostic_summary, pitch, why_proposals, what_proposals, or evidence_based_risks.
 
 STEP 3 — AI DIAGNOSIS SUMMARY:
 Write a diagnostic narrative that reads like an expert assessment, not a template:
@@ -3076,7 +3099,7 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
     Separate paragraphs with \n\n in the JSON string — this is required for rendering.
   - Do not add foresight implications here. External pressures belong only in the later Strategic Synthesis / Activation call.
   - Target length: 250-375 words.
-  - First sentence: State the archetype and what defines this company's position.
+  - First sentence: State the company's current-reality position in plain business language without using an archetype label.
   - Body: Map 3-4 key findings to specific KB dimensions. For each finding, connect the evidence
     to the KB pattern it reveals.
   - Use KB terminology naturally — but only where the evidence supports the pattern.
@@ -3087,7 +3110,7 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
   - PRECISION CLAIMS: exact euro amounts, percentages, order books, dates, named partnerships, named product launches, named customers/suppliers, and ownership shares are allowed only when the same value/name/date appears in generation-eligible evidence or explicit financial context above. If not, use cautious non-specific wording or state that public evidence is limited.
   - TEMPORAL PRECISION: When evidence contains the same metric for different periods (e.g. Q1 vs full-year, 2024 vs 2025), always use the most recent FULL-YEAR / ANNUAL figure — not interim or quarterly snapshots. If only a quarterly figure is available, label it explicitly (e.g. "as of Q1 2025"). Never present a quarterly number as if it were the annual result. Do not write that a metric is unpublished or unavailable if the evidence or financial context contains that metric for the latest annual period.
   - ORGANIZATIONAL CLAIMS PROHIBITION: NEVER claim or imply leadership gaps, unfilled executive roles, succession planning issues, management vacancies, or organizational restructuring unless the evidence EXPLICITLY states this. The absence of a person in scanner results does NOT mean the role is vacant — it means the scanner didn't find them. Do NOT invent risk factors about people, roles, or organizational structure to add analytical depth. If the evidence doesn't mention an organizational problem, the problem does not exist for this analysis.
-  - Use ONLY the four archetype labels: Thriving, Modernizing, Cash Cow, At Risk.
+  - Do NOT write these archetype labels in prose: Thriving, Modernizing, Cash Cow, At Risk.
   - CRITICAL SEPARATION: This section is strictly neutral diagnosis. Do NOT use sales language, calls-to-action, persuasion, or proposal framing here.
   - EVIDENCE DIMENSION BOUNDARY: Financial evidence may establish financial condition, capacity or investment context only. It cannot establish operating-model maturity, architecture, AI/data capability, service delivery, strategy execution or culture. Diagnose those dimensions only from promoted non-financial jury evidence; otherwise state that evidence is insufficient.
   - HISTORICAL EVIDENCE: Previous links and snippets are discovery inputs only. Use them only after current URL, entity, content and claim-support validation.
@@ -3143,6 +3166,7 @@ Rules:
 Respond with valid JSON only. Required fields:
 {{"diagnostic_summary": "...", "evidence_based_risks": ["..."], "commercial_pitch": "...", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."], "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
 Note: diagnostic_summary must contain \n\n between paragraphs (3-4 core paragraphs plus one optional final foresight implication paragraph). commercial_pitch must also contain \n\n between its 3 paragraphs.
+The archetype field is audit-only and must not appear in diagnostic_summary, commercial_pitch, why_proposals, what_proposals, or evidence_based_risks.
 Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2.
 
 ### CRITICAL CONTEXT — FACT-CHECK CORRECTIONS
@@ -3205,19 +3229,19 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
 
             if new_summary:
                 new_summary = _apply_deterministic_corrections(new_summary, detailed_claims)
-                data["summary_text"] = _strip_tac_codes(new_summary)
+                data["summary_text"] = _strip_tac_codes(strip_archetype_labels_from_text(new_summary))
             if new_pitch:
                 new_pitch = _apply_deterministic_corrections(new_pitch, detailed_claims)
-                data["pitch_text"] = new_pitch
+                data["pitch_text"] = strip_archetype_labels_from_text(new_pitch)
             new_risks = resynth_json.get("evidence_based_risks", [])
             if isinstance(new_risks, list) and new_risks:
-                data["evidence_based_risks"] = new_risks
+                data["evidence_based_risks"] = strip_archetype_labels_from_text(new_risks)
             new_why = resynth_json.get("why_proposals", [])
             new_what = resynth_json.get("what_proposals", [])
             if new_why and isinstance(new_why, list):
-                data["why_proposals"] = new_why
+                data["why_proposals"] = strip_archetype_labels_from_text(new_why)
             if new_what and isinstance(new_what, list):
-                data["what_proposals"] = new_what
+                data["what_proposals"] = strip_archetype_labels_from_text(new_what)
 
             # Update reality score if the re-synthesis re-evaluated it
             resynth_reality = resynth_json.get("reality_score")
@@ -3239,12 +3263,7 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
             # Verify archetype from re-synthesis matches deterministic rule
             resynth_archetype = resynth_json.get("archetype")
             if resynth_archetype and resynth_archetype != expected_archetype:
-                print(f"   ⚖️ [Clean Re-Synthesis] Archetype '{resynth_archetype}' → corrected to '{expected_archetype}'")
-                valid_archetypes = ["Thriving", "Modernizing", "Cash Cow", "At Risk"]
-                for wrong_label in valid_archetypes:
-                    if wrong_label == expected_archetype:
-                        continue
-                    data["summary_text"] = data["summary_text"].replace(wrong_label, expected_archetype)
+                print(f"   ⚖️ [Clean Re-Synthesis] Archetype audit '{resynth_archetype}' differs from deterministic '{expected_archetype}'")
 
             if old_archetype and old_archetype != expected_archetype:
                 print(f"   ⚖️ [Clean] Archetype '{old_archetype}' → corrected to '{expected_archetype}' (scores: Reality={reality}, Financial={fin_for_arch})")
@@ -5240,13 +5259,13 @@ Scoring rules:
   - Sum the 5 dimensions → 'reality_score' (0-100).
   - Do NOT evaluate intent_score or financial_index — those are immutable pipeline outputs.
 
-STEP 2 — ARCHETYPE DERIVATION (mechanical, from scores):
-Use YOUR reality_score + Financial Health Index ({fin_for_archetype}):
+STEP 2 — ARCHETYPE AUDIT ONLY (mechanical, from scores):
+For internal audit only, derive an 'archetype' JSON field from YOUR reality_score + Financial Health Index ({fin_for_archetype}):
   - reality_score >= 50 AND Financial Health Index >= 50 → "Thriving"
   - reality_score >= 50 AND Financial Health Index < 50 → "Modernizing"
   - reality_score < 50 AND Financial Health Index >= 50 → "Cash Cow"
   - reality_score < 50 AND Financial Health Index < 50 → "At Risk"
-This is a mechanical derivation — do not override based on narrative interpretation.
+This is a mechanical derivation for log comparison only. NEVER mention the archetype label in diagnostic_summary or evidence_based_risks.
 
 STEP 3 — AI DIAGNOSIS SUMMARY:
 Write a diagnostic narrative that reads like an expert assessment, not a template:
@@ -5255,7 +5274,7 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
     Separate paragraphs with \n\n in the JSON string — this is required for rendering.
   - Do not add foresight implications here. External pressures belong only in Strategic Synthesis.
   - Target length: 250-375 words.
-  - First sentence: State the archetype and what defines this company's position.
+  - First sentence: State the company's current-reality position in plain business language without using an archetype label.
   - Body: Map 3-4 key findings to specific KB dimensions. For each finding, connect the evidence
     to the KB pattern it reveals (e.g., "Job postings emphasize hierarchical reporting lines,
     characteristic of Digital Taylorism in the Operating Model dimension").
@@ -5269,7 +5288,7 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
   - Do NOT fabricate findings. If evidence is sparse, acknowledge gaps rather than inventing patterns.
   - TEMPORAL PRECISION: When evidence contains the same metric for different periods (e.g. Q1 vs full-year, 2024 vs 2025), always use the most recent FULL-YEAR / ANNUAL figure — not interim or quarterly snapshots. If only a quarterly figure is available, label it explicitly (e.g. "as of Q1 2025"). Never present a quarterly number as if it were the annual result. Do not write that a metric is unpublished or unavailable if the evidence or financial context contains that metric for the latest annual period.
   - ORGANIZATIONAL CLAIMS PROHIBITION: NEVER claim or imply leadership gaps, unfilled executive roles, succession planning issues, management vacancies, or organizational restructuring unless the evidence EXPLICITLY states this. The absence of a person in scanner results does NOT mean the role is vacant — it means the scanner didn't find them. Do NOT invent risk factors about people, roles, or organizational structure to add analytical depth. If the evidence doesn't mention an organizational problem, the problem does not exist for this analysis.
-  - Use ONLY the four archetype labels: Thriving, Modernizing, Cash Cow, At Risk.
+  - Do NOT write these archetype labels in prose: Thriving, Modernizing, Cash Cow, At Risk.
   - CRITICAL SEPARATION: This section is strictly neutral diagnosis. Do NOT use sales language, calls-to-action, persuasion, or proposal framing here.
 
 STEP 4 — EVIDENCE-BASED RISKS:
@@ -5288,7 +5307,7 @@ Generate 2-4 neutral risk bullets in a JSON array named evidence_based_risks.
 ### OUTPUT
 Respond with valid JSON only. Required fields:
 {{"diagnostic_summary": "...", "evidence_based_risks": ["..."], "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
-Note: diagnostic_summary must contain \n\n between 3-4 current-reality paragraphs. Do not add a foresight paragraph.
+Note: diagnostic_summary must contain \n\n between 3-4 current-reality paragraphs. The archetype field is audit-only and must not appear in diagnostic_summary or evidence_based_risks. Do not add a foresight paragraph.
 Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_proposals in this call. Those are generated later from the locked diagnosis, Knowledge Base, and foresight context."""
 
                 # --- Diagnosis synthesis with fallback chain: Opus 4.8 → GPT 5.5 → Sonnet 4.6 ---
@@ -5475,11 +5494,11 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                     payload = extract_json_from_text(response_text)
                     if payload:
                          json_data = json.loads(payload, strict=False)
-                         summary = sanitize_inference_wording(json_data.get("diagnostic_summary", json_data.get("summary", summary)))
-                         pitch = sanitize_inference_wording(json_data.get("commercial_pitch", json_data.get("pitch", pitch)) or pitch)
-                         evidence_based_risks = sanitize_inference_wording(json_data.get("evidence_based_risks", evidence_based_risks) or evidence_based_risks)
-                         why_proposals = sanitize_inference_wording(json_data.get("why_proposals", why_proposals) or why_proposals)
-                         what_proposals = sanitize_inference_wording(json_data.get("what_proposals", what_proposals) or what_proposals)
+                         summary = strip_archetype_labels_from_text(sanitize_inference_wording(json_data.get("diagnostic_summary", json_data.get("summary", summary))))
+                         pitch = strip_archetype_labels_from_text(sanitize_inference_wording(json_data.get("commercial_pitch", json_data.get("pitch", pitch)) or pitch))
+                         evidence_based_risks = strip_archetype_labels_from_text(sanitize_inference_wording(json_data.get("evidence_based_risks", evidence_based_risks) or evidence_based_risks))
+                         why_proposals = strip_archetype_labels_from_text(sanitize_inference_wording(json_data.get("why_proposals", why_proposals) or why_proposals))
+                         what_proposals = strip_archetype_labels_from_text(sanitize_inference_wording(json_data.get("what_proposals", what_proposals) or what_proposals))
 
                          # --- SYNTHESIS SCORE OBSERVATION ---
                          # Synthesis may disagree with Scanner 2, but the current
@@ -5523,23 +5542,22 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                                  print(f"   ℹ️ [Score Verify] Intent: Scanner 1 {scanner_intent} vs Opus {opus_intent} (delta {delta_i}). Keeping Scanner 1 score (immutable).")
                                  gap = intent_results["score"] - reality_results["score"]
 
-                         # --- ARCHETYPE VERIFICATION ---
-                         # Opus now derives the archetype from its own scores.
-                         # Verify it matches the deterministic rule; fix summary if not.
+                         # --- ARCHETYPE AUDIT ---
+                         # The model's archetype is retained only as a drift signal.
+                         # Written diagnosis/summary prose must not contain archetype labels.
                          opus_archetype = json_data.get("archetype")
                          final_reality = reality_results["score"]
                          expected_archetype = ("Thriving" if fin_for_archetype >= 50 else "Modernizing") if final_reality >= 50 else ("Cash Cow" if fin_for_archetype >= 50 else "At Risk")
 
                          if opus_archetype and opus_archetype != expected_archetype:
-                             print(f"   ⚖️ [Archetype Verify] Opus wrote '{opus_archetype}' but scores dictate '{expected_archetype}' (reality={final_reality}, financial={fin_for_archetype}). Correcting summary.")
-                             valid_archetypes = ["Thriving", "Modernizing", "Cash Cow", "At Risk"]
-                             for wrong_label in valid_archetypes:
-                                 if wrong_label == expected_archetype:
-                                     continue
-                                 summary = summary.replace(wrong_label, expected_archetype)
-                                 summary = summary.replace(wrong_label.upper(), expected_archetype.upper())
+                             print(f"   ⚖️ [Archetype Audit] Model wrote '{opus_archetype}' but frozen scores dictate '{expected_archetype}' (reality={final_reality}, financial={fin_for_archetype}). Written prose keeps archetype labels out.")
                          elif opus_archetype:
-                             print(f"   ✅ [Archetype Verify] Opus archetype '{opus_archetype}' matches score-derived '{expected_archetype}'")
+                             print(f"   ✅ [Archetype Audit] Model archetype '{opus_archetype}' matches frozen score-derived '{expected_archetype}'")
+                         summary = strip_archetype_labels_from_text(summary)
+                         evidence_based_risks = strip_archetype_labels_from_text(evidence_based_risks)
+                         pitch = strip_archetype_labels_from_text(pitch)
+                         why_proposals = strip_archetype_labels_from_text(why_proposals)
+                         what_proposals = strip_archetype_labels_from_text(what_proposals)
 
                          # --- STRATEGIC ACTIVATION (WHY / WHAT / PITCH) ---
                          # This is deliberately split from diagnosis. The first

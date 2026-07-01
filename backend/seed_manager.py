@@ -32,6 +32,25 @@ def _strip_tac_codes(text: str) -> str:
     return text.strip()
 
 
+def strip_archetype_labels_from_text(value):
+    """Keep archetype labels out of written diagnosis/summary prose."""
+    if isinstance(value, list):
+        return [strip_archetype_labels_from_text(item) for item in value]
+    if isinstance(value, dict):
+        return {key: strip_archetype_labels_from_text(item) for key, item in value.items()}
+    text = str(value or "")
+    replacements = {
+        "Thriving": "financially and operationally strong profile",
+        "Modernizing": "modernizing but financially constrained profile",
+        "Cash Cow": "financially capable but operationally under-proven profile",
+        "At Risk": "financially and operationally pressured profile",
+    }
+    for label, replacement in replacements.items():
+        text = re.sub(rf"\b{re.escape(label)}\b", replacement, text)
+        text = re.sub(rf"\b{re.escape(label.upper())}\b", replacement, text)
+    return text
+
+
 def _shared_prompt_guardrails(include_diagnostic: bool = True, include_foresight: bool = True, include_claim_tier: bool = False) -> str:
     """Shared evidence/diagnosis/foresight guardrails injected into seed_manager prompts."""
     return build_shared_guardrails(include_diagnostic=include_diagnostic, include_foresight=include_foresight, include_claim_tier=include_claim_tier)
@@ -548,13 +567,13 @@ Scoring rules:
   - Sum the 5 dimensions → 'reality_score' (0-100).
   - Do NOT evaluate intent_score or financial_index — those are immutable pipeline outputs.
 
-STEP 2 — ARCHETYPE DERIVATION (mechanical, from scores):
-Use YOUR reality_score + Financial Health Index ({fin_for_archetype}):
+STEP 2 — ARCHETYPE AUDIT ONLY (mechanical, from scores):
+For internal audit only, derive an 'archetype' JSON field from YOUR reality_score + Financial Health Index ({fin_for_archetype}):
   - reality_score >= 50 AND Financial Health Index >= 50 → "Thriving"
   - reality_score >= 50 AND Financial Health Index < 50 → "Modernizing"
   - reality_score < 50 AND Financial Health Index >= 50 → "Cash Cow"
   - reality_score < 50 AND Financial Health Index < 50 → "At Risk"
-This is a mechanical derivation — do not override based on narrative interpretation.
+This is a mechanical derivation for log comparison only. NEVER mention the archetype label in summary, pitch, why_proposals, or what_proposals.
 
 STEP 3 — AI DIAGNOSIS SUMMARY:
 Write a diagnostic narrative that reads like an expert assessment, not a template:
@@ -565,7 +584,7 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
   - The final foresight paragraph must phrase forces as external pressure or market context, not as company facts, unless company-specific evidence above supports the fact.
   - If no qualified foresight inputs exist, do not force a future paragraph.
   - Target length: 250-375 words without foresight inputs; 325-475 words when the optional foresight paragraph is present.
-  - First sentence: State the archetype and what defines this company's position.
+  - First sentence: State the company's current-reality position in plain business language without using an archetype label.
   - Body: Map 3-4 key findings to specific KB dimensions. For each finding, connect the evidence
     to the KB pattern it reveals (e.g., "Job postings emphasize hierarchical reporting lines,
     characteristic of Digital Taylorism in the Operating Model dimension").
@@ -577,7 +596,7 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
   - Do NOT fabricate findings. If evidence is sparse, acknowledge gaps rather than inventing patterns.
   - TEMPORAL PRECISION: When evidence contains the same metric for different periods (e.g. Q1 vs full-year, 2024 vs 2025), always use the most recent FULL-YEAR / ANNUAL figure — not interim or quarterly snapshots. If only a quarterly figure is available, label it explicitly (e.g. "as of Q1 2025"). Never present a quarterly number as if it were the annual result.
   - ORGANIZATIONAL CLAIMS PROHIBITION: NEVER claim or imply leadership gaps, unfilled executive roles, succession planning issues, management vacancies, or organizational restructuring unless the evidence EXPLICITLY states this. The absence of a person in scanner results does NOT mean the role is vacant — it means the scanner didn't find them. Do NOT invent risk factors about people, roles, or organizational structure to add analytical depth. If the evidence doesn't mention an organizational problem, the problem does not exist for this analysis.
-  - Use ONLY the four archetype labels: Thriving, Modernizing, Cash Cow, At Risk.
+  - Do NOT write these archetype labels in prose: Thriving, Modernizing, Cash Cow, At Risk.
 
 STEP 4 — PITCH (90-110 words):
 A direct cold-outreach message to a C-level executive at {company_name}:
@@ -626,7 +645,7 @@ Rules:
 ### OUTPUT
 Respond with valid JSON only. Six fields required:
 {{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."]}}
-Note: the summary value must contain \\n\\n between paragraphs (3-4 core paragraphs plus one optional final foresight implication paragraph). The pitch value must also contain \\n\\n between its 3 paragraphs.
+Note: the summary value must contain \\n\\n between paragraphs (3-4 core paragraphs plus one optional final foresight implication paragraph). The pitch value must also contain \\n\\n between its 3 paragraphs. The archetype field is audit-only and must not appear in summary, pitch, why_proposals, or what_proposals.
 Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2."""
 
                     # --- Synthesis with fallback chain: Opus 4.8 → GPT 5.5 → Sonnet 4.6 ---
@@ -698,10 +717,10 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                         payload = extract_json_from_text(response_text)
                         if payload:
                              json_data = json.loads(payload, strict=False)
-                             summary_text = json_data.get("summary", summary_text)
-                             pitch_text = json_data.get("pitch", pitch_text) or pitch_text
-                             why_proposals = json_data.get("why_proposals", why_proposals) or why_proposals
-                             what_proposals = json_data.get("what_proposals", what_proposals) or what_proposals
+                             summary_text = strip_archetype_labels_from_text(json_data.get("summary", summary_text))
+                             pitch_text = strip_archetype_labels_from_text(json_data.get("pitch", pitch_text) or pitch_text)
+                             why_proposals = strip_archetype_labels_from_text(json_data.get("why_proposals", why_proposals) or why_proposals)
+                             what_proposals = strip_archetype_labels_from_text(json_data.get("what_proposals", what_proposals) or what_proposals)
 
                              # --- OPUS SCORE VERIFICATION ---
                              opus_reality = json_data.get("reality_score")
@@ -743,24 +762,18 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                                      print(f"   [{company_name}] ℹ️ [Score Verify] Intent: Scanner 1 {scanner_intent} vs Opus {opus_intent} (delta {delta_i}). Keeping Scanner 1 score (immutable).")
                                      gap = intent_results["score"] - reality_results["score"]
 
-                             # --- ARCHETYPE VERIFICATION ---
+                             # --- ARCHETYPE AUDIT ---
                              opus_archetype = json_data.get("archetype")
                              final_reality = reality_results["score"]
                              expected_archetype = ("Thriving" if fin_for_archetype >= 50 else "Modernizing") if final_reality >= 50 else ("Cash Cow" if fin_for_archetype >= 50 else "At Risk")
 
                              if opus_archetype and opus_archetype != expected_archetype:
-                                 print(f"   [{company_name}] ⚖️ [Archetype Verify] Opus wrote '{opus_archetype}' but scores dictate '{expected_archetype}' (reality={final_reality}, financial={fin_for_archetype}). Correcting summary.")
-                                 valid_archetypes = ["Thriving", "Modernizing", "Cash Cow", "At Risk"]
-                                 for wrong_label in valid_archetypes:
-                                     if wrong_label == expected_archetype:
-                                         continue
-                                     summary_text = summary_text.replace(wrong_label, expected_archetype)
-                                     summary_text = summary_text.replace(wrong_label.upper(), expected_archetype.upper())
+                                 print(f"   [{company_name}] ⚖️ [Archetype Audit] Model wrote '{opus_archetype}' but scores dictate '{expected_archetype}' (reality={final_reality}, financial={fin_for_archetype}). Written prose keeps archetype labels out.")
                              elif opus_archetype:
-                                 print(f"   [{company_name}] ✅ [Archetype Verify] Opus archetype '{opus_archetype}' matches score-derived '{expected_archetype}'")
+                                 print(f"   [{company_name}] ✅ [Archetype Audit] Model archetype '{opus_archetype}' matches score-derived '{expected_archetype}'")
 
                         else:
-                             summary_text = response_text
+                             summary_text = strip_archetype_labels_from_text(response_text)
                 except Exception as e:
                     print(f"   [{company_name}] ❌ [Synthesis Error] {e}")
 
@@ -834,10 +847,10 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                 "key_people": key_people,
                 "stakeholder_enrichment_skipped": stakeholder_enrichment_skipped,
                 "stakeholder_intelligence_mode": "buying_insight_only",
-                "summary_text": _strip_tac_codes(summary_text),
-                "pitch_text": pitch_text,
-                "why_proposals": why_proposals,
-                "what_proposals": what_proposals,
+                "summary_text": _strip_tac_codes(strip_archetype_labels_from_text(summary_text)),
+                "pitch_text": strip_archetype_labels_from_text(pitch_text),
+                "why_proposals": strip_archetype_labels_from_text(why_proposals),
+                "what_proposals": strip_archetype_labels_from_text(what_proposals),
                 "lastUpdated": timestamp,
                 "history": batch_history,
                 "is_simulated": False,
@@ -1069,12 +1082,12 @@ For 'intent_score' (0-100): Score based on the Intent Data provided above.
 
 STEP 2 — SUMMARY (180-220 words):
 Write a diagnostic narrative that reads like an expert assessment, not a template:
-  - First sentence: State the archetype and what defines this company's position.
+  - First sentence: State the company's current-reality position in plain business language without using an archetype label.
   - Body: Map 3-4 key findings to specific KB dimensions.
   - Use KB terminology naturally — but only where evidence supports it.
   - Do NOT cite numeric scores in the text — scores display separately in the UI.
   - Do NOT fabricate findings.
-  - Use ONLY the four archetype labels: Thriving, Modernizing, Cash Cow, At Risk.
+  - Do NOT write these archetype labels in prose: Thriving, Modernizing, Cash Cow, At Risk.
 
 STEP 3 — PITCH (90-110 words):
 A direct cold-outreach message to a C-level executive at {company_name}:
@@ -1093,6 +1106,7 @@ Generate exactly 2 WHY statements and 2 WHAT statements.
 ### OUTPUT
 Respond with valid JSON only. Six fields required:
 {{"summary": "...", "pitch": "...", "reality_score": <int 0-100>, "intent_score": <int 0-100>, "why_proposals": ["...", "..."], "what_proposals": ["...", "..."]}}
+Note: Do not write archetype labels in summary, pitch, why_proposals, or what_proposals.
 
 ### CRITICAL CONTEXT — FACT-CHECK CORRECTIONS
 The previous synthesis contained false claims detected by an independent fact-checker.
@@ -1150,15 +1164,15 @@ re-introduce any of the false claims listed above."""
                             new_pitch = resynth_json.get("pitch", "")
 
                             if new_summary:
-                                full_data["summary_text"] = _strip_tac_codes(new_summary)
+                                full_data["summary_text"] = _strip_tac_codes(strip_archetype_labels_from_text(new_summary))
                             if new_pitch:
-                                full_data["pitch_text"] = new_pitch
+                                full_data["pitch_text"] = strip_archetype_labels_from_text(new_pitch)
                             new_why = resynth_json.get("why_proposals", [])
                             new_what = resynth_json.get("what_proposals", [])
                             if new_why and isinstance(new_why, list):
-                                full_data["why_proposals"] = new_why
+                                full_data["why_proposals"] = strip_archetype_labels_from_text(new_why)
                             if new_what and isinstance(new_what, list):
-                                full_data["what_proposals"] = new_what
+                                full_data["what_proposals"] = strip_archetype_labels_from_text(new_what)
 
                             # Update reality score if re-synthesis re-evaluated it
                             resynth_reality = resynth_json.get("reality_score")
@@ -1182,12 +1196,7 @@ re-introduce any of the false claims listed above."""
                             final_reality = full_data["reality_score"]
                             expected_archetype = ("Thriving" if fin_for_archetype >= 50 else "Modernizing") if final_reality >= 50 else ("Cash Cow" if fin_for_archetype >= 50 else "At Risk")
                             if resynth_archetype and resynth_archetype != expected_archetype:
-                                print(f"   [{company_name}] ⚖️ [Re-Synthesis] Archetype '{resynth_archetype}' → corrected to '{expected_archetype}'")
-                                valid_archetypes = ["Thriving", "Modernizing", "Cash Cow", "At Risk"]
-                                for wrong_label in valid_archetypes:
-                                    if wrong_label == expected_archetype:
-                                        continue
-                                    full_data["summary_text"] = full_data["summary_text"].replace(wrong_label, expected_archetype)
+                                print(f"   [{company_name}] ⚖️ [Re-Synthesis] Archetype audit '{resynth_archetype}' differs from deterministic '{expected_archetype}'")
 
                             print(f"   [{company_name}] ✅ [Re-Synthesis] Full re-synthesis applied from cleaned evidence")
 
