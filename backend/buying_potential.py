@@ -1246,7 +1246,7 @@ def _activation_pair_text(pair: dict) -> str:
     return _clip(
         " | ".join(
             str(pair.get(key) or "")
-            for key in ("theme", "why", "what")
+            for key in ("theme", "why", "what_to_do", "what", "what_progress_shows")
             if pair.get(key)
         ),
         1200,
@@ -1268,7 +1268,13 @@ def _need_hypothesis_from_signal(signal: dict) -> dict:
     future_pressure = _clip(pressure if play_type != "current_status" else signal.get("commercial_pressure") or pressure, 420)
     structural_exposure = _clip(signal.get("theme") or pressure_label, 260)
     likely_business_consequence = _clip(signal.get("business_consequence") or consequence, 420)
-    what_to_propose = _clip(signal.get("what") or "Validate whether the pressure is real, owned, and commercially relevant before proposing a service path.", 420)
+    what_to_propose = _clip(
+        signal.get("what_to_do")
+        or signal.get("what")
+        or "Validate whether the pressure is real, owned, and commercially relevant before proposing a service path.",
+        420,
+    )
+    progress_signal = _clip(signal.get("what_progress_shows"), 420)
     why_now_or_soon = _clip(signal.get("timing_relevance") or _infer_timing(text), 360)
     context_type = _normalize_context_type(signal.get("context_type"), play_type)
     company_context = _clip(current_condition, 520)
@@ -1296,6 +1302,7 @@ def _need_hypothesis_from_signal(signal: dict) -> dict:
         "likely_business_consequence": likely_business_consequence,
         "why_now_or_soon": why_now_or_soon,
         "what_to_propose": what_to_propose,
+        "what_progress_shows": progress_signal,
         "discovery_question": "Where would this pressure become most visible if it starts affecting priorities, operating capacity, or investment choices?",
         "disqualifier": "Do not advance this as a sales play if the customer confirms no owner, pressure, timing, or business consequence.",
         "company_context": company_context,
@@ -1329,6 +1336,12 @@ def _normalize_need_hypothesis(need: Any, fallback_signal: dict, play_type: Any 
         )
     if not normalized.get("falsifier"):
         normalized["falsifier"] = fallback["falsifier"]
+    if not normalized.get("what_progress_shows"):
+        normalized["what_progress_shows"] = _clip(
+            fallback.get("what_progress_shows")
+            or "Progress should be visible as a clearer owner, validated pressure, and agreed evidence of whether the response direction is worth pursuing.",
+            700,
+        )
     return normalized
 
 
@@ -1478,13 +1491,18 @@ def _build_account_signal_map(
         for index in range(min(3, max(len(whys), len(whats)))):
             activation_pairs.append({
                 "theme_type": "proactive_opportunity",
+                "sales_use": "proactive_opportunity",
                 "theme": f"Activation pair {index + 1}",
                 "why": whys[index] if index < len(whys) else "",
                 "what": whats[index] if index < len(whats) else "",
+                "what_to_do": whats[index] if index < len(whats) else "",
+                "what_progress_shows": "",
             })
 
     for idx, pair in enumerate(activation_pairs[:3], start=1):
-        play_type = _normalize_play_type(pair.get("theme_type"))
+        play_type = _normalize_play_type(pair.get("sales_use") or pair.get("theme_type"))
+        what_to_do = _clip(pair.get("what_to_do") or pair.get("what"), 700)
+        what_progress_shows = _clip(pair.get("what_progress_shows"), 700)
         text = _activation_pair_text(pair)
         signal = add_signal(
             "scanner_activation_pair",
@@ -1502,10 +1520,12 @@ def _build_account_signal_map(
                 "play_type_label": PLAY_TYPE_LABELS.get(play_type, "Sales play"),
                 "theme": _clip(pair.get("theme"), 180),
                 "why": _clip(pair.get("why"), 700),
-                "what": _clip(pair.get("what"), 700),
+                "what": what_to_do,
+                "what_to_do": what_to_do,
+                "what_progress_shows": what_progress_shows,
                 "account_movement": _clip(pair.get("why") or pair.get("theme") or text, 420),
                 "commercial_pressure": _clip(pair.get("why") or text, 500),
-                "business_consequence": _clip(pair.get("what") or _infer_pressure(text)[2], 500),
+                "business_consequence": _clip(what_progress_shows or _infer_pressure(text)[2], 500),
                 "timing_relevance": (
                     "Current-status validation should be tested in near-term discovery."
                     if play_type == "current_status"
@@ -1683,6 +1703,7 @@ def _build_input_payload(
             "activation_pairs": _list(company_data.get("activation_pairs"))[:4],
             "why": _list(company_data.get("why_proposals"))[:4],
             "what": _list(company_data.get("what_proposals"))[:4],
+            "what_progress": _list(company_data.get("what_progress_proposals"))[:4],
             "pitch": _clip(company_data.get("pitch_text"), 900),
             "domain_force_dossier": _clip(company_data.get("domain_force_dossier"), 1800),
             "evidence_trust": {
@@ -1747,7 +1768,7 @@ Return ONLY valid JSON with this schema:
   "why_now": [{{"trigger": "...", "interpretation": "...", "gate": "...", "confidence": 0, "evidence_basis": []}}],
   "stakeholder_map": [{{"name": "...", "role": "...", "likely_buying_committee_role": "...", "relevance_rationale": "...", "linked_pressure_themes": [], "linked_service_themes": [], "evidence_basis": "...", "confidence": 0, "allowed_use": "internal_only|allowed_as_discovery_question|allowed_as_hypothesis", "do_not_say": [], "safety_notes": []}}],
   "pain_to_solution_map": [{{"evidence": "...", "interpreted_pressure": "...", "service": "...", "proof_point": "...", "safe_wording": "...", "gate": "...", "confidence": 0, "disqualifiers": []}}],
-  "recommended_sales_plays": [{{"service_or_offer": "...", "need_hypothesis": {{"future_pressure": "...", "current_condition": "...", "structural_exposure": "...", "likely_business_consequence": "...", "why_now_or_soon": "...", "what_to_propose": "...", "discovery_question": "...", "disqualifier": "...", "company_context": "...", "market_context": "...", "combined_activation_hypothesis": "...", "falsifier": "...", "context_type": "company_only|market_watch|combined_activation"}}, "response_directions": {{"potential_need": "...", "evolving_modernization_directions": [], "vivicta_potential_contribution": "...", "other_capabilities_may_be_required": []}}, "readiness_band": "Validate now|Validate when trigger appears|Monitor|Insufficient account connection", "evidence_coverage": "...", "confidence_boundary": "...", "priority_band": "...", "why_relevant": "...", "target_stakeholder": "...", "opening_angle": "...", "executive_angle": "...", "technical_angle": "...", "discovery_questions": ["..."], "do_not_say": ["..."], "confidence": 0, "hypothesis_strength": 0, "score_label": "Internal compatibility score", "overclaim_risk": "low|medium|high", "evidence_basis": [], "disqualifiers": []}}],
+  "recommended_sales_plays": [{{"service_or_offer": "...", "need_hypothesis": {{"future_pressure": "...", "current_condition": "...", "structural_exposure": "...", "likely_business_consequence": "...", "why_now_or_soon": "...", "what_to_propose": "...", "what_progress_shows": "...", "discovery_question": "...", "disqualifier": "...", "company_context": "...", "market_context": "...", "combined_activation_hypothesis": "...", "falsifier": "...", "context_type": "company_only|market_watch|combined_activation"}}, "response_directions": {{"potential_need": "...", "evolving_modernization_directions": [], "vivicta_potential_contribution": "...", "other_capabilities_may_be_required": []}}, "readiness_band": "Validate now|Validate when trigger appears|Monitor|Insufficient account connection", "evidence_coverage": "...", "confidence_boundary": "...", "priority_band": "...", "why_relevant": "...", "target_stakeholder": "...", "opening_angle": "...", "executive_angle": "...", "technical_angle": "...", "discovery_questions": ["..."], "do_not_say": ["..."], "confidence": 0, "hypothesis_strength": 0, "score_label": "Internal compatibility score", "overclaim_risk": "low|medium|high", "evidence_basis": [], "disqualifiers": []}}],
   "sales_spine": {{"account_thesis": "", "strategic_synthesis_basis": "", "top_buying_hypotheses": [], "risk_themes": [], "self_scan_note": ""}},
   "evidence_confidence": {{"strongest_evidence": [], "verified_facts": [], "safe_hypotheses": [], "use_only_as_question": [], "weak_or_missing_evidence": [], "do_not_use_claims": [], "do_not_say": [], "sensitive_claims": [], "claims_as_questions_only": []}},
   "overall_confidence": 0,
@@ -1783,7 +1804,7 @@ BUYING_SECTION_SCHEMAS = {
 """.strip(),
     "sales_plays": """
 {
-  "recommended_sales_plays": [{"play_name": "...", "linked_signal_ids": ["SIG-01"], "activation_pair_index": 1, "play_type": "current_status|foresight_driven|proactive_opportunity", "service_or_offer": "...", "need_hypothesis": {"future_pressure": "...", "current_condition": "...", "structural_exposure": "...", "likely_business_consequence": "...", "why_now_or_soon": "...", "what_to_propose": "...", "discovery_question": "...", "disqualifier": "...", "company_context": "...", "market_context": "...", "combined_activation_hypothesis": "...", "falsifier": "...", "context_type": "company_only|market_watch|combined_activation"}, "response_directions": {"potential_need": "...", "evolving_modernization_directions": [], "vivicta_potential_contribution": "...", "other_capabilities_may_be_required": []}, "readiness_band": "Validate now|Validate when trigger appears|Monitor|Insufficient account connection", "evidence_coverage": "...", "confidence_boundary": "...", "priority_band": "...", "primary_buyer": "...", "secondary_buyers": [], "trigger": "...", "account_thesis": "...", "buying_hypothesis": "...", "trigger_to_offer_bridge": "...", "business_hypothesis": "...", "why_relevant": "...", "target_stakeholder": "...", "first_meeting_objective": "...", "opening_angle": "...", "executive_angle": "...", "technical_angle": "...", "safe_customer_wording": "...", "discovery_questions": ["..."], "discovery_questions_by_role": [{"role": "...", "questions": ["..."]}], "proof_point": "...", "do_not_say": ["..."], "qualification_upgrade_criteria": [], "confidence": 0, "play_score": 0, "hypothesis_strength": 0, "score_label": "Internal compatibility score", "play_classification": "strong_account_play|qualified_discovery_play|monitor_soft_discovery|weak_signal|do_not_use", "overclaim_risk": "low|medium|high", "evidence_basis": ["SIG-01"], "disqualifiers": []}],
+  "recommended_sales_plays": [{"play_name": "...", "linked_signal_ids": ["SIG-01"], "activation_pair_index": 1, "play_type": "current_status|foresight_driven|proactive_opportunity", "service_or_offer": "...", "need_hypothesis": {"future_pressure": "...", "current_condition": "...", "structural_exposure": "...", "likely_business_consequence": "...", "why_now_or_soon": "...", "what_to_propose": "...", "what_progress_shows": "...", "discovery_question": "...", "disqualifier": "...", "company_context": "...", "market_context": "...", "combined_activation_hypothesis": "...", "falsifier": "...", "context_type": "company_only|market_watch|combined_activation"}, "response_directions": {"potential_need": "...", "evolving_modernization_directions": [], "vivicta_potential_contribution": "...", "other_capabilities_may_be_required": []}, "readiness_band": "Validate now|Validate when trigger appears|Monitor|Insufficient account connection", "evidence_coverage": "...", "confidence_boundary": "...", "priority_band": "...", "primary_buyer": "...", "secondary_buyers": [], "trigger": "...", "account_thesis": "...", "buying_hypothesis": "...", "trigger_to_offer_bridge": "...", "business_hypothesis": "...", "why_relevant": "...", "target_stakeholder": "...", "first_meeting_objective": "...", "opening_angle": "...", "executive_angle": "...", "technical_angle": "...", "safe_customer_wording": "...", "discovery_questions": ["..."], "discovery_questions_by_role": [{"role": "...", "questions": ["..."]}], "proof_point": "...", "do_not_say": ["..."], "qualification_upgrade_criteria": [], "confidence": 0, "play_score": 0, "hypothesis_strength": 0, "score_label": "Internal compatibility score", "play_classification": "strong_account_play|qualified_discovery_play|monitor_soft_discovery|weak_signal|do_not_use", "overclaim_risk": "low|medium|high", "evidence_basis": ["SIG-01"], "disqualifiers": []}],
   "model_notes": []
 }
 """.strip(),
@@ -1829,8 +1850,9 @@ BUYING_SECTION_INSTRUCTIONS = {
         "Each play must include a need_hypothesis with future_pressure, current_condition, structural_exposure, "
         "likely_business_consequence, why_now_or_soon, what_to_propose, discovery_question, disqualifier, "
         "company_context, market_context, combined_activation_hypothesis, falsifier, and context_type "
-        "(company_only, market_watch, or combined_activation). WHY is the reason the pressure may matter; WHAT is "
-        "a validation or response direction, not a ready-made solution. "
+        "(company_only, market_watch, or combined_activation). WHY is why the customer challenge matters; "
+        "WHAT_TO_DO is the activity, diagnostic, analysis, roadmap, or deliverable to propose next; "
+        "WHAT_PROGRESS_SHOWS is the observable proof of progress. "
         "Each play must also name account thesis, buying hypothesis, trigger-to-offer bridge, primary/secondary buyers, "
         "first meeting objective, discovery questions by buyer role, qualification upgrade criteria, disqualifiers, "
         "safe customer-facing wording, do_not_say notes, readiness_band, evidence_coverage, confidence_boundary, "
@@ -1883,8 +1905,8 @@ Evidence contract:
 - blocked: unsupported, wrong-entity, sensitive, or overclaiming material.
 - Say "buying hypothesis", "need hypothesis", or "demand creation potential"; never "confirmed buying intent", unless explicit evidence exists in the payload.
 - Stakeholder notes must remain professional, role-relevant, and source-bound. No private-life profiling.
-- Strategic Synthesis and scanner_activation_pair signals are the sales spine. Preserve each pair's why/what logic.
-- WHY is the reason the pressure may matter; WHAT is the validation or response direction. Do not turn WHAT into a pre-scoped solution.
+- Strategic Synthesis and scanner_activation_pair signals are the sales spine. Preserve each pair's why, what_to_do, and what_progress_shows logic.
+- WHY is why the customer challenge matters. WHAT_TO_DO is the concrete validation activity or deliverable. WHAT_PROGRESS_SHOWS is observable proof of progress. Do not turn WHAT_TO_DO into a pre-scoped implementation plan.
 - General Summary is factual context only. AI Diagnosis and evidence_based_risks are internal reasoning and discovery framing, not customer-facing facts.
 - Numeric scores are internal compatibility diagnostics only. They must not be used as proof that a need exists, as customer-facing evidence, or as the main reason for a proposal.
 - Every recommended play should map to one activation pair when any activation-pair SIG exists.
@@ -2250,7 +2272,7 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             "trigger": _clip(activation_signal.get("account_movement") or activation_signal.get("theme"), 260),
             "account_thesis": report["sales_spine"].get("account_thesis"),
             "buying_hypothesis": _clip(activation_signal.get("why") or activation_signal.get("commercial_pressure"), 360),
-            "trigger_to_offer_bridge": _clip(activation_signal.get("what") or activation_signal.get("business_consequence"), 360),
+            "trigger_to_offer_bridge": _clip(activation_signal.get("what_to_do") or activation_signal.get("what") or activation_signal.get("business_consequence"), 360),
             "business_hypothesis": _clip(activation_signal.get("business_consequence"), 360),
             "why_relevant": _clip(activation_signal.get("commercial_pressure") or activation_signal.get("why"), 360),
             "target_stakeholder": (_list(activation_signal.get("buyer_roles")) or ["Role to validate"])[0],
@@ -2264,12 +2286,12 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
                 "role": (_list(activation_signal.get("buyer_roles")) or ["Role to validate"])[0],
                 "questions": [activation_signal.get("need_hypothesis", {}).get("discovery_question") or "Where would this pressure become visible if it starts to matter?"],
             }],
-            "proof_point": "Generated from Scanner WHY/WHAT activation logic; validate before customer-facing use.",
+            "proof_point": _clip(activation_signal.get("what_progress_shows") or "Generated from Scanner WHY/WHAT activation logic; validate before customer-facing use.", 360),
             "do_not_say": ["Do not present this as a confirmed project, budget, or buying intent."],
             "qualification_upgrade_criteria": [
                 "Customer confirms the pressure is real",
                 "A named owner or decision forum exists",
-                "Timing or business consequence is confirmed",
+                _clip(activation_signal.get("what_progress_shows") or "Timing or business consequence is confirmed", 260),
             ],
             "confidence": min(55, _safe_int(activation_signal.get("confidence"), 45)),
             "play_score": 45 if readiness != "Validate now" else 65,
@@ -2304,7 +2326,8 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             play["play_type"] = _normalize_play_type(play.get("play_type") or activation_signal.get("sales_play_type"))
             play["trigger"] = play.get("trigger") or activation_signal.get("account_movement")
             play["buying_hypothesis"] = play.get("buying_hypothesis") or activation_signal.get("why")
-            play["trigger_to_offer_bridge"] = play.get("trigger_to_offer_bridge") or activation_signal.get("what")
+            play["trigger_to_offer_bridge"] = play.get("trigger_to_offer_bridge") or activation_signal.get("what_to_do") or activation_signal.get("what")
+            play["proof_point"] = play.get("proof_point") or activation_signal.get("what_progress_shows")
             play["account_thesis"] = play.get("account_thesis") or sales_spine.get("account_thesis")
             if not isinstance(play.get("need_hypothesis"), dict):
                 play["need_hypothesis"] = activation_signal.get("need_hypothesis") or _need_hypothesis_from_signal(activation_signal)
@@ -2333,6 +2356,8 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             "theme": play.get("trigger"),
             "why": play.get("buying_hypothesis") or play.get("why_relevant"),
             "what": play.get("trigger_to_offer_bridge") or play.get("service_or_offer"),
+            "what_to_do": play.get("trigger_to_offer_bridge") or play.get("service_or_offer"),
+            "what_progress_shows": play.get("proof_point"),
             "account_movement": play.get("account_thesis"),
             "commercial_pressure": play.get("business_hypothesis"),
             "business_consequence": play.get("business_hypothesis"),
@@ -2739,6 +2764,8 @@ def _deterministic_buying_report(payload: dict, reason: str) -> dict:
                 "service_or_offer": service_name,
                 "buying_hypothesis": _clip(signal.get("why") or signal.get("commercial_pressure"), 300),
                 "why_relevant": trigger,
+                "trigger_to_offer_bridge": _clip(signal.get("what_to_do") or signal.get("what") or trigger, 300),
+                "proof_point": _clip(signal.get("what_progress_shows") or proof_point, 300),
             }
             readiness_band = _readiness_band(score, has_signal=True, has_service=True, has_question=True, gate="allowed_as_discovery_question")
             evidence_coverage = _evidence_coverage(has_signal=True, has_service=True, has_question=True)
@@ -2773,7 +2800,7 @@ def _deterministic_buying_report(payload: dict, reason: str) -> dict:
                 "trigger": _clip(signal.get("account_movement"), 220),
                 "account_thesis": sales_spine.get("account_thesis"),
                 "buying_hypothesis": _clip(signal.get("why") or signal.get("commercial_pressure"), 300),
-                "trigger_to_offer_bridge": _clip(signal.get("what") or trigger, 300),
+                "trigger_to_offer_bridge": _clip(signal.get("what_to_do") or signal.get("what") or trigger, 300),
                 "business_hypothesis": _clip(signal.get("business_consequence"), 300),
                 "why_relevant": trigger,
                 "target_stakeholder": primary_buyer,
@@ -2784,7 +2811,7 @@ def _deterministic_buying_report(payload: dict, reason: str) -> dict:
                 "safe_customer_wording": safe_wording,
                 "discovery_questions": [safe_question],
                 "discovery_questions_by_role": [{"role": primary_buyer, "questions": [safe_question]}],
-                "proof_point": proof_point,
+                "proof_point": _clip(signal.get("what_progress_shows") or proof_point, 300),
                 "do_not_say": do_not_claim + [
                     "Do not state confirmed buying intent or imply a project exists unless the customer confirms it.",
                     "Do not present service fit as fact when it is based on Scanner interpretation or weak public signals.",
@@ -3294,6 +3321,7 @@ def render_buying_potential_html(report: dict) -> str:
           <p><b>Likely consequence:</b> {_esc(need.get('likely_business_consequence'))}</p>
           <p><b>Why now or soon:</b> {_esc(need.get('why_now_or_soon'))}</p>
           <p><b>What to validate or explore:</b> {_esc(need.get('what_to_propose'))}</p>
+          <p><b>What progress would show:</b> {_esc(need.get('what_progress_shows'))}</p>
           <p><b>Falsifier:</b> {_esc(need.get('falsifier'))}</p>
           <h3>Possible Conversation Direction</h3>
           <p><b>Potential need:</b> {_esc(response.get('potential_need'))}</p>

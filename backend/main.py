@@ -158,6 +158,17 @@ _ACTIVATION_THEME_TYPES = {
 }
 
 
+def _normalize_sales_use(value: str) -> str:
+    token = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+    if token in {"current", "current_state", "current_status", "status"}:
+        return "current_status"
+    if token in {"foresight", "future", "future_pressure", "foresight_driven"}:
+        return "foresight_driven"
+    if token in {"proactive", "opportunity", "proactive_opportunity", "discovery"}:
+        return "proactive_opportunity"
+    return "current_status"
+
+
 def _clip_sentence(text: str, limit: int = 520) -> str:
     """Trim activation prose without cutting words into ragged fragments."""
     cleaned = re.sub(r"\s+", " ", str(text or "")).strip()
@@ -177,18 +188,28 @@ def _activation_pair_candidates(payload: dict) -> list[dict]:
             if not isinstance(item, dict):
                 continue
             why = _activation_list(_first_activation_value(item, ("why", "why_proposal", "reason"), ""))
-            what = _activation_list(_first_activation_value(item, ("what", "what_proposal", "outcome"), ""))
+            what_to_do = _activation_list(_first_activation_value(item, (
+                "what_to_do", "what", "what_proposal", "what_action", "activity", "deliverable",
+            ), ""))
+            progress = _activation_list(_first_activation_value(item, (
+                "what_progress_shows", "progress_proof", "progress_signal", "observable_progress",
+                "success_evidence", "outcome",
+            ), ""))
+            what = what_to_do
             if not why or not what:
                 continue
-            theme_type = str(item.get("theme_type") or item.get("type") or "").strip().lower()
+            theme_type = _normalize_sales_use(item.get("theme_type") or item.get("sales_use") or item.get("type"))
             if theme_type not in _ACTIVATION_THEME_TYPES:
                 theme_type = "current_status"
             label = str(item.get("theme") or item.get("label") or item.get("title") or theme_type.replace("_", " ")).strip()
             pairs.append({
                 "theme_type": theme_type,
+                "sales_use": _normalize_sales_use(item.get("sales_use") or theme_type),
                 "theme": label,
                 "why": _clip_sentence(why[0]),
                 "what": _clip_sentence(what[0]),
+                "what_to_do": _clip_sentence(what[0]),
+                "what_progress_shows": _clip_sentence(progress[0]) if progress else "",
             })
     return pairs
 
@@ -210,17 +231,24 @@ def _ensure_activation_pairs(payload: dict, prior: dict | None = None) -> list[d
         whats = _activation_list(_first_activation_value(payload, (
             "what_proposals", "what", "what_items", "what_points", "what_actions",
         ), prior.get("what_proposals", [])))
+        progress_items = _activation_list(_first_activation_value(payload, (
+            "what_progress_proposals", "what_progress", "progress_proposals", "progress_items",
+        ), prior.get("what_progress_proposals", [])))
         count = min(max(len(whys), len(whats)), 3)
         if count:
             theme_cycle = ["current_status", "foresight_driven", "proactive_opportunity"]
             for idx in range(count):
                 why = whys[idx] if idx < len(whys) else whys[-1]
                 what = whats[idx] if idx < len(whats) else whats[-1]
+                progress = progress_items[idx] if idx < len(progress_items) else ""
                 pairs.append({
                     "theme_type": theme_cycle[idx],
+                    "sales_use": theme_cycle[idx],
                     "theme": theme_cycle[idx].replace("_", " "),
                     "why": _clip_sentence(why),
                     "what": _clip_sentence(what),
+                    "what_to_do": _clip_sentence(what),
+                    "what_progress_shows": _clip_sentence(progress),
                 })
 
     # If the model returns only one pair, add a second bounded discovery pair
@@ -235,14 +263,23 @@ def _ensure_activation_pairs(payload: dict, prior: dict | None = None) -> list[d
             basis = _clip_sentence(synthesis, 180).rstrip(".")
         pairs.append({
             "theme_type": "proactive_opportunity",
+            "sales_use": "proactive_opportunity",
             "theme": "validated next step",
             "why": (
                 f"A second sales trigger should validate whether {basis} is material "
                 "enough to create an executive priority, rather than assuming the gap is already proven."
             ),
             "what": (
-                "Progress would be observable if discovery identifies a named owner, a concrete business "
-                "pressure, and one measurable operating or commercial outcome to test first."
+                "Run a bounded discovery conversation to identify the business owner, the pressure, and the first "
+                "operating or commercial outcome worth testing."
+            ),
+            "what_to_do": (
+                "Run a bounded discovery conversation to identify the business owner, the pressure, and the first "
+                "operating or commercial outcome worth testing."
+            ),
+            "what_progress_shows": (
+                "Progress is visible when discovery identifies a named owner, a concrete business pressure, "
+                "and one measurable operating or commercial outcome to test first."
             ),
         })
 
@@ -317,13 +354,15 @@ def _normalize_activation_payload(payload: dict, prior: dict | None = None) -> d
     ), prior.get("pitch", ""))
     activation_pairs = _ensure_activation_pairs(payload, prior)
     why = [pair["why"] for pair in activation_pairs]
-    what = [pair["what"] for pair in activation_pairs]
+    what = [pair.get("what_to_do") or pair["what"] for pair in activation_pairs]
+    progress = [pair.get("what_progress_shows") for pair in activation_pairs if pair.get("what_progress_shows")]
     return {
         "strategic_synthesis": sanitize_inference_wording(str(synthesis or "").strip()),
         "pitch": sanitize_inference_wording(str(pitch or "").strip()),
         "activation_pairs": sanitize_inference_wording(activation_pairs),
         "why_proposals": sanitize_inference_wording(_activation_list(why)),
         "what_proposals": sanitize_inference_wording(_activation_list(what)),
+        "what_progress_proposals": sanitize_inference_wording(_activation_list(progress)),
     }
 
 
@@ -343,6 +382,7 @@ def _plain_text_activation_fallback(text: str, prior: dict | None = None) -> dic
         "commercial_pitch": prior.get("pitch") if prior.get("pitch") not in {"", "Pitch Unavailable"} else third[:900],
         "why_proposals": prior.get("why_proposals") or [first[:500]],
         "what_proposals": prior.get("what_proposals") or [second[:500]],
+        "what_progress_proposals": prior.get("what_progress_proposals") or [],
     }, prior)
 
 
@@ -2627,26 +2667,29 @@ Existing Pitch:
 {pitch_text}
 
 ### YOUR TASK
-Generate exactly 2 WHY statements and 2 WHAT statements based on the analysis above.
+Generate exactly 2 paired activation items based on the analysis above.
 
-WHY (Desired Impact) — the strategic reason to act:
-  - Each WHY must connect a specific weakness from the analysis to a business-level consequence the C-suite cares about.
-  - Frame as: "What happens if this stays unfixed?" → strategic risk or missed opportunity.
+WHY — customer value and consequence:
+  - Each WHY must connect a detected customer challenge/problem to end-value, future strategy, cost of inaction, risk, or missed opportunity.
   - Tone: Executive-level, outcome-oriented. Not technical jargon.
   - Length: 2-3 sentences each.
 
-WHAT (Desired Effect) — the measurable business outcome:
-  - Each WHAT must propose a concrete, observable change that would prove progress on the corresponding WHY.
-  - Frame as: "What would be different in 12 months if we succeed?"
-  - Must be specific enough to verify, but not a made-up KPI number.
+WHAT_TO_DO — proposed activity or deliverable:
+  - Each WHAT_TO_DO must propose a concrete activity, diagnostic, workshop, analysis, decision model, roadmap, readiness assessment, or deliverable.
+  - It must answer: "What could be done next?"
   - Tone: Tangible, verifiable, grounded in this company's context.
-  - Length: 2-3 sentences each.
+  - Length: 1-2 sentences each.
+
+WHAT_PROGRESS_SHOWS — observable proof of progress:
+  - Describe what progress would look like after the activity.
+  - This can be qualitative or measurable, but do not invent numeric KPI targets.
+  - Length: 1-2 sentences each.
 
 Rules:
-  - WHY1 pairs with WHAT1 (same theme). WHY2 pairs with WHAT2 (different theme).
+  - WHY1 pairs with WHAT_TO_DO1 and WHAT_PROGRESS_SHOWS1. WHY2 pairs with WHAT_TO_DO2 and WHAT_PROGRESS_SHOWS2.
   - Draw ONLY from the weakest KB dimensions visible in the analysis.
   - Never generic — each must reference something specific from the evidence or diagnosis.
-  - These are proposals, not promises — frame as "potential impact" and "potential effect".
+  - These are proposals, not promises — frame as validation or discovery where evidence is narrow.
   - When evidence confidence is low or narrow, frame as "validate whether..." rather than "fix...".
   - Do not use strong KB labels unless the evidence threshold in the shared guardrails is met.
 
@@ -2656,7 +2699,7 @@ Rules:
 
 ### OUTPUT
 Respond with valid JSON only:
-{{"why_proposals": ["...", "..."], "what_proposals": ["...", "..."]}}"""
+{{"activation_pairs": [{{"theme_type": "current_status", "sales_use": "current_status", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "..."}}, {{"theme_type": "foresight_driven", "sales_use": "foresight_driven", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "..."}}], "why_proposals": ["WHY texts"], "what_proposals": ["WHAT_TO_DO texts"], "what_progress_proposals": ["WHAT_PROGRESS_SHOWS texts"]}}"""
 
     old_why = data.get("why_proposals", [])
     old_what = data.get("what_proposals", [])
@@ -2687,6 +2730,16 @@ Respond with valid JSON only:
     result_json = json.loads(payload, strict=False)
     new_why = strip_archetype_labels_from_text(result_json.get("why_proposals", []))
     new_what = strip_archetype_labels_from_text(result_json.get("what_proposals", []))
+    normalized_activation = _normalize_activation_payload(result_json, {
+        "why_proposals": old_why,
+        "what_proposals": old_what,
+        "what_progress_proposals": data.get("what_progress_proposals", []),
+        "activation_pairs": data.get("activation_pairs", []),
+    })
+    new_why = normalized_activation.get("why_proposals") or new_why
+    new_what = normalized_activation.get("what_proposals") or new_what
+    new_progress = normalized_activation.get("what_progress_proposals") or []
+    new_pairs = normalized_activation.get("activation_pairs") or []
 
     if not new_why or not new_what or not isinstance(new_why, list) or not isinstance(new_what, list):
         return {"company": company_name, "status": "failed", "reason": "Model returned invalid proposal structure."}
@@ -2694,6 +2747,9 @@ Respond with valid JSON only:
     # Save updated proposals
     data["why_proposals"] = new_why
     data["what_proposals"] = new_what
+    data["what_progress_proposals"] = new_progress
+    if new_pairs:
+        data["activation_pairs"] = new_pairs
     callable_paths = _find_callables(data, f"{company_name}.pre_save")
     if callable_paths:
         print(f"   ⚠️ [Data Hygiene] Callable objects before save: {callable_paths[:30]}")
@@ -2711,6 +2767,8 @@ Respond with valid JSON only:
         "old_what": old_what,
         "new_why": new_why,
         "new_what": new_what,
+        "new_what_progress": new_progress,
+        "new_activation_pairs": new_pairs,
     }
 
 
@@ -3130,27 +3188,30 @@ Generate 2-4 neutral risk bullets in a JSON array named evidence_based_risks.
   - No solutions or CTA in this section; just what risk exists and why.
 
 STEP 6 — IMPACT PROPOSALS (derived from Steps 1-4):
-Generate 1-2 WHY statements and 1-2 WHAT statements (matching count).
+Generate 1-2 paired WHY / WHAT_TO_DO / WHAT_PROGRESS_SHOWS items.
 If evidence strongly supports 2 distinct weaknesses, produce 2 pairs. If evidence is limited, produce 1 pair. One strong evidence-based proposal beats two fabricated ones.
 
-WHY (Desired Impact) — the strategic reason to act:
-  - Each WHY must connect a specific weakness found in Step 1 to a business-level consequence the C-suite cares about.
-  - Frame as: "What happens if this stays unfixed?" → strategic risk or missed opportunity.
+WHY — customer value and consequence:
+  - Each WHY must connect a detected customer challenge/problem to end-value, future strategy, cost of inaction, risk, or missed opportunity.
   - Tone: Executive-level, outcome-oriented. Not technical jargon.
   - Length: 1-2 sentences each.
 
-WHAT (Desired Effect) — the measurable business outcome:
-  - Each WHAT must propose a concrete, observable change that would prove progress on the corresponding WHY.
-  - Frame as: "What would be different in 12 months if we succeed?"
-  - Must be specific enough to verify, but not a made-up KPI number.
+WHAT_TO_DO — proposed activity or deliverable:
+  - Each WHAT_TO_DO must propose a concrete activity, diagnostic, workshop, analysis, decision model, roadmap, readiness assessment, or deliverable.
+  - It must answer: "What could be done next?"
   - Tone: Tangible, verifiable, grounded in this company's context.
   - Length: 1-2 sentences each.
 
+WHAT_PROGRESS_SHOWS — observable proof of progress:
+  - Describe what progress would look like after the activity.
+  - This can be qualitative or measurable, but do not invent numeric KPI targets.
+  - Length: 1-2 sentences each.
+
 Rules:
-  - WHY1 pairs with WHAT1 (same theme). If 2 pairs: WHY2 pairs with WHAT2 (different theme).
+  - WHY1 pairs with WHAT_TO_DO1 and WHAT_PROGRESS_SHOWS1. If 2 pairs: WHY2 pairs with WHAT_TO_DO2 and WHAT_PROGRESS_SHOWS2.
   - Draw ONLY from the weakest KB dimensions scored in Step 1 that have ACTUAL EVIDENCE.
   - Never generic — each must reference something specific from the evidence or diagnosis.
-  - These are proposals, not promises — frame as "potential impact" and "potential effect".
+  - These are proposals, not promises — frame as validation or discovery where evidence is narrow.
 
 ### GUARDRAILS
 - NEVER fabricate evidence, people, events, partnerships, or metrics not present in the scan data.
@@ -3163,10 +3224,10 @@ Rules:
 
 ### OUTPUT
 Respond with valid JSON only. Required fields:
-{{"diagnostic_summary": "...", "evidence_based_risks": ["..."], "commercial_pitch": "...", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."], "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
+{{"diagnostic_summary": "...", "evidence_based_risks": ["..."], "commercial_pitch": "...", "activation_pairs": [{{"theme_type": "current_status|foresight_driven|proactive_opportunity", "sales_use": "current_status|foresight_driven|proactive_opportunity", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "..."}}], "why_proposals": ["WHY texts"], "what_proposals": ["WHAT_TO_DO texts"], "what_progress_proposals": ["WHAT_PROGRESS_SHOWS texts"], "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
 Note: diagnostic_summary must contain \n\n between paragraphs (3-4 core paragraphs plus one optional final foresight implication paragraph). commercial_pitch must also contain \n\n between its 3 paragraphs.
 The archetype field is audit-only and must not appear in diagnostic_summary, commercial_pitch, why_proposals, what_proposals, or evidence_based_risks.
-Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2.
+Note: why_proposals contains WHY texts, what_proposals contains WHAT_TO_DO texts, and what_progress_proposals contains WHAT_PROGRESS_SHOWS texts. Preserve the same order across all three arrays.
 
 ### CRITICAL CONTEXT — FACT-CHECK CORRECTIONS
 The previous synthesis contained false claims detected by an independent fact-checker.
@@ -3237,10 +3298,20 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                 data["evidence_based_risks"] = strip_archetype_labels_from_text(new_risks)
             new_why = resynth_json.get("why_proposals", [])
             new_what = resynth_json.get("what_proposals", [])
+            normalized_activation = _normalize_activation_payload(resynth_json, {
+                "why_proposals": data.get("why_proposals", []),
+                "what_proposals": data.get("what_proposals", []),
+                "what_progress_proposals": data.get("what_progress_proposals", []),
+                "activation_pairs": data.get("activation_pairs", []),
+            })
             if new_why and isinstance(new_why, list):
-                data["why_proposals"] = strip_archetype_labels_from_text(new_why)
+                data["why_proposals"] = strip_archetype_labels_from_text(normalized_activation.get("why_proposals") or new_why)
             if new_what and isinstance(new_what, list):
-                data["what_proposals"] = strip_archetype_labels_from_text(new_what)
+                data["what_proposals"] = strip_archetype_labels_from_text(normalized_activation.get("what_proposals") or new_what)
+            if normalized_activation.get("what_progress_proposals"):
+                data["what_progress_proposals"] = strip_archetype_labels_from_text(normalized_activation["what_progress_proposals"])
+            if normalized_activation.get("activation_pairs"):
+                data["activation_pairs"] = strip_archetype_labels_from_text(normalized_activation["activation_pairs"])
 
             # Update reality score if the re-synthesis re-evaluated it
             resynth_reality = resynth_json.get("reality_score")
@@ -5091,6 +5162,7 @@ def _execute_scan_pipeline(
         activation_pairs = []
         why_proposals = []
         what_proposals = []
+        what_progress_proposals = []
         scan_quality = "empty_reality" if _s2_empty else "complete"  # downgraded if phases are skipped due to time
 
         anthropic_key = clean_env_var(os.environ.get("ANTHROPIC_API_KEY"))
@@ -5657,19 +5729,22 @@ Write a direct cold-outreach message to a C-level executive at {companyName}.
 
 ### WHY / WHAT
 Generate 2-3 paired WHY/WHAT items every time. Do not collapse to one pair because evidence is thin.
-- WHY = the strategic reason to act, tied to a diagnosed weakness and business consequence.
-- WHAT = the observable business effect that would prove progress.
-- Each statement: 1-2 sentences.
+- WHY = why this matters for the customer: connect a detected challenge/problem to end-value, future strategy, risk, cost of inaction, or missed opportunity.
+- WHAT_TO_DO = the concrete activity, diagnostic, workshop, analysis, decision model, roadmap, readiness assessment, or deliverable to propose next. It must be action-oriented.
+- WHAT_PROGRESS_SHOWS = observable proof of progress after the activity. It may be qualitative or measurable, but do not invent numeric KPI targets unless already evidenced.
+- The legacy "what" field must contain the same action-oriented text as WHAT_TO_DO for backward compatibility.
+- Each WHY/WHAT field: 1-2 sentences.
 - Each pair must have exactly one theme_type:
   - current_status: current evidence, operating-model, financial, proof, or portfolio reality.
   - foresight_driven: external pressure combined with current readiness or uncertainty.
   - proactive_opportunity: a bounded hypothesis or discovery trigger to validate, not a claim.
+- Each pair must also include sales_use with the same allowed values: current_status, foresight_driven, proactive_opportunity.
 - If evidence is thin, frame the pair as a validation/discovery trigger instead of omitting it.
 - WHY1 pairs with WHAT1, WHY2 with WHAT2, and WHY3 with WHAT3 if present.
 
 ### OUTPUT
 Respond with valid JSON only:
-{{"strategic_synthesis": "...", "commercial_pitch": "...", "activation_pairs": [{{"theme_type": "current_status", "theme": "...", "why": "...", "what": "..."}}, {{"theme_type": "foresight_driven", "theme": "...", "why": "...", "what": "..."}}], "why_proposals": ["...", "..."], "what_proposals": ["...", "..."]}}"""
+{{"strategic_synthesis": "...", "commercial_pitch": "...", "activation_pairs": [{{"theme_type": "current_status", "sales_use": "current_status", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "..."}}, {{"theme_type": "foresight_driven", "sales_use": "foresight_driven", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "..."}}], "why_proposals": ["WHY texts only"], "what_proposals": ["WHAT_TO_DO texts only"], "what_progress_proposals": ["WHAT_PROGRESS_SHOWS texts only"]}}"""
 
                              activation_text = ""
                              activation_timeout = min(95, max(50, _activation_left - 25))
@@ -5736,6 +5811,7 @@ Respond with valid JSON only:
                                      "activation_pairs": activation_pairs,
                                      "why_proposals": why_proposals,
                                      "what_proposals": what_proposals,
+                                     "what_progress_proposals": what_progress_proposals,
                                  }
                                  activation_json = _parse_activation_json(activation_text)
                                  if not activation_json and _synthesis_budget_left() > 25:
@@ -5744,7 +5820,7 @@ Respond with valid JSON only:
                                          print(f"   🔧 [Activation] JSON parse failed; trying cheap JSON repair (timeout: {repair_timeout}s)...")
                                          repair_prompt = f"""Convert the following Strategic Activation output into STRICT JSON only.
 Do not add facts. Preserve the meaning. Required keys:
-{{"strategic_synthesis": "...", "commercial_pitch": "...", "activation_pairs": [{{"theme_type": "current_status|foresight_driven|proactive_opportunity", "theme": "...", "why": "...", "what": "..."}}], "why_proposals": ["..."], "what_proposals": ["..."]}}
+{{"strategic_synthesis": "...", "commercial_pitch": "...", "activation_pairs": [{{"theme_type": "current_status|foresight_driven|proactive_opportunity", "sales_use": "current_status|foresight_driven|proactive_opportunity", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "concrete activity or deliverable", "what_progress_shows": "observable proof of progress"}}], "why_proposals": ["..."], "what_proposals": ["what_to_do texts"], "what_progress_proposals": ["what_progress_shows texts"]}}
 
 TEXT TO REPAIR:
 {activation_text[:7000]}"""
@@ -5775,6 +5851,8 @@ TEXT TO REPAIR:
                                      why_proposals = activation_norm["why_proposals"]
                                  if activation_norm.get("what_proposals"):
                                      what_proposals = activation_norm["what_proposals"]
+                                 if activation_norm.get("what_progress_proposals"):
+                                     what_progress_proposals = activation_norm["what_progress_proposals"]
                                  if pitch or why_proposals or what_proposals or strategic_synthesis:
                                      print(
                                          f"   ✅ [Activation] Grounded activation complete "
@@ -5941,6 +6019,7 @@ TEXT TO REPAIR:
             "activation_pairs": activation_pairs,
             "why_proposals": why_proposals,
             "what_proposals": what_proposals,
+            "what_progress_proposals": what_progress_proposals,
             "lastUpdated": new_timestamp,
             "history": history,
             "is_simulated": reality_results.get("is_simulated", False),

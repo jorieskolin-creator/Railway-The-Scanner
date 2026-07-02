@@ -614,20 +614,18 @@ STEP 5 — IMPACT PROPOSALS (derived from Steps 1-4):
 Generate 1-2 WHY statements and 1-2 WHAT statements (matching count).
 If evidence strongly supports 2 distinct weaknesses, produce 2 pairs. If evidence is limited, produce 1 pair. One strong evidence-based proposal beats two fabricated ones.
 
-WHY (Desired Impact) — the strategic reason to act:
-  - Each WHY must connect a specific weakness found in Step 1 to a business-level consequence the C-suite cares about.
-  - Frame as: "What happens if this stays unfixed?" → strategic risk or missed opportunity.
+WHY — customer value and consequence:
+  - Each WHY must connect a detected customer challenge/problem to end-value, future strategy, cost of inaction, risk, or missed opportunity.
   - Tone: Executive-level, outcome-oriented. Not technical jargon.
   - Length: 2-3 sentences each.
   - Example: "Reduce time-to-market for digital services from months to weeks by dissolving project-based handoffs that currently bottleneck every release."
 
-WHAT (Desired Effect) — the measurable business outcome:
-  - Each WHAT must propose a concrete, observable change that would prove progress on the corresponding WHY.
-  - Frame as: "What would be different in 12 months if we succeed?"
-  - Must be specific enough to verify, but not a made-up KPI number.
+WHAT — proposed activity or deliverable:
+  - Each WHAT must propose a concrete activity, diagnostic, workshop, analysis, decision model, roadmap, readiness assessment, or deliverable.
+  - It must answer: "What could be done next?"
   - Tone: Tangible, verifiable, grounded in this company's context.
   - Length: 2-3 sentences each.
-  - Example: "Cross-functional teams own services end-to-end, eliminating the current approval chain that delays every deployment."
+  - Example: "Run a value-stream and team-ownership diagnostic to identify the handoffs, governance points, and release constraints that slow digital-service delivery."
 
 Rules:
   - WHY1 pairs with WHAT1 (same theme). If 2 pairs: WHY2 pairs with WHAT2 (different theme).

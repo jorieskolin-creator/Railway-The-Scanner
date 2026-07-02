@@ -506,7 +506,10 @@ const isForesightContext = (link) => {
   const handleCopyWhyWhat = () => {
     const why = data.why_proposals || [];
     const what = data.what_proposals || [];
-    const text = `WHY (Desired Impact):\n1. ${why[0] || ''}\n2. ${why[1] || ''}\n\nWHAT (Desired Effect):\n1. ${what[0] || ''}\n2. ${what[1] || ''}`;
+    const progress = data.what_progress_proposals || [];
+    const maxItems = Math.max(why.length, what.length, progress.length, 2);
+    const numbered = (items: any[]) => Array.from({ length: maxItems }, (_, i) => `${i + 1}. ${items[i] || ''}`).join('\n');
+    const text = `WHY (Customer value / consequence):\n${numbered(why)}\n\nWHAT (Activity / deliverable):\n${numbered(what)}\n\nPROGRESS PROOF:\n${numbered(progress)}`;
     navigator.clipboard.writeText(text).then(() => {
         setWhyWhatCopied(true);
         setTimeout(() => setWhyWhatCopied(false), 2000);
@@ -997,7 +1000,11 @@ const isForesightContext = (link) => {
             return '<div class="callout cyan"><h3>Copied From Buying Insight</h3><p>This stakeholder list is copied from the stored Admin Buying Insight report. Treat it as sales-prep and discovery guidance, not as core Scanner diagnostic evidence or confirmed buying intent.</p></div>'
                 + '<div class="stakeholders">' + cards + '</div>';
         };
-        var activationHTML = '<div class="two-col"><div><h3>WHY</h3>' + renderList(exportData.why_proposals) + '</div><div><h3>WHAT</h3>' + renderList(exportData.what_proposals) + '</div></div>'
+        var activationProgressHTML = Array.isArray(exportData.what_progress_proposals) && exportData.what_progress_proposals.length
+            ? '<div class="section nested"><h3>PROGRESS — Observable Proof</h3>' + renderList(exportData.what_progress_proposals) + '</div>'
+            : '';
+        var activationHTML = '<div class="two-col"><div><h3>WHY — Customer Value / Consequence</h3>' + renderList(exportData.why_proposals) + '</div><div><h3>WHAT — Activity / Deliverable</h3>' + renderList(exportData.what_proposals) + '</div></div>'
+            + activationProgressHTML
             + renderSection('Strategic Pitch', 'Outbound narrative', renderParagraphs(exportData.pitch_text), 'nested');
         var strategicForesightData = exportData.strategic_foresight || {};
         var strategicForesightHTML = renderStrategicForesightEvidence(strategicForesightData);
@@ -1327,7 +1334,10 @@ const isForesightContext = (link) => {
             exportData.lastUpdated ? '<span>Scanned ' + escapeHTML(new Date(exportData.lastUpdated).toLocaleDateString('en-FI', { day: 'numeric', month: 'long', year: 'numeric' })) + '</span>' : ''
         ].filter(Boolean).join('');
 
-        const whyWhatHTML = '<div class="two-col"><div><h3>WHY</h3>' + renderList(exportData.why_proposals) + '</div><div><h3>WHAT</h3>' + renderList(exportData.what_proposals) + '</div></div>';
+        const whyWhatProgressHTML = Array.isArray(exportData.what_progress_proposals) && exportData.what_progress_proposals.length
+            ? '<div class="section nested"><h3>PROGRESS — Observable Proof</h3>' + renderList(exportData.what_progress_proposals) + '</div>'
+            : '';
+        const whyWhatHTML = '<div class="two-col"><div><h3>WHY — Customer Value / Consequence</h3>' + renderList(exportData.why_proposals) + '</div><div><h3>WHAT — Activity / Deliverable</h3>' + renderList(exportData.what_proposals) + '</div></div>' + whyWhatProgressHTML;
         const pitchHTML = renderParagraphs(exportData.pitch_text);
         const diagnosisHTML = renderParagraphs(exportData.summary_text)
             + (Array.isArray(exportData.evidence_based_risks) && exportData.evidence_based_risks.length > 0
@@ -2282,7 +2292,7 @@ const isForesightContext = (link) => {
                 <div className="relative group">
                     <div className="space-y-4">
                         <div>
-                            <p className="text-[11px] font-bold text-amber-400 uppercase tracking-wider mb-2">WHY — Desired Impact</p>
+                            <p className="text-[11px] font-bold text-amber-400 uppercase tracking-wider mb-2">WHY — Customer Value / Consequence</p>
                             <div className="space-y-2">
                                 {data.why_proposals.map((why, i) => (
                                     <div key={i} className="bg-black/30 p-3 rounded-lg border border-amber-500/15">
@@ -2294,7 +2304,7 @@ const isForesightContext = (link) => {
                             </div>
                         </div>
                         <div>
-                            <p className="text-[11px] font-bold text-orange-400 uppercase tracking-wider mb-2">WHAT — Desired Effect</p>
+                            <p className="text-[11px] font-bold text-orange-400 uppercase tracking-wider mb-2">WHAT — Activity / Deliverable</p>
                             <div className="space-y-2">
                                 {data.what_proposals.map((what, i) => (
                                     <div key={i} className="bg-black/30 p-3 rounded-lg border border-orange-500/15">
@@ -2305,6 +2315,20 @@ const isForesightContext = (link) => {
                                 ))}
                             </div>
                         </div>
+                        {data.what_progress_proposals && data.what_progress_proposals.length > 0 && (
+                            <div>
+                                <p className="text-[11px] font-bold text-cyan-400 uppercase tracking-wider mb-2">PROGRESS — Observable Proof</p>
+                                <div className="space-y-2">
+                                    {data.what_progress_proposals.map((progress, i) => (
+                                        <div key={i} className="bg-black/30 p-3 rounded-lg border border-cyan-500/15">
+                                            <p className="text-xs text-slate-300 leading-relaxed">
+                                                <span className="text-cyan-400 font-bold mr-2">{i + 1}.</span>{progress}
+                                            </p>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </div>
                     <button
                         onClick={handleCopyWhyWhat}
