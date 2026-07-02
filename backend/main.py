@@ -58,6 +58,7 @@ from llm_clients import call_anthropic_text, call_json_model_chain, call_openai_
 from buying_potential import BuyingPotentialError, generate_buying_potential_report, load_service_portfolio_kb, validate_service_portfolio_kb
 from company_evidence import CompanyEvidenceError, build_company_evidence_database
 from company_source_ledger import CompanySourceLedgerError, build_company_source_ledger
+from market_readiness_report import build_market_readiness_report, render_market_readiness_html
 from evidence_graph import attach_evidence_graph, build_evidence_manifest, evidence_prompt_packet
 from evidence_absence import build_evidence_absence_signals, format_absence_signals_for_prompt
 from evidence_contracts import build_classification_namespaces
@@ -1638,6 +1639,110 @@ _company_evidence_jobs = {}
 _company_evidence_jobs_lock = threading.Lock()
 _company_source_ledger_jobs = {}
 _company_source_ledger_jobs_lock = threading.Lock()
+_market_readiness_state = {
+    "is_running": False,
+    "started_at": None,
+    "completed_at": None,
+    "current_step": None,
+    "progress": 0,
+    "result": None,
+    "error": None,
+    "metadata": None,
+}
+_market_readiness_lock = threading.Lock()
+
+
+def _update_market_readiness_state(**fields):
+    with _market_readiness_lock:
+        _market_readiness_state.update(fields)
+
+
+def _run_market_readiness_generation():
+    started = time.time()
+
+    def set_stage(step: str, progress: int):
+        _update_market_readiness_state(
+            is_running=True,
+            current_step=step,
+            progress=progress,
+            elapsed_ms=int((time.time() - started) * 1000),
+        )
+        print(f"   🔄 [Market Readiness] {step} ({progress}%)", flush=True)
+
+    try:
+        set_stage("Loading stored Scanner artifacts", 12)
+        report_json = build_market_readiness_report(storage, buying_storage=buying_storage)
+        set_stage("Rendering HTML report", 72)
+        html_report = render_market_readiness_html(report_json)
+        set_stage("Saving report artifacts", 88)
+        metadata = storage.save_market_readiness_report(report_json, html_report)
+        if not metadata:
+            raise RuntimeError("Market Readiness report generated but could not be saved.")
+        _update_market_readiness_state(
+            is_running=False,
+            current_step=None,
+            progress=100,
+            result={"status": "completed"},
+            error=None,
+            metadata=metadata,
+            completed_at=datetime.utcnow().isoformat(),
+            elapsed_ms=int((time.time() - started) * 1000),
+        )
+        print(f"   ✅ [Market Readiness] Completed in {int((time.time() - started) * 1000)}ms", flush=True)
+    except Exception as exc:
+        print(f"   ❌ [Market Readiness] Failed: {exc}", flush=True)
+        import traceback
+        traceback.print_exc()
+        _update_market_readiness_state(
+            is_running=False,
+            current_step=None,
+            progress=100,
+            result={"error": str(exc)},
+            error=f"{type(exc).__name__}: {str(exc)[:240]}",
+            completed_at=datetime.utcnow().isoformat(),
+            elapsed_ms=int((time.time() - started) * 1000),
+        )
+
+
+@app.post("/admin/generate-market-readiness-report")
+async def generate_market_readiness_report_endpoint(request: Request):
+    """Start the Admin-only Market Readiness and Emerging Demand Outlook report."""
+    verify_admin(request)
+    with _market_readiness_lock:
+        if _market_readiness_state["is_running"]:
+            raise HTTPException(status_code=409, detail="Market Readiness report generation already in progress.")
+        _market_readiness_state.update({
+            "is_running": True,
+            "started_at": datetime.utcnow().isoformat(),
+            "completed_at": None,
+            "current_step": "Initializing",
+            "progress": 0,
+            "result": None,
+            "error": None,
+            "metadata": None,
+            "elapsed_ms": 0,
+        })
+    thread = threading.Thread(target=_run_market_readiness_generation, daemon=True)
+    thread.start()
+    return {"status": "started"}
+
+
+@app.get("/admin/market-readiness-status")
+async def market_readiness_report_status(request: Request):
+    verify_admin(request)
+    with _market_readiness_lock:
+        state = dict(_market_readiness_state)
+    if not state.get("metadata"):
+        latest = storage.get_market_readiness_report()
+        if latest.get("exists"):
+            state["metadata"] = latest.get("metadata")
+    return state
+
+
+@app.get("/admin/market-readiness-report")
+async def get_market_readiness_report_endpoint(request: Request):
+    verify_admin(request)
+    return storage.get_market_readiness_report()
 
 
 def _append_company_evidence_log(job_id: str, message: str):

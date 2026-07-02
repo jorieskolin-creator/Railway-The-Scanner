@@ -165,6 +165,9 @@ const App = () => {
  const [pipelineReadiness, setPipelineReadiness] = useState(null);
  const [pipelineReadinessLoading, setPipelineReadinessLoading] = useState(false);
  const [prepareCompanyName, setPrepareCompanyName] = useState(null);
+ const [marketReadinessLoading, setMarketReadinessLoading] = useState(false);
+ const [marketReadinessStatus, setMarketReadinessStatus] = useState<any>(null);
+ const [marketReadinessMeta, setMarketReadinessMeta] = useState<any>(null);
 
   // MANUAL EDIT STATE
   const [editingCompany, setEditingCompany] = useState(null);  // company name being edited
@@ -592,9 +595,94 @@ const App = () => {
         const json = await res.json();
         setDataReviewItems(json.companies || []);
         fetchPipelineReadiness();
+        fetchMarketReadinessStatus();
       }
     } catch (e) { console.error(e); alert("Failed to load review data."); }
     finally { setDataReviewLoading(false); }
+  };
+
+  const fetchMarketReadinessStatus = async () => {
+    if (!isAdmin) return null;
+    try {
+      const res = await fetch(`/admin/market-readiness-status?t=${Date.now()}`, { headers: authHeaders() });
+      if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return null; }
+      if (!res.ok) return null;
+      const json = await res.json();
+      setMarketReadinessStatus(json);
+      if (json?.metadata) setMarketReadinessMeta(json.metadata);
+      return json;
+    } catch (e) {
+      console.error('Market Readiness status failed:', e);
+      return null;
+    }
+  };
+
+  const fetchMarketReadinessReport = async () => {
+    if (!isAdmin) return null;
+    try {
+      const res = await fetch(`/admin/market-readiness-report?t=${Date.now()}`, { headers: authHeaders() });
+      if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return null; }
+      if (!res.ok) return null;
+      const json = await res.json();
+      if (json?.metadata) setMarketReadinessMeta(json.metadata);
+      return json;
+    } catch (e) {
+      console.error('Market Readiness report lookup failed:', e);
+      return null;
+    }
+  };
+
+  const handleOpenMarketReadinessReport = async () => {
+    if (!isAdmin) return;
+    const current = marketReadinessMeta?.html_url ? { metadata: marketReadinessMeta } : await fetchMarketReadinessReport();
+    const url = current?.metadata?.html_url;
+    if (!url) {
+      alert('No Market Readiness Outlook has been generated yet.');
+      return;
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleGenerateMarketReadinessReport = async () => {
+    if (!isAdmin || marketReadinessLoading) return;
+    const proceed = confirm('Generate Market Readiness and Emerging Demand Outlook?\n\nThis uses stored Scanner, Market Intelligence, FAVI, Observatory, and Cross-Impact artifacts. It does not rescan companies or change existing summaries.');
+    if (!proceed) return;
+    setMarketReadinessLoading(true);
+    setMarketReadinessStatus({ is_running: true, current_step: 'Queued', progress: 0 });
+    try {
+      const res = await fetch('/admin/generate-market-readiness-report', {
+        method: 'POST',
+        headers: authHeaders()
+      });
+      if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return; }
+      if (res.status === 409) {
+        alert('Market Readiness report generation is already running.');
+      } else if (!res.ok) {
+        throw new Error(await res.text());
+      }
+      let finalStatus: any = null;
+      for (let i = 0; i < 90; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+        const status = await fetchMarketReadinessStatus();
+        if (!status) continue;
+        if (!status.is_running) {
+          finalStatus = status;
+          break;
+        }
+      }
+      if (!finalStatus) throw new Error('Market Readiness report timed out while polling status.');
+      if (finalStatus.error) throw new Error(finalStatus.error);
+      if (finalStatus.metadata) {
+        setMarketReadinessMeta(finalStatus.metadata);
+        alert(`Market Readiness Outlook generated.\n\nCompanies: ${finalStatus.metadata.company_count ?? 'n/a'}\nDomains: ${finalStatus.metadata.domain_count ?? 'n/a'}\nWarnings: ${(finalStatus.metadata.warnings || []).length}`);
+      }
+      refreshPipelineAll();
+    } catch (e) {
+      console.error(e);
+      alert('Market Readiness Outlook failed: ' + (e?.message || e));
+    } finally {
+      setMarketReadinessLoading(false);
+    }
   };
 
   const handleDeleteCompany = async (companyName) => {
@@ -2164,6 +2252,23 @@ const App = () => {
                   WHY/WHAT
                 </button>
                 <button
+                  onClick={handleGenerateMarketReadinessReport}
+                  disabled={marketReadinessLoading || marketReadinessStatus?.is_running}
+                  className="flex items-center gap-1.5 px-2.5 py-1 bg-sky-900/40 hover:bg-sky-800/60 border border-sky-600/50 text-sky-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
+                  title="Generate the Admin-only Market Readiness and Emerging Demand Outlook from stored Scanner artifacts."
+                >
+                  {(marketReadinessLoading || marketReadinessStatus?.is_running) ? <Loader2 size={12} className="animate-spin" /> : <BarChart3 size={12} />}
+                  {(marketReadinessLoading || marketReadinessStatus?.is_running) ? `OUTLOOK ${marketReadinessStatus?.progress || 0}%` : 'OUTLOOK'}
+                </button>
+                <button
+                  onClick={handleOpenMarketReadinessReport}
+                  className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-800/60 hover:bg-slate-700/70 border border-slate-600/50 text-slate-200 font-mono font-bold text-[10px] rounded transition-all"
+                  title={marketReadinessMeta?.html_url ? `Open latest Market Readiness Outlook generated ${marketReadinessMeta.generated_at || ''}` : 'Open latest Market Readiness Outlook, if available.'}
+                >
+                  <Eye size={12} />
+                  OPEN OUTLOOK
+                </button>
+                <button
                   onClick={handleEnrichStakeholdersAll}
                   disabled={enrichStakeholdersLoading}
                   className="flex items-center gap-1.5 px-2.5 py-1 bg-indigo-900/40 hover:bg-indigo-800/60 border border-indigo-600/50 text-indigo-200 font-mono font-bold text-[10px] rounded transition-all disabled:opacity-50"
@@ -2238,6 +2343,46 @@ const App = () => {
                 </div>
               ) : (
                 <>
+                  {(marketReadinessStatus || marketReadinessMeta) && (
+                    <div className={`rounded-xl p-4 border ${marketReadinessStatus?.error ? 'bg-rose-500/5 border-rose-500/20' : marketReadinessStatus?.is_running ? 'bg-sky-500/5 border-sky-500/20' : 'bg-slate-500/5 border-slate-500/20'}`}>
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            {marketReadinessStatus?.is_running ? <Loader2 size={16} className="text-sky-300 animate-spin" /> : <BarChart3 size={16} className="text-sky-300" />}
+                            <span className="font-bold text-white text-sm">Market Readiness Outlook</span>
+                            {marketReadinessMeta?.generated_at && (
+                              <span className="text-[10px] text-slate-500 font-mono">latest {readinessDate(marketReadinessMeta.generated_at)}</span>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-400 mt-1">
+                            {marketReadinessStatus?.is_running
+                              ? `${marketReadinessStatus.current_step || 'Generating'} (${marketReadinessStatus.progress || 0}%)`
+                              : marketReadinessStatus?.error
+                                ? marketReadinessStatus.error
+                                : marketReadinessMeta?.html_url
+                                  ? `Stored report ready: ${marketReadinessMeta.company_count ?? 'n/a'} companies, ${marketReadinessMeta.domain_count ?? 'n/a'} domains.`
+                                  : 'No stored report found yet.'}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={fetchMarketReadinessStatus}
+                            className="px-2.5 py-1 rounded border border-slate-600/50 bg-black/20 text-[10px] text-slate-300 font-mono hover:bg-white/5"
+                          >
+                            STATUS
+                          </button>
+                          <button
+                            onClick={handleOpenMarketReadinessReport}
+                            disabled={!marketReadinessMeta?.html_url}
+                            className="px-2.5 py-1 rounded border border-sky-600/50 bg-sky-500/10 text-[10px] text-sky-200 font-mono hover:bg-sky-500/20 disabled:opacity-40"
+                          >
+                            OPEN
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {/* RECHECK RESULTS BANNER */}
                   {recheckResults && (
                     <div className={`rounded-xl p-4 border ${recheckResults.flagged_count > 0 ? 'bg-rose-500/5 border-rose-500/20' : 'bg-emerald-500/5 border-emerald-500/20'}`}>
