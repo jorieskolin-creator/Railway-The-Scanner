@@ -7,6 +7,8 @@ and (optionally) strategic foresight. Designed to be the "full report"
 that the company modal summary is the executive summary of.
 """
 
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -35,6 +37,49 @@ _FORBIDDEN_TERMS = [
 
 _WORD_MIN = 800
 _WORD_MAX = 1200
+_COMPACT_WORD_MIN = 500
+_COMPACT_WORD_MAX = 750
+
+
+def _section_headings(text: str) -> list[str]:
+    return [
+        match.group(1).strip()
+        for match in re.finditer(r"(?m)^##\s+(.+?)\s*$", text or "")
+    ]
+
+
+def _ends_complete_sentence(text: str) -> bool:
+    cleaned = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not cleaned:
+        return False
+    return bool(re.search(r'[\.\!\?][)"\']?$', cleaned))
+
+
+def detailed_report_quality(text: str, compact: bool = False) -> dict:
+    words = _word_count(text)
+    headings = _section_headings(text)
+    normalized = [heading.strip().lower() for heading in headings]
+    required_min = _COMPACT_WORD_MIN if compact else _WORD_MIN
+    missing = []
+    if words < required_min:
+        missing.append(f"word_count_below_{required_min}")
+    if "key findings" not in normalized:
+        missing.append("missing_key_findings")
+    if "verdict" not in normalized:
+        missing.append("missing_verdict")
+    dimension_count = len([heading for heading in normalized if heading not in {"key findings", "verdict"}])
+    if dimension_count < 3:
+        missing.append("missing_three_dimension_sections")
+    if not _ends_complete_sentence(text):
+        missing.append("ends_mid_sentence")
+    return {
+        "complete": not missing,
+        "word_count": words,
+        "headings": headings,
+        "dimension_section_count": dimension_count,
+        "missing": missing,
+        "required_min_words": required_min,
+    }
 
 
 def _build_input_payload(full_data: dict, company_name: str, foresight_data: dict | None, prior_summaries: dict | None = None) -> dict:
@@ -325,6 +370,32 @@ MANDATORY RULES:
 Output only the prose text. Nothing else."""
 
 
+def _build_completion_prompt(payload: dict, company_name: str, draft: str, compact: bool = False) -> str:
+    target = f"{_COMPACT_WORD_MIN}-{_COMPACT_WORD_MAX}" if compact else f"{_WORD_MIN}-{_WORD_MAX}"
+    return f"""You are repairing and completing a Detailed Forensic Report for {company_name}.
+
+The previous draft is incomplete or below the required length. Produce a COMPLETE replacement report, not a continuation fragment.
+
+STRICT OUTPUT REQUIREMENTS:
+- {target} words.
+- Exactly 5-7 sections.
+- Required headings: ## Key Findings, at least three dimension deep-dive sections, and ## Verdict.
+- Each section heading must be on its own line and start with "## ".
+- End with a complete sentence.
+- No bullets, no tables, no links, no URLs, no score names or score numbers.
+- Do not use internal archetype or KB labels.
+- Use only the structured payload as evidence. Treat the draft as reusable wording only, not as independent evidence.
+- If a factual claim cannot be supported by the payload, narrow it, qualify it, or omit it.
+
+STRUCTURED PAYLOAD:
+{json.dumps(payload, ensure_ascii=False, indent=2)}
+
+INCOMPLETE DRAFT TO REPAIR:
+{draft}
+
+Return only the completed report prose."""
+
+
 def _word_count(text: str) -> int:
     return len(text.split())
 
@@ -332,6 +403,38 @@ def _word_count(text: str) -> int:
 def _strip_links(text: str) -> str:
     """Remove any [label](url) markdown links the model sneaks in."""
     return re.sub(r'\[([^\]]+)\]\(https?://[^)]+\)', r'\1', text)
+
+
+def complete_detailed_report_draft(
+    full_data: dict,
+    company_name: str,
+    foresight_data: dict | None,
+    draft: str,
+    *,
+    prior_summaries: dict | None = None,
+    compact: bool = False,
+    time_budget_seconds: int = 80,
+) -> tuple[str, str, dict]:
+    """Use GPT to expand/repair a short or truncated Detailed Report draft."""
+    payload = _build_input_payload(full_data, company_name, foresight_data, prior_summaries)
+    prompt = _build_completion_prompt(payload, company_name, draft, compact=compact)
+    timeout = max(30, min(100, int(time_budget_seconds or 80)))
+    token_budget = 5000 if compact else 8000
+    t0 = time.time()
+    text = call_openai_text(
+        prompt,
+        model="gpt-5.5",
+        max_output_tokens=token_budget,
+        timeout=timeout,
+    )
+    text = _strip_links((text or "").strip())
+    quality = detailed_report_quality(text, compact=compact)
+    elapsed = int((time.time() - t0) * 1000)
+    print(
+        "   📝 [Detailed Report] GPT completion/repair: "
+        f"{quality['word_count']} words, complete={quality['complete']} ({elapsed}ms)"
+    )
+    return (text if quality["complete"] else ""), "gpt-5.5-completion", quality
 
 
 def generate_detailed_report(
@@ -363,10 +466,50 @@ def generate_detailed_report(
             "shorter Detailed Report of 500-750 words. Keep the same evidence discipline, headings, "
             "and proportionality rules. Do not omit major verified contradictions or material risks."
         )
-    target_min = 450 if compact else _WORD_MIN
-    usable_min = 350 if compact else 500
+    target_min = _COMPACT_WORD_MIN if compact else _WORD_MIN
     token_budget = 5000 if compact else 8000
-    model_timeout = max(35, min(120, int(time_budget_seconds or (85 if compact else 120))))
+    started = time.time()
+    total_budget = max(60, int(time_budget_seconds or (110 if compact else 180)))
+
+    def remaining_timeout(*, reserve: int = 8, cap: int = 120, floor: int = 30) -> int:
+        remaining = total_budget - int(time.time() - started) - reserve
+        return max(floor, min(cap, remaining))
+
+    def quality_ok(text: str) -> bool:
+        quality = detailed_report_quality(text, compact=compact)
+        if quality["complete"]:
+            return True
+        print(
+            "   ⚠️ [Detailed Report] Completeness gate failed: "
+            f"words={quality['word_count']}, missing={quality['missing']}, headings={quality['headings']}"
+        )
+        return False
+
+    def complete_with_gpt(draft: str, reason: str) -> tuple[str, str]:
+        if total_budget - int(time.time() - started) < 35:
+            print(f"   ⏭ [Detailed Report] GPT completion skipped ({reason}); insufficient report budget")
+            return "", ""
+        try:
+            print(f"   📝 [Detailed Report] Attempting gpt-5.5 completion ({reason})...")
+            t0 = time.time()
+            completion_prompt = _build_completion_prompt(payload, company_name, draft, compact=compact)
+            repaired = call_openai_text(
+                completion_prompt,
+                model="gpt-5.5",
+                max_output_tokens=token_budget,
+                timeout=remaining_timeout(reserve=5, cap=110, floor=30),
+            )
+            repaired = _strip_links((repaired or "").strip())
+            wc = _word_count(repaired)
+            elapsed = int((time.time() - t0) * 1000)
+            print(f"   📝 [Detailed Report] gpt-5.5 completion: {wc} words ({elapsed}ms)")
+            if repaired and quality_ok(repaired):
+                return repaired, "gpt-5.5-completion"
+            return "", ""
+        except Exception as exc:
+            elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
+            print(f"   ❌ [Detailed Report] gpt-5.5 completion failed ({elapsed}ms): {exc}")
+            return "", ""
 
     # --- Attempt 1: Claude Opus 4.8 (accuracy-first primary) ---
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
@@ -375,7 +518,7 @@ def generate_detailed_report(
         try:
             print(f"   📝 [Detailed Report] Attempting {OPUS_MODEL}...")
             t0 = time.time()
-            claude_client = anthropic.Anthropic(api_key=anthropic_key, timeout=model_timeout)
+            claude_client = anthropic.Anthropic(api_key=anthropic_key, timeout=remaining_timeout(reserve=35 if not compact else 20))
             response = claude_client.messages.create(
                 model=OPUS_MODEL,
                 max_tokens=token_budget,
@@ -393,13 +536,13 @@ def generate_detailed_report(
             elapsed = int((time.time() - t0) * 1000)
             print(f"   📝 [Detailed Report] {OPUS_MODEL}: {wc} words ({elapsed}ms)")
 
-            if text and wc >= target_min:
+            if text and wc >= target_min and quality_ok(text):
                 return text, OPUS_MODEL
-            elif text and wc >= usable_min:
-                print(f"   [Detailed Report] Opus result usable ({wc} words) — below target but acceptable")
-                return text, OPUS_MODEL
-            else:
-                print(f"   ⚠️ [Detailed Report] Opus too short ({wc} words) — falling back to GPT 5.5")
+            if text:
+                repaired, repair_model = complete_with_gpt(text, f"{OPUS_MODEL}_incomplete_or_short")
+                if repaired:
+                    return repaired, f"{OPUS_MODEL}+{repair_model}"
+            print(f"   ⚠️ [Detailed Report] Opus unusable ({wc} words) — falling back to GPT 5.5")
         except Exception as e:
             elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
             print(f"   ❌ [Detailed Report] {OPUS_MODEL} failed ({elapsed}ms): {e}")
@@ -412,25 +555,26 @@ def generate_detailed_report(
             prompt,
             model="gpt-5.5",
             max_output_tokens=token_budget,
-            timeout=model_timeout,
+            timeout=remaining_timeout(reserve=20 if not compact else 10, cap=110, floor=30),
         )
         text = _strip_links((text or "").strip())
         wc = _word_count(text)
         elapsed = int((time.time() - t0) * 1000)
         print(f"   📝 [Detailed Report] gpt-5.5: {wc} words ({elapsed}ms)")
 
-        if text and wc >= target_min:
+        if text and wc >= target_min and quality_ok(text):
             return text, "gpt-5.5"
-        if text and wc >= usable_min:
-            print(f"   [Detailed Report] GPT result usable ({wc} words) — below target but acceptable")
-            return text, "gpt-5.5"
+        if text:
+            repaired, repair_model = complete_with_gpt(text, "gpt-5.5_incomplete_or_short")
+            if repaired:
+                return repaired, f"gpt-5.5+{repair_model}"
         print(f"   ⚠️ [Detailed Report] GPT result too short ({wc} words) — falling back to Sonnet")
     except Exception as e:
         elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
         print(f"   ❌ [Detailed Report] gpt-5.5 failed ({elapsed}ms): {e}")
 
     if anthropic_key:
-        claude_client = anthropic.Anthropic(api_key=anthropic_key, timeout=model_timeout)
+        claude_client = anthropic.Anthropic(api_key=anthropic_key, timeout=remaining_timeout(reserve=5, cap=90, floor=30))
         # --- Attempt 3: Claude Sonnet 4.6 ---
         SONNET_MODEL = "claude-sonnet-4-6"
         try:
@@ -450,13 +594,13 @@ def generate_detailed_report(
             elapsed = int((time.time() - t0) * 1000)
             print(f"   📝 [Detailed Report] {SONNET_MODEL}: {wc} words ({elapsed}ms)")
 
-            if text and wc >= target_min:
+            if text and wc >= target_min and quality_ok(text):
                 return text, SONNET_MODEL
-            elif text and wc >= usable_min:
-                print(f"   [Detailed Report] Sonnet result usable ({wc} words) — below target but acceptable")
-                return text, SONNET_MODEL
-            else:
-                print(f"   ⚠️ [Detailed Report] Sonnet too short ({wc} words) — no usable detailed report")
+            if text:
+                repaired, repair_model = complete_with_gpt(text, f"{SONNET_MODEL}_incomplete_or_short")
+                if repaired:
+                    return repaired, f"{SONNET_MODEL}+{repair_model}"
+            print(f"   ⚠️ [Detailed Report] Sonnet unusable ({wc} words) — no usable detailed report")
         except Exception as e:
             elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
             print(f"   ❌ [Detailed Report] {SONNET_MODEL} failed ({elapsed}ms): {e}")

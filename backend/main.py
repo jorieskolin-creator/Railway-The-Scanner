@@ -6195,6 +6195,7 @@ TEXT TO REPAIR:
         # structured foresight evidence, Why/What proposals, all metrics and evidence).
         dr_text, dr_model = "", ""
         dr_ms = 0
+        prior_summaries = {}
         _dr_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
         full_data["detailed_report_status"] = "pending"
         if _dr_remaining < DETAIL_REPORT_COMPACT_MIN:
@@ -6208,10 +6209,19 @@ TEXT TO REPAIR:
                 scan_quality = "partial_report"
         else:
             try:
-                from detailed_report import generate_detailed_report
+                from detailed_report import (
+                    complete_detailed_report_draft,
+                    detailed_report_quality,
+                    generate_detailed_report,
+                )
                 dr_start = time.time()
                 dr_compact = _dr_remaining < DETAIL_REPORT_FULL_MIN
-                dr_time_budget = max(45, min(140, int(_dr_remaining) - 10))
+                if dr_compact:
+                    dr_time_budget = max(45, min(110, int(_dr_remaining) - 45))
+                else:
+                    # Full reports need room for Opus plus one GPT completion pass,
+                    # while preserving time for fact-check, save and job finalization.
+                    dr_time_budget = max(90, min(230, int(_dr_remaining) - 110))
                 if dr_compact:
                     print(
                         f"   📝 [Detailed Report] Moderate budget ({int(_dr_remaining)}s) "
@@ -6224,7 +6234,6 @@ TEXT TO REPAIR:
                     )
 
                 # Collect all prior analyses for meta-synthesis
-                prior_summaries = {}
                 if full_data.get("general_summary"):
                     prior_summaries["general_summary"] = full_data["general_summary"]
                 if full_data.get("summary_text"):
@@ -6287,12 +6296,52 @@ TEXT TO REPAIR:
                     "fact_check_skipped": True,
                     "reason": "insufficient_budget",
                 }
-            full_data["detailed_report"] = dr_text
-            full_data["detailed_report_model"] = dr_model
-            full_data["detailed_report_status"] = "generated"
-            full_data.pop("detailed_report_skip_reason", None)
-            wc = len(dr_text.split())
-            print(f"   ✅ [Detailed Report] {wc} words, model={dr_model} ({dr_ms}ms)")
+
+            dr_quality = detailed_report_quality(dr_text, compact=dr_compact)
+            if not dr_quality.get("complete"):
+                print(
+                    "   ⚠️ [Detailed Report] Post-check completeness failed: "
+                    f"words={dr_quality.get('word_count')}, missing={dr_quality.get('missing')}"
+                )
+                _dr_repair_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
+                if _dr_repair_remaining >= 65:
+                    try:
+                        repaired_text, repair_model, repair_quality = complete_detailed_report_draft(
+                            full_data,
+                            companyName,
+                            foresight_data,
+                            dr_text,
+                            prior_summaries=prior_summaries if prior_summaries else None,
+                            compact=dr_compact,
+                            time_budget_seconds=max(35, min(95, int(_dr_repair_remaining) - 35)),
+                        )
+                        if repaired_text and repair_quality.get("complete"):
+                            dr_text = repaired_text
+                            dr_model = f"{dr_model}+{repair_model}" if dr_model else repair_model
+                            dr_quality = repair_quality
+                            full_data["detailed_report"] = dr_text
+                    except Exception as repair_err:
+                        print(f"   ⚠️ [Detailed Report] Post-check repair failed: {repair_err}")
+                if not dr_quality.get("complete"):
+                    full_data.pop("detailed_report", None)
+                    full_data["detailed_report_model"] = dr_model
+                    full_data["detailed_report_status"] = "incomplete"
+                    full_data["detailed_report_skip_reason"] = "detailed_report_incomplete_after_repair"
+                    full_data["detailed_report_quality"] = dr_quality
+                    if scan_quality == "complete":
+                        scan_quality = "partial_report"
+                    dr_text = ""
+
+            if dr_text:
+                full_data["detailed_report"] = dr_text
+                full_data["detailed_report_model"] = dr_model
+                full_data["detailed_report_status"] = "generated"
+                full_data["detailed_report_quality"] = dr_quality
+                full_data.pop("detailed_report_skip_reason", None)
+                wc = len(dr_text.split())
+                print(f"   ✅ [Detailed Report] {wc} words, model={dr_model} ({dr_ms}ms)")
+            else:
+                print("   ⚠️ [Detailed Report] Incomplete after repair — not rendering as generated")
         else:
             if full_data.get("detailed_report_status") == "pending":
                 full_data["detailed_report_status"] = "empty"

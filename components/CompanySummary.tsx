@@ -996,6 +996,12 @@ const isForesightContext = (link) => {
         var strategicForesightHTML = renderStrategicForesightEvidence(strategicForesightData);
         var buyingInsightStakeholdersHTML = renderBuyingInsightStakeholders(buyingInsightReport);
         var rawDataHTML = '<details><summary>Open complete raw JSON payload</summary><pre>' + escapeHTML(JSON.stringify(exportData, null, 2)) + '</pre></details>';
+        var detailedReportStatus = exportData.detailed_report_status || '';
+        var detailedReportHTML = exportData.detailed_report && detailedReportStatus !== 'incomplete'
+            ? renderReportBlocks(exportData.detailed_report)
+            : (detailedReportStatus && detailedReportStatus !== 'generated'
+                ? '<div class="callout amber"><h3>Detailed Report unavailable</h3><p>The detailed forensic report was not rendered because generation was incomplete or did not pass the completeness gate. Open Scanner to rerun or inspect the source evidence.</p><p><strong>Status:</strong> ' + escapeHTML(detailedReportStatus) + '</p></div>'
+                : '');
         var htmlContent = '<!DOCTYPE html>\n<html lang="en">\n<head>\n'
             + '<meta charset="UTF-8">\n'
             + '<meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
@@ -1011,7 +1017,7 @@ const isForesightContext = (link) => {
             + renderSection('Master Metrics', 'All score and trust signals', '<div class="metrics">' + metrics.join('') + '</div>' + breakdownHTML)
             + renderSection('Evidence Trust', 'Source verification and promotion state', trustHTML)
             + renderSection('Strategic Activation', 'WHY, WHAT, and pitch', activationHTML)
-            + renderSection('Detailed Forensic Report', 'Diagnostic detail', renderReportBlocks(exportData.detailed_report))
+            + renderSection('Detailed Forensic Report', 'Diagnostic detail', detailedReportHTML)
             + renderSection(exportData.domain ? 'Domain Force Dossier: ' + exportData.domain : 'Domain Force Dossier', 'Market context', domainDossierHTML)
             + renderSection('Strategic Foresight Evidence', 'Key forces, cross-impact, scenarios, and climate exposure', strategicForesightHTML)
             + renderSection('Reality Checklist', 'Forensic reality markers', checklistHTML)
@@ -1332,6 +1338,12 @@ const isForesightContext = (link) => {
                 + '<div class="stakeholders">' + cards + '</div>';
         };
         const buyingInsightStakeholdersHTML = renderBuyingInsightStakeholders(exportData.buying_insight_report);
+        const detailedReportStatus = exportData.detailed_report_status || '';
+        const detailedReportHTML = exportData.detailed_report && detailedReportStatus !== 'incomplete'
+            ? renderReportBlocks(exportData.detailed_report)
+            : (detailedReportStatus && detailedReportStatus !== 'generated'
+                ? '<div class="callout amber"><h3>Detailed Report unavailable</h3><p>The detailed forensic report was not rendered because generation was incomplete or did not pass the completeness gate. Open Scanner to rerun or inspect the source evidence.</p><p><strong>Status:</strong> ' + escapeHTML(detailedReportStatus) + '</p></div>'
+                : '');
 
         const htmlContent = '<!DOCTYPE html>\n<html lang="en">\n<head>\n'
             + '<meta charset="UTF-8">\n'
@@ -1339,7 +1351,7 @@ const isForesightContext = (link) => {
             + '<title>' + escapeHTML(companyName) + ' - Executive Summary</title>\n'
             + '<style>\n'
             + ':root{color-scheme:dark;--bg:#0f172a;--panel:#172033;--panel2:#111827;--line:#334155;--text:#e5e7eb;--muted:#94a3b8;--cyan:#67e8f9;--green:#6ee7b7;--amber:#fbbf24;--rose:#fda4af;--violet:#c4b5fd;}\n'
-            + '*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Arial,sans-serif;line-height:1.55}main{max-width:1120px;margin:0 auto;padding:40px 28px 56px}.hero{border:1px solid var(--line);background:linear-gradient(135deg,#172033,#0f172a);border-radius:8px;padding:30px;margin-bottom:20px}.kicker{color:var(--cyan);font-size:11px;font-weight:800;letter-spacing:.16em;text-transform:uppercase}.hero h1{margin:8px 0 10px;font-size:34px;line-height:1.1}.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.meta span,.chips span{border:1px solid rgba(148,163,184,.28);background:rgba(15,23,42,.62);border-radius:999px;padding:5px 9px;color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:20px 0}.metric{border:1px solid rgba(148,163,184,.22);background:rgba(15,23,42,.72);border-radius:8px;padding:14px}.metric span{display:block;color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em}.metric strong{display:block;margin-top:4px;font-size:24px;color:white}.metric em{display:block;margin-top:3px;color:var(--muted);font-size:11px;font-style:normal}.section{border:1px solid rgba(148,163,184,.22);background:rgba(17,24,39,.78);border-radius:8px;padding:24px;margin-top:16px}.section h2{margin:0 0 14px;color:white;font-size:20px}.section h3{margin:20px 0 8px;color:var(--cyan);font-size:14px;text-transform:uppercase;letter-spacing:.08em}.section h4{margin:16px 0 6px;color:white;font-size:14px}.section p{margin:0 0 13px;color:#dbe4f0}.eyebrow{margin-bottom:6px;color:var(--muted);font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}.two-col{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px}.two-col h3{color:var(--amber)}ul{margin:0;padding-left:20px}li{margin:8px 0}.callout{margin-top:18px;border-left:3px solid var(--rose);background:rgba(244,63,94,.08);padding:14px 16px}.callout.cyan{border-left-color:var(--cyan);background:rgba(34,211,238,.08)}.stakeholders{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.stakeholders article{border:1px solid rgba(148,163,184,.18);background:rgba(15,23,42,.55);border-radius:8px;padding:15px}.stakeholders h3{margin:0;color:white;text-transform:none;letter-spacing:0;font-size:15px}.role{color:var(--green);font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin:4px 0 8px}.stakeholders small{display:block;margin-top:10px;color:var(--muted);font-size:11px}.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}.table-wrap{overflow-x:auto;margin-top:10px;margin-bottom:18px;border:1px solid rgba(148,163,184,.18);border-radius:8px}table{width:100%;border-collapse:collapse;font-size:11px;min-width:820px}th,td{padding:8px 10px;text-align:left;border-bottom:1px solid rgba(148,163,184,.14)}th{color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.08em;background:rgba(15,23,42,.68)}td{color:#dbe4f0}td:nth-child(4){color:var(--rose);font-weight:800}.scanner-link{display:inline-block;border:1px solid rgba(103,232,249,.38);background:rgba(8,145,178,.18);color:var(--cyan);border-radius:8px;padding:10px 14px;font-weight:800;text-decoration:none}.scanner-link:hover{background:rgba(8,145,178,.28);color:white}.formula{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}.inline-meta{color:var(--muted);font-size:.92em;font-weight:700;letter-spacing:.01em}.muted{color:var(--muted)!important}strong{color:white}hr{border:0;border-top:1px solid var(--line);margin:20px 0}.footer{margin-top:28px;color:#64748b;font-size:11px;text-align:center}.page-note{color:var(--muted);max-width:820px;margin:0}\n'
+            + '*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Arial,sans-serif;line-height:1.55}main{max-width:1120px;margin:0 auto;padding:40px 28px 56px}.hero{border:1px solid var(--line);background:linear-gradient(135deg,#172033,#0f172a);border-radius:8px;padding:30px;margin-bottom:20px}.kicker{color:var(--cyan);font-size:11px;font-weight:800;letter-spacing:.16em;text-transform:uppercase}.hero h1{margin:8px 0 10px;font-size:34px;line-height:1.1}.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.meta span,.chips span{border:1px solid rgba(148,163,184,.28);background:rgba(15,23,42,.62);border-radius:999px;padding:5px 9px;color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:20px 0}.metric{border:1px solid rgba(148,163,184,.22);background:rgba(15,23,42,.72);border-radius:8px;padding:14px}.metric span{display:block;color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em}.metric strong{display:block;margin-top:4px;font-size:24px;color:white}.metric em{display:block;margin-top:3px;color:var(--muted);font-size:11px;font-style:normal}.section{border:1px solid rgba(148,163,184,.22);background:rgba(17,24,39,.78);border-radius:8px;padding:24px;margin-top:16px}.section h2{margin:0 0 14px;color:white;font-size:20px}.section h3{margin:20px 0 8px;color:var(--cyan);font-size:14px;text-transform:uppercase;letter-spacing:.08em}.section h4{margin:16px 0 6px;color:white;font-size:14px}.section p{margin:0 0 13px;color:#dbe4f0}.eyebrow{margin-bottom:6px;color:var(--muted);font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}.two-col{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px}.two-col h3{color:var(--amber)}ul{margin:0;padding-left:20px}li{margin:8px 0}.callout{margin-top:18px;border-left:3px solid var(--rose);background:rgba(244,63,94,.08);padding:14px 16px}.callout.cyan{border-left-color:var(--cyan);background:rgba(34,211,238,.08)}.callout.amber{border-left-color:var(--amber);background:rgba(251,191,36,.08)}.stakeholders{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.stakeholders article{border:1px solid rgba(148,163,184,.18);background:rgba(15,23,42,.55);border-radius:8px;padding:15px}.stakeholders h3{margin:0;color:white;text-transform:none;letter-spacing:0;font-size:15px}.role{color:var(--green);font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin:4px 0 8px}.stakeholders small{display:block;margin-top:10px;color:var(--muted);font-size:11px}.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}.table-wrap{overflow-x:auto;margin-top:10px;margin-bottom:18px;border:1px solid rgba(148,163,184,.18);border-radius:8px}table{width:100%;border-collapse:collapse;font-size:11px;min-width:820px}th,td{padding:8px 10px;text-align:left;border-bottom:1px solid rgba(148,163,184,.14)}th{color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.08em;background:rgba(15,23,42,.68)}td{color:#dbe4f0}td:nth-child(4){color:var(--rose);font-weight:800}.scanner-link{display:inline-block;border:1px solid rgba(103,232,249,.38);background:rgba(8,145,178,.18);color:var(--cyan);border-radius:8px;padding:10px 14px;font-weight:800;text-decoration:none}.scanner-link:hover{background:rgba(8,145,178,.28);color:white}.formula{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}.inline-meta{color:var(--muted);font-size:.92em;font-weight:700;letter-spacing:.01em}.muted{color:var(--muted)!important}strong{color:white}hr{border:0;border-top:1px solid var(--line);margin:20px 0}.footer{margin-top:28px;color:#64748b;font-size:11px;text-align:center}.page-note{color:var(--muted);max-width:820px;margin:0}\n'
             + '</style>\n</head>\n<body>\n<main>\n'
             + '<header class="hero"><div class="kicker">Executive Summary HTML Export</div><h1>' + escapeHTML(companyName) + '</h1><p class="page-note">Compact context package for leadership review and upload workflows. This file intentionally excludes the full raw JSON payload.</p><div class="meta">' + headerMeta + '<span>Generated ' + escapeHTML(generatedDate) + '</span></div></header>\n'
             + (isLowEvidenceMode ? '<section class="section"><div class="eyebrow">Evidence status</div><h2>' + escapeHTML(lowEvidenceLabel || 'Low promoted evidence') + '</h2><p class="muted">Promoted source-register evidence is limited. The summary remains usable, but precise external company claims require source-backed support.</p></section>' : '')
@@ -1349,7 +1361,7 @@ const isForesightContext = (link) => {
             + renderSection('Strategic Synthesis', 'Current reality x external pressure', renderStrategicSynthesisParagraphs(exportData.strategic_synthesis))
             + renderSection('WHY and WHAT', 'Activation thesis', whyWhatHTML)
             + renderSection('Strategic Pitch', 'Outbound narrative', pitchHTML)
-            + renderSection('Detailed Forensic Report', 'Diagnostic detail', renderReportBlocks(exportData.detailed_report))
+            + renderSection('Detailed Forensic Report', 'Diagnostic detail', detailedReportHTML)
             + renderSection('Buying Insight Stakeholders', 'Sales-prep stakeholders', buyingInsightStakeholdersHTML)
             + '<section class="section"><div class="eyebrow">Continue analysis</div><h2>See Detailed Report</h2><p class="muted">For the full interactive scanner view, source context, and deeper company diagnostics, open the Scanner.</p><p><a class="scanner-link" href="https://the-demand-scanner.up.railway.app/" target="_blank" rel="noopener noreferrer">See detailed report - Scanner</a></p></section>'
             + '<div class="footer">AdaptabilityScanner | Executive export | No raw JSON embedded</div>\n'
@@ -1412,6 +1424,9 @@ const isForesightContext = (link) => {
     a.rel = 'noopener noreferrer';
     a.click();
   };
+  const detailedReportStatus = data?.detailed_report_status || '';
+  const showDetailedReport = Boolean(data?.detailed_report && detailedReportStatus !== 'incomplete');
+  const showDetailedReportUnavailable = Boolean(detailedReportStatus && detailedReportStatus !== 'generated' && !showDetailedReport);
 
   return (
     <div className="space-y-4">
@@ -2551,7 +2566,7 @@ const isForesightContext = (link) => {
         {/* These sections are wrapped with report-only class which is display:none in the app
             but the downloaded HTML overrides it to display:block */}
 
-        {data.detailed_report && (
+        {(showDetailedReport || showDetailedReportUnavailable) && (
             <div className="report-only-section" style={{ display: 'none' }}>
                 <div className="bg-black/20 p-8 rounded-2xl border-l-4 border-violet-500 backdrop-blur-sm">
                     <h3 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
@@ -2561,7 +2576,7 @@ const isForesightContext = (link) => {
                     <p className="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">
                         Deep diagnostic with current evidence and reasoning trace
                     </p>
-                    <div>
+                    {showDetailedReport ? <div>
                         {data.detailed_report.split(/\n\n+/).map((block, pi) => {
                             const headingMatch = block.match(/^##\s+(.+)/);
                             if (headingMatch) {
@@ -2577,7 +2592,14 @@ const isForesightContext = (link) => {
                                 </p>
                             );
                         })}
-                    </div>
+                    </div> : (
+                        <div className="bg-amber-500/10 border border-amber-400/20 rounded-lg p-4">
+                            <p className="text-amber-100 text-sm leading-relaxed">
+                                Detailed Report unavailable: generation was incomplete or did not pass the completeness gate.
+                                Status: {detailedReportStatus || 'unavailable'}.
+                            </p>
+                        </div>
+                    )}
                 </div>
             </div>
         )}
