@@ -174,6 +174,7 @@ def _clip(value: Any, limit: int = 900) -> str:
     word_cut = candidate.rfind(" ")
     if word_cut >= min_sentence:
         candidate = candidate[:word_cut].rstrip()
+    candidate = re.sub(r"\b(?:and|or|with|to|for|of|in|the|a|an)$", "", candidate, flags=re.I).rstrip()
     candidate = candidate.rstrip(" ,;:-")
     if candidate and not re.search(r"[.!?]$", candidate):
         candidate += "."
@@ -1282,18 +1283,18 @@ def _need_hypothesis_from_signal(signal: dict) -> dict:
     if play_type == "current_status":
         combined_activation = (
             f"Account signal: {current_condition}. Sales hypothesis: validate the response direction "
-            f"before this becomes an operating or financial constraint. Response direction: {what_to_propose}."
+            f"before this becomes an operating or financial constraint. Potential response to validate: {what_to_propose}."
         )
     elif play_type == "foresight_driven":
         combined_activation = (
             f"External pressure: {market_context}. Account-specific question: whether this connects to "
-            f"the current condition: {current_condition}. Response direction to validate: {what_to_propose}."
+            f"the current condition: {current_condition}. Potential response to validate: {what_to_propose}."
         )
     else:
         combined_activation = (
             f"Proactive opportunity: test whether this account condition becomes more commercially relevant "
             f"as the market pressure develops. Account condition: {current_condition}. Market pressure: "
-            f"{market_context}. Response direction: {what_to_propose}."
+            f"{market_context}. Potential response to validate: {what_to_propose}."
         )
     return {
         "future_pressure": future_pressure,
@@ -2129,6 +2130,71 @@ def _safe_guardrail_items(items: list[Any]) -> tuple[list[str], list[str]]:
     return list(dict.fromkeys(do_not_say)), list(dict.fromkeys(question_only))
 
 
+def _looks_like_verified_fact(text: str) -> bool:
+    clean = str(text or "").strip()
+    if not clean:
+        return False
+    lower = clean.lower()
+    fact_markers = (
+        "legal entity",
+        "business id",
+        "y-tunnus",
+        "located in",
+        "company material states",
+        "company material describes",
+        "available evidence points to",
+        "according to",
+        "recorded 2025 revenue",
+        "operating profit",
+        "operating margin",
+        "signed new",
+        "order book",
+        "backlog",
+        "cooperation agreement",
+        "final assembly",
+        "verified product",
+        "is a finnish",
+        "listed as",
+    )
+    question_markers = (
+        "whether ",
+        "how ",
+        "what ",
+        "where ",
+        "ask",
+        "do not assert",
+        "stakeholder role relevance",
+        "planned or deployed",
+        "already exist",
+    )
+    return any(marker in lower for marker in fact_markers) and not any(marker in lower for marker in question_markers)
+
+
+def _clean_evidence_confidence_buckets(evidence_confidence: dict) -> dict:
+    """Keep facts, hypotheses, questions, and blocked claims in separate buckets."""
+    evidence_confidence = _dict(evidence_confidence).copy()
+    verified = [str(item).strip() for item in _list(evidence_confidence.get("verified_facts")) if str(item).strip()]
+    questions = [str(item).strip() for item in _list(evidence_confidence.get("use_only_as_question")) if str(item).strip()]
+    safe_hypotheses = [str(item).strip() for item in _list(evidence_confidence.get("safe_hypotheses")) if str(item).strip()]
+
+    moved_facts = [item for item in questions if _looks_like_verified_fact(item)]
+    questions = [item for item in questions if item not in moved_facts]
+    verified = list(dict.fromkeys(verified + moved_facts))
+
+    do_not_say, question_from_blocked = _safe_guardrail_items(
+        _list(evidence_confidence.get("do_not_say"))
+        + _list(evidence_confidence.get("do_not_use_claims"))
+    )
+    questions = list(dict.fromkeys(questions + question_from_blocked))
+
+    evidence_confidence["verified_facts"] = verified[:12]
+    evidence_confidence["safe_hypotheses"] = list(dict.fromkeys(safe_hypotheses))[:12]
+    evidence_confidence["use_only_as_question"] = list(dict.fromkeys(questions))[:12]
+    evidence_confidence["do_not_say"] = list(dict.fromkeys(do_not_say))[:12]
+    evidence_confidence["do_not_use_claims"] = evidence_confidence["do_not_say"]
+    return evidence_confidence
+
+
 def _signal_by_id(payload: dict) -> dict[str, dict]:
     return {
         str(signal.get("id")): signal
@@ -2590,6 +2656,7 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         ))[:12]
         evidence_confidence["do_not_use_claims"] = evidence_confidence["do_not_say"]
 
+    evidence_confidence = _clean_evidence_confidence_buckets(evidence_confidence)
     report["account_snapshot"] = _strip_archetype_terms(report.get("account_snapshot"))
     report["buying_potential_thesis"] = _strip_archetype_terms(report.get("buying_potential_thesis"))
     report["sales_spine"] = _strip_archetype_terms(report.get("sales_spine"))
@@ -3296,6 +3363,7 @@ def render_buying_potential_html(report: dict) -> str:
         upgrades = "".join(f"<li>{_esc(q)}</li>" for q in _list(item.get("qualification_upgrade_criteria"))[:5])
         modernization = "".join(f"<li>{_esc(q)}</li>" for q in _list(response.get("evolving_modernization_directions"))[:5])
         other_capabilities = "".join(f"<li>{_esc(q)}</li>" for q in _list(response.get("other_capabilities_may_be_required"))[:6])
+        do_not_say_html = f"<h3>Do Not Say</h3><ul>{do_not_say}</ul>" if do_not_say else ""
         return f"""
         <article class="card">
           <div class="card-top"><strong>{_esc(item.get('play_name') or item.get('service_or_offer'))}</strong><span class="risk">Risk: {_esc(item.get('overclaim_risk'))}</span></div>
@@ -3342,8 +3410,7 @@ def render_buying_potential_html(report: dict) -> str:
           <ul>{role_questions or '<li>No role-specific questions generated.</li>'}</ul>
           <h3>Qualification Upgrade Criteria</h3>
           <ul>{upgrades or '<li>No upgrade criteria generated.</li>'}</ul>
-          <h3>Do Not Say</h3>
-          <ul>{do_not_say or '<li>No guardrails generated.</li>'}</ul>
+          {do_not_say_html}
           <small>Signals: {_esc(', '.join(item.get('linked_signal_ids') or item.get('evidence_basis') or []))} · Classification: {_esc(item.get('play_classification'))} · Internal score retained in JSON only</small>
         </article>"""
 
@@ -3353,6 +3420,10 @@ def render_buying_potential_html(report: dict) -> str:
         def add_item(raw):
             text = _restore_company_case(_clip(raw, 420), company)
             if len(text) < 24:
+                return
+            if re.search(r"\bResponse direction\b", text, re.I):
+                return
+            if re.search(r"\b(?:and|or|with|to)\.$", text, re.I):
                 return
             if re.search(r"\bNo items generated\b", text, re.I):
                 return
@@ -3367,12 +3438,16 @@ def render_buying_potential_html(report: dict) -> str:
             need = _dict(play.get("need_hypothesis"))
             if _normalize_context_type(need.get("context_type"), play.get("play_type")) != context_type:
                 continue
-            add_item(
-                need.get("combined_activation_hypothesis")
-                or need.get("company_context")
-                or need.get("market_context")
-                or play.get("buying_hypothesis"),
-            )
+            if context_type == "company_only":
+                add_item(need.get("company_context") or need.get("current_condition") or play.get("buying_hypothesis"))
+            elif context_type == "market_watch":
+                add_item(need.get("market_context") or need.get("future_pressure") or play.get("trigger"))
+            else:
+                add_item(
+                    need.get("combined_activation_hypothesis")
+                    or play.get("buying_hypothesis")
+                    or need.get("what_to_propose")
+                )
         if len(items) < limit:
             for signal in _list(report.get("account_signal_map")):
                 if not isinstance(signal, dict):
@@ -3391,7 +3466,8 @@ def render_buying_potential_html(report: dict) -> str:
                 else:
                     add_item(
                         need.get("combined_activation_hypothesis")
-                        or f"{signal.get('why') or signal.get('account_movement')} Response direction: {signal.get('what') or signal.get('business_consequence')}"
+                        or signal.get("business_consequence")
+                        or signal.get("what")
                     )
                 if len(items) >= limit:
                     break

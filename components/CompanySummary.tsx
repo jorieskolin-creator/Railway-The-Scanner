@@ -737,6 +737,12 @@ const isForesightContext = (link) => {
             exportData.ai_verification && exportData.ai_verification.audit_notes,
             exportData.re_synthesis && exportData.re_synthesis.audit_notes
         );
+        var isVerboseAuditNote = function(note) {
+            var text = String(note || '');
+            return text.length > 240
+                || /\[[^\]]+\]\s*[^.]{20,}\s+—\s+/.test(text)
+                || /Large order book is absent|Structured payload supported|Inference scope|underlying strategic inference/i.test(text);
+        };
         var getSummaryLengthWordCount = function(note) {
             var match = String(note || '').match(/Summary (?:unusually long|length outside target range) \((\d+) words, expected 325-(?:375|475)\)/i);
             return match ? Number(match[1]) : null;
@@ -842,7 +848,7 @@ const isForesightContext = (link) => {
             + (contradictionWarnings.length ? '<div class="callout amber"><h3>Contradiction Warnings</h3>' + renderList(contradictionWarnings) + '</div>' : '<p class="muted">No contradiction warnings detected.</p>')
             + (wrongEntityWarnings.length ? '<div class="callout"><h3>Wrong-Entity Warnings</h3>' + renderList(wrongEntityWarnings) + '</div>' : '<p class="muted">No wrong-entity evidence detected.</p>')
             + (blockingWarnings.length ? '<div class="callout rose"><h3>Blocking Issues</h3>' + renderList(blockingWarnings) + '</div>' : '<p class="muted">No blocking false claims detected.</p>')
-            + (hallucinationWarnings.length ? '<div class="callout"><h3>Inference / Methodology Audit Notes</h3>' + renderList(hallucinationWarnings) + '</div>' : '<p class="muted">No inference or methodology audit notes detected.</p>')
+            + (hallucinationWarnings.filter(function(note) { return !isVerboseAuditNote(note); }).length ? '<div class="callout"><h3>Inference / Methodology Audit Notes</h3>' + renderList(hallucinationWarnings.filter(function(note) { return !isVerboseAuditNote(note); })) + '</div>' : '<p class="muted">Inference and methodology audit details are retained in the raw payload.</p>')
             + (qualityNotes.length ? '<div class="callout cyan"><h3>Quality Notes</h3>' + renderList(qualityNotes) + '</div>' : '<p class="muted">No format or style notes detected.</p>');
         var sourceTable = evidencePool.length ? '<div class="table-wrap source-register-wrap"><table class="source-register"><thead><tr><th>Ref</th><th>Stable ID</th><th>Source</th><th>Type</th><th>URL</th><th>Verification</th><th>Entity / Scope</th><th>Source Context</th><th>Claim Support</th><th>Exact Passage</th><th>Claim IDs</th></tr></thead><tbody>'
             + evidencePool.map(function(link) {
