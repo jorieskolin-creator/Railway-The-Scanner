@@ -111,9 +111,73 @@ class BuyingPotentialError(RuntimeError):
         self.status_code = status_code
 
 
-def _clip(value: Any, limit: int = 900) -> str:
+ACRONYM_FIXES = (
+    "AI", "API", "ERP", "SAP", "CRM", "PLM", "MES", "MOM", "OT", "IT",
+    "CFO", "CEO", "COO", "CIO", "CTO", "CISO", "GTP", "GTT",
+)
+
+
+def _clean_generated_text(value: Any) -> str:
     text = re.sub(r"\s+", " ", str(value or "")).strip()
-    return text[:limit]
+    if not text:
+        return ""
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    text = re.sub(r"\.{2,}", ".", text)
+    text = re.sub(r"([!?])\.", r"\1", text)
+    text = re.sub(r"\bThe external pressure is\s+", "External pressure: ", text, flags=re.I)
+    text = re.sub(r"\bThe account-specific question is whether\s+", "Account-specific question: whether ", text, flags=re.I)
+    for acronym in ACRONYM_FIXES:
+        text = re.sub(rf"\b{re.escape(acronym.lower())}\b", acronym, text, flags=re.I)
+    return text.strip()
+
+
+def _restore_company_case(text: Any, company_name: Any = "") -> str:
+    cleaned = _clean_generated_text(text)
+    company = str(company_name or "").strip()
+    if not company:
+        return cleaned
+    pattern = re.compile(rf"\b{re.escape(company)}\b", re.I)
+    cleaned = pattern.sub(company, cleaned)
+    legal_forms = ("Oy", "Ab", "Oyj", "Ltd", "Inc", "GmbH")
+    for token in legal_forms:
+        cleaned = re.sub(rf"\b{token.lower()}\b", token, cleaned, flags=re.I)
+    return cleaned
+
+
+def _polish_generated_text_tree(value: Any, company_name: Any = "", parent_key: str = "") -> Any:
+    if isinstance(value, list):
+        return [_polish_generated_text_tree(item, company_name, parent_key) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _polish_generated_text_tree(item, company_name, str(key))
+            for key, item in value.items()
+        }
+    if isinstance(value, str):
+        key_l = str(parent_key or "").lower()
+        if "url" in key_l or key_l in {"id", "source", "evidence_basis"}:
+            return value
+        return _restore_company_case(value, company_name)
+    return value
+
+
+def _clip(value: Any, limit: int = 900) -> str:
+    text = _clean_generated_text(value)
+    if len(text) <= limit:
+        return text
+    if re.match(r"^https?://\S+$", text):
+        return text[:limit]
+    candidate = text[:limit].rstrip()
+    min_sentence = max(80, int(limit * 0.45))
+    sentence_cuts = [m.end() for m in re.finditer(r"[.!?](?:\s|$)", candidate) if m.end() >= min_sentence]
+    if sentence_cuts:
+        return candidate[:sentence_cuts[-1]].strip()
+    word_cut = candidate.rfind(" ")
+    if word_cut >= min_sentence:
+        candidate = candidate[:word_cut].rstrip()
+    candidate = candidate.rstrip(" ,;:-")
+    if candidate and not re.search(r"[.!?]$", candidate):
+        candidate += "."
+    return candidate
 
 
 def _list(value: Any) -> list:
@@ -232,7 +296,7 @@ def _modernization_lens_text(tactic: dict) -> str:
     mechanism = _clip(tactic.get("solution_mechanism"), 180)
     problem = _clip(tactic.get("problem_pattern"), 180)
     if problem:
-        return f"{concept}: use {mechanism} as a validation lens where the account signal suggests {problem.lower()}"
+        return f"{concept}: use {mechanism} as a validation lens where the account signal suggests this pattern: {problem}"
     return f"{concept}: use {mechanism} as a validation lens after the account signal is confirmed"
 
 
@@ -1211,18 +1275,19 @@ def _need_hypothesis_from_signal(signal: dict) -> dict:
     market_context = _clip(future_pressure if play_type != "current_status" else signal.get("commercial_pressure") or pressure, 520)
     if play_type == "current_status":
         combined_activation = (
-            f"The account signal suggests {current_condition}. The sales hypothesis is to validate whether "
-            f"{what_to_propose.lower()} before this becomes an operating or financial constraint."
+            f"Account signal: {current_condition}. Sales hypothesis: validate the response direction "
+            f"before this becomes an operating or financial constraint. Response direction: {what_to_propose}."
         )
     elif play_type == "foresight_driven":
         combined_activation = (
-            f"The external pressure is {market_context}. The account-specific question is whether "
-            f"{current_condition.lower()} creates a practical reason to explore {what_to_propose.lower()}."
+            f"External pressure: {market_context}. Account-specific question: whether this connects to "
+            f"the current condition: {current_condition}. Response direction to validate: {what_to_propose}."
         )
     else:
         combined_activation = (
-            f"The proactive opportunity is to test whether {current_condition.lower()} could become more "
-            f"commercially relevant as {market_context.lower()}. The response direction is {what_to_propose.lower()}."
+            f"Proactive opportunity: test whether this account condition becomes more commercially relevant "
+            f"as the market pressure develops. Account condition: {current_condition}. Market pressure: "
+            f"{market_context}. Response direction: {what_to_propose}."
         )
     return {
         "future_pressure": future_pressure,
@@ -2521,7 +2586,7 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         "financial_sources": financial_count,
         "blocked_or_display_only": len(payload.get("blocked_or_display_only_sources") or []),
     }
-    return report
+    return _polish_generated_text_tree(report, _dict(payload.get("company")).get("name"))
 
 
 def _first_nonempty(*values: Any, limit: int = 900) -> str:
@@ -3090,6 +3155,7 @@ def _esc(value: Any) -> str:
 
 def render_buying_potential_html(report: dict) -> str:
     company = report.get("companyName") or "Company"
+    report = _polish_generated_text_tree(report, company)
     generated = report.get("generated_at", "")[:10]
     confidence = report.get("overall_confidence", 0)
     snapshot = _dict(report.get("account_snapshot"))
@@ -3255,21 +3321,52 @@ def render_buying_potential_html(report: dict) -> str:
 
     def hypothesis_items(context_type, limit=6):
         items = []
+        seen = set()
+        def add_item(raw):
+            text = _restore_company_case(_clip(raw, 420), company)
+            if len(text) < 24:
+                return
+            if re.search(r"\bNo items generated\b", text, re.I):
+                return
+            key = re.sub(r"\W+", " ", text.lower()).strip()[:120]
+            if key in seen:
+                return
+            seen.add(key)
+            items.append(text)
         for play in _list(report.get("recommended_sales_plays")):
             if not isinstance(play, dict):
                 continue
             need = _dict(play.get("need_hypothesis"))
             if _normalize_context_type(need.get("context_type"), play.get("play_type")) != context_type:
                 continue
-            text = _clip(
+            add_item(
                 need.get("combined_activation_hypothesis")
                 or need.get("company_context")
                 or need.get("market_context")
                 or play.get("buying_hypothesis"),
-                420,
             )
-            if text:
-                items.append(text)
+        if len(items) < limit:
+            for signal in _list(report.get("account_signal_map")):
+                if not isinstance(signal, dict):
+                    continue
+                signal_context = _normalize_context_type(
+                    _dict(signal.get("need_hypothesis")).get("context_type"),
+                    signal.get("sales_play_type") or signal.get("play_type") or signal.get("theme_type"),
+                )
+                if signal_context != context_type:
+                    continue
+                need = _dict(signal.get("need_hypothesis"))
+                if context_type == "company_only":
+                    add_item(need.get("company_context") or signal.get("why") or signal.get("account_movement"))
+                elif context_type == "market_watch":
+                    add_item(need.get("market_context") or signal.get("commercial_pressure") or signal.get("why"))
+                else:
+                    add_item(
+                        need.get("combined_activation_hypothesis")
+                        or f"{signal.get('why') or signal.get('account_movement')} Response direction: {signal.get('what') or signal.get('business_consequence')}"
+                    )
+                if len(items) >= limit:
+                    break
         return simple_items(items, limit)
 
     return f"""<!doctype html>
