@@ -30,10 +30,12 @@ from llm_clients import (
     parse_json_object,
 )
 from source_quality import is_generation_eligible_source
+from knowledge_base import REMOTE_KNOWLEDGE_URL as DEFAULT_MODERNIZATION_TACTICS_URL
 
 
 SERVICE_KB_CACHE_PREFIX = "service_portfolio/vivicta_services.extracted"
 SERVICE_KB_TEXT_LIMIT = 65000
+BUYING_MODERNIZATION_TACTICS_URL = "https://3bk7txu1jiixlgmr.public.blob.vercel-storage.com/tactics.json"
 ALLOWED_GATES = {
     "allowed_as_fact",
     "allowed_as_hypothesis",
@@ -42,6 +44,7 @@ ALLOWED_GATES = {
     "blocked",
 }
 EVIDENCE_BASIS_PREFIXES = ("SRC-", "FIN-", "CED-", "LEDGER-", "EVD-")
+_modernization_tactics_cache = {"url": None, "items": None}
 
 
 BUYER_ROLE_LENSES = {
@@ -145,6 +148,126 @@ def _dedupe_chain(models: tuple[str, ...]) -> tuple[str, ...]:
             seen.add(model)
             cleaned.append(model)
     return tuple(cleaned)
+
+
+def _tactic_text(item: dict) -> str:
+    return " ".join(
+        str(item.get(key) or "")
+        for key in (
+            "category",
+            "problem_pattern",
+            "what",
+            "concept",
+            "resource_label",
+            "solution_mechanism",
+            "case_study",
+        )
+    )
+
+
+def _normalize_modernization_tactic(item: Any) -> dict | None:
+    if not isinstance(item, dict):
+        return None
+    concept = _clip(item.get("concept") or item.get("resource_label"), 160)
+    mechanism = _clip(item.get("solution_mechanism"), 220)
+    problem = _clip(item.get("problem_pattern") or item.get("what"), 220)
+    category = _clip(item.get("category"), 80)
+    if not concept and mechanism:
+        concept = mechanism
+    if not concept or not mechanism:
+        return None
+    return {
+        "category": category,
+        "concept": concept,
+        "problem_pattern": problem,
+        "solution_mechanism": mechanism,
+        "case_study": _clip(item.get("case_study"), 220),
+        "resource_url": _clip(item.get("resource_url"), 500),
+        "match_text": _tactic_text(item).lower(),
+    }
+
+
+def _load_modernization_tactics() -> list[dict]:
+    url_candidates = [
+        _clean_env(os.environ.get("BUYING_MODERNIZATION_TACTICS_URL")),
+        BUYING_MODERNIZATION_TACTICS_URL,
+        DEFAULT_MODERNIZATION_TACTICS_URL,
+    ]
+    for url in [item for item in url_candidates if item]:
+        if _modernization_tactics_cache.get("url") == url and isinstance(_modernization_tactics_cache.get("items"), list):
+            return _modernization_tactics_cache["items"]
+        try:
+            response = requests.get(url, timeout=4)
+            if response.status_code != 200:
+                continue
+            data = response.json()
+            raw_items = data if isinstance(data, list) else _list(_dict(data).get("tactics"))
+            items = [item for item in (_normalize_modernization_tactic(raw) for raw in raw_items) if item]
+            if items:
+                _modernization_tactics_cache["url"] = url
+                _modernization_tactics_cache["items"] = items
+                return items
+        except Exception as exc:
+            print(f"   ⚠️ [Buying Potential] Modernization tactics fetch failed from {url}: {exc}")
+    _modernization_tactics_cache["url"] = "fallback_empty"
+    _modernization_tactics_cache["items"] = []
+    return []
+
+
+def _keyword_set(text: Any) -> set[str]:
+    words = {
+        word.lower()
+        for word in re.findall(r"[a-zA-ZåäöÅÄÖ0-9]{4,}", str(text or ""))
+    }
+    stop = {
+        "this", "that", "with", "from", "into", "where", "which", "would", "could", "should",
+        "company", "customer", "business", "pressure", "evidence", "public", "validate", "need",
+        "readiness", "service", "services", "modernization", "solution", "solutions",
+    }
+    return {word for word in words if word not in stop}
+
+
+def _modernization_lens_text(tactic: dict) -> str:
+    concept = _clip(tactic.get("concept"), 150)
+    mechanism = _clip(tactic.get("solution_mechanism"), 180)
+    problem = _clip(tactic.get("problem_pattern"), 180)
+    if problem:
+        return f"{concept}: use {mechanism} as a validation lens where the account signal suggests {problem.lower()}"
+    return f"{concept}: use {mechanism} as a validation lens after the account signal is confirmed"
+
+
+def _match_modernization_tactics(text: Any, tactics: list[dict], *, limit: int = 3) -> list[dict]:
+    query = _keyword_set(text)
+    if not query or not tactics:
+        return []
+    scored = []
+    for tactic in tactics:
+        tactic_words = _keyword_set(tactic.get("match_text") or _tactic_text(tactic))
+        overlap = sorted(query & tactic_words)
+        if not overlap:
+            continue
+        scored.append((len(overlap), tactic.get("category") or "", tactic.get("concept") or "", overlap[:8], tactic))
+    scored.sort(key=lambda item: (-item[0], item[1], item[2]))
+    matches = []
+    seen = set()
+    for _score, _category, _concept, overlap, tactic in scored:
+        key = tactic.get("concept")
+        if key in seen:
+            continue
+        seen.add(key)
+        matches.append({
+            "category": tactic.get("category"),
+            "concept": tactic.get("concept"),
+            "problem_pattern": tactic.get("problem_pattern"),
+            "solution_mechanism": tactic.get("solution_mechanism"),
+            "case_study": tactic.get("case_study"),
+            "resource_url": tactic.get("resource_url"),
+            "match_terms": overlap,
+            "lens": _modernization_lens_text(tactic),
+        })
+        if len(matches) >= limit:
+            break
+    return matches
 
 
 def _buying_model_mode(mode: str | None = None) -> str:
@@ -1086,10 +1209,21 @@ def _need_hypothesis_from_signal(signal: dict) -> dict:
     context_type = _normalize_context_type(signal.get("context_type"), play_type)
     company_context = _clip(current_condition, 520)
     market_context = _clip(future_pressure if play_type != "current_status" else signal.get("commercial_pressure") or pressure, 520)
-    combined_activation = _clip(
-        f"If {current_condition}, then {future_pressure} may make {what_to_propose} commercially relevant.",
-        700,
-    )
+    if play_type == "current_status":
+        combined_activation = (
+            f"The account signal suggests {current_condition}. The sales hypothesis is to validate whether "
+            f"{what_to_propose.lower()} before this becomes an operating or financial constraint."
+        )
+    elif play_type == "foresight_driven":
+        combined_activation = (
+            f"The external pressure is {market_context}. The account-specific question is whether "
+            f"{current_condition.lower()} creates a practical reason to explore {what_to_propose.lower()}."
+        )
+    else:
+        combined_activation = (
+            f"The proactive opportunity is to test whether {current_condition.lower()} could become more "
+            f"commercially relevant as {market_context.lower()}. The response direction is {what_to_propose.lower()}."
+        )
     return {
         "future_pressure": future_pressure,
         "current_condition": current_condition,
@@ -1101,7 +1235,7 @@ def _need_hypothesis_from_signal(signal: dict) -> dict:
         "disqualifier": "Do not advance this as a sales play if the customer confirms no owner, pressure, timing, or business consequence.",
         "company_context": company_context,
         "market_context": market_context,
-        "combined_activation_hypothesis": combined_activation,
+        "combined_activation_hypothesis": _clip(combined_activation, 700),
         "falsifier": "The hypothesis weakens if the customer confirms the condition is already controlled, the market pressure is not relevant, or there is no owner, timing, or business consequence.",
         "context_type": context_type,
     }
@@ -1117,9 +1251,15 @@ def _normalize_need_hypothesis(need: Any, fallback_signal: dict, play_type: Any 
         normalized["market_context"] = "No separate market pressure is required for this company-derived need hypothesis."
     if normalized["context_type"] == "market_watch" and not normalized.get("company_context"):
         normalized["company_context"] = "Account-specific exposure is not established; keep as market watch until discovery validates relevance."
-    if not normalized.get("combined_activation_hypothesis"):
+    combined_text = str(normalized.get("combined_activation_hypothesis") or "")
+    if (
+        not combined_text
+        or re.search(r"\bmay make\s+[A-Z]", combined_text)
+        or re.search(r"^If .{80,}, then .{80,}", combined_text)
+    ):
         normalized["combined_activation_hypothesis"] = _clip(
-            f"{normalized.get('company_context')} + {normalized.get('market_context')} may create a need to {normalized.get('what_to_propose')}",
+            fallback.get("combined_activation_hypothesis")
+            or f"{normalized.get('company_context')} + {normalized.get('market_context')} may create a need to {normalized.get('what_to_propose')}",
             700,
         )
     if not normalized.get("falsifier"):
@@ -1430,6 +1570,17 @@ def _build_input_payload(
             "do_not_claim": _list(svc.get("do_not_claim"))[:8],
             "disqualifiers": _list(svc.get("disqualifiers"))[:8],
         })
+    modernization_tactics = [
+        {
+            "category": tactic.get("category"),
+            "concept": tactic.get("concept"),
+            "problem_pattern": tactic.get("problem_pattern"),
+            "solution_mechanism": tactic.get("solution_mechanism"),
+            "case_study": tactic.get("case_study"),
+            "resource_url": tactic.get("resource_url"),
+        }
+        for tactic in _load_modernization_tactics()[:30]
+    ]
     service_owner = _clip(service_kb.get("owner") or "Vivicta", 120)
     company_name = _clip(company_data.get("companyName") or company_data.get("company_name"), 120)
     self_scan = bool(
@@ -1497,6 +1648,7 @@ def _build_input_payload(
         "stakeholder_name_list": _stakeholder_name_list(company_data, company_evidence, company_source_ledger),
         "foresight_forces": forces,
         "services": services,
+        "modernization_tactics": modernization_tactics,
         "self_scan_context": self_scan_context,
     }
     payload["account_signal_map"] = _build_account_signal_map(payload, services)
@@ -1618,6 +1770,9 @@ BUYING_SECTION_INSTRUCTIONS = {
         "first meeting objective, discovery questions by buyer role, qualification upgrade criteria, disqualifiers, "
         "safe customer-facing wording, do_not_say notes, readiness_band, evidence_coverage, confidence_boundary, "
         "priority_band, and response_directions. Keep play_score/hypothesis_strength only as internal compatibility fields. "
+        "Use modernization_tactics as an Evolving Modernization support layer only after an account SIG exists: map 1-3 "
+        "relevant tactics into response_directions.evolving_modernization_directions, but never use a tactic as the reason "
+        "for the play and never expose internal TAC codes. "
         "Do not create a separate conversation-angles section or a delivery plan."
     ),
     "pressure_evidence": (
@@ -1669,6 +1824,7 @@ Evidence contract:
 - Numeric scores are internal compatibility diagnostics only. They must not be used as proof that a need exists, as customer-facing evidence, or as the main reason for a proposal.
 - Every recommended play should map to one activation pair when any activation-pair SIG exists.
 - Every service recommendation must cite at least one account_signal_map SIG id. Service KB pain triggers may refine wording, but cannot be the only reason for a recommendation.
+- Evolving Modernization tactics are support lenses only. Use modernization_tactics after an account SIG exists, map at most 1-3 relevant tactics to the response direction, and never show TAC codes or let a tactic create demand by itself.
 - Every recommended play must separate company_context, market_context, combined_activation_hypothesis, falsifier, and response_directions. Response directions are not delivery scope, staffing, pricing, schedule, or implementation design.
 - If a bridge from account signal to service is weak, use allowed_as_discovery_question or internal_only.
 - Do not output empty pressure descriptions or generic buyer targets such as "relevant owner".
@@ -1912,6 +2068,7 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
     service_names = _known_service_names(payload)
     scanner_outputs = _dict(payload.get("scanner_outputs"))
     self_scan_context = _dict(payload.get("self_scan_context"))
+    modernization_tactics = [item for item in _list(payload.get("modernization_tactics")) if isinstance(item, dict)]
 
     def fix_item(item: Any, default_gate: str = "allowed_as_hypothesis") -> Any:
         if not isinstance(item, dict):
@@ -2164,6 +2321,36 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         response_directions["other_capabilities_may_be_required"] = [
             str(item) for item in (_list(response_directions.get("other_capabilities_may_be_required")) or default_response["other_capabilities_may_be_required"])[:6]
         ]
+        play_match_text = " ".join(
+            _clip(play.get(key), 700)
+            for key in (
+                "play_name",
+                "service_or_offer",
+                "buying_hypothesis",
+                "trigger_to_offer_bridge",
+                "business_hypothesis",
+                "why_relevant",
+                "safe_customer_wording",
+            )
+            if play.get(key)
+        )
+        play_match_text += " " + " ".join(
+            _clip(play["need_hypothesis"].get(key), 700)
+            for key in (
+                "future_pressure",
+                "current_condition",
+                "structural_exposure",
+                "what_to_propose",
+                "combined_activation_hypothesis",
+            )
+            if play["need_hypothesis"].get(key)
+        )
+        tactic_matches = _match_modernization_tactics(play_match_text, modernization_tactics, limit=3) if has_signal else []
+        if tactic_matches:
+            response_directions["modernization_lenses"] = tactic_matches
+            response_directions["evolving_modernization_directions"] = [
+                match.get("lens") for match in tactic_matches if match.get("lens")
+            ][:3]
         if play["play_classification"] in {"weak_signal", "do_not_use"} and play.get("gate") != "blocked":
             play["gate"] = "internal_only"
             play["confidence_boundary"] = _confidence_boundary(play.get("gate"), play["evidence_coverage"])
