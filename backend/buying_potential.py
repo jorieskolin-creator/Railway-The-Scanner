@@ -937,10 +937,12 @@ PLAY_TYPE_LABELS = {
 }
 
 CONTEXT_TYPE_LABELS = {
-    "company_only": "Company-derived need hypothesis",
-    "market_watch": "Market-derived pressure hypothesis",
-    "combined_activation": "Combined activation hypothesis",
+    "company_only": "Account need signal",
+    "market_watch": "Market pressure signal",
+    "combined_activation": "Need-emergence signal",
 }
+
+ARCHETYPE_TERMS = ("Thriving", "Modernizing", "Cash Cow", "At Risk")
 
 
 def _normalize_play_type(value: Any) -> str:
@@ -952,6 +954,27 @@ def _normalize_play_type(value: Any) -> str:
     if token in {"proactive", "opportunity", "proactive_opportunity"}:
         return "proactive_opportunity"
     return "proactive_opportunity"
+
+
+def _strip_archetype_terms(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_strip_archetype_terms(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _strip_archetype_terms(item) for key, item in value.items()}
+    if value is None or isinstance(value, str):
+        text = str(value or "")
+    else:
+        return value
+    replacements = {
+        "Thriving": "commercially strong",
+        "Modernizing": "modernizing",
+        "Cash Cow": "financially capable but operationally under-proven",
+        "At Risk": "financially and operationally pressured",
+    }
+    for label, replacement in replacements.items():
+        text = re.sub(rf"\b{re.escape(label)}\b", replacement, text)
+        text = re.sub(rf"\b{re.escape(label.upper())}\b", replacement, text)
+    return text
 
 
 def _normalize_context_type(value: Any, play_type: Any = None) -> str:
@@ -968,6 +991,19 @@ def _normalize_context_type(value: Any, play_type: Any = None) -> str:
     if normalized_play_type == "foresight_driven":
         return "market_watch"
     return "combined_activation"
+
+
+def _normalize_priority_band(value: Any, readiness_band: str = "") -> str:
+    token = str(value or "").strip().lower()
+    if token.startswith("priority a") or "high-priority" in token or token == "validate now":
+        return "Priority A - validate now"
+    if token.startswith("priority b") or "trigger" in token or "qualified" in token:
+        return "Priority B - validate when trigger appears"
+    if token.startswith("priority c") or "monitor" in token or "watch" in token:
+        return "Priority C - monitor"
+    if token.startswith("reject") or "insufficient" in token:
+        return "Reject - insufficient account connection"
+    return _priority_band(readiness_band)
 
 
 def _readiness_band(score: int, *, has_signal: bool, has_service: bool, has_question: bool, gate: str = "") -> str:
@@ -1832,6 +1868,24 @@ def _looks_unsafe_claim(text: Any) -> bool:
     )
 
 
+def _is_meaningful_text(*values: Any, min_len: int = 18) -> bool:
+    return any(len(_clip(value, 400)) >= min_len for value in values)
+
+
+def _safe_guardrail_items(items: list[Any]) -> tuple[list[str], list[str]]:
+    do_not_say: list[str] = []
+    question_only: list[str] = []
+    for raw in items:
+        text = _clip(raw, 520)
+        if not text:
+            continue
+        if _looks_unsafe_claim(text):
+            do_not_say.append(text)
+        else:
+            question_only.append(text)
+    return list(dict.fromkeys(do_not_say)), list(dict.fromkeys(question_only))
+
+
 def _signal_by_id(payload: dict) -> dict[str, dict]:
     return {
         str(signal.get("id")): signal
@@ -1872,6 +1926,11 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
     for key in ("account_snapshot", "buying_potential_thesis"):
         if isinstance(report.get(key), dict):
             fix_item(report[key], "allowed_as_hypothesis")
+            if key == "account_snapshot" and report[key].get("gate") == "allowed_as_fact":
+                snapshot_text_l = str(report[key].get("text") or report[key].get("statement") or "").lower()
+                if any(term in snapshot_text_l for term in ("proof", "hypothesis", "momentum", "maturity", "pressure", "demand-creation")):
+                    report[key]["gate"] = "allowed_as_hypothesis"
+            report[key] = _strip_archetype_terms(report[key])
     sales_spine = _dict(report.get("sales_spine"))
     if not sales_spine:
         activation_themes = [
@@ -1905,9 +1964,20 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             sales_spine["risk_themes"] = [_clip(item, 240) for item in _list(scanner_outputs.get("evidence_based_risks"))[:4]]
         if self_scan_context.get("is_self_scan"):
             sales_spine["self_scan_note"] = sales_spine.get("self_scan_note") or self_scan_context.get("framing")
-    report["sales_spine"] = sales_spine
+    report["sales_spine"] = _strip_archetype_terms(sales_spine)
     for key in ("why_now",):
-        report[key] = [fix_item(item) for item in _list(report.get(key)) if isinstance(item, dict)]
+        report[key] = [
+            fix_item(item)
+            for item in _list(report.get(key))
+            if isinstance(item, dict)
+            and _is_meaningful_text(
+                item.get("trigger"),
+                item.get("why_it_matters_now"),
+                item.get("interpretation"),
+                item.get("safe_discovery_question"),
+                min_len=12,
+            )
+        ]
     report["pressure_signals"] = [
         fix_item(item)
         for item in _list(report.get("pressure_signals"))
@@ -1915,6 +1985,80 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
     ]
     report["pain_to_solution_map"] = [fix_item(item) for item in _list(report.get("pain_to_solution_map")) if isinstance(item, dict)]
     report["recommended_sales_plays"] = [fix_item(item) for item in _list(report.get("recommended_sales_plays")) if isinstance(item, dict)]
+    referenced_activation_ids = {
+        signal_id
+        for play in report["recommended_sales_plays"]
+        if isinstance(play, dict)
+        for signal_id in _item_signal_ids(play)
+        if signal_id in activation_signal_ids
+    }
+    for signal_id in sorted(activation_signal_ids):
+        if signal_id in referenced_activation_ids or len(report["recommended_sales_plays"]) >= 3:
+            continue
+        activation_signal = signals_by_id.get(signal_id)
+        if not activation_signal:
+            continue
+        play_type = _normalize_play_type(activation_signal.get("sales_play_type") or activation_signal.get("theme_type"))
+        need = activation_signal.get("need_hypothesis") or _need_hypothesis_from_signal(activation_signal)
+        service_hints = [hint for hint in _list(activation_signal.get("service_fit_hints")) if isinstance(hint, dict)]
+        service_hint_names = [hint.get("service") or hint.get("category") for hint in service_hints[:2]]
+        service_name = _first_nonempty(
+            *service_hint_names,
+            "Discovery validation - offer to be selected after qualification",
+            limit=220,
+        )
+        readiness = "Validate when trigger appears" if play_type == "foresight_driven" else "Monitor"
+        if play_type == "current_status":
+            readiness = "Validate now"
+        coverage = "Account signal present; use as discovery/watch item until service fit and buyer timing are confirmed."
+        generated_play = {
+            "play_name": f"{_clip(activation_signal.get('theme') or 'Activation theme', 90)} discovery watch",
+            "linked_signal_ids": [signal_id],
+            "activation_pair_index": activation_signal.get("activation_pair_index"),
+            "play_type": play_type,
+            "service_or_offer": service_name,
+            "need_hypothesis": need,
+            "response_directions": _response_directions_from_play({"service_or_offer": service_name}, need),
+            "readiness_band": readiness,
+            "evidence_coverage": coverage,
+            "confidence_boundary": _confidence_boundary("allowed_as_discovery_question", coverage),
+            "priority_band": _priority_band(readiness),
+            "primary_buyer": (_list(activation_signal.get("buyer_roles")) or ["Role to validate"])[0],
+            "secondary_buyers": _list(activation_signal.get("buyer_roles"))[1:4],
+            "trigger": _clip(activation_signal.get("account_movement") or activation_signal.get("theme"), 260),
+            "account_thesis": report["sales_spine"].get("account_thesis"),
+            "buying_hypothesis": _clip(activation_signal.get("why") or activation_signal.get("commercial_pressure"), 360),
+            "trigger_to_offer_bridge": _clip(activation_signal.get("what") or activation_signal.get("business_consequence"), 360),
+            "business_hypothesis": _clip(activation_signal.get("business_consequence"), 360),
+            "why_relevant": _clip(activation_signal.get("commercial_pressure") or activation_signal.get("why"), 360),
+            "target_stakeholder": (_list(activation_signal.get("buyer_roles")) or ["Role to validate"])[0],
+            "first_meeting_objective": "Validate whether the signal has a real owner, timing window, and business consequence before selecting an offer.",
+            "opening_angle": "Use this as a discovery theme, not as a proposal or asserted customer need.",
+            "executive_angle": "Explore whether this theme is becoming commercially material and who owns it.",
+            "technical_angle": "Validate the current process, data, integration, governance, or operating baseline before recommending technology.",
+            "safe_customer_wording": "This may be worth exploring as a forward-looking topic if it connects to a current priority or upcoming pressure.",
+            "discovery_questions": [activation_signal.get("need_hypothesis", {}).get("discovery_question") or "Where would this pressure become visible if it starts to matter?"],
+            "discovery_questions_by_role": [{
+                "role": (_list(activation_signal.get("buyer_roles")) or ["Role to validate"])[0],
+                "questions": [activation_signal.get("need_hypothesis", {}).get("discovery_question") or "Where would this pressure become visible if it starts to matter?"],
+            }],
+            "proof_point": "Generated from Scanner WHY/WHAT activation logic; validate before customer-facing use.",
+            "do_not_say": ["Do not present this as a confirmed project, budget, or buying intent."],
+            "qualification_upgrade_criteria": [
+                "Customer confirms the pressure is real",
+                "A named owner or decision forum exists",
+                "Timing or business consequence is confirmed",
+            ],
+            "confidence": min(55, _safe_int(activation_signal.get("confidence"), 45)),
+            "play_score": 45 if readiness != "Validate now" else 65,
+            "hypothesis_strength": 45 if readiness != "Validate now" else 65,
+            "score_label": "Internal compatibility score",
+            "play_classification": "monitor_soft_discovery" if readiness == "Monitor" else "qualified_discovery_play",
+            "overclaim_risk": "medium",
+            "evidence_basis": [signal_id],
+            "disqualifiers": _list(activation_signal.get("disqualifiers"))[:4],
+        }
+        report["recommended_sales_plays"].append(generated_play)
     evidence_confidence = _dict(report.get("evidence_confidence"))
     weak_notes = evidence_confidence.setdefault("weak_or_missing_evidence", [])
     for item in report.get("pain_to_solution_map", []):
@@ -1978,6 +2122,12 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
                 "role": play.get("primary_buyer") or play.get("target_stakeholder") or "Executive sponsor",
                 "questions": play["discovery_questions"][:3],
             }]
+        if not _list(play.get("qualification_upgrade_criteria")):
+            play["qualification_upgrade_criteria"] = [
+                "Customer confirms the pressure is real",
+                "A named owner or decision forum exists",
+                "Timing, business consequence, or measurable priority is confirmed",
+            ]
         score = _score_play(play, has_signal=has_signal, has_service=has_service, has_question=bool(play["discovery_questions"]))
         play["play_score"] = max(0, min(100, _safe_int(play.get("play_score"), score)))
         play["hypothesis_strength"] = play["play_score"]
@@ -1999,7 +2149,7 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         play["readiness_band"] = play.get("readiness_band") or readiness
         play["evidence_coverage"] = play.get("evidence_coverage") or evidence_coverage
         play["confidence_boundary"] = play.get("confidence_boundary") or _confidence_boundary(play.get("gate"), play["evidence_coverage"])
-        play["priority_band"] = play.get("priority_band") or _priority_band(play["readiness_band"])
+        play["priority_band"] = _normalize_priority_band(play.get("priority_band"), play["readiness_band"])
         play["response_directions"] = _dict(play.get("response_directions")) or _response_directions_from_play(play, play["need_hypothesis"])
         response_directions = play["response_directions"]
         default_response = _response_directions_from_play(play, play["need_hypothesis"])
@@ -2017,6 +2167,24 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         if play["play_classification"] in {"weak_signal", "do_not_use"} and play.get("gate") != "blocked":
             play["gate"] = "internal_only"
             play["confidence_boundary"] = _confidence_boundary(play.get("gate"), play["evidence_coverage"])
+        for text_key in (
+            "play_name",
+            "service_or_offer",
+            "trigger",
+            "account_thesis",
+            "buying_hypothesis",
+            "trigger_to_offer_bridge",
+            "business_hypothesis",
+            "why_relevant",
+            "opening_angle",
+            "executive_angle",
+            "technical_angle",
+            "safe_customer_wording",
+            "proof_point",
+        ):
+            play[text_key] = _strip_archetype_terms(play.get(text_key))
+        play["need_hypothesis"] = _strip_archetype_terms(play["need_hypothesis"])
+        play["response_directions"] = _strip_archetype_terms(play["response_directions"])
     fixed_stakeholders = []
     for item in _list(report.get("stakeholder_map")):
         if not isinstance(item, dict):
@@ -2084,12 +2252,25 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             if isinstance(item, dict) and item.get("gate") == "allowed_as_discovery_question"
         ]
     ))[:12]
-    unsafe_claims = [
-        str(item) for item in _list(evidence_confidence.get("do_not_say"))
+    unsafe_claims, question_only_from_guardrails = _safe_guardrail_items(
+        _list(evidence_confidence.get("do_not_say"))
         + _list(evidence_confidence.get("do_not_use_claims"))
-        if _looks_unsafe_claim(item)
+    )
+    evidence_confidence["use_only_as_question"] = list(dict.fromkeys(
+        _list(evidence_confidence.get("use_only_as_question"))
+        + question_only_from_guardrails
+    ))[:12]
+    false_or_unsupported = [
+        _clip(item, 520)
+        for item in _list(_dict(scanner_outputs.get("evidence_trust")).get("false_or_unsupported_claims"))
+        if _clip(item, 520)
     ]
-    unsafe_claims.extend(str(item) for item in _list(_dict(scanner_outputs.get("evidence_trust")).get("false_or_unsupported_claims")) if item)
+    unsafe_false, question_only_false = _safe_guardrail_items(false_or_unsupported)
+    unsafe_claims.extend(unsafe_false)
+    evidence_confidence["use_only_as_question"] = list(dict.fromkeys(
+        _list(evidence_confidence.get("use_only_as_question"))
+        + question_only_false
+    ))[:12]
     evidence_confidence["do_not_say"] = list(dict.fromkeys(unsafe_claims))[:12]
     evidence_confidence["do_not_use_claims"] = evidence_confidence["do_not_say"]
     report["evidence_confidence"] = evidence_confidence
@@ -2112,24 +2293,34 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
                 if isinstance(items, list) and 0 <= index < len(items) and isinstance(items[index], dict):
                     items[index]["gate"] = new_gate
         blocked = _list(gate_review.get("blocked_claims"))
-        blocked_claims = [str(item) for item in blocked[:12] if item]
-        if blocked_claims:
-            evidence_confidence.setdefault("do_not_say", []).extend(blocked_claims)
+        blocked_claims = [_clip(item, 520) for item in blocked[:12] if _clip(item, 520)]
+        blocked_guardrails, blocked_questions = _safe_guardrail_items(blocked_claims)
+        if blocked_guardrails:
+            evidence_confidence.setdefault("do_not_say", []).extend(blocked_guardrails)
+        if blocked_questions:
+            evidence_confidence.setdefault("use_only_as_question", []).extend(blocked_questions)
         report["gate_review"] = {
             "approved": gate_review.get("approved") is True,
             "required_downgrades": downgrades[:20],
             "blocked_claims": blocked[:20],
             "notes": _list(gate_review.get("notes"))[:10],
         }
-        evidence_confidence["do_not_say"] = list(dict.fromkeys(
-            [
-                str(item)
-                for item in _list(evidence_confidence.get("do_not_say"))
-                if _looks_unsafe_claim(item)
-            ]
-            + blocked_claims
+        clean_do_not, clean_questions = _safe_guardrail_items(_list(evidence_confidence.get("do_not_say")))
+        evidence_confidence["do_not_say"] = clean_do_not[:12]
+        evidence_confidence["use_only_as_question"] = list(dict.fromkeys(
+            _list(evidence_confidence.get("use_only_as_question"))
+            + clean_questions
         ))[:12]
         evidence_confidence["do_not_use_claims"] = evidence_confidence["do_not_say"]
+
+    report["account_snapshot"] = _strip_archetype_terms(report.get("account_snapshot"))
+    report["buying_potential_thesis"] = _strip_archetype_terms(report.get("buying_potential_thesis"))
+    report["sales_spine"] = _strip_archetype_terms(report.get("sales_spine"))
+    report["pressure_signals"] = _strip_archetype_terms(report.get("pressure_signals"))
+    report["why_now"] = _strip_archetype_terms(report.get("why_now"))
+    report["pain_to_solution_map"] = _strip_archetype_terms(report.get("pain_to_solution_map"))
+    report["recommended_sales_plays"] = _strip_archetype_terms(report.get("recommended_sales_plays"))
+    report["evidence_confidence"] = _strip_archetype_terms(evidence_confidence)
 
     report["overall_confidence"] = max(0, min(100, _safe_int(report.get("overall_confidence"), 45)))
     if low_evidence:
@@ -2840,10 +3031,10 @@ def render_buying_potential_html(report: dict) -> str:
           <p><b>Buying hypothesis:</b> {_esc(item.get('buying_hypothesis'))}</p>
           <p><b>Trigger-to-offer bridge:</b> {_esc(item.get('trigger_to_offer_bridge'))}</p>
           <p><b>Business hypothesis:</b> {_esc(item.get('business_hypothesis') or item.get('why_relevant'))}</p>
-          <h3>Need Hypothesis</h3>
-          <p><b>Company context:</b> {_esc(need.get('company_context'))}</p>
-          <p><b>Market context:</b> {_esc(need.get('market_context'))}</p>
-          <p><b>Combined activation hypothesis:</b> {_esc(need.get('combined_activation_hypothesis'))}</p>
+          <h3>Why This Might Matter</h3>
+          <p><b>Account signal:</b> {_esc(need.get('company_context'))}</p>
+          <p><b>Market pressure:</b> {_esc(need.get('market_context'))}</p>
+          <p><b>Where need may emerge:</b> {_esc(need.get('combined_activation_hypothesis'))}</p>
           <p><b>Future pressure:</b> {_esc(need.get('future_pressure'))}</p>
           <p><b>Current condition:</b> {_esc(need.get('current_condition'))}</p>
           <p><b>Structural exposure:</b> {_esc(need.get('structural_exposure'))}</p>
@@ -2851,12 +3042,12 @@ def render_buying_potential_html(report: dict) -> str:
           <p><b>Why now or soon:</b> {_esc(need.get('why_now_or_soon'))}</p>
           <p><b>What to validate or explore:</b> {_esc(need.get('what_to_propose'))}</p>
           <p><b>Falsifier:</b> {_esc(need.get('falsifier'))}</p>
-          <h3>Potential Response Directions</h3>
+          <h3>Possible Conversation Direction</h3>
           <p><b>Potential need:</b> {_esc(response.get('potential_need'))}</p>
           <p><b>Vivicta potential contribution:</b> {_esc(response.get('vivicta_potential_contribution'))}</p>
-          <h3>Evolving Modernization Directions</h3>
+          <h3>Modernization Lens</h3>
           <ul>{modernization or '<li>No response directions generated.</li>'}</ul>
-          <h3>Other Capabilities May Be Required</h3>
+          <h3>Other Capabilities To Check</h3>
           <ul>{other_capabilities or '<li>No adjacent capability notes generated.</li>'}</ul>
           <p><b>First meeting objective:</b> {_esc(item.get('first_meeting_objective'))}</p>
           <p><b>Opening angle:</b> {_esc(item.get('opening_angle'))}</p>
@@ -2965,16 +3156,16 @@ def render_buying_potential_html(report: dict) -> str:
   </section>
 
   <section>
-    <h2>Need Hypothesis Spine</h2>
+    <h2>Sales Hypothesis Map</h2>
     <div class="grid grid-3">
-      <div class="card compact"><h3>Company-Derived Need Hypotheses</h3><ul>{hypothesis_items('company_only')}</ul></div>
-      <div class="card compact"><h3>Market-Derived Pressure Hypotheses</h3><ul>{hypothesis_items('market_watch')}</ul></div>
-      <div class="card compact"><h3>Combined Activation Hypotheses</h3><ul>{hypothesis_items('combined_activation')}</ul></div>
+      <div class="card compact"><h3>Account Need Signals</h3><ul>{hypothesis_items('company_only')}</ul></div>
+      <div class="card compact"><h3>Market Pressure Signals</h3><ul>{hypothesis_items('market_watch')}</ul></div>
+      <div class="card compact"><h3>Where Need May Emerge</h3><ul>{hypothesis_items('combined_activation')}</ul></div>
     </div>
   </section>
 
-  <section><h2>Commercial Pressure Signals</h2><div class="grid">{_render_list(_list(report.get('pressure_signals')), pressure_card)}</div></section>
-  <section><h2>Timing Triggers & Urgency Signals</h2><div class="grid">{_render_list(_list(report.get('why_now')), why_card)}</div></section>
+  <section><h2>Sales Pressure Signals</h2><div class="grid">{_render_list(_list(report.get('pressure_signals')), pressure_card)}</div></section>
+  <section><h2>Why This May Matter Now</h2><div class="grid">{_render_list(_list(report.get('why_now')), why_card)}</div></section>
 
   <section>
     <h2>Buying Committee & Influence Map</h2>
@@ -2982,8 +3173,8 @@ def render_buying_potential_html(report: dict) -> str:
     {extra_stakeholder_rows(report.get('additional_stakeholder_names'))}
   </section>
 
-  <section><h2>Potential Response Directions</h2><div class="grid">{_render_list(_list(report.get('pain_to_solution_map')), solution_card)}</div></section>
-  <section><h2>Recommended Growth Plays</h2><div class="grid">{_render_list(_list(report.get('recommended_sales_plays')), play_card)}</div></section>
+  <section><h2>Possible Conversation Directions</h2><div class="grid">{_render_list(_list(report.get('pain_to_solution_map')), solution_card)}</div></section>
+  <section><h2>Recommended Sales Plays</h2><div class="grid">{_render_list(_list(report.get('recommended_sales_plays')), play_card)}</div></section>
 
 
   <section class="warning">

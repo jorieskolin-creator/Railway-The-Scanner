@@ -2583,7 +2583,6 @@ def _refresh_proposals_for_company(company_name: str, data: dict) -> dict:
     reality_checklist = data.get("reality_checklist", [])
     summary_text = data.get("summary_text", "")
     pitch_text = data.get("pitch_text", "")
-    archetype = data.get("archetype", "Unknown")
     reality_score = data.get("reality_score", 0)
     evidence_links = _analysis_evidence_links(data.get("evidence_links", []))
     evidence_list = '\n'.join([
@@ -2609,8 +2608,8 @@ def _refresh_proposals_for_company(company_name: str, data: dict) -> dict:
 
 ### EXISTING ANALYSIS CONTEXT
 Company: {company_name}
-Archetype: {archetype}
 Reality Score: {reality_score}/100
+Archetype is audit-only and intentionally omitted from this writing context. Do not write labels such as Thriving, Modernizing, Cash Cow, or At Risk in WHY or WHAT.
 
 Intent Breakdown (Scanner 1):
 {intent_breakdown}
@@ -2686,8 +2685,8 @@ Respond with valid JSON only:
         return {"company": company_name, "status": "failed", "reason": "Could not parse JSON from model response."}
 
     result_json = json.loads(payload, strict=False)
-    new_why = result_json.get("why_proposals", [])
-    new_what = result_json.get("what_proposals", [])
+    new_why = strip_archetype_labels_from_text(result_json.get("why_proposals", []))
+    new_what = strip_archetype_labels_from_text(result_json.get("what_proposals", []))
 
     if not new_why or not new_what or not isinstance(new_why, list) or not isinstance(new_what, list):
         return {"company": company_name, "status": "failed", "reason": "Model returned invalid proposal structure."}
@@ -5601,11 +5600,11 @@ The AI Diagnosis below is LOCKED. The Knowledge Base is the mandatory baseline. 
 {knowledge_context}
 
 ### LOCKED DIAGNOSTIC CONTRACT
-Archetype: {expected_archetype}
 Reality score: {reality_results["score"]}
 Intent score: {intent_results["score"]}
 Financial context: {financial_context or "No financial interpretation available."}
 Washing / contradiction context: {washing_context or "No washing flag detected."}
+Archetype is audit-only and intentionally omitted from this writing context. Do not write labels such as Thriving, Modernizing, Cash Cow, or At Risk in strategic_synthesis, pitch, WHY, or WHAT.
 
 Diagnosis:
 {summary}
@@ -5764,6 +5763,7 @@ TEXT TO REPAIR:
                                  else:
                                      print("   ⚠️ [Activation] Could not parse activation JSON — using plain-text fallback")
                                      activation_norm = _plain_text_activation_fallback(activation_text, prior_activation)
+                                 activation_norm = strip_archetype_labels_from_text(activation_norm)
 
                                  if activation_norm.get("pitch"):
                                      pitch = activation_norm["pitch"]
