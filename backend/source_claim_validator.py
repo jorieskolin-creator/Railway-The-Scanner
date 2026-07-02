@@ -349,6 +349,107 @@ def _parse_relevance_json(raw: str) -> dict:
     }
 
 
+def _build_claim_rewrite_prompt(
+    *,
+    company_name: str,
+    company_domain: str,
+    original_claim: str,
+    source_excerpt: str,
+    unsupported_reason: str,
+    entity_scope: str,
+) -> str:
+    return f"""Rewrite or downgrade an over-strong source claim.
+
+TARGET COMPANY:
+{company_name}
+
+TARGET DOMAIN:
+{company_domain}
+
+ENTITY SCOPE:
+{entity_scope or "unknown"}
+
+ORIGINAL CLAIM:
+{original_claim}
+
+VALIDATOR REASON:
+{unsupported_reason}
+
+SOURCE EXCERPT:
+{source_excerpt[:1600]}
+
+Rules:
+- Use ONLY the source excerpt.
+- Do not add numbers, dates, partnerships, outcomes, maturity claims, or causality not visible in the excerpt.
+- If the excerpt supports a narrower factual claim, return classification "narrow_supported_claim".
+- If the excerpt is useful only as a discovery premise/question, return "question_only_premise".
+- If it is only general company/source context, return "context_only".
+- If it is wrong entity, unsafe, or unusable even as context, return "blocked".
+- The rewritten claim must be one sentence, conservative, and source-supported.
+- The question-only premise must be phrased as a question or "validate whether..." statement.
+
+Return ONLY JSON:
+{{
+  "classification": "narrow_supported_claim|question_only_premise|context_only|blocked",
+  "rewritten_claim": "...",
+  "question_premise": "...",
+  "supporting_quote": "short exact excerpt",
+  "reason": "brief reason"
+}}"""
+
+
+def _parse_claim_rewrite_json(raw: str) -> dict:
+    raw = (raw or "").strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    data = json.loads(raw)
+    classification = str(data.get("classification") or "blocked").strip().lower()
+    if classification not in {"narrow_supported_claim", "question_only_premise", "context_only", "blocked"}:
+        classification = "blocked"
+    return {
+        "classification": classification,
+        "rewritten_claim": str(data.get("rewritten_claim") or "").strip(),
+        "question_premise": str(data.get("question_premise") or "").strip(),
+        "supporting_quote": str(data.get("supporting_quote") or "").strip(),
+        "reason": str(data.get("reason") or "").strip(),
+    }
+
+
+def _rewrite_overstrong_claim(
+    *,
+    original_claim: str,
+    source_excerpt: str,
+    unsupported_reason: str,
+    company_name: str,
+    company_domain: str,
+    entity_scope: str,
+    timeout: int = 12,
+) -> dict:
+    if not source_excerpt or len(source_excerpt.strip()) < 40:
+        return {"classification": "blocked", "reason": "No usable source excerpt for rewrite."}
+    prompt = _build_claim_rewrite_prompt(
+        company_name=company_name,
+        company_domain=company_domain,
+        original_claim=original_claim,
+        source_excerpt=source_excerpt,
+        unsupported_reason=unsupported_reason,
+        entity_scope=entity_scope,
+    )
+    raw, model_used = call_json_model_chain(prompt, ("gpt-5.5", "claude-sonnet-4-6"), max_tokens=520, timeout=timeout)
+    parsed = _parse_claim_rewrite_json(raw)
+    parsed["rewrite_model"] = model_used
+    quote = parsed.get("supporting_quote") or source_excerpt
+    rewritten = parsed.get("rewritten_claim") or parsed.get("question_premise") or ""
+    if parsed["classification"] == "narrow_supported_claim":
+        if not rewritten or not _quote_value_overlap(rewritten, quote, source_excerpt):
+            parsed["classification"] = "context_only"
+            parsed["reason"] = parsed.get("reason") or "Rewritten claim did not deterministically match source values."
+    elif parsed["classification"] == "question_only_premise":
+        if not (parsed.get("question_premise") or rewritten):
+            parsed["classification"] = "context_only"
+    return parsed
+
+
 def _score_to_status(score: int) -> tuple[bool, str]:
     if score >= _ANALYSIS_SUPPORT_THRESHOLD:
         return True, "supported"
@@ -403,6 +504,7 @@ def _evaluate_parsed_relevance(
         "model_claim_support_status": model_support_status,
         "model_claim_supported": model_claim_supported,
         "content_verified": True,
+        "page_excerpt": page_text[:1600],
         "source_quote": supporting_quote,
         "model_supporting_quote": model_supporting_quote,
         "reason": reason,
@@ -713,6 +815,13 @@ def validate_source_claims(
     results = {}
     deadline = time.time() + max(1, int(time_budget_seconds)) if time_budget_seconds else None
     timed_out_pairs = 0
+    rewrite_stats = {
+        "too_strong_rewritten": 0,
+        "too_strong_question_only": 0,
+        "too_strong_context_only": 0,
+        "too_strong_blocked": 0,
+        "too_strong_rewrite_attempted": 0,
+    }
 
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
     future_to_item = {}
@@ -800,6 +909,60 @@ def validate_source_claims(
                             result.get("source_quote") or "",
                             snippet,
                         )
+                        if support_status in {"unsupported_for_this_claim", "unsupported"}:
+                            rewrite_budget_ok = not deadline or (deadline - time.time()) >= 8
+                            if rewrite_budget_ok:
+                                try:
+                                    rewrite_stats["too_strong_rewrite_attempted"] += 1
+                                    rewrite = _rewrite_overstrong_claim(
+                                        original_claim=snippet,
+                                        source_excerpt=result.get("page_excerpt") or result.get("source_quote") or "",
+                                        unsupported_reason=result.get("reason") or "",
+                                        company_name=company_name,
+                                        company_domain=company_domain,
+                                        entity_scope=item.get("entity_scope") or result.get("entity_scope") or entity_status,
+                                        timeout=max(4, min(12, int((deadline - time.time()) if deadline else 10))),
+                                    )
+                                    classification = rewrite.get("classification") or "blocked"
+                                    item["claim_rewrite_result"] = rewrite
+                                    item["claim_rewrite_classification"] = classification
+                                    item["claim_rewrite_reason"] = rewrite.get("reason", "")
+                                    if rewrite.get("supporting_quote"):
+                                        item["source_quote"] = rewrite["supporting_quote"]
+                                    if classification == "narrow_supported_claim" and rewrite.get("rewritten_claim"):
+                                        item["original_overstrong_claim"] = snippet
+                                        item["snippet"] = rewrite["rewritten_claim"]
+                                        item["description"] = rewrite["rewritten_claim"]
+                                        item["rewritten_supported_claim"] = rewrite["rewritten_claim"]
+                                        item["claim_support_status"] = "supported"
+                                        item["claim_relation_status"] = "rewritten_supported"
+                                        item["claim_overreach_status"] = "rewritten_narrow_supported"
+                                        item["support_level"] = "exact"
+                                        item["claim_irrelevant"] = False
+                                        rewrite_stats["too_strong_rewritten"] += 1
+                                    elif classification == "question_only_premise":
+                                        premise = rewrite.get("question_premise") or rewrite.get("rewritten_claim") or snippet
+                                        item["question_only_premise"] = premise
+                                        item["claim_support_status"] = "context_only"
+                                        item["claim_relation_status"] = "rewritten_question_only"
+                                        item["claim_overreach_status"] = "rewritten_question_only"
+                                        item["support_level"] = "context_only"
+                                        item["source_use_status"] = "scoped_context"
+                                        rewrite_stats["too_strong_question_only"] += 1
+                                    elif classification == "context_only":
+                                        item["claim_support_status"] = "context_only"
+                                        item["claim_relation_status"] = "rewritten_context_only"
+                                        item["claim_overreach_status"] = "rewritten_context_only"
+                                        item["support_level"] = "context_only"
+                                        item["source_use_status"] = "scoped_context"
+                                        rewrite_stats["too_strong_context_only"] += 1
+                                    else:
+                                        rewrite_stats["too_strong_blocked"] += 1
+                                except Exception as rewrite_exc:
+                                    item["claim_rewrite_error"] = str(rewrite_exc)[:180]
+                                    rewrite_stats["too_strong_blocked"] += 1
+                            else:
+                                item["claim_rewrite_skipped"] = "insufficient_time_budget"
                 else:
                     item["source_context_status"] = "out_of_context"
         except concurrent.futures.TimeoutError:
@@ -825,8 +988,14 @@ def validate_source_claims(
     elapsed_ms = int((time.time() - start) * 1000)
 
     checked = len(results)
-    claim_failed = [url for url, r in results.items()
-                    if r["relevance_score"] >= 0 and r.get("claim_support_status") == "unsupported"]
+    item_by_url = {url: item for url, _snippet, item in to_check}
+    claim_failed = [
+        url for url, r in results.items()
+        if r["relevance_score"] >= 0
+        and r.get("claim_support_status") == "unsupported"
+        and str(item_by_url.get(url, {}).get("claim_support_status") or "").lower()
+        in {"unsupported_for_this_claim", "unsupported"}
+    ]
     wrong_entity = [
         url for url, r in results.items()
         if r.get("entity_match_status") == "wrong" or r.get("content_entity_match_status") == "wrong"
@@ -850,6 +1019,15 @@ def validate_source_claims(
     ]
 
     partial = len(results) < len(to_check)
+    if rewrite_stats["too_strong_rewrite_attempted"]:
+        print(
+            "   🧩 [Source-Claim Rewrite] "
+            f"attempted={rewrite_stats['too_strong_rewrite_attempted']}, "
+            f"narrowed={rewrite_stats['too_strong_rewritten']}, "
+            f"question_only={rewrite_stats['too_strong_question_only']}, "
+            f"context_only={rewrite_stats['too_strong_context_only']}, "
+            f"blocked={rewrite_stats['too_strong_blocked']}"
+        )
     if partial:
         print(
             f"   ⚠️ [Source-Claim] partial validation: checked {checked}/{len(to_check)}, "
@@ -882,6 +1060,8 @@ def validate_source_claims(
         "partial": partial,
         "timed_out_pairs": max(timed_out_pairs, len(to_check) - checked),
         "elapsed_ms": elapsed_ms,
+        "claim_rewrite_stats": rewrite_stats,
+        **rewrite_stats,
     }
 
 

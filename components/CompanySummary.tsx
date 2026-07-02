@@ -764,6 +764,12 @@ const isForesightContext = (link) => {
         var acquisitionHealth = exportData.forensic_acquisition_health && typeof exportData.forensic_acquisition_health === 'object'
             ? exportData.forensic_acquisition_health
             : {};
+        var claimRewriteLabel = [
+            acquisitionHealth.too_strong_rewritten || 0,
+            acquisitionHealth.too_strong_question_only || 0,
+            acquisitionHealth.too_strong_context_only || 0,
+            acquisitionHealth.too_strong_blocked || 0
+        ].join('/');
         var metrics = [
             renderMetric('Ambition Score', formatScore(exportData.intent_score, '/100'), 'Narrative clarity'),
             renderMetric('Reality Score', formatScore(exportData.reality_score, '/100'), 'Evidence check'),
@@ -772,6 +778,7 @@ const isForesightContext = (link) => {
             renderMetric('Financial Health', formatScore(exportData.financial_index, '/100'), 'Adaptation capacity'),
             renderMetric('Acq Fresh', formatScore(acquisitionHealth.fresh_packets_accepted, '') + '/' + formatScore(acquisitionHealth.fresh_packets_acquired, ''), 'accepted / acquired'),
             renderMetric('Acq Repair', acquisitionHealth.repair_dependency || 'n/a', acquisitionHealth.confidence_reason || 'acquisition dependency'),
+            renderMetric('Claim Rewrite', claimRewriteLabel, 'narrow/question/context/blocked'),
             renderMetric('URL Verified', verifiedSources, weakSources + ' weak/unverified'),
             renderMetric('Content Readable', contentReadableSources, 'readable page text'),
             renderMetric('Target Entity Verified', entityVerifiedSources, 'right company/scope'),
@@ -1263,12 +1270,22 @@ const isForesightContext = (link) => {
         const evidenceSufficiency = exportData.evidence_sufficiency && typeof exportData.evidence_sufficiency === 'object' ? exportData.evidence_sufficiency : null;
         const lowEvidenceLabel = exportData.low_evidence_label || (evidenceSufficiency && evidenceSufficiency.label) || '';
         const isLowEvidenceMode = exportData.low_evidence_mode === true || !!lowEvidenceLabel;
+        const acquisitionHealth = exportData.forensic_acquisition_health && typeof exportData.forensic_acquisition_health === 'object'
+            ? exportData.forensic_acquisition_health
+            : {};
+        const claimRewriteLabel = [
+            acquisitionHealth.too_strong_rewritten || 0,
+            acquisitionHealth.too_strong_question_only || 0,
+            acquisitionHealth.too_strong_context_only || 0,
+            acquisitionHealth.too_strong_blocked || 0
+        ].join('/');
         const metrics = [
             renderMetric('Ambition Score', formatScore(exportData.intent_score, '/100'), 'Narrative clarity'),
             renderMetric('Reality Score', formatScore(exportData.reality_score, '/100'), 'Evidence check'),
             renderMetric('Integrity Delta', (gap > 0 ? '+' : '') + Math.round(gap), 'Ambition minus reality'),
             renderMetric('Confidence', formatScore(exportData.confidence_score ?? exportData.scan_quality?.confidence_score ?? exportData.evidence_sufficiency?.score, '%'), 'Model confidence'),
             renderMetric('Financial Health', formatScore(exportData.financial_index, '/100'), 'Adaptation capacity'),
+            renderMetric('Claim Rewrite', claimRewriteLabel, 'narrow/question/context/blocked'),
             renderMetric('URL Verified Sources', verifiedSources, weakSources + ' weak/unverified'),
             renderMetric('Analysis Verified', analysisVerifiedSources, 'content supports claim'),
             renderMetric('Generation Eligible', generationEligibleSources, 'safe for prose'),

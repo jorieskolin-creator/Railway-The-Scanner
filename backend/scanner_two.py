@@ -2773,6 +2773,7 @@ def _build_acquisition_health(
     seed_lifecycle: dict | None = None,
     confidence_score: int | None = None,
     final_mode: str = "",
+    claim_rewrite_stats: dict | None = None,
 ) -> dict:
     """Compact operator-facing summary of acquisition quality and dependency."""
     rejected_total = sum(len(item.get("pre_jury_rejected", []) or []) for item in acquisition_results or [])
@@ -2805,6 +2806,10 @@ def _build_acquisition_health(
         confidence_reasons.append(f"{len(provider_failures)} provider failure/status warning(s)")
     if weak_after_repair:
         confidence_reasons.append(f"{len(weak_after_repair)} weak lane(s) after repair")
+    if claim_rewrite_stats and int(claim_rewrite_stats.get("too_strong_rewrite_attempted") or 0):
+        confidence_reasons.append(
+            f"{int(claim_rewrite_stats.get('too_strong_rewrite_attempted') or 0)} over-strong claim rewrite attempt(s)"
+        )
     if confidence_score is not None and confidence_score <= 20:
         confidence_reasons.append("low final evidence confidence")
     if not confidence_reasons:
@@ -2825,6 +2830,11 @@ def _build_acquisition_health(
         "weak_lane_names": [jury.split(" JURY")[0] for jury in weak_after_repair],
         "final_mode": final_mode,
         "confidence_reason": "; ".join(confidence_reasons[:4]),
+        "claim_rewrite_stats": claim_rewrite_stats or {},
+        "too_strong_rewritten": int((claim_rewrite_stats or {}).get("too_strong_rewritten") or 0),
+        "too_strong_question_only": int((claim_rewrite_stats or {}).get("too_strong_question_only") or 0),
+        "too_strong_context_only": int((claim_rewrite_stats or {}).get("too_strong_context_only") or 0),
+        "too_strong_blocked": int((claim_rewrite_stats or {}).get("too_strong_blocked") or 0),
     }
 
 
@@ -6585,6 +6595,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         # Only runs when time permits (adds ~5-10s for page fetches + Flash calls).
         _elapsed = time.time() - _fn_start
         postprocess_remaining = max(0, int(postprocess_deadline - time.time()))
+        scv_result = {}
         if postprocess_remaining >= 8 and url_verified >= 1:
             try:
                 from source_claim_validator import validate_source_claims
@@ -6603,6 +6614,11 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 data["source_claim_validation_claim_overreach_valid_context"] = int(
                     scv_result.get("claim_overreach_valid_context") or 0
                 )
+                data["source_claim_rewrite_stats"] = scv_result.get("claim_rewrite_stats") or {}
+                data["source_claim_too_strong_rewritten"] = int(scv_result.get("too_strong_rewritten") or 0)
+                data["source_claim_too_strong_question_only"] = int(scv_result.get("too_strong_question_only") or 0)
+                data["source_claim_too_strong_context_only"] = int(scv_result.get("too_strong_context_only") or 0)
+                data["source_claim_too_strong_blocked"] = int(scv_result.get("too_strong_blocked") or 0)
                 raw_findings = annotate_evidence_links(raw_findings, company_domain, company_name)
                 if scv_result["irrelevant"] > 0:
                     # Penalise confidence for irrelevant sources
@@ -6682,6 +6698,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             seed_lifecycle=data.get("seed_lifecycle") or {},
             confidence_score=int(confidence),
             final_mode=final_mode,
+            claim_rewrite_stats=scv_result.get("claim_rewrite_stats") or {},
         )
 
         postprocess_elapsed = round(time.time() - postprocess_started, 2)
