@@ -29,23 +29,29 @@ const OBS_CATEGORY_COLORS: Record<string, string> = {
 // HTML EXPORT
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const OBSERVATORY_EVIDENCE_ID_SOURCE = String.raw`(?:L[123]-CLAIM-\d+|FINDING-[A-Z0-9]+|DOMAIN-[A-Z0-9-]+|PORTFOLIO-[A-Z0-9-]+|EVD-[A-Z0-9]+|FOR-[A-Z0-9]+|KB-[A-Z0-9-]+|CON-[A-Z0-9]+|(?=[A-F0-9]*[A-F])[A-F0-9]{8,12})`;
+const OBSERVATORY_EVIDENCE_ID_SOURCE = String.raw`(?:L[123]-(?:CLAIM|FALLBACK)-\d+|FINDING-[A-Z0-9]+|DOMAIN-[A-Z0-9-]+|PORTFOLIO-[A-Z0-9-]+|EVD-[A-Z0-9]+|FOR-[A-Z0-9]+|KB-[A-Z0-9-]+|CON-[A-Z0-9]+|(?=[A-F0-9]*[A-F])[A-F0-9]{8,12})`;
 const OBSERVATORY_EVIDENCE_ID_RE = new RegExp(`\\b${OBSERVATORY_EVIDENCE_ID_SOURCE}\\b`, "g");
+const OBSERVATORY_FALLBACK_PAREN_RE = /\s*\(\s*L[123]-FALLBACK-\d+(?:\s*[/,;]\s*\d+)*\s*\)/g;
 const OBSERVATORY_EVIDENCE_PAREN_RE = new RegExp(`\\s*\\((?:\\s*${OBSERVATORY_EVIDENCE_ID_SOURCE}\\s*(?:[;,]\\s*)?)+\\)`, "g");
 const OBSERVATORY_EVIDENCE_MIXED_PAREN_RE = new RegExp(`\\s*\\((?:\\s*(?:${OBSERVATORY_EVIDENCE_ID_SOURCE}|versus|vs\\.?|and|[,;:])\\s*)+\\)`, "gi");
+const OBSERVATORY_METHOD_LABEL_RE = /(?:\*{1,2})?\[?\s*(?:strategic inference(?:\s*\/\s*scenario hypothesis)?|scenario hypothesis)\s*\]?(?:\*{1,2})?\s*:?\s*/gi;
 
 const extractObservatoryEvidenceRefs = (text: string): string[] => {
   if (!text) return [];
   const refs = text.match(OBSERVATORY_EVIDENCE_ID_RE) || [];
-  return Array.from(new Set(refs));
+  return Array.from(new Set(refs.filter(ref => !/FALLBACK/i.test(ref))));
 };
 
 const stripObservatoryInlineEvidenceRefs = (text: string): string => {
   if (!text) return "";
   return text
+    .replace(OBSERVATORY_FALLBACK_PAREN_RE, "")
     .replace(OBSERVATORY_EVIDENCE_MIXED_PAREN_RE, "")
     .replace(OBSERVATORY_EVIDENCE_PAREN_RE, "")
     .replace(OBSERVATORY_EVIDENCE_ID_RE, "")
+    .replace(OBSERVATORY_METHOD_LABEL_RE, "")
+    .replace(/^\s*(?:#{1,3}\s*)?Section\s*$/gim, "")
+    .replace(/(\d)\.\s+(?=\d)/g, "$1.")
     .replace(/\(\s*(?:[,;:\s]|versus|vs\.?|and)*\)/gi, "")
     .replace(/\s+([,.;:])/g, "$1")
     .replace(/([(\[])\s+/g, "$1")
@@ -176,6 +182,9 @@ const normalizeObservatoryEssayText = (text: string): string => {
   return emphasizeObservatoryProseLabels(stripObservatoryInlineEvidenceRefs(text))
     .replace(/\r\n?/g, "\n")
     .replace(/^\s*#{1,3}\s*$/gm, "")
+    .replace(/^\s*(?:#{1,3}\s*)?Section\s*$/gim, "")
+    .replace(/identifiedzero/gi, "identified zero")
+    .replace(/\*{3,}/g, "**")
     .replace(/([^\n])\s+(#{1,3}\s+)/g, "$1\n\n$2")
     .replace(/\s+(\d+\s+[—-]\s+)/g, "\n\n$1")
     .replace(/\*\*([^*]{1,90})\*\*\s+:/g, "**$1**:")

@@ -53,12 +53,19 @@ CRITICAL FRAMING RULE — Technology is context, never conclusion:
 - Focus on: thinking and adaptability, future-drivenness, innovative thinking, organizational learning, what companies need to STOP doing, creating "Own Race" vs. participating reactively.
 
 EVIDENCE RULE — Every claim must trace to the data provided. Include specific numbers when available (e.g., "60% of Finnish industrial companies sit in Cash Cow archetype"). Do not invent statistics.
-EVIDENCE TRACE RULE — When pre-computed findings include evidence IDs, preserve the relevant IDs in parentheses after material claims so the interpretation remains auditable."""
+PUBLIC OUTPUT RULE — Write for an executive reader. Do not expose internal method labels such as "[Strategic inference]" or fallback claim IDs such as "L2-FALLBACK-5" in the prose."""
 
 OBSERVATORY_DOSSIER_VERSION = "observatory_dossier_v1"
 OBSERVATORY_L1_MODEL = GPT_PRO_MODEL
 OBSERVATORY_L2_MODEL = GPT_PRO_MODEL
 OBSERVATORY_L3_MODEL = "claude-opus-4-8"
+OBSERVATORY_INTERNAL_ID_RE = re.compile(r"\bL[123]-(?:CLAIM|FALLBACK)-\d+\b")
+OBSERVATORY_FALLBACK_PAREN_RE = re.compile(r"\s*\(\s*L[123]-FALLBACK-\d+(?:\s*[/,;]\s*\d+)*\s*\)")
+OBSERVATORY_METHOD_LABEL_RE = re.compile(
+    r"(?:\*{1,2})?\[?\s*(?:strategic inference(?:\s*/\s*scenario hypothesis)?|scenario hypothesis)\s*\]?(?:\*{1,2})?\s*:?\s*",
+    re.I,
+)
+OBSERVATORY_RAW_MARKDOWN_RE = re.compile(r"(^|[^*])\*(?!\*)([^*\n]{1,90})\*(?!\*)")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -174,6 +181,144 @@ def _aggregate_kb_signals(all_kb: dict) -> dict:
 def _evidence_id(prefix: str, *parts) -> str:
     raw = "|".join(str(part or "") for part in parts)
     return f"{prefix}-{hashlib.sha1(raw.encode('utf-8')).hexdigest()[:10].upper()}"
+
+
+def _strip_internal_observatory_artifacts(text: str) -> str:
+    """Remove audit/method artifacts that must never reach reader-facing prose."""
+    if not text:
+        return ""
+    out = str(text)
+    out = OBSERVATORY_FALLBACK_PAREN_RE.sub("", out)
+    out = re.sub(r"\s*\(\s*L[123]-(?:CLAIM|FALLBACK)-\d+(?:\s*[,;/]\s*L[123]-(?:CLAIM|FALLBACK)-\d+)*\s*\)", "", out)
+    out = OBSERVATORY_INTERNAL_ID_RE.sub("", out)
+    out = OBSERVATORY_METHOD_LABEL_RE.sub("", out)
+    out = re.sub(r"(?im)^\s*(?:#{1,3}\s*)?Section\s*$\n\s*(\d+\s+[—-])", r"\1", out)
+    out = re.sub(r"(?im)^\s*(?:#{1,3}\s*)?Section\s*$", "", out)
+    out = re.sub(r"(?<=\d)\.\s+(?=\d)", ".", out)
+    out = re.sub(r"\(\s*(?:[,;:\s]|and|vs\.?|versus)*\)", "", out, flags=re.I)
+    out = re.sub(r"\s+([,.;:])", r"\1", out)
+    out = re.sub(r"([(\[])\s+", r"\1", out)
+    out = re.sub(r"\s+([)\]])", r"\1", out)
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    return out.strip()
+
+
+def _public_claim_handoff(claims: list[dict]) -> list[dict]:
+    """Create a prompt-safe claim handoff without internal IDs or evidence lists."""
+    safe_claims = []
+    for index, claim in enumerate(claims or []):
+        if not isinstance(claim, dict):
+            continue
+        statement = _strip_internal_observatory_artifacts(str(claim.get("statement") or "").strip())
+        if not statement:
+            continue
+        claim_type = str(claim.get("claim_type") or "strategic_interpretation").strip()
+        if claim_type == "strategic_inference":
+            claim_type = "strategic_interpretation"
+        safe_claims.append({
+            "handoff_index": index + 1,
+            "statement": statement,
+            "claim_type": claim_type,
+            "confidence": max(0, min(100, int(claim.get("confidence") or 50))),
+            "evidence_count": len(claim.get("evidence_ids") or []),
+        })
+    return safe_claims[:10]
+
+
+def _prompt_safe_dossier(value):
+    """Remove internal handoff identifiers from the dossier view shown to models."""
+    if isinstance(value, dict):
+        cleaned = {}
+        for key, child in value.items():
+            if key in {"claim_id", "extraction_model"}:
+                continue
+            if key == "limitations" and "deterministic handoff" in str(child).lower():
+                continue
+            if key == "strategic_inference_must_be_labelled":
+                cleaned[key] = False
+                continue
+            cleaned[key] = _prompt_safe_dossier(child)
+        return cleaned
+    if isinstance(value, list):
+        return [_prompt_safe_dossier(item) for item in value]
+    if isinstance(value, str):
+        return _strip_internal_observatory_artifacts(value)
+    return value
+
+
+def _sanitize_observatory_public_text(text: str) -> str:
+    """Final public prose cleanup for Observatory app and HTML output."""
+    if not text:
+        return ""
+    out = _strip_internal_observatory_artifacts(text)
+    out = re.sub(r"\*{3,}", "**", out)
+    out = re.sub(r"\*\*\s+", "**", out)
+    out = re.sub(r"\s+\*\*", "**", out)
+    out = re.sub(r"(?i)\bidentifiedzero\b", "identified zero", out)
+    out = re.sub(r"\s+([,.;:])", r"\1", out)
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    return out.strip()
+
+
+def _observatory_public_quality(text: str, label: str) -> dict:
+    issues = []
+    warnings = []
+    raw = text or ""
+    if OBSERVATORY_INTERNAL_ID_RE.search(raw):
+        issues.append("internal_claim_id_leak")
+    if OBSERVATORY_METHOD_LABEL_RE.search(raw):
+        issues.append("method_label_leak")
+    if re.search(r"(?im)^\s*(?:#{1,3}\s*)?Section\s*$", raw):
+        issues.append("orphan_section_label")
+    if OBSERVATORY_RAW_MARKDOWN_RE.search(raw):
+        warnings.append("single_asterisk_markdown_marker")
+    paragraphs = [p.strip() for p in re.split(r"\n{2,}", raw) if p.strip()]
+    max_paragraph_chars = max((len(p) for p in paragraphs), default=0)
+    if max_paragraph_chars > 1200:
+        warnings.append("long_paragraph")
+    return {
+        "label": label,
+        "passed": not issues,
+        "issues": issues,
+        "warnings": warnings,
+        "max_paragraph_chars": max_paragraph_chars,
+    }
+
+
+def _sanitize_observatory_payload(result: dict) -> dict:
+    """Sanitize reader-facing Observatory text and attach public-output QA metadata."""
+    checks = []
+    global_text = (result.get("global_analysis") or {}).get("text") or ""
+    if global_text:
+        result["global_analysis"]["text"] = _sanitize_observatory_public_text(global_text)
+        checks.append(_observatory_public_quality(result["global_analysis"]["text"], "global_analysis"))
+
+    finland_text = (result.get("finland_analysis") or {}).get("text") or ""
+    if finland_text:
+        result["finland_analysis"]["text"] = _sanitize_observatory_public_text(finland_text)
+        checks.append(_observatory_public_quality(result["finland_analysis"]["text"], "finland_analysis"))
+
+    for dossier in result.get("domain_dossiers") or []:
+        if not isinstance(dossier, dict):
+            continue
+        text = dossier.get("text") or ""
+        if text:
+            dossier["text"] = _sanitize_observatory_public_text(text)
+            checks.append(_observatory_public_quality(dossier["text"], f"domain:{dossier.get('domain') or 'unknown'}"))
+
+    blocking = [check for check in checks if not check.get("passed")]
+    result["public_output_quality"] = {
+        "passed": not blocking,
+        "checks": checks,
+        "blocking_issue_count": sum(len(check.get("issues") or []) for check in checks),
+        "warning_count": sum(len(check.get("warnings") or []) for check in checks),
+    }
+    if blocking:
+        labels = ", ".join(check["label"] for check in blocking[:5])
+        raise ValueError(f"Observatory public-output QA failed after sanitation: {labels}")
+    return result
 
 
 def _is_eligible_foresight_context(record: dict) -> tuple[bool, str]:
@@ -577,7 +722,8 @@ def _build_l2_evidence_dossier(
             "macro_input": "structured L1 claims only; the L1 essay is intentionally excluded",
             "portfolio_claims_require_computed_metrics": True,
             "material_claims_require_evidence_ids": True,
-            "strategic_inference_must_be_labelled": True,
+            "strategic_inference_must_be_labelled": False,
+            "public_prose_excludes_internal_method_labels": True,
         },
         "input_manifest": input_manifest.get("company_portfolio", {}),
         "validated_l1_claims": l1_claims,
@@ -660,7 +806,8 @@ def _build_l3_evidence_dossier(
             "company_metrics_are_portfolio_evidence": True,
             "foresight_signals_are_macro_context_not_company_facts": True,
             "material_claims_require_evidence_ids": True,
-            "strategic_inference_must_be_labelled": True,
+            "strategic_inference_must_be_labelled": False,
+            "public_prose_excludes_internal_method_labels": True,
         },
         "domain_configuration": {
             "fp_themes": domain_config.get("fp_themes") or [],
@@ -806,7 +953,7 @@ def _build_global_prompt(
             for f in top_foresights[:10]
         )
 
-    locked_dossier = json.dumps(evidence_dossier or {}, ensure_ascii=False, indent=2)
+    locked_dossier = json.dumps(_prompt_safe_dossier(evidence_dossier or {}), ensure_ascii=False, indent=2)
 
     return f"""{SYSTEM_ROLE}
 
@@ -819,7 +966,7 @@ DOSSIER RULE:
 - Treat the dossier above as the authoritative evidence boundary.
 - Use the summaries below only as readable views of the same dossier, not as additional evidence.
 - Cite evidence IDs after material claims.
-- Clearly distinguish macro evidence from strategic inference.
+- Keep interpretation visibly evidence-grounded, but write inference in plain executive language without method labels.
 
 DATA PROVIDED:
 
@@ -939,13 +1086,13 @@ def _build_finland_prompt(
         signal_evidence = "Macro context is supplied through the validated_l1_claims in the locked dossier."
 
     if l1_claims is not None:
-        global_context = json.dumps(l1_claims, ensure_ascii=False, indent=2)
+        global_context = json.dumps(_public_claim_handoff(l1_claims), ensure_ascii=False, indent=2)
         global_context_label = "STRUCTURED L1 CLAIM HANDOFF (the L1 essay is intentionally excluded)"
     else:
         # Compatibility path for older callers and tests.
         global_context = global_analysis
         global_context_label = "GLOBAL CONTEXT"
-    locked_dossier = json.dumps(evidence_dossier or {}, ensure_ascii=False, indent=2)
+    locked_dossier = json.dumps(_prompt_safe_dossier(evidence_dossier or {}), ensure_ascii=False, indent=2)
 
     return f"""{SYSTEM_ROLE}
 
@@ -967,7 +1114,7 @@ LOCKED LAYER 2 EVIDENCE DOSSIER ({OBSERVATORY_DOSSIER_VERSION}):
 DOSSIER RULE:
 - Treat this dossier as the authoritative Layer 2 evidence boundary.
 - Use only the structured L1 claims below; do not infer from or reproduce the full Layer 1 essay.
-- Cite evidence IDs after material claims and label strategic inference.
+- Cite evidence IDs after material claims when helpful for auditability, but do not write method labels such as "[Strategic inference]" in the prose.
 
 {global_context_label}:
 {global_context}
@@ -1118,7 +1265,11 @@ def _build_domain_prompt(
 
     health_score = market_health.get("score", "N/A") if market_health else "N/A"
     if upstream_claims is not None:
-        broader_context = json.dumps(upstream_claims, ensure_ascii=False, indent=2)
+        safe_upstream = {
+            "layer_1": _public_claim_handoff((upstream_claims or {}).get("layer_1") or []),
+            "layer_2": _public_claim_handoff((upstream_claims or {}).get("layer_2") or []),
+        }
+        broader_context = json.dumps(safe_upstream, ensure_ascii=False, indent=2)
         broader_context_rule = (
             "Use only the structured, evidence-linked L1/L2 claims in the locked dossier. "
             "The full upstream essays are intentionally excluded."
@@ -1126,7 +1277,7 @@ def _build_domain_prompt(
     else:
         broader_context = f"Layer 1:\n{global_analysis}\n\nLayer 2:\n{finland_analysis}"
         broader_context_rule = "Use the supplied Layer 1 and Layer 2 analyses as broader context."
-    locked_dossier = json.dumps(evidence_dossier or {}, ensure_ascii=False, indent=2)
+    locked_dossier = json.dumps(_prompt_safe_dossier(evidence_dossier or {}), ensure_ascii=False, indent=2)
 
     return f"""{SYSTEM_ROLE}
 
@@ -1155,7 +1306,7 @@ DOSSIER RULE:
 - Treat the locked dossier as the authoritative evidence boundary.
 - Cite evidence IDs after material claims.
 - Treat foresight signals as macro context, never proof that a company has acted.
-- Label strategic inference and state important evidence gaps.
+- State important evidence gaps in plain language. Do not write method labels such as "[Strategic inference]" in the prose.
 
 DOMAIN DATA:
 
@@ -1658,6 +1809,7 @@ def generate_observatory(progress_callback=None):
         # in Market Intelligence > Future Demand. Additive; safe for old clients.
         "theme_momentum": kb_agg.get("theme_momentum_top", []),
     }
+    result = _sanitize_observatory_payload(result)
 
     # Save to storage
     url = storage.save_observatory(result)
