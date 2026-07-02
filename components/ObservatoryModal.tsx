@@ -59,7 +59,14 @@ const renderEvidenceRefsHtml = (refs: string[]): string => {
   return `<div class="evidence-refs"><div class="evidence-refs-title">Evidence references</div><div class="evidence-ref-list">${refs.map(ref => `<span>${ref}</span>`).join("")}</div></div>`;
 };
 
-const stripMarkdownEmphasis = (text: string): string => (text || "").replace(/\*\*/g, "");
+const stripMarkdownEmphasis = (text: string): string => (text || "").replace(/\*\*/g, "").replace(/\*/g, "");
+
+const escapeObsHtml = (text: string): string => String(text || "")
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;")
+  .replace(/'/g, "&#39;");
 
 const isObservatoryHeadingBlock = (text: string): boolean => {
   const clean = stripMarkdownEmphasis(text || "").trim();
@@ -89,10 +96,17 @@ const renderInlineMarkdown = (text: string) => {
   });
 };
 
-const markdownInlineToHtml = (text: string): string =>
-  (text || "").replace(/\*\*([^*]+)\*\*/g, (_match, inner) =>
-    shouldRenderObservatoryEmphasis(inner) ? `<strong>${inner}</strong>` : inner
-  );
+const markdownInlineToHtml = (text: string): string => {
+  const segments = (text || "").split(/(\*\*[^*]+\*\*)/);
+  return segments.map((seg) => {
+    if (seg.startsWith("**") && seg.endsWith("**")) {
+      const inner = seg.slice(2, -2).trim();
+      const safe = escapeObsHtml(inner);
+      return shouldRenderObservatoryEmphasis(inner) ? `<strong>${safe}</strong>` : safe;
+    }
+    return escapeObsHtml(seg);
+  }).join("");
+};
 
 const escapeRegExp = (value: string): string => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -112,8 +126,22 @@ const OBSERVATORY_PROSE_LEAD_LABELS = [
   "The third asymmetry",
   "The fourth asymmetry",
   "The contrarian hypothesis",
+  "The underestimated force",
   "The implication",
   "The urgent thinking shift",
+  "Act Now",
+  "Next 12 months",
+  "Prepare",
+  "Position",
+  "Now, over the next 6–12 months",
+  "Now, over the next 6-12 months",
+  "12–36 months",
+  "12-36 months",
+  "Strategic Asymmetries in the Finnish Landscape",
+  "Running Someone Else's Race",
+  "Running Someone Else’s Race",
+  "Finland's Dangerous Assumption",
+  "Finland’s Dangerous Assumption",
 ];
 
 const OBSERVATORY_SECTION_HEADINGS = [
@@ -130,13 +158,13 @@ const OBSERVATORY_SECTION_HEADINGS = [
 ];
 
 const OBSERVATORY_PROSE_LEAD_LABEL_RE = new RegExp(
-  `(^|\\n|[.!?]\\s+)(${OBSERVATORY_PROSE_LEAD_LABELS.map(escapeRegExp).join("|")})(?=\\s|:)`,
+  `(^|\\n|[.!?]\\s+)(\\*{0,2})(${OBSERVATORY_PROSE_LEAD_LABELS.map(escapeRegExp).join("|")})(\\*{0,2})(?=\\s|:|\\.)`,
   "g"
 );
 
 const emphasizeObservatoryProseLabels = (text: string): string => {
   if (!text) return "";
-  return text.replace(OBSERVATORY_PROSE_LEAD_LABEL_RE, (_match, prefix: string, label: string) => {
+  return text.replace(OBSERVATORY_PROSE_LEAD_LABEL_RE, (_match, prefix: string, _open: string, label: string) => {
     const needsParagraphBreak = Boolean(prefix && prefix !== "\n" && prefix.trim().length > 0);
     const normalizedPrefix = prefix === "\n" ? "\n\n" : needsParagraphBreak ? `${prefix.trimEnd()}\n\n` : prefix;
     return `${normalizedPrefix}**${label}**`;
@@ -147,10 +175,11 @@ const normalizeObservatoryEssayText = (text: string): string => {
   if (!text) return "";
   return emphasizeObservatoryProseLabels(stripObservatoryInlineEvidenceRefs(text))
     .replace(/\r\n?/g, "\n")
+    .replace(/^\s*#{1,3}\s*$/gm, "")
     .replace(/([^\n])\s+(#{1,3}\s+)/g, "$1\n\n$2")
     .replace(/\s+(\d+\s+[—-]\s+)/g, "\n\n$1")
     .replace(/\*\*([^*]{1,90})\*\*\s+:/g, "**$1**:")
-    .replace(/\*([^*\n]{1,80})\*/g, "$1")
+    .replace(/\*([^*\n]{1,100})\*/g, "**$1**")
     .replace(/[^\S\n]{2,}/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -165,6 +194,7 @@ type ObservatoryNarrativeBlock = {
 const normalizeObservatoryHeadingText = (value: string): string => {
   const clean = stripMarkdownEmphasis(value || "")
     .replace(/^#{1,3}\s*/, "")
+    .replace(/^Domain Force Dossier\s*[:—-]\s*/i, "")
     .replace(/\s+/g, " ")
     .trim()
     .replace(/[.:]\s*$/, "");
@@ -223,6 +253,40 @@ const splitObservatoryKnownSection = (value: string): { heading: string; rest: s
   return null;
 };
 
+const splitLongObservatoryParagraph = (text: string, maxChars = 720): string[] => {
+  const clean = (text || "").replace(/\s+/g, " ").trim();
+  if (!clean || clean.length <= maxChars) return clean ? [clean] : [];
+  const sentences = clean.match(/[^.!?]+[.!?]+(?:["'”’)]*)|\S[\s\S]*$/g) || [clean];
+  const chunks: string[] = [];
+  let current = "";
+  sentences.forEach((sentence) => {
+    const part = sentence.trim();
+    if (!part) return;
+    if (current && (current.length + part.length + 1) > maxChars) {
+      chunks.push(current.trim());
+      current = part;
+    } else {
+      current = current ? `${current} ${part}` : part;
+    }
+  });
+  if (current.trim()) chunks.push(current.trim());
+  return chunks.length ? chunks : [clean];
+};
+
+const pushObservatoryParagraphBlocks = (blocks: ObservatoryNarrativeBlock[], text: string) => {
+  splitLongObservatoryParagraph(text).forEach(part => {
+    const clean = part
+      .replace(/^#{1,3}\s+/, "")
+      .replace(/\n/g, " ")
+      .replace(/^\*\*\s*/, "**")
+      .replace(/\s+\*\*$/, "**")
+      .trim();
+    if (clean && !/^#{1,3}$/.test(clean)) {
+      blocks.push({ type: "paragraph", text: clean });
+    }
+  });
+};
+
 const buildObservatoryNarrativeBlocks = (text: string): ObservatoryNarrativeBlock[] => {
   const cleanText = normalizeObservatoryEssayText(text);
   if (!cleanText) return [];
@@ -244,7 +308,7 @@ const buildObservatoryNarrativeBlocks = (text: string): ObservatoryNarrativeBloc
     const split = splitObservatoryKnownSection(trimmed);
     if (split?.heading) {
       blocks.push({ type: "heading", level: 2, text: split.heading });
-      if (split.rest) blocks.push({ type: "paragraph", text: split.rest });
+      if (split.rest) pushObservatoryParagraphBlocks(blocks, split.rest);
       return;
     }
 
@@ -261,7 +325,7 @@ const buildObservatoryNarrativeBlocks = (text: string): ObservatoryNarrativeBloc
       return;
     }
 
-    blocks.push({ type: "paragraph", text: trimmed.replace(/^#{1,3}\s+/, "").replace(/\n/g, " ") });
+    pushObservatoryParagraphBlocks(blocks, trimmed);
   });
   return blocks;
 };
@@ -273,7 +337,7 @@ const markdownToHtml = (text: string): string => {
     if (block.type === "hr") return '<hr>';
     if (block.type === "heading") {
       const tag = block.level === 1 ? "h1" : block.level === 3 ? "h3" : "h2";
-      return `<${tag}>${block.text || ""}</${tag}>`;
+      return `<${tag}>${escapeObsHtml(block.text || "")}</${tag}>`;
     }
     const html = markdownInlineToHtml(block.text || "");
     return `<p>${html}</p>`;
@@ -427,26 +491,27 @@ const exportObservatoryHtml = (data: any, marketIntelData?: any) => {
   <style>
     :root { --bg: #0f172a; --surface: #1e293b; --border: #334155; --text: #e2e8f0; --text-muted: #94a3b8; --text-dim: #64748b; --cyan: #22d3ee; --violet: #a78bfa; --amber: #fbbf24; --emerald: #34d399; --rose: #fb7185; }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: var(--bg); color: var(--text); font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.7; max-width: 900px; margin: 0 auto; padding: 40px 24px; }
-    h1 { font-size: 28px; margin-bottom: 4px; color: white; }
+    body { background: var(--bg); color: var(--text); font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.68; max-width: 1120px; margin: 0 auto; padding: 44px 28px 72px; }
+    h1 { font-size: 30px; margin-bottom: 4px; color: white; letter-spacing: 0; }
     .subtitle { color: var(--text-dim); font-size: 12px; font-family: monospace; margin-bottom: 32px; }
     .meta { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 32px; }
     .meta-item { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 14px; font-size: 12px; font-family: monospace; color: var(--text-muted); }
     .meta-item.highlight { border-color: rgba(34,211,238,0.3); color: var(--cyan); }
 
-    .layer { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 28px; overflow: hidden; }
-    .layer-header { padding: 20px 28px; border-bottom: 1px solid var(--border); }
-    .layer-header h2 { font-size: 18px; margin-bottom: 4px; }
+    .layer { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 28px; overflow: hidden; }
+    .layer-header { padding: 22px 30px; border-bottom: 1px solid var(--border); }
+    .layer-header h2 { font-size: 18px; margin-bottom: 4px; letter-spacing: 0; }
     .layer-header.global h2 { color: var(--cyan); }
     .layer-header.finland h2 { color: var(--violet); }
     .layer-header.domain h2 { color: var(--amber); }
     .layer-desc { color: var(--text-dim); font-size: 12px; line-height: 1.6; margin-top: 8px; }
-    .layer-body { padding: 24px 28px; }
+    .layer-body { padding: 26px 30px; }
 
-    .essay h1 { font-size: 20px; margin: 32px 0 14px; color: white; }
-    .essay h2 { font-size: 16px; margin: 32px 0 14px; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
-    .essay h3 { font-size: 14px; margin: 24px 0 10px; color: white; font-weight: 600; }
-    .essay p { font-size: 14px; color: var(--text); margin-bottom: 18px; line-height: 1.8; font-weight: 400; }
+    .essay { max-width: 880px; }
+    .essay h1 { font-size: 20px; margin: 30px 0 12px; color: white; letter-spacing: 0; }
+    .essay h2 { font-size: 16px; margin: 30px 0 12px; color: var(--cyan); letter-spacing: 0; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+    .essay h3 { font-size: 14px; margin: 22px 0 9px; color: white; font-weight: 650; letter-spacing: 0; }
+    .essay p { font-size: 14px; color: var(--text); margin: 0 0 16px; line-height: 1.78; font-weight: 400; max-width: 860px; }
     .essay p strong { color: #e2e8f0; font-weight: 600; }
     .essay hr { border: none; border-top: 1px solid var(--border); margin: 28px 0; }
     .evidence-refs { margin-top: 20px; padding-top: 14px; border-top: 1px solid rgba(148,163,184,0.18); }
@@ -454,9 +519,9 @@ const exportObservatoryHtml = (data: any, marketIntelData?: any) => {
     .evidence-ref-list { display: flex; flex-wrap: wrap; gap: 6px; }
     .evidence-ref-list span { color: var(--text-dim); border: 1px solid rgba(148,163,184,0.2); background: rgba(15,23,42,0.5); border-radius: 999px; padding: 2px 7px; font-size: 10px; font-family: monospace; }
 
-    .domain-dossier { border-top: 1px solid var(--border); padding: 24px 28px; }
+    .domain-dossier { border-top: 1px solid var(--border); padding: 26px 30px; }
     .domain-dossier:first-child { border-top: none; }
-    .domain-dossier h2 { font-size: 17px; color: var(--amber); margin-bottom: 8px; }
+    .domain-dossier h2 { font-size: 17px; color: var(--amber); margin-bottom: 8px; letter-spacing: 0; }
 
     .badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
     .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 10px; font-family: monospace; background: var(--bg); border: 1px solid var(--border); color: var(--text-muted); }
@@ -468,8 +533,8 @@ const exportObservatoryHtml = (data: any, marketIntelData?: any) => {
     .badge-prepare { color: var(--amber); border-color: rgba(251,191,36,0.3); }
     .badge-position { color: var(--cyan); border-color: rgba(34,211,238,0.3); }
 
-    .section { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 28px; padding: 24px 28px; }
-    .section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--violet); margin-bottom: 16px; }
+    .section { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 28px; padding: 24px 28px; overflow-x: auto; }
+    .section h2 { font-size: 15px; letter-spacing: 0; color: var(--violet); margin-bottom: 16px; }
 
     table { width: 100%; border-collapse: collapse; font-size: 12px; }
     th { text-align: left; padding: 8px 10px; color: var(--text-muted); font-weight: 500; border-bottom: 1px solid var(--border); }
@@ -579,21 +644,21 @@ const formatEssayText = (text: string) => {
     if (block.type === "hr") return <hr key={i} className="border-slate-700/40 my-6" />;
     if (block.type === "heading" && block.level === 1) {
       return (
-        <h2 key={i} className="text-lg font-bold text-slate-50 mt-6 mb-3">
+        <h2 key={i} className="text-lg font-bold text-slate-50 mt-7 mb-3 tracking-normal">
           {block.text}
         </h2>
       );
     }
     if (block.type === "heading") {
       return (
-        <h3 key={i} className="text-base font-bold text-slate-100 mt-6 mb-3 border-b border-white/10 pb-1">
+        <h3 key={i} className="text-base font-bold text-slate-100 mt-7 mb-3 border-b border-white/10 pb-1.5 tracking-normal">
           {block.text}
         </h3>
       );
     }
     const rendered = renderInlineMarkdown(block.text || "");
     return (
-      <p key={i} className="text-sm text-slate-300 leading-[1.8] mb-4 font-normal">
+      <p key={i} className="text-sm text-slate-300 leading-[1.78] mb-4 font-normal max-w-[860px]">
         {rendered}
       </p>
     );
@@ -712,7 +777,7 @@ const EssaySection = ({ title, icon: Icon, colorKey, text, verification, metadat
         </div>
       )}
       {isOpen && (
-        <div className="px-5 py-4 bg-black/20 max-h-[600px] overflow-y-auto">
+        <div className="px-5 py-4 bg-black/20">
           {formatEssayText(text)}
         </div>
       )}
@@ -809,7 +874,7 @@ const DomainDossierTabs = ({ dossiers, defaultOpen = false }: { dossiers: any[];
             )}
 
             {/* Essay text */}
-            <div className="max-h-[500px] overflow-y-auto">
+            <div>
               {formatEssayText(active.text)}
             </div>
           </div>
