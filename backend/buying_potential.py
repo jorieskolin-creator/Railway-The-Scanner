@@ -1851,7 +1851,7 @@ BUYING_SECTION_INSTRUCTIONS = {
         "likely_business_consequence, why_now_or_soon, what_to_propose, discovery_question, disqualifier, "
         "company_context, market_context, combined_activation_hypothesis, falsifier, and context_type "
         "(company_only, market_watch, or combined_activation). WHY is why the customer challenge matters; "
-        "WHAT_TO_DO is the activity, diagnostic, analysis, roadmap, or deliverable to propose next; "
+        "WHAT_TO_DO is the customer outcome or deliverable state to validate next, not the consulting method used to create it; "
         "WHAT_PROGRESS_SHOWS is the observable proof of progress. "
         "Each play must also name account thesis, buying hypothesis, trigger-to-offer bridge, primary/secondary buyers, "
         "first meeting objective, discovery questions by buyer role, qualification upgrade criteria, disqualifiers, "
@@ -1906,7 +1906,7 @@ Evidence contract:
 - Say "buying hypothesis", "need hypothesis", or "demand creation potential"; never "confirmed buying intent", unless explicit evidence exists in the payload.
 - Stakeholder notes must remain professional, role-relevant, and source-bound. No private-life profiling.
 - Strategic Synthesis and scanner_activation_pair signals are the sales spine. Preserve each pair's why, what_to_do, and what_progress_shows logic.
-- WHY is why the customer challenge matters. WHAT_TO_DO is the concrete validation activity or deliverable. WHAT_PROGRESS_SHOWS is observable proof of progress. Do not turn WHAT_TO_DO into a pre-scoped implementation plan.
+- WHY is why the customer challenge matters. WHAT_TO_DO is the customer outcome or deliverable state to validate next. WHAT_PROGRESS_SHOWS is observable proof of progress. Do not turn WHAT_TO_DO into consulting-method/HOW language or a pre-scoped implementation plan.
 - General Summary is factual context only. AI Diagnosis and evidence_based_risks are internal reasoning and discovery framing, not customer-facing facts.
 - Numeric scores are internal compatibility diagnostics only. They must not be used as proof that a need exists, as customer-facing evidence, or as the main reason for a proposal.
 - Every recommended play should map to one activation pair when any activation-pair SIG exists.

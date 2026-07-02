@@ -158,6 +158,27 @@ _ACTIVATION_THEME_TYPES = {
     "proactive_opportunity",
 }
 
+_ACTIVATION_HOW_METHOD_RE = re.compile(
+    r"\b(?:run|conduct|facilitate|hold|perform|execute|carry out|workshop|diagnostic|assessment|"
+    r"readiness assessment|value stream analysis|strategic evaluation|service-based business architecture|"
+    r"delivery & capacity planning|evolving modernization|tac-\d{3,4})\b",
+    re.I,
+)
+_ACTIVATION_METHOD_NAME_RE = re.compile(
+    r"\b(?:Delivery\s*&\s*Capacity\s*Planning|Value\s*Stream\s*Analysis|AI\s*Readiness\s*Assessment|"
+    r"Strategic\s*Evaluation|Service-Based\s*Business\s*Architecture|Evolving\s*Modernization|TAC-\d{3,4})\b",
+    re.I,
+)
+
+_ACTIVATION_WHAT_CONTRACT = """WHAT_TO_DO — outcome / deliverable state:
+  - WHAT is derived from WHY, but it must describe what should be achieved, clarified, evidenced, or made decision-ready.
+  - Write it as an outcome or deliverable state, not as HOW to deliver it.
+  - Good WHAT patterns: "Within 12 months...", "A validated...", "An explicit...", "Evidence shows...", "A decision-ready...", "A prioritized...".
+  - Do NOT lead with method verbs such as run, conduct, facilitate, perform, execute, or build.
+  - Do NOT name consulting methods, tools, workshops, diagnostics, assessments, Evolving Modernization tactics, TAC codes, Value Stream Analysis, AI Readiness Assessment, or Delivery & Capacity Planning in WHAT. Those belong to proposal/HOW later.
+  - The legacy "what" field must contain the same outcome/deliverable-state text as WHAT_TO_DO for backward compatibility.
+  - Length: 1-2 sentences each."""
+
 
 def _normalize_sales_use(value: str) -> str:
     token = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
@@ -176,6 +197,56 @@ def _clip_sentence(text: str, limit: int = 520) -> str:
     if len(cleaned) <= limit:
         return cleaned
     return cleaned[:limit].rsplit(" ", 1)[0].rstrip(".,;:") + "."
+
+
+def _is_how_method_what(text: str) -> bool:
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return False
+    if re.match(r"(?i)^\s*(?:run|conduct|facilitate|hold|perform|execute|carry out|build)\b", cleaned):
+        return True
+    return bool(_ACTIVATION_HOW_METHOD_RE.search(cleaned))
+
+
+def _progress_to_outcome_what(progress: str) -> str:
+    cleaned = _clip_sentence(progress)
+    if not cleaned:
+        return ""
+    cleaned = re.sub(r"(?i)^progress\s+(?:is\s+)?(?:visible|shown|evident)\s+when\s+", "", cleaned).strip()
+    cleaned = re.sub(r"(?i)^progress\s+(?:would\s+)?(?:look\s+like|show)\s+", "", cleaned).strip()
+    cleaned = re.sub(r"(?i)^when\s+", "", cleaned).strip()
+    if not cleaned:
+        return ""
+    if re.match(r"(?i)^(within|a validated|an explicit|evidence|decision-ready|a prioritized|measurable|observable)\b", cleaned):
+        return _clip_sentence(cleaned)
+    cleaned = cleaned[0].lower() + cleaned[1:] if len(cleaned) > 1 else cleaned.lower()
+    return _clip_sentence(f"A validated outcome shows {cleaned}")
+
+
+def _normalize_what_to_outcome(what: str, progress: str = "") -> str:
+    candidate = _clip_sentence(what)
+    if candidate and not _is_how_method_what(candidate):
+        return candidate
+    progress_outcome = _progress_to_outcome_what(progress)
+    if progress_outcome:
+        return progress_outcome
+    if candidate:
+        cleaned = re.sub(
+            r"(?i)^\s*(?:run|conduct|facilitate|hold|perform|execute|carry out|build)\s+(?:a|an|the)?\s*",
+            "",
+            candidate,
+        ).strip()
+        cleaned = re.sub(
+            r"(?i)\b(?:diagnostic|workshop|assessment|analysis|strategic evaluation)\b",
+            "decision-ready evidence",
+            cleaned,
+        )
+        cleaned = _ACTIVATION_METHOD_NAME_RE.sub("the relevant operating or commercial outcome", cleaned)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ,.;:")
+        if cleaned:
+            cleaned = cleaned[0].lower() + cleaned[1:] if len(cleaned) > 1 else cleaned.lower()
+            return _clip_sentence(f"A decision-ready deliverable clarifies {cleaned}")
+    return ""
 
 
 def _activation_pair_candidates(payload: dict) -> list[dict]:
@@ -199,6 +270,10 @@ def _activation_pair_candidates(payload: dict) -> list[dict]:
             what = what_to_do
             if not why or not what:
                 continue
+            progress_text = _clip_sentence(progress[0]) if progress else ""
+            what_text = _normalize_what_to_outcome(what[0], progress_text)
+            if not what_text:
+                continue
             theme_type = _normalize_sales_use(item.get("theme_type") or item.get("sales_use") or item.get("type"))
             if theme_type not in _ACTIVATION_THEME_TYPES:
                 theme_type = "current_status"
@@ -208,9 +283,9 @@ def _activation_pair_candidates(payload: dict) -> list[dict]:
                 "sales_use": _normalize_sales_use(item.get("sales_use") or theme_type),
                 "theme": label,
                 "why": _clip_sentence(why[0]),
-                "what": _clip_sentence(what[0]),
-                "what_to_do": _clip_sentence(what[0]),
-                "what_progress_shows": _clip_sentence(progress[0]) if progress else "",
+                "what": what_text,
+                "what_to_do": what_text,
+                "what_progress_shows": progress_text,
             })
     return pairs
 
@@ -242,14 +317,16 @@ def _ensure_activation_pairs(payload: dict, prior: dict | None = None) -> list[d
                 why = whys[idx] if idx < len(whys) else whys[-1]
                 what = whats[idx] if idx < len(whats) else whats[-1]
                 progress = progress_items[idx] if idx < len(progress_items) else ""
+                progress_text = _clip_sentence(progress)
+                what_text = _normalize_what_to_outcome(what, progress_text) or _clip_sentence(what)
                 pairs.append({
                     "theme_type": theme_cycle[idx],
                     "sales_use": theme_cycle[idx],
                     "theme": theme_cycle[idx].replace("_", " "),
                     "why": _clip_sentence(why),
-                    "what": _clip_sentence(what),
-                    "what_to_do": _clip_sentence(what),
-                    "what_progress_shows": _clip_sentence(progress),
+                    "what": what_text,
+                    "what_to_do": what_text,
+                    "what_progress_shows": progress_text,
                 })
 
     # If the model returns only one pair, add a second bounded discovery pair
@@ -271,11 +348,11 @@ def _ensure_activation_pairs(payload: dict, prior: dict | None = None) -> list[d
                 "enough to create an executive priority, rather than assuming the gap is already proven."
             ),
             "what": (
-                "Run a bounded discovery conversation to identify the business owner, the pressure, and the first "
+                "A bounded discovery trigger identifies the business owner, the pressure, and the first "
                 "operating or commercial outcome worth testing."
             ),
             "what_to_do": (
-                "Run a bounded discovery conversation to identify the business owner, the pressure, and the first "
+                "A bounded discovery trigger identifies the business owner, the pressure, and the first "
                 "operating or commercial outcome worth testing."
             ),
             "what_progress_shows": (
@@ -2779,11 +2856,7 @@ WHY — customer value and consequence:
   - Tone: Executive-level, outcome-oriented. Not technical jargon.
   - Length: 2-3 sentences each.
 
-WHAT_TO_DO — proposed activity or deliverable:
-  - Each WHAT_TO_DO must propose a concrete activity, diagnostic, workshop, analysis, decision model, roadmap, readiness assessment, or deliverable.
-  - It must answer: "What could be done next?"
-  - Tone: Tangible, verifiable, grounded in this company's context.
-  - Length: 1-2 sentences each.
+{_ACTIVATION_WHAT_CONTRACT}
 
 WHAT_PROGRESS_SHOWS — observable proof of progress:
   - Describe what progress would look like after the activity.
@@ -3301,11 +3374,7 @@ WHY — customer value and consequence:
   - Tone: Executive-level, outcome-oriented. Not technical jargon.
   - Length: 1-2 sentences each.
 
-WHAT_TO_DO — proposed activity or deliverable:
-  - Each WHAT_TO_DO must propose a concrete activity, diagnostic, workshop, analysis, decision model, roadmap, readiness assessment, or deliverable.
-  - It must answer: "What could be done next?"
-  - Tone: Tangible, verifiable, grounded in this company's context.
-  - Length: 1-2 sentences each.
+{_ACTIVATION_WHAT_CONTRACT}
 
 WHAT_PROGRESS_SHOWS — observable proof of progress:
   - Describe what progress would look like after the activity.
@@ -5835,9 +5904,11 @@ Write a direct cold-outreach message to a C-level executive at {companyName}.
 ### WHY / WHAT
 Generate 2-3 paired WHY/WHAT items every time. Do not collapse to one pair because evidence is thin.
 - WHY = why this matters for the customer: connect a detected challenge/problem to end-value, future strategy, risk, cost of inaction, or missed opportunity.
-- WHAT_TO_DO = the concrete activity, diagnostic, workshop, analysis, decision model, roadmap, readiness assessment, or deliverable to propose next. It must be action-oriented.
+- WHAT_TO_DO = the outcome or deliverable state to achieve next. It must describe what becomes clarified, evidenced, decision-ready, or observable for the customer; do not describe HOW to deliver it.
 - WHAT_PROGRESS_SHOWS = observable proof of progress after the activity. It may be qualitative or measurable, but do not invent numeric KPI targets unless already evidenced.
-- The legacy "what" field must contain the same action-oriented text as WHAT_TO_DO for backward compatibility.
+- The legacy "what" field must contain the same outcome/deliverable-state text as WHAT_TO_DO for backward compatibility.
+- Do NOT lead WHAT with run, conduct, facilitate, perform, execute, or build.
+- Do NOT name consulting methods, tools, workshops, diagnostics, assessments, Evolving Modernization tactics, TAC codes, Value Stream Analysis, AI Readiness Assessment, or Delivery & Capacity Planning in WHAT. Those belong to proposal/HOW later.
 - Each WHY/WHAT field: 1-2 sentences.
 - Each pair must have exactly one theme_type:
   - current_status: current evidence, operating-model, financial, proof, or portfolio reality.
@@ -5925,7 +5996,8 @@ Respond with valid JSON only:
                                          print(f"   🔧 [Activation] JSON parse failed; trying cheap JSON repair (timeout: {repair_timeout}s)...")
                                          repair_prompt = f"""Convert the following Strategic Activation output into STRICT JSON only.
 Do not add facts. Preserve the meaning. Required keys:
-{{"strategic_synthesis": "...", "commercial_pitch": "...", "activation_pairs": [{{"theme_type": "current_status|foresight_driven|proactive_opportunity", "sales_use": "current_status|foresight_driven|proactive_opportunity", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "concrete activity or deliverable", "what_progress_shows": "observable proof of progress"}}], "why_proposals": ["..."], "what_proposals": ["what_to_do texts"], "what_progress_proposals": ["what_progress_shows texts"]}}
+{{"strategic_synthesis": "...", "commercial_pitch": "...", "activation_pairs": [{{"theme_type": "current_status|foresight_driven|proactive_opportunity", "sales_use": "current_status|foresight_driven|proactive_opportunity", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "outcome or deliverable state, not HOW/method language", "what_progress_shows": "observable proof of progress"}}], "why_proposals": ["..."], "what_proposals": ["what_to_do outcome/deliverable-state texts"], "what_progress_proposals": ["what_progress_shows texts"]}}
+Do not write method-led WHAT text such as run, conduct, workshop, diagnostic, assessment, Value Stream Analysis, AI Readiness Assessment, or Delivery & Capacity Planning.
 
 TEXT TO REPAIR:
 {activation_text[:7000]}"""

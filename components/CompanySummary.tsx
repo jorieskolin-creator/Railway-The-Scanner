@@ -509,7 +509,7 @@ const isForesightContext = (link) => {
     const progress = data.what_progress_proposals || [];
     const maxItems = Math.max(why.length, what.length, progress.length, 2);
     const numbered = (items: any[]) => Array.from({ length: maxItems }, (_, i) => `${i + 1}. ${items[i] || ''}`).join('\n');
-    const text = `WHY (Customer value / consequence):\n${numbered(why)}\n\nWHAT (Activity / deliverable):\n${numbered(what)}\n\nPROGRESS PROOF:\n${numbered(progress)}`;
+    const text = `WHY (Customer value / consequence):\n${numbered(why)}\n\nWHAT (Outcome / deliverable):\n${numbered(what)}\n\nPROGRESS PROOF:\n${numbered(progress)}`;
     navigator.clipboard.writeText(text).then(() => {
         setWhyWhatCopied(true);
         setTimeout(() => setWhyWhatCopied(false), 2000);
@@ -1003,7 +1003,7 @@ const isForesightContext = (link) => {
         var activationProgressHTML = Array.isArray(exportData.what_progress_proposals) && exportData.what_progress_proposals.length
             ? '<div class="section nested"><h3>PROGRESS — Observable Proof</h3>' + renderList(exportData.what_progress_proposals) + '</div>'
             : '';
-        var activationHTML = '<div class="two-col"><div><h3>WHY — Customer Value / Consequence</h3>' + renderList(exportData.why_proposals) + '</div><div><h3>WHAT — Activity / Deliverable</h3>' + renderList(exportData.what_proposals) + '</div></div>'
+        var activationHTML = '<div class="two-col"><div><h3>WHY — Customer Value / Consequence</h3>' + renderList(exportData.why_proposals) + '</div><div><h3>WHAT — Outcome / Deliverable</h3>' + renderList(exportData.what_proposals) + '</div></div>'
             + activationProgressHTML
             + renderSection('Strategic Pitch', 'Outbound narrative', renderParagraphs(exportData.pitch_text), 'nested');
         var strategicForesightData = exportData.strategic_foresight || {};
@@ -1337,7 +1337,7 @@ const isForesightContext = (link) => {
         const whyWhatProgressHTML = Array.isArray(exportData.what_progress_proposals) && exportData.what_progress_proposals.length
             ? '<div class="section nested"><h3>PROGRESS — Observable Proof</h3>' + renderList(exportData.what_progress_proposals) + '</div>'
             : '';
-        const whyWhatHTML = '<div class="two-col"><div><h3>WHY — Customer Value / Consequence</h3>' + renderList(exportData.why_proposals) + '</div><div><h3>WHAT — Activity / Deliverable</h3>' + renderList(exportData.what_proposals) + '</div></div>' + whyWhatProgressHTML;
+        const whyWhatHTML = '<div class="two-col"><div><h3>WHY — Customer Value / Consequence</h3>' + renderList(exportData.why_proposals) + '</div><div><h3>WHAT — Outcome / Deliverable</h3>' + renderList(exportData.what_proposals) + '</div></div>' + whyWhatProgressHTML;
         const pitchHTML = renderParagraphs(exportData.pitch_text);
         const diagnosisHTML = renderParagraphs(exportData.summary_text)
             + (Array.isArray(exportData.evidence_based_risks) && exportData.evidence_based_risks.length > 0
@@ -2304,7 +2304,7 @@ const isForesightContext = (link) => {
                             </div>
                         </div>
                         <div>
-                            <p className="text-[11px] font-bold text-orange-400 uppercase tracking-wider mb-2">WHAT — Activity / Deliverable</p>
+                            <p className="text-[11px] font-bold text-orange-400 uppercase tracking-wider mb-2">WHAT — Outcome / Deliverable</p>
                             <div className="space-y-2">
                                 {data.what_proposals.map((what, i) => (
                                     <div key={i} className="bg-black/30 p-3 rounded-lg border border-orange-500/15">

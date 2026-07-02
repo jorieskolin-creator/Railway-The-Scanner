@@ -620,12 +620,14 @@ WHY — customer value and consequence:
   - Length: 2-3 sentences each.
   - Example: "Reduce time-to-market for digital services from months to weeks by dissolving project-based handoffs that currently bottleneck every release."
 
-WHAT — proposed activity or deliverable:
-  - Each WHAT must propose a concrete activity, diagnostic, workshop, analysis, decision model, roadmap, readiness assessment, or deliverable.
-  - It must answer: "What could be done next?"
+WHAT — outcome / deliverable state:
+  - Each WHAT must describe what should be achieved, clarified, evidenced, or made decision-ready for the customer.
+  - Write it as the desired deliverable state or business effect, not as the method used to create it.
+  - Do NOT lead with method verbs such as run, conduct, facilitate, perform, execute, or build.
+  - Do NOT name consulting methods, tools, workshops, diagnostics, assessments, Value Stream Analysis, AI Readiness Assessment, or Delivery & Capacity Planning in WHAT. Those belong to proposal/HOW later.
   - Tone: Tangible, verifiable, grounded in this company's context.
   - Length: 2-3 sentences each.
-  - Example: "Run a value-stream and team-ownership diagnostic to identify the handoffs, governance points, and release constraints that slow digital-service delivery."
+  - Example: "Within 12 months, release constraints and team-ownership gaps are visible enough that digital-service delivery can be governed by observable flow evidence rather than project-status interpretation."
 
 Rules:
   - WHY1 pairs with WHAT1 (same theme). If 2 pairs: WHY2 pairs with WHAT2 (different theme).
@@ -1095,6 +1097,8 @@ A direct cold-outreach message to a C-level executive at {company_name}:
 
 STEP 4 — IMPACT PROPOSALS (derived from Steps 1-3):
 Generate exactly 2 WHY statements and 2 WHAT statements.
+WHY must explain the customer value, risk, cost of inaction, or missed opportunity.
+WHAT must describe the outcome or deliverable state to achieve next. Do not write HOW-method language such as run, conduct, workshop, diagnostic, assessment, Value Stream Analysis, AI Readiness Assessment, or Delivery & Capacity Planning.
 
 ### GUARDRAILS
 - NEVER fabricate evidence, people, events, partnerships, or metrics not present in the scan data.
