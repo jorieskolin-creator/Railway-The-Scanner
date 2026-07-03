@@ -518,38 +518,110 @@ def _merge_observatory_public_qa(current: dict, prior=None) -> dict:
     return merged
 
 
+def _observatory_failed_unit(label: str, exc, *, unit_type: str = "", previous=None, domain: str = "") -> tuple[dict, dict]:
+    """Return a reused previous unit or an explicit failed placeholder."""
+    error = str(exc)
+    failed_at = datetime.utcnow().isoformat()
+    if isinstance(previous, dict) and (previous.get("text") or previous.get("sections")):
+        reused = dict(previous)
+        reused["status"] = "reused_previous_due_to_failure"
+        reused["unit_type"] = unit_type or reused.get("unit_type") or label
+        if domain:
+            reused["domain"] = domain
+        reused["reuse_reason"] = error
+        reused["reused_at"] = failed_at
+        qa = dict(reused.get("public_output_quality") or {})
+        qa.setdefault("label", label)
+        qa["status"] = "warning"
+        qa["fatal"] = []
+        qa["repairable"] = qa.get("repairable") or []
+        qa["warnings"] = list(dict.fromkeys((qa.get("warnings") or []) + ["reused_previous_due_to_failure"]))
+        qa["saved_with_warnings"] = True
+        reused["public_output_quality"] = qa
+        marker = {
+            "label": label,
+            "unit_type": unit_type,
+            "domain": domain,
+            "status": "reused_previous_due_to_failure",
+            "error": error,
+            "reused_at": failed_at,
+        }
+        return reused, marker
+
+    qa = {
+        "label": label,
+        "passed": False,
+        "status": "fatal",
+        "fatal": ["unit_generation_failed"],
+        "repairable": [],
+        "issues": ["unit_generation_failed"],
+        "warnings": [],
+        "max_paragraph_chars": 0,
+        "word_count": 0,
+        "attempts": [],
+        "repaired_issue_count": 0,
+        "saved_with_warnings": False,
+    }
+    placeholder = {
+        "status": "fatal_failed",
+        "unit_type": unit_type or label,
+        "text": "",
+        "sections": [],
+        "error": error,
+        "failed_at": failed_at,
+        "public_output_quality": qa,
+    }
+    if domain:
+        placeholder["domain"] = domain
+    marker = {
+        "label": label,
+        "unit_type": unit_type,
+        "domain": domain,
+        "status": "fatal_failed",
+        "error": error,
+        "failed_at": failed_at,
+    }
+    return placeholder, marker
+
+
 def _sanitize_observatory_payload(result: dict) -> dict:
     """Sanitize reader-facing Observatory text and attach non-fatal QA metadata."""
     checks = []
     global_text = (result.get("global_analysis") or {}).get("text") or ""
     if global_text or result.get("global_analysis"):
-        prior_qa = result["global_analysis"].get("public_output_quality")
-        text, sections, qa = _finalize_observatory_output_text(
-            global_text,
-            "global_analysis",
-            OBSERVATORY_ALL_SECTION_TITLES,
-            allow_rewrite=False,
-        )
-        qa = _merge_observatory_public_qa(qa, prior_qa)
-        result["global_analysis"]["text"] = text
-        result["global_analysis"]["sections"] = sections
-        result["global_analysis"]["public_output_quality"] = qa
-        checks.append(qa)
+        if result["global_analysis"].get("status") == "fatal_failed" and not global_text:
+            checks.append(result["global_analysis"].get("public_output_quality") or _observatory_public_quality("", "global_analysis"))
+        else:
+            prior_qa = result["global_analysis"].get("public_output_quality")
+            text, sections, qa = _finalize_observatory_output_text(
+                global_text,
+                "global_analysis",
+                OBSERVATORY_ALL_SECTION_TITLES,
+                allow_rewrite=False,
+            )
+            qa = _merge_observatory_public_qa(qa, prior_qa)
+            result["global_analysis"]["text"] = text
+            result["global_analysis"]["sections"] = sections
+            result["global_analysis"]["public_output_quality"] = qa
+            checks.append(qa)
 
     finland_text = (result.get("finland_analysis") or {}).get("text") or ""
     if finland_text or result.get("finland_analysis"):
-        prior_qa = result["finland_analysis"].get("public_output_quality")
-        text, sections, qa = _finalize_observatory_output_text(
-            finland_text,
-            "finland_analysis",
-            OBSERVATORY_FINLAND_SECTION_TITLES,
-            allow_rewrite=False,
-        )
-        qa = _merge_observatory_public_qa(qa, prior_qa)
-        result["finland_analysis"]["text"] = text
-        result["finland_analysis"]["sections"] = sections
-        result["finland_analysis"]["public_output_quality"] = qa
-        checks.append(qa)
+        if result["finland_analysis"].get("status") == "fatal_failed" and not finland_text:
+            checks.append(result["finland_analysis"].get("public_output_quality") or _observatory_public_quality("", "finland_analysis"))
+        else:
+            prior_qa = result["finland_analysis"].get("public_output_quality")
+            text, sections, qa = _finalize_observatory_output_text(
+                finland_text,
+                "finland_analysis",
+                OBSERVATORY_FINLAND_SECTION_TITLES,
+                allow_rewrite=False,
+            )
+            qa = _merge_observatory_public_qa(qa, prior_qa)
+            result["finland_analysis"]["text"] = text
+            result["finland_analysis"]["sections"] = sections
+            result["finland_analysis"]["public_output_quality"] = qa
+            checks.append(qa)
 
     filtered_domains = []
     kept_dossiers = []
@@ -579,20 +651,37 @@ def _sanitize_observatory_payload(result: dict) -> dict:
     fatal = [check for check in checks if check.get("fatal")]
     repairable = [check for check in checks if check.get("repairable")]
     warning = [check for check in checks if check.get("warnings")]
-    status = "fatal_failed" if fatal else "saved_with_warnings" if (repairable or warning or filtered_domains) else "clean"
+    failed_units = list(result.get("failed_units") or [])
+    reused_units = list(result.get("reused_units") or [])
+    failed_labels = {item.get("label") for item in failed_units if isinstance(item, dict)}
+    for check in fatal:
+        if check.get("label") not in failed_labels:
+            failed_units.append({
+                "label": check.get("label"),
+                "status": "fatal_failed",
+                "fatal": check.get("fatal") or [],
+            })
+    status = (
+        "saved_with_failed_units" if failed_units
+        else "saved_with_warnings" if (repairable or warning or filtered_domains or reused_units)
+        else "clean"
+    )
     result["public_output_quality"] = {
-        "passed": not fatal and not repairable,
+        "passed": not failed_units and not repairable,
         "status": status,
         "checks": checks,
-        "blocking_issue_count": sum(len(check.get("fatal") or []) for check in checks),
+        "blocking_issue_count": 0,
+        "fatal_issue_count": sum(len(check.get("fatal") or []) for check in checks),
         "repairable_issue_count": sum(len(check.get("repairable") or []) for check in checks),
         "warning_count": sum(len(check.get("warnings") or []) for check in checks),
         "repaired_issue_count": sum(int(check.get("repaired_issue_count") or 0) for check in checks),
         "filtered": {"domain_dossiers": filtered_domains},
+        "failed_units": failed_units,
+        "reused_units": reused_units,
     }
-    if fatal:
-        labels = ", ".join(check["label"] for check in fatal[:5])
-        raise ValueError(f"Observatory fatal public-output QA failed after sanitation: {labels}")
+    result["failed_units"] = failed_units
+    result["reused_units"] = reused_units
+    result["generation_status"] = "partial" if failed_units or reused_units else "complete"
     return result
 
 
@@ -1866,6 +1955,18 @@ def generate_observatory(progress_callback=None):
     progress_callback(step_name, current_index, total_steps) is called after each step.
     """
     storage = BlobStorage()
+    try:
+        previous_observatory = storage.get_observatory() or {}
+    except Exception as exc:
+        print(f"   [Observatory] Previous observatory unavailable for fallback (non-blocking): {type(exc).__name__}: {exc}")
+        previous_observatory = {}
+    previous_domains = {
+        str(item.get("domain")): item
+        for item in (previous_observatory.get("domain_dossiers") or [])
+        if isinstance(item, dict) and item.get("domain")
+    }
+    failed_units = []
+    reused_units = []
 
     def progress(step, idx, total):
         print(f"   [Observatory] Step {idx+1}/{total}: {step}")
@@ -1901,191 +2002,256 @@ def generate_observatory(progress_callback=None):
 
     # --- Output 1: Global Force Landscape ---
     progress("Global Force Landscape", 0, total_steps)
-    global_prompt = _build_global_prompt(
-        kb_agg,
-        mi.get("cross_impact", []),
-        mi.get("top_foresights", []),
-        findings_block,
-        evidence_dossier=l1_dossier,
-    )
-    global_source = json.dumps(l1_dossier, ensure_ascii=False)
-    global_text, global_verify = _generate_with_verification(
-        global_prompt,
-        global_source,
-        "Global Force Landscape",
-        signal_evidence=signal_evidence,
-        use_gpt_pro=True,
-    )
-    l1_claims = _extract_layer_claims(global_text, l1_dossier, "L1")
+    try:
+        global_prompt = _build_global_prompt(
+            kb_agg,
+            mi.get("cross_impact", []),
+            mi.get("top_foresights", []),
+            findings_block,
+            evidence_dossier=l1_dossier,
+        )
+        global_source = json.dumps(l1_dossier, ensure_ascii=False)
+        global_text, global_verify = _generate_with_verification(
+            global_prompt,
+            global_source,
+            "Global Force Landscape",
+            signal_evidence=signal_evidence,
+            use_gpt_pro=True,
+        )
+        l1_claims = _extract_layer_claims(global_text, l1_dossier, "L1")
 
-    # Extract key convergences from the text (first 3 sentences that mention convergence/force)
-    key_convergences = []
-    for sentence in re.split(r'[.!?]+', global_text):
-        sentence = sentence.strip()
-        if any(word in sentence.lower() for word in ["converg", "amplif", "intersect", "compound"]):
-            if len(sentence) > 20:
-                key_convergences.append(sentence[:150])
-        if len(key_convergences) >= 3:
-            break
-    global_text, global_sections, global_public_qa = _finalize_observatory_output_text(
-        global_text,
-        "global_analysis",
-        OBSERVATORY_ALL_SECTION_TITLES,
-        allow_rewrite=False,
-    )
+        # Extract key convergences from the text (first 3 sentences that mention convergence/force)
+        key_convergences = []
+        for sentence in re.split(r'[.!?]+', global_text):
+            sentence = sentence.strip()
+            if any(word in sentence.lower() for word in ["converg", "amplif", "intersect", "compound"]):
+                if len(sentence) > 20:
+                    key_convergences.append(sentence[:150])
+            if len(key_convergences) >= 3:
+                break
+        global_text, global_sections, global_public_qa = _finalize_observatory_output_text(
+            global_text,
+            "global_analysis",
+            OBSERVATORY_ALL_SECTION_TITLES,
+            allow_rewrite=False,
+        )
 
-    global_analysis = {
-        "text": global_text,
-        "sections": global_sections,
-        "force_count": kb_agg["total_signals"],
-        "accelerating_forces": kb_agg["accelerating"],
-        "key_convergences": key_convergences,
-        "structured_claims": l1_claims,
-        "evidence_dossier_version": OBSERVATORY_DOSSIER_VERSION,
-        "analysis_model": global_verify.get("generation_model", OBSERVATORY_L1_MODEL),
-        "verification": global_verify,
-        "public_output_quality": global_public_qa,
-    }
+        global_analysis = {
+            "status": "fresh",
+            "text": global_text,
+            "sections": global_sections,
+            "force_count": kb_agg["total_signals"],
+            "accelerating_forces": kb_agg["accelerating"],
+            "key_convergences": key_convergences,
+            "structured_claims": l1_claims,
+            "evidence_dossier_version": OBSERVATORY_DOSSIER_VERSION,
+            "analysis_model": global_verify.get("generation_model", OBSERVATORY_L1_MODEL),
+            "verification": global_verify,
+            "public_output_quality": global_public_qa,
+        }
+    except Exception as exc:
+        print(f"   [Observatory] Global Force Landscape failed; continuing with fallback/placeholder: {type(exc).__name__}: {exc}")
+        global_analysis, marker = _observatory_failed_unit(
+            "global_analysis",
+            exc,
+            unit_type="layer_1",
+            previous=previous_observatory.get("global_analysis"),
+        )
+        if marker["status"] == "reused_previous_due_to_failure":
+            reused_units.append(marker)
+        else:
+            failed_units.append(marker)
+        l1_claims = global_analysis.get("structured_claims") if isinstance(global_analysis.get("structured_claims"), list) else []
+        global_verify = global_analysis.get("verification") if isinstance(global_analysis.get("verification"), dict) else {
+            "status": "unavailable",
+            "error": str(exc),
+        }
 
     # --- Output 2: Finnish Economy Force Map ---
     progress("Finnish Economy Force Map", 1, total_steps)
     l2_dossier = _build_l2_evidence_dossier(mi, l1_claims, structured_findings, input_manifest)
-    finland_prompt = _build_finland_prompt(
-        "",
-        mi,
-        kb_agg,
-        findings_block,
-        l1_claims=l1_claims,
-        evidence_dossier=l2_dossier,
-    )
-    finland_source = json.dumps(l2_dossier, ensure_ascii=False)
-    finland_text, finland_verify = _generate_with_verification(
-        finland_prompt,
-        finland_source,
-        "Finnish Economy Force Map",
-        use_gpt_pro=True,
-    )
-    l2_claims = _extract_layer_claims(finland_text, l2_dossier, "L2")
-    finland_text, finland_sections, finland_public_qa = _finalize_observatory_output_text(
-        finland_text,
-        "finland_analysis",
-        OBSERVATORY_FINLAND_SECTION_TITLES,
-        allow_rewrite=False,
-    )
+    try:
+        finland_prompt = _build_finland_prompt(
+            "",
+            mi,
+            kb_agg,
+            findings_block,
+            l1_claims=l1_claims,
+            evidence_dossier=l2_dossier,
+        )
+        finland_source = json.dumps(l2_dossier, ensure_ascii=False)
+        finland_text, finland_verify = _generate_with_verification(
+            finland_prompt,
+            finland_source,
+            "Finnish Economy Force Map",
+            use_gpt_pro=True,
+        )
+        l2_claims = _extract_layer_claims(finland_text, l2_dossier, "L2")
+        finland_text, finland_sections, finland_public_qa = _finalize_observatory_output_text(
+            finland_text,
+            "finland_analysis",
+            OBSERVATORY_FINLAND_SECTION_TITLES,
+            allow_rewrite=False,
+        )
 
-    # Extract top adaptability gaps
-    top_gaps = []
-    for g in mi.get("gap_patterns", [])[:3]:
-        top_gaps.append(f"{g['dimension']}: gap={g['avg_gap']}")
+        # Extract top adaptability gaps
+        top_gaps = []
+        for g in mi.get("gap_patterns", [])[:3]:
+            top_gaps.append(f"{g['dimension']}: gap={g['avg_gap']}")
 
-    finland_analysis = {
-        "text": finland_text,
-        "sections": finland_sections,
-        "domains_analyzed": len(mi.get("market_health", [])),
-        "favi_distribution": mi.get("favi_segments", {}),
-        "top_adaptability_gaps": top_gaps,
-        "l1_claims_consumed": len(l1_claims),
-        "structured_claims": l2_claims,
-        "evidence_dossier_version": OBSERVATORY_DOSSIER_VERSION,
-        "analysis_model": finland_verify.get("generation_model", OBSERVATORY_L2_MODEL),
-        "verification": finland_verify,
-        "public_output_quality": finland_public_qa,
-    }
+        finland_analysis = {
+            "status": "fresh",
+            "text": finland_text,
+            "sections": finland_sections,
+            "domains_analyzed": len(mi.get("market_health", [])),
+            "favi_distribution": mi.get("favi_segments", {}),
+            "top_adaptability_gaps": top_gaps,
+            "l1_claims_consumed": len(l1_claims),
+            "structured_claims": l2_claims,
+            "evidence_dossier_version": OBSERVATORY_DOSSIER_VERSION,
+            "analysis_model": finland_verify.get("generation_model", OBSERVATORY_L2_MODEL),
+            "verification": finland_verify,
+            "public_output_quality": finland_public_qa,
+        }
+    except Exception as exc:
+        print(f"   [Observatory] Finnish Economy Force Map failed; continuing with fallback/placeholder: {type(exc).__name__}: {exc}")
+        finland_analysis, marker = _observatory_failed_unit(
+            "finland_analysis",
+            exc,
+            unit_type="layer_2",
+            previous=previous_observatory.get("finland_analysis"),
+        )
+        if marker["status"] == "reused_previous_due_to_failure":
+            reused_units.append(marker)
+        else:
+            failed_units.append(marker)
+        l2_claims = finland_analysis.get("structured_claims") if isinstance(finland_analysis.get("structured_claims"), list) else []
+        finland_verify = finland_analysis.get("verification") if isinstance(finland_analysis.get("verification"), dict) else {
+            "status": "unavailable",
+            "error": str(exc),
+        }
 
     # --- Output 3: Domain Force Dossiers ---
     domain_dossiers = []
+    failed_domain_dossiers = []
     l3_dossiers = {}
     for i, domain in enumerate(active_domains):
         progress(f"Domain: {domain}", 2 + i, total_steps)
 
-        config = DOMAIN_TO_FORESIGHT.get(domain, DOMAIN_TO_FORESIGHT.get("Other", {}))
-        companies = domain_companies[domain]
+        try:
+            config = DOMAIN_TO_FORESIGHT.get(domain, DOMAIN_TO_FORESIGHT.get("Other", {}))
+            companies = domain_companies[domain]
 
-        # Get KB signals for this domain's themes
-        kb_signals = []
-        for theme in config.get("fp_themes", []):
-            for theme_slug, theme_data in data["all_kb"].items():
-                for sig in theme_data.get("signals", []):
-                    eligible, _ = _is_eligible_foresight_context(sig)
-                    if sig.get("fp_theme") == theme and eligible:
-                        kb_signals.append(sig)
+            # Get KB signals for this domain's themes
+            kb_signals = []
+            for theme in config.get("fp_themes", []):
+                for theme_slug, theme_data in data["all_kb"].items():
+                    for sig in theme_data.get("signals", []):
+                        eligible, _ = _is_eligible_foresight_context(sig)
+                        if sig.get("fp_theme") == theme and eligible:
+                            kb_signals.append(sig)
 
-        # Find market health for this domain
-        mh = None
-        for h in mi.get("market_health", []):
-            if h["domain"] == domain:
-                mh = h
-                break
+            # Find market health for this domain
+            mh = None
+            for h in mi.get("market_health", []):
+                if h["domain"] == domain:
+                    mh = h
+                    break
 
-        l3_dossier = _build_l3_evidence_dossier(
-            domain, config, companies, kb_signals, mh,
-            l1_claims, l2_claims, structured_findings,
-        )
-        l3_dossiers[domain] = l3_dossier
-        domain_prompt = _build_domain_prompt(
-            domain, config, companies, kb_signals, mh,
-            "", "", findings_block,
-            upstream_claims={"layer_1": l1_claims, "layer_2": l2_claims},
-            evidence_dossier=l3_dossier,
-        )
-        source = json.dumps(l3_dossier, ensure_ascii=False)
-        # Build domain-specific signal evidence for cross-validation
-        domain_signal_evidence = "\n".join(
-            f"- **{s.get('title', 'N/A')}** [{s.get('force_type', '?')} | {s.get('timeframe', '?')}]\n  Description: {s.get('description', 'N/A')}"
-            for s in kb_signals[:20]
-        )
-        text, verify = _generate_with_verification(domain_prompt, source, f"Domain Dossier: {domain}", use_opus=True, signal_evidence=domain_signal_evidence)
-        text, sections, public_qa = _finalize_observatory_output_text(
-            text,
-            f"domain:{domain}",
-            OBSERVATORY_DOMAIN_SECTION_TITLES,
-            allow_rewrite=True,
-        )
+            l3_dossier = _build_l3_evidence_dossier(
+                domain, config, companies, kb_signals, mh,
+                l1_claims, l2_claims, structured_findings,
+            )
+            l3_dossiers[domain] = l3_dossier
+            domain_prompt = _build_domain_prompt(
+                domain, config, companies, kb_signals, mh,
+                "", "", findings_block,
+                upstream_claims={"layer_1": l1_claims, "layer_2": l2_claims},
+                evidence_dossier=l3_dossier,
+            )
+            source = json.dumps(l3_dossier, ensure_ascii=False)
+            # Build domain-specific signal evidence for cross-validation
+            domain_signal_evidence = "\n".join(
+                f"- **{s.get('title', 'N/A')}** [{s.get('force_type', '?')} | {s.get('timeframe', '?')}]\n  Description: {s.get('description', 'N/A')}"
+                for s in kb_signals[:20]
+            )
+            text, verify = _generate_with_verification(domain_prompt, source, f"Domain Dossier: {domain}", use_opus=True, signal_evidence=domain_signal_evidence)
+            text, sections, public_qa = _finalize_observatory_output_text(
+                text,
+                f"domain:{domain}",
+                OBSERVATORY_DOMAIN_SECTION_TITLES,
+                allow_rewrite=True,
+            )
 
-        # Extract forces by timescale
-        forces_by_ts = {"act_now": [], "prepare": [], "position": []}
-        for sig in kb_signals:
-            tf = sig.get("timeframe", "")
-            title = sig.get("title", "")[:80]
-            if "6-12" in tf:
-                forces_by_ts["act_now"].append(title)
-            elif "12-24" in tf:
-                forces_by_ts["prepare"].append(title)
-            elif "24-36" in tf:
-                forces_by_ts["position"].append(title)
+            # Extract forces by timescale
+            forces_by_ts = {"act_now": [], "prepare": [], "position": []}
+            for sig in kb_signals:
+                tf = sig.get("timeframe", "")
+                title = sig.get("title", "")[:80]
+                if "6-12" in tf:
+                    forces_by_ts["act_now"].append(title)
+                elif "12-24" in tf:
+                    forces_by_ts["prepare"].append(title)
+                elif "24-36" in tf:
+                    forces_by_ts["position"].append(title)
 
-        # Limit to top 5 per timescale
-        for k in forces_by_ts:
-            forces_by_ts[k] = forces_by_ts[k][:5]
+            # Limit to top 5 per timescale
+            for k in forces_by_ts:
+                forces_by_ts[k] = forces_by_ts[k][:5]
 
-        dossier = {
-            "domain": domain,
-            "text": text,
-            "sections": sections,
-            "company_count": len(companies),
-            "archetype_distribution": dict(Counter(
-                classify_archetype(
-                    float(c["reality_score"]),
-                    float(c.get("financial_index") or c.get("intent_score", 0))
-                )
-                for c in companies if c.get("reality_score") is not None
-            )),
-            "forces_by_timescale": forces_by_ts,
-            "analysis_model": verify.get("generation_model", OBSERVATORY_L3_MODEL),
-            "evidence_dossier_version": OBSERVATORY_DOSSIER_VERSION,
-            "verification": verify,
-            "public_output_quality": public_qa,
-        }
-        domain_dossiers.append(dossier)
+            dossier = {
+                "status": "fresh",
+                "domain": domain,
+                "text": text,
+                "sections": sections,
+                "company_count": len(companies),
+                "archetype_distribution": dict(Counter(
+                    classify_archetype(
+                        float(c["reality_score"]),
+                        float(c.get("financial_index") or c.get("intent_score", 0))
+                    )
+                    for c in companies if c.get("reality_score") is not None
+                )),
+                "forces_by_timescale": forces_by_ts,
+                "analysis_model": verify.get("generation_model", OBSERVATORY_L3_MODEL),
+                "evidence_dossier_version": OBSERVATORY_DOSSIER_VERSION,
+                "verification": verify,
+                "public_output_quality": public_qa,
+            }
+            domain_dossiers.append(dossier)
+        except Exception as exc:
+            print(f"   [Observatory] Domain dossier failed for {domain}; continuing with fallback/placeholder: {type(exc).__name__}: {exc}")
+            fallback, marker = _observatory_failed_unit(
+                f"domain:{domain}",
+                exc,
+                unit_type="domain_dossier",
+                previous=previous_domains.get(domain),
+                domain=domain,
+            )
+            if marker["status"] == "reused_previous_due_to_failure":
+                reused_units.append(marker)
+                domain_dossiers.append(fallback)
+            else:
+                failed_units.append(marker)
+                failed_domain_dossiers.append(fallback)
 
     # --- Assemble final result ---
-    all_verifications = [global_verify, finland_verify] + [item["verification"] for item in domain_dossiers]
+    all_verifications = [global_verify, finland_verify] + [
+        item.get("verification", {"status": "unavailable"})
+        for item in domain_dossiers
+        if isinstance(item, dict)
+    ]
     result = {
         "generated_at": datetime.utcnow().isoformat(),
+        "generation_status": "partial" if failed_units or reused_units else "complete",
+        "failed_units": failed_units,
+        "reused_units": reused_units,
         "model": "gpt-5.5-pro (Layers 1-2) + claude-opus-4-8 (Layer 3)",
         "verification_model": "gpt-5.5 high / claude-sonnet-4-6",
         "company_count": len(data["dashboard_data"]),
         "domain_count": len(active_domains),
+        "domain_count_generated": len(domain_dossiers),
+        "domain_count_failed": len(failed_domain_dossiers),
         "input_manifest": input_manifest,
         "evidence_dossiers": {
             "schema_version": OBSERVATORY_DOSSIER_VERSION,
@@ -2099,6 +2265,7 @@ def generate_observatory(progress_callback=None):
         "global_analysis": global_analysis,
         "finland_analysis": finland_analysis,
         "domain_dossiers": domain_dossiers,
+        "failed_domain_dossiers": failed_domain_dossiers,
         # Top-15 themes with momentum breakdown — drives the Theme Momentum chart
         # in Market Intelligence > Future Demand. Additive; safe for old clients.
         "theme_momentum": kb_agg.get("theme_momentum_top", []),
@@ -2111,10 +2278,13 @@ def generate_observatory(progress_callback=None):
     qa_warning_count = (result.get("public_output_quality") or {}).get("warning_count", 0)
     qa_repairable_count = (result.get("public_output_quality") or {}).get("repairable_issue_count", 0)
     qa_repaired_count = (result.get("public_output_quality") or {}).get("repaired_issue_count", 0)
+    failed_count = len(result.get("failed_units") or [])
+    reused_count = len(result.get("reused_units") or [])
     print(
         f"   [Observatory] Saved observatory to storage: {url} "
         f"(qa_status={qa_status}, warnings={qa_warning_count}, "
-        f"repairable_remaining={qa_repairable_count}, repaired={qa_repaired_count})"
+        f"repairable_remaining={qa_repairable_count}, repaired={qa_repaired_count}, "
+        f"failed_units={failed_count}, reused_units={reused_count})"
     )
 
     return result
