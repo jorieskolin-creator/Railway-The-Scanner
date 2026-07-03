@@ -28,7 +28,8 @@ import anthropic
 from llm_clients import (
     GPT_PRO_MODEL,
     GPT_REASONING_MODEL,
-    call_json_model_chain,
+    GPT_VERIFIER_MODEL,
+    call_anthropic_text,
     call_openai_text,
     parse_json_object,
 )
@@ -103,6 +104,8 @@ OBSERVATORY_FAKE_NUMERIC_HEADING_RE = re.compile(
     + "|".join(re.escape(title) for title in OBSERVATORY_ALL_SECTION_TITLES)
     + r")"
 )
+OBSERVATORY_BROKEN_DECIMAL_RE = re.compile(r"(?<=\d)\.\s+(?=\d)")
+OBSERVATORY_EMPTY_CITATION_SHELL_RE = re.compile(r"\s*\[(?:\s*,\s*)*\]")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -284,6 +287,62 @@ def _prompt_safe_dossier(value):
     return value
 
 
+def _call_observatory_json(
+    prompt: str,
+    model_chain: tuple[str, ...] | list[str],
+    *,
+    max_tokens: int = 1600,
+    timeout: int = 90,
+    reasoning_effort: str | None = "low",
+    repair_label: str = "observatory_json",
+) -> tuple[dict, str]:
+    """Call models until one returns parseable JSON; repair malformed JSON once."""
+    errors: list[str] = []
+    for model in model_chain:
+        try:
+            if model.startswith("gpt-"):
+                raw = call_openai_text(
+                    prompt,
+                    model,
+                    max_output_tokens=max_tokens,
+                    timeout=timeout,
+                    max_retries=1,
+                    reasoning_effort=reasoning_effort,
+                )
+            elif model.startswith("claude-"):
+                raw = call_anthropic_text(prompt, model, max_tokens=max_tokens, timeout=timeout)
+            else:
+                raise ValueError(f"Unsupported model provider: {model}")
+
+            if not str(raw or "").strip():
+                raise ValueError("empty JSON response")
+            try:
+                return parse_json_object(raw), model
+            except Exception as parse_exc:
+                repair_prompt = f"""Repair this {repair_label} response into one valid JSON object.
+
+Rules:
+- Return JSON only, no markdown or commentary.
+- Preserve only fields and values present in the raw response.
+- If the raw response is incomplete, return the most complete valid JSON object possible.
+
+RAW RESPONSE:
+{str(raw)[:12000]}"""
+                repaired = call_openai_text(
+                    repair_prompt,
+                    GPT_VERIFIER_MODEL,
+                    max_output_tokens=max_tokens,
+                    timeout=45,
+                    max_retries=1,
+                    reasoning_effort="low",
+                )
+                return parse_json_object(repaired), f"{model}+json_repair"
+        except Exception as exc:
+            errors.append(f"{model}: {str(exc)[:160]}")
+            continue
+    raise ValueError("All Observatory JSON models failed: " + " | ".join(errors))
+
+
 def _sanitize_observatory_public_text(text: str) -> str:
     """Final public prose cleanup for Observatory app and HTML output."""
     if not text:
@@ -291,6 +350,7 @@ def _sanitize_observatory_public_text(text: str) -> str:
     out = _strip_internal_observatory_artifacts(text)
     out = re.sub(r"\*{1,3}([^*\n]{1,160})\*{1,3}", r"\1", out)
     out = out.replace("*", "")
+    out = OBSERVATORY_EMPTY_CITATION_SHELL_RE.sub("", out)
     out = re.sub(r"(?im)^\s*(?:#{1,3}\s*)?Section\s*$", "", out)
     out = re.sub(
         r"(?m)^\s*(\d{1,3})\s+[—-]\s+(?!"
@@ -300,7 +360,8 @@ def _sanitize_observatory_public_text(text: str) -> str:
         out,
     )
     out = re.sub(r"(?i)\bidentifiedzero\b", "identified zero", out)
-    out = re.sub(r"(?<=\d)\.\s+(?=\d)", ".", out)
+    out = OBSERVATORY_BROKEN_DECIMAL_RE.sub(".", out)
+    out = re.sub(r"(?<=\d)\s+\.\s*(?=\d)", ".", out)
     out = re.sub(r"\s+([,.;:])", r"\1", out)
     out = re.sub(r"[ \t]{2,}", " ", out)
     out = re.sub(r"\n{3,}", "\n\n", out)
@@ -359,12 +420,23 @@ def _observatory_domain_metric_count(text: str) -> int:
     return sum(len(re.findall(pattern, text, flags=re.I)) for pattern in metric_patterns)
 
 
+def _observatory_broken_decimal_count(text: str) -> int:
+    return len(OBSERVATORY_BROKEN_DECIMAL_RE.findall(text or ""))
+
+
+def _observatory_empty_citation_shell_count(text: str) -> int:
+    return len(OBSERVATORY_EMPTY_CITATION_SHELL_RE.findall(text or ""))
+
+
 def _observatory_public_quality(text: str, label: str) -> dict:
     fatal = []
     repairable = []
     warnings = []
     raw = text or ""
     word_count = len(raw.split())
+    broken_decimal_count = _observatory_broken_decimal_count(raw)
+    empty_citation_shell_count = _observatory_empty_citation_shell_count(raw)
+    metric_signal_count = _observatory_domain_metric_count(raw)
     if not raw.strip():
         fatal.append("empty_output")
     elif word_count < 50:
@@ -377,6 +449,10 @@ def _observatory_public_quality(text: str, label: str) -> dict:
         repairable.append("orphan_section_label")
     if OBSERVATORY_RAW_MARKDOWN_RE.search(raw):
         repairable.append("raw_markdown_marker")
+    if broken_decimal_count:
+        repairable.append("broken_decimal_spacing")
+    if empty_citation_shell_count:
+        repairable.append("empty_citation_shell")
     paragraphs = [p.strip() for p in re.split(r"\n{2,}", raw) if p.strip()]
     max_paragraph_chars = max((len(p) for p in paragraphs), default=0)
     is_domain = label.startswith("domain:")
@@ -388,7 +464,7 @@ def _observatory_public_quality(text: str, label: str) -> dict:
         sections = _extract_observatory_sections(raw, OBSERVATORY_DOMAIN_SECTION_TITLES)
         if sections and len(sections) < 4:
             warnings.append("partial_domain_section_structure")
-        if _observatory_domain_metric_count(raw) > 3:
+        if metric_signal_count > 3:
             warnings.append("metric_heavy_domain_dossier")
     if label == "finland_analysis":
         if OBSERVATORY_FAKE_NUMERIC_HEADING_RE.search(raw):
@@ -396,7 +472,7 @@ def _observatory_public_quality(text: str, label: str) -> dict:
         sections = _extract_observatory_sections(raw, OBSERVATORY_FINLAND_SECTION_TITLES)
         if sections and len(sections) < 4:
             warnings.append("partial_finland_section_structure")
-        if _observatory_domain_metric_count(raw) > 5:
+        if metric_signal_count > 5:
             warnings.append("metric_heavy_finland_analysis")
     if fatal:
         status = "fatal"
@@ -416,6 +492,9 @@ def _observatory_public_quality(text: str, label: str) -> dict:
         "warnings": warnings,
         "max_paragraph_chars": max_paragraph_chars,
         "word_count": word_count,
+        "broken_decimal_count": broken_decimal_count,
+        "empty_citation_shell_count": empty_citation_shell_count,
+        "metric_signal_count": metric_signal_count,
     }
 
 
@@ -675,6 +754,13 @@ def _sanitize_observatory_payload(result: dict) -> dict:
         "repairable_issue_count": sum(len(check.get("repairable") or []) for check in checks),
         "warning_count": sum(len(check.get("warnings") or []) for check in checks),
         "repaired_issue_count": sum(int(check.get("repaired_issue_count") or 0) for check in checks),
+        "broken_decimal_count": sum(int(check.get("broken_decimal_count") or 0) for check in checks),
+        "empty_citation_shell_count": sum(int(check.get("empty_citation_shell_count") or 0) for check in checks),
+        "metric_signal_count": sum(int(check.get("metric_signal_count") or 0) for check in checks),
+        "metric_heavy_unit_count": sum(
+            1 for check in checks
+            if any("metric_heavy" in str(warning) for warning in (check.get("warnings") or []))
+        ),
         "filtered": {"domain_dossiers": filtered_domains},
         "failed_units": failed_units,
         "reused_units": reused_units,
@@ -974,30 +1060,32 @@ def _allowed_evidence_ids(dossier: dict) -> set[str]:
 def _extract_layer_claims(analysis: str, dossier: dict, layer: str) -> list[dict]:
     """Convert narrative output into a bounded evidence-ID-backed handoff."""
     allowed_ids = _allowed_evidence_ids(dossier)
+    allowed_id_sample = sorted(allowed_ids)[:180]
     prompt = f"""Extract the major claims from this {layer} strategic analysis for use by the next Observatory layer.
 
 Return JSON only:
 {{"claims": [{{"claim_id": "{layer}-CLAIM-1", "statement": "...", "claim_type": "macro_evidence|portfolio_evidence|strategic_inference", "evidence_ids": ["..."], "confidence": 0, "limitations": "..."}}]}}
 
 Rules:
-- Return at most 10 claims.
-- Evidence IDs must come from this allowed list: {json.dumps(sorted(allowed_ids))}.
+- Return at most 6 claims.
+- Evidence IDs must come from this allowed list: {json.dumps(allowed_id_sample)}.
 - A strategic inference must still cite the evidence IDs it interprets.
 - Drop claims that cannot be tied to an allowed evidence ID.
 - Confidence is 0-100.
+- Keep statements concise and do not include markdown.
 
 ANALYSIS:
-{analysis}
+{analysis[:9000]}
 """
     try:
-        raw, model_used = call_json_model_chain(
+        parsed, model_used = _call_observatory_json(
             prompt,
-            (GPT_REASONING_MODEL, "claude-sonnet-4-6"),
-            max_tokens=2600,
-            timeout=120,
-            reasoning_effort="high",
+            (GPT_VERIFIER_MODEL, GPT_REASONING_MODEL, "claude-sonnet-4-6"),
+            max_tokens=1800,
+            timeout=90,
+            reasoning_effort="low",
+            repair_label=f"{layer} claim extraction",
         )
-        parsed = parse_json_object(raw)
         claims = []
         for index, item in enumerate(parsed.get("claims") or []):
             if not isinstance(item, dict) or not str(item.get("statement") or "").strip():
@@ -1476,6 +1564,8 @@ NATIONAL-LEVEL EDITORIAL CONTRACT:
 - Scores and counts are background evidence, not the narrative spine.
 - Use no more than 4-5 reader-facing metric highlights in the whole essay.
 - Every metric you mention must answer: "so what for Finland's economic readiness, adaptation capacity, timing pressure, or strategic choice?"
+- Do not mention raw scores, indices, percentages, or counts in National Thesis. Open with the strategic meaning first.
+- Reader-facing metrics may appear only after National Thesis, and only when the same sentence or the next sentence explains the implication.
 - Do not write domain-by-domain score rollups or table narration.
 - Prefer domain clusters when useful: industrial core, trust economy, digital/service domains, exposed domestic-demand domains, regulated infrastructure, or capital-intensive domains.
 - Do not use company-level examples unless they are essential to explain a national pattern.
@@ -1524,10 +1614,10 @@ ANALYTICAL STRUCTURE:
 Use these exact headings, one per line. Do not write the word "Section".
 
 National Thesis
-Write the national-level thesis: what the portfolio pattern says about Finland's current economic readiness and the central strategic tension. Use implication-led language, not domain ranking.
+Write the national-level thesis: what the portfolio pattern says about Finland's current economic readiness and the central strategic tension. Use implication-led language, not domain ranking. Do not include raw metrics in this section.
 
 Three Strategic Asymmetries
-Identify exactly three asymmetries. Each asymmetry should combine a domain-cluster pattern, a force pattern, and a strategic implication. Use only the most necessary metrics and interpret them immediately.
+Identify exactly three asymmetries. Each asymmetry should combine a domain-cluster pattern, a force pattern, and a strategic implication. Use only the most necessary metrics and interpret each one immediately; never leave a number as a standalone observation.
 
 What The Pattern Means
 Explain what the asymmetries reveal about Finnish organizational thinking, adaptation capacity, capability concentration, and exposure. Go beyond the intent/reality gap list.
@@ -1643,7 +1733,9 @@ DOMAIN-LEVEL EDITORIAL CONTRACT:
 - Do not list company-by-company scores or create a roll call of winners and laggards.
 - Use individual company names only when a named outlier is necessary to explain a domain-level pattern.
 - Include exactly three reader-facing evidence highlights in the "Three Evidence Highlights" section. Each highlight must be domain-level and must explain what the metric reveals.
+- Do not mention raw scores, indices, percentages, counts, or archetype totals in Domain Thesis. Open with the domain-level strategic meaning.
 - Outside the Three Evidence Highlights section, avoid raw score recitation. Interpret what the pattern means for domain readiness, pressure, capability, risk, or strategic choice.
+- If a metric appears outside Three Evidence Highlights, rewrite it as qualitative implication unless the sentence immediately explains a strategic consequence.
 - Never begin a paragraph or heading with a bare score such as "75 — ...".
 
 BROADER CONTEXT — How to use prior analysis layers:
@@ -1690,10 +1782,10 @@ ANALYTICAL STRUCTURE:
 Use these exact headings, one per line. Do not write the word "Section".
 
 Domain Thesis
-Write a concise synthesis of the domain's current position and central tension. Use domain-level language.
+Write a concise synthesis of the domain's current position and central tension. Use domain-level language. Do not include raw metrics in this section.
 
 Three Evidence Highlights
-Write exactly three short highlights. Each highlight must combine one metric or evidence pattern with its interpretation. These are the only reader-facing metric highlights in the dossier.
+Write exactly three short highlights. Each highlight must combine one metric or evidence pattern with its interpretation. These are the only reader-facing metric highlights in the dossier; every metric must answer what it reveals about the domain.
 
 What The Pattern Means
 Explain what the evidence pattern reveals about the domain's readiness, challenge profile, structural exposure, and ability to act. Avoid listing company scores.
@@ -1863,14 +1955,14 @@ RESPOND IN JSON FORMAT ONLY:
 {{"passed": true/false, "word_count_estimate": N, "issues": ["issue 1", ...], "tech_framing_violations": ["sentence 1", ...], "data_mismatches": ["mismatch 1", ...], "evidence_id_issues": ["issue 1", ...]{signal_response_fields}}}"""
 
     try:
-        result, model_used = call_json_model_chain(
+        parsed, model_used = _call_observatory_json(
             prompt,
-            (GPT_REASONING_MODEL, "claude-sonnet-4-6"),
-            max_tokens=2600,
-            timeout=120,
-            reasoning_effort="high",
+            (GPT_VERIFIER_MODEL, GPT_REASONING_MODEL, "claude-sonnet-4-6"),
+            max_tokens=1800,
+            timeout=90,
+            reasoning_effort="low",
+            repair_label=f"{output_type} verification",
         )
-        parsed = result if isinstance(result, dict) else parse_json_object(result)
         parsed.setdefault("verification_model", model_used)
         parsed["status"] = "verified" if parsed.get("passed") is True else "failed"
         return parsed
@@ -2278,12 +2370,17 @@ def generate_observatory(progress_callback=None):
     qa_warning_count = (result.get("public_output_quality") or {}).get("warning_count", 0)
     qa_repairable_count = (result.get("public_output_quality") or {}).get("repairable_issue_count", 0)
     qa_repaired_count = (result.get("public_output_quality") or {}).get("repaired_issue_count", 0)
+    qa_broken_decimals = (result.get("public_output_quality") or {}).get("broken_decimal_count", 0)
+    qa_empty_citations = (result.get("public_output_quality") or {}).get("empty_citation_shell_count", 0)
+    qa_metric_heavy_units = (result.get("public_output_quality") or {}).get("metric_heavy_unit_count", 0)
     failed_count = len(result.get("failed_units") or [])
     reused_count = len(result.get("reused_units") or [])
     print(
         f"   [Observatory] Saved observatory to storage: {url} "
         f"(qa_status={qa_status}, warnings={qa_warning_count}, "
         f"repairable_remaining={qa_repairable_count}, repaired={qa_repaired_count}, "
+        f"broken_decimals={qa_broken_decimals}, empty_citations={qa_empty_citations}, "
+        f"metric_heavy_units={qa_metric_heavy_units}, "
         f"failed_units={failed_count}, reused_units={reused_count})"
     )
 
