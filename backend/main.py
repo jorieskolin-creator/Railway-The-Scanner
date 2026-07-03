@@ -4045,19 +4045,75 @@ async def get_observatory(response: Response):
 
 _cross_impact_state = {
     "is_running": False,
+    "run_id": None,
     "started_at": None,
+    "last_heartbeat_at": None,
     "completed_at": None,
     "current_step": None,
+    "elapsed_seconds": 0,
+    "max_expected_seconds": 0,
     "result": None,
 }
 _cross_impact_lock = threading.Lock()
+_CROSS_IMPACT_MAX_SECONDS = int(os.getenv("CROSS_IMPACT_MAX_SECONDS", "900"))
 
 
-def _run_cross_impact_generation():
+def _cross_impact_elapsed_seconds(state: dict) -> int:
+    started = _parse_pipeline_dt(state.get("started_at"))
+    if not started:
+        return 0
+    return max(0, int((datetime.utcnow() - started).total_seconds()))
+
+
+def _refresh_cross_impact_watchdog_locked():
+    """Clear a stale Matrix Interpretation run so readiness cannot stay running forever."""
+    if not _cross_impact_state.get("is_running"):
+        return
+    elapsed = _cross_impact_elapsed_seconds(_cross_impact_state)
+    _cross_impact_state["elapsed_seconds"] = elapsed
+    max_seconds = int(_cross_impact_state.get("max_expected_seconds") or _CROSS_IMPACT_MAX_SECONDS)
+    if elapsed <= max_seconds:
+        return
+    message = f"Matrix Interpretation exceeded {max_seconds}s hard limit at step: {_cross_impact_state.get('current_step') or 'unknown'}"
+    print(f"   [CrossImpact] Watchdog marked run stale: {message}", flush=True)
+    _cross_impact_state["is_running"] = False
+    _cross_impact_state["completed_at"] = datetime.utcnow().isoformat()
+    _cross_impact_state["current_step"] = "Timed out"
+    _cross_impact_state["result"] = {
+        "status": "timed_out",
+        "error": message,
+        "elapsed_seconds": elapsed,
+    }
+
+
+def _cross_impact_heartbeat(run_id: str, step: str) -> bool:
+    """Update visible progress for a Matrix Interpretation run.
+
+    Returns False when the run is no longer current/active, allowing late
+    background workers to avoid overwriting newer or timed-out results.
+    """
+    with _cross_impact_lock:
+        _refresh_cross_impact_watchdog_locked()
+        if _cross_impact_state.get("run_id") != run_id or not _cross_impact_state.get("is_running"):
+            return False
+        elapsed = _cross_impact_elapsed_seconds(_cross_impact_state)
+        _cross_impact_state["current_step"] = step
+        _cross_impact_state["last_heartbeat_at"] = datetime.utcnow().isoformat()
+        _cross_impact_state["elapsed_seconds"] = elapsed
+        _cross_impact_state["result"] = {
+            "status": "running",
+            "step": step,
+            "elapsed_seconds": elapsed,
+        }
+    print(f"   [CrossImpact] {step} ({elapsed}s elapsed)", flush=True)
+    return True
+
+
+def _run_cross_impact_generation(run_id: str):
     """Background worker for cross-impact interpretation generation."""
     try:
-        with _cross_impact_lock:
-            _cross_impact_state["current_step"] = "Loading data"
+        if not _cross_impact_heartbeat(run_id, "Loading data"):
+            return
 
         dashboard_data = storage.retrieve_latest_data("index/summary_list") or []
         company_details = []
@@ -4079,34 +4135,45 @@ def _run_cross_impact_generation():
             for theme, category in THEME_CATEGORIES.items()
         }
 
-        with _cross_impact_lock:
-            _cross_impact_state["current_step"] = "Generating interpretation"
+        if not _cross_impact_heartbeat(run_id, "Generating interpretation"):
+            return
 
         payload = generate_cross_impact_interpretation(
             company_details=company_details,
             dashboard_data=dashboard_data,
             theme_descriptions=theme_descriptions,
+            progress_callback=lambda step: _cross_impact_heartbeat(run_id, step),
         )
 
-        with _cross_impact_lock:
-            _cross_impact_state["current_step"] = "Saving"
+        if not _cross_impact_heartbeat(run_id, "Saving"):
+            print("   [CrossImpact] Late result ignored because run is no longer active.", flush=True)
+            return
 
         storage.save_cross_impact_interpretation(payload)
 
         with _cross_impact_lock:
+            if _cross_impact_state.get("run_id") != run_id or not _cross_impact_state.get("is_running"):
+                print("   [CrossImpact] Save completed for stale run; status update ignored.", flush=True)
+                return
+            elapsed = _cross_impact_elapsed_seconds(_cross_impact_state)
             _cross_impact_state["result"] = {"status": "completed"}
             _cross_impact_state["completed_at"] = datetime.utcnow().isoformat()
             _cross_impact_state["is_running"] = False
             _cross_impact_state["current_step"] = None
+            _cross_impact_state["elapsed_seconds"] = elapsed
     except Exception as e:
         print(f"   [CrossImpact] Generation failed: {e}")
         import traceback
         traceback.print_exc()
         with _cross_impact_lock:
+            if _cross_impact_state.get("run_id") != run_id:
+                return
+            elapsed = _cross_impact_elapsed_seconds(_cross_impact_state)
             _cross_impact_state["is_running"] = False
-            _cross_impact_state["result"] = {"error": str(e)}
+            _cross_impact_state["result"] = {"status": "error", "error": str(e), "elapsed_seconds": elapsed}
             _cross_impact_state["completed_at"] = datetime.utcnow().isoformat()
             _cross_impact_state["current_step"] = None
+            _cross_impact_state["elapsed_seconds"] = elapsed
 
 
 @app.post("/admin/generate-cross-impact-interpretation")
@@ -4116,23 +4183,31 @@ def generate_cross_impact_endpoint(request: Request):
     verify_admin(request)
 
     with _cross_impact_lock:
+        _refresh_cross_impact_watchdog_locked()
         if _cross_impact_state["is_running"]:
-            return {"status": "already_running"}
+            return {"status": "already_running", "state": dict(_cross_impact_state)}
+        run_id = str(uuid.uuid4())
         _cross_impact_state["is_running"] = True
+        _cross_impact_state["run_id"] = run_id
         _cross_impact_state["current_step"] = "Initializing..."
         _cross_impact_state["started_at"] = datetime.utcnow().isoformat()
+        _cross_impact_state["last_heartbeat_at"] = _cross_impact_state["started_at"]
         _cross_impact_state["completed_at"] = None
-        _cross_impact_state["result"] = None
+        _cross_impact_state["elapsed_seconds"] = 0
+        _cross_impact_state["max_expected_seconds"] = _CROSS_IMPACT_MAX_SECONDS
+        _cross_impact_state["result"] = {"status": "running", "step": "Initializing...", "elapsed_seconds": 0}
 
-    thread = threading.Thread(target=_run_cross_impact_generation, daemon=True)
+    thread = threading.Thread(target=_run_cross_impact_generation, args=(run_id,), daemon=True)
     thread.start()
-    return {"status": "started"}
+    return {"status": "started", "run_id": run_id}
 
 
 @app.get("/admin/cross-impact-interpretation-status")
 def cross_impact_status():
     """Polls the cross-impact generation status."""
     with _cross_impact_lock:
+        _refresh_cross_impact_watchdog_locked()
+        _cross_impact_state["elapsed_seconds"] = _cross_impact_elapsed_seconds(_cross_impact_state)
         return dict(_cross_impact_state)
 
 
@@ -4217,7 +4292,14 @@ def _global_running_item(state: dict, running_label: str):
             running_label,
             state.get("current_theme") or state.get("current_step") or state.get("current_status") or "Running",
             state.get("started_at"),
-            {"current": state.get("current"), "total": state.get("total")},
+            {
+                "current": state.get("current"),
+                "total": state.get("total"),
+                "elapsed_seconds": state.get("elapsed_seconds"),
+                "max_expected_seconds": state.get("max_expected_seconds"),
+                "last_heartbeat_at": state.get("last_heartbeat_at"),
+                "run_id": state.get("run_id"),
+            },
             "Wait for this run to complete before regenerating dependent artifacts.",
         )
     return None
@@ -4374,6 +4456,8 @@ def _current_observatory_state() -> dict:
 
 def _current_cross_impact_state() -> dict:
     with _cross_impact_lock:
+        _refresh_cross_impact_watchdog_locked()
+        _cross_impact_state["elapsed_seconds"] = _cross_impact_elapsed_seconds(_cross_impact_state)
         return dict(_cross_impact_state)
 
 

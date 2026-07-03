@@ -1915,7 +1915,7 @@ const parseCrossImpactInterpretation = (text: string): CIBlock[] => {
   return blocks;
 };
 
-const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretationData = null, pipelineGlobal = null, onRefreshCrossImpactInterpretation, crossImpactInterpretationLoading = false }: { data: any; observatoryData?: any; crossImpactInterpretationData?: any; pipelineGlobal?: any; onRefreshCrossImpactInterpretation?: () => void; crossImpactInterpretationLoading?: boolean }) => {
+const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretationData = null, pipelineGlobal = null, onRefreshCrossImpactInterpretation, crossImpactInterpretationLoading = false, crossImpactInterpretationStatus = null }: { data: any; observatoryData?: any; crossImpactInterpretationData?: any; pipelineGlobal?: any; onRefreshCrossImpactInterpretation?: () => void; crossImpactInterpretationLoading?: boolean; crossImpactInterpretationStatus?: any }) => {
   const foresights = data.top_foresights || [];
   const crossImpact = data.cross_impact || [];
   const industryRadar = data.industry_radar || [];
@@ -2178,6 +2178,29 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
       {/* CROSS-IMPACT MATRIX INTERPRETATION — placed directly under the matrix
           since it interprets the matrix above. Empty-state appears for admins
           when no interpretation has been generated yet. */}
+      {(crossImpactInterpretationLoading || crossImpactInterpretationStatus?.is_running || pipelineGlobal?.cross_impact?.state === 'running' || crossImpactInterpretationStatus?.result?.error) && (
+        <div className="mt-6 bg-indigo-500/10 border border-indigo-500/25 rounded-lg px-4 py-3 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+          <div>
+            <div className="text-[10px] font-bold text-indigo-200 uppercase tracking-wide">
+              {crossImpactInterpretationStatus?.result?.error ? 'Matrix Interpretation Refresh Needs Attention' : 'Matrix Interpretation Refresh'}
+            </div>
+            <div className="text-[10px] text-slate-400 mt-1">
+              {crossImpactInterpretationStatus?.result?.error
+                ? crossImpactInterpretationStatus.result.error
+                : (crossImpactInterpretationStatus?.current_step || pipelineGlobal?.cross_impact?.detail || 'Generating interpretation')}
+            </div>
+          </div>
+          {!crossImpactInterpretationStatus?.result?.error && (
+            <div className="flex items-center gap-2 text-[9px] font-mono text-indigo-200">
+              <RefreshCw size={11} className="animate-spin" />
+              {typeof (crossImpactInterpretationStatus?.elapsed_seconds ?? pipelineGlobal?.cross_impact?.stats?.elapsed_seconds) === 'number'
+                ? `${crossImpactInterpretationStatus?.elapsed_seconds ?? pipelineGlobal?.cross_impact?.stats?.elapsed_seconds}s elapsed`
+                : 'Running'}
+            </div>
+          )}
+        </div>
+      )}
+
       {!crossImpactInterpretationData?.text && onRefreshCrossImpactInterpretation && (
         <div className="mt-6 bg-black/20 border border-indigo-500/20 rounded-xl px-5 py-4 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -2195,8 +2218,8 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 transition-colors text-[10px] font-mono text-indigo-200 hover:text-indigo-100 disabled:opacity-40 whitespace-nowrap"
             title="Generate the Cross-Impact Matrix Interpretation"
           >
-            <RefreshCw size={12} className={crossImpactInterpretationLoading ? 'animate-spin' : ''} />
-            {crossImpactInterpretationLoading ? 'Generating…' : 'Generate the Matrix Interpretation'}
+            <RefreshCw size={12} className={crossImpactInterpretationLoading || crossImpactInterpretationStatus?.is_running ? 'animate-spin' : ''} />
+            {crossImpactInterpretationLoading || crossImpactInterpretationStatus?.is_running ? 'Generating…' : 'Generate the Matrix Interpretation'}
           </button>
         </div>
       )}
@@ -2228,8 +2251,8 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
                     className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 transition-colors text-[9px] font-mono text-indigo-300 hover:text-indigo-100 disabled:opacity-40"
                     title="Regenerate the Cross-Impact Matrix Interpretation"
                   >
-                    <RefreshCw size={11} className={crossImpactInterpretationLoading ? 'animate-spin' : ''} />
-                    Refresh the Matrix Interpretation
+                    <RefreshCw size={11} className={crossImpactInterpretationLoading || crossImpactInterpretationStatus?.is_running ? 'animate-spin' : ''} />
+                    {crossImpactInterpretationLoading || crossImpactInterpretationStatus?.is_running ? 'Generating…' : 'Refresh the Matrix Interpretation'}
                   </button>
                 )}
               </div>
@@ -3305,7 +3328,7 @@ const TABS = [
   { id: 'sweden', label: 'SWEDEN - SUMMARY', icon: Globe },
 ];
 
-const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, onCompanyClick, observatoryData = null, crossImpactInterpretationData = null, pipelineGlobal = null, onRefreshCrossImpactInterpretation, crossImpactInterpretationLoading = false }: {
+const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, onCompanyClick, observatoryData = null, crossImpactInterpretationData = null, pipelineGlobal = null, onRefreshCrossImpactInterpretation, crossImpactInterpretationLoading = false, crossImpactInterpretationStatus = null }: {
   isOpen: boolean;
   data: any;
   loading: boolean;
@@ -3317,6 +3340,7 @@ const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, on
   pipelineGlobal?: any;
   onRefreshCrossImpactInterpretation?: () => void;
   crossImpactInterpretationLoading?: boolean;
+  crossImpactInterpretationStatus?: any;
 }) => {
   const [activeTab, setActiveTab] = useState('opportunity');
 
@@ -3392,7 +3416,7 @@ const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, on
             <>
               {activeTab === 'opportunity' && <OpportunityMapTab data={data} onCompanyClick={onCompanyClick} />}
               {activeTab === 'executive' && <ExecutiveSummaryTab data={data} observatoryData={observatoryData} />}
-              {activeTab === 'future' && <FutureDemandTab data={data} observatoryData={observatoryData} crossImpactInterpretationData={crossImpactInterpretationData} pipelineGlobal={pipelineGlobal} onRefreshCrossImpactInterpretation={onRefreshCrossImpactInterpretation} crossImpactInterpretationLoading={crossImpactInterpretationLoading} />}
+              {activeTab === 'future' && <FutureDemandTab data={data} observatoryData={observatoryData} crossImpactInterpretationData={crossImpactInterpretationData} pipelineGlobal={pipelineGlobal} onRefreshCrossImpactInterpretation={onRefreshCrossImpactInterpretation} crossImpactInterpretationLoading={crossImpactInterpretationLoading} crossImpactInterpretationStatus={crossImpactInterpretationStatus} />}
               {activeTab === 'current' && <CurrentDemandTab data={data} />}
               {activeTab === 'favi' && <ForesightVulnerabilityTab data={data} onCompanyClick={onCompanyClick} />}
               {activeTab === 'sweden' && <SwedenSummaryTab data={data} onCompanyClick={onCompanyClick} />}

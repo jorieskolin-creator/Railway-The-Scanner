@@ -70,6 +70,7 @@ const App = () => {
   // CROSS-IMPACT MATRIX INTERPRETATION STATE
   const [crossImpactInterpretationData, setCrossImpactInterpretationData] = useState<any>(null);
   const [crossImpactInterpretationLoading, setCrossImpactInterpretationLoading] = useState(false);
+  const [crossImpactInterpretationStatus, setCrossImpactInterpretationStatus] = useState<any>(null);
 
   // THEME EXPLORER STATE
   const [isThemeExplorerOpen, setIsThemeExplorerOpen] = useState(false);
@@ -477,6 +478,7 @@ const App = () => {
     setIsMarketIntelOpen(true);
     if (isAdmin) {
       fetchPipelineReadiness();
+      fetchCrossImpactGenerationStatus();
     }
     if (!marketIntelData) {
       await fetchMarketIntelData();
@@ -498,25 +500,89 @@ const App = () => {
       if (res.ok) {
         const result = await res.json();
         setCrossImpactInterpretationData(result);
+        return result;
       } else if (res.status === 404) {
         setCrossImpactInterpretationData(null);
+        return null;
       }
+      console.error('Cross-impact interpretation fetch failed:', res.status);
+      return null;
     } catch (e) {
       console.error('Cross-impact interpretation fetch failed:', e);
+      return null;
     } finally {
       setCrossImpactInterpretationLoading(false);
     }
   };
 
+  const fetchCrossImpactGenerationStatus = async () => {
+    if (!isAdmin || !authToken) return null;
+    try {
+      const res = await fetch(`/admin/cross-impact-interpretation-status?t=${Date.now()}`, { headers: { ...authHeaders() } });
+      if (res.status === 401) { alert("Session expired. Please log in again."); handleLogout(); return null; }
+      if (!res.ok) return null;
+      const status = await res.json();
+      setCrossImpactInterpretationStatus(status);
+      return status;
+    } catch (e) {
+      console.warn('Cross-impact status fetch failed:', e);
+      return null;
+    }
+  };
+
+  const crossImpactStatusError = (status: any) => {
+    const result = status?.result || {};
+    if (result?.error) return String(result.error);
+    if (result?.status === 'timed_out') return 'Matrix Interpretation timed out.';
+    if (result?.status === 'stale_failed') return 'Matrix Interpretation run became stale.';
+    return '';
+  };
+
+  const pollCrossImpactInterpretation = async () => {
+    for (let i = 0; i < 720; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      const state = await fetchCrossImpactGenerationStatus();
+      if (!state) continue;
+      if (!state.is_running) {
+        const error = crossImpactStatusError(state);
+        if (error) {
+          alert(`Cross-Impact Matrix Interpretation did not complete.\n\n${error}\n\nPrevious interpretation, if available, has been kept.`);
+          await refreshPipelineGlobal();
+          return state;
+        }
+        const latest = await fetchCrossImpactInterpretation();
+        if (!latest?.text) {
+          alert('Matrix Interpretation finished, but no saved interpretation was found. Previous content, if available, has been kept.');
+        }
+        await refreshPipelineGlobal();
+        return state;
+      }
+    }
+    alert('Matrix Interpretation is still marked as running after an extended wait. Please check Railway status/logs before starting another refresh.');
+    await refreshPipelineGlobal();
+    return await fetchCrossImpactGenerationStatus();
+  };
+
   const handleRefreshCrossImpactInterpretation = async () => {
     if (!isAdmin) return;
-    const readiness = await fetchPipelineReadiness() || pipelineReadiness;
+    const readiness = await fetchPipelineReadiness({ refresh: 'global', force: true }) || pipelineReadiness;
     const global = readiness?.global || {};
+    const status = await fetchCrossImpactGenerationStatus();
+    if (status?.is_running || global.cross_impact?.state === 'running') {
+      setCrossImpactInterpretationLoading(true);
+      try {
+        await pollCrossImpactInterpretation();
+      } finally {
+        setCrossImpactInterpretationLoading(false);
+      }
+      return;
+    }
     if (!preflightWarnings(
-      [global.foresight_kb, global.observatory, global.cross_impact],
+      [global.foresight_kb, global.observatory],
       'Matrix Interpretation preflight warning'
     )) return;
     setCrossImpactInterpretationLoading(true);
+    setCrossImpactInterpretationStatus({ is_running: true, current_step: 'Starting Matrix Interpretation refresh', elapsed_seconds: 0, result: { status: 'running' } });
     try {
       const res = await fetch('/admin/generate-cross-impact-interpretation', {
         method: 'POST',
@@ -527,26 +593,12 @@ const App = () => {
         setCrossImpactInterpretationLoading(false);
         return;
       }
-      refreshPipelineGlobal();
-      // Poll status until completion
-      const pollUntilDone = async () => {
-        for (let i = 0; i < 120; i++) {
-          await new Promise(r => setTimeout(r, 2000));
-          try {
-            const s = await fetch('/admin/cross-impact-interpretation-status', { headers: { ...authHeaders() } });
-            if (!s.ok) continue;
-            const state = await s.json();
-            if (!state.is_running) {
-              await fetchCrossImpactInterpretation();
-              return;
-            }
-          } catch {}
-        }
-        // Timeout — still try to refetch in case the blob landed.
-        await fetchCrossImpactInterpretation();
-      };
-      await pollUntilDone();
+      const started = await res.json().catch(() => ({}));
       await refreshPipelineGlobal();
+      if (started?.state) {
+        setCrossImpactInterpretationStatus(started.state);
+      }
+      await pollCrossImpactInterpretation();
     } catch (e) {
       console.error('Cross-impact regeneration failed:', e);
     } finally {
@@ -2921,6 +2973,7 @@ const App = () => {
         crossImpactInterpretationData={crossImpactInterpretationData}
         onRefreshCrossImpactInterpretation={isAdmin ? handleRefreshCrossImpactInterpretation : undefined}
         crossImpactInterpretationLoading={crossImpactInterpretationLoading}
+        crossImpactInterpretationStatus={crossImpactInterpretationStatus}
         pipelineGlobal={pipelineReadiness?.global}
       />
 

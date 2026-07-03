@@ -493,6 +493,7 @@ def generate_cross_impact_interpretation(
     company_details: list,
     dashboard_data: list,
     theme_descriptions: dict,
+    progress_callback=None,
 ) -> dict:
     """Produce the Cross-Impact Matrix Interpretation payload.
 
@@ -510,12 +511,18 @@ def generate_cross_impact_interpretation(
     # Lazy import to avoid pulling provider clients at module load.
     from foresight_observatory import _generate_with_verification
 
+    def progress(step: str):
+        if progress_callback:
+            progress_callback(step)
+
     # 1. Build inputs from existing computations (no new scoring or scraping).
+    progress("Preparing matrix payload")
     cross_impact_flat = compute_cross_impact(company_details)
     matrix_data = shape_cross_impact_for_prompt(cross_impact_flat)
     if not matrix_data:
         raise ValueError("Cross-impact matrix is empty — cannot generate interpretation")
 
+    progress("Preparing interpretation context")
     gap_patterns = compute_gap_patterns(company_details)
     archetype_distribution = compute_archetype_flow(dashboard_data)
 
@@ -537,6 +544,7 @@ def generate_cross_impact_interpretation(
         f"Top theme density: {matrix_data[0]['total_density']}, "
         f"Sources: {', '.join(available_sources)}"
     )
+    progress("Generating and verifying interpretation")
     text, verification = _generate_with_verification(
         prompt,
         source_summary,
@@ -546,9 +554,11 @@ def generate_cross_impact_interpretation(
 
     # 3. Post-hoc numeric check. If a fabricated density slipped through,
     #    regenerate once with a correction prompt.
+    progress("Checking numeric grounding")
     numeric_check = verify_numeric_claims(text, matrix_data)
     if not numeric_check["passed"]:
         from foresight_observatory import _generate_gpt_pro, _verify_with_models
+        progress("Correcting numeric grounding")
         correction = (
             "\n\nCRITICAL CORRECTION: Your previous attempt cited density values "
             f"that do not appear in the matrix payload: {numeric_check['fabricated']}. "
@@ -557,8 +567,10 @@ def generate_cross_impact_interpretation(
             "appear in the matrix."
         )
         text, _wc, generation_model = _generate_gpt_pro(prompt + correction)
+        progress("Verifying corrected interpretation")
         verification = _verify_with_models(text, source_summary, "Cross-Impact Matrix Interpretation")
         verification["generation_model"] = generation_model
+        progress("Rechecking numeric grounding")
         numeric_check = verify_numeric_claims(text, matrix_data)
 
     return {
