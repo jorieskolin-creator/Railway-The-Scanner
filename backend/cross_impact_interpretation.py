@@ -40,6 +40,115 @@ DIMENSION_DESCRIPTIONS = {
 }
 
 
+def _pct(value, total) -> float:
+    try:
+        if not total:
+            return 0.0
+        return round((float(value) / float(total)) * 100.0, 1)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return 0.0
+
+
+def _theme_shape(item: dict) -> str:
+    total = int(item.get("total_density") or 0)
+    dims = item.get("dimensions") or {}
+    if not item.get("apply_shape_label", True):
+        return "SMALL_N"
+    if total <= 0:
+        return "SMALL_N"
+    ranked = sorted((int(v or 0) for v in dims.values()), reverse=True)
+    top = _pct(ranked[0] if ranked else 0, total)
+    top_two = _pct(sum(ranked[:2]), total)
+    if top >= 35.0 and top_two >= 60.0:
+        return "CONCENTRATED"
+    if top_two >= 60.0 and top < 35.0:
+        return "BIMODAL"
+    if top < 30.0 and top_two < 55.0:
+        return "DIFFUSE"
+    return "DIFFUSE"
+
+
+def _shape_meaning(shape: str) -> str:
+    return {
+        "CONCENTRATED": "single primary organizational bottleneck",
+        "BIMODAL": "two-front adaptation problem",
+        "DIFFUSE": "whole-business pressure that cannot be owned by one function",
+        "SMALL_N": "directional signal with limited density",
+    }.get(shape, "uneven routing pattern")
+
+
+def _response_origin(dimension: str) -> str:
+    return {
+        "Operating Model": "operating governance, workflow ownership, and execution design",
+        "Service Portfolio": "portfolio renewal, offering architecture, and monetization choices",
+        "Values": "leadership principles, culture, sustainability, and decision standards",
+        "Strategy": "strategic prioritization, market positioning, and investment direction",
+        "AI Readiness": "data foundations, AI governance, technology stack, and capability investment",
+    }.get(dimension or "", "leadership attention and capability investment")
+
+
+def _derive_analysis_context(matrix_data: list, theme_descriptions: dict) -> dict:
+    """Create prompt-support context so the model can reason from the matrix
+    without turning the prose into a score listing."""
+    theme_context = []
+    top_cells = []
+    for item in matrix_data or []:
+        theme = item.get("theme") or ""
+        total = int(item.get("total_density") or 0)
+        dims = item.get("dimensions") or {}
+        ranked_dims = sorted(
+            ((dim, int(dims.get(dim) or 0)) for dim in KB_DIMENSIONS),
+            key=lambda pair: pair[1],
+            reverse=True,
+        )
+        top_dim, top_value = ranked_dims[0] if ranked_dims else ("", 0)
+        second_dim, second_value = ranked_dims[1] if len(ranked_dims) > 1 else ("", 0)
+        shape = _theme_shape(item)
+        absence_candidates = [
+            (dim, value)
+            for dim, value in ranked_dims
+            if total > 0 and value < max(1, total * 0.10) and top_value >= max(2, total * 0.25)
+        ]
+        absence = absence_candidates[-1] if absence_candidates else None
+        theme_context.append({
+            "theme": theme,
+            "total_density": total,
+            "shape": shape,
+            "shape_meaning": _shape_meaning(shape),
+            "top_dimension": top_dim,
+            "top_density": top_value,
+            "top_share": _pct(top_value, total),
+            "second_dimension": second_dim,
+            "second_density": second_value,
+            "second_share": _pct(second_value, total),
+            "notable_absence": absence[0] if absence else None,
+            "notable_absence_density": absence[1] if absence else None,
+            "description": theme_descriptions.get(theme, "(no description provided)"),
+        })
+        for dim, value in ranked_dims:
+            if value <= 0:
+                continue
+            top_cells.append({
+                "theme": theme,
+                "dimension": dim,
+                "density": value,
+                "row_share": _pct(value, total),
+                "theme_total": total,
+                "theme_shape": shape,
+                "theme_pattern": "primary landing point" if dim == top_dim else "secondary pressure point",
+                "response_origin": _response_origin(dim),
+                "dimension_meaning": DIMENSION_DESCRIPTIONS.get(dim, ""),
+            })
+
+    top_cells = sorted(top_cells, key=lambda cell: cell["density"], reverse=True)[:3]
+    for idx, cell in enumerate(top_cells, start=1):
+        cell["rank"] = idx
+    return {
+        "themes": theme_context[:3],
+        "cells": top_cells,
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # PROMPT BUILDER
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -50,6 +159,7 @@ def _build_prompt(
     available_sources: list,
     intent_reality_gap: list = None,
     archetype_distribution: list = None,
+    analysis_context: dict = None,
 ) -> str:
     """Build the v1 Cross-Impact Matrix Interpretation prompt.
 
@@ -80,6 +190,30 @@ def _build_prompt(
     # Dimension descriptions
     dim_lines = [f"- {d}: {DIMENSION_DESCRIPTIONS[d]}" for d in KB_DIMENSIONS]
     dim_block = "\n".join(dim_lines)
+
+    analysis_context = analysis_context or _derive_analysis_context(matrix_data, theme_descriptions)
+    theme_context_lines = []
+    for item in analysis_context.get("themes") or []:
+        absence = (
+            f"{item['notable_absence']}={item['notable_absence_density']}"
+            if item.get("notable_absence") is not None else "none"
+        )
+        theme_context_lines.append(
+            "- {theme} | total_density={total_density} | shape={shape} | "
+            "business_meaning={shape_meaning} | primary={top_dimension}:{top_density} ({top_share}%) | "
+            "secondary={second_dimension}:{second_density} ({second_share}%) | notable_absence={absence} | "
+            "description={description}".format(absence=absence, **item)
+        )
+    theme_context_block = "\n".join(theme_context_lines) if theme_context_lines else "(no derived theme context)"
+
+    cell_context_lines = []
+    for cell in analysis_context.get("cells") or []:
+        cell_context_lines.append(
+            "- rank={rank} | {theme} x {dimension} | density={density} | row_share={row_share}% | "
+            "theme_total={theme_total} | theme_shape={theme_shape} | pattern={theme_pattern} | "
+            "response_origin={response_origin} | dimension_meaning={dimension_meaning}".format(**cell)
+        )
+    cell_context_block = "\n".join(cell_context_lines) if cell_context_lines else "(no derived cell context)"
 
     # Optional cross-reference blocks
     if intent_reality_gap:
@@ -128,6 +262,13 @@ INPUTS
 Matrix data (top themes, with per-dimension density):
 {matrix_block}
 
+Derived analytical context (use this to reason; do not copy it mechanically):
+Dominant-force context:
+{theme_context_block}
+
+Convergence-point context:
+{cell_context_block}
+
 Theme descriptions (use these for accurate paraphrasing — do not invent themes):
 {desc_block}
 
@@ -161,6 +302,9 @@ BIMODAL / DIFFUSE label. Describe its distribution numerically and explain
 that the row total is too small for shape classification.
 
 Step 3 — Identify the top 3 highest-density cells in the matrix (any rows).
+Treat these cells as organizational landing points: where a future force turns
+into a concrete demand on a dimension such as operating model, strategy,
+portfolio, values, or AI readiness.
 
 Step 4 — Identify conspicuous absences. For each top theme, flag any cell that
 holds less than 10% of that theme's total_density when other cells in the same
@@ -190,35 +334,37 @@ One opening sentence framing what the vertical view answers.
 Then, for each of the top 3 Pareto themes, produce a compact subsection in this
 exact format:
 [THEME: <name>] [TOTAL: <total_density>] [SHAPE: <CONCENTRATED|BIMODAL|DIFFUSE|SMALL_N>]
-Two paragraphs. Paragraph 1: state the theme's total_density, its full
-distribution, and characterize its shape (or note SMALL_N if applicable).
-Use specific numbers.
-Paragraph 2 carries the interpretive payoff. Name the underlying force the
-routing reveals (for example a positioning challenge versus a capability-
-readiness challenge), the trade-off the routing creates (what the theme is
-NOT asking the organization to do), and what kind of decision this routing
-puts in front of leadership. Reference the theme description so the reader
-knows what kinds of signals are inside the theme. Add 30-40 words of
-interpretive depth beyond the numerical description; do not restate the
-densities.
+Two paragraphs, 120-150 words total per theme. Paragraph 1 must start with a
+one-sentence analytical thesis about what this force means for the portfolio.
+Then use only one or two key density references, usually the total_density and
+the primary dimension or secondary dimension. Do NOT list the full distribution.
+Translate the shape label into business meaning, such as single bottleneck,
+two-front adaptation problem, whole-business pressure, or directional signal.
+Paragraph 2 carries the interpretive payoff. Explain what emerging demand,
+readiness gap, leadership choice, or strategic trade-off the routing reveals.
+Reference the theme description so the reader knows what kinds of signals sit
+inside the theme, but avoid copying the description. End with what kind of
+decision the force puts in front of leadership.
 
 [SECTION: HORIZONTAL — CONVERGENCE POINTS]
 One opening sentence framing what the horizontal view answers.
 Then, for each of the top 3 highest-density cells, produce in this exact format:
 [CELL: <theme> x <dimension>] [DENSITY: <value>] [RANK: 1|2|3]
-Two paragraphs. Paragraph 1: what the cell tells us — name the theme, the
-dimension, and the convergence specifically.
-Paragraph 2 carries the interpretive payoff. Name the kind of organizational
-response the convergence implies and where the response should originate
-(governance, leadership attention, technology stack, culture, capability
-investment). Surface the practical decision the cell forces on the
-organization. Add 30-40 words of interpretive depth; do not restate the
-density value.
+Two paragraphs, 110-140 words total per cell. Paragraph 1 must explain why this
+theme-dimension intersection matters commercially: what future pressure is
+landing, what dimension is being tested, and why that makes the cell more than
+a large value. Use the density value once if helpful; do not repeat row totals
+unless necessary for interpretation.
+Paragraph 2 carries the interpretive payoff. Name the likely organizational
+response area and where it should originate, using the convergence-point
+context when available. Add one explicit demand-hypothesis sentence beginning
+with "The demand hypothesis is that..." and keep it falsifiable rather than
+claiming confirmed buying intent.
 
 [SECTION: FOCUSED — STRUCTURAL PATTERN]
 Three to four paragraphs. No sub-headers in this section.
 Paragraph 1: Compare the distribution shapes of the top Pareto themes. Use
-specific numbers.
+one or two specific numbers only where they sharpen the comparison.
 Paragraph 2: Explain the conspicuous absences flagged in Step 4.
 Paragraph 3: State the structural finding — one or two sentences that
 summarize what the three views together reveal — then add a 30-40 word coda
@@ -261,11 +407,12 @@ HARD CONSTRAINTS
 5. Maintain a calm, formal tone throughout. Do not use sales language, do not
    use exclamations, and do not address the reader as "you" except in the
    closing "How to Use" section.
-6. Length budget: 900-1300 words total across all sections. The interpretive
+6. Length budget: 1150-1600 words total across all sections. The interpretive
    payoff paragraphs (paragraph 2 of each theme in VERTICAL, paragraph 2 of
    each cell in HORIZONTAL, and the structural-finding coda in FOCUSED) carry
-   the analytical weight. The Focused section should be the longest; Sources
-   should be one short sentence plus the list.
+   the analytical weight. Use the extra length for implications and demand
+   hypotheses, not additional value listing. Sources should be one short
+   sentence plus the list.
 7. Do not output any preamble or postscript outside the [SECTION: ...] markers.
    The first character of the output is the first section marker; the last
    character is the end of the Sources section.
