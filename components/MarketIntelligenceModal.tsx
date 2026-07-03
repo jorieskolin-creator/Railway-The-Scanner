@@ -1316,12 +1316,7 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
     // 5. C2 (Domain x Dimension) is intentionally hidden in the app — also
     //    omitted from the export to keep them in sync.
 
-    // 6. C3 — Theme Momentum bars (only present when Observatory has been generated)
-    if (observatoryData?.theme_momentum?.length) {
-      content += `<div class="mi-card"><h2 style="color:#67e8f9">Theme Momentum — Top 10 themes by signal volume</h2>${buildThemeMomentumHtml(observatoryData.theme_momentum)}</div>`;
-    }
-
-    // 7. Finnish Economy Force Map (last)
+    // 6. Finnish Economy Force Map (last)
     if (observatoryData?.finland_analysis?.text) {
       content += buildFinnishEconomyForceMapHtml(observatoryData);
     }
@@ -2509,48 +2504,6 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
                 ))}
               </tbody>
             </table>
-          </div>
-        );
-      })()}
-
-      {/* C3 — Theme Momentum bars */}
-      {(observatoryData?.theme_momentum?.length || 0) > 0 && (() => {
-        const tm = observatoryData.theme_momentum as Array<{ theme: string; accelerating: number; stable: number; decelerating: number; total: number }>;
-        const top = tm.slice(0, 10);
-        return (
-          <div className="bg-black/20 border border-white/10 rounded-lg p-4">
-            <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-1">Theme Momentum — Top 10 themes by signal volume</h4>
-            <p className="text-[10px] text-slate-500 mb-3">Accelerating vs. stable vs. decelerating signals per theme, drawn from the Foresight Knowledge Base.</p>
-            <div className="space-y-2">
-              {top.map(row => {
-                const tot = row.total || 1;
-                const aPct = (row.accelerating / tot) * 100;
-                const sPct = (row.stable / tot) * 100;
-                const dPct = (row.decelerating / tot) * 100;
-                return (
-                  <div key={row.theme} className="grid grid-cols-[160px_1fr_64px] items-center gap-3 text-[10px]">
-                    <div className="text-slate-300 truncate" title={row.theme}>{row.theme}</div>
-                    <div className="h-3 flex rounded overflow-hidden bg-slate-800/60 border border-slate-700">
-                      {aPct > 0 && <div style={{ width: `${aPct}%`, backgroundColor: '#10b981' }} title={`Accelerating: ${row.accelerating}`} />}
-                      {sPct > 0 && <div style={{ width: `${sPct}%`, backgroundColor: '#64748b' }} title={`Stable: ${row.stable}`} />}
-                      {dPct > 0 && <div style={{ width: `${dPct}%`, backgroundColor: '#f43f5e' }} title={`Decelerating: ${row.decelerating}`} />}
-                    </div>
-                    <div className="text-right font-mono text-slate-500">{row.total}</div>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="mt-3 flex flex-wrap items-center gap-3 text-[9px] text-slate-500">
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-2 h-2 rounded" style={{ backgroundColor: '#10b981' }}></span> Accelerating
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-2 h-2 rounded" style={{ backgroundColor: '#64748b' }}></span> Stable
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-2 h-2 rounded" style={{ backgroundColor: '#f43f5e' }}></span> Decelerating
-              </span>
-            </div>
           </div>
         );
       })()}
