@@ -3271,6 +3271,66 @@ def render_buying_potential_html(report: dict) -> str:
     def simple_items(items, limit=10):
         return "".join(f"<li>{_esc(x)}</li>" for x in _list(items)[:limit]) or "<li>No items generated.</li>"
 
+    signal_lookup = {
+        str(signal.get("id")): signal
+        for signal in _list(report.get("account_signal_map"))
+        if isinstance(signal, dict) and signal.get("id")
+    }
+
+    def signal_display_label(signal_id):
+        signal_id = str(signal_id or "").strip()
+        if not signal_id:
+            return ""
+        signal = signal_lookup.get(signal_id)
+        if not signal:
+            return signal_id
+        label = _first_nonempty(
+            signal.get("theme"),
+            _dict(signal.get("need_hypothesis")).get("structural_exposure"),
+            signal.get("pressure_type"),
+            signal.get("account_movement"),
+            limit=80,
+        )
+        label = re.sub(r"\s+", " ", label or "").strip(" .:-")
+        if not label:
+            return signal_id
+        if signal_id.lower() in label.lower():
+            return label
+        return f"{label} ({signal_id})"
+
+    def combined_need_items(limit=5):
+        items = []
+        seen = set()
+
+        def add_item(raw):
+            text = _restore_company_case(_clip(raw, 460), company)
+            if len(text) < 24:
+                return
+            key = re.sub(r"\W+", " ", text.lower()).strip()[:140]
+            if key in seen:
+                return
+            seen.add(key)
+            items.append(text)
+
+        for play in _list(report.get("recommended_sales_plays")):
+            if not isinstance(play, dict):
+                continue
+            need = _dict(play.get("need_hypothesis"))
+            add_item(need.get("combined_activation_hypothesis") or play.get("buying_hypothesis"))
+            if len(items) >= limit:
+                break
+
+        if len(items) < limit:
+            for signal in _list(report.get("account_signal_map")):
+                if not isinstance(signal, dict):
+                    continue
+                need = _dict(signal.get("need_hypothesis"))
+                add_item(need.get("combined_activation_hypothesis") or signal.get("business_consequence"))
+                if len(items) >= limit:
+                    break
+
+        return simple_items(items, limit)
+
     def pressure_card(item):
         return f"""
         <article class="card">
@@ -3338,10 +3398,11 @@ def render_buying_potential_html(report: dict) -> str:
 
     def solution_card(item):
         disq = ", ".join(item.get("disqualifiers") or [])
+        account_signal_label = signal_display_label(item.get("account_signal_id"))
         return f"""
         <article class="card">
           <div class="card-top"><strong>{_esc(item.get('service'))}</strong>{_gate_badge(item.get('gate'))}</div>
-          <p><b>Account signal:</b> {_esc(item.get('account_signal_id'))}</p>
+          <p><b>Account signal:</b> {_esc(account_signal_label)}</p>
           <p><b>Pressure:</b> {_esc(item.get('interpreted_pressure'))}</p>
           <p><b>Buyer lens:</b> {_esc(item.get('buyer_lens'))}</p>
           <p><b>Why this response direction:</b> {_esc(item.get('why_this_service'))}</p>
@@ -3539,20 +3600,11 @@ def render_buying_potential_html(report: dict) -> str:
     <div class="grid grid-3">
       <div class="card compact"><h3>Top Buying Hypotheses</h3><ul>{simple_items(sales_spine.get('top_buying_hypotheses'), 5)}</ul></div>
       <div class="card compact"><h3>Risk Themes For Discovery</h3><ul>{simple_items(sales_spine.get('risk_themes'), 5)}</ul></div>
-      <div class="card compact"><h3>Internal Note</h3><p>{_esc(sales_spine.get('self_scan_note'))}</p></div>
+      <div class="card compact"><h3>Where Need May Emerge</h3><ul>{combined_need_items(5)}</ul></div>
     </div>
   </section>
 
-  <section>
-    <h2>Sales Hypothesis Map</h2>
-    <div class="grid grid-3">
-      <div class="card compact"><h3>Account Need Signals</h3><ul>{hypothesis_items('company_only')}</ul></div>
-      <div class="card compact"><h3>Market Pressure Signals</h3><ul>{hypothesis_items('market_watch')}</ul></div>
-      <div class="card compact"><h3>Where Need May Emerge</h3><ul>{hypothesis_items('combined_activation')}</ul></div>
-    </div>
-  </section>
-
-  <section><h2>Sales Pressure Signals</h2><div class="grid">{_render_list(_list(report.get('pressure_signals')), pressure_card)}</div></section>
+  <section><h2>Pressure & Demand Hypothesis Signals</h2><div class="grid">{_render_list(_list(report.get('pressure_signals')), pressure_card)}</div></section>
   <section><h2>Why This May Matter Now</h2><div class="grid">{_render_list(_list(report.get('why_now')), why_card)}</div></section>
 
   <section>
