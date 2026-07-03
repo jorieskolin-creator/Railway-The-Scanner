@@ -151,6 +151,9 @@ const OBSERVATORY_PROSE_LEAD_LABELS = [
 ];
 
 const OBSERVATORY_SECTION_HEADINGS = [
+  "National Thesis",
+  "Three Strategic Asymmetries",
+  "Timing And Readiness Implications",
   "Domain Thesis",
   "Three Evidence Highlights",
   "What The Pattern Means",
@@ -628,10 +631,10 @@ const exportObservatoryHtml = (data: any, marketIntelData?: any) => {
   <div class="layer">
     <div class="layer-header finland">
       <h2>Layer 2: Finnish Economy Force Map</h2>
-      <div class="layer-desc">Maps how global forces specifically land in the Finnish business landscape. Grounds every claim in actual company data — market health scores, archetype distributions, and gap patterns.</div>
+      <div class="layer-desc">Maps how global forces land in the Finnish business landscape. Turns portfolio evidence into national readiness implications, strategic asymmetries, and timing pressure.</div>
     </div>
     <div class="layer-body">
-      <div class="essay">${markdownToHtml(data.finland_analysis?.text)}</div>
+      <div class="essay">${renderObservatorySectionsHtml(data.finland_analysis?.sections, data.finland_analysis?.text)}</div>
     </div>
   </div>
 
@@ -677,7 +680,7 @@ const SECTION_COLORS = {
 
 const LAYER_DESCRIPTIONS: Record<string, string> = {
   global: "A futurologist's briefing on the converging global forces reshaping business. Synthesizes validated signals from the Foresight Knowledge Base into macro-level patterns — identifying which forces are accelerating, which are decelerating, and where unexpected cross-impacts create strategic inflection points. Frames the future through thinking capacity and adaptability, not technology adoption.",
-  finland: "Maps how global forces specifically land in the Finnish business landscape. Grounds every claim in current company data — market health scores, archetype distributions, and gap patterns — to reveal where Finnish industry leads, where it lags, and where genuine strategic opportunities exist.",
+  finland: "Maps how global forces land in the Finnish business landscape. Turns portfolio evidence into national readiness implications, strategic asymmetries, timing pressure, and choices about where Finnish industry can define its own race.",
   domain: "Per-domain strategic analysis with timescale mapping. Each dossier examines a specific industry's position using company-level data, identifies forces by urgency horizon (Act Now / Prepare / Position), explores 'Own Race' opportunities, and offers a contrarian signal that challenges conventional domain wisdom.",
 };
 
@@ -804,7 +807,7 @@ const ObservatoryGovernance = ({ data }: { data: any }) => {
   );
 };
 
-const EssaySection = ({ title, icon: Icon, colorKey, text, verification, metadata, description, defaultOpen = false }: any) => {
+const EssaySection = ({ title, icon: Icon, colorKey, text, sections, verification, metadata, description, defaultOpen = false }: any) => {
   const [isOpen, setIsOpen] = useState(defaultOpen);
   const colors = SECTION_COLORS[colorKey as keyof typeof SECTION_COLORS] || SECTION_COLORS.global;
 
@@ -834,7 +837,7 @@ const EssaySection = ({ title, icon: Icon, colorKey, text, verification, metadat
       )}
       {isOpen && (
         <div className="px-5 py-4 bg-black/20">
-          {formatEssayText(text)}
+          {formatEssayText(text, sections)}
         </div>
       )}
     </div>
@@ -1314,6 +1317,7 @@ const ObservatoryModal = ({ isOpen, data, loading, onClose, onRefresh, adminPass
                 icon={Map}
                 colorKey="finland"
                 text={data.finland_analysis?.text}
+                sections={data.finland_analysis?.sections}
                 verification={data.finland_analysis?.verification}
                 metadata={`${data.finland_analysis?.domains_analyzed || 0} domains`}
                 description={LAYER_DESCRIPTIONS.finland}

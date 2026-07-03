@@ -74,15 +74,33 @@ OBSERVATORY_DOMAIN_SECTION_TITLES = (
     "Strategic Implication",
     "Contrarian Signal",
 )
-OBSERVATORY_DOMAIN_SECTION_RE = re.compile(
-    r"(?im)^\s*(?:#{1,3}\s*)?(?:Section\s+\d+\s+[—-]\s*)?(?:\d+\s+[—-]\s*)?"
-    r"("
-    + "|".join(re.escape(title) for title in OBSERVATORY_DOMAIN_SECTION_TITLES)
-    + r")\s*:?\s*$"
+OBSERVATORY_FINLAND_SECTION_TITLES = (
+    "National Thesis",
+    "Three Strategic Asymmetries",
+    "What The Pattern Means",
+    "Timing And Readiness Implications",
+    "Contrarian Signal",
 )
+OBSERVATORY_ALL_SECTION_TITLES = tuple(dict.fromkeys(
+    OBSERVATORY_DOMAIN_SECTION_TITLES + OBSERVATORY_FINLAND_SECTION_TITLES
+))
+
+
+def _observatory_section_re(titles: tuple[str, ...]) -> re.Pattern:
+    return re.compile(
+        r"(?im)^\s*(?:#{1,3}\s*)?(?:Section\s+\d+\s+[—-]\s*)?(?:\d+\s+[—-]\s*)?"
+        r"("
+        + "|".join(re.escape(title) for title in titles)
+        + r")\s*:?\s*$"
+    )
+
+
+OBSERVATORY_DOMAIN_SECTION_RE = _observatory_section_re(OBSERVATORY_DOMAIN_SECTION_TITLES)
+OBSERVATORY_FINLAND_SECTION_RE = _observatory_section_re(OBSERVATORY_FINLAND_SECTION_TITLES)
+OBSERVATORY_ALL_SECTION_RE = _observatory_section_re(OBSERVATORY_ALL_SECTION_TITLES)
 OBSERVATORY_FAKE_NUMERIC_HEADING_RE = re.compile(
     r"(?m)^\s*\d{1,3}\s+[—-]\s+(?!"
-    + "|".join(re.escape(title) for title in OBSERVATORY_DOMAIN_SECTION_TITLES)
+    + "|".join(re.escape(title) for title in OBSERVATORY_ALL_SECTION_TITLES)
     + r")"
 )
 
@@ -286,7 +304,15 @@ def _extract_observatory_sections(text: str, titles: tuple[str, ...] = OBSERVATO
     if not text:
         return []
     title_lookup = {title.lower(): title for title in titles}
-    matches = list(OBSERVATORY_DOMAIN_SECTION_RE.finditer(text))
+    if titles == OBSERVATORY_DOMAIN_SECTION_TITLES:
+        section_re = OBSERVATORY_DOMAIN_SECTION_RE
+    elif titles == OBSERVATORY_FINLAND_SECTION_TITLES:
+        section_re = OBSERVATORY_FINLAND_SECTION_RE
+    elif titles == OBSERVATORY_ALL_SECTION_TITLES:
+        section_re = OBSERVATORY_ALL_SECTION_RE
+    else:
+        section_re = _observatory_section_re(titles)
+    matches = list(section_re.finditer(text))
     sections: list[dict] = []
     for idx, match in enumerate(matches):
         raw_title = (match.group(1) or "").strip().lower()
@@ -348,11 +374,19 @@ def _observatory_public_quality(text: str, label: str) -> dict:
     if is_domain:
         if OBSERVATORY_FAKE_NUMERIC_HEADING_RE.search(raw):
             issues.append("fake_numeric_heading")
-        sections = _extract_observatory_sections(raw)
+        sections = _extract_observatory_sections(raw, OBSERVATORY_DOMAIN_SECTION_TITLES)
         if sections and len(sections) < 4:
             warnings.append("partial_domain_section_structure")
         if _observatory_domain_metric_count(raw) > 10:
             warnings.append("metric_heavy_domain_dossier")
+    if label == "finland_analysis":
+        if OBSERVATORY_FAKE_NUMERIC_HEADING_RE.search(raw):
+            warnings.append("fake_numeric_heading")
+        sections = _extract_observatory_sections(raw, OBSERVATORY_FINLAND_SECTION_TITLES)
+        if sections and len(sections) < 4:
+            warnings.append("partial_finland_section_structure")
+        if _observatory_domain_metric_count(raw) > 12:
+            warnings.append("metric_heavy_finland_analysis")
     return {
         "label": label,
         "passed": not issues,
@@ -373,6 +407,10 @@ def _sanitize_observatory_payload(result: dict) -> dict:
     finland_text = (result.get("finland_analysis") or {}).get("text") or ""
     if finland_text:
         result["finland_analysis"]["text"] = _sanitize_observatory_public_text(finland_text)
+        result["finland_analysis"]["sections"] = _extract_observatory_sections(
+            result["finland_analysis"]["text"],
+            OBSERVATORY_FINLAND_SECTION_TITLES,
+        )
         checks.append(_observatory_public_quality(result["finland_analysis"]["text"], "finland_analysis"))
 
     for dossier in result.get("domain_dossiers") or []:
@@ -381,7 +419,7 @@ def _sanitize_observatory_payload(result: dict) -> dict:
         text = dossier.get("text") or ""
         if text:
             dossier["text"] = _sanitize_observatory_public_text(text)
-            dossier["sections"] = _extract_observatory_sections(dossier["text"])
+            dossier["sections"] = _extract_observatory_sections(dossier["text"], OBSERVATORY_DOMAIN_SECTION_TITLES)
             checks.append(_observatory_public_quality(dossier["text"], f"domain:{dossier.get('domain') or 'unknown'}"))
 
     blocking = [check for check in checks if not check.get("passed")]
@@ -1184,6 +1222,16 @@ TONE CALIBRATION — Balanced Strategic Assessment:
 ANALYTICAL LENS — Strategic Asymmetry Mapping:
 Your task is NOT to summarize the data. Your task is to find the ASYMMETRIES — the places where the data contradicts expectations, where strength in one dimension masks vulnerability in another, where forces that seem separate are actually the same force arriving through different channels. Think like a strategist reading the data for what it reveals that the data itself does not say out loud.
 
+NATIONAL-LEVEL EDITORIAL CONTRACT:
+- Scores and counts are background evidence, not the narrative spine.
+- Use no more than 4-5 reader-facing metric highlights in the whole essay.
+- Every metric you mention must answer: "so what for Finland's economic readiness, adaptation capacity, timing pressure, or strategic choice?"
+- Do not write domain-by-domain score rollups or table narration.
+- Prefer domain clusters when useful: industrial core, trust economy, digital/service domains, exposed domestic-demand domains, regulated infrastructure, or capital-intensive domains.
+- Do not use company-level examples unless they are essential to explain a national pattern.
+- Avoid raw markdown emphasis. Use plain section headings only.
+- Never begin a paragraph or heading with a bare score such as "75 — ...".
+
 LOCKED LAYER 2 EVIDENCE DOSSIER ({OBSERVATORY_DOSSIER_VERSION}):
 {locked_dossier}
 
@@ -1221,58 +1269,31 @@ Companies with detailed data: {mi.get('detailed_count', 0)}
 PRE-COMPUTED EVIDENCE-LINKED FINDINGS:
 {structured_findings}
 
-ANALYTICAL STRUCTURE (4 sections):
+ANALYTICAL STRUCTURE:
 
-Section 1 — THE FINNISH FORCE MAP: Strategic Asymmetries in the Finnish Landscape
+Use these exact headings, one per line. Do not write the word "Section".
 
-Combine the Finnish positioning data with the cross-domain convergence patterns into ONE integrated analysis. Do NOT first describe where Finland stands and then separately describe cross-domain patterns. Instead, identify the 3-4 most important STRATEGIC ASYMMETRIES in the Finnish data — places where:
-- A domain appears healthy by one metric but vulnerable by another
-- Forces converge on multiple domains simultaneously in ways that create compound exposure
-- A gap between intent and reality in one domain amplifies pressure in a connected domain
-- Organizational capability is concentrated in well-served dimensions but weak where pressure is greatest
+National Thesis
+Write the national-level thesis: what the portfolio pattern says about Finland's current economic readiness and the central strategic tension. Use implication-led language, not domain ranking.
 
-For each asymmetry, explain WHY it matters strategically — not just what the numbers show, but what the numbers MEAN for Finnish industry's future competitive position. Use specific signal evidence to connect these asymmetries to the global forces identified in Layer 1.
+Three Strategic Asymmetries
+Identify exactly three asymmetries. Each asymmetry should combine a domain-cluster pattern, a force pattern, and a strategic implication. Use only the most necessary metrics and interpret them immediately.
 
-SO WHAT: End this section with a single paragraph answering: "What is the one pattern in this data that a Finnish board should lose sleep over, and what is the one pattern they should take genuine confidence from?"
+What The Pattern Means
+Explain what the asymmetries reveal about Finnish organizational thinking, adaptation capacity, capability concentration, and exposure. Go beyond the intent/reality gap list.
 
-Section 2 — THE ADAPTABILITY GAP: Running Someone Else's Race
+Timing And Readiness Implications
+Explain the 6-12, 12-24, and 24-36 month implications as one national readiness narrative. Name the capability, governance mechanism, or operating-model change that must carry each horizon.
 
-Use the gap patterns (intent vs reality) to analyze where Finnish companies claim one thing but do another. Go beyond listing the gaps — interpret what the PATTERN of gaps reveals about Finnish organizational thinking.
-
-Key analytical questions:
-- When companies overestimate intent and underestimate operational reality, what does this tell us about how Finnish leadership constructs strategy?
-- Are the gap patterns random, or do they reveal a SYSTEMATIC bias in how Finnish companies see themselves?
-- Which gaps are the most dangerous — not because they are the largest, but because they create the most strategic exposure when combined with the force convergence patterns from Section 1?
-- What should Finnish companies STOP doing based on these gaps?
-
-SO WHAT: What does the gap pattern reveal about whether Finnish industry is running its own race or someone else's?
-
-Section 3 — THREE HORIZONS FOR FINLAND:
-- Now (6-12 months): What must Finnish industry address immediately based on the data? Be specific — name the domains and the forces.
-- Prepare (12-24 months): What capabilities need building? Connect to the asymmetries and gaps identified above.
-- Position (24-36 months): What "Own Race" opportunities exist? Where could Finnish industry define new competitive terrain rather than compete on existing terrain?
-
-For each horizon, identify not just WHAT to do but which organizational capability, governance mechanism, or operating-model change must carry it.
-
-SO WHAT: Which horizon carries the highest cost of inaction, and why?
-
-Section 4 — THE CONTRARIAN SIGNAL: Finland's Dangerous Assumption
-
-This section applies the Genius Forecasting method — insight-driven analysis that requires deep pattern recognition to see what conventional strategic thinking misses.
-
-In 2-3 paragraphs, identify:
-1. THE DANGEROUS ASSUMPTION: What is the single most consequential assumption Finnish industry is currently making that the data suggests is wrong? Look for: dimensions where confidence is high but evidence is weak, domains where all companies cluster in the same archetype (groupthink signal), forces with high credibility signals that Finnish companies are systematically ignoring, or gap patterns that suggest an entire sector is reading the map wrong.
-2. THE CONTRARIAN HYPOTHESIS: Formulate a specific, defensible contrarian view about Finnish industry's strategic direction: "The conventional wisdom in Finnish business is [X], but the data suggests [Y] because [specific evidence from the data above]."
-3. THE IMPLICATION: If this contrarian view is correct, what should Finnish industry collectively STOP doing that it currently considers essential? What should it START doing that currently seems marginal or irrelevant?
-
-Frame this as strategic foresight, not prediction. The value is in expanding the range of futures that Finnish decision-makers consider plausible.
+Contrarian Signal
+Identify the dangerous assumption, the contrarian hypothesis, and the implication in 2-3 paragraphs. Frame this as strategic foresight, not prediction.
 
 OUTPUT FORMAT:
-- 1800-2400 words
-- Four sections with headers
+- 1300-1700 words
+- Five sections with the exact headings above
 - Analytical essay prose — NO bullet points
 - Deep strategic analysis, not data reporting — every paragraph must contain an insight, not just a finding
-- Grounded in actual company data patterns (cite specific numbers)
+- Grounded in actual company data patterns, but do not turn the essay into a score list
 - Reference specific KB signals by name when supporting claims about forces"""
 
 
