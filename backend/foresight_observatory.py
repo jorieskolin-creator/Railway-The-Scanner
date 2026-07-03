@@ -291,6 +291,14 @@ def _sanitize_observatory_public_text(text: str) -> str:
     out = _strip_internal_observatory_artifacts(text)
     out = re.sub(r"\*{1,3}([^*\n]{1,160})\*{1,3}", r"\1", out)
     out = out.replace("*", "")
+    out = re.sub(r"(?im)^\s*(?:#{1,3}\s*)?Section\s*$", "", out)
+    out = re.sub(
+        r"(?m)^\s*(\d{1,3})\s+[—-]\s+(?!"
+        + "|".join(re.escape(title) for title in OBSERVATORY_ALL_SECTION_TITLES)
+        + r")(.+)$",
+        r"\2",
+        out,
+    )
     out = re.sub(r"(?i)\bidentifiedzero\b", "identified zero", out)
     out = re.sub(r"(?<=\d)\.\s+(?=\d)", ".", out)
     out = re.sub(r"\s+([,.;:])", r"\1", out)
@@ -352,32 +360,35 @@ def _observatory_domain_metric_count(text: str) -> int:
 
 
 def _observatory_public_quality(text: str, label: str) -> dict:
-    issues = []
+    fatal = []
+    repairable = []
     warnings = []
     raw = text or ""
+    word_count = len(raw.split())
+    if not raw.strip():
+        fatal.append("empty_output")
+    elif word_count < 50:
+        fatal.append("too_short_output")
     if OBSERVATORY_INTERNAL_ID_RE.search(raw):
-        issues.append("internal_claim_id_leak")
+        repairable.append("internal_claim_id_leak")
     if OBSERVATORY_METHOD_LABEL_RE.search(raw):
-        issues.append("method_label_leak")
+        repairable.append("method_label_leak")
     if re.search(r"(?im)^\s*(?:#{1,3}\s*)?Section\s*$", raw):
-        issues.append("orphan_section_label")
+        repairable.append("orphan_section_label")
     if OBSERVATORY_RAW_MARKDOWN_RE.search(raw):
-        issues.append("raw_markdown_marker")
+        repairable.append("raw_markdown_marker")
     paragraphs = [p.strip() for p in re.split(r"\n{2,}", raw) if p.strip()]
     max_paragraph_chars = max((len(p) for p in paragraphs), default=0)
     is_domain = label.startswith("domain:")
     if max_paragraph_chars > 1200:
-        if is_domain:
-            issues.append("long_paragraph")
-        else:
-            warnings.append("long_paragraph")
+        warnings.append("long_paragraph")
     if is_domain:
         if OBSERVATORY_FAKE_NUMERIC_HEADING_RE.search(raw):
-            issues.append("fake_numeric_heading")
+            repairable.append("fake_numeric_heading")
         sections = _extract_observatory_sections(raw, OBSERVATORY_DOMAIN_SECTION_TITLES)
         if sections and len(sections) < 4:
             warnings.append("partial_domain_section_structure")
-        if _observatory_domain_metric_count(raw) > 10:
+        if _observatory_domain_metric_count(raw) > 3:
             warnings.append("metric_heavy_domain_dossier")
     if label == "finland_analysis":
         if OBSERVATORY_FAKE_NUMERIC_HEADING_RE.search(raw):
@@ -385,53 +396,203 @@ def _observatory_public_quality(text: str, label: str) -> dict:
         sections = _extract_observatory_sections(raw, OBSERVATORY_FINLAND_SECTION_TITLES)
         if sections and len(sections) < 4:
             warnings.append("partial_finland_section_structure")
-        if _observatory_domain_metric_count(raw) > 12:
+        if _observatory_domain_metric_count(raw) > 5:
             warnings.append("metric_heavy_finland_analysis")
+    if fatal:
+        status = "fatal"
+    elif repairable:
+        status = "repairable"
+    elif warnings:
+        status = "warning"
+    else:
+        status = "clean"
     return {
         "label": label,
-        "passed": not issues,
-        "issues": issues,
+        "passed": status in {"clean", "warning"},
+        "status": status,
+        "fatal": fatal,
+        "repairable": repairable,
+        "issues": fatal + repairable,
         "warnings": warnings,
         "max_paragraph_chars": max_paragraph_chars,
+        "word_count": word_count,
     }
+
+
+def _rewrite_observatory_public_text_for_hygiene(text: str, label: str, titles: tuple[str, ...]) -> str:
+    """Best-effort prose hygiene rewrite. Never required for saving."""
+    if not text or not text.strip():
+        return text or ""
+    prompt = f"""Clean the following Observatory public prose for formatting/readability only.
+
+Rules:
+- Preserve the meaning, evidence boundaries, domain conclusions, and all factual claims.
+- Do not add new claims, evidence, companies, scores, or recommendations.
+- Remove orphan words like "Section".
+- Remove raw markdown markers such as *, **, ***.
+- Convert fake numeric headings such as "75 — ..." into normal prose.
+- Keep or restore only these section headings when they are already present or naturally fit: {", ".join(titles)}.
+- Return cleaned prose only, no commentary.
+
+TEXT:
+{text[:12000]}"""
+    try:
+        cleaned = call_openai_text(
+            prompt,
+            model=GPT_REASONING_MODEL,
+            max_output_tokens=min(7000, max(1800, len(text.split()) * 2)),
+            timeout=90,
+            max_retries=1,
+            reasoning_effort="low",
+        )
+        return _sanitize_observatory_public_text(cleaned or text)
+    except Exception as exc:
+        print(f"   [Observatory] QA rewrite unavailable for {label} (non-blocking): {type(exc).__name__}: {exc}")
+        return text
+
+
+def _finalize_observatory_output_text(
+    text: str,
+    label: str,
+    titles: tuple[str, ...],
+    *,
+    allow_rewrite: bool = False,
+) -> tuple[str, list[dict], dict]:
+    """Sanitize, optionally rewrite, and return reader-facing sections + QA."""
+    initial = _observatory_public_quality(text or "", label)
+    cleaned = _sanitize_observatory_public_text(text or "")
+    cleaned_check = _observatory_public_quality(cleaned, label)
+    attempts = [
+        {"stage": "initial", **initial},
+        {"stage": "deterministic_sanitize", **cleaned_check},
+    ]
+    best_text = cleaned
+    best_check = cleaned_check
+
+    if allow_rewrite and best_check.get("repairable") and not best_check.get("fatal"):
+        rewritten = _rewrite_observatory_public_text_for_hygiene(best_text, label, titles)
+        rewritten_check = _observatory_public_quality(rewritten, label)
+        attempts.append({"stage": "hygiene_rewrite", **rewritten_check})
+        if len(rewritten_check.get("fatal") or []) <= len(best_check.get("fatal") or []) and (
+            len(rewritten_check.get("repairable") or []) <= len(best_check.get("repairable") or [])
+        ):
+            best_text = rewritten
+            best_check = rewritten_check
+
+    repaired_issue_count = max(
+        0,
+        len(initial.get("repairable") or []) - len(best_check.get("repairable") or []),
+    )
+    qa = {
+        **best_check,
+        "attempts": attempts,
+        "repaired_issue_count": repaired_issue_count,
+        "saved_with_warnings": bool(best_check.get("repairable") or best_check.get("warnings")),
+    }
+    sections = _extract_observatory_sections(best_text, titles)
+    return best_text, sections, qa
+
+
+def _merge_observatory_public_qa(current: dict, prior=None) -> dict:
+    """Preserve generation-time QA attempts when final payload sanitation rechecks text."""
+    if not isinstance(prior, dict):
+        return current
+    merged = dict(current)
+    if prior.get("attempts"):
+        merged["attempts"] = prior.get("attempts")
+    merged["repaired_issue_count"] = max(
+        int(current.get("repaired_issue_count") or 0),
+        int(prior.get("repaired_issue_count") or 0),
+    )
+    merged["saved_with_warnings"] = bool(
+        current.get("saved_with_warnings")
+        or prior.get("saved_with_warnings")
+        or current.get("warnings")
+        or current.get("repairable")
+    )
+    if prior.get("status") == "repairable" and current.get("status") == "clean":
+        merged["status"] = "warning"
+        merged.setdefault("warnings", [])
+        if "repaired_public_output_issues" not in merged["warnings"]:
+            merged["warnings"] = list(merged["warnings"]) + ["repaired_public_output_issues"]
+    return merged
 
 
 def _sanitize_observatory_payload(result: dict) -> dict:
-    """Sanitize reader-facing Observatory text and attach public-output QA metadata."""
+    """Sanitize reader-facing Observatory text and attach non-fatal QA metadata."""
     checks = []
     global_text = (result.get("global_analysis") or {}).get("text") or ""
-    if global_text:
-        result["global_analysis"]["text"] = _sanitize_observatory_public_text(global_text)
-        checks.append(_observatory_public_quality(result["global_analysis"]["text"], "global_analysis"))
+    if global_text or result.get("global_analysis"):
+        prior_qa = result["global_analysis"].get("public_output_quality")
+        text, sections, qa = _finalize_observatory_output_text(
+            global_text,
+            "global_analysis",
+            OBSERVATORY_ALL_SECTION_TITLES,
+            allow_rewrite=False,
+        )
+        qa = _merge_observatory_public_qa(qa, prior_qa)
+        result["global_analysis"]["text"] = text
+        result["global_analysis"]["sections"] = sections
+        result["global_analysis"]["public_output_quality"] = qa
+        checks.append(qa)
 
     finland_text = (result.get("finland_analysis") or {}).get("text") or ""
-    if finland_text:
-        result["finland_analysis"]["text"] = _sanitize_observatory_public_text(finland_text)
-        result["finland_analysis"]["sections"] = _extract_observatory_sections(
-            result["finland_analysis"]["text"],
+    if finland_text or result.get("finland_analysis"):
+        prior_qa = result["finland_analysis"].get("public_output_quality")
+        text, sections, qa = _finalize_observatory_output_text(
+            finland_text,
+            "finland_analysis",
             OBSERVATORY_FINLAND_SECTION_TITLES,
+            allow_rewrite=False,
         )
-        checks.append(_observatory_public_quality(result["finland_analysis"]["text"], "finland_analysis"))
+        qa = _merge_observatory_public_qa(qa, prior_qa)
+        result["finland_analysis"]["text"] = text
+        result["finland_analysis"]["sections"] = sections
+        result["finland_analysis"]["public_output_quality"] = qa
+        checks.append(qa)
 
+    filtered_domains = []
+    kept_dossiers = []
     for dossier in result.get("domain_dossiers") or []:
         if not isinstance(dossier, dict):
             continue
+        if str(dossier.get("domain") or "").strip().lower() == "other":
+            filtered_domains.append(dossier.get("domain") or "Other")
+            continue
         text = dossier.get("text") or ""
-        if text:
-            dossier["text"] = _sanitize_observatory_public_text(text)
-            dossier["sections"] = _extract_observatory_sections(dossier["text"], OBSERVATORY_DOMAIN_SECTION_TITLES)
-            checks.append(_observatory_public_quality(dossier["text"], f"domain:{dossier.get('domain') or 'unknown'}"))
+        label = f"domain:{dossier.get('domain') or 'unknown'}"
+        prior_qa = dossier.get("public_output_quality")
+        text, sections, qa = _finalize_observatory_output_text(
+            text,
+            label,
+            OBSERVATORY_DOMAIN_SECTION_TITLES,
+            allow_rewrite=True,
+        )
+        qa = _merge_observatory_public_qa(qa, prior_qa)
+        dossier["text"] = text
+        dossier["sections"] = sections
+        dossier["public_output_quality"] = qa
+        checks.append(qa)
+        kept_dossiers.append(dossier)
+    result["domain_dossiers"] = kept_dossiers
 
-    blocking = [check for check in checks if not check.get("passed")]
+    fatal = [check for check in checks if check.get("fatal")]
+    repairable = [check for check in checks if check.get("repairable")]
+    warning = [check for check in checks if check.get("warnings")]
+    status = "fatal_failed" if fatal else "saved_with_warnings" if (repairable or warning or filtered_domains) else "clean"
     result["public_output_quality"] = {
-        "passed": not blocking,
+        "passed": not fatal and not repairable,
+        "status": status,
         "checks": checks,
-        "blocking_issue_count": sum(len(check.get("issues") or []) for check in checks),
+        "blocking_issue_count": sum(len(check.get("fatal") or []) for check in checks),
+        "repairable_issue_count": sum(len(check.get("repairable") or []) for check in checks),
         "warning_count": sum(len(check.get("warnings") or []) for check in checks),
+        "repaired_issue_count": sum(int(check.get("repaired_issue_count") or 0) for check in checks),
+        "filtered": {"domain_dossiers": filtered_domains},
     }
-    if blocking:
-        labels = ", ".join(check["label"] for check in blocking[:5])
-        raise ValueError(f"Observatory public-output QA failed after sanitation: {labels}")
+    if fatal:
+        labels = ", ".join(check["label"] for check in fatal[:5])
+        raise ValueError(f"Observatory fatal public-output QA failed after sanitation: {labels}")
     return result
 
 
@@ -1766,9 +1927,16 @@ def generate_observatory(progress_callback=None):
                 key_convergences.append(sentence[:150])
         if len(key_convergences) >= 3:
             break
+    global_text, global_sections, global_public_qa = _finalize_observatory_output_text(
+        global_text,
+        "global_analysis",
+        OBSERVATORY_ALL_SECTION_TITLES,
+        allow_rewrite=False,
+    )
 
     global_analysis = {
         "text": global_text,
+        "sections": global_sections,
         "force_count": kb_agg["total_signals"],
         "accelerating_forces": kb_agg["accelerating"],
         "key_convergences": key_convergences,
@@ -1776,6 +1944,7 @@ def generate_observatory(progress_callback=None):
         "evidence_dossier_version": OBSERVATORY_DOSSIER_VERSION,
         "analysis_model": global_verify.get("generation_model", OBSERVATORY_L1_MODEL),
         "verification": global_verify,
+        "public_output_quality": global_public_qa,
     }
 
     # --- Output 2: Finnish Economy Force Map ---
@@ -1797,6 +1966,12 @@ def generate_observatory(progress_callback=None):
         use_gpt_pro=True,
     )
     l2_claims = _extract_layer_claims(finland_text, l2_dossier, "L2")
+    finland_text, finland_sections, finland_public_qa = _finalize_observatory_output_text(
+        finland_text,
+        "finland_analysis",
+        OBSERVATORY_FINLAND_SECTION_TITLES,
+        allow_rewrite=False,
+    )
 
     # Extract top adaptability gaps
     top_gaps = []
@@ -1805,6 +1980,7 @@ def generate_observatory(progress_callback=None):
 
     finland_analysis = {
         "text": finland_text,
+        "sections": finland_sections,
         "domains_analyzed": len(mi.get("market_health", [])),
         "favi_distribution": mi.get("favi_segments", {}),
         "top_adaptability_gaps": top_gaps,
@@ -1813,6 +1989,7 @@ def generate_observatory(progress_callback=None):
         "evidence_dossier_version": OBSERVATORY_DOSSIER_VERSION,
         "analysis_model": finland_verify.get("generation_model", OBSERVATORY_L2_MODEL),
         "verification": finland_verify,
+        "public_output_quality": finland_public_qa,
     }
 
     # --- Output 3: Domain Force Dossiers ---
@@ -1858,6 +2035,12 @@ def generate_observatory(progress_callback=None):
             for s in kb_signals[:20]
         )
         text, verify = _generate_with_verification(domain_prompt, source, f"Domain Dossier: {domain}", use_opus=True, signal_evidence=domain_signal_evidence)
+        text, sections, public_qa = _finalize_observatory_output_text(
+            text,
+            f"domain:{domain}",
+            OBSERVATORY_DOMAIN_SECTION_TITLES,
+            allow_rewrite=True,
+        )
 
         # Extract forces by timescale
         forces_by_ts = {"act_now": [], "prepare": [], "position": []}
@@ -1878,6 +2061,7 @@ def generate_observatory(progress_callback=None):
         dossier = {
             "domain": domain,
             "text": text,
+            "sections": sections,
             "company_count": len(companies),
             "archetype_distribution": dict(Counter(
                 classify_archetype(
@@ -1890,6 +2074,7 @@ def generate_observatory(progress_callback=None):
             "analysis_model": verify.get("generation_model", OBSERVATORY_L3_MODEL),
             "evidence_dossier_version": OBSERVATORY_DOSSIER_VERSION,
             "verification": verify,
+            "public_output_quality": public_qa,
         }
         domain_dossiers.append(dossier)
 
@@ -1922,7 +2107,15 @@ def generate_observatory(progress_callback=None):
 
     # Save to storage
     url = storage.save_observatory(result)
-    print(f"   [Observatory] Saved observatory to storage: {url}")
+    qa_status = (result.get("public_output_quality") or {}).get("status", "unknown")
+    qa_warning_count = (result.get("public_output_quality") or {}).get("warning_count", 0)
+    qa_repairable_count = (result.get("public_output_quality") or {}).get("repairable_issue_count", 0)
+    qa_repaired_count = (result.get("public_output_quality") or {}).get("repaired_issue_count", 0)
+    print(
+        f"   [Observatory] Saved observatory to storage: {url} "
+        f"(qa_status={qa_status}, warnings={qa_warning_count}, "
+        f"repairable_remaining={qa_repairable_count}, repaired={qa_repaired_count})"
+    )
 
     return result
 
