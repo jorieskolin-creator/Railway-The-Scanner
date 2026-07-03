@@ -377,7 +377,7 @@ def generate_cross_impact_interpretation(
         archetype_distribution=archetype_distribution,
     )
 
-    # 2. Build prompt + run generation with independent verification.
+    # 2. Build prompt + run GPT Pro generation with independent verification.
     prompt = _build_prompt(
         matrix_data=matrix_data,
         theme_descriptions=theme_descriptions,
@@ -394,14 +394,14 @@ def generate_cross_impact_interpretation(
         prompt,
         source_summary,
         "Cross-Impact Matrix Interpretation",
-        use_opus=True,
+        use_gpt_pro=True,
     )
 
     # 3. Post-hoc numeric check. If a fabricated density slipped through,
     #    regenerate once with a correction prompt.
     numeric_check = verify_numeric_claims(text, matrix_data)
     if not numeric_check["passed"]:
-        from foresight_observatory import _generate_opus, _verify_with_models
+        from foresight_observatory import _generate_gpt_pro, _verify_with_models
         correction = (
             "\n\nCRITICAL CORRECTION: Your previous attempt cited density values "
             f"that do not appear in the matrix payload: {numeric_check['fabricated']}. "
@@ -409,8 +409,9 @@ def generate_cross_impact_interpretation(
             "matrix data above. Rewrite the interpretation using only numbers that "
             "appear in the matrix."
         )
-        text, _wc = _generate_opus(prompt + correction)
+        text, _wc, generation_model = _generate_gpt_pro(prompt + correction)
         verification = _verify_with_models(text, source_summary, "Cross-Impact Matrix Interpretation")
+        verification["generation_model"] = generation_model
         numeric_check = verify_numeric_claims(text, matrix_data)
 
     return {
@@ -420,5 +421,5 @@ def generate_cross_impact_interpretation(
         "sources_used": available_sources,
         "matrix_snapshot": matrix_data,
         "generated_at": datetime.utcnow().isoformat() + "Z",
-        "model": "claude-opus-4-8 + gpt/claude verification",
+        "model": f"{verification.get('generation_model', 'gpt-5.5-pro')} + gpt/claude verification",
     }

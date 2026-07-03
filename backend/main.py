@@ -54,7 +54,7 @@ from database_sanitizer import sanitize_database
 from foresight_guardrails import sanitize_foresight_collection, sanitize_report_foresight_fields
 from domain_classifier import infer_domain
 from evidence_cleaner import CLEAN_EVIDENCE_MODEL_CHAIN, clean_company_evidence
-from llm_clients import call_anthropic_text, call_json_model_chain, call_openai_text
+from llm_clients import GPT_PRO_MODEL, call_anthropic_text, call_json_model_chain, call_openai_text
 from buying_potential import BuyingPotentialError, generate_buying_potential_report, load_service_portfolio_kb, validate_service_portfolio_kb
 from company_evidence import CompanyEvidenceError, build_company_evidence_database
 from company_source_ledger import CompanySourceLedgerError, build_company_source_ledger
@@ -5925,13 +5925,13 @@ Respond with valid JSON only:
                              activation_text = ""
                              activation_timeout = min(95, max(50, _activation_left - 25))
                              try:
-                                 print(f"   🔄 [Activation] Generating WHY/WHAT/Pitch from locked diagnosis via gpt-5.5 (timeout: {activation_timeout}s)...")
+                                 print(f"   🔄 [Activation] Generating Strategic Synthesis/WHY/WHAT/Pitch from locked diagnosis via {GPT_PRO_MODEL} (timeout: {activation_timeout}s)...")
                                  act_start = time.time()
 
                                  def _activation_gpt():
                                      return _call_openai_text(
                                          activation_prompt,
-                                         model="gpt-5.5",
+                                         model=GPT_PRO_MODEL,
                                          max_output_tokens=5000,
                                          timeout=activation_timeout,
                                      )
@@ -5942,12 +5942,12 @@ Respond with valid JSON only:
                                      activation_text = act_future.result(timeout=activation_timeout)
                                  except concurrent.futures.TimeoutError:
                                      act_pool.shutdown(wait=False)
-                                     print(f"   ⏰ [Activation] GPT 5.5 timed out after {activation_timeout}s")
+                                     print(f"   ⏰ [Activation] {GPT_PRO_MODEL} timed out after {activation_timeout}s")
                                      raise Exception(f"GPT activation timeout after {activation_timeout}s")
                                  act_pool.shutdown(wait=False)
-                                 print(f"   ✅ [Activation] GPT 5.5 complete ({int((time.time() - act_start) * 1000)}ms)")
+                                 print(f"   ✅ [Activation] {GPT_PRO_MODEL} complete ({int((time.time() - act_start) * 1000)}ms)")
                              except Exception as act_gpt_err:
-                                 print(f"   ❌ [Activation] GPT 5.5 failed: {act_gpt_err}")
+                                 print(f"   ❌ [Activation] {GPT_PRO_MODEL} failed: {act_gpt_err}")
 
                              if not activation_text and _synthesis_budget_left() > 50:
                                  sonnet_activation_timeout = min(75, max(45, _synthesis_budget_left() - 20))
