@@ -151,6 +151,11 @@ const OBSERVATORY_PROSE_LEAD_LABELS = [
 ];
 
 const OBSERVATORY_SECTION_HEADINGS = [
+  "Domain Thesis",
+  "Three Evidence Highlights",
+  "What The Pattern Means",
+  "Forces By Timing",
+  "Strategic Implication",
   "Domain Reality Check",
   "Forces by Timescale",
   "The Own Race Opportunity",
@@ -162,6 +167,11 @@ const OBSERVATORY_SECTION_HEADINGS = [
   "Finland's Dangerous Assumption",
   "Finland’s Dangerous Assumption",
 ];
+const OBSERVATORY_SECTION_TITLE_PATTERN = OBSERVATORY_SECTION_HEADINGS.map(escapeRegExp).join("|");
+const OBSERVATORY_KNOWN_NUMBERED_SECTION_RE = new RegExp(
+  `\\s+((?:Section\\s+)?\\d+\\s+[—-]\\s+(?:${OBSERVATORY_SECTION_TITLE_PATTERN}))`,
+  "gi"
+);
 
 const OBSERVATORY_PROSE_LEAD_LABEL_RE = new RegExp(
   `(^|\\n|[.!?]\\s+)(\\*{0,2})(${OBSERVATORY_PROSE_LEAD_LABELS.map(escapeRegExp).join("|")})(\\*{0,2})(?=\\s|:|\\.)`,
@@ -184,11 +194,12 @@ const normalizeObservatoryEssayText = (text: string): string => {
     .replace(/^\s*#{1,3}\s*$/gm, "")
     .replace(/^\s*(?:#{1,3}\s*)?Section\s*$/gim, "")
     .replace(/identifiedzero/gi, "identified zero")
-    .replace(/\*{3,}/g, "**")
+    .replace(/(?<=\d)\.\s+(?=\d)/g, ".")
+    .replace(/\*{1,3}([^*\n]{1,160})\*{1,3}/g, "$1")
+    .replace(/\*/g, "")
     .replace(/([^\n])\s+(#{1,3}\s+)/g, "$1\n\n$2")
-    .replace(/\s+(\d+\s+[—-]\s+)/g, "\n\n$1")
+    .replace(OBSERVATORY_KNOWN_NUMBERED_SECTION_RE, "\n\n$1")
     .replace(/\*\*([^*]{1,90})\*\*\s+:/g, "**$1**:")
-    .replace(/\*([^*\n]{1,100})\*/g, "**$1**")
     .replace(/[^\S\n]{2,}/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -198,6 +209,11 @@ type ObservatoryNarrativeBlock = {
   type: "heading" | "paragraph" | "hr";
   text?: string;
   level?: 1 | 2 | 3;
+};
+
+type ObservatorySection = {
+  title: string;
+  text: string;
 };
 
 const normalizeObservatoryHeadingText = (value: string): string => {
@@ -243,14 +259,6 @@ const splitObservatoryKnownSection = (value: string): { heading: string; rest: s
         };
       }
     }
-  }
-
-  const numbered = clean.match(/^(\d+\s+[—-]\s+)([^:.]{3,90})(?::|\.)\s+([\s\S]+)$/);
-  if (numbered) {
-    return {
-      heading: normalizeObservatoryHeadingText(`${numbered[1]}${numbered[2]}`),
-      rest: numbered[3].trim(),
-    };
   }
 
   for (const title of OBSERVATORY_SECTION_HEADINGS) {
@@ -301,8 +309,7 @@ const buildObservatoryNarrativeBlocks = (text: string): ObservatoryNarrativeBloc
   if (!cleanText) return [];
   const expanded = cleanText
     .replace(/([^\n])\s+(#{1,3}\s+)/g, "$1\n\n$2")
-    .replace(/\s+(Section\s+\d+\s+[—-]\s+)/gi, "\n\n$1")
-    .replace(/\s+(\d+\s+[—-]\s+)/g, "\n\n$1");
+    .replace(OBSERVATORY_KNOWN_NUMBERED_SECTION_RE, "\n\n$1");
   const rawBlocks = expanded.split(/\n\n+/);
   const blocks: ObservatoryNarrativeBlock[] = [];
 
@@ -351,6 +358,34 @@ const markdownToHtml = (text: string): string => {
     const html = markdownInlineToHtml(block.text || "");
     return `<p>${html}</p>`;
   }).join('\n');
+  return `${body}${renderEvidenceRefsHtml(refs)}`;
+};
+
+const normalizeObservatorySections = (sections?: any[]): ObservatorySection[] => {
+  if (!Array.isArray(sections)) return [];
+  return sections
+    .map((section) => ({
+      title: normalizeObservatoryHeadingText(String(section?.title || "")),
+      text: normalizeObservatoryEssayText(String(section?.text || "")),
+    }))
+    .filter((section) => section.title && section.text);
+};
+
+const renderObservatorySectionBodyHtml = (text: string): string => {
+  return buildObservatoryNarrativeBlocks(text).map(block => {
+    if (block.type === "hr") return '<hr>';
+    if (block.type === "heading") return `<h3>${escapeObsHtml(block.text || "")}</h3>`;
+    return `<p>${markdownInlineToHtml(block.text || "")}</p>`;
+  }).join('\n');
+};
+
+const renderObservatorySectionsHtml = (sections?: any[], fallbackText = ""): string => {
+  const structured = normalizeObservatorySections(sections);
+  if (!structured.length) return markdownToHtml(fallbackText);
+  const refs = extractObservatoryEvidenceRefs(fallbackText || structured.map(section => section.text).join("\n\n"));
+  const body = structured.map(section => (
+    `<h2>${escapeObsHtml(section.title)}</h2>\n${renderObservatorySectionBodyHtml(section.text)}`
+  )).join('\n');
   return `${body}${renderEvidenceRefsHtml(refs)}`;
 };
 
@@ -487,7 +522,7 @@ const exportObservatoryHtml = (data: any, marketIntelData?: any) => {
       <div class="domain-dossier">
         <h2>${d.domain}</h2>
         <div class="badges">${archBadges} <span class="badge">${d.company_count} companies</span> ${forceBadges}</div>
-        <div class="essay">${markdownToHtml(d.text)}</div>
+        <div class="essay">${renderObservatorySectionsHtml(d.sections, d.text)}</div>
       </div>`;
   }).join('\n');
 
@@ -646,28 +681,40 @@ const LAYER_DESCRIPTIONS: Record<string, string> = {
   domain: "Per-domain strategic analysis with timescale mapping. Each dossier examines a specific industry's position using company-level data, identifies forces by urgency horizon (Act Now / Prepare / Position), explores 'Own Race' opportunities, and offers a contrarian signal that challenges conventional domain wisdom.",
 };
 
-const formatEssayText = (text: string) => {
+const formatEssayText = (text: string, sections?: any[]) => {
   if (!text) return null;
+  const structured = normalizeObservatorySections(sections);
   const refs = extractObservatoryEvidenceRefs(text);
-  const renderedParts = buildObservatoryNarrativeBlocks(text).map((block: ObservatoryNarrativeBlock, i: number) => {
+  const blocksToRender = structured.length
+    ? structured.flatMap((section, sectionIndex) => [
+        { type: "heading" as const, level: 2 as const, text: section.title, key: `section-${sectionIndex}` },
+        ...buildObservatoryNarrativeBlocks(section.text).map((block, blockIndex) => ({
+          ...block,
+          key: `section-${sectionIndex}-${blockIndex}`,
+        })),
+      ])
+    : buildObservatoryNarrativeBlocks(text).map((block, blockIndex) => ({ ...block, key: `block-${blockIndex}` }));
+
+  const renderedParts = blocksToRender.map((block: ObservatoryNarrativeBlock & { key?: string }, i: number) => {
+    const key = block.key || i;
     if (block.type === "hr") return <hr key={i} className="border-slate-700/40 my-6" />;
     if (block.type === "heading" && block.level === 1) {
       return (
-        <h2 key={i} className="text-lg font-bold text-slate-50 mt-7 mb-3 tracking-normal">
+        <h2 key={key} className="text-lg font-bold text-slate-50 mt-7 mb-3 tracking-normal">
           {block.text}
         </h2>
       );
     }
     if (block.type === "heading") {
       return (
-        <h3 key={i} className="text-base font-bold text-slate-100 mt-7 mb-3 border-b border-white/10 pb-1.5 tracking-normal">
+        <h3 key={key} className="text-base font-bold text-slate-100 mt-7 mb-3 border-b border-white/10 pb-1.5 tracking-normal">
           {block.text}
         </h3>
       );
     }
     const rendered = renderInlineMarkdown(block.text || "");
     return (
-      <p key={i} className="text-sm text-slate-300 leading-[1.78] mb-4 font-normal max-w-[860px]">
+      <p key={key} className="text-sm text-slate-300 leading-[1.78] mb-4 font-normal max-w-[860px]">
         {rendered}
       </p>
     );
@@ -884,7 +931,7 @@ const DomainDossierTabs = ({ dossiers, defaultOpen = false }: { dossiers: any[];
 
             {/* Essay text */}
             <div>
-              {formatEssayText(active.text)}
+              {formatEssayText(active.text, active.sections)}
             </div>
           </div>
         </>

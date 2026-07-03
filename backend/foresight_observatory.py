@@ -66,6 +66,25 @@ OBSERVATORY_METHOD_LABEL_RE = re.compile(
     re.I,
 )
 OBSERVATORY_RAW_MARKDOWN_RE = re.compile(r"(^|[^*])\*(?!\*)([^*\n]{1,90})\*(?!\*)")
+OBSERVATORY_DOMAIN_SECTION_TITLES = (
+    "Domain Thesis",
+    "Three Evidence Highlights",
+    "What The Pattern Means",
+    "Forces By Timing",
+    "Strategic Implication",
+    "Contrarian Signal",
+)
+OBSERVATORY_DOMAIN_SECTION_RE = re.compile(
+    r"(?im)^\s*(?:#{1,3}\s*)?(?:Section\s+\d+\s+[—-]\s*)?(?:\d+\s+[—-]\s*)?"
+    r"("
+    + "|".join(re.escape(title) for title in OBSERVATORY_DOMAIN_SECTION_TITLES)
+    + r")\s*:?\s*$"
+)
+OBSERVATORY_FAKE_NUMERIC_HEADING_RE = re.compile(
+    r"(?m)^\s*\d{1,3}\s+[—-]\s+(?!"
+    + "|".join(re.escape(title) for title in OBSERVATORY_DOMAIN_SECTION_TITLES)
+    + r")"
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -252,14 +271,58 @@ def _sanitize_observatory_public_text(text: str) -> str:
     if not text:
         return ""
     out = _strip_internal_observatory_artifacts(text)
-    out = re.sub(r"\*{3,}", "**", out)
-    out = re.sub(r"\*\*\s+", "**", out)
-    out = re.sub(r"\s+\*\*", "**", out)
+    out = re.sub(r"\*{1,3}([^*\n]{1,160})\*{1,3}", r"\1", out)
+    out = out.replace("*", "")
     out = re.sub(r"(?i)\bidentifiedzero\b", "identified zero", out)
+    out = re.sub(r"(?<=\d)\.\s+(?=\d)", ".", out)
     out = re.sub(r"\s+([,.;:])", r"\1", out)
     out = re.sub(r"[ \t]{2,}", " ", out)
     out = re.sub(r"\n{3,}", "\n\n", out)
     return out.strip()
+
+
+def _extract_observatory_sections(text: str, titles: tuple[str, ...] = OBSERVATORY_DOMAIN_SECTION_TITLES) -> list[dict]:
+    """Extract known public sections from generated Observatory prose."""
+    if not text:
+        return []
+    title_lookup = {title.lower(): title for title in titles}
+    matches = list(OBSERVATORY_DOMAIN_SECTION_RE.finditer(text))
+    sections: list[dict] = []
+    for idx, match in enumerate(matches):
+        raw_title = (match.group(1) or "").strip().lower()
+        title = title_lookup.get(raw_title)
+        if not title:
+            continue
+        start = match.end()
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+        body = _sanitize_observatory_public_text(text[start:end].strip())
+        if body:
+            sections.append({"title": title, "text": body})
+    seen = set()
+    unique_sections = []
+    for section in sections:
+        title = section["title"]
+        if title in seen:
+            continue
+        seen.add(title)
+        unique_sections.append(section)
+    return unique_sections
+
+
+def _observatory_domain_metric_count(text: str) -> int:
+    """Approximate reader-facing numeric highlights in one domain dossier."""
+    if not text:
+        return 0
+    metric_patterns = (
+        r"\bmarket health(?: score)?\b",
+        r"\breality score\b",
+        r"\bfinancial index\b",
+        r"\bintent(?: score)?\b",
+        r"\bThriving ratio\b",
+        r"\baverage reality\b",
+        r"\baverage financial\b",
+    )
+    return sum(len(re.findall(pattern, text, flags=re.I)) for pattern in metric_patterns)
 
 
 def _observatory_public_quality(text: str, label: str) -> dict:
@@ -273,11 +336,23 @@ def _observatory_public_quality(text: str, label: str) -> dict:
     if re.search(r"(?im)^\s*(?:#{1,3}\s*)?Section\s*$", raw):
         issues.append("orphan_section_label")
     if OBSERVATORY_RAW_MARKDOWN_RE.search(raw):
-        warnings.append("single_asterisk_markdown_marker")
+        issues.append("raw_markdown_marker")
     paragraphs = [p.strip() for p in re.split(r"\n{2,}", raw) if p.strip()]
     max_paragraph_chars = max((len(p) for p in paragraphs), default=0)
+    is_domain = label.startswith("domain:")
     if max_paragraph_chars > 1200:
-        warnings.append("long_paragraph")
+        if is_domain:
+            issues.append("long_paragraph")
+        else:
+            warnings.append("long_paragraph")
+    if is_domain:
+        if OBSERVATORY_FAKE_NUMERIC_HEADING_RE.search(raw):
+            issues.append("fake_numeric_heading")
+        sections = _extract_observatory_sections(raw)
+        if sections and len(sections) < 4:
+            warnings.append("partial_domain_section_structure")
+        if _observatory_domain_metric_count(raw) > 10:
+            warnings.append("metric_heavy_domain_dossier")
     return {
         "label": label,
         "passed": not issues,
@@ -306,6 +381,7 @@ def _sanitize_observatory_payload(result: dict) -> dict:
         text = dossier.get("text") or ""
         if text:
             dossier["text"] = _sanitize_observatory_public_text(text)
+            dossier["sections"] = _extract_observatory_sections(dossier["text"])
             checks.append(_observatory_public_quality(dossier["text"], f"domain:{dossier.get('domain') or 'unknown'}"))
 
     blocking = [check for check in checks if not check.get("passed")]
@@ -1290,6 +1366,15 @@ TONE CALIBRATION — Let the Data Drive the Tone:
 - The goal is an honest, data-grounded assessment — positive where the data warrants, concerned where the data warrants.
 - A domain with 4 of 5 companies Thriving is genuinely strong. Do not undermine that finding with hypothetical future risks unless the signal evidence specifically supports those risks.
 
+DOMAIN-LEVEL EDITORIAL CONTRACT:
+- Write about the domain pattern, not individual company stories. Company-level detail belongs in Company Summary, not here.
+- Use company data only as background evidence for the domain thesis.
+- Do not list company-by-company scores or create a roll call of winners and laggards.
+- Use individual company names only when a named outlier is necessary to explain a domain-level pattern.
+- Include exactly three reader-facing evidence highlights in the "Three Evidence Highlights" section. Each highlight must be domain-level and must explain what the metric reveals.
+- Outside the Three Evidence Highlights section, avoid raw score recitation. Interpret what the pattern means for domain readiness, pressure, capability, risk, or strategic choice.
+- Never begin a paragraph or heading with a bare score such as "75 — ...".
+
 BROADER CONTEXT — How to use prior analysis layers:
 {broader_context_rule}
 - From Layer 1, identify 1-2 global forces most directly relevant to {domain} and reference how they manifest in this specific domain.
@@ -1331,31 +1416,32 @@ PRE-COMPUTED EVIDENCE-LINKED FINDINGS:
 
 ANALYTICAL STRUCTURE:
 
-Section 1 — DOMAIN REALITY CHECK: Current state summary. What does the archetype distribution and average scores reveal about this domain's collective thinking capacity? Be specific with numbers.
+Use these exact headings, one per line. Do not write the word "Section".
 
-Section 2 — FORCES BY TIMESCALE:
-- Next 12 months (Act Now): Forces already in motion. What organizational thinking shifts are urgent? What must companies STOP doing immediately?
-- 12-36 months (Prepare): Forces building momentum. What capabilities need to be built? What assumptions need challenging?
-- 24-60 months (Position): Emerging forces that will reshape the domain. What "Own Race" opportunities exist?
+Domain Thesis
+Write a concise synthesis of the domain's current position and central tension. Use domain-level language.
 
-Section 3 — THE OWN RACE OPPORTUNITY: What would it mean for companies in {domain} to define their own race rather than react? Specific strategic scenarios.
+Three Evidence Highlights
+Write exactly three short highlights. Each highlight must combine one metric or evidence pattern with its interpretation. These are the only reader-facing metric highlights in the dossier.
 
-Section 4 — CONTRARIAN SIGNAL (Genius Forecasting):
+What The Pattern Means
+Explain what the evidence pattern reveals about the domain's readiness, challenge profile, structural exposure, and ability to act. Avoid listing company scores.
 
-This section applies the Genius Forecasting method — the preparation of insight-driven forecasts that require both deep domain expertise and creative pattern recognition to see what conventional analysis misses.
+Forces By Timing
+Explain the 6-12, 12-36, and 24-60 month pressures as one integrated timing narrative. Include what organizations should stop assuming and what they should start preparing.
 
-In 2-3 paragraphs, identify:
-1. THE UNDERESTIMATED FORCE: What does the data suggest that most strategists in {domain} would dismiss or overlook? Look for: forces with high credibility but low company engagement, Black Swan/Preposterous signals that connect to accelerating trends, or dimensions where the gap is extreme but nobody is talking about it.
-2. THE CONTRARIAN HYPOTHESIS: Formulate a specific, defensible contrarian view: "The conventional wisdom in {domain} is [X], but the data suggests [Y] because [specific evidence]." This should challenge assumptions about what {domain} companies think their future looks like.
-3. THE IMPLICATION: If the contrarian view is correct, what should organizations in this domain STOP doing that they currently consider essential? What should they START doing that currently seems marginal or irrelevant?
+Strategic Implication
+Describe what it would mean for this domain to define its own race rather than react. Make this about strategic choices, capability focus, and demand-shaping opportunities.
 
-Frame this as strategic foresight, not prediction. The value is in expanding the range of futures that decision-makers consider plausible.
+Contrarian Signal
+Identify the underestimated force, the contrarian hypothesis, and the implication in 2-3 paragraphs. Frame this as strategic foresight, not prediction.
+
 
 OUTPUT FORMAT:
-- 700-900 words
-- Four sections with headers
+- 650-850 words
+- Six sections with the exact headings above
 - Analytical essay prose — NO bullet points
-- Reference actual data from above"""
+- Reference actual data from above, but do not turn the dossier into a score list"""
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1616,11 +1702,13 @@ def generate_observatory(progress_callback=None):
     # Import domain config
     from strategic_foresight import DOMAIN_TO_FORESIGHT
 
-    # Count active domains (domains with companies)
+    # Count active domains (domains with companies). "Other" is useful as an
+    # internal classification fallback, but it is not a reader-facing domain
+    # for Observatory Layer 3.
     domain_companies = defaultdict(list)
     for c in data["company_details"]:
         domain = c.get("domain") or "Unknown"
-        if domain != "Unknown":
+        if domain not in {"Unknown", "Other"}:
             domain_companies[domain].append(c)
 
     active_domains = [d for d in sorted(domain_companies.keys()) if len(domain_companies[d]) >= 2]
