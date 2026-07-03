@@ -1876,7 +1876,7 @@ def _generate_opus(prompt: str, max_tokens: int = 16000) -> tuple[str, int]:
     return text, wc
 
 
-def _generate_gpt_pro(prompt: str, max_tokens: int = 16000) -> tuple[str, int, str]:
+def _generate_gpt_pro(prompt: str, max_tokens: int = 16000, log_label: str = "Observatory") -> tuple[str, int, str]:
     """Generate L1/L2 with GPT-5.5 Pro and bounded quality fallbacks."""
     attempts = (
         (OBSERVATORY_L1_MODEL, None, 480),
@@ -1897,7 +1897,7 @@ def _generate_gpt_pro(prompt: str, max_tokens: int = 16000) -> tuple[str, int, s
             text = re.sub(r'\[([^\]]+)\]\(https?://[^)]+\)', r'\1', text).strip()
             wc = len(text.split())
             elapsed = int((time.time() - t0) * 1000)
-            print(f"   [Observatory] {model}{f' ({effort})' if effort else ''}: {wc} words ({elapsed}ms)")
+            print(f"   [{log_label}] {model}{f' ({effort})' if effort else ''}: {wc} words ({elapsed}ms)")
             return text, wc, model
         except Exception as exc:
             errors.append(f"{model}: {exc}")

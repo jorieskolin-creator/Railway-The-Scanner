@@ -9,9 +9,8 @@ Produces three views in section-marker format:
   - HORIZONTAL: convergence points (top 3 highest-density cells)
   - FOCUSED: structural pattern (cross-analysis + conspicuous absences)
 
-Reuses the LLM + GPT/Claude verification pipeline from foresight_observatory.
-Adds a deterministic post-hoc numeric verifier that checks every cited density
-against the matrix payload to catch fabricated numbers.
+Uses GPT Pro for synthesis and a narrow Cross-Impact verifier: required
+structure, deterministic numeric grounding, and public-output hygiene.
 """
 
 import json
@@ -464,6 +463,104 @@ def verify_numeric_claims(text: str, matrix_data: list) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# CROSS-IMPACT OUTPUT GUARDRAILS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+REQUIRED_SECTION_MARKERS = (
+    "[SECTION: INTRODUCTION]",
+    "[SECTION: VERTICAL — DOMINANT FORCES]",
+    "[SECTION: HORIZONTAL — CONVERGENCE POINTS]",
+    "[SECTION: FOCUSED — STRUCTURAL PATTERN]",
+    "[SECTION: HOW TO USE THIS INTERPRETATION]",
+    "[SECTION: SOURCES]",
+)
+
+
+def sanitize_public_output(text: str) -> str:
+    """Deterministically clean reader-facing formatting artifacts."""
+    cleaned = str(text or "").strip()
+    cleaned = re.sub(r"^```(?:\w+)?\s*", "", cleaned)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+    cleaned = re.sub(r"\[([^\]]+)\]\(https?://[^)]+\)", r"\1", cleaned)
+    cleaned = re.sub(r"(\d+)\.\s+(\d+)", r"\1.\2", cleaned)
+    cleaned = re.sub(r"(?m)^\s*Section\s*$", "", cleaned)
+    cleaned = cleaned.replace("***", "").replace("**", "").replace("*", "")
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def verify_structure(text: str) -> dict:
+    """Confirm the output can be parsed by the existing renderer."""
+    missing = [marker for marker in REQUIRED_SECTION_MARKERS if marker not in text]
+    theme_count = len(re.findall(r"\[THEME:\s*[^\]]+\]", text))
+    cell_count = len(re.findall(r"\[CELL:\s*[^\]]+\]", text))
+    issues = []
+    if missing:
+        issues.append(f"missing_section_markers:{', '.join(missing)}")
+    if theme_count < 3:
+        issues.append(f"expected_3_theme_blocks_found_{theme_count}")
+    if cell_count < 3:
+        issues.append(f"expected_3_cell_blocks_found_{cell_count}")
+    return {
+        "passed": not issues,
+        "issues": issues,
+        "missing_sections": missing,
+        "theme_count": theme_count,
+        "cell_count": cell_count,
+    }
+
+
+def verify_public_hygiene(text: str) -> dict:
+    """Check only presentation-level quality; do not judge analysis quality."""
+    issues = []
+    if not str(text or "").strip():
+        issues.append("empty_output")
+    if len(str(text or "").split()) < 300:
+        issues.append("too_short_for_cross_impact_interpretation")
+    if "```" in text:
+        issues.append("code_fence_present")
+    if re.search(r"(?m)^\s*Section\s*$", text):
+        issues.append("orphan_section_label")
+    if re.search(r"(?<!\*)\*(?!\*)|\*\*|\*\*\*", text):
+        issues.append("raw_markdown_marker")
+    if re.search(r"\d+\.\s+\d+", text):
+        issues.append("broken_decimal_spacing")
+    if re.search(r"\[\s*\]", text):
+        issues.append("empty_bracket_artifact")
+    return {
+        "passed": not issues,
+        "issues": issues,
+        "word_count": len(str(text or "").split()),
+    }
+
+
+def build_cross_impact_verification(text: str, matrix_data: list, numeric_check: dict) -> dict:
+    """Narrow verifier for Cross-Impact: structure, numeric grounding, hygiene."""
+    structure = verify_structure(text)
+    hygiene = verify_public_hygiene(text)
+    issues = []
+    if not structure["passed"]:
+        issues.extend(structure["issues"])
+    if not numeric_check["passed"]:
+        issues.append(f"fabricated_density_values:{numeric_check.get('fabricated')}")
+    if not hygiene["passed"]:
+        issues.extend(hygiene["issues"])
+    return {
+        "passed": not issues,
+        "status": "verified" if not issues else "guardrail_warning",
+        "verification_model": "deterministic_cross_impact_guardrails",
+        "generation_model": "gpt-5.5-pro",
+        "issues": issues,
+        "structure": structure,
+        "numeric_grounding": numeric_check,
+        "public_hygiene": hygiene,
+        "analysis_quality_reviewed": False,
+        "note": "Cross-Impact verifier checks numeric grounding, required structure, and public-output hygiene only; it does not judge analytical framing.",
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # AVAILABLE-SOURCES BUILDER
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -509,7 +606,7 @@ def generate_cross_impact_interpretation(
       }
     """
     # Lazy import to avoid pulling provider clients at module load.
-    from foresight_observatory import _generate_with_verification
+    from foresight_observatory import _generate_gpt_pro
 
     def progress(step: str):
         if progress_callback:
@@ -531,7 +628,9 @@ def generate_cross_impact_interpretation(
         archetype_distribution=archetype_distribution,
     )
 
-    # 2. Build prompt + run GPT Pro generation with independent verification.
+    # 2. Build prompt + run GPT Pro generation. Cross-Impact uses only narrow,
+    # deterministic guardrails below; it does not use the shared Observatory
+    # analysis-quality verifier.
     prompt = _build_prompt(
         matrix_data=matrix_data,
         theme_descriptions=theme_descriptions,
@@ -539,39 +638,46 @@ def generate_cross_impact_interpretation(
         intent_reality_gap=gap_patterns,
         archetype_distribution=archetype_distribution,
     )
-    source_summary = (
-        f"Themes: {len(matrix_data)}, "
-        f"Top theme density: {matrix_data[0]['total_density']}, "
-        f"Sources: {', '.join(available_sources)}"
-    )
-    progress("Generating and verifying interpretation")
-    text, verification = _generate_with_verification(
-        prompt,
-        source_summary,
-        "Cross-Impact Matrix Interpretation",
-        use_gpt_pro=True,
-    )
+    progress("Generating interpretation")
+    text, _wc, generation_model = _generate_gpt_pro(prompt, log_label="CrossImpact")
+    text = sanitize_public_output(text)
 
     # 3. Post-hoc numeric check. If a fabricated density slipped through,
-    #    regenerate once with a correction prompt.
-    progress("Checking numeric grounding")
+    #    or the section contract is malformed, regenerate once with a narrow
+    #    correction prompt. This does not judge the analysis quality.
+    progress("Checking Cross-Impact guardrails")
     numeric_check = verify_numeric_claims(text, matrix_data)
-    if not numeric_check["passed"]:
-        from foresight_observatory import _generate_gpt_pro, _verify_with_models
-        progress("Correcting numeric grounding")
+    structure_check = verify_structure(text)
+    if not numeric_check["passed"] or not structure_check["passed"]:
+        progress("Correcting Cross-Impact guardrails")
+        correction_parts = []
+        if not numeric_check["passed"]:
+            correction_parts.append(
+                "Your previous attempt cited density values that do not appear "
+                f"in the matrix payload: {numeric_check['fabricated']}. Every density "
+                "number in the prose must match a value present in the matrix."
+            )
+        if not structure_check["passed"]:
+            correction_parts.append(
+                "Your previous attempt did not satisfy the required section/block "
+                f"contract: {json.dumps(structure_check['issues'])}. Include every "
+                "required [SECTION: ...] marker, exactly three [THEME: ...] blocks, "
+                "and exactly three [CELL: ...] blocks."
+            )
         correction = (
-            "\n\nCRITICAL CORRECTION: Your previous attempt cited density values "
-            f"that do not appear in the matrix payload: {numeric_check['fabricated']}. "
-            "Every density number in the prose must match a value present in the "
-            "matrix data above. Rewrite the interpretation using only numbers that "
-            "appear in the matrix."
+            "\n\nCRITICAL CORRECTION: "
+            + " ".join(correction_parts)
+            + " Rewrite the interpretation while preserving the analytical meaning. "
+            "Do not add analysis-quality self-review or commentary."
         )
-        text, _wc, generation_model = _generate_gpt_pro(prompt + correction)
-        progress("Verifying corrected interpretation")
-        verification = _verify_with_models(text, source_summary, "Cross-Impact Matrix Interpretation")
-        verification["generation_model"] = generation_model
-        progress("Rechecking numeric grounding")
+        text, _wc, generation_model = _generate_gpt_pro(prompt + correction, log_label="CrossImpact")
+        text = sanitize_public_output(text)
+        progress("Rechecking Cross-Impact guardrails")
         numeric_check = verify_numeric_claims(text, matrix_data)
+        structure_check = verify_structure(text)
+
+    verification = build_cross_impact_verification(text, matrix_data, numeric_check)
+    verification["generation_model"] = generation_model
 
     return {
         "text": text,
@@ -580,5 +686,5 @@ def generate_cross_impact_interpretation(
         "sources_used": available_sources,
         "matrix_snapshot": matrix_data,
         "generated_at": datetime.utcnow().isoformat() + "Z",
-        "model": f"{verification.get('generation_model', 'gpt-5.5-pro')} + gpt/claude verification",
+        "model": f"{verification.get('generation_model', 'gpt-5.5-pro')} + deterministic cross-impact guardrails",
     }
