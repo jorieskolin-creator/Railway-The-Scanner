@@ -207,10 +207,37 @@ def _clip(value: Any, limit: int = 900) -> str:
     sentence_cuts = [m.end() for m in re.finditer(r"[.!?](?:\s|$)", candidate) if m.end() >= min_sentence]
     if sentence_cuts:
         return candidate[:sentence_cuts[-1]].strip()
-    word_cut = candidate.rfind(" ")
-    if word_cut >= min_sentence:
-        candidate = candidate[:word_cut].rstrip()
+    soft_cuts = [m.end() for m in re.finditer(r"[;:](?:\s|$)", candidate) if m.end() >= min_sentence]
+    used_soft_cut = False
+    if soft_cuts:
+        candidate = candidate[:soft_cuts[-1]].rstrip(" ;:")
+        used_soft_cut = True
+    else:
+        last_clause = max(candidate.rfind(","), candidate.rfind(";"), candidate.rfind(":"))
+        trailing = candidate[last_clause + 1:].strip() if last_clause >= 0 else candidate
+        dangling_markers = (
+            "but", "while", "although", "because", "which", "that", "where",
+            "could", "would", "should", "may", "might", "can", "will",
+            "could limit", "would limit", "may limit", "might limit",
+            "risks", "requires", "depends", "suggests",
+        )
+        trailing_l = trailing.lower().strip(" .,:;-")
+        if last_clause >= min_sentence and (
+            len(trailing.split()) <= 4
+            or any(trailing_l == marker or trailing_l.endswith(f" {marker}") for marker in dangling_markers)
+        ):
+            candidate = candidate[:last_clause].rstrip(" ,;:")
+    if not used_soft_cut:
+        word_cut = candidate.rfind(" ")
+        if word_cut >= min_sentence:
+            candidate = candidate[:word_cut].rstrip()
     candidate = re.sub(r"\b(?:and|or|with|to|for|of|in|the|a|an)$", "", candidate, flags=re.I).rstrip()
+    candidate = re.sub(
+        r"(?:\b(?:but|while|although|because|which|that|where|could|would|should|may|might|can|will)\b\.?)$",
+        "",
+        candidate,
+        flags=re.I,
+    ).rstrip()
     candidate = candidate.rstrip(" ,;:-")
     if candidate and not re.search(r"[.!?]$", candidate):
         candidate += "."
@@ -2313,6 +2340,25 @@ def _clean_evidence_confidence_buckets(evidence_confidence: dict) -> dict:
     verified = [str(item).strip() for item in _list(evidence_confidence.get("verified_facts")) if str(item).strip()]
     questions = [str(item).strip() for item in _list(evidence_confidence.get("use_only_as_question")) if str(item).strip()]
     safe_hypotheses = [str(item).strip() for item in _list(evidence_confidence.get("safe_hypotheses")) if str(item).strip()]
+    analysis_context = [str(item).strip() for item in _list(evidence_confidence.get("analysis_context")) if str(item).strip()]
+    weak_or_missing: list[str] = []
+    report_quality_notes = [
+        str(item).strip()
+        for item in _list(evidence_confidence.get("report_quality_notes"))
+        if str(item).strip()
+    ]
+    for item in _list(evidence_confidence.get("weak_or_missing_evidence")):
+        text = str(item or "").strip()
+        if not text:
+            continue
+        lower = text.lower()
+        if any(marker in lower for marker in ("deterministic fallback", "malformed", "json", "section_", "parse failed", "repair failed")):
+            report_quality_notes.append(text)
+            continue
+        if "verified_for_analysis" in lower:
+            analysis_context.append(text.replace(": verified_for_analysis", "").replace("verified_for_analysis", "").strip(" :-"))
+            continue
+        weak_or_missing.append(text)
 
     do_not_say, question_from_blocked = _safe_guardrail_items(
         _list(evidence_confidence.get("do_not_say"))
@@ -2323,6 +2369,9 @@ def _clean_evidence_confidence_buckets(evidence_confidence: dict) -> dict:
     evidence_confidence["verified_facts"] = verified[:12]
     evidence_confidence["safe_hypotheses"] = list(dict.fromkeys(safe_hypotheses))[:12]
     evidence_confidence["use_only_as_question"] = list(dict.fromkeys(questions))[:12]
+    evidence_confidence["analysis_context"] = list(dict.fromkeys(analysis_context))[:12]
+    evidence_confidence["weak_or_missing_evidence"] = list(dict.fromkeys(weak_or_missing))[:12]
+    evidence_confidence["report_quality_notes"] = list(dict.fromkeys(report_quality_notes))[:12]
     evidence_confidence["do_not_say"] = list(dict.fromkeys(do_not_say))[:12]
     evidence_confidence["do_not_use_claims"] = evidence_confidence["do_not_say"]
     return evidence_confidence
@@ -2504,6 +2553,14 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         report["recommended_sales_plays"].append(generated_play)
     evidence_confidence = _dict(report.get("evidence_confidence"))
     evidence_confidence["verified_facts"] = _verified_fact_items_from_payload(payload)
+    quality_notes = evidence_confidence.setdefault("report_quality_notes", [])
+    for note in _list(report.get("model_notes")) + _list(report.get("missing_input_warnings")):
+        note_text = _clip(note, 320)
+        if not note_text:
+            continue
+        lower = note_text.lower()
+        if any(marker in lower for marker in ("deterministic fallback", "malformed", "json", "parse failed", "repair failed", "generation failed")):
+            quality_notes.append(note_text)
     weak_notes = evidence_confidence.setdefault("weak_or_missing_evidence", [])
     for item in report.get("pain_to_solution_map", []):
         has_signal = _has_signal_reference(item, known_signal_ids)
@@ -2838,12 +2895,40 @@ def _basis_from_payload(payload: dict, limit: int = 4) -> list[str]:
     return [str(item) for item in basis[:limit]]
 
 
+def _fact_text_from_source_item(item: dict, *, limit: int = 260) -> str:
+    candidates = (
+        item.get("fact"),
+        item.get("statement"),
+        item.get("claim"),
+        item.get("source_quote"),
+        item.get("quote"),
+        item.get("snippet"),
+        item.get("text_excerpt"),
+        item.get("description"),
+        item.get("finding"),
+        item.get("title"),
+        item.get("url"),
+    )
+    title = str(item.get("title") or "").strip().lower()
+    for candidate in candidates:
+        text = _clip(candidate, limit)
+        if not text:
+            continue
+        text_l = text.lower().strip()
+        if text_l == title and len(text.split()) <= 6:
+            continue
+        if len(text.split()) <= 2 and not re.search(r"\d", text):
+            continue
+        return text
+    return ""
+
+
 def _verified_fact_items_from_payload(payload: dict, limit: int = 12) -> list[str]:
     facts: list[str] = []
     for item in _list(payload.get("verified_evidence")):
         if not isinstance(item, dict) or _source_item_gate(item) != "allowed_as_fact":
             continue
-        text = _first_nonempty(item.get("title"), item.get("quote"), item.get("url"), limit=260)
+        text = _fact_text_from_source_item(item)
         if text:
             facts.append(f"{item.get('id')}: {text}" if item.get("id") else text)
     for item in _list(payload.get("financial_sources")):
@@ -2851,9 +2936,12 @@ def _verified_fact_items_from_payload(payload: dict, limit: int = 12) -> list[st
             continue
         if not (item.get("generation_eligible") or _source_item_gate(item) == "allowed_as_fact"):
             continue
+        metric_text = " ".join(str(part).strip() for part in (item.get("metric"), item.get("value"), item.get("year")) if str(part or "").strip())
         text = _first_nonempty(
-            f"{item.get('metric') or 'Financial reference'} {item.get('value') or ''} {item.get('year') or ''}",
+            metric_text if metric_text and metric_text.lower() != "financial reference" else "",
+            item.get("source_quote"),
             item.get("quote"),
+            item.get("snippet"),
             item.get("title"),
             limit=260,
         )
@@ -3156,10 +3244,17 @@ def _deterministic_buying_report(payload: dict, reason: str) -> dict:
         f"{item.get('id')}: {item.get('title') or item.get('quote') or item.get('url')}"
         for item in (evidence + financial)[:8]
     ]
-    weak_notes = [
-        f"{item.get('title') or item.get('url')}: {item.get('verification_reason') or item.get('promotion_status') or 'not generation eligible'}"
-        for item in weak[:8]
-    ]
+    weak_notes: list[str] = []
+    analysis_context: list[str] = []
+    for item in weak[:12]:
+        title = _clip(item.get("title") or item.get("url"), 180)
+        reason = _clip(item.get("verification_reason") or item.get("promotion_status") or "not generation eligible", 160)
+        if not title:
+            continue
+        if "verified_for_analysis" in reason.lower():
+            analysis_context.append(title)
+        else:
+            weak_notes.append(f"{title}: {reason}")
 
     return {
         "account_snapshot": {"text": snapshot_text, "gate": "allowed_as_hypothesis", "evidence_basis": basis},
@@ -3179,7 +3274,9 @@ def _deterministic_buying_report(payload: dict, reason: str) -> dict:
                 for signal in activation_signals[:3]
             ],
             "use_only_as_question": ["Service-fit and timing signals should be used as discovery questions unless independently verified."],
-            "weak_or_missing_evidence": weak_notes + ["Generative report JSON was malformed; deterministic fallback used."],
+            "analysis_context": analysis_context,
+            "weak_or_missing_evidence": weak_notes,
+            "report_quality_notes": ["Generative report JSON was malformed; deterministic fallback used."],
             "do_not_use_claims": _list(_dict(outputs.get("evidence_trust")).get("false_or_unsupported_claims"))[:10],
             "do_not_say": _list(_dict(outputs.get("evidence_trust")).get("false_or_unsupported_claims"))[:10],
             "sensitive_claims": [],
@@ -3256,6 +3353,7 @@ def _parse_or_repair_section(
             raise ValueError("Section JSON root was not an object")
         return parsed, "parsed"
     except Exception as parse_exc:
+        print(f"   ⚠️ [Buying Potential] Section JSON parse failed ({section}); attempting repair: {parse_exc}")
         if stage_callback:
             stage_callback("generate_report", 55, f"Repairing malformed Buying Insight section: {section}")
         try:
@@ -3272,9 +3370,11 @@ def _parse_or_repair_section(
             notes = _list(parsed.get("model_notes"))
             notes.append(f"Malformed section JSON repaired by {repair_model}. Original parse error: {str(parse_exc)[:160]}")
             parsed["model_notes"] = notes
+            print(f"   ✅ [Buying Potential] Section {section} JSON repaired by {repair_model}")
             return parsed, f"repaired by {repair_model}"
         except Exception as repair_exc:
             reason = f"Section '{section}' JSON parse failed ({parse_exc}); repair failed ({repair_exc})"
+            print(f"   ❌ [Buying Potential] Section {section} repair failed; using deterministic fallback: {repair_exc}")
             return _section_fallback(section, payload, reason), "section_deterministic_fallback"
 
 
@@ -3294,13 +3394,14 @@ def _generate_buying_section(
             buying_generation_chain(model_mode),
             max_tokens=_section_token_limit(section),
             timeout=75,
-            validate_json=True,
         )
         section_data, parse_status = _parse_or_repair_section(section, raw, payload, model_mode, stage_callback)
+        print(f"   ✅ [Buying Potential] Section {section}: model={model_used}, parse_status={parse_status}")
         meta = {"section": section, "model": model_used, "parse_status": parse_status}
         return section_data, meta
     except Exception as exc:
         reason = f"Section '{section}' generation failed: {exc}"
+        print(f"   ❌ [Buying Potential] Section {section}: generation failed, deterministic fallback used: {exc}")
         return _section_fallback(section, payload, reason), {
             "section": section,
             "model": "deterministic_fallback",
@@ -3452,7 +3553,7 @@ def render_buying_potential_html(report: dict) -> str:
         return "Evidence stance: not scored"
 
     def simple_items(items, limit=10):
-        return "".join(f"<li>{_esc(x)}</li>" for x in _list(items)[:limit]) or "<li>No items generated.</li>"
+        return "".join(f"<li>{_esc(_clip(x, 520))}</li>" for x in _list(items)[:limit] if _clip(x, 520)) or "<li>No items generated.</li>"
 
     def status_scale_html():
         chips = []
@@ -3848,7 +3949,9 @@ def render_buying_potential_html(report: dict) -> str:
       <div><h3>Verified Facts</h3><ul>{simple_items(evidence.get('verified_facts'), 12)}</ul></div>
       <div><h3>Safe Hypotheses</h3><ul>{simple_items(evidence.get('safe_hypotheses'), 12)}</ul></div>
       <div><h3>Use Only As Question</h3><ul>{simple_items(evidence.get('use_only_as_question') or evidence.get('claims_as_questions_only'), 12)}</ul></div>
-      <div><h3>Weak Or Missing</h3><ul>{simple_items(evidence.get('weak_or_missing_evidence'), 12)}</ul></div>
+      <div><h3>Analysis Context</h3><ul>{simple_items(evidence.get('analysis_context'), 12)}</ul></div>
+      <div><h3>Weak / Missing Evidence</h3><ul>{simple_items(evidence.get('weak_or_missing_evidence'), 12)}</ul></div>
+      <div><h3>Report Quality Notes</h3><ul>{simple_items(evidence.get('report_quality_notes'), 12)}</ul></div>
       <div><h3>Do Not Say</h3><ul>{simple_items(evidence.get('do_not_say') or evidence.get('do_not_use_claims'), 12)}</ul></div>
       <div><h3>Sensitive Claims</h3><ul>{simple_items(evidence.get('sensitive_claims'), 12)}</ul></div>
     </div>
