@@ -2253,7 +2253,7 @@ def _score_play(play: dict, *, has_signal: bool, has_service: bool, has_question
 
 def _looks_unsafe_claim(text: Any) -> bool:
     token = str(text or "").lower()
-    return any(
+    if any(
         phrase in token
         for phrase in (
             "do not",
@@ -2272,8 +2272,112 @@ def _looks_unsafe_claim(text: Any) -> bool:
             "roi",
             "group revenue",
             "poor ai maturity",
+            "has deployed ai",
+            "has deployed data-platform",
+            "has deployed automation",
+            "has deployed ml",
+            "has a confirmed modernization program",
+        )
+    ):
+        return True
+    return any(
+        token.startswith(prefix)
+        for prefix in (
+            "present the hypotheses as established facts",
+            "present hypotheses as established facts",
+            "claim a current buying project exists",
+            "claim current buying intent",
+            "state that competitors are definitively ahead",
+            "state competitors are definitively ahead",
+            "say that competitors are definitively ahead",
+            "assert that ",
+            "assert ",
         )
     )
+
+
+def _humanize_report_quality_note(note: Any) -> str:
+    text = _clean_generated_text(note)
+    lower = text.lower()
+    if not text:
+        return ""
+    if "deterministic fallback" in lower:
+        return "One generated section used deterministic fallback; treat the affected content as draft guidance."
+    if any(marker in lower for marker in ("malformed", "json", "parse failed", "invalid json", "original parse error")):
+        return "Some generated sections required JSON repair before saving; keep normal evidence guardrails in use."
+    if "repair failed" in lower:
+        return "One generated section could not be fully repaired; review affected wording before reuse."
+    return text
+
+
+def _looks_like_context_not_fact(text: Any) -> bool:
+    lower = str(text or "").lower()
+    return any(
+        marker in lower
+        for marker in (
+            "coresignal public professional profile candidate",
+            "public professional profile candidate",
+            "matched demand groups",
+            "stakeholder role relevance",
+            "linkedin profile candidate",
+            "people profile candidate",
+        )
+    )
+
+
+def _summarize_contact_source_text(text: Any) -> str:
+    raw = str(text or "")
+    lower = raw.lower()
+    if not any(marker in lower for marker in ("yhteystiedot", "contact", "postiosoite", "käyntiosoite", "kayntiosoite", "laskutusosoitteet")):
+        return ""
+    compact = re.sub(r"[#*_`]+", " ", raw)
+    compact = re.sub(r"\s+", " ", compact).strip()
+    labeled_address_match = re.search(
+        r"(?:Käyntiosoite|Kayntiosoite|Visiting address)\s+(.{5,100}?)(?:\s+(?:Postiosoite|Laskutusosoitteet|Sähköpostiosoitteet|Puhelin|Phone|Y-tunnus|Business ID)\b|$)",
+        compact,
+        re.I,
+    )
+    compact_for_entity = re.sub(r"\b(?:Yhteystiedot|Contact details|Contacts|Contact)\b", " ", compact, flags=re.I)
+    compact_for_entity = re.sub(r"\s+", " ", compact_for_entity).strip()
+    company_match = re.search(
+        r"\b(?:Oy\s+)?[A-ZÅÄÖ][A-Za-zÅÄÖåäö0-9& .'-]{2,70}\s+(?:Oy|Oyj|Ab|Ltd|Inc|GmbH)\b",
+        compact_for_entity,
+    )
+    bid_match = re.search(r"\b(?:Y-tunnus|Business ID)\s*[:\-]?\s*([0-9]{7}-[0-9])\b", compact, re.I)
+    address_match = re.search(
+        r"\b([A-ZÅÄÖ][A-Za-zÅÄÖåäö .'-]+(?:tie|katu|kuja|polku|väylä|vayla)\s+\d+[A-Za-z]?(?:,\s*[A-ZÅÄÖ][A-Za-zÅÄÖåäö .'-]+)?)\b",
+        compact,
+        re.I,
+    )
+    parts: list[str] = []
+    if company_match:
+        parts.append(company_match.group(0).strip())
+    if bid_match:
+        parts.append(f"business ID {bid_match.group(1)}")
+    address = ""
+    if labeled_address_match:
+        address = labeled_address_match.group(1).strip()
+    elif address_match:
+        address = address_match.group(1).strip()
+    if address:
+        parts.append(f"visiting address {address}")
+    if not parts:
+        return ""
+    return "Official contact material lists " + ", ".join(parts) + "."
+
+
+def _clean_fact_statement(text: Any, *, limit: int = 260) -> str:
+    if _looks_like_context_not_fact(text):
+        return ""
+    contact_summary = _summarize_contact_source_text(text)
+    if contact_summary:
+        return _clip(contact_summary, limit)
+    cleaned = re.sub(r"[#*_`]+", " ", str(text or ""))
+    cleaned = re.sub(r"\b(?:Skip to content|Avaa valikko|Menu|Search)\b", " ", cleaned, flags=re.I)
+    cleaned = _clean_generated_text(cleaned)
+    if _looks_like_context_not_fact(cleaned):
+        return ""
+    return _clip(cleaned, limit)
 
 
 def _is_meaningful_text(*values: Any, min_len: int = 18) -> bool:
@@ -2343,9 +2447,9 @@ def _clean_evidence_confidence_buckets(evidence_confidence: dict) -> dict:
     analysis_context = [str(item).strip() for item in _list(evidence_confidence.get("analysis_context")) if str(item).strip()]
     weak_or_missing: list[str] = []
     report_quality_notes = [
-        str(item).strip()
+        _humanize_report_quality_note(item)
         for item in _list(evidence_confidence.get("report_quality_notes"))
-        if str(item).strip()
+        if _humanize_report_quality_note(item)
     ]
     for item in _list(evidence_confidence.get("weak_or_missing_evidence")):
         text = str(item or "").strip()
@@ -2353,10 +2457,14 @@ def _clean_evidence_confidence_buckets(evidence_confidence: dict) -> dict:
             continue
         lower = text.lower()
         if any(marker in lower for marker in ("deterministic fallback", "malformed", "json", "section_", "parse failed", "repair failed")):
-            report_quality_notes.append(text)
+            note = _humanize_report_quality_note(text)
+            if note:
+                report_quality_notes.append(note)
             continue
         if "verified_for_analysis" in lower:
-            analysis_context.append(text.replace(": verified_for_analysis", "").replace("verified_for_analysis", "").strip(" :-"))
+            context_text = text.replace(": verified_for_analysis", "").replace("verified_for_analysis", "").strip(" :-")
+            if context_text and context_text.lower() not in {"source", "source label", "verified", "analysis"}:
+                analysis_context.append(context_text)
             continue
         weak_or_missing.append(text)
 
@@ -2366,7 +2474,9 @@ def _clean_evidence_confidence_buckets(evidence_confidence: dict) -> dict:
     )
     questions = list(dict.fromkeys(questions + question_from_blocked))
 
-    evidence_confidence["verified_facts"] = verified[:12]
+    evidence_confidence["verified_facts"] = [
+        item for item in list(dict.fromkeys(_clean_fact_statement(item, limit=520) for item in verified)) if item
+    ][:12]
     evidence_confidence["safe_hypotheses"] = list(dict.fromkeys(safe_hypotheses))[:12]
     evidence_confidence["use_only_as_question"] = list(dict.fromkeys(questions))[:12]
     evidence_confidence["analysis_context"] = list(dict.fromkeys(analysis_context))[:12]
@@ -2896,6 +3006,12 @@ def _basis_from_payload(payload: dict, limit: int = 4) -> list[str]:
 
 
 def _fact_text_from_source_item(item: dict, *, limit: int = 260) -> str:
+    combined = " ".join(
+        str(item.get(key) or "")
+        for key in ("id", "title", "description", "source_quote", "snippet", "claim", "finding")
+    )
+    if _looks_like_context_not_fact(combined):
+        return ""
     candidates = (
         item.get("fact"),
         item.get("statement"),
@@ -2911,7 +3027,7 @@ def _fact_text_from_source_item(item: dict, *, limit: int = 260) -> str:
     )
     title = str(item.get("title") or "").strip().lower()
     for candidate in candidates:
-        text = _clip(candidate, limit)
+        text = _clean_fact_statement(candidate, limit=limit)
         if not text:
             continue
         text_l = text.lower().strip()
@@ -2939,10 +3055,10 @@ def _verified_fact_items_from_payload(payload: dict, limit: int = 12) -> list[st
         metric_text = " ".join(str(part).strip() for part in (item.get("metric"), item.get("value"), item.get("year")) if str(part or "").strip())
         text = _first_nonempty(
             metric_text if metric_text and metric_text.lower() != "financial reference" else "",
-            item.get("source_quote"),
-            item.get("quote"),
-            item.get("snippet"),
-            item.get("title"),
+            _clean_fact_statement(item.get("source_quote")),
+            _clean_fact_statement(item.get("quote")),
+            _clean_fact_statement(item.get("snippet")),
+            _clean_fact_statement(item.get("title")),
             limit=260,
         )
         if text:
@@ -3552,8 +3668,9 @@ def render_buying_potential_html(report: dict) -> str:
             return "Evidence stance: constrained / question-led"
         return "Evidence stance: not scored"
 
-    def simple_items(items, limit=10):
-        return "".join(f"<li>{_esc(_clip(x, 520))}</li>" for x in _list(items)[:limit] if _clip(x, 520)) or "<li>No items generated.</li>"
+    def simple_items(items, limit=10, empty_label="N/A - no separate items for this run."):
+        rendered = "".join(f"<li>{_esc(_clip(x, 520))}</li>" for x in _list(items)[:limit] if _clip(x, 520))
+        return rendered or f"<li>{_esc(empty_label)}</li>"
 
     def status_scale_html():
         chips = []
@@ -3949,11 +4066,11 @@ def render_buying_potential_html(report: dict) -> str:
       <div><h3>Verified Facts</h3><ul>{simple_items(evidence.get('verified_facts'), 12)}</ul></div>
       <div><h3>Safe Hypotheses</h3><ul>{simple_items(evidence.get('safe_hypotheses'), 12)}</ul></div>
       <div><h3>Use Only As Question</h3><ul>{simple_items(evidence.get('use_only_as_question') or evidence.get('claims_as_questions_only'), 12)}</ul></div>
-      <div><h3>Analysis Context</h3><ul>{simple_items(evidence.get('analysis_context'), 12)}</ul></div>
-      <div><h3>Weak / Missing Evidence</h3><ul>{simple_items(evidence.get('weak_or_missing_evidence'), 12)}</ul></div>
-      <div><h3>Report Quality Notes</h3><ul>{simple_items(evidence.get('report_quality_notes'), 12)}</ul></div>
-      <div><h3>Do Not Say</h3><ul>{simple_items(evidence.get('do_not_say') or evidence.get('do_not_use_claims'), 12)}</ul></div>
-      <div><h3>Sensitive Claims</h3><ul>{simple_items(evidence.get('sensitive_claims'), 12)}</ul></div>
+      <div><h3>Analysis Context</h3><ul>{simple_items(evidence.get('analysis_context'), 12, "N/A - no separate analysis-context items in this run.")}</ul></div>
+      <div><h3>Weak / Missing Evidence</h3><ul>{simple_items(evidence.get('weak_or_missing_evidence'), 12, "N/A - no weak or missing evidence items were separated in this run.")}</ul></div>
+      <div><h3>Report Quality Notes</h3><ul>{simple_items(evidence.get('report_quality_notes'), 12, "N/A - no generation or repair notes for this run.")}</ul></div>
+      <div><h3>Do Not Say</h3><ul>{simple_items(evidence.get('do_not_say') or evidence.get('do_not_use_claims'), 12, "N/A - no blocked customer-facing claims were generated.")}</ul></div>
+      <div><h3>Sensitive Claims</h3><ul>{simple_items(evidence.get('sensitive_claims'), 12, "N/A - no sensitive-claim notes were generated.")}</ul></div>
     </div>
   </section>
 </main>
