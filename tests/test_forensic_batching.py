@@ -219,6 +219,132 @@ def test_service_seed_routes_to_service_jury_not_ai_data():
     assert routed[ai_data] == []
 
 
+def test_prh_prefetch_normalizes_current_api_shape_and_krek_notices(monkeypatch):
+    class FakeResponse:
+        status_code = 200
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    company_payload = {
+        "companies": [{
+            "businessId": {"value": "3296940-6", "registrationDate": "2022-06-23"},
+            "names": [
+                {"name": "Vivicta Oy", "type": "1", "registrationDate": "2025-09-24"},
+                {"name": "Tietoevry Tech Services Finland Oy", "type": "1", "endDate": "2025-09-24"},
+                {"name": "Vivicta Ltd", "type": "2", "registrationDate": "2025-09-24"},
+            ],
+            "mainBusinessLine": {
+                "type": "62200",
+                "descriptions": [{"languageCode": "3", "description": "Computer consultancy"}],
+            },
+            "companyForms": [{
+                "type": "16",
+                "descriptions": [{"languageCode": "3", "description": "Limited company"}],
+            }],
+            "addresses": [{
+                "postOffices": [{"city": "ESPOO", "languageCode": "1", "municipalityCode": "049"}],
+            }],
+            "registeredEntries": [{
+                "type": "1",
+                "descriptions": [{"languageCode": "3", "description": "Registered"}],
+                "registrationDate": "2022-11-01",
+                "register": "1",
+            }],
+            "tradeRegisterStatus": "1",
+            "status": "2",
+            "registrationDate": "2022-11-01",
+            "lastModified": "2026-06-17T10:38:39",
+        }],
+    }
+    notice_payload = {
+        "publicNotices": [
+            {
+                "registrationDate": "2026-06-17",
+                "recordNumber": "2026/770814",
+                "typeOfRegistration": "M",
+                "entryCodes": ["MUU"],
+            },
+            {
+                "registrationDate": "2026-06-17",
+                "recordNumber": "2026/770814",
+                "typeOfRegistration": "M",
+                "entryCodes": ["MUU"],
+            },
+        ],
+    }
+
+    def fake_get(url, *_args, **_kwargs):
+        if "registerednotices" in url:
+            return FakeResponse(notice_payload)
+        return FakeResponse(company_payload)
+
+    monkeypatch.setattr(scanner_two.http_requests, "get", fake_get)
+
+    context = scanner_two._fetch_prh_company_data("Vivicta")
+
+    assert context["source_type"] == "official_registry"
+    assert context["entity_scope"] == "canonical_legal_entity"
+    assert context["business_id"] == "3296940-6"
+    assert context["current_legal_name"] == "Vivicta Oy"
+    assert context["previous_names"] == ["Tietoevry Tech Services Finland Oy"]
+    assert context["parallel_names"] == ["Vivicta Ltd"]
+    assert context["registered_industry"] == "Computer consultancy"
+    assert context["registered_industry_is_administrative"] is True
+    assert context["registered_notice_count"] == 1
+    assert context["registered_notices"][0]["record_number"] == "2026/770814"
+    assert "3296940-6" in context["aliases"]
+
+
+def test_brave_search_returns_untrusted_candidate_packets(monkeypatch):
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "web": {
+                    "results": [{
+                        "url": "https://www.vivicta.com/en/services/cloud",
+                        "title": "Cloud services",
+                        "description": "Vivicta cloud service portfolio.",
+                        "extra_snippets": ["Modernization and managed services."],
+                        "age": "June 2026",
+                    }]
+                }
+            }
+
+    calls = []
+
+    def fake_get(url, *_args, **kwargs):
+        calls.append((url, kwargs))
+        return FakeResponse()
+
+    monkeypatch.setenv("BRAVE_SEARCH_API_KEY", "test-key")
+    monkeypatch.setattr(scanner_two.http_requests, "get", fake_get)
+
+    payload, status = scanner_two._brave_search_candidate_payload(
+        "Vivicta",
+        "vivicta.com",
+        "SERVICE PORTFOLIO JURY (Delivery Reality)",
+        search_aliases=["Vivicta Oy", "3296940-6"],
+        max_queries=1,
+        per_query_count=1,
+    )
+    normalized = scanner_two._normalize_acquisition_payload(payload, payload["jury"], "brave-search")
+
+    assert status == "brave_search_completed"
+    assert calls[0][0] == "https://api.search.brave.com/res/v1/web/search"
+    assert calls[0][1]["headers"]["X-Subscription-Token"] == "test-key"
+    assert normalized[0]["url"] == "https://www.vivicta.com/en/services/cloud"
+    assert normalized[0]["acquisition_provider"] == "brave-search"
+    assert normalized[0]["trust_state"] == "candidate_unverified"
+    assert normalized[0]["content_verified"] is False
+    assert normalized[0]["source_intent"] == "candidate_discovery"
+
+
 def test_zero_fresh_sources_caps_coverage_and_reports_missing_juries():
     evidence = [
         _finding(

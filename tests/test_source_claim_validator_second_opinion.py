@@ -76,6 +76,63 @@ def test_supported_primary_with_missing_quote_triggers_sonnet_and_blocks_disagre
     assert result["verification_review_reason"] == "gpt_supported_but_evidence_controls_are_weak"
 
 
+def test_batch_validation_separates_claim_overreach_from_source_context_failure(monkeypatch):
+    findings = [
+        {
+            "url": "https://example.com/services",
+            "snippet": "Example has company-wide AI outcomes.",
+            "verified": True,
+            "source_credibility": "medium",
+        },
+        {
+            "url": "https://wrong.example.com/services",
+            "snippet": "Example has company-wide AI outcomes.",
+            "verified": True,
+            "source_credibility": "medium",
+        },
+    ]
+
+    def fake_check(url, claim, *_args, **_kwargs):
+        if "wrong" in url:
+            return {
+                "relevance_score": 0,
+                "relevant": False,
+                "claim_support_status": "unsupported",
+                "content_verified": True,
+                "source_quote": "Different company service page.",
+                "reason": "Wrong entity.",
+                "entity_verified": False,
+                "entity_match_status": "wrong",
+                "content_entity_match_status": "wrong",
+            }
+        return {
+            "relevance_score": 20,
+            "relevant": False,
+            "claim_support_status": "unsupported",
+            "content_verified": True,
+            "source_quote": "Example describes data and automation services.",
+            "reason": "The claim is stronger than the source text.",
+            "entity_verified": True,
+            "entity_match_status": "exact",
+            "content_entity_match_status": "exact",
+        }
+
+    monkeypatch.setattr(scv, "_check_relevance", fake_check)
+
+    result = scv.validate_source_claims(findings, max_checks=None, max_workers=1)
+
+    assert result["checked"] == 2
+    assert result["claim_failed"] == 2
+    assert result["claim_overreach_valid_context"] == 1
+    assert result["wrong_entity"] == 1
+    assert result["irrelevant"] == 1
+    assert findings[0]["source_context_status"] == "valid_company_context"
+    assert findings[0]["claim_overreach_status"] == "claim_too_strong_source_valid"
+    assert findings[0]["claim_irrelevant"] is False
+    assert findings[1]["source_context_status"] == "wrong_entity"
+    assert findings[1]["claim_irrelevant"] is True
+
+
 def test_high_value_unsupported_primary_can_be_promoted_by_safe_second_opinion(monkeypatch):
     monkeypatch.setattr(
         scv,

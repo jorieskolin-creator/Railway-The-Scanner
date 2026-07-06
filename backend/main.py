@@ -54,16 +54,39 @@ from database_sanitizer import sanitize_database
 from foresight_guardrails import sanitize_foresight_collection, sanitize_report_foresight_fields
 from domain_classifier import infer_domain
 from evidence_cleaner import CLEAN_EVIDENCE_MODEL_CHAIN, clean_company_evidence
-from llm_clients import call_anthropic_text, call_json_model_chain, call_openai_text
+from llm_clients import GPT_PRO_MODEL, call_anthropic_text, call_json_model_chain, call_openai_text
 from buying_potential import BuyingPotentialError, generate_buying_potential_report, load_service_portfolio_kb, validate_service_portfolio_kb
 from company_evidence import CompanyEvidenceError, build_company_evidence_database
 from company_source_ledger import CompanySourceLedgerError, build_company_source_ledger
+from market_readiness_report import build_market_readiness_report, render_market_readiness_html
 from evidence_graph import attach_evidence_graph, build_evidence_manifest, evidence_prompt_packet
 from evidence_absence import build_evidence_absence_signals, format_absence_signals_for_prompt
 from evidence_contracts import build_classification_namespaces
 
 # VERIFICATION LOG: v5.4.0 - Extended Thinking + Search Budget Upgrade
 print("Starting Adaptability Scanner Backend (v5.4.0 - Extended Thinking + Search Budget Upgrade)...", flush=True)
+
+ARCHETYPE_LABELS = ("Thriving", "Modernizing", "Cash Cow", "At Risk")
+
+
+def strip_archetype_labels_from_text(value):
+    """Keep archetype labels out of written diagnosis/summary prose."""
+    if isinstance(value, list):
+        return [strip_archetype_labels_from_text(item) for item in value]
+    if isinstance(value, dict):
+        return {key: strip_archetype_labels_from_text(item) for key, item in value.items()}
+    text = str(value or "")
+    replacements = {
+        "Thriving": "financially and operationally strong profile",
+        "Modernizing": "modernizing but financially constrained profile",
+        "Cash Cow": "financially capable but operationally under-proven profile",
+        "At Risk": "financially and operationally pressured profile",
+    }
+    for label, replacement in replacements.items():
+        text = re.sub(rf"\b{re.escape(label)}\b", replacement, text)
+        text = re.sub(rf"\b{re.escape(label.upper())}\b", replacement, text)
+    return text
+
 
 def _strip_tac_codes(text: str) -> str:
     """Remove legacy TAC-xxx / DIM-xxx internal codes from summary text.
@@ -127,6 +150,218 @@ def _activation_list(value) -> list[str]:
             items.extend(_activation_list(item))
         return [item for item in items if item][:3]
     return []
+
+
+_ACTIVATION_THEME_TYPES = {
+    "current_status",
+    "foresight_driven",
+    "proactive_opportunity",
+}
+
+_ACTIVATION_HOW_METHOD_RE = re.compile(
+    r"\b(?:run|conduct|facilitate|hold|perform|execute|carry out|workshop|diagnostic|assessment|"
+    r"readiness assessment|value stream analysis|strategic evaluation|service-based business architecture|"
+    r"delivery & capacity planning|evolving modernization|tac-\d{3,4})\b",
+    re.I,
+)
+_ACTIVATION_METHOD_NAME_RE = re.compile(
+    r"\b(?:Delivery\s*&\s*Capacity\s*Planning|Value\s*Stream\s*Analysis|AI\s*Readiness\s*Assessment|"
+    r"Strategic\s*Evaluation|Service-Based\s*Business\s*Architecture|Evolving\s*Modernization|TAC-\d{3,4})\b",
+    re.I,
+)
+
+_ACTIVATION_WHAT_CONTRACT = """WHAT_TO_DO — outcome / deliverable state:
+  - WHAT is derived from WHY, but it must describe what should be achieved, clarified, evidenced, or made decision-ready.
+  - Write it as an outcome or deliverable state, not as HOW to deliver it.
+  - Good WHAT patterns: "Within 12 months...", "A validated...", "An explicit...", "Evidence shows...", "A decision-ready...", "A prioritized...".
+  - Do NOT lead with method verbs such as run, conduct, facilitate, perform, execute, or build.
+  - Do NOT name consulting methods, tools, workshops, diagnostics, assessments, Evolving Modernization tactics, TAC codes, Value Stream Analysis, AI Readiness Assessment, or Delivery & Capacity Planning in WHAT. Those belong to proposal/HOW later.
+  - The legacy "what" field must contain the same outcome/deliverable-state text as WHAT_TO_DO for backward compatibility.
+  - Length: 1-2 sentences each."""
+
+
+def _normalize_sales_use(value: str) -> str:
+    token = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+    if token in {"current", "current_state", "current_status", "status"}:
+        return "current_status"
+    if token in {"foresight", "future", "future_pressure", "foresight_driven"}:
+        return "foresight_driven"
+    if token in {"proactive", "opportunity", "proactive_opportunity", "discovery"}:
+        return "proactive_opportunity"
+    return "current_status"
+
+
+def _clip_sentence(text: str, limit: int = 520) -> str:
+    """Trim activation prose without cutting words into ragged fragments."""
+    cleaned = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[:limit].rsplit(" ", 1)[0].rstrip(".,;:") + "."
+
+
+def _is_how_method_what(text: str) -> bool:
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return False
+    if re.match(r"(?i)^\s*(?:run|conduct|facilitate|hold|perform|execute|carry out|build)\b", cleaned):
+        return True
+    return bool(_ACTIVATION_HOW_METHOD_RE.search(cleaned))
+
+
+def _progress_to_outcome_what(progress: str) -> str:
+    cleaned = _clip_sentence(progress)
+    if not cleaned:
+        return ""
+    cleaned = re.sub(r"(?i)^progress\s+(?:is\s+)?(?:visible|shown|evident)\s+when\s+", "", cleaned).strip()
+    cleaned = re.sub(r"(?i)^progress\s+(?:would\s+)?(?:look\s+like|show)\s+", "", cleaned).strip()
+    cleaned = re.sub(r"(?i)^when\s+", "", cleaned).strip()
+    if not cleaned:
+        return ""
+    if re.match(r"(?i)^(within|a validated|an explicit|evidence|decision-ready|a prioritized|measurable|observable)\b", cleaned):
+        return _clip_sentence(cleaned)
+    cleaned = cleaned[0].lower() + cleaned[1:] if len(cleaned) > 1 else cleaned.lower()
+    return _clip_sentence(f"A validated outcome shows {cleaned}")
+
+
+def _normalize_what_to_outcome(what: str, progress: str = "") -> str:
+    candidate = _clip_sentence(what)
+    if candidate and not _is_how_method_what(candidate):
+        return candidate
+    progress_outcome = _progress_to_outcome_what(progress)
+    if progress_outcome:
+        return progress_outcome
+    if candidate:
+        cleaned = re.sub(
+            r"(?i)^\s*(?:run|conduct|facilitate|hold|perform|execute|carry out|build)\s+(?:a|an|the)?\s*",
+            "",
+            candidate,
+        ).strip()
+        cleaned = re.sub(
+            r"(?i)\b(?:diagnostic|workshop|assessment|analysis|strategic evaluation)\b",
+            "decision-ready evidence",
+            cleaned,
+        )
+        cleaned = _ACTIVATION_METHOD_NAME_RE.sub("the relevant operating or commercial outcome", cleaned)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ,.;:")
+        if cleaned:
+            cleaned = cleaned[0].lower() + cleaned[1:] if len(cleaned) > 1 else cleaned.lower()
+            return _clip_sentence(f"A decision-ready deliverable clarifies {cleaned}")
+    return ""
+
+
+def _activation_pair_candidates(payload: dict) -> list[dict]:
+    """Normalize typed activation pair aliases from current and future prompts."""
+    candidates = _first_activation_value(payload, (
+        "activation_pairs", "why_what_pairs", "pairs", "themes",
+    ), [])
+    pairs: list[dict] = []
+    if isinstance(candidates, list):
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            why = _activation_list(_first_activation_value(item, ("why", "why_proposal", "reason"), ""))
+            what_to_do = _activation_list(_first_activation_value(item, (
+                "what_to_do", "what", "what_proposal", "what_action", "activity", "deliverable",
+            ), ""))
+            progress = _activation_list(_first_activation_value(item, (
+                "what_progress_shows", "progress_proof", "progress_signal", "observable_progress",
+                "success_evidence", "outcome",
+            ), ""))
+            what = what_to_do
+            if not why or not what:
+                continue
+            progress_text = _clip_sentence(progress[0]) if progress else ""
+            what_text = _normalize_what_to_outcome(what[0], progress_text)
+            if not what_text:
+                continue
+            theme_type = _normalize_sales_use(item.get("theme_type") or item.get("sales_use") or item.get("type"))
+            if theme_type not in _ACTIVATION_THEME_TYPES:
+                theme_type = "current_status"
+            label = str(item.get("theme") or item.get("label") or item.get("title") or theme_type.replace("_", " ")).strip()
+            pairs.append({
+                "theme_type": theme_type,
+                "sales_use": _normalize_sales_use(item.get("sales_use") or theme_type),
+                "theme": label,
+                "why": _clip_sentence(why[0]),
+                "what": what_text,
+                "what_to_do": what_text,
+                "what_progress_shows": progress_text,
+            })
+    return pairs
+
+
+def _ensure_activation_pairs(payload: dict, prior: dict | None = None) -> list[dict]:
+    """Return 2-3 paired WHY/WHAT records while preserving legacy arrays.
+
+    The model prompt requires typed pairs, but older responses and stored data
+    expose separate why_proposals / what_proposals arrays. This function keeps
+    both contracts coherent and prevents a thin-evidence scan from collapsing to
+    a single generic sales trigger.
+    """
+    prior = prior or {}
+    pairs = _activation_pair_candidates(payload)
+    if not pairs:
+        whys = _activation_list(_first_activation_value(payload, (
+            "why_proposals", "why", "why_items", "why_points", "why_questions",
+        ), prior.get("why_proposals", [])))
+        whats = _activation_list(_first_activation_value(payload, (
+            "what_proposals", "what", "what_items", "what_points", "what_actions",
+        ), prior.get("what_proposals", [])))
+        progress_items = _activation_list(_first_activation_value(payload, (
+            "what_progress_proposals", "what_progress", "progress_proposals", "progress_items",
+        ), prior.get("what_progress_proposals", [])))
+        count = min(max(len(whys), len(whats)), 3)
+        if count:
+            theme_cycle = ["current_status", "foresight_driven", "proactive_opportunity"]
+            for idx in range(count):
+                why = whys[idx] if idx < len(whys) else whys[-1]
+                what = whats[idx] if idx < len(whats) else whats[-1]
+                progress = progress_items[idx] if idx < len(progress_items) else ""
+                progress_text = _clip_sentence(progress)
+                what_text = _normalize_what_to_outcome(what, progress_text) or _clip_sentence(what)
+                pairs.append({
+                    "theme_type": theme_cycle[idx],
+                    "sales_use": theme_cycle[idx],
+                    "theme": theme_cycle[idx].replace("_", " "),
+                    "why": _clip_sentence(why),
+                    "what": what_text,
+                    "what_to_do": what_text,
+                    "what_progress_shows": progress_text,
+                })
+
+    # If the model returns only one pair, add a second bounded discovery pair
+    # rather than silently weakening the sales-trigger surface.
+    if len(pairs) == 1:
+        synthesis = str(_first_activation_value(payload, (
+            "strategic_synthesis", "synthesis", "strategic_activation",
+            "strategic_summary", "activation_summary",
+        ), prior.get("strategic_synthesis", "")) or "")
+        basis = "the strongest current diagnostic and foresight pressure"
+        if synthesis:
+            basis = _clip_sentence(synthesis, 180).rstrip(".")
+        pairs.append({
+            "theme_type": "proactive_opportunity",
+            "sales_use": "proactive_opportunity",
+            "theme": "validated next step",
+            "why": (
+                f"A second sales trigger should validate whether {basis} is material "
+                "enough to create an executive priority, rather than assuming the gap is already proven."
+            ),
+            "what": (
+                "A bounded discovery trigger identifies the business owner, the pressure, and the first "
+                "operating or commercial outcome worth testing."
+            ),
+            "what_to_do": (
+                "A bounded discovery trigger identifies the business owner, the pressure, and the first "
+                "operating or commercial outcome worth testing."
+            ),
+            "what_progress_shows": (
+                "Progress is visible when discovery identifies a named owner, a concrete business pressure, "
+                "and one measurable operating or commercial outcome to test first."
+            ),
+        })
+
+    return pairs[:3]
 
 
 def _first_activation_value(payload: dict, keys: tuple[str, ...], default=None):
@@ -195,17 +430,17 @@ def _normalize_activation_payload(payload: dict, prior: dict | None = None) -> d
     pitch = _first_activation_value(payload, (
         "commercial_pitch", "pitch", "pitch_text", "activation_pitch",
     ), prior.get("pitch", ""))
-    why = _first_activation_value(payload, (
-        "why_proposals", "why", "why_items", "why_points", "why_questions",
-    ), prior.get("why_proposals", []))
-    what = _first_activation_value(payload, (
-        "what_proposals", "what", "what_items", "what_points", "what_actions",
-    ), prior.get("what_proposals", []))
+    activation_pairs = _ensure_activation_pairs(payload, prior)
+    why = [pair["why"] for pair in activation_pairs]
+    what = [pair.get("what_to_do") or pair["what"] for pair in activation_pairs]
+    progress = [pair.get("what_progress_shows") for pair in activation_pairs if pair.get("what_progress_shows")]
     return {
         "strategic_synthesis": sanitize_inference_wording(str(synthesis or "").strip()),
         "pitch": sanitize_inference_wording(str(pitch or "").strip()),
+        "activation_pairs": sanitize_inference_wording(activation_pairs),
         "why_proposals": sanitize_inference_wording(_activation_list(why)),
         "what_proposals": sanitize_inference_wording(_activation_list(what)),
+        "what_progress_proposals": sanitize_inference_wording(_activation_list(progress)),
     }
 
 
@@ -225,6 +460,7 @@ def _plain_text_activation_fallback(text: str, prior: dict | None = None) -> dic
         "commercial_pitch": prior.get("pitch") if prior.get("pitch") not in {"", "Pitch Unavailable"} else third[:900],
         "why_proposals": prior.get("why_proposals") or [first[:500]],
         "what_proposals": prior.get("what_proposals") or [second[:500]],
+        "what_progress_proposals": prior.get("what_progress_proposals") or [],
     }, prior)
 
 
@@ -1480,6 +1716,110 @@ _company_evidence_jobs = {}
 _company_evidence_jobs_lock = threading.Lock()
 _company_source_ledger_jobs = {}
 _company_source_ledger_jobs_lock = threading.Lock()
+_market_readiness_state = {
+    "is_running": False,
+    "started_at": None,
+    "completed_at": None,
+    "current_step": None,
+    "progress": 0,
+    "result": None,
+    "error": None,
+    "metadata": None,
+}
+_market_readiness_lock = threading.Lock()
+
+
+def _update_market_readiness_state(**fields):
+    with _market_readiness_lock:
+        _market_readiness_state.update(fields)
+
+
+def _run_market_readiness_generation():
+    started = time.time()
+
+    def set_stage(step: str, progress: int):
+        _update_market_readiness_state(
+            is_running=True,
+            current_step=step,
+            progress=progress,
+            elapsed_ms=int((time.time() - started) * 1000),
+        )
+        print(f"   🔄 [Market Readiness] {step} ({progress}%)", flush=True)
+
+    try:
+        set_stage("Loading stored Scanner artifacts", 12)
+        report_json = build_market_readiness_report(storage, buying_storage=buying_storage)
+        set_stage("Rendering HTML report", 72)
+        html_report = render_market_readiness_html(report_json)
+        set_stage("Saving report artifacts", 88)
+        metadata = storage.save_market_readiness_report(report_json, html_report)
+        if not metadata:
+            raise RuntimeError("Market Readiness report generated but could not be saved.")
+        _update_market_readiness_state(
+            is_running=False,
+            current_step=None,
+            progress=100,
+            result={"status": "completed"},
+            error=None,
+            metadata=metadata,
+            completed_at=datetime.utcnow().isoformat(),
+            elapsed_ms=int((time.time() - started) * 1000),
+        )
+        print(f"   ✅ [Market Readiness] Completed in {int((time.time() - started) * 1000)}ms", flush=True)
+    except Exception as exc:
+        print(f"   ❌ [Market Readiness] Failed: {exc}", flush=True)
+        import traceback
+        traceback.print_exc()
+        _update_market_readiness_state(
+            is_running=False,
+            current_step=None,
+            progress=100,
+            result={"error": str(exc)},
+            error=f"{type(exc).__name__}: {str(exc)[:240]}",
+            completed_at=datetime.utcnow().isoformat(),
+            elapsed_ms=int((time.time() - started) * 1000),
+        )
+
+
+@app.post("/admin/generate-market-readiness-report")
+async def generate_market_readiness_report_endpoint(request: Request):
+    """Start the Admin-only Market Readiness and Emerging Demand Outlook report."""
+    verify_admin(request)
+    with _market_readiness_lock:
+        if _market_readiness_state["is_running"]:
+            raise HTTPException(status_code=409, detail="Market Readiness report generation already in progress.")
+        _market_readiness_state.update({
+            "is_running": True,
+            "started_at": datetime.utcnow().isoformat(),
+            "completed_at": None,
+            "current_step": "Initializing",
+            "progress": 0,
+            "result": None,
+            "error": None,
+            "metadata": None,
+            "elapsed_ms": 0,
+        })
+    thread = threading.Thread(target=_run_market_readiness_generation, daemon=True)
+    thread.start()
+    return {"status": "started"}
+
+
+@app.get("/admin/market-readiness-status")
+async def market_readiness_report_status(request: Request):
+    verify_admin(request)
+    with _market_readiness_lock:
+        state = dict(_market_readiness_state)
+    if not state.get("metadata"):
+        latest = storage.get_market_readiness_report()
+        if latest.get("exists"):
+            state["metadata"] = latest.get("metadata")
+    return state
+
+
+@app.get("/admin/market-readiness-report")
+async def get_market_readiness_report_endpoint(request: Request):
+    verify_admin(request)
+    return storage.get_market_readiness_report()
 
 
 def _append_company_evidence_log(job_id: str, message: str):
@@ -2465,7 +2805,6 @@ def _refresh_proposals_for_company(company_name: str, data: dict) -> dict:
     reality_checklist = data.get("reality_checklist", [])
     summary_text = data.get("summary_text", "")
     pitch_text = data.get("pitch_text", "")
-    archetype = data.get("archetype", "Unknown")
     reality_score = data.get("reality_score", 0)
     evidence_links = _analysis_evidence_links(data.get("evidence_links", []))
     evidence_list = '\n'.join([
@@ -2491,8 +2830,8 @@ def _refresh_proposals_for_company(company_name: str, data: dict) -> dict:
 
 ### EXISTING ANALYSIS CONTEXT
 Company: {company_name}
-Archetype: {archetype}
 Reality Score: {reality_score}/100
+Archetype is audit-only and intentionally omitted from this writing context. Do not write labels such as Thriving, Modernizing, Cash Cow, or At Risk in WHY or WHAT.
 
 Intent Breakdown (Scanner 1):
 {intent_breakdown}
@@ -2510,26 +2849,25 @@ Existing Pitch:
 {pitch_text}
 
 ### YOUR TASK
-Generate exactly 2 WHY statements and 2 WHAT statements based on the analysis above.
+Generate exactly 2 paired activation items based on the analysis above.
 
-WHY (Desired Impact) — the strategic reason to act:
-  - Each WHY must connect a specific weakness from the analysis to a business-level consequence the C-suite cares about.
-  - Frame as: "What happens if this stays unfixed?" → strategic risk or missed opportunity.
+WHY — customer value and consequence:
+  - Each WHY must connect a detected customer challenge/problem to end-value, future strategy, cost of inaction, risk, or missed opportunity.
   - Tone: Executive-level, outcome-oriented. Not technical jargon.
   - Length: 2-3 sentences each.
 
-WHAT (Desired Effect) — the measurable business outcome:
-  - Each WHAT must propose a concrete, observable change that would prove progress on the corresponding WHY.
-  - Frame as: "What would be different in 12 months if we succeed?"
-  - Must be specific enough to verify, but not a made-up KPI number.
-  - Tone: Tangible, verifiable, grounded in this company's context.
-  - Length: 2-3 sentences each.
+{_ACTIVATION_WHAT_CONTRACT}
+
+WHAT_PROGRESS_SHOWS — observable proof of progress:
+  - Describe what progress would look like after the activity.
+  - This can be qualitative or measurable, but do not invent numeric KPI targets.
+  - Length: 1-2 sentences each.
 
 Rules:
-  - WHY1 pairs with WHAT1 (same theme). WHY2 pairs with WHAT2 (different theme).
+  - WHY1 pairs with WHAT_TO_DO1 and WHAT_PROGRESS_SHOWS1. WHY2 pairs with WHAT_TO_DO2 and WHAT_PROGRESS_SHOWS2.
   - Draw ONLY from the weakest KB dimensions visible in the analysis.
   - Never generic — each must reference something specific from the evidence or diagnosis.
-  - These are proposals, not promises — frame as "potential impact" and "potential effect".
+  - These are proposals, not promises — frame as validation or discovery where evidence is narrow.
   - When evidence confidence is low or narrow, frame as "validate whether..." rather than "fix...".
   - Do not use strong KB labels unless the evidence threshold in the shared guardrails is met.
 
@@ -2539,7 +2877,7 @@ Rules:
 
 ### OUTPUT
 Respond with valid JSON only:
-{{"why_proposals": ["...", "..."], "what_proposals": ["...", "..."]}}"""
+{{"activation_pairs": [{{"theme_type": "current_status", "sales_use": "current_status", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "..."}}, {{"theme_type": "foresight_driven", "sales_use": "foresight_driven", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "..."}}], "why_proposals": ["WHY texts"], "what_proposals": ["WHAT_TO_DO texts"], "what_progress_proposals": ["WHAT_PROGRESS_SHOWS texts"]}}"""
 
     old_why = data.get("why_proposals", [])
     old_what = data.get("what_proposals", [])
@@ -2568,8 +2906,18 @@ Respond with valid JSON only:
         return {"company": company_name, "status": "failed", "reason": "Could not parse JSON from model response."}
 
     result_json = json.loads(payload, strict=False)
-    new_why = result_json.get("why_proposals", [])
-    new_what = result_json.get("what_proposals", [])
+    new_why = strip_archetype_labels_from_text(result_json.get("why_proposals", []))
+    new_what = strip_archetype_labels_from_text(result_json.get("what_proposals", []))
+    normalized_activation = _normalize_activation_payload(result_json, {
+        "why_proposals": old_why,
+        "what_proposals": old_what,
+        "what_progress_proposals": data.get("what_progress_proposals", []),
+        "activation_pairs": data.get("activation_pairs", []),
+    })
+    new_why = normalized_activation.get("why_proposals") or new_why
+    new_what = normalized_activation.get("what_proposals") or new_what
+    new_progress = normalized_activation.get("what_progress_proposals") or []
+    new_pairs = normalized_activation.get("activation_pairs") or []
 
     if not new_why or not new_what or not isinstance(new_why, list) or not isinstance(new_what, list):
         return {"company": company_name, "status": "failed", "reason": "Model returned invalid proposal structure."}
@@ -2577,6 +2925,9 @@ Respond with valid JSON only:
     # Save updated proposals
     data["why_proposals"] = new_why
     data["what_proposals"] = new_what
+    data["what_progress_proposals"] = new_progress
+    if new_pairs:
+        data["activation_pairs"] = new_pairs
     callable_paths = _find_callables(data, f"{company_name}.pre_save")
     if callable_paths:
         print(f"   ⚠️ [Data Hygiene] Callable objects before save: {callable_paths[:30]}")
@@ -2594,6 +2945,8 @@ Respond with valid JSON only:
         "old_what": old_what,
         "new_why": new_why,
         "new_what": new_what,
+        "new_what_progress": new_progress,
+        "new_activation_pairs": new_pairs,
     }
 
 
@@ -2931,10 +3284,11 @@ If evidence is thin, say so — a short honest analysis beats a long fabricated 
 ### PRIMARY FRAMEWORK (KNOWLEDGE BASE — MANDATORY)
 {knowledge_context}
 
-You MUST use the terminology, archetypes, and criteria defined in the Knowledge Base above.
+You MUST use the terminology and criteria defined in the Knowledge Base above.
 Every claim in the summary MUST trace back to specific evidence AND map to a Knowledge Base dimension.
 Do NOT invent categories — use ONLY Knowledge Base vocabulary.
 NEVER use internal codes (TAC-xxx, DIM-xxx, etc.) — always write the full concept name.
+Do NOT write adaptability archetype labels in diagnostic_summary, evidence_based_risks, or any prose.
 
 ### SCAN DATA
 Target: {company_name}
@@ -2965,22 +3319,22 @@ Scoring rules:
   - Sum the 5 dimensions → 'reality_score' (0-100).
   - Do NOT evaluate intent_score or financial_index — those are immutable pipeline outputs.
 
-STEP 2 — ARCHETYPE DERIVATION (mechanical, from scores):
-Use YOUR reality_score + Financial Health Index ({fin_for_arch}):
+STEP 2 — ARCHETYPE AUDIT ONLY (mechanical, from scores):
+For internal audit only, derive an 'archetype' JSON field from YOUR reality_score + Financial Health Index ({fin_for_arch}):
   - reality_score >= 50 AND Financial Health Index >= 50 → "Thriving"
   - reality_score >= 50 AND Financial Health Index < 50 → "Modernizing"
   - reality_score < 50 AND Financial Health Index >= 50 → "Cash Cow"
   - reality_score < 50 AND Financial Health Index < 50 → "At Risk"
-This is a mechanical derivation — do not override based on narrative interpretation.
+This is a mechanical derivation for log comparison only. NEVER mention the archetype label in diagnostic_summary, pitch, why_proposals, what_proposals, or evidence_based_risks.
 
 STEP 3 — AI DIAGNOSIS SUMMARY:
 Write a diagnostic narrative that reads like an expert assessment, not a template:
   - Structure: exactly 3-4 core paragraphs, each covering a distinct KB dimension (e.g. overall position
     & operating model / strategy & culture / service portfolio & AI readiness / financial context).
     Separate paragraphs with \n\n in the JSON string — this is required for rendering.
-  - Do not add foresight implications here. External pressures belong only in Strategic Synthesis.
+  - Do not add foresight implications here. External pressures belong only in the later Strategic Synthesis / Activation call.
   - Target length: 250-375 words.
-  - First sentence: State the archetype and what defines this company's position.
+  - First sentence: State the company's current-reality position in plain business language without using an archetype label.
   - Body: Map 3-4 key findings to specific KB dimensions. For each finding, connect the evidence
     to the KB pattern it reveals.
   - Use KB terminology naturally — but only where the evidence supports the pattern.
@@ -2991,7 +3345,7 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
   - PRECISION CLAIMS: exact euro amounts, percentages, order books, dates, named partnerships, named product launches, named customers/suppliers, and ownership shares are allowed only when the same value/name/date appears in generation-eligible evidence or explicit financial context above. If not, use cautious non-specific wording or state that public evidence is limited.
   - TEMPORAL PRECISION: When evidence contains the same metric for different periods (e.g. Q1 vs full-year, 2024 vs 2025), always use the most recent FULL-YEAR / ANNUAL figure — not interim or quarterly snapshots. If only a quarterly figure is available, label it explicitly (e.g. "as of Q1 2025"). Never present a quarterly number as if it were the annual result. Do not write that a metric is unpublished or unavailable if the evidence or financial context contains that metric for the latest annual period.
   - ORGANIZATIONAL CLAIMS PROHIBITION: NEVER claim or imply leadership gaps, unfilled executive roles, succession planning issues, management vacancies, or organizational restructuring unless the evidence EXPLICITLY states this. The absence of a person in scanner results does NOT mean the role is vacant — it means the scanner didn't find them. Do NOT invent risk factors about people, roles, or organizational structure to add analytical depth. If the evidence doesn't mention an organizational problem, the problem does not exist for this analysis.
-  - Use ONLY the four archetype labels: Thriving, Modernizing, Cash Cow, At Risk.
+  - Do NOT write these archetype labels in prose: Thriving, Modernizing, Cash Cow, At Risk.
   - CRITICAL SEPARATION: This section is strictly neutral diagnosis. Do NOT use sales language, calls-to-action, persuasion, or proposal framing here.
   - EVIDENCE DIMENSION BOUNDARY: Financial evidence may establish financial condition, capacity or investment context only. It cannot establish operating-model maturity, architecture, AI/data capability, service delivery, strategy execution or culture. Diagnose those dimensions only from promoted non-financial jury evidence; otherwise state that evidence is insufficient.
   - HISTORICAL EVIDENCE: Previous links and snippets are discovery inputs only. Use them only after current URL, entity, content and claim-support validation.
@@ -3012,27 +3366,26 @@ Generate 2-4 neutral risk bullets in a JSON array named evidence_based_risks.
   - No solutions or CTA in this section; just what risk exists and why.
 
 STEP 6 — IMPACT PROPOSALS (derived from Steps 1-4):
-Generate 1-2 WHY statements and 1-2 WHAT statements (matching count).
+Generate 1-2 paired WHY / WHAT_TO_DO / WHAT_PROGRESS_SHOWS items.
 If evidence strongly supports 2 distinct weaknesses, produce 2 pairs. If evidence is limited, produce 1 pair. One strong evidence-based proposal beats two fabricated ones.
 
-WHY (Desired Impact) — the strategic reason to act:
-  - Each WHY must connect a specific weakness found in Step 1 to a business-level consequence the C-suite cares about.
-  - Frame as: "What happens if this stays unfixed?" → strategic risk or missed opportunity.
+WHY — customer value and consequence:
+  - Each WHY must connect a detected customer challenge/problem to end-value, future strategy, cost of inaction, risk, or missed opportunity.
   - Tone: Executive-level, outcome-oriented. Not technical jargon.
   - Length: 1-2 sentences each.
 
-WHAT (Desired Effect) — the measurable business outcome:
-  - Each WHAT must propose a concrete, observable change that would prove progress on the corresponding WHY.
-  - Frame as: "What would be different in 12 months if we succeed?"
-  - Must be specific enough to verify, but not a made-up KPI number.
-  - Tone: Tangible, verifiable, grounded in this company's context.
+{_ACTIVATION_WHAT_CONTRACT}
+
+WHAT_PROGRESS_SHOWS — observable proof of progress:
+  - Describe what progress would look like after the activity.
+  - This can be qualitative or measurable, but do not invent numeric KPI targets.
   - Length: 1-2 sentences each.
 
 Rules:
-  - WHY1 pairs with WHAT1 (same theme). If 2 pairs: WHY2 pairs with WHAT2 (different theme).
+  - WHY1 pairs with WHAT_TO_DO1 and WHAT_PROGRESS_SHOWS1. If 2 pairs: WHY2 pairs with WHAT_TO_DO2 and WHAT_PROGRESS_SHOWS2.
   - Draw ONLY from the weakest KB dimensions scored in Step 1 that have ACTUAL EVIDENCE.
   - Never generic — each must reference something specific from the evidence or diagnosis.
-  - These are proposals, not promises — frame as "potential impact" and "potential effect".
+  - These are proposals, not promises — frame as validation or discovery where evidence is narrow.
 
 ### GUARDRAILS
 - NEVER fabricate evidence, people, events, partnerships, or metrics not present in the scan data.
@@ -3045,9 +3398,10 @@ Rules:
 
 ### OUTPUT
 Respond with valid JSON only. Required fields:
-{{"diagnostic_summary": "...", "evidence_based_risks": ["..."], "commercial_pitch": "...", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."], "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
+{{"diagnostic_summary": "...", "evidence_based_risks": ["..."], "commercial_pitch": "...", "activation_pairs": [{{"theme_type": "current_status|foresight_driven|proactive_opportunity", "sales_use": "current_status|foresight_driven|proactive_opportunity", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "..."}}], "why_proposals": ["WHY texts"], "what_proposals": ["WHAT_TO_DO texts"], "what_progress_proposals": ["WHAT_PROGRESS_SHOWS texts"], "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
 Note: diagnostic_summary must contain \n\n between paragraphs (3-4 core paragraphs plus one optional final foresight implication paragraph). commercial_pitch must also contain \n\n between its 3 paragraphs.
-Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pairs with WHAT1. If 2 pairs: WHY2 pairs with WHAT2.
+The archetype field is audit-only and must not appear in diagnostic_summary, commercial_pitch, why_proposals, what_proposals, or evidence_based_risks.
+Note: why_proposals contains WHY texts, what_proposals contains WHAT_TO_DO texts, and what_progress_proposals contains WHAT_PROGRESS_SHOWS texts. Preserve the same order across all three arrays.
 
 ### CRITICAL CONTEXT — FACT-CHECK CORRECTIONS
 The previous synthesis contained false claims detected by an independent fact-checker.
@@ -3109,19 +3463,29 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
 
             if new_summary:
                 new_summary = _apply_deterministic_corrections(new_summary, detailed_claims)
-                data["summary_text"] = _strip_tac_codes(new_summary)
+                data["summary_text"] = _strip_tac_codes(strip_archetype_labels_from_text(new_summary))
             if new_pitch:
                 new_pitch = _apply_deterministic_corrections(new_pitch, detailed_claims)
-                data["pitch_text"] = new_pitch
+                data["pitch_text"] = strip_archetype_labels_from_text(new_pitch)
             new_risks = resynth_json.get("evidence_based_risks", [])
             if isinstance(new_risks, list) and new_risks:
-                data["evidence_based_risks"] = new_risks
+                data["evidence_based_risks"] = strip_archetype_labels_from_text(new_risks)
             new_why = resynth_json.get("why_proposals", [])
             new_what = resynth_json.get("what_proposals", [])
+            normalized_activation = _normalize_activation_payload(resynth_json, {
+                "why_proposals": data.get("why_proposals", []),
+                "what_proposals": data.get("what_proposals", []),
+                "what_progress_proposals": data.get("what_progress_proposals", []),
+                "activation_pairs": data.get("activation_pairs", []),
+            })
             if new_why and isinstance(new_why, list):
-                data["why_proposals"] = new_why
+                data["why_proposals"] = strip_archetype_labels_from_text(normalized_activation.get("why_proposals") or new_why)
             if new_what and isinstance(new_what, list):
-                data["what_proposals"] = new_what
+                data["what_proposals"] = strip_archetype_labels_from_text(normalized_activation.get("what_proposals") or new_what)
+            if normalized_activation.get("what_progress_proposals"):
+                data["what_progress_proposals"] = strip_archetype_labels_from_text(normalized_activation["what_progress_proposals"])
+            if normalized_activation.get("activation_pairs"):
+                data["activation_pairs"] = strip_archetype_labels_from_text(normalized_activation["activation_pairs"])
 
             # Update reality score if the re-synthesis re-evaluated it
             resynth_reality = resynth_json.get("reality_score")
@@ -3143,12 +3507,7 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
             # Verify archetype from re-synthesis matches deterministic rule
             resynth_archetype = resynth_json.get("archetype")
             if resynth_archetype and resynth_archetype != expected_archetype:
-                print(f"   ⚖️ [Clean Re-Synthesis] Archetype '{resynth_archetype}' → corrected to '{expected_archetype}'")
-                valid_archetypes = ["Thriving", "Modernizing", "Cash Cow", "At Risk"]
-                for wrong_label in valid_archetypes:
-                    if wrong_label == expected_archetype:
-                        continue
-                    data["summary_text"] = data["summary_text"].replace(wrong_label, expected_archetype)
+                print(f"   ⚖️ [Clean Re-Synthesis] Archetype audit '{resynth_archetype}' differs from deterministic '{expected_archetype}'")
 
             if old_archetype and old_archetype != expected_archetype:
                 print(f"   ⚖️ [Clean] Archetype '{old_archetype}' → corrected to '{expected_archetype}' (scores: Reality={reality}, Financial={fin_for_arch})")
@@ -3686,19 +4045,75 @@ async def get_observatory(response: Response):
 
 _cross_impact_state = {
     "is_running": False,
+    "run_id": None,
     "started_at": None,
+    "last_heartbeat_at": None,
     "completed_at": None,
     "current_step": None,
+    "elapsed_seconds": 0,
+    "max_expected_seconds": 0,
     "result": None,
 }
 _cross_impact_lock = threading.Lock()
+_CROSS_IMPACT_MAX_SECONDS = int(os.getenv("CROSS_IMPACT_MAX_SECONDS", "900"))
 
 
-def _run_cross_impact_generation():
+def _cross_impact_elapsed_seconds(state: dict) -> int:
+    started = _parse_pipeline_dt(state.get("started_at"))
+    if not started:
+        return 0
+    return max(0, int((datetime.utcnow() - started).total_seconds()))
+
+
+def _refresh_cross_impact_watchdog_locked():
+    """Clear a stale Matrix Interpretation run so readiness cannot stay running forever."""
+    if not _cross_impact_state.get("is_running"):
+        return
+    elapsed = _cross_impact_elapsed_seconds(_cross_impact_state)
+    _cross_impact_state["elapsed_seconds"] = elapsed
+    max_seconds = int(_cross_impact_state.get("max_expected_seconds") or _CROSS_IMPACT_MAX_SECONDS)
+    if elapsed <= max_seconds:
+        return
+    message = f"Matrix Interpretation exceeded {max_seconds}s hard limit at step: {_cross_impact_state.get('current_step') or 'unknown'}"
+    print(f"   [CrossImpact] Watchdog marked run stale: {message}", flush=True)
+    _cross_impact_state["is_running"] = False
+    _cross_impact_state["completed_at"] = datetime.utcnow().isoformat()
+    _cross_impact_state["current_step"] = "Timed out"
+    _cross_impact_state["result"] = {
+        "status": "timed_out",
+        "error": message,
+        "elapsed_seconds": elapsed,
+    }
+
+
+def _cross_impact_heartbeat(run_id: str, step: str) -> bool:
+    """Update visible progress for a Matrix Interpretation run.
+
+    Returns False when the run is no longer current/active, allowing late
+    background workers to avoid overwriting newer or timed-out results.
+    """
+    with _cross_impact_lock:
+        _refresh_cross_impact_watchdog_locked()
+        if _cross_impact_state.get("run_id") != run_id or not _cross_impact_state.get("is_running"):
+            return False
+        elapsed = _cross_impact_elapsed_seconds(_cross_impact_state)
+        _cross_impact_state["current_step"] = step
+        _cross_impact_state["last_heartbeat_at"] = datetime.utcnow().isoformat()
+        _cross_impact_state["elapsed_seconds"] = elapsed
+        _cross_impact_state["result"] = {
+            "status": "running",
+            "step": step,
+            "elapsed_seconds": elapsed,
+        }
+    print(f"   [CrossImpact] {step} ({elapsed}s elapsed)", flush=True)
+    return True
+
+
+def _run_cross_impact_generation(run_id: str):
     """Background worker for cross-impact interpretation generation."""
     try:
-        with _cross_impact_lock:
-            _cross_impact_state["current_step"] = "Loading data"
+        if not _cross_impact_heartbeat(run_id, "Loading data"):
+            return
 
         dashboard_data = storage.retrieve_latest_data("index/summary_list") or []
         company_details = []
@@ -3720,34 +4135,45 @@ def _run_cross_impact_generation():
             for theme, category in THEME_CATEGORIES.items()
         }
 
-        with _cross_impact_lock:
-            _cross_impact_state["current_step"] = "Generating interpretation"
+        if not _cross_impact_heartbeat(run_id, "Generating interpretation"):
+            return
 
         payload = generate_cross_impact_interpretation(
             company_details=company_details,
             dashboard_data=dashboard_data,
             theme_descriptions=theme_descriptions,
+            progress_callback=lambda step: _cross_impact_heartbeat(run_id, step),
         )
 
-        with _cross_impact_lock:
-            _cross_impact_state["current_step"] = "Saving"
+        if not _cross_impact_heartbeat(run_id, "Saving"):
+            print("   [CrossImpact] Late result ignored because run is no longer active.", flush=True)
+            return
 
         storage.save_cross_impact_interpretation(payload)
 
         with _cross_impact_lock:
+            if _cross_impact_state.get("run_id") != run_id or not _cross_impact_state.get("is_running"):
+                print("   [CrossImpact] Save completed for stale run; status update ignored.", flush=True)
+                return
+            elapsed = _cross_impact_elapsed_seconds(_cross_impact_state)
             _cross_impact_state["result"] = {"status": "completed"}
             _cross_impact_state["completed_at"] = datetime.utcnow().isoformat()
             _cross_impact_state["is_running"] = False
             _cross_impact_state["current_step"] = None
+            _cross_impact_state["elapsed_seconds"] = elapsed
     except Exception as e:
         print(f"   [CrossImpact] Generation failed: {e}")
         import traceback
         traceback.print_exc()
         with _cross_impact_lock:
+            if _cross_impact_state.get("run_id") != run_id:
+                return
+            elapsed = _cross_impact_elapsed_seconds(_cross_impact_state)
             _cross_impact_state["is_running"] = False
-            _cross_impact_state["result"] = {"error": str(e)}
+            _cross_impact_state["result"] = {"status": "error", "error": str(e), "elapsed_seconds": elapsed}
             _cross_impact_state["completed_at"] = datetime.utcnow().isoformat()
             _cross_impact_state["current_step"] = None
+            _cross_impact_state["elapsed_seconds"] = elapsed
 
 
 @app.post("/admin/generate-cross-impact-interpretation")
@@ -3757,23 +4183,31 @@ def generate_cross_impact_endpoint(request: Request):
     verify_admin(request)
 
     with _cross_impact_lock:
+        _refresh_cross_impact_watchdog_locked()
         if _cross_impact_state["is_running"]:
-            return {"status": "already_running"}
+            return {"status": "already_running", "state": dict(_cross_impact_state)}
+        run_id = str(uuid.uuid4())
         _cross_impact_state["is_running"] = True
+        _cross_impact_state["run_id"] = run_id
         _cross_impact_state["current_step"] = "Initializing..."
         _cross_impact_state["started_at"] = datetime.utcnow().isoformat()
+        _cross_impact_state["last_heartbeat_at"] = _cross_impact_state["started_at"]
         _cross_impact_state["completed_at"] = None
-        _cross_impact_state["result"] = None
+        _cross_impact_state["elapsed_seconds"] = 0
+        _cross_impact_state["max_expected_seconds"] = _CROSS_IMPACT_MAX_SECONDS
+        _cross_impact_state["result"] = {"status": "running", "step": "Initializing...", "elapsed_seconds": 0}
 
-    thread = threading.Thread(target=_run_cross_impact_generation, daemon=True)
+    thread = threading.Thread(target=_run_cross_impact_generation, args=(run_id,), daemon=True)
     thread.start()
-    return {"status": "started"}
+    return {"status": "started", "run_id": run_id}
 
 
 @app.get("/admin/cross-impact-interpretation-status")
 def cross_impact_status():
     """Polls the cross-impact generation status."""
     with _cross_impact_lock:
+        _refresh_cross_impact_watchdog_locked()
+        _cross_impact_state["elapsed_seconds"] = _cross_impact_elapsed_seconds(_cross_impact_state)
         return dict(_cross_impact_state)
 
 
@@ -3785,6 +4219,492 @@ async def get_cross_impact_interpretation(response: Response):
     if not data:
         raise HTTPException(status_code=404, detail="No cross-impact interpretation found. Generate one first.")
     return data
+
+
+PIPELINE_FRESH_DAYS = 14
+PIPELINE_READINESS_SNAPSHOT_TTL_SECONDS = 15 * 60
+
+
+def _parse_pipeline_dt(value):
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).replace(tzinfo=None)
+    except Exception:
+        return None
+
+
+def _pipeline_item(state: str, label: str, detail: str = "", updated_at=None, stats=None, recommended_action: str = "") -> dict:
+    return {
+        "state": state,
+        "label": label,
+        "detail": detail,
+        "updated_at": updated_at,
+        "stats": stats or {},
+        "recommended_action": recommended_action,
+    }
+
+
+def _index_by_company(items: list[dict]) -> dict[str, dict]:
+    return {
+        str(item.get("companyName") or item.get("company_name") or "").strip().lower(): item
+        for item in (items or [])
+        if isinstance(item, dict) and (item.get("companyName") or item.get("company_name"))
+    }
+
+
+def _newer_than(left, right) -> bool:
+    left_dt = _parse_pipeline_dt(left)
+    right_dt = _parse_pipeline_dt(right)
+    return bool(left_dt and right_dt and left_dt > right_dt)
+
+
+def _days_old(value):
+    dt = _parse_pipeline_dt(value)
+    if not dt:
+        return None
+    return max(0, (datetime.utcnow() - dt).days)
+
+
+def _running_company_job(jobs: dict, company_name: str) -> dict | None:
+    target = str(company_name or "").strip().lower()
+    for job in jobs.values():
+        if job.get("status") in {"queued", "running"} and str(job.get("company") or "").strip().lower() == target:
+            return job
+    return None
+
+
+def _first_running_company_job(lock, jobs: dict, company_name: str) -> dict | None:
+    with lock:
+        job = _running_company_job(jobs, company_name)
+        return dict(job) if job else None
+
+
+def _global_running_item(state: dict, running_label: str):
+    if state.get("is_running"):
+        return _pipeline_item(
+            "running",
+            running_label,
+            state.get("current_theme") or state.get("current_step") or state.get("current_status") or "Running",
+            state.get("started_at"),
+            {
+                "current": state.get("current"),
+                "total": state.get("total"),
+                "elapsed_seconds": state.get("elapsed_seconds"),
+                "max_expected_seconds": state.get("max_expected_seconds"),
+                "last_heartbeat_at": state.get("last_heartbeat_at"),
+                "run_id": state.get("run_id"),
+            },
+            "Wait for this run to complete before regenerating dependent artifacts.",
+        )
+    return None
+
+
+def _pipeline_indexes() -> dict:
+    company_evidence_index = buying_storage.get_company_evidence_index()
+    source_ledger_index = buying_storage.get_company_source_ledger_index()
+    buying_index = buying_storage.get_buying_potential_index()
+    return {
+        "company_evidence": _index_by_company(company_evidence_index),
+        "source_ledger": _index_by_company(source_ledger_index),
+        "buying_insight": _index_by_company(buying_index),
+    }
+
+
+def _pipeline_company_source_stamps(company: dict, indexes: dict) -> dict:
+    name = company.get("companyName") or company.get("company_name") or ""
+    key = str(name).strip().lower()
+    evidence_meta = indexes.get("company_evidence", {}).get(key) or {}
+    ledger_meta = indexes.get("source_ledger", {}).get(key) or {}
+    buying_meta = indexes.get("buying_insight", {}).get(key) or {}
+    return {
+        "scan": company.get("lastUpdated") or company.get("uploaded_at"),
+        "evidence_verified": company.get("evidence_cleaned_at"),
+        "company_evidence_db": evidence_meta.get("updated_at"),
+        "source_ledger": ledger_meta.get("updated_at"),
+        "buying_insight": buying_meta.get("updated_at"),
+    }
+
+
+def _pipeline_snapshot_is_fresh(snapshot: dict | None) -> bool:
+    if not isinstance(snapshot, dict):
+        return False
+    generated_at = _parse_pipeline_dt(snapshot.get("generated_at"))
+    if not generated_at:
+        return False
+    age_seconds = max(0, (datetime.utcnow() - generated_at).total_seconds())
+    return age_seconds <= PIPELINE_READINESS_SNAPSHOT_TTL_SECONDS
+
+
+def _get_pipeline_snapshot() -> dict | None:
+    try:
+        return storage.get_pipeline_readiness_index()
+    except Exception as exc:
+        print(f"   [Pipeline Readiness] Snapshot read failed: {exc}")
+        return None
+
+
+def _save_pipeline_snapshot(snapshot: dict) -> dict:
+    try:
+        storage.save_pipeline_readiness_index(snapshot)
+    except Exception as exc:
+        print(f"   [Pipeline Readiness] Snapshot save failed: {exc}")
+    return snapshot
+
+
+def _find_company_for_pipeline_readiness(company_name: str) -> dict | None:
+    if not company_name:
+        return None
+    detail = storage.get_company_data(company_name)
+    if isinstance(detail, dict) and detail:
+        return detail
+    summaries = storage.get_all_companies_summary()
+    target = str(company_name or "").strip().lower()
+    for summary in summaries:
+        if str(summary.get("companyName") or "").strip().lower() == target:
+            detail = storage.get_company_data(summary.get("companyName"))
+            return {**summary, **detail} if isinstance(detail, dict) else summary
+    return None
+
+
+def _build_pipeline_global_readiness() -> dict:
+    try:
+        kb_meta = storage.get_foresight_kb_status()
+    except Exception:
+        kb_meta = {"theme_count": 0, "total_signals": 0, "last_updated": None, "themes": []}
+    try:
+        observatory = storage.get_observatory()
+    except Exception:
+        observatory = None
+    try:
+        cross_impact = storage.get_cross_impact_interpretation()
+    except Exception:
+        cross_impact = None
+
+    kb_running = _global_running_item(_current_foresight_kb_state(), "Foresight KB")
+    if kb_running:
+        foresight_kb = kb_running
+    elif not kb_meta or not kb_meta.get("theme_count"):
+        foresight_kb = _pipeline_item("missing", "Foresight KB", "No harvested foresight KB themes found.", None, kb_meta or {}, "Harvest KB before refreshing foresight-dependent analysis.")
+    else:
+        age = _days_old(kb_meta.get("last_updated"))
+        stale = age is not None and age > PIPELINE_FRESH_DAYS
+        foresight_kb = _pipeline_item(
+            "warning" if stale else "ready",
+            "Foresight KB",
+            f"{kb_meta.get('theme_count', 0)} theme(s), {kb_meta.get('total_signals', 0)} signal(s)." + (f" Last harvest {age} day(s) ago." if age is not None else ""),
+            kb_meta.get("last_updated"),
+            kb_meta,
+            "Harvest KB if current foresight context matters." if stale else "",
+        )
+
+    obs_running = _global_running_item(_current_observatory_state(), "Observatory")
+    observatory_updated = observatory.get("generated_at") if isinstance(observatory, dict) else None
+    if obs_running:
+        observatory_item = obs_running
+    elif not observatory:
+        observatory_item = _pipeline_item("missing", "Observatory", "No Observatory analysis found.", None, recommended_action="Generate Observatory after Foresight KB is ready.")
+    else:
+        stale = _newer_than(kb_meta.get("last_updated") if kb_meta else None, observatory_updated)
+        observatory_item = _pipeline_item(
+            "warning" if stale else "ready",
+            "Observatory",
+            "Observatory is older than the Foresight KB." if stale else "Observatory analysis is available.",
+            observatory_updated,
+            {"model": observatory.get("model")},
+            "Regenerate Observatory after KB harvest." if stale else "",
+        )
+
+    cross_running = _global_running_item(_current_cross_impact_state(), "Matrix Interpretation")
+    cross_updated = cross_impact.get("generated_at") if isinstance(cross_impact, dict) else None
+    if cross_running:
+        cross_item = cross_running
+    elif not cross_impact:
+        cross_item = _pipeline_item("missing", "Matrix Interpretation", "No Cross-Impact Matrix Interpretation found.", None, recommended_action="Generate the Matrix Interpretation after Observatory/Foresight context is ready.")
+    else:
+        stale = _newer_than(kb_meta.get("last_updated") if kb_meta else None, cross_updated) or _newer_than(observatory_updated, cross_updated)
+        cross_item = _pipeline_item(
+            "warning" if stale else "ready",
+            "Matrix Interpretation",
+            "Matrix Interpretation is older than Observatory or Foresight KB." if stale else "Matrix Interpretation is available.",
+            cross_updated,
+            {"model": cross_impact.get("model")},
+            "Refresh the Matrix Interpretation." if stale else "",
+        )
+
+    return {
+        "foresight_kb": foresight_kb,
+        "observatory": observatory_item,
+        "cross_impact": cross_item,
+    }
+
+
+def _current_foresight_kb_state() -> dict:
+    with _foresight_kb_lock:
+        return dict(_foresight_kb_state)
+
+
+def _current_observatory_state() -> dict:
+    with _observatory_lock:
+        return dict(_observatory_state)
+
+
+def _current_cross_impact_state() -> dict:
+    with _cross_impact_lock:
+        _refresh_cross_impact_watchdog_locked()
+        _cross_impact_state["elapsed_seconds"] = _cross_impact_elapsed_seconds(_cross_impact_state)
+        return dict(_cross_impact_state)
+
+
+def _company_pipeline_readiness(company: dict, indexes: dict) -> dict:
+    name = company.get("companyName") or company.get("company_name") or ""
+    latest_scan = company.get("lastUpdated") or company.get("uploaded_at")
+    evidence_stats = company.get("evidence_cleaning_stats") or {}
+    activation_pairs = company.get("activation_pairs") or []
+    why = company.get("why_proposals") or []
+    what = company.get("what_proposals") or []
+    key = str(name).strip().lower()
+
+    evidence_job = _first_running_company_job(_company_evidence_jobs_lock, _company_evidence_jobs, name)
+    ledger_job = _first_running_company_job(_company_source_ledger_jobs_lock, _company_source_ledger_jobs, name)
+    buying_job = _first_running_company_job(_buying_potential_jobs_lock, _buying_potential_jobs, name)
+
+    if latest_scan:
+        scan = _pipeline_item("ready", "Scan", "Latest Scanner record is available.", latest_scan)
+    else:
+        scan = _pipeline_item("missing", "Scan", "No stored Scanner scan timestamp found.", None, recommended_action="Run or refresh Scanner first.")
+
+    analysis_verified = evidence_stats.get("analysis_verified")
+    total_sources = evidence_stats.get("total_sources")
+    unsupported = evidence_stats.get("unsupported")
+    wrong_entity = evidence_stats.get("wrong_entity")
+    if company.get("evidence_cleaned_at"):
+        if analysis_verified:
+            evidence_verified = _pipeline_item(
+                "ready",
+                "Evidence Verified",
+                f"{analysis_verified} analysis-verified source(s).",
+                company.get("evidence_cleaned_at"),
+                evidence_stats,
+            )
+        else:
+            evidence_verified = _pipeline_item(
+                "warning",
+                "Evidence Verified",
+                "Evidence was checked, but no analysis-verified sources were recorded.",
+                company.get("evidence_cleaned_at"),
+                evidence_stats,
+                "Run Verify Evidence or rescan if this company should have stronger public evidence.",
+            )
+    elif total_sources:
+        evidence_verified = _pipeline_item(
+            "warning",
+            "Evidence Verified",
+            f"{total_sources} source(s) present, verification freshness unknown.",
+            None,
+            evidence_stats,
+            "Run Verify Evidence before relying on downstream artifacts.",
+        )
+    else:
+        evidence_verified = _pipeline_item(
+            "missing",
+            "Evidence Verified",
+            "No evidence verification metadata found.",
+            None,
+            evidence_stats,
+            "Run Verify Evidence after scan evidence is available.",
+        )
+    if (unsupported or 0) > 0 or (wrong_entity or 0) > 0:
+        evidence_verified["state"] = "warning"
+        evidence_verified["detail"] += f" Unsupported: {unsupported or 0}; wrong entity: {wrong_entity or 0}."
+
+    evidence_meta = indexes["company_evidence"].get(key)
+    if evidence_job:
+        company_evidence_db = _pipeline_item("running", "Evidence DB", evidence_job.get("stage") or "Running", evidence_job.get("created_at"), evidence_job.get("stats"), "Wait for Evidence DB to complete.")
+    elif evidence_meta:
+        evidence_updated = evidence_meta.get("updated_at")
+        stale = _newer_than(latest_scan, evidence_updated)
+        company_evidence_db = _pipeline_item(
+            "warning" if stale else "ready",
+            "Evidence DB",
+            "Evidence DB is older than the latest scan." if stale else "Company Evidence DB is available.",
+            evidence_updated,
+            evidence_meta.get("stats"),
+            "Rebuild Company Evidence DB so Buying Insight can use fresh source candidates." if stale else "",
+        )
+    else:
+        company_evidence_db = _pipeline_item("missing", "Evidence DB", "No Company Evidence DB artifact found.", None, recommended_action="Build Evidence DB before high-confidence Buying Insight.")
+
+    ledger_meta = indexes["source_ledger"].get(key)
+    ledger_upstream = max([dt for dt in (latest_scan, evidence_meta.get("updated_at") if evidence_meta else None) if dt], default=None)
+    if ledger_job:
+        source_ledger = _pipeline_item("running", "Source Ledger", ledger_job.get("stage") or "Running", ledger_job.get("created_at"), ledger_job.get("stats"), "Wait for Source Ledger to complete.")
+    elif ledger_meta:
+        ledger_updated = ledger_meta.get("updated_at")
+        stale = _newer_than(ledger_upstream, ledger_updated)
+        source_ledger = _pipeline_item(
+            "warning" if stale else "ready",
+            "Source Ledger",
+            "Source Ledger is older than scan/Evidence DB." if stale else "Source Ledger is available.",
+            ledger_updated,
+            ledger_meta.get("stats"),
+            "Combine Evidence again to refresh traceability." if stale else "",
+        )
+    else:
+        source_ledger = _pipeline_item("missing", "Source Ledger", "No Source Ledger artifact found.", None, recommended_action="Combine Evidence after Evidence DB is ready.")
+
+    pair_count = len(activation_pairs) if isinstance(activation_pairs, list) else 0
+    why_count = len(why) if isinstance(why, list) else 0
+    what_count = len(what) if isinstance(what, list) else 0
+    if pair_count >= 2:
+        activation_status = _pipeline_item("ready", "Activation Pairs", f"{pair_count} WHY/WHAT activation pair(s) available.", latest_scan, {"activation_pairs": pair_count})
+    elif pair_count == 1 or (why_count and what_count):
+        activation_status = _pipeline_item("warning", "Activation Pairs", "Activation logic exists but may be thin or legacy-shaped.", latest_scan, {"activation_pairs": pair_count, "why": why_count, "what": what_count}, "Refresh WHY/WHAT if Buying Insight needs a stronger sales spine.")
+    else:
+        activation_status = _pipeline_item("missing", "Activation Pairs", "No activation-pair logic found.", latest_scan, {"activation_pairs": pair_count, "why": why_count, "what": what_count}, "Refresh WHY/WHAT before creating Buying Insight.")
+
+    buying_meta = indexes["buying_insight"].get(key)
+    buying_upstream = max([
+        dt for dt in (
+            latest_scan,
+            evidence_meta.get("updated_at") if evidence_meta else None,
+            ledger_meta.get("updated_at") if ledger_meta else None,
+        )
+        if dt
+    ], default=None)
+    if buying_job:
+        buying_insight = _pipeline_item("running", "Buying Insight", buying_job.get("stage") or "Running", buying_job.get("created_at"), buying_job.get("source_counts"), "Wait for Buying Insight to complete.")
+    elif buying_meta:
+        buying_updated = buying_meta.get("updated_at")
+        stale = _newer_than(buying_upstream, buying_updated)
+        buying_insight = _pipeline_item(
+            "warning" if stale else "ready",
+            "Buying Insight",
+            "Buying Insight is older than one or more upstream artifacts." if stale else f"Buying Insight available, confidence {buying_meta.get('confidence', 'n/a')}.",
+            buying_updated,
+            buying_meta.get("source_counts"),
+            "Regenerate Buying Insight after refreshing upstream evidence." if stale else "",
+        )
+        buying_insight["confidence"] = buying_meta.get("confidence")
+    else:
+        buying_insight = _pipeline_item("missing", "Buying Insight", "No Buying Insight artifact found.", None, recommended_action="Generate Buying Insight when prerequisites are acceptable.")
+
+    readiness = {
+        "scan": scan,
+        "evidence_verified": evidence_verified,
+        "company_evidence_db": company_evidence_db,
+        "source_ledger": source_ledger,
+        "activation_pairs": activation_status,
+        "buying_insight": buying_insight,
+    }
+    readiness["_source_stamps"] = _pipeline_company_source_stamps(company, indexes)
+    return readiness
+
+
+def _overlay_company_running_readiness(company_name: str, readiness: dict | None) -> dict:
+    item = dict(readiness or {})
+    evidence_job = _first_running_company_job(_company_evidence_jobs_lock, _company_evidence_jobs, company_name)
+    ledger_job = _first_running_company_job(_company_source_ledger_jobs_lock, _company_source_ledger_jobs, company_name)
+    buying_job = _first_running_company_job(_buying_potential_jobs_lock, _buying_potential_jobs, company_name)
+    if evidence_job:
+        item["company_evidence_db"] = _pipeline_item("running", "Evidence DB", evidence_job.get("stage") or "Running", evidence_job.get("created_at"), evidence_job.get("stats"), "Wait for Evidence DB to complete.")
+    if ledger_job:
+        item["source_ledger"] = _pipeline_item("running", "Source Ledger", ledger_job.get("stage") or "Running", ledger_job.get("created_at"), ledger_job.get("stats"), "Wait for Source Ledger to complete.")
+    if buying_job:
+        item["buying_insight"] = _pipeline_item("running", "Buying Insight", buying_job.get("stage") or "Running", buying_job.get("created_at"), buying_job.get("source_counts"), "Wait for Buying Insight to complete.")
+    return item
+
+
+def _overlay_pipeline_running_state(snapshot: dict) -> dict:
+    data = dict(snapshot or {})
+    global_items = dict(data.get("global") or {})
+    kb_running = _global_running_item(_current_foresight_kb_state(), "Foresight KB")
+    obs_running = _global_running_item(_current_observatory_state(), "Observatory")
+    cross_running = _global_running_item(_current_cross_impact_state(), "Matrix Interpretation")
+    if kb_running:
+        global_items["foresight_kb"] = kb_running
+    if obs_running:
+        global_items["observatory"] = obs_running
+    if cross_running:
+        global_items["cross_impact"] = cross_running
+    data["global"] = global_items
+    companies = dict(data.get("companies") or {})
+    for company_name, readiness in list(companies.items()):
+        companies[company_name] = _overlay_company_running_readiness(company_name, readiness)
+    data["companies"] = companies
+    data["served_at"] = datetime.utcnow().isoformat()
+    return data
+
+
+def _build_pipeline_readiness_snapshot() -> dict:
+    company_summaries = storage.get_all_companies_summary()
+    companies = []
+    for summary in company_summaries:
+        name = summary.get("companyName")
+        detail = storage.get_company_data(name) if name else None
+        companies.append({**summary, **detail} if isinstance(detail, dict) else summary)
+    indexes = _pipeline_indexes()
+    return {
+        "generated_at": datetime.utcnow().isoformat(),
+        "fresh_days": PIPELINE_FRESH_DAYS,
+        "snapshot_ttl_seconds": PIPELINE_READINESS_SNAPSHOT_TTL_SECONDS,
+        "global": _build_pipeline_global_readiness(),
+        "companies": {
+            company.get("companyName"): _company_pipeline_readiness(company, indexes)
+            for company in companies
+            if company.get("companyName")
+        },
+    }
+
+
+def _refresh_pipeline_company_in_snapshot(snapshot: dict | None, company_name: str) -> dict:
+    data = snapshot if isinstance(snapshot, dict) else _build_pipeline_readiness_snapshot()
+    company = _find_company_for_pipeline_readiness(company_name)
+    if company:
+        indexes = _pipeline_indexes()
+        canonical = company.get("companyName") or company.get("company_name") or company_name
+        companies = dict(data.get("companies") or {})
+        companies[canonical] = _company_pipeline_readiness(company, indexes)
+        data["companies"] = companies
+    data["generated_at"] = datetime.utcnow().isoformat()
+    return _save_pipeline_snapshot(data)
+
+
+def _refresh_pipeline_global_in_snapshot(snapshot: dict | None) -> dict:
+    data = snapshot if isinstance(snapshot, dict) else _build_pipeline_readiness_snapshot()
+    data["global"] = _build_pipeline_global_readiness()
+    data["generated_at"] = datetime.utcnow().isoformat()
+    return _save_pipeline_snapshot(data)
+
+
+@app.get("/admin/pipeline-readiness")
+async def pipeline_readiness(request: Request):
+    """Return advisory readiness/freshness state for Scanner admin pipeline stages.
+
+    Default mode serves a materialized snapshot and overlays live running-job
+    status. Use refresh=company&company=... or refresh=global/all after
+    state-changing admin actions.
+    """
+    verify_admin(request)
+    query = request.query_params
+    refresh = str(query.get("refresh") or "").strip().lower()
+    company_name = str(query.get("company") or "").strip()
+    force = str(query.get("force") or "").strip().lower() in {"1", "true", "yes"}
+
+    snapshot = _get_pipeline_snapshot()
+    if refresh == "company" and company_name:
+        snapshot = _refresh_pipeline_company_in_snapshot(snapshot, company_name)
+    elif refresh == "global":
+        snapshot = _refresh_pipeline_global_in_snapshot(snapshot)
+    elif force or refresh == "all" or not _pipeline_snapshot_is_fresh(snapshot):
+        snapshot = _save_pipeline_snapshot(_build_pipeline_readiness_snapshot())
+
+    return _overlay_pipeline_running_state(snapshot or {})
 
 
 # --- MAIN SCAN ENDPOINT (MULTIPART) ---
@@ -3892,7 +4812,7 @@ def _execute_scan_pipeline(
         #   Final outputs: protected reserve for fact-check, General Summary,
         #                  save/index; Detailed Report is optional when time is tight.
         SCAN_TOTAL_BUDGET = 900
-        CORE_SYNTHESIS_RESERVE = 180
+        CORE_SYNTHESIS_RESERVE = 220
         FINAL_OUTPUT_RESERVE = 120
         REALITY_PHASE_MAX_BUDGET = 420
         DETAIL_REPORT_FULL_MIN = 120
@@ -3989,6 +4909,7 @@ def _execute_scan_pipeline(
                 previous_context = {
                     "last_scanned": existing_data.get("lastUpdated"),
                     "previous_evidence": existing_data.get("evidence_links", [])[:24],
+                    "scanner_evidence_quarantine": existing_data.get("scanner_evidence_quarantine", [])[:30],
                     "context_contract": "source_discovery_only",
                 }
                 print(
@@ -4171,8 +5092,22 @@ def _execute_scan_pipeline(
             )
         ):
             previous_links = []
+            prior_quarantine_urls = set()
+            for item in (previous_context or {}).get("scanner_evidence_quarantine", []) if previous_context else []:
+                value = str((item or {}).get("canonical_url") or (item or {}).get("url") or "").strip()
+                if not value:
+                    continue
+                parsed = urlparse(value if "://" in value else f"https://{value}")
+                host = parsed.netloc.lower().removeprefix("www.")
+                path = re.sub(r"/+", "/", parsed.path or "/").rstrip("/") or "/"
+                prior_quarantine_urls.add(f"{host}{path}".lower())
             if previous_context:
                 for ev in previous_context.get("previous_evidence", []) or []:
+                    ev_url = str(ev.get("url") or "").strip()
+                    parsed = urlparse(ev_url if "://" in ev_url else f"https://{ev_url}")
+                    ev_key = f"{parsed.netloc.lower().removeprefix('www.')}{(re.sub(r'/+', '/', parsed.path or '/').rstrip('/') or '/')}".lower()
+                    if ev_key in prior_quarantine_urls:
+                        continue
                     if historical_source_can_revalidate(ev):
                         previous_links.append(prepare_historical_revalidation_candidate(ev))
             if previous_links:
@@ -4309,6 +5244,21 @@ def _execute_scan_pipeline(
             archetype = "Thriving" if fin_for_archetype_early >= 50 else "Modernizing"
         else:
             archetype = "Cash Cow" if fin_for_archetype_early >= 50 else "At Risk"
+
+        # Freeze the current-reality classification before foresight and
+        # activation consume it. Later synthesis may record a score observation,
+        # but it must not silently rewrite the reality baseline after downstream
+        # reasoning has already used it.
+        frozen_classification_snapshot = {
+            "reality_score": reality_results.get("score"),
+            "financial_health": fin_score_early,
+            "financial_health_for_archetype": fin_for_archetype_early,
+            "adaptability_archetype": archetype,
+            "classification_version": "scanner_current_reality_pre_foresight_v1",
+            "frozen_at": datetime.utcnow().isoformat(),
+            "source": "scanner2_plus_financial_before_foresight",
+        }
+        reality_results["frozen_classification_snapshot"] = frozen_classification_snapshot
 
         # --- STEP 2.7: STRATEGIC FORESIGHT ---
         foresight_data = None
@@ -4467,8 +5417,10 @@ def _execute_scan_pipeline(
         evidence_absence_signals = []
         evidence_absence_context = ""
         evidence_based_risks = []
+        activation_pairs = []
         why_proposals = []
         what_proposals = []
+        what_progress_proposals = []
         scan_quality = "empty_reality" if _s2_empty else "complete"  # downgraded if phases are skipped due to time
 
         anthropic_key = clean_env_var(os.environ.get("ANTHROPIC_API_KEY"))
@@ -4636,13 +5588,13 @@ Scoring rules:
   - Sum the 5 dimensions → 'reality_score' (0-100).
   - Do NOT evaluate intent_score or financial_index — those are immutable pipeline outputs.
 
-STEP 2 — ARCHETYPE DERIVATION (mechanical, from scores):
-Use YOUR reality_score + Financial Health Index ({fin_for_archetype}):
+STEP 2 — ARCHETYPE AUDIT ONLY (mechanical, from scores):
+For internal audit only, derive an 'archetype' JSON field from YOUR reality_score + Financial Health Index ({fin_for_archetype}):
   - reality_score >= 50 AND Financial Health Index >= 50 → "Thriving"
   - reality_score >= 50 AND Financial Health Index < 50 → "Modernizing"
   - reality_score < 50 AND Financial Health Index >= 50 → "Cash Cow"
   - reality_score < 50 AND Financial Health Index < 50 → "At Risk"
-This is a mechanical derivation — do not override based on narrative interpretation.
+This is a mechanical derivation for log comparison only. NEVER mention the archetype label in diagnostic_summary or evidence_based_risks.
 
 STEP 3 — AI DIAGNOSIS SUMMARY:
 Write a diagnostic narrative that reads like an expert assessment, not a template:
@@ -4651,7 +5603,7 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
     Separate paragraphs with \n\n in the JSON string — this is required for rendering.
   - Do not add foresight implications here. External pressures belong only in Strategic Synthesis.
   - Target length: 250-375 words.
-  - First sentence: State the archetype and what defines this company's position.
+  - First sentence: State the company's current-reality position in plain business language without using an archetype label.
   - Body: Map 3-4 key findings to specific KB dimensions. For each finding, connect the evidence
     to the KB pattern it reveals (e.g., "Job postings emphasize hierarchical reporting lines,
     characteristic of Digital Taylorism in the Operating Model dimension").
@@ -4665,7 +5617,7 @@ Write a diagnostic narrative that reads like an expert assessment, not a templat
   - Do NOT fabricate findings. If evidence is sparse, acknowledge gaps rather than inventing patterns.
   - TEMPORAL PRECISION: When evidence contains the same metric for different periods (e.g. Q1 vs full-year, 2024 vs 2025), always use the most recent FULL-YEAR / ANNUAL figure — not interim or quarterly snapshots. If only a quarterly figure is available, label it explicitly (e.g. "as of Q1 2025"). Never present a quarterly number as if it were the annual result. Do not write that a metric is unpublished or unavailable if the evidence or financial context contains that metric for the latest annual period.
   - ORGANIZATIONAL CLAIMS PROHIBITION: NEVER claim or imply leadership gaps, unfilled executive roles, succession planning issues, management vacancies, or organizational restructuring unless the evidence EXPLICITLY states this. The absence of a person in scanner results does NOT mean the role is vacant — it means the scanner didn't find them. Do NOT invent risk factors about people, roles, or organizational structure to add analytical depth. If the evidence doesn't mention an organizational problem, the problem does not exist for this analysis.
-  - Use ONLY the four archetype labels: Thriving, Modernizing, Cash Cow, At Risk.
+  - Do NOT write these archetype labels in prose: Thriving, Modernizing, Cash Cow, At Risk.
   - CRITICAL SEPARATION: This section is strictly neutral diagnosis. Do NOT use sales language, calls-to-action, persuasion, or proposal framing here.
 
 STEP 4 — EVIDENCE-BASED RISKS:
@@ -4684,8 +5636,8 @@ Generate 2-4 neutral risk bullets in a JSON array named evidence_based_risks.
 ### OUTPUT
 Respond with valid JSON only. Required fields:
 {{"diagnostic_summary": "...", "evidence_based_risks": ["..."], "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
-Note: diagnostic_summary must contain \n\n between 3-4 current-reality paragraphs. Do not add a foresight paragraph.
-Do NOT generate commercial_pitch, why_proposals, or what_proposals in this call. Those are generated later from the locked diagnosis and Knowledge Base."""
+Note: diagnostic_summary must contain \n\n between 3-4 current-reality paragraphs. The archetype field is audit-only and must not appear in diagnostic_summary or evidence_based_risks. Do not add a foresight paragraph.
+Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_proposals in this call. Those are generated later from the locked diagnosis, Knowledge Base, and foresight context."""
 
                 # --- Diagnosis synthesis with fallback chain: Opus 4.8 → GPT 5.5 → Sonnet 4.6 ---
                 # Opus is the judge — it does ONE thing: synthesize. Fallbacks degrade gracefully.
@@ -4871,19 +5823,17 @@ Do NOT generate commercial_pitch, why_proposals, or what_proposals in this call.
                     payload = extract_json_from_text(response_text)
                     if payload:
                          json_data = json.loads(payload, strict=False)
-                         summary = sanitize_inference_wording(json_data.get("diagnostic_summary", json_data.get("summary", summary)))
-                         pitch = sanitize_inference_wording(json_data.get("commercial_pitch", json_data.get("pitch", pitch)) or pitch)
-                         evidence_based_risks = sanitize_inference_wording(json_data.get("evidence_based_risks", evidence_based_risks) or evidence_based_risks)
-                         why_proposals = sanitize_inference_wording(json_data.get("why_proposals", why_proposals) or why_proposals)
-                         what_proposals = sanitize_inference_wording(json_data.get("what_proposals", what_proposals) or what_proposals)
+                         summary = strip_archetype_labels_from_text(sanitize_inference_wording(json_data.get("diagnostic_summary", json_data.get("summary", summary))))
+                         pitch = strip_archetype_labels_from_text(sanitize_inference_wording(json_data.get("commercial_pitch", json_data.get("pitch", pitch)) or pitch))
+                         evidence_based_risks = strip_archetype_labels_from_text(sanitize_inference_wording(json_data.get("evidence_based_risks", evidence_based_risks) or evidence_based_risks))
+                         why_proposals = strip_archetype_labels_from_text(sanitize_inference_wording(json_data.get("why_proposals", why_proposals) or why_proposals))
+                         what_proposals = strip_archetype_labels_from_text(sanitize_inference_wording(json_data.get("what_proposals", what_proposals) or what_proposals))
 
-                         # --- OPUS SCORE VERIFICATION ---
-                         # Opus is the Final Judge for Reality Score. It has the most
-                         # complete picture: Scanner 1 intent + Scanner 2 evidence +
-                         # its own synthesis. Its score is always authoritative.
-                         # (The 25-point delta threshold in the rescan trigger is a
-                         # separate concern — it flags companies for re-evaluation,
-                         # not score override.)
+                         # --- SYNTHESIS SCORE OBSERVATION ---
+                         # Synthesis may disagree with Scanner 2, but the current
+                         # reality score is frozen before foresight. Record the
+                         # disagreement for audit/recheck instead of rewriting the
+                         # score after downstream reasoning has consumed it.
                          opus_reality = json_data.get("reality_score")
                          opus_intent = json_data.get("intent_score")
                          scanner2_reality = reality_results["score"]
@@ -4896,23 +5846,16 @@ Do NOT generate commercial_pitch, why_proposals, or what_proposals in this call.
                              reality_results["opus_reality_score"] = opus_reality
 
                              if delta_r <= 5:
-                                 # Agreement — Opus confirms Scanner 2's finding
-                                 print(f"   ✅ [Score Verify] Reality: Scanner 2 {scanner2_reality} ≈ Opus {opus_reality} (delta {delta_r}). Final score: {opus_reality}")
+                                 print(f"   ✅ [Score Verify] Reality: Scanner 2 {scanner2_reality} ≈ synthesis {opus_reality} (delta {delta_r}). Frozen score kept: {scanner2_reality}")
                              else:
-                                 # Divergence — Opus is the final judge, log the delta for diagnostics
-                                 print(f"   ⚖️ [Score Verify] Reality: Scanner 2 {scanner2_reality} vs Opus {opus_reality} (delta {delta_r}). Opus is final judge → {opus_reality}")
+                                 print(f"   ⚖️ [Score Verify] Reality: Scanner 2 {scanner2_reality} vs synthesis {opus_reality} (delta {delta_r}). Frozen score kept; re-audit recommended.")
 
-                             reality_results["score"] = opus_reality
-                             reality_results["score_verification"] = "opus_final_judge"
-
-                             # Recalculate gap if score changed
-                             if reality_results["score"] != scanner2_reality:
-                                 gap = intent_results["score"] - reality_results["score"]
-
-                                 # Re-evaluate washing flag
-                                 if reality_results["score"] >= intent_results["score"]:
-                                     washing_flag = False
-                                     washing_type = None
+                             reality_results["score_verification"] = "frozen_before_foresight"
+                             reality_results["synthesis_score_observation"] = {
+                                 "observed_reality_score": opus_reality,
+                                 "delta_from_frozen_score": delta_r,
+                                 "recommended_reaudit": delta_r > 5,
+                             }
 
                          # Intent score is IMMUTABLE — Scanner 1's website analysis is the
                          # sole source of intent. Opus may disagree, but overriding intent
@@ -4928,30 +5871,29 @@ Do NOT generate commercial_pitch, why_proposals, or what_proposals in this call.
                                  print(f"   ℹ️ [Score Verify] Intent: Scanner 1 {scanner_intent} vs Opus {opus_intent} (delta {delta_i}). Keeping Scanner 1 score (immutable).")
                                  gap = intent_results["score"] - reality_results["score"]
 
-                         # --- ARCHETYPE VERIFICATION ---
-                         # Opus now derives the archetype from its own scores.
-                         # Verify it matches the deterministic rule; fix summary if not.
+                         # --- ARCHETYPE AUDIT ---
+                         # The model's archetype is retained only as a drift signal.
+                         # Written diagnosis/summary prose must not contain archetype labels.
                          opus_archetype = json_data.get("archetype")
                          final_reality = reality_results["score"]
                          expected_archetype = ("Thriving" if fin_for_archetype >= 50 else "Modernizing") if final_reality >= 50 else ("Cash Cow" if fin_for_archetype >= 50 else "At Risk")
 
                          if opus_archetype and opus_archetype != expected_archetype:
-                             print(f"   ⚖️ [Archetype Verify] Opus wrote '{opus_archetype}' but scores dictate '{expected_archetype}' (reality={final_reality}, financial={fin_for_archetype}). Correcting summary.")
-                             valid_archetypes = ["Thriving", "Modernizing", "Cash Cow", "At Risk"]
-                             for wrong_label in valid_archetypes:
-                                 if wrong_label == expected_archetype:
-                                     continue
-                                 summary = summary.replace(wrong_label, expected_archetype)
-                                 summary = summary.replace(wrong_label.upper(), expected_archetype.upper())
+                             print(f"   ⚖️ [Archetype Audit] Model wrote '{opus_archetype}' but frozen scores dictate '{expected_archetype}' (reality={final_reality}, financial={fin_for_archetype}). Written prose keeps archetype labels out.")
                          elif opus_archetype:
-                             print(f"   ✅ [Archetype Verify] Opus archetype '{opus_archetype}' matches score-derived '{expected_archetype}'")
+                             print(f"   ✅ [Archetype Audit] Model archetype '{opus_archetype}' matches frozen score-derived '{expected_archetype}'")
+                         summary = strip_archetype_labels_from_text(summary)
+                         evidence_based_risks = strip_archetype_labels_from_text(evidence_based_risks)
+                         pitch = strip_archetype_labels_from_text(pitch)
+                         why_proposals = strip_archetype_labels_from_text(why_proposals)
+                         what_proposals = strip_archetype_labels_from_text(what_proposals)
 
                          # --- STRATEGIC ACTIVATION (WHY / WHAT / PITCH) ---
                          # This is deliberately split from diagnosis. The first
                          # call is the strategic judge; this second call activates
                          # only the locked diagnosis, risks, evidence, and KB.
                          _activation_left = _synthesis_budget_left()
-                         if summary and _activation_left > 45:
+                         if summary and _activation_left > 60:
                              generation_graph_input = {
                                  "evidence_links": verified_links,
                                  "foresight_links": foresight_links,
@@ -4988,11 +5930,11 @@ The AI Diagnosis below is LOCKED. The Knowledge Base is the mandatory baseline. 
 {knowledge_context}
 
 ### LOCKED DIAGNOSTIC CONTRACT
-Archetype: {expected_archetype}
 Reality score: {reality_results["score"]}
 Intent score: {intent_results["score"]}
 Financial context: {financial_context or "No financial interpretation available."}
 Washing / contradiction context: {washing_context or "No washing flag detected."}
+Archetype is audit-only and intentionally omitted from this writing context. Do not write labels such as Thriving, Modernizing, Cash Cow, or At Risk in strategic_synthesis, pitch, WHY, or WHAT.
 
 Diagnosis:
 {summary}
@@ -5013,8 +5955,8 @@ Evidence-based risks:
 1. Use the Knowledge Base terminology and proposal logic as the baseline.
 2. Ground every WHY/WHAT/Pitch claim in the locked diagnosis, risks, or evidence packet above.
 3. Do NOT add new facts, people, metrics, events, client names, partnerships, or timelines.
-4. If evidence is thin, produce one strong pair instead of two weak pairs.
-5. WHY1 must pair with WHAT1. If you produce WHY2, produce WHAT2 for the same theme.
+4. Always produce 2-3 paired WHY/WHAT items. If evidence is thin, frame pairs as validation or discovery triggers instead of omitting them.
+5. WHY1 must pair with WHAT1, WHY2 with WHAT2, and WHY3 with WHAT3 if present.
 6. Keep activation suggestive but evidence-bound: proposals, not promises.
 7. Write strategic_synthesis as the explicit reasoning bridge between CURRENT COMPANY REALITY and EXTERNAL FORESIGHT PRESSURES.
 8. A macro pressure never proves that the company has acted. Use modal language such as "may increase pressure", "creates a question", or "could affect".
@@ -5022,6 +5964,19 @@ Evidence-based risks:
 10. Do not compare Scanner outputs across scans or discuss Scanner performance.
 11. Cite company premises with [EVD-*] and macro premises with [FOR-*]. Every material synthesis sentence must cite the IDs it uses.
 12. If you use an absence-of-promoted-evidence signal, phrase it as an evidence/proof gap, never as proof that the capability is absent.
+13. If partial/contextual support exists, say what is partially supported and what remains unconfirmed; do not write absolute "no source verifies" wording for a broader capability.
+14. Treat evidence limits as one qualifier, not the whole thesis. Spend most of the synthesis on bounded interpretation, priorities, and pressure-readiness fit.
+
+### STRATEGIC SYNTHESIS
+Write 300-500 words. This is the deepest company-specific reasoning layer, not a sales pitch.
+It must include:
+- Current adaptation thesis: the company's present position in one clear opening sentence.
+- 2-3 strategic tensions grounded in the locked diagnosis, risks, financial context, or evidence gaps.
+- At least 2 external foresight pressure links, each connected to a current company readiness or proof condition.
+- At least 1 financial-capacity implication.
+- At least 2 time horizons (for example: "next 6-12 months" and "12-36 months").
+- 1 uncertainty or invalidation condition that would change the thesis.
+Do not use section headings inside strategic_synthesis. Write coherent executive prose.
 
 ### PITCH
 Write a direct cold-outreach message to a C-level executive at {companyName}.
@@ -5031,26 +5986,37 @@ Write a direct cold-outreach message to a C-level executive at {companyName}.
 - No generic service names.
 
 ### WHY / WHAT
-Generate 1-2 WHY statements and 1-2 WHAT statements.
-- WHY = the strategic reason to act, tied to a diagnosed weakness and business consequence.
-- WHAT = the observable business effect that would prove progress.
-- Each statement: 1-2 sentences.
+Generate 2-3 paired WHY/WHAT items every time. Do not collapse to one pair because evidence is thin.
+- WHY = why this matters for the customer: connect a detected challenge/problem to end-value, future strategy, risk, cost of inaction, or missed opportunity.
+- WHAT_TO_DO = the outcome or deliverable state to achieve next. It must describe what becomes clarified, evidenced, decision-ready, or observable for the customer; do not describe HOW to deliver it.
+- WHAT_PROGRESS_SHOWS = observable proof of progress after the activity. It may be qualitative or measurable, but do not invent numeric KPI targets unless already evidenced.
+- The legacy "what" field must contain the same outcome/deliverable-state text as WHAT_TO_DO for backward compatibility.
+- Do NOT lead WHAT with run, conduct, facilitate, perform, execute, or build.
+- Do NOT name consulting methods, tools, workshops, diagnostics, assessments, Evolving Modernization tactics, TAC codes, Value Stream Analysis, AI Readiness Assessment, or Delivery & Capacity Planning in WHAT. Those belong to proposal/HOW later.
+- Each WHY/WHAT field: 1-2 sentences.
+- Each pair must have exactly one theme_type:
+  - current_status: current evidence, operating-model, financial, proof, or portfolio reality.
+  - foresight_driven: external pressure combined with current readiness or uncertainty.
+  - proactive_opportunity: a bounded hypothesis or discovery trigger to validate, not a claim.
+- Each pair must also include sales_use with the same allowed values: current_status, foresight_driven, proactive_opportunity.
+- If evidence is thin, frame the pair as a validation/discovery trigger instead of omitting it.
+- WHY1 pairs with WHAT1, WHY2 with WHAT2, and WHY3 with WHAT3 if present.
 
 ### OUTPUT
 Respond with valid JSON only:
-{{"strategic_synthesis": "...", "commercial_pitch": "...", "why_proposals": ["...", "..."], "what_proposals": ["...", "..."]}}"""
+{{"strategic_synthesis": "...", "commercial_pitch": "...", "activation_pairs": [{{"theme_type": "current_status", "sales_use": "current_status", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "..."}}, {{"theme_type": "foresight_driven", "sales_use": "foresight_driven", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "..."}}], "why_proposals": ["WHY texts only"], "what_proposals": ["WHAT_TO_DO texts only"], "what_progress_proposals": ["WHAT_PROGRESS_SHOWS texts only"]}}"""
 
                              activation_text = ""
-                             activation_timeout = min(75, max(35, _activation_left - 20))
+                             activation_timeout = min(95, max(50, _activation_left - 25))
                              try:
-                                 print(f"   🔄 [Activation] Generating WHY/WHAT/Pitch from locked diagnosis via gpt-5.5 (timeout: {activation_timeout}s)...")
+                                 print(f"   🔄 [Activation] Generating Strategic Synthesis/WHY/WHAT/Pitch from locked diagnosis via {GPT_PRO_MODEL} (timeout: {activation_timeout}s)...")
                                  act_start = time.time()
 
                                  def _activation_gpt():
                                      return _call_openai_text(
                                          activation_prompt,
-                                         model="gpt-5.5",
-                                         max_output_tokens=3500,
+                                         model=GPT_PRO_MODEL,
+                                         max_output_tokens=5000,
                                          timeout=activation_timeout,
                                      )
 
@@ -5060,15 +6026,15 @@ Respond with valid JSON only:
                                      activation_text = act_future.result(timeout=activation_timeout)
                                  except concurrent.futures.TimeoutError:
                                      act_pool.shutdown(wait=False)
-                                     print(f"   ⏰ [Activation] GPT 5.5 timed out after {activation_timeout}s")
+                                     print(f"   ⏰ [Activation] {GPT_PRO_MODEL} timed out after {activation_timeout}s")
                                      raise Exception(f"GPT activation timeout after {activation_timeout}s")
                                  act_pool.shutdown(wait=False)
-                                 print(f"   ✅ [Activation] GPT 5.5 complete ({int((time.time() - act_start) * 1000)}ms)")
+                                 print(f"   ✅ [Activation] {GPT_PRO_MODEL} complete ({int((time.time() - act_start) * 1000)}ms)")
                              except Exception as act_gpt_err:
-                                 print(f"   ❌ [Activation] GPT 5.5 failed: {act_gpt_err}")
+                                 print(f"   ❌ [Activation] {GPT_PRO_MODEL} failed: {act_gpt_err}")
 
-                             if not activation_text and _synthesis_budget_left() > 35:
-                                 sonnet_activation_timeout = min(60, max(30, _synthesis_budget_left() - 15))
+                             if not activation_text and _synthesis_budget_left() > 50:
+                                 sonnet_activation_timeout = min(75, max(45, _synthesis_budget_left() - 20))
                                  try:
                                      print(f"   🔄 [Activation] Falling back to Claude Sonnet 4.6 (timeout: {sonnet_activation_timeout}s)...")
                                      act_start = time.time()
@@ -5076,7 +6042,7 @@ Respond with valid JSON only:
                                      def _activation_sonnet():
                                          return claude_client.messages.create(
                                              model="claude-sonnet-4-6",
-                                             max_tokens=3000,
+                                             max_tokens=4500,
                                              system="You are a conservative activation writer. Use only the locked diagnosis, evidence packet, and Knowledge Base. Return JSON only.",
                                              messages=[{"role": "user", "content": activation_prompt}],
                                          )
@@ -5102,24 +6068,27 @@ Respond with valid JSON only:
                                  prior_activation = {
                                      "strategic_synthesis": strategic_synthesis,
                                      "pitch": "" if pitch == "Pitch Unavailable" else pitch,
+                                     "activation_pairs": activation_pairs,
                                      "why_proposals": why_proposals,
                                      "what_proposals": what_proposals,
+                                     "what_progress_proposals": what_progress_proposals,
                                  }
                                  activation_json = _parse_activation_json(activation_text)
                                  if not activation_json and _synthesis_budget_left() > 25:
                                      try:
-                                         repair_timeout = min(30, max(15, _synthesis_budget_left() - 10))
+                                         repair_timeout = min(35, max(18, _synthesis_budget_left() - 10))
                                          print(f"   🔧 [Activation] JSON parse failed; trying cheap JSON repair (timeout: {repair_timeout}s)...")
                                          repair_prompt = f"""Convert the following Strategic Activation output into STRICT JSON only.
 Do not add facts. Preserve the meaning. Required keys:
-{{"strategic_synthesis": "...", "commercial_pitch": "...", "why_proposals": ["..."], "what_proposals": ["..."]}}
+{{"strategic_synthesis": "...", "commercial_pitch": "...", "activation_pairs": [{{"theme_type": "current_status|foresight_driven|proactive_opportunity", "sales_use": "current_status|foresight_driven|proactive_opportunity", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "outcome or deliverable state, not HOW/method language", "what_progress_shows": "observable proof of progress"}}], "why_proposals": ["..."], "what_proposals": ["what_to_do outcome/deliverable-state texts"], "what_progress_proposals": ["what_progress_shows texts"]}}
+Do not write method-led WHAT text such as run, conduct, workshop, diagnostic, assessment, Value Stream Analysis, AI Readiness Assessment, or Delivery & Capacity Planning.
 
 TEXT TO REPAIR:
 {activation_text[:7000]}"""
                                          repaired_text = call_openai_text(
                                              repair_prompt,
                                              model="gpt-5.4",
-                                             max_output_tokens=1800,
+                                             max_output_tokens=2600,
                                              timeout=repair_timeout,
                                          )
                                          activation_json = _parse_activation_json(repaired_text)
@@ -5131,22 +6100,27 @@ TEXT TO REPAIR:
                                  else:
                                      print("   ⚠️ [Activation] Could not parse activation JSON — using plain-text fallback")
                                      activation_norm = _plain_text_activation_fallback(activation_text, prior_activation)
+                                 activation_norm = strip_archetype_labels_from_text(activation_norm)
 
                                  if activation_norm.get("pitch"):
                                      pitch = activation_norm["pitch"]
                                  if activation_norm.get("strategic_synthesis"):
                                      strategic_synthesis = activation_norm["strategic_synthesis"]
+                                 if activation_norm.get("activation_pairs"):
+                                     activation_pairs = activation_norm["activation_pairs"]
                                  if activation_norm.get("why_proposals"):
                                      why_proposals = activation_norm["why_proposals"]
                                  if activation_norm.get("what_proposals"):
                                      what_proposals = activation_norm["what_proposals"]
+                                 if activation_norm.get("what_progress_proposals"):
+                                     what_progress_proposals = activation_norm["what_progress_proposals"]
                                  if pitch or why_proposals or what_proposals or strategic_synthesis:
                                      print(
                                          f"   ✅ [Activation] Grounded activation complete "
                                          f"(why={len(why_proposals)}, what={len(what_proposals)}, pitch={'yes' if pitch and pitch != 'Pitch Unavailable' else 'no'}, synthesis={'yes' if strategic_synthesis else 'no'})"
                                      )
                          elif summary:
-                             print(f"   ⏭ [Activation] Budget < 45s before final reserve ({_activation_left}s) — skipping WHY/WHAT/Pitch")
+                             print(f"   ⏭ [Activation] Budget < 60s before final reserve ({_activation_left}s) — skipping WHY/WHAT/Pitch")
 
                     else:
                          summary = response_text
@@ -5234,6 +6208,28 @@ TEXT TO REPAIR:
             foresight_links,
             financial_evidence_links,
         )
+        def _quarantine_key(item):
+            value = str((item or {}).get("canonical_url") or (item or {}).get("url") or "").strip()
+            if not value:
+                return ""
+            parsed = urlparse(value if "://" in value else f"https://{value}")
+            host = parsed.netloc.lower().removeprefix("www.")
+            path = re.sub(r"/+", "/", parsed.path or "/").rstrip("/") or "/"
+            return f"{host}{path}".lower()
+
+        scanner_evidence_quarantine = []
+        seen_quarantine = set()
+        for item in (existing_data or {}).get("scanner_evidence_quarantine", []) + reality_results.get("scanner_evidence_quarantine", []):
+            if not isinstance(item, dict):
+                continue
+            key = _quarantine_key(item)
+            if not key or key in seen_quarantine:
+                continue
+            cleaned = dict(item)
+            cleaned.setdefault("canonical_url", key)
+            scanner_evidence_quarantine.append(cleaned)
+            seen_quarantine.add(key)
+        scanner_evidence_quarantine = scanner_evidence_quarantine[-30:]
 
         full_data = {
             "id": result_id,
@@ -5249,6 +6245,7 @@ TEXT TO REPAIR:
             "reality_gap": gap,
             "confidence_score": confidence,
             "archetype": archetype,
+            "frozen_classification_snapshot": reality_results.get("frozen_classification_snapshot", {}),
             "classification_context": classification_context,
             "adaptability_archetype": classification_context["adaptability_archetype"],
             "favi_vulnerability_segment": classification_context["favi_vulnerability_segment"],
@@ -5260,6 +6257,9 @@ TEXT TO REPAIR:
             "metrics": intent_results.get("metrics", {}),
             "reality_checklist": reality_results["checklist"],
             "evidence_links": managed_evidence_links,
+            "forensic_acquisition_health": reality_results.get("forensic_acquisition_health", {}),
+            "registry_context": reality_results.get("registry_context", {}),
+            "scanner_evidence_quarantine": scanner_evidence_quarantine,
             "evidence_gold_standard": source_mgmt["gold_standard"],
             "evidence_sufficiency": evidence_sufficiency,
             "low_evidence_mode": evidence_sufficiency.get("status") != "complete",
@@ -5277,8 +6277,10 @@ TEXT TO REPAIR:
             "strategic_synthesis": _strip_tac_codes(strategic_synthesis),
             "pitch_text": pitch,
             "evidence_based_risks": evidence_based_risks,
+            "activation_pairs": activation_pairs,
             "why_proposals": why_proposals,
             "what_proposals": what_proposals,
+            "what_progress_proposals": what_progress_proposals,
             "lastUpdated": new_timestamp,
             "history": history,
             "is_simulated": reality_results.get("is_simulated", False),
@@ -5418,32 +6420,46 @@ TEXT TO REPAIR:
                 for claim in fact_check["false_claims"]:
                     print(f"      - {claim}")
                 corrected_summary = fact_check.get("corrected_summary", "")
+                corrected_sections = fact_check.get("corrected_sections") or {}
+                corrected_pitch = fact_check.get("corrected_pitch", "") or ""
                 if corrected_summary:
                     print(
-                        f"   🧭 [Fact-Check] Correction suggestion retained for audit "
-                        f"({len(corrected_summary.split())} words); original inference text preserved"
+                        f"   🧭 [Fact-Check] Applying corrected public AI Diagnosis "
+                        f"({len(corrected_summary.split())} words); original retained in audit metadata"
                     )
+                    full_data["summary_text"] = _strip_tac_codes(sanitize_inference_wording(corrected_summary))
+                if isinstance(corrected_sections, dict):
+                    if corrected_sections.get("strategic_synthesis"):
+                        full_data["strategic_synthesis"] = _strip_tac_codes(
+                            sanitize_inference_wording(corrected_sections["strategic_synthesis"])
+                        )
+                    if corrected_sections.get("evidence_based_risks"):
+                        full_data["evidence_based_risks"] = sanitize_inference_wording(
+                            corrected_sections["evidence_based_risks"]
+                        )
+                if corrected_pitch:
+                    full_data["pitch_text"] = sanitize_inference_wording(corrected_pitch)
                 full_data["re_synthesis"] = {
-                    "was_resynthesized": False,
+                    "was_resynthesized": bool(corrected_summary or corrected_sections or corrected_pitch),
                     "false_claims_found": fact_check["false_claims"],
                     "false_claims_detailed": fact_check.get("false_claims_detailed", []),
                     "audit_notes": fact_check.get("audit_notes", []),
                     "audit_notes_detailed": fact_check.get("audit_notes_detailed", []),
                     "suggested_corrected_summary": _strip_tac_codes(corrected_summary) if corrected_summary else "",
-                    "suggested_corrected_pitch": fact_check.get("corrected_pitch", "") or "",
-                    "suggested_corrected_sections": fact_check.get("corrected_sections") or {},
-                    "evidence_purged": {"removed": 0, "skipped": True, "reason": "inference_audit_preserved_sources"},
+                    "suggested_corrected_pitch": corrected_pitch,
+                    "suggested_corrected_sections": corrected_sections,
+                    "evidence_purged": {"removed": 0, "skipped": True, "reason": "public_text_corrected_without_source_purge"},
                     "resynth_model": fact_check.get("fact_check_model", ""),
                     "resynth_time_ms": fact_check.get("fact_check_time_ms", 0),
-                    "method": "inference_audit_preserved_original",
+                    "method": "public_correction_applied" if (corrected_summary or corrected_sections or corrected_pitch) else "inference_audit_preserved_original",
                 }
                 full_data["ai_verification"]["verified"] = False
                 full_data["ai_verification"]["verification_status"] = (
                     fact_check.get("verification_status") or "inference_audit_requires_review"
                 )
                 full_data["ai_verification"]["note"] = (
-                    "AI Diagnosis and Strategic Synthesis were preserved for inference audit. "
-                    "General Summary remains the strict factual correction layer."
+                    "Blocking inference issues were corrected in public-facing fields when a correction was available. "
+                    "Audit metadata preserves the original finding trail."
                 )
                 if scan_quality == "complete":
                     scan_quality = "unverified"
@@ -5519,6 +6535,7 @@ TEXT TO REPAIR:
         # structured foresight evidence, Why/What proposals, all metrics and evidence).
         dr_text, dr_model = "", ""
         dr_ms = 0
+        prior_summaries = {}
         _dr_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
         full_data["detailed_report_status"] = "pending"
         if _dr_remaining < DETAIL_REPORT_COMPACT_MIN:
@@ -5532,10 +6549,19 @@ TEXT TO REPAIR:
                 scan_quality = "partial_report"
         else:
             try:
-                from detailed_report import generate_detailed_report
+                from detailed_report import (
+                    complete_detailed_report_draft,
+                    detailed_report_quality,
+                    generate_detailed_report,
+                )
                 dr_start = time.time()
                 dr_compact = _dr_remaining < DETAIL_REPORT_FULL_MIN
-                dr_time_budget = max(45, min(140, int(_dr_remaining) - 10))
+                if dr_compact:
+                    dr_time_budget = max(45, min(110, int(_dr_remaining) - 45))
+                else:
+                    # Full reports need room for Opus plus one GPT completion pass,
+                    # while preserving time for fact-check, save and job finalization.
+                    dr_time_budget = max(90, min(230, int(_dr_remaining) - 110))
                 if dr_compact:
                     print(
                         f"   📝 [Detailed Report] Moderate budget ({int(_dr_remaining)}s) "
@@ -5548,7 +6574,6 @@ TEXT TO REPAIR:
                     )
 
                 # Collect all prior analyses for meta-synthesis
-                prior_summaries = {}
                 if full_data.get("general_summary"):
                     prior_summaries["general_summary"] = full_data["general_summary"]
                 if full_data.get("summary_text"):
@@ -5611,12 +6636,52 @@ TEXT TO REPAIR:
                     "fact_check_skipped": True,
                     "reason": "insufficient_budget",
                 }
-            full_data["detailed_report"] = dr_text
-            full_data["detailed_report_model"] = dr_model
-            full_data["detailed_report_status"] = "generated"
-            full_data.pop("detailed_report_skip_reason", None)
-            wc = len(dr_text.split())
-            print(f"   ✅ [Detailed Report] {wc} words, model={dr_model} ({dr_ms}ms)")
+
+            dr_quality = detailed_report_quality(dr_text, compact=dr_compact)
+            if not dr_quality.get("complete"):
+                print(
+                    "   ⚠️ [Detailed Report] Post-check completeness failed: "
+                    f"words={dr_quality.get('word_count')}, missing={dr_quality.get('missing')}"
+                )
+                _dr_repair_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
+                if _dr_repair_remaining >= 65:
+                    try:
+                        repaired_text, repair_model, repair_quality = complete_detailed_report_draft(
+                            full_data,
+                            companyName,
+                            foresight_data,
+                            dr_text,
+                            prior_summaries=prior_summaries if prior_summaries else None,
+                            compact=dr_compact,
+                            time_budget_seconds=max(35, min(95, int(_dr_repair_remaining) - 35)),
+                        )
+                        if repaired_text and repair_quality.get("complete"):
+                            dr_text = repaired_text
+                            dr_model = f"{dr_model}+{repair_model}" if dr_model else repair_model
+                            dr_quality = repair_quality
+                            full_data["detailed_report"] = dr_text
+                    except Exception as repair_err:
+                        print(f"   ⚠️ [Detailed Report] Post-check repair failed: {repair_err}")
+                if not dr_quality.get("complete"):
+                    full_data.pop("detailed_report", None)
+                    full_data["detailed_report_model"] = dr_model
+                    full_data["detailed_report_status"] = "incomplete"
+                    full_data["detailed_report_skip_reason"] = "detailed_report_incomplete_after_repair"
+                    full_data["detailed_report_quality"] = dr_quality
+                    if scan_quality == "complete":
+                        scan_quality = "partial_report"
+                    dr_text = ""
+
+            if dr_text:
+                full_data["detailed_report"] = dr_text
+                full_data["detailed_report_model"] = dr_model
+                full_data["detailed_report_status"] = "generated"
+                full_data["detailed_report_quality"] = dr_quality
+                full_data.pop("detailed_report_skip_reason", None)
+                wc = len(dr_text.split())
+                print(f"   ✅ [Detailed Report] {wc} words, model={dr_model} ({dr_ms}ms)")
+            else:
+                print("   ⚠️ [Detailed Report] Incomplete after repair — not rendering as generated")
         else:
             if full_data.get("detailed_report_status") == "pending":
                 full_data["detailed_report_status"] = "empty"

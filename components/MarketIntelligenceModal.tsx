@@ -118,41 +118,64 @@ const SEGMENT_CONFIG: Record<string, { color: string; bg: string; border: string
 
 const ADAPTATION_SEGMENT_CONFIG: Record<string, { color: string; hex: string; bg: string; border: string; description: string; condition: string }> = {
   "Trapped": { color: "text-rose-300", hex: "#fb7185", bg: "bg-rose-500/15", border: "border-rose-500/30", description: "Low cushion, future pressure is high", condition: "Low adaptation capacity + high future vulnerability" },
-  "Wealthy Under Pressure": { color: "text-amber-300", hex: "#fbbf24", bg: "bg-amber-500/15", border: "border-amber-500/30", description: "Financial cushion exists, but future forces are building", condition: "High adaptation capacity + high future vulnerability" },
-  "Mature & Stable": { color: "text-blue-300", hex: "#60a5fa", bg: "bg-blue-500/15", border: "border-blue-500/30", description: "Financially steady with lower future pressure", condition: "Low adaptation pressure + lower future vulnerability" },
+  "Capable but Exposed": { color: "text-amber-300", hex: "#fbbf24", bg: "bg-amber-500/15", border: "border-amber-500/30", description: "Capacity exists, but future forces are building", condition: "High adaptation capacity + high future exposure" },
+  "Limited but Sheltered": { color: "text-blue-300", hex: "#60a5fa", bg: "bg-blue-500/15", border: "border-blue-500/30", description: "Lower capacity, but future pressure is lower", condition: "Low adaptation capacity + lower future exposure" },
   "Future-Ready": { color: "text-emerald-300", hex: "#34d399", bg: "bg-emerald-500/15", border: "border-emerald-500/30", description: "Strong cushion and lower future pressure", condition: "High adaptation capacity + lower future vulnerability" },
 };
 
-const getFacCutoff = (companies: any[] = []) => {
-  const values = companies.map((c: any) => Number(c?.fac || 0)).filter((x: number) => Number.isFinite(x) && x >= 0);
-  if (!values.length) return 50;
+const getScoreMedian = (values: number[], fallback = 50) => {
+  if (!values.length) return fallback;
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
 };
 
-const getAdaptationSegment = (company: any, faviCutoff = 50, facCutoff = 50) => {
-  const fac = Number(company?.fac || 0);
-  const favi = Number(company?.favi_score || 0);
-  const highFuture = favi >= faviCutoff;
-  const highCapacity = fac >= facCutoff;
+const getFacCutoff = (companies: any[] = []) => {
+  const values = companies
+    .map((c: any) => Number(c?.adaptation_capacity ?? c?.fac ?? 0))
+    .filter((x: number) => Number.isFinite(x) && x >= 0);
+  return getScoreMedian(values, 50);
+};
+
+const getAdaptationSegment = (company: any, futureCutoff = 50, capacityCutoff = 50) => {
+  const capacity = Number(company?.adaptation_capacity ?? company?.fac ?? 0);
+  const future = Number(company?.future_exposure_gap ?? company?.favi_score ?? 0);
+  const highFuture = future >= futureCutoff;
+  const highCapacity = capacity >= capacityCutoff;
   if (highFuture && !highCapacity) return "Trapped";
-  if (highFuture && highCapacity) return "Wealthy Under Pressure";
-  if (!highFuture && !highCapacity) return "Mature & Stable";
+  if (highFuture && highCapacity) return "Capable but Exposed";
+  if (!highFuture && !highCapacity) return "Limited but Sheltered";
   return "Future-Ready";
 };
 
-const getAdaptationSegmentCounts = (companies: any[] = [], faviCutoff = 50, facCutoff = 50) => {
+const getAdaptationSegmentCounts = (companies: any[] = [], futureCutoff = 50, capacityCutoff = 50) => {
   const counts: Record<string, number> = {
     "Trapped": 0,
-    "Wealthy Under Pressure": 0,
-    "Mature & Stable": 0,
+    "Capable but Exposed": 0,
+    "Limited but Sheltered": 0,
     "Future-Ready": 0,
   };
   companies.forEach((company: any) => {
-    counts[getAdaptationSegment(company, faviCutoff, facCutoff)] += 1;
+    counts[getAdaptationSegment(company, futureCutoff, capacityCutoff)] += 1;
   });
   return counts;
+};
+
+const getFutureExposureCutoff = (data: any, fallback = 48) =>
+  Number(data?.favi_cutoffs?.future_exposure_gap ?? data?.favi_cutoffs?.favi ?? fallback);
+
+const getCurrentVulnerabilityV2Cutoff = (data: any, fallback = 40) =>
+  Number(data?.favi_cutoffs?.current_vulnerability_v2 ?? data?.favi_cutoffs?.current_vulnerability ?? fallback);
+
+const getCurrentFutureSegment = (company: any, futureCutoff = 50, currentCutoff = 50) => {
+  const current = Number(company?.current_vulnerability_v2 ?? company?.current_vulnerability ?? 0);
+  const future = Number(company?.future_exposure_gap ?? company?.favi_score ?? 0);
+  const highCurrent = current >= currentCutoff;
+  const highFuture = future >= futureCutoff;
+  if (highCurrent && highFuture) return "Critical";
+  if (!highCurrent && highFuture) return "Emerging Risk";
+  if (highCurrent && !highFuture) return "Current Recovery Need";
+  return "Well Positioned";
 };
 
 const FAVI_COLOR = (score: number) => {
@@ -200,6 +223,22 @@ table.matrix td { font-family: monospace; font-size: 11px; color: var(--text-mut
 .bar-track { flex: 1; height: 14px; background: var(--bg); border-radius: 4px; overflow: hidden; position: relative; }
 .bar-fill { height: 100%; border-radius: 4px; }
 .bar-val { font-size: 10px; font-family: monospace; color: var(--text-muted); min-width: 35px; }
+.mi-card { background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; margin-bottom: 24px; padding: 16px; overflow: hidden; }
+.mi-card h2 { border: 0; padding: 0; margin: 0 0 12px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }
+.mi-card p { font-size: 10px; color: var(--text-dim); line-height: 1.6; }
+.theme-desc-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 12px; margin-top: 12px; }
+.theme-desc-row { display: flex; gap: 8px; font-size: 9px; line-height: 1.45; }
+.theme-desc-row strong { white-space: nowrap; }
+.force-map { border-color: rgba(167,139,250,0.22); padding: 0; border-radius: 12px; }
+.force-map-header { display: flex; justify-content: space-between; gap: 16px; align-items: center; padding: 16px 20px; border-bottom: 1px solid rgba(167,139,250,0.1); }
+.force-map-title { display: flex; align-items: center; gap: 12px; }
+.force-map-icon { width: 32px; height: 32px; border-radius: 8px; background: rgba(139,92,246,0.2); color: #a78bfa; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; }
+.force-map-body { padding: 16px 20px; }
+.force-map-body h3 { font-size: 16px; color: #ede9fe; margin: 24px 0 12px; }
+.force-map-body h4 { font-size: 14px; color: #ddd6fe; margin: 24px 0 12px; padding-bottom: 6px; border-bottom: 1px solid rgba(167,139,250,0.1); }
+.force-map-body p { font-size: 12px; color: rgba(203,213,225,0.9); line-height: 1.7; margin-bottom: 16px; }
+.force-map-body strong { color: #ddd6fe; font-weight: 600; }
+.force-map-footer { padding: 10px 20px; border-top: 1px solid rgba(167,139,250,0.1); display: flex; flex-wrap: wrap; gap: 16px; font-size: 9px; color: #475569; }
 .footer { text-align: center; color: var(--text-dim); font-size: 11px; font-family: monospace; margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--border); }
 @media print {
   body { background: white; color: #1a1a1a; max-width: 100%; padding: 20px; }
@@ -208,6 +247,9 @@ table.matrix td { font-family: monospace; font-size: 11px; color: var(--text-mut
   td, th { color: #333; }
   .badge { background: #f5f5f5; border-color: #ccc; color: #555; }
   .footer { color: #999; border-color: #ddd; }
+  .mi-card, .force-map { background: #fafafa; border-color: #ddd; }
+  .force-map-body p { color: #333; }
+  .theme-desc-row span { color: #555 !important; }
 }`;
 
 const downloadHtml = (html: string, filename: string) => {
@@ -473,14 +515,14 @@ const renderMiNarrativeMarkdownHtml = (text: string): string => {
   return `${body}${renderMiEvidenceRefsHtml(refs)}`;
 };
 
-// Adaptation Capacity x Future Vulnerability scatter for the static HTML export.
+// Adaptation Capacity x Future Exposure Gap scatter for the static HTML export.
 // Mirrors the in-app Recharts version: dots colored by segment, dashed
-// reference lines at the calibrated FAVI cutoff and the FAC median, four
+// reference lines at the calibrated future exposure cutoff and capacity median, four
 // quadrant labels, and a small caption listing what each quadrant means.
 const buildSvgAdaptabilityScatter = (
   faviCompanies: any[],
-  faviCutoff: number,
-  facCutoff: number,
+  futureCutoff: number,
+  capacityCutoff: number,
 ): string => {
   if (!faviCompanies?.length) return '';
   const chartW = 720, chartH = 360, mL = 56, mR = 36, mT = 28, mB = 50;
@@ -488,7 +530,7 @@ const buildSvgAdaptabilityScatter = (
   const xToPx = (x: number) => mL + (Math.max(0, Math.min(100, x)) / 100) * plotW;
   const yToPx = (y: number) => mT + plotH - (Math.max(0, Math.min(100, y)) / 100) * plotH;
   const segColor = (company: any) => {
-    const seg = getAdaptationSegment(company, faviCutoff, facCutoff);
+    const seg = getAdaptationSegment(company, futureCutoff, capacityCutoff);
     return ADAPTATION_SEGMENT_CONFIG[seg]?.hex || '#94a3b8';
   };
 
@@ -504,58 +546,59 @@ const buildSvgAdaptabilityScatter = (
     );
   }).join('\n');
 
-  // Reference lines: vertical at FAC median, horizontal at FAVI cutoff
-  // visually nudged down by 2 (label still reflects the actual cutoff value).
-  const xRef = xToPx(facCutoff), yRef = yToPx(Math.max(0, faviCutoff - 2));
+  // Reference lines: vertical at adaptation capacity median, horizontal at future exposure cutoff.
+  const xRef = xToPx(capacityCutoff), yRef = yToPx(Math.max(0, futureCutoff - 2));
   const refs = [
     `<line x1="${xRef}" y1="${mT}" x2="${xRef}" y2="${mT + plotH}" stroke="#475569" stroke-dasharray="6,4"/>`,
     `<line x1="${mL}" y1="${yRef}" x2="${mL + plotW}" y2="${yRef}" stroke="#475569" stroke-dasharray="6,4"/>`,
-    `<text x="${xRef + 4}" y="${mT + 10}" fill="#475569" font-size="9" font-family="sans-serif">FAC=${facCutoff.toFixed(0)}</text>`,
-    `<text x="${mL + plotW - 4}" y="${yRef - 4}" text-anchor="end" fill="#475569" font-size="9" font-family="sans-serif">FAVI=${faviCutoff}</text>`,
+    `<text x="${xRef + 4}" y="${mT + 10}" fill="#475569" font-size="9" font-family="sans-serif">Capacity=${capacityCutoff.toFixed(0)}</text>`,
+    `<text x="${mL + plotW - 4}" y="${yRef - 4}" text-anchor="end" fill="#475569" font-size="9" font-family="sans-serif">Future=${futureCutoff}</text>`,
   ].join('\n');
 
   // Quadrant labels in the four corners.
   const labels = [
     `<text x="${mL + 8}" y="${mT + 16}" fill="#fb7185" font-size="10" font-weight="700" font-family="sans-serif">TRAPPED</text>`,
-    `<text x="${mL + plotW - 8}" y="${mT + 16}" text-anchor="end" fill="#fbbf24" font-size="10" font-weight="700" font-family="sans-serif">WEALTHY UNDER PRESSURE</text>`,
-    `<text x="${mL + 8}" y="${mT + plotH - 8}" fill="#60a5fa" font-size="10" font-weight="700" font-family="sans-serif">MATURE &amp; STABLE</text>`,
+    `<text x="${mL + plotW - 8}" y="${mT + 16}" text-anchor="end" fill="#fbbf24" font-size="10" font-weight="700" font-family="sans-serif">CAPABLE BUT EXPOSED</text>`,
+    `<text x="${mL + 8}" y="${mT + plotH - 8}" fill="#60a5fa" font-size="10" font-weight="700" font-family="sans-serif">LIMITED BUT SHELTERED</text>`,
     `<text x="${mL + plotW - 8}" y="${mT + plotH - 8}" text-anchor="end" fill="#34d399" font-size="10" font-weight="700" font-family="sans-serif">FUTURE-READY</text>`,
   ].join('\n');
 
   // Dots, one per company that has any signal on either axis.
   const dots = faviCompanies
-    .filter((c: any) => (c.favi_score || 0) > 0 || (c.fac || 0) > 0)
+    .filter((c: any) => (c.future_exposure_gap ?? c.favi_score ?? 0) > 0 || (c.adaptation_capacity ?? c.fac ?? 0) > 0)
     .map((c: any) => {
-      const cx = xToPx(c.fac || 0), cy = yToPx(c.favi_score || 0);
-      const adaptationSegment = getAdaptationSegment(c, faviCutoff, facCutoff);
+      const capacity = c.adaptation_capacity ?? c.fac ?? 0;
+      const future = c.future_exposure_gap ?? c.favi_score ?? 0;
+      const cx = xToPx(capacity), cy = yToPx(future);
+      const adaptationSegment = getAdaptationSegment(c, futureCutoff, capacityCutoff);
       const fill = segColor(c);
       const safeName = String(c.name || '').replace(/[<>&"']/g, ch => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' } as any)[ch] || ch);
-      return `<circle cx="${cx}" cy="${cy}" r="4.5" fill="${fill}" fill-opacity="0.78" stroke="${fill}" stroke-opacity="0.95"><title>${safeName} (${c.domain || ''}) — FAC=${c.fac || 0}, FAVI=${c.favi_score || 0}, ${adaptationSegment}</title></circle>`;
+      return `<circle cx="${cx}" cy="${cy}" r="4.5" fill="${fill}" fill-opacity="0.78" stroke="${fill}" stroke-opacity="0.95"><title>${safeName} (${c.domain || ''}) — Capacity=${capacity}, Future exposure=${future}, ${adaptationSegment}</title></circle>`;
     }).join('\n');
 
   // Axis titles.
-  const xTitle = `<text x="${mL + plotW / 2}" y="${chartH - 8}" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">Financial Adaptation Capacity (FAC)</text>`;
-  const yTitle = `<text x="${14}" y="${mT + plotH / 2}" text-anchor="middle" transform="rotate(-90 14 ${mT + plotH / 2})" fill="#64748b" font-size="9" font-family="sans-serif">Foresight Vulnerability (FAVI)</text>`;
+  const xTitle = `<text x="${mL + plotW / 2}" y="${chartH - 8}" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">Adaptation Capacity</text>`;
+  const yTitle = `<text x="${14}" y="${mT + plotH / 2}" text-anchor="middle" transform="rotate(-90 14 ${mT + plotH / 2})" fill="#64748b" font-size="9" font-family="sans-serif">Future Exposure Gap</text>`;
 
   const caption = `<div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-size:10px;color:#94a3b8">
     <div><span style="color:#fb7185;font-weight:700">TRAPPED</span> <span style="color:#64748b">(top-left)</span> — low cushion, future bad</div>
-    <div><span style="color:#fbbf24;font-weight:700">WEALTHY UNDER PRESSURE</span> <span style="color:#64748b">(top-right)</span> — should evaluate investment priorities</div>
-    <div><span style="color:#60a5fa;font-weight:700">MATURE &amp; STABLE</span> <span style="color:#64748b">(bottom-left)</span> — financially fine, no future pressure</div>
+    <div><span style="color:#fbbf24;font-weight:700">CAPABLE BUT EXPOSED</span> <span style="color:#64748b">(top-right)</span> — capacity exists, future is building</div>
+    <div><span style="color:#60a5fa;font-weight:700">LIMITED BUT SHELTERED</span> <span style="color:#64748b">(bottom-left)</span> — lower capacity, lower future pressure</div>
     <div><span style="color:#34d399;font-weight:700">FUTURE-READY</span> <span style="color:#64748b">(bottom-right)</span> — best position</div>
   </div>`;
 
   return `<svg viewBox="0 0 ${chartW} ${chartH}" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:${chartW}px;height:auto;display:block;margin:0 auto">${grid}\n${refs}\n${labels}\n${dots}\n${xTitle}\n${yTitle}</svg>${caption}`;
 };
 
-// FAVI vs Current Vulnerability scatter for the static HTML export.
+// Future Exposure Gap vs Current Vulnerability scatter for the static HTML export.
 // Mirrors the in-app Recharts version: dots colored by segment, dashed
-// reference lines at the calibrated current-vulnerability and FAVI
+// reference lines at the calibrated current-vulnerability and future exposure
 // cutoffs, four quadrant labels named after the segments themselves
-// (Sleepwalking / Critical / Safe Harbor / Wounded but Sheltered),
+// (Emerging Risk / Critical / Well Positioned / Current Recovery Need),
 // and a small caption.
 const buildSvgFaviCurrentScatter = (
   faviCompanies: any[],
-  faviCutoff: number,
+  futureCutoff: number,
   currentCutoff: number,
 ): string => {
   if (!faviCompanies?.length) return '';
@@ -565,8 +608,8 @@ const buildSvgFaviCurrentScatter = (
   const yToPx = (y: number) => mT + plotH - (Math.max(0, Math.min(100, y)) / 100) * plotH;
   const segColor = (seg: string) =>
     seg === 'Critical' ? '#f43f5e' :
-    seg === 'Sleepwalking' ? '#f59e0b' :
-    seg === 'Wounded but Sheltered' ? '#3b82f6' : '#10b981';
+    seg === 'Emerging Risk' ? '#f59e0b' :
+    seg === 'Current Recovery Need' ? '#3b82f6' : '#10b981';
 
   const ticks = [0, 25, 50, 75, 100];
   const grid = ticks.map(t => {
@@ -579,39 +622,43 @@ const buildSvgFaviCurrentScatter = (
     );
   }).join('\n');
 
-  const xRef = xToPx(currentCutoff), yRef = yToPx(faviCutoff);
+  const xRef = xToPx(currentCutoff), yRef = yToPx(futureCutoff);
   const refs = [
     `<line x1="${xRef}" y1="${mT}" x2="${xRef}" y2="${mT + plotH}" stroke="#475569" stroke-dasharray="6,4"/>`,
     `<line x1="${mL}" y1="${yRef}" x2="${mL + plotW}" y2="${yRef}" stroke="#475569" stroke-dasharray="6,4"/>`,
     `<text x="${xRef + 4}" y="${mT + 10}" fill="#475569" font-size="9" font-family="sans-serif">Vuln=${currentCutoff}</text>`,
-    `<text x="${mL + plotW - 4}" y="${yRef - 4}" text-anchor="end" fill="#475569" font-size="9" font-family="sans-serif">FAVI=${faviCutoff}</text>`,
+    `<text x="${mL + plotW - 4}" y="${yRef - 4}" text-anchor="end" fill="#475569" font-size="9" font-family="sans-serif">Future=${futureCutoff}</text>`,
   ].join('\n');
 
-  // Quadrants named after the segments they classify.
   const labels = [
-    `<text x="${mL + 8}" y="${mT + 16}" fill="#fbbf24" font-size="10" font-weight="700" font-family="sans-serif">SLEEPWALKING</text>`,
+    `<text x="${mL + 8}" y="${mT + 16}" fill="#fbbf24" font-size="10" font-weight="700" font-family="sans-serif">EMERGING RISK</text>`,
     `<text x="${mL + plotW - 8}" y="${mT + 16}" text-anchor="end" fill="#fb7185" font-size="10" font-weight="700" font-family="sans-serif">CRITICAL</text>`,
-    `<text x="${mL + 8}" y="${mT + plotH - 8}" fill="#34d399" font-size="10" font-weight="700" font-family="sans-serif">SAFE HARBOR</text>`,
-    `<text x="${mL + plotW - 8}" y="${mT + plotH - 8}" text-anchor="end" fill="#60a5fa" font-size="10" font-weight="700" font-family="sans-serif">WOUNDED BUT SHELTERED</text>`,
+    `<text x="${mL + 8}" y="${mT + plotH - 8}" fill="#34d399" font-size="10" font-weight="700" font-family="sans-serif">WELL POSITIONED</text>`,
+    `<text x="${mL + plotW - 8}" y="${mT + plotH - 8}" text-anchor="end" fill="#60a5fa" font-size="10" font-weight="700" font-family="sans-serif">CURRENT RECOVERY NEED</text>`,
   ].join('\n');
 
   const dots = faviCompanies
-    .filter((c: any) => (c.favi_score || 0) > 0 || (c.current_vulnerability || 0) > 0)
+    .filter((c: any) => (c.future_exposure_gap ?? c.favi_score ?? 0) > 0 || (c.current_vulnerability_v2 ?? c.current_vulnerability ?? 0) > 0)
     .map((c: any) => {
-      const cx = xToPx(c.current_vulnerability || 0), cy = yToPx(c.favi_score || 0);
-      const fill = segColor(c.segment);
+      const current = c.current_vulnerability_v2 ?? c.current_vulnerability ?? 0;
+      const future = c.future_exposure_gap ?? c.favi_score ?? 0;
+      const cx = xToPx(current), cy = yToPx(future);
+      const highCurrent = current >= currentCutoff;
+      const highFuture = future >= futureCutoff;
+      const segment = highCurrent && highFuture ? 'Critical' : (!highCurrent && highFuture ? 'Emerging Risk' : (highCurrent ? 'Current Recovery Need' : 'Well Positioned'));
+      const fill = segColor(segment);
       const safeName = String(c.name || '').replace(/[<>&"']/g, ch => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' } as any)[ch] || ch);
-      return `<circle cx="${cx}" cy="${cy}" r="4.5" fill="${fill}" fill-opacity="0.78" stroke="${fill}" stroke-opacity="0.95"><title>${safeName} (${c.domain || ''}) — Current=${c.current_vulnerability || 0}, FAVI=${c.favi_score || 0}, ${c.segment || ''}</title></circle>`;
+      return `<circle cx="${cx}" cy="${cy}" r="4.5" fill="${fill}" fill-opacity="0.78" stroke="${fill}" stroke-opacity="0.95"><title>${safeName} (${c.domain || ''}) — Current=${current}, Future exposure=${future}, ${segment}</title></circle>`;
     }).join('\n');
 
   const xTitle = `<text x="${mL + plotW / 2}" y="${chartH - 8}" text-anchor="middle" fill="#64748b" font-size="9" font-family="sans-serif">Current Vulnerability</text>`;
-  const yTitle = `<text x="${14}" y="${mT + plotH / 2}" text-anchor="middle" transform="rotate(-90 14 ${mT + plotH / 2})" fill="#64748b" font-size="9" font-family="sans-serif">Foresight Vulnerability (FAVI)</text>`;
+  const yTitle = `<text x="${14}" y="${mT + plotH / 2}" text-anchor="middle" transform="rotate(-90 14 ${mT + plotH / 2})" fill="#64748b" font-size="9" font-family="sans-serif">Future Exposure Gap</text>`;
 
   const caption = `<div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-size:10px;color:#94a3b8">
-    <div><span style="color:#fbbf24;font-weight:700">SLEEPWALKING</span> <span style="color:#64748b">(top-left)</span> — looks fine today, future is building</div>
-    <div><span style="color:#fb7185;font-weight:700">CRITICAL</span> <span style="color:#64748b">(top-right)</span> — struggling now AND blind to what is coming</div>
-    <div><span style="color:#34d399;font-weight:700">SAFE HARBOR</span> <span style="color:#64748b">(bottom-left)</span> — healthy and future-ready</div>
-    <div><span style="color:#60a5fa;font-weight:700">WOUNDED BUT SHELTERED</span> <span style="color:#64748b">(bottom-right)</span> — problems are real but future is not adding pressure</div>
+    <div><span style="color:#fbbf24;font-weight:700">EMERGING RISK</span> <span style="color:#64748b">(top-left)</span> — future pressure is building before visible pain</div>
+    <div><span style="color:#fb7185;font-weight:700">CRITICAL</span> <span style="color:#64748b">(top-right)</span> — vulnerable now and exposed to future pressure</div>
+    <div><span style="color:#34d399;font-weight:700">WELL POSITIONED</span> <span style="color:#64748b">(bottom-left)</span> — lower current and future pressure</div>
+    <div><span style="color:#60a5fa;font-weight:700">CURRENT RECOVERY NEED</span> <span style="color:#64748b">(bottom-right)</span> — current issues dominate future pressure</div>
   </div>`;
 
   return `<svg viewBox="0 0 ${chartW} ${chartH}" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:${chartW}px;height:auto;display:block;margin:0 auto">${grid}\n${refs}\n${labels}\n${dots}\n${xTitle}\n${yTitle}</svg>${caption}`;
@@ -940,8 +987,8 @@ const buildCrossImpactInterpretationHtml = (interpretation: any, crossImpact: an
   return blocks.join('') + renderMiEvidenceRefsHtml(narrativeRefs) + meta;
 };
 
-// C1 — Concentration vs Volume table for HTML export. Static replacement for the
-// in-app Recharts scatter; same data, same per-theme shape classification.
+// C1 — Concentration vs Volume scatter for HTML export. Static SVG equivalent
+// of the in-app Recharts scatter; same data, same per-theme shape classification.
 const buildC1ConcentrationHtml = (crossImpact: any[]): string => {
   if (!crossImpact?.length) return '';
   const dims = ["Operating Model", "Service Portfolio", "Values", "Strategy", "AI Readiness"];
@@ -965,12 +1012,100 @@ const buildC1ConcentrationHtml = (crossImpact: any[]): string => {
     else if (topShare < 0.30 && top2Share < 0.55) shape = 'DIFFUSE';
     return { theme, total, topShare: Math.round(topShare * 1000) / 10, dimCount, topDim, shape };
   }).sort((a, b) => b.total - a.total);
-  const tableRows = rows.map(r => {
+
+  const chartW = 760, chartH = 320, mL = 58, mR = 30, mT = 20, mB = 52;
+  const plotW = chartW - mL - mR, plotH = chartH - mT - mB;
+  const maxTotal = Math.max(...rows.map(r => r.total), 1);
+  const xToPx = (x: number) => mL + (Math.max(0, Math.min(maxTotal, x)) / maxTotal) * plotW;
+  const yToPx = (y: number) => mT + plotH - (Math.max(0, Math.min(100, y)) / 100) * plotH;
+  const ticksX = [0, 0.25, 0.5, 0.75, 1].map(t => Math.round(t * maxTotal));
+  const ticksY = [0, 25, 50, 75, 100];
+  const grid = [
+    ...ticksX.map(t => {
+      const x = xToPx(t);
+      return `<line x1="${x}" y1="${mT}" x2="${x}" y2="${mT + plotH}" stroke="#334155" stroke-dasharray="3,3" opacity="0.65"/><text x="${x}" y="${mT + plotH + 16}" text-anchor="middle" fill="#94a3b8" font-size="9" font-family="sans-serif">${t}</text>`;
+    }),
+    ...ticksY.map(t => {
+      const y = yToPx(t);
+      return `<line x1="${mL}" y1="${y}" x2="${mL + plotW}" y2="${y}" stroke="#334155" stroke-dasharray="3,3" opacity="0.65"/><text x="${mL - 8}" y="${y + 3}" text-anchor="end" fill="#94a3b8" font-size="9" font-family="sans-serif">${t}%</text>`;
+    }),
+  ].join('\n');
+  const dots = rows.map((r) => {
     const color = SHAPE_COLORS[r.shape];
-    return `<tr><td style="text-align:left;color:#cbd5e1">${r.theme}</td><td style="text-align:right;font-family:ui-monospace,monospace">${r.total}</td><td style="text-align:right;font-family:ui-monospace,monospace">${r.topShare}%</td><td style="text-align:left;color:#6ee7b7">${r.topDim}</td><td style="text-align:right;font-family:ui-monospace,monospace">${r.dimCount} of 5</td><td style="text-align:center"><span style="padding:1px 8px;border-radius:3px;background:${color}33;border:1px solid ${color}66;color:${color};font-family:ui-monospace,monospace;font-size:10px">${r.shape}</span></td></tr>`;
+    const cx = xToPx(r.total);
+    const cy = yToPx(r.topShare);
+    const radius = 4 + Math.max(0, Math.min(5, r.dimCount)) * 1.8;
+    return `<circle cx="${cx}" cy="${cy}" r="${radius}" fill="${color}" fill-opacity="0.75" stroke="${color}"><title>${escapeMiHtml(r.theme)} — total density ${r.total}; top dimension ${escapeMiHtml(r.topDim)} (${r.topShare}%); dimensions touched ${r.dimCount} of 5; ${r.shape}</title></circle>`;
   }).join('');
+  const labels = rows
+    .filter((r, idx) => idx < 8 || r.total >= maxTotal * 0.65)
+    .map((r) => `<text x="${xToPx(r.total) + 9}" y="${yToPx(r.topShare) - 7}" fill="#cbd5e1" font-size="8" font-family="sans-serif">${escapeMiHtml(r.theme)}</text>`)
+    .join('\n');
+  const axes = [
+    `<text x="${mL + plotW / 2}" y="${chartH - 8}" text-anchor="middle" fill="#94a3b8" font-size="10" font-family="sans-serif">Total density</text>`,
+    `<text x="14" y="${mT + plotH / 2}" text-anchor="middle" transform="rotate(-90 14 ${mT + plotH / 2})" fill="#94a3b8" font-size="10" font-family="sans-serif">Top-dimension share</text>`,
+  ].join('\n');
+  const legend = Object.entries(SHAPE_COLORS).map(([shape, color]) =>
+    `<span><span style="display:inline-block;width:8px;height:8px;border-radius:999px;background:${color};margin-right:5px;vertical-align:middle"></span>${shape}</span>`
+  ).join('');
   return `<p style="font-size:10px;color:#64748b;margin-bottom:10px">X = total density (volume of pressure). Top-share % = share absorbed by the top dimension (concentration). Dimensions touched = number of dimensions with non-zero density. Shape labels follow the same thresholds the interpretation uses (CONCENTRATED if top dim ≥ 35% and top two ≥ 60%; BIMODAL if top two ≥ 60% but top single < 35%; DIFFUSE if top dim < 30% and top two < 55%; SMALL_N when total density < 8).</p>
-  <table><thead><tr><th style="text-align:left">Theme</th><th style="text-align:right">Total</th><th style="text-align:right">Top-dim share</th><th style="text-align:left">Top dim</th><th style="text-align:right">Dimensions touched</th><th style="text-align:center">Shape</th></tr></thead><tbody>${tableRows}</tbody></table>`;
+  <svg viewBox="0 0 ${chartW} ${chartH}" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:${chartW}px;height:auto;display:block;margin:0 auto">${grid}\n${dots}\n${labels}\n${axes}</svg>
+  <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:14px;font-size:9px;color:#94a3b8">${legend}</div>`;
+};
+
+const renderMiForceMapInlineHtml = (text: string): string => {
+  return String(text || '').split(/(\*\*[^*]+\*\*)/).map((seg) => {
+    if (seg.startsWith("**") && seg.endsWith("**")) {
+      return `<strong>${escapeMiHtml(seg.slice(2, -2))}</strong>`;
+    }
+    return escapeMiHtml(seg);
+  }).join('');
+};
+
+const buildFinnishEconomyForceMapHtml = (observatoryData: any): string => {
+  const analysis = observatoryData?.finland_analysis || {};
+  const text = analysis.text || '';
+  if (!text) return '';
+  const generatedAt = observatoryData.generated_at
+    ? new Date(observatoryData.generated_at).toLocaleDateString('en-FI', { day: 'numeric', month: 'short', year: 'numeric' })
+    : '';
+  const body = text.split(/\n+/).map((part: string) => {
+    const trimmed = part.trim();
+    if (!trimmed) return '';
+    if (trimmed === '---') return `<hr style="border:none;border-top:1px solid rgba(167,139,250,0.1);margin:16px 0">`;
+    if (trimmed.startsWith("## ")) return `<h4>${escapeMiHtml(trimmed.replace(/^##\s*/, ""))}</h4>`;
+    if (trimmed.startsWith("# ")) return `<h3>${escapeMiHtml(trimmed.replace(/^#\s*/, ""))}</h3>`;
+    const hasBold = /\*\*[^*]+\*\*/.test(trimmed);
+    if (!hasBold) {
+      const dotIdx = trimmed.indexOf('. ');
+      if (dotIdx > 10 && dotIdx < 150) {
+        return `<p><strong>${escapeMiHtml(trimmed.slice(0, dotIdx + 1))}</strong> ${escapeMiHtml(trimmed.slice(dotIdx + 2))}</p>`;
+      }
+    }
+    return `<p>${renderMiForceMapInlineHtml(trimmed)}</p>`;
+  }).join('');
+  const faviDistribution = analysis.favi_distribution
+    ? Object.entries(analysis.favi_distribution).map(([k, v]: [string, any]) => `${escapeMiHtml(k)}: ${escapeMiHtml(v)}`).join(' · ')
+    : '';
+  const footer = [
+    analysis.domains_analyzed ? `<span>${escapeMiHtml(analysis.domains_analyzed)} domains analyzed</span>` : '',
+    faviDistribution ? `<span>FAVI: ${faviDistribution}</span>` : '',
+    observatoryData.model ? `<span>Model: ${escapeMiHtml(observatoryData.model)}</span>` : '',
+  ].filter(Boolean).join('');
+  return `<div class="section force-map">
+    <div class="force-map-header">
+      <div class="force-map-title">
+        <div class="force-map-icon">◎</div>
+        <div>
+          <h3 style="margin:0;color:#ddd6fe;font-size:14px">Finnish Economy Force Map</h3>
+          <p style="margin:2px 0 0;font-size:10px;color:#64748b">Strategic Foresight Observatory — How global forces reshape Finnish business</p>
+        </div>
+      </div>
+      ${generatedAt ? `<span style="font-size:9px;font-family:ui-monospace,monospace;color:#475569">${generatedAt}</span>` : ''}
+    </div>
+    <div class="force-map-body">${body}</div>
+    ${footer ? `<div class="force-map-footer">${footer}</div>` : ''}
+  </div>`;
 };
 
 // C3 — Theme Momentum bars (reads observatoryData.theme_momentum).
@@ -1023,20 +1158,20 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
     } else {
       const opportunityRows = opportunities.length
         ? opportunities.map((c: any, i: number) =>
-            `<tr><td>${i + 1}</td><td>${escapeMiHtml(c.name)}</td><td>${escapeMiHtml(c.domain)}</td><td>${escapeMiHtml(c.opportunity_score)}</td><td>${escapeMiHtml(c.foresight_pressure)}</td><td>${escapeMiHtml(c.readiness_gap)}</td><td>${escapeMiHtml(c.financial_capacity)}</td><td>${escapeMiHtml(c.intent_reality_gap)}</td><td>${escapeMiHtml(c.proposal_cluster_signal)}</td></tr>`
+            `<tr><td>${i + 1}</td><td>${escapeMiHtml(c.name)}</td><td>${escapeMiHtml(c.domain)}</td><td>${escapeMiHtml(c.demand_creation_potential ?? c.opportunity_score)}</td><td>${escapeMiHtml(c.future_exposure_gap ?? c.foresight_pressure)}</td><td>${escapeMiHtml(c.adaptation_capacity ?? c.financial_capacity)}</td><td>${escapeMiHtml(c.current_vulnerability_v2 ?? c.intent_reality_gap)}</td><td>${escapeMiHtml(c.latent_need_delta ?? '')}</td><td>${escapeMiHtml(c.proposal_cluster_signal)}</td></tr>`
           ).join('')
         : `<tr><td colspan="9" style="color:#64748b">No Sweden opportunity rows available yet.</td></tr>`;
-      content += `<div class="section"><h2>Top Opportunities</h2><p style="font-size:10px;color:#64748b;margin-bottom:12px">Same opportunity logic as the global Top 50 company opportunities, filtered to matched Sweden cohort companies.</p><table><thead><tr><th>#</th><th>Company</th><th>Domain</th><th>Opportunity</th><th>Pressure</th><th>Readiness Gap</th><th>Fin. Capacity</th><th>Intent-Reality Gap</th><th>WHY/WHAT Signal</th></tr></thead><tbody>${opportunityRows}</tbody></table></div>`;
+      content += `<div class="section"><h2>Top Demand-Creation Opportunities</h2><p style="font-size:10px;color:#64748b;margin-bottom:12px">Same demand-creation logic as the global Top 50 company opportunities, filtered to matched Sweden cohort companies.</p><table><thead><tr><th>#</th><th>Company</th><th>Domain</th><th>Demand Potential</th><th>Future Gap</th><th>Adapt. Capacity</th><th>Current Vuln.</th><th>Latent Delta</th><th>WHY/WHAT Signal</th></tr></thead><tbody>${opportunityRows}</tbody></table></div>`;
 
-      const faviCutoff = data.favi_cutoffs?.favi ?? 48;
-      const facCutoff = getFacCutoff(faviRows);
+      const futureCutoff = getFutureExposureCutoff(data);
+      const capacityCutoff = getFacCutoff(faviRows);
       const faviTableRows = faviRows.length
         ? faviRows.map((c: any, i: number) => {
-            const adaptationSegment = getAdaptationSegment(c, faviCutoff, facCutoff);
-            return `<tr><td>${i + 1}</td><td>${escapeMiHtml(c.name)}</td><td>${escapeMiHtml(c.domain)}</td><td>${escapeMiHtml(c.favi_score)}</td><td>${escapeMiHtml(c.fps)}</td><td>${escapeMiHtml(c.readiness_gap)}</td><td>${escapeMiHtml(c.fac)}</td><td>${escapeMiHtml(c.current_vulnerability)}</td><td>${escapeMiHtml(adaptationSegment)}</td></tr>`;
+            const adaptationSegment = getAdaptationSegment(c, futureCutoff, capacityCutoff);
+            return `<tr><td>${i + 1}</td><td>${escapeMiHtml(c.name)}</td><td>${escapeMiHtml(c.domain)}</td><td>${escapeMiHtml(c.future_exposure_gap ?? c.favi_score)}</td><td>${escapeMiHtml(c.fps)}</td><td>${escapeMiHtml(c.readiness_gap)}</td><td>${escapeMiHtml(c.adaptation_capacity ?? c.fac)}</td><td>${escapeMiHtml(c.current_vulnerability_v2 ?? c.current_vulnerability)}</td><td>${escapeMiHtml(adaptationSegment)}</td></tr>`;
           }).join('')
-        : `<tr><td colspan="9" style="color:#64748b">No Sweden Foresight Vulnerability rows available yet.</td></tr>`;
-      content += `<div class="section"><h2>Foresight Vulnerability</h2><p style="font-size:10px;color:#64748b;margin-bottom:12px">Same FAVI company-ranking content as the global Foresight Vulnerability sheet, filtered to matched Sweden cohort companies.</p><table><thead><tr><th>#</th><th>Company</th><th>Domain</th><th>FAVI</th><th>Pressure</th><th>Gap</th><th>Adaptation</th><th>Current Vuln.</th><th>FAC x FAVI Segment</th></tr></thead><tbody>${faviTableRows}</tbody></table></div>`;
+        : `<tr><td colspan="9" style="color:#64748b">No Sweden future exposure rows available yet.</td></tr>`;
+      content += `<div class="section"><h2>Future Exposure & Adaptation Capacity</h2><p style="font-size:10px;color:#64748b;margin-bottom:12px">Same forward-looking exposure content as the global vulnerability sheet, filtered to matched Sweden cohort companies.</p><table><thead><tr><th>#</th><th>Company</th><th>Domain</th><th>Future Gap</th><th>Pressure</th><th>Readiness Gap</th><th>Adaptation</th><th>Current Vuln.</th><th>Segment</th></tr></thead><tbody>${faviTableRows}</tbody></table></div>`;
     }
   } else if (tabName === 'executive') {
     // Market Health Gauges (SVG)
@@ -1077,34 +1212,34 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
         ? `<p style="font-size:10px;color:#64748b;font-family:monospace;margin:0 0 12px">Score formula: ${escapeMiHtml(opportunityMap.formula)}</p>`
         : '';
       const domainTable = opportunityDomains.length > 0
-        ? `<h3>Domain Rankings</h3><table><thead><tr><th>#</th><th>Domain</th><th>Opportunity</th><th>Pressure</th><th>Readiness Gap</th><th>Fin. Capacity</th><th>Intent-Reality Gap</th><th>Companies</th></tr></thead><tbody>${opportunityDomains.map((d: any, i: number) =>
-            `<tr><td>${i + 1}</td><td>${escapeMiHtml(d.domain)}</td><td>${escapeMiHtml(d.opportunity_score)}</td><td>${escapeMiHtml(d.foresight_pressure)}</td><td>${escapeMiHtml(d.readiness_gap)}</td><td>${escapeMiHtml(d.financial_capacity)}</td><td>${escapeMiHtml(d.intent_reality_gap)}</td><td>${escapeMiHtml(d.company_count)}</td></tr>`
+        ? `<h3>Domain Rankings</h3><table><thead><tr><th>#</th><th>Domain</th><th>Demand Potential</th><th>Future Gap</th><th>Adapt. Capacity</th><th>Current Vuln.</th><th>Latent Delta</th><th>Companies</th></tr></thead><tbody>${opportunityDomains.map((d: any, i: number) =>
+            `<tr><td>${i + 1}</td><td>${escapeMiHtml(d.domain)}</td><td>${escapeMiHtml(d.demand_creation_potential ?? d.opportunity_score)}</td><td>${escapeMiHtml(d.future_exposure_gap ?? d.foresight_pressure)}</td><td>${escapeMiHtml(d.adaptation_capacity ?? d.financial_capacity)}</td><td>${escapeMiHtml(d.current_vulnerability_v2 ?? d.intent_reality_gap)}</td><td>${escapeMiHtml(d.latent_need_delta ?? '')}</td><td>${escapeMiHtml(d.company_count)}</td></tr>`
           ).join('')}</tbody></table>`
         : '';
       const companyTable = opportunityCompanies.length > 0
-        ? `<h3>Top 50 Company Opportunities</h3><table><thead><tr><th>#</th><th>Company</th><th>Domain</th><th>Opportunity</th><th>Pressure</th><th>Readiness Gap</th><th>Fin. Capacity</th><th>Intent-Reality Gap</th><th>WHY/WHAT Signal</th></tr></thead><tbody>${opportunityCompanies.map((c: any, i: number) =>
-            `<tr><td>${i + 1}</td><td>${escapeMiHtml(c.name)}</td><td>${escapeMiHtml(c.domain)}</td><td>${escapeMiHtml(c.opportunity_score)}</td><td>${escapeMiHtml(c.foresight_pressure)}</td><td>${escapeMiHtml(c.readiness_gap)}</td><td>${escapeMiHtml(c.financial_capacity)}</td><td>${escapeMiHtml(c.intent_reality_gap)}</td><td>${escapeMiHtml(c.proposal_cluster_signal)}</td></tr>`
+        ? `<h3>Top 50 Company Opportunities</h3><table><thead><tr><th>#</th><th>Company</th><th>Domain</th><th>Demand Potential</th><th>Future Gap</th><th>Adapt. Capacity</th><th>Current Vuln.</th><th>Latent Delta</th><th>WHY/WHAT Signal</th></tr></thead><tbody>${opportunityCompanies.map((c: any, i: number) =>
+            `<tr><td>${i + 1}</td><td>${escapeMiHtml(c.name)}</td><td>${escapeMiHtml(c.domain)}</td><td>${escapeMiHtml(c.demand_creation_potential ?? c.opportunity_score)}</td><td>${escapeMiHtml(c.future_exposure_gap ?? c.foresight_pressure)}</td><td>${escapeMiHtml(c.adaptation_capacity ?? c.financial_capacity)}</td><td>${escapeMiHtml(c.current_vulnerability_v2 ?? c.intent_reality_gap)}</td><td>${escapeMiHtml(c.latent_need_delta ?? '')}</td><td>${escapeMiHtml(c.proposal_cluster_signal)}</td></tr>`
           ).join('')}</tbody></table>`
         : '';
-      opportunityMapSectionHtml = `<div class="section"><h2>Opportunity Map</h2><p style="font-size:10px;color:#64748b;margin-bottom:12px">Ranked by high foresight pressure, low readiness, financial capacity, intent-reality gap, and repeated WHY/WHAT clusters.</p>${formula}${domainTable}${companyTable}</div>`;
+      opportunityMapSectionHtml = `<div class="section"><h2>Opportunity Map</h2><p style="font-size:10px;color:#64748b;margin-bottom:12px">Ranked by proactive demand-creation potential: future exposure, adaptation capacity, latent need delta, readiness gap, and score confidence. Current vulnerability is shown as context.</p>${formula}${domainTable}${companyTable}</div>`;
     }
 
-    // Adaptation Capacity x Future Vulnerability Summary
+    // Adaptation Capacity x Future Exposure Gap Summary
     if (data.favi_companies?.length) {
-      const faviCutoff = data.favi_cutoffs?.favi ?? 48;
-      const facCutoff = getFacCutoff(data.favi_companies);
-      const adaptationSegments = getAdaptationSegmentCounts(data.favi_companies, faviCutoff, facCutoff);
+      const futureCutoff = getFutureExposureCutoff(data);
+      const capacityCutoff = getFacCutoff(data.favi_companies);
+      const adaptationSegments = getAdaptationSegmentCounts(data.favi_companies, futureCutoff, capacityCutoff);
       const segs = [
         { key: 'Trapped', color: '#f43f5e', bg: 'rgba(244,63,94,0.1)', border: 'rgba(244,63,94,0.3)', desc: ADAPTATION_SEGMENT_CONFIG["Trapped"].description },
-        { key: 'Wealthy Under Pressure', color: '#f59e0b', bg: 'rgba(245,158,11,0.1)', border: 'rgba(245,158,11,0.3)', desc: ADAPTATION_SEGMENT_CONFIG["Wealthy Under Pressure"].description },
-        { key: 'Mature & Stable', color: '#3b82f6', bg: 'rgba(59,130,246,0.1)', border: 'rgba(59,130,246,0.3)', desc: ADAPTATION_SEGMENT_CONFIG["Mature & Stable"].description },
+        { key: 'Capable but Exposed', color: '#f59e0b', bg: 'rgba(245,158,11,0.1)', border: 'rgba(245,158,11,0.3)', desc: ADAPTATION_SEGMENT_CONFIG["Capable but Exposed"].description },
+        { key: 'Limited but Sheltered', color: '#3b82f6', bg: 'rgba(59,130,246,0.1)', border: 'rgba(59,130,246,0.3)', desc: ADAPTATION_SEGMENT_CONFIG["Limited but Sheltered"].description },
         { key: 'Future-Ready', color: '#10b981', bg: 'rgba(16,185,129,0.1)', border: 'rgba(16,185,129,0.3)', desc: ADAPTATION_SEGMENT_CONFIG["Future-Ready"].description },
       ];
       const cards = segs.map(s => {
         const count = adaptationSegments[s.key] || 0;
         return `<div class="segment-card" style="background:${s.bg};border:1px solid ${s.border}"><h4 style="color:${s.color}">${s.key}</h4><div class="count" style="color:${s.color}">${count}</div><div class="desc">${s.desc}</div></div>`;
       }).join('');
-      content += `<div class="section"><h2>Adaptation Capacity x Future Vulnerability</h2><div class="segment-grid">${cards}</div></div>`;
+      content += `<div class="section"><h2>Adaptation Capacity x Future Exposure Gap</h2><div class="segment-grid">${cards}</div></div>`;
     }
 
     // Observatory Layer 2 Sections 3 & 4 — Three Horizons + Contrarian Signal
@@ -1133,53 +1268,57 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
   }
 
   if (tabName === 'future') {
-    // 1. Pareto chart
-    content += `<div class="section"><h2>Top ${(data.top_foresights || []).length} Foresight Themes (Pareto)</h2>${buildSvgPareto(data.top_foresights || [])}</div>`;
-
-    // 2. Theme descriptions
+    // 1. Pareto chart + theme descriptions, matching the in-app card.
     if (data.top_foresights?.length) {
       const descs = data.top_foresights.map((f: any) => {
         const col = CATEGORY_COLORS[f.category] || '#6366f1';
         const desc = FORESIGHT_THEME_DESCRIPTIONS[f.theme] || f.category;
-        return `<div style="display:flex;gap:8px;margin:4px 0"><span style="color:${col};font-weight:bold;font-size:11px;white-space:nowrap">${f.theme}:</span><span style="color:#94a3b8;font-size:11px">${desc}</span></div>`;
+        return `<div class="theme-desc-row"><strong style="color:${col}">${escapeMiHtml(f.theme)}:</strong><span style="color:#64748b">${escapeMiHtml(desc)}</span></div>`;
       }).join('');
-      content += `<div class="section"><h2>Theme Descriptions</h2>${descs}</div>`;
+      content += `<div class="mi-card"><h2 style="color:#67e8f9">TOP ${(data.top_foresights || []).length} Foresight Themes (Pareto)</h2>${buildSvgPareto(data.top_foresights || [])}<div class="theme-desc-grid">${descs}</div></div>`;
+    } else {
+      content += `<div class="mi-card"><h2 style="color:#67e8f9">TOP 0 Foresight Themes (Pareto)</h2><div style="color:#64748b;font-size:12px;text-align:center;padding:32px 0">No foresight data available</div></div>`;
     }
 
-    // 3. Cross-Impact Matrix (with subtitle, rank chips, legend, dim descriptions)
+    // 2. Cross-Impact Matrix (with subtitle, rank chips, legend, dim descriptions)
     if (data.cross_impact?.length) {
-      content += `<div class="section"><h2>Theme × Dimension Cross-Impact Matrix</h2>${buildCrossImpactHtml(data.cross_impact)}</div>`;
+      content += `<div class="mi-card"><h2 style="color:#c4b5fd">Theme x Dimension Cross-Impact Matrix</h2>${buildCrossImpactHtml(data.cross_impact)}</div>`;
     }
 
-    // 4. Cross-Impact Matrix Interpretation — placed directly under the matrix
+    // 3. Cross-Impact Matrix Interpretation — placed directly under the matrix
     //    so the export mirrors the new in-app order.
     if (crossImpactInterpretationData?.text && data.cross_impact?.length) {
       const generatedAt = crossImpactInterpretationData.generated_at
         ? new Date(crossImpactInterpretationData.generated_at).toLocaleDateString('en-FI', { day: 'numeric', month: 'short', year: 'numeric' })
         : '';
-      content += `<div class="section" style="border-color:rgba(99,102,241,0.3)">
-        <h2 style="color:#a5b4fc">Cross-Impact Matrix Interpretation</h2>
-        <p style="font-size:10px;color:#64748b;margin-bottom:14px">Where structural pressure consolidates across the Theme x Dimension matrix${generatedAt ? ` — ${generatedAt}` : ''}</p>
+      content += `<div class="section" style="border-color:rgba(99,102,241,0.3);padding:0;border-radius:12px">
+        <div style="padding:16px 20px;border-bottom:1px solid rgba(99,102,241,0.1);display:flex;justify-content:space-between;gap:16px;align-items:center">
+          <div style="display:flex;align-items:center;gap:12px">
+            <div style="width:32px;height:32px;border-radius:8px;background:rgba(99,102,241,0.2);color:#818cf8;display:flex;align-items:center;justify-content:center;font-weight:700">▦</div>
+            <div>
+              <h3 style="margin:0;color:#c7d2fe;font-size:14px">Cross-Impact Matrix Interpretation</h3>
+              <p style="margin:2px 0 0;font-size:10px;color:#64748b">Where structural pressure consolidates across the Theme x Dimension matrix</p>
+            </div>
+          </div>
+          ${generatedAt ? `<span style="font-size:9px;font-family:ui-monospace,monospace;color:#475569">${generatedAt}</span>` : ''}
+        </div>
+        <div style="padding:16px 20px">
         ${buildCrossImpactInterpretationHtml(crossImpactInterpretationData, data.cross_impact)}
+        </div>
       </div>`;
     }
 
-    // 5. C1 — Concentration vs Volume table (replaces the in-app scatter)
+    // 4. C1 — Concentration vs Volume scatter
     if (data.cross_impact?.length) {
-      content += `<div class="section"><h2 style="color:#a5b4fc">Concentration vs Volume — Top 15 Themes</h2>${buildC1ConcentrationHtml(data.cross_impact)}</div>`;
+      content += `<div class="mi-card"><h2 style="color:#a5b4fc">Concentration vs Volume — Top 15 Themes</h2>${buildC1ConcentrationHtml(data.cross_impact)}</div>`;
     }
 
-    // 6. C2 (Domain x Dimension) is intentionally hidden in the app — also
+    // 5. C2 (Domain x Dimension) is intentionally hidden in the app — also
     //    omitted from the export to keep them in sync.
 
-    // 7. C3 — Theme Momentum bars (only present when Observatory has been generated)
-    if (observatoryData?.theme_momentum?.length) {
-      content += `<div class="section"><h2 style="color:#67e8f9">Theme Momentum — Top 10 themes by signal volume</h2>${buildThemeMomentumHtml(observatoryData.theme_momentum)}</div>`;
-    }
-
-    // 8. Finnish Economy Force Map (last)
+    // 6. Finnish Economy Force Map (last)
     if (observatoryData?.finland_analysis?.text) {
-      content += `<div class="section" style="border-color:rgba(167,139,250,0.3)"><h2 style="color:#a78bfa">Finnish Economy Force Map</h2><p style="font-size:10px;color:#64748b;margin-bottom:16px">Strategic Foresight Observatory — How global forces reshape Finnish business</p>${renderMiNarrativeMarkdownHtml(observatoryData.finland_analysis.text)}</div>`;
+      content += buildFinnishEconomyForceMapHtml(observatoryData);
     }
   }
 
@@ -1230,25 +1369,18 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
   }
 
   if (tabName === 'favi') {
-    // Strategic Foresight Vulnerability Matrix — mirrors the FAC x FAVI layout:
-    // Top-left = Trapped, Top-right = Wealthy Under Pressure,
-    // Bottom-left = Mature & Stable, Bottom-right = Future-Ready.
+    // Strategic readiness matrix: future exposure gap on the y-axis and
+    // adaptation capacity on the x-axis.
     if (data.favi_companies?.length) {
-      const facValues = data.favi_companies.map((c: any) => c.fac || 0).filter((x: number) => x >= 0);
-      let facMedian = 50;
-      if (facValues.length) {
-        const sortedFac = [...facValues].sort((a: number, b: number) => a - b);
-        const mid = Math.floor(sortedFac.length / 2);
-        facMedian = sortedFac.length % 2 === 0 ? (sortedFac[mid - 1] + sortedFac[mid]) / 2 : sortedFac[mid];
-      }
-      const faviCutoff = data.favi_cutoffs?.favi ?? 48;
-      const adaptationSegments = getAdaptationSegmentCounts(data.favi_companies, faviCutoff, facMedian);
+      const capacityCutoff = getFacCutoff(data.favi_companies);
+      const futureCutoff = getFutureExposureCutoff(data);
+      const adaptationSegments = getAdaptationSegmentCounts(data.favi_companies, futureCutoff, capacityCutoff);
       // Each entry carries the same per-card text the modal renders so the
       // download reads identically to what the user sees on screen.
       const matrixCards = [
         { key: 'Trapped',                 color: '#fb7185', bg: 'rgba(244,63,94,0.08)',  border: 'rgba(244,63,94,0.25)', desc: ADAPTATION_SEGMENT_CONFIG["Trapped"].description,                 condition: ADAPTATION_SEGMENT_CONFIG["Trapped"].condition },
-        { key: 'Wealthy Under Pressure',  color: '#fbbf24', bg: 'rgba(245,158,11,0.08)', border: 'rgba(245,158,11,0.25)', desc: ADAPTATION_SEGMENT_CONFIG["Wealthy Under Pressure"].description,  condition: ADAPTATION_SEGMENT_CONFIG["Wealthy Under Pressure"].condition },
-        { key: 'Mature & Stable',         color: '#60a5fa', bg: 'rgba(59,130,246,0.08)', border: 'rgba(59,130,246,0.25)', desc: ADAPTATION_SEGMENT_CONFIG["Mature & Stable"].description,         condition: ADAPTATION_SEGMENT_CONFIG["Mature & Stable"].condition },
+        { key: 'Capable but Exposed',     color: '#fbbf24', bg: 'rgba(245,158,11,0.08)', border: 'rgba(245,158,11,0.25)', desc: ADAPTATION_SEGMENT_CONFIG["Capable but Exposed"].description,     condition: ADAPTATION_SEGMENT_CONFIG["Capable but Exposed"].condition },
+        { key: 'Limited but Sheltered',   color: '#60a5fa', bg: 'rgba(59,130,246,0.08)', border: 'rgba(59,130,246,0.25)', desc: ADAPTATION_SEGMENT_CONFIG["Limited but Sheltered"].description,   condition: ADAPTATION_SEGMENT_CONFIG["Limited but Sheltered"].condition },
         { key: 'Future-Ready',            color: '#34d399', bg: 'rgba(16,185,129,0.08)', border: 'rgba(16,185,129,0.25)', desc: ADAPTATION_SEGMENT_CONFIG["Future-Ready"].description,            condition: ADAPTATION_SEGMENT_CONFIG["Future-Ready"].condition },
       ];
       const totalCo = Object.values(adaptationSegments).reduce((a: number, b: any) => a + (b || 0), 0) as number;
@@ -1275,62 +1407,61 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
       // Cutoffs note — same line that appears below the matrix in the modal.
       let cutoffsHtml = '';
       if (data.favi_cutoffs) {
-        const src: string = data.favi_cutoffs.source || '';
+        const src: string = data.favi_cutoffs.v2_source || data.favi_cutoffs.source || '';
         const sourceLabel = src.startsWith('percentile')
-          ? src.replace('percentile:', '').replace(/p(\d+(\.\d+)?)/g, '$1th percentile').replace(/,/g, ', ').replace('favi=', 'FAVI ').replace('current=', 'Current ')
+          ? src.replace('percentile:', '').replace(/p(\d+(\.\d+)?)/g, '$1th percentile').replace(/,/g, ', ').replace('future=', 'Future ').replace('current_v2=', 'Current ').replace('adaptation=', 'Adaptation ').replace('demand=', 'Demand ')
           : 'fixed fallback';
-        cutoffsHtml = `<p style="font-size:11px;color:#94a3b8;margin-top:12px">Cutoffs (${sourceLabel}): FAVI &ge; <span style="font-family:ui-monospace,monospace;color:#cbd5e1">${data.favi_cutoffs.favi}</span> &middot; FAC median &ge; <span style="font-family:ui-monospace,monospace;color:#cbd5e1">${facMedian.toFixed(1)}</span></p>`;
+        cutoffsHtml = `<p style="font-size:11px;color:#94a3b8;margin-top:12px">Cutoffs (${sourceLabel}): Future gap &ge; <span style="font-family:ui-monospace,monospace;color:#cbd5e1">${futureCutoff}</span> &middot; Adaptation capacity &ge; <span style="font-family:ui-monospace,monospace;color:#cbd5e1">${capacityCutoff.toFixed(1)}</span></p>`;
       }
 
       // Matrix axis labels — same pair of labels rendered below the matrix in the modal.
       const axisLabels = `<div style="display:flex;justify-content:space-between;margin-top:10px;font-size:8px;color:#64748b;text-transform:uppercase;letter-spacing:0.08em">
-        <div style="display:flex;align-items:center;gap:6px"><span style="display:inline-block;width:24px;height:1px;background:#475569"></span>Financial Adaptation Capacity (x-axis)<span style="display:inline-block;width:24px;height:1px;background:#475569"></span></div>
-        <div style="display:flex;align-items:center;gap:6px"><span style="display:inline-block;width:24px;height:1px;background:#475569"></span>Foresight-Adjusted Vulnerability Index (y-axis)<span style="display:inline-block;width:24px;height:1px;background:#475569"></span></div>
+        <div style="display:flex;align-items:center;gap:6px"><span style="display:inline-block;width:24px;height:1px;background:#475569"></span>Adaptation Capacity (x-axis)<span style="display:inline-block;width:24px;height:1px;background:#475569"></span></div>
+        <div style="display:flex;align-items:center;gap:6px"><span style="display:inline-block;width:24px;height:1px;background:#475569"></span>Future Exposure Gap (y-axis)<span style="display:inline-block;width:24px;height:1px;background:#475569"></span></div>
       </div>`;
 
-      content += `<div class="section"><h2>Adaptation Capacity x Future Vulnerability</h2>${matrixGrid}${cutoffsHtml}${axisLabels}</div>`;
+      content += `<div class="section"><h2>Adaptation Capacity x Future Exposure Gap</h2>${matrixGrid}${cutoffsHtml}${axisLabels}</div>`;
     }
 
-    // Adaptation Capacity x Future Vulnerability scatter — replaces the old Domain
+    // Adaptation Capacity x Future Exposure Gap scatter — replaces the old Domain
     // Foresight Pressure bar in the static export, mirroring the in-app view.
     if (data.favi_companies?.length) {
-      const facValues = data.favi_companies.map((c: any) => c.fac || 0).filter((x: number) => x >= 0);
-      let facMedian = 50;
-      if (facValues.length) {
-        const sortedFac = [...facValues].sort((a: number, b: number) => a - b);
-        const mid = Math.floor(sortedFac.length / 2);
-        facMedian = sortedFac.length % 2 === 0 ? (sortedFac[mid - 1] + sortedFac[mid]) / 2 : sortedFac[mid];
-      }
-      const faviCutoff = data.favi_cutoffs?.favi ?? 48;
-      const currentCutoff = data.favi_cutoffs?.current_vulnerability ?? 40;
-      content += `<div class="section"><h2>Adaptation Capacity x Future Vulnerability</h2><p style="font-size:10px;color:#64748b;margin-bottom:10px">X = financial capacity to absorb change. Y = foresight-driven future pressure. Top-left = trapped; bottom-right = future-ready.</p>${buildSvgAdaptabilityScatter(data.favi_companies, faviCutoff, facMedian)}</div>`;
-      content += `<div class="section"><h2>Foresight-Adjusted Vulnerability vs Current Vulnerability</h2><p style="font-size:10px;color:#64748b;margin-bottom:10px">X = how vulnerable today. Y = how vulnerable tomorrow. The reference lines split the plane into the four strategic segments (Critical / Sleepwalking / Wounded / Safe Harbor).</p>${buildSvgFaviCurrentScatter(data.favi_companies, faviCutoff, currentCutoff)}</div>`;
+      const capacityCutoff = getFacCutoff(data.favi_companies);
+      const futureCutoff = getFutureExposureCutoff(data);
+      const currentCutoff = getCurrentVulnerabilityV2Cutoff(data);
+      content += `<div class="section"><h2>Adaptation Capacity x Future Exposure Gap</h2><p style="font-size:10px;color:#64748b;margin-bottom:10px">X = capacity to act. Y = future exposure that may create demand before visible pain. Top-left = trapped; bottom-right = future-ready.</p>${buildSvgAdaptabilityScatter(data.favi_companies, futureCutoff, capacityCutoff)}</div>`;
+      content += `<div class="section"><h2>Future Exposure Gap vs Current Vulnerability</h2><p style="font-size:10px;color:#64748b;margin-bottom:10px">X = visible weakness today. Y = future pressure. This separates emerging risk from urgent remediation.</p>${buildSvgFaviCurrentScatter(data.favi_companies, futureCutoff, currentCutoff)}</div>`;
     }
 
-    // FAVI company table
+    // FAVI company table with new independent score fields surfaced first.
     if (data.favi_companies?.length) {
-      const sorted = [...data.favi_companies].sort((a: any, b: any) => (b.favi_score || 0) - (a.favi_score || 0));
+      const futureCutoff = getFutureExposureCutoff(data);
+      const capacityCutoff = getFacCutoff(data.favi_companies);
+      const sorted = [...data.favi_companies].sort((a: any, b: any) => (b.future_exposure_gap ?? b.favi_score ?? 0) - (a.future_exposure_gap ?? a.favi_score ?? 0));
       const segBadge = (seg: string) => {
         const cfg = ADAPTATION_SEGMENT_CONFIG[seg] || ADAPTATION_SEGMENT_CONFIG["Future-Ready"];
         return `<span class="badge" style="color:${cfg.hex};border-color:${cfg.hex};background:${cfg.hex}22">${seg}</span>`;
       };
       const rows = sorted.map((c: any, i: number) => {
-        const fc = FAVI_COLOR(c.favi_score || 0);
-        const adaptationSegment = getAdaptationSegment(c, faviCutoff, facMedian);
+        const futureGap = c.future_exposure_gap ?? c.favi_score ?? 0;
+        const currentVuln = c.current_vulnerability_v2 ?? c.current_vulnerability ?? 0;
+        const capacity = c.adaptation_capacity ?? c.fac ?? 0;
+        const fc = FAVI_COLOR(futureGap || 0);
+        const adaptationSegment = getAdaptationSegment(c, futureCutoff, capacityCutoff);
         return `<tr>
           <td style="font-family:monospace;color:#64748b">${i + 1}</td>
           <td style="color:#22d3ee;font-weight:600">${c.name}</td>
           <td style="font-size:11px">${c.domain || ''}</td>
-          <td style="color:${fc};font-weight:bold;font-family:monospace">${Math.round(c.favi_score || 0)}</td>
+          <td style="color:${fc};font-weight:bold;font-family:monospace">${Math.round(futureGap || 0)}</td>
+          <td style="font-family:monospace">${Math.round(c.demand_creation_potential || 0)}</td>
+          <td style="font-family:monospace">${Math.round(capacity || 0)}</td>
+          <td style="font-family:monospace">${Math.round(currentVuln || 0)}</td>
           <td style="font-family:monospace">${Math.round(c.fps || 0)}</td>
           <td style="font-family:monospace">${Math.round(c.readiness_gap || 0)}</td>
-          <td style="font-family:monospace">${Math.round(c.fac || 0)}</td>
-          <td style="font-family:monospace">${c.megatrend_exposure ? Math.round(c.megatrend_exposure) + '%' : '–'}</td>
-          <td style="font-family:monospace">${Math.round(c.current_vulnerability || 0)}</td>
           <td>${segBadge(adaptationSegment)}</td>
         </tr>`;
       }).join('');
-      content += `<div class="section"><h2>Foresight-Adjusted Vulnerability Index — Company Rankings</h2><div style="overflow-x:auto"><table><thead><tr><th>#</th><th>Company</th><th>Domain</th><th>Vulnerability</th><th>Pressure</th><th>Gap</th><th>Adapt.</th><th>Megatrend</th><th>Vuln.</th><th>FAC x FAVI Segment</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+      content += `<div class="section"><h2>Future Exposure & Demand Potential — Company Rankings</h2><div style="overflow-x:auto"><table><thead><tr><th>#</th><th>Company</th><th>Domain</th><th>Future Gap</th><th>Demand Potential</th><th>Adapt.</th><th>Current Vuln.</th><th>Pressure</th><th>Readiness Gap</th><th>Segment</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
     }
   }
 
@@ -1338,7 +1469,7 @@ const exportMiTabHtml = (tabName: string, data: any, observatoryData?: any, cros
     executive: 'Executive Summary',
     future: 'Future Demand Analysis',
     current: 'Current Demand Analysis',
-    favi: 'Foresight Vulnerability Analysis',
+    favi: 'Future Exposure & Demand Potential',
     sweden: 'SWEDEN - SUMMARY',
   };
 
@@ -1484,7 +1615,7 @@ const ExecutiveSummaryTab = ({ data, observatoryData = null }: { data: any; obse
         <Crosshair size={12} /> Opportunity Map
       </h4>
       <div className="text-[8px] text-slate-500 mb-3 leading-relaxed">
-        Portfolio priorities ranked by future pressure, readiness gaps, financial capacity, intent-reality gap, and repeated WHY/WHAT clusters.
+        Portfolio priorities ranked by proactive demand-creation potential: future exposure, adaptation capacity, latent need delta, readiness gap, and score confidence. Current vulnerability is context.
       </div>
       {opportunityMap.formula && (
         <div className="text-[9px] text-slate-500 font-mono mb-4">Score formula: {opportunityMap.formula}</div>
@@ -1496,19 +1627,19 @@ const ExecutiveSummaryTab = ({ data, observatoryData = null }: { data: any; obse
           <div className="overflow-x-auto">
             <table className="w-full text-[10px]">
               <thead><tr className="text-slate-500 border-b border-white/10">
-                <th className="p-2 text-left">#</th><th className="p-2 text-left">Domain</th><th className="p-2 text-left">Opportunity</th>
-                <th className="p-2 text-left">Pressure</th><th className="p-2 text-left">Readiness Gap</th><th className="p-2 text-left">Fin. Capacity</th><th className="p-2 text-left">Intent-Reality Gap</th><th className="p-2 text-left">Companies</th>
+                <th className="p-2 text-left">#</th><th className="p-2 text-left">Domain</th><th className="p-2 text-left">Demand Potential</th>
+                <th className="p-2 text-left">Future Gap</th><th className="p-2 text-left">Adapt. Capacity</th><th className="p-2 text-left">Current Vuln.</th><th className="p-2 text-left">Latent Delta</th><th className="p-2 text-left">Companies</th>
               </tr></thead>
               <tbody>
                 {opportunityDomains.slice(0, 8).map((d: any, i: number) => (
                   <tr key={d.domain} className="border-t border-white/5">
                     <td className="p-2 text-slate-500">{i + 1}</td>
                     <td className="p-2 text-cyan-300 font-medium">{d.domain}</td>
-                    <td className="p-2 font-mono font-bold text-rose-300">{d.opportunity_score}</td>
-                    <td className="p-2 font-mono text-violet-300">{d.foresight_pressure}</td>
-                    <td className="p-2 font-mono text-amber-300">{d.readiness_gap}</td>
-                    <td className="p-2 font-mono text-emerald-300">{d.financial_capacity}</td>
-                    <td className="p-2 font-mono text-rose-300">{d.intent_reality_gap}</td>
+                    <td className="p-2 font-mono font-bold text-rose-300">{d.demand_creation_potential ?? d.opportunity_score}</td>
+                    <td className="p-2 font-mono text-violet-300">{d.future_exposure_gap ?? d.foresight_pressure}</td>
+                    <td className="p-2 font-mono text-emerald-300">{d.adaptation_capacity ?? d.financial_capacity}</td>
+                    <td className="p-2 font-mono text-amber-300">{d.current_vulnerability_v2 ?? d.intent_reality_gap}</td>
+                    <td className="p-2 font-mono text-cyan-300">{d.latent_need_delta ?? '—'}</td>
                     <td className="p-2 font-mono text-slate-400">{d.company_count}</td>
                   </tr>
                 ))}
@@ -1524,8 +1655,8 @@ const ExecutiveSummaryTab = ({ data, observatoryData = null }: { data: any; obse
           <div className="overflow-x-auto">
             <table className="w-full text-[10px]">
               <thead><tr className="text-slate-500 border-b border-white/10">
-                <th className="p-2 text-left">#</th><th className="p-2 text-left">Company</th><th className="p-2 text-left">Domain</th><th className="p-2 text-left">Opportunity</th>
-                <th className="p-2 text-left">Pressure</th><th className="p-2 text-left">Readiness Gap</th><th className="p-2 text-left">Fin. Capacity</th><th className="p-2 text-left">Intent-Reality Gap</th><th className="p-2 text-left">WHY/WHAT Signal</th>
+                <th className="p-2 text-left">#</th><th className="p-2 text-left">Company</th><th className="p-2 text-left">Domain</th><th className="p-2 text-left">Demand Potential</th>
+                <th className="p-2 text-left">Future Gap</th><th className="p-2 text-left">Adapt. Capacity</th><th className="p-2 text-left">Current Vuln.</th><th className="p-2 text-left">Latent Delta</th><th className="p-2 text-left">WHY/WHAT Signal</th>
               </tr></thead>
               <tbody>
                 {opportunityCompanies.slice(0, 50).map((c: any, i: number) => (
@@ -1533,11 +1664,11 @@ const ExecutiveSummaryTab = ({ data, observatoryData = null }: { data: any; obse
                     <td className="p-2 text-slate-500">{i + 1}</td>
                     <td className="p-2 text-cyan-300 font-medium">{c.name}</td>
                     <td className="p-2 text-slate-400">{c.domain}</td>
-                    <td className="p-2 font-mono font-bold text-rose-300">{c.opportunity_score}</td>
-                    <td className="p-2 font-mono text-violet-300">{c.foresight_pressure}</td>
-                    <td className="p-2 font-mono text-amber-300">{c.readiness_gap}</td>
-                    <td className="p-2 font-mono text-emerald-300">{c.financial_capacity}</td>
-                    <td className="p-2 font-mono text-rose-300">{c.intent_reality_gap}</td>
+                    <td className="p-2 font-mono font-bold text-rose-300">{c.demand_creation_potential ?? c.opportunity_score}</td>
+                    <td className="p-2 font-mono text-violet-300">{c.future_exposure_gap ?? c.foresight_pressure}</td>
+                    <td className="p-2 font-mono text-emerald-300">{c.adaptation_capacity ?? c.financial_capacity}</td>
+                    <td className="p-2 font-mono text-amber-300">{c.current_vulnerability_v2 ?? c.intent_reality_gap}</td>
+                    <td className="p-2 font-mono text-cyan-300">{c.latent_need_delta ?? '—'}</td>
                     <td className="p-2 font-mono text-cyan-300">{c.proposal_cluster_signal}</td>
                   </tr>
                 ))}
@@ -1612,23 +1743,23 @@ const ExecutiveSummaryTab = ({ data, observatoryData = null }: { data: any; obse
         <div className="bg-black/20 border border-white/10 rounded-lg p-3 text-center">
           <div className="text-2xl font-bold text-rose-400">{(data.opportunity_map?.company_rankings || []).length}</div>
           <div className="text-[9px] text-slate-400 uppercase">Opportunity Ranked</div>
-          <div className="text-[8px] text-slate-500 mt-1 leading-relaxed">Companies ranked by future pressure, readiness gap, financial capacity, and WHY/WHAT signal</div>
+          <div className="text-[8px] text-slate-500 mt-1 leading-relaxed">Companies ranked by demand creation potential, with current vulnerability kept as context</div>
         </div>
       </div>
 
-      {/* FAC x FAVI Segment Summary (mini preview) */}
+      {/* Adaptation Capacity x Future Exposure Gap Segment Summary (mini preview) */}
       {data.favi_companies?.length > 0 && (() => {
-        const faviCutoff = data.favi_cutoffs?.favi ?? 48;
-        const facCutoff = getFacCutoff(data.favi_companies);
-        const adaptationSegments = getAdaptationSegmentCounts(data.favi_companies, faviCutoff, facCutoff);
+        const futureCutoff = getFutureExposureCutoff(data);
+        const capacityCutoff = getFacCutoff(data.favi_companies);
+        const adaptationSegments = getAdaptationSegmentCounts(data.favi_companies, futureCutoff, capacityCutoff);
         return (
         <div className="bg-black/20 border border-white/10 rounded-lg p-4">
           <h4 className="text-[10px] font-bold text-violet-300 uppercase tracking-wide mb-1 flex items-center gap-2">
-            <Eye size={12} /> Adaptation Capacity x Future Vulnerability
+            <Eye size={12} /> Adaptation Capacity x Future Exposure Gap
           </h4>
-          <div className="text-[8px] text-slate-500 mb-3 leading-relaxed">Companies segmented by financial capacity to absorb change vs. foresight-driven future pressure. This view shows who is trapped, who has cushion but rising pressure, and who is genuinely future-ready.</div>
+          <div className="text-[8px] text-slate-500 mb-3 leading-relaxed">Companies segmented by capacity to act vs. future exposure that may create demand before visible pain.</div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {(["Trapped", "Wealthy Under Pressure", "Mature & Stable", "Future-Ready"] as const).map(seg => {
+            {(["Trapped", "Capable but Exposed", "Limited but Sheltered", "Future-Ready"] as const).map(seg => {
               const cfg = ADAPTATION_SEGMENT_CONFIG[seg];
               const count = adaptationSegments[seg] || 0;
               return (
@@ -1784,7 +1915,7 @@ const parseCrossImpactInterpretation = (text: string): CIBlock[] => {
   return blocks;
 };
 
-const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretationData = null, onRefreshCrossImpactInterpretation, crossImpactInterpretationLoading = false }: { data: any; observatoryData?: any; crossImpactInterpretationData?: any; onRefreshCrossImpactInterpretation?: () => void; crossImpactInterpretationLoading?: boolean }) => {
+const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretationData = null, pipelineGlobal = null, onRefreshCrossImpactInterpretation, crossImpactInterpretationLoading = false, crossImpactInterpretationStatus = null }: { data: any; observatoryData?: any; crossImpactInterpretationData?: any; pipelineGlobal?: any; onRefreshCrossImpactInterpretation?: () => void; crossImpactInterpretationLoading?: boolean; crossImpactInterpretationStatus?: any }) => {
   const foresights = data.top_foresights || [];
   const crossImpact = data.cross_impact || [];
   const industryRadar = data.industry_radar || [];
@@ -1854,9 +1985,41 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
     });
     return point;
   });
+  const readinessTone = (state?: string) => {
+    if (state === 'ready') return 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30';
+    if (state === 'warning') return 'bg-amber-500/10 text-amber-300 border-amber-500/30';
+    if (state === 'missing') return 'bg-rose-500/10 text-rose-300 border-rose-500/30';
+    if (state === 'running') return 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30';
+    return 'bg-slate-500/10 text-slate-400 border-slate-500/20';
+  };
+  const readinessDate = (value?: string) => {
+    if (!value) return '';
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? String(value).slice(0, 10) : d.toLocaleDateString('fi-FI');
+  };
+  const readinessPill = (item: any, label: string) => (
+    <span title={`${item?.label || label}: ${item?.detail || 'No status'}${item?.recommended_action ? `\n${item.recommended_action}` : ''}`} className={`inline-flex items-center gap-1 rounded border px-2 py-1 text-[9px] font-mono font-bold uppercase tracking-wide ${readinessTone(item?.state)}`}>
+      {label}{item?.updated_at ? ` ${readinessDate(item.updated_at)}` : ''}
+    </span>
+  );
 
   return (
     <div className="space-y-6">
+      {pipelineGlobal && (
+        <div className="bg-black/20 border border-cyan-500/20 rounded-lg p-4">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div>
+              <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide">Foresight Freshness</h4>
+              <p className="text-[10px] text-slate-500 mt-0.5">Advisory status before refreshing foresight-dependent interpretation.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {readinessPill(pipelineGlobal.foresight_kb, 'KB')}
+              {readinessPill(pipelineGlobal.observatory, 'OBS')}
+              {readinessPill(pipelineGlobal.cross_impact, 'MATRIX')}
+            </div>
+          </div>
+        </div>
+      )}
       {/* TOP10 Foresights Pareto */}
       <div className="bg-black/20 border border-white/10 rounded-lg p-4">
         <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-3">TOP {foresights.length} Foresight Themes (Pareto)</h4>
@@ -2015,6 +2178,29 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
       {/* CROSS-IMPACT MATRIX INTERPRETATION — placed directly under the matrix
           since it interprets the matrix above. Empty-state appears for admins
           when no interpretation has been generated yet. */}
+      {(crossImpactInterpretationLoading || crossImpactInterpretationStatus?.is_running || pipelineGlobal?.cross_impact?.state === 'running' || crossImpactInterpretationStatus?.result?.error) && (
+        <div className="mt-6 bg-indigo-500/10 border border-indigo-500/25 rounded-lg px-4 py-3 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+          <div>
+            <div className="text-[10px] font-bold text-indigo-200 uppercase tracking-wide">
+              {crossImpactInterpretationStatus?.result?.error ? 'Matrix Interpretation Refresh Needs Attention' : 'Matrix Interpretation Refresh'}
+            </div>
+            <div className="text-[10px] text-slate-400 mt-1">
+              {crossImpactInterpretationStatus?.result?.error
+                ? crossImpactInterpretationStatus.result.error
+                : (crossImpactInterpretationStatus?.current_step || pipelineGlobal?.cross_impact?.detail || 'Generating interpretation')}
+            </div>
+          </div>
+          {!crossImpactInterpretationStatus?.result?.error && (
+            <div className="flex items-center gap-2 text-[9px] font-mono text-indigo-200">
+              <RefreshCw size={11} className="animate-spin" />
+              {typeof (crossImpactInterpretationStatus?.elapsed_seconds ?? pipelineGlobal?.cross_impact?.stats?.elapsed_seconds) === 'number'
+                ? `${crossImpactInterpretationStatus?.elapsed_seconds ?? pipelineGlobal?.cross_impact?.stats?.elapsed_seconds}s elapsed`
+                : 'Running'}
+            </div>
+          )}
+        </div>
+      )}
+
       {!crossImpactInterpretationData?.text && onRefreshCrossImpactInterpretation && (
         <div className="mt-6 bg-black/20 border border-indigo-500/20 rounded-xl px-5 py-4 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -2032,8 +2218,8 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 transition-colors text-[10px] font-mono text-indigo-200 hover:text-indigo-100 disabled:opacity-40 whitespace-nowrap"
             title="Generate the Cross-Impact Matrix Interpretation"
           >
-            <RefreshCw size={12} className={crossImpactInterpretationLoading ? 'animate-spin' : ''} />
-            {crossImpactInterpretationLoading ? 'Generating…' : 'Generate the Matrix Interpretation'}
+            <RefreshCw size={12} className={crossImpactInterpretationLoading || crossImpactInterpretationStatus?.is_running ? 'animate-spin' : ''} />
+            {crossImpactInterpretationLoading || crossImpactInterpretationStatus?.is_running ? 'Generating…' : 'Generate the Matrix Interpretation'}
           </button>
         </div>
       )}
@@ -2065,8 +2251,8 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
                     className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 transition-colors text-[9px] font-mono text-indigo-300 hover:text-indigo-100 disabled:opacity-40"
                     title="Regenerate the Cross-Impact Matrix Interpretation"
                   >
-                    <RefreshCw size={11} className={crossImpactInterpretationLoading ? 'animate-spin' : ''} />
-                    Refresh the Matrix Interpretation
+                    <RefreshCw size={11} className={crossImpactInterpretationLoading || crossImpactInterpretationStatus?.is_running ? 'animate-spin' : ''} />
+                    {crossImpactInterpretationLoading || crossImpactInterpretationStatus?.is_running ? 'Generating…' : 'Refresh the Matrix Interpretation'}
                   </button>
                 )}
               </div>
@@ -2345,48 +2531,6 @@ const FutureDemandTab = ({ data, observatoryData = null, crossImpactInterpretati
         );
       })()}
 
-      {/* C3 — Theme Momentum bars */}
-      {(observatoryData?.theme_momentum?.length || 0) > 0 && (() => {
-        const tm = observatoryData.theme_momentum as Array<{ theme: string; accelerating: number; stable: number; decelerating: number; total: number }>;
-        const top = tm.slice(0, 10);
-        return (
-          <div className="bg-black/20 border border-white/10 rounded-lg p-4">
-            <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-1">Theme Momentum — Top 10 themes by signal volume</h4>
-            <p className="text-[10px] text-slate-500 mb-3">Accelerating vs. stable vs. decelerating signals per theme, drawn from the Foresight Knowledge Base.</p>
-            <div className="space-y-2">
-              {top.map(row => {
-                const tot = row.total || 1;
-                const aPct = (row.accelerating / tot) * 100;
-                const sPct = (row.stable / tot) * 100;
-                const dPct = (row.decelerating / tot) * 100;
-                return (
-                  <div key={row.theme} className="grid grid-cols-[160px_1fr_64px] items-center gap-3 text-[10px]">
-                    <div className="text-slate-300 truncate" title={row.theme}>{row.theme}</div>
-                    <div className="h-3 flex rounded overflow-hidden bg-slate-800/60 border border-slate-700">
-                      {aPct > 0 && <div style={{ width: `${aPct}%`, backgroundColor: '#10b981' }} title={`Accelerating: ${row.accelerating}`} />}
-                      {sPct > 0 && <div style={{ width: `${sPct}%`, backgroundColor: '#64748b' }} title={`Stable: ${row.stable}`} />}
-                      {dPct > 0 && <div style={{ width: `${dPct}%`, backgroundColor: '#f43f5e' }} title={`Decelerating: ${row.decelerating}`} />}
-                    </div>
-                    <div className="text-right font-mono text-slate-500">{row.total}</div>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="mt-3 flex flex-wrap items-center gap-3 text-[9px] text-slate-500">
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-2 h-2 rounded" style={{ backgroundColor: '#10b981' }}></span> Accelerating
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-2 h-2 rounded" style={{ backgroundColor: '#64748b' }}></span> Stable
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="inline-block w-2 h-2 rounded" style={{ backgroundColor: '#f43f5e' }}></span> Decelerating
-              </span>
-            </div>
-          </div>
-        );
-      })()}
-
       {/* FINNISH ECONOMY FORCE MAP — from Observatory */}
       {observatoryData?.finland_analysis?.text && (
         <div className="mt-6 bg-black/20 rounded-xl border border-violet-500/20 overflow-hidden">
@@ -2548,11 +2692,18 @@ const CurrentDemandTab = ({ data }: { data: any }) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onCompanyClick: (company: any) => void }) => {
-  const [sortKey, setSortKey] = useState('favi_score');
+  const [sortKey, setSortKey] = useState('future_exposure_gap');
   const [sortDir, setSortDir] = useState('desc');
   const [expandedCompany, setExpandedCompany] = useState<string | null>(null);
 
-  const faviCompanies = data.favi_companies || [];
+  const faviCompanies = (data.favi_companies || []).map((row: any) => ({
+    ...row,
+    future_exposure_gap: row.future_exposure_gap ?? row.favi_score ?? 0,
+    adaptation_capacity: row.adaptation_capacity ?? row.fac ?? 0,
+    current_vulnerability_v2: row.current_vulnerability_v2 ?? row.current_vulnerability ?? 0,
+    demand_creation_potential: row.demand_creation_potential ?? row.favi_score ?? 0,
+    latent_need_delta: row.latent_need_delta ?? Math.max(0, Number(row.future_exposure_gap ?? row.favi_score ?? 0) - Number(row.current_vulnerability_v2 ?? row.current_vulnerability ?? 0)),
+  }));
   const domainPressure = data.favi_domain_pressure || [];
 
   const sorted = useMemo(() => {
@@ -2574,9 +2725,20 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
 
   const handleExportCSV = () => {
     if (sorted.length === 0) return;
-    const headers = ['Rank', 'Company', 'Domain', 'Foresight Vulnerability', 'Foresight Pressure', 'Readiness Gap', 'Adaptation Capacity', 'Current Vuln.', 'FAC x FAVI Segment', 'Formula'];
+    const headers = ['Rank', 'Company', 'Domain', 'Future Exposure Gap', 'Demand Creation Potential', 'Adaptation Capacity', 'Current Vulnerability', 'Foresight Pressure', 'Readiness Gap', 'Legacy FAVI', 'Segment', 'Formula'];
     const rows = sorted.map((v: any, i: number) => [
-      i + 1, v.name, v.domain, v.favi_score, v.fps, v.readiness_gap, v.fac, v.current_vulnerability, getAdaptationSegment(v, faviCutoff, facCutoff), v.formula
+      i + 1,
+      v.name,
+      v.domain,
+      v.future_exposure_gap ?? v.favi_score,
+      v.demand_creation_potential,
+      v.adaptation_capacity ?? v.fac,
+      v.current_vulnerability_v2 ?? v.current_vulnerability,
+      v.fps,
+      v.readiness_gap,
+      v.favi_score,
+      getAdaptationSegment(v, futureCutoff, capacityCutoff),
+      v.formula
     ]);
     const csv = [headers, ...rows].map(r => r.map((c: any) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
@@ -2594,17 +2756,18 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
     </th>
   );
 
-  const faviCutoff = data.favi_cutoffs?.favi ?? 48;
-  const facCutoff = getFacCutoff(faviCompanies);
-  const adaptationSegments = getAdaptationSegmentCounts(faviCompanies, faviCutoff, facCutoff);
+  const futureCutoff = getFutureExposureCutoff(data);
+  const capacityCutoff = getFacCutoff(faviCompanies);
+  const currentV2Cutoff = getCurrentVulnerabilityV2Cutoff(data);
+  const adaptationSegments = getAdaptationSegmentCounts(faviCompanies, futureCutoff, capacityCutoff);
   const totalCompanies = Object.values(adaptationSegments).reduce((s: number, v: any) => s + (v || 0), 0) || 1;
 
   return (
     <div className="space-y-6">
-      {/* 2x2 Adaptation Capacity x Future Vulnerability Matrix */}
+      {/* 2x2 Adaptation Capacity x Future Exposure Gap Matrix */}
       <div className="bg-black/20 border border-white/10 rounded-lg p-4">
         <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-4 flex items-center gap-2">
-          <Eye size={12} /> Adaptation Capacity x Future Vulnerability
+          <Eye size={12} /> Adaptation Capacity x Future Exposure Gap
         </h4>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-px bg-white/10 rounded-lg overflow-hidden">
           {/* Top-left: Trapped */}
@@ -2619,28 +2782,28 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
               <div className="h-full bg-rose-500 rounded-full" style={{ width: `${((adaptationSegments["Trapped"] || 0) / totalCompanies) * 100}%` }} />
             </div>
           </div>
-          {/* Top-right: Wealthy Under Pressure */}
-          <div className={`p-4 ${ADAPTATION_SEGMENT_CONFIG["Wealthy Under Pressure"].bg}`}>
+          {/* Top-right: Capable but Exposed */}
+          <div className={`p-4 ${ADAPTATION_SEGMENT_CONFIG["Capable but Exposed"].bg}`}>
             <div className="flex items-center justify-between mb-2">
-              <div className={`text-sm font-bold ${ADAPTATION_SEGMENT_CONFIG["Wealthy Under Pressure"].color}`}>Wealthy Under Pressure</div>
-              <div className="text-2xl font-bold text-amber-400">{adaptationSegments["Wealthy Under Pressure"] || 0}</div>
+              <div className={`text-sm font-bold ${ADAPTATION_SEGMENT_CONFIG["Capable but Exposed"].color}`}>Capable but Exposed</div>
+              <div className="text-2xl font-bold text-amber-400">{adaptationSegments["Capable but Exposed"] || 0}</div>
             </div>
-            <div className="text-[9px] text-slate-400 mb-1">{ADAPTATION_SEGMENT_CONFIG["Wealthy Under Pressure"].condition}</div>
-            <div className="text-[9px] text-amber-300/70">{ADAPTATION_SEGMENT_CONFIG["Wealthy Under Pressure"].description}</div>
+            <div className="text-[9px] text-slate-400 mb-1">{ADAPTATION_SEGMENT_CONFIG["Capable but Exposed"].condition}</div>
+            <div className="text-[9px] text-amber-300/70">{ADAPTATION_SEGMENT_CONFIG["Capable but Exposed"].description}</div>
             <div className="mt-2 h-1 rounded-full bg-white/5 overflow-hidden">
-              <div className="h-full bg-amber-500 rounded-full" style={{ width: `${((adaptationSegments["Wealthy Under Pressure"] || 0) / totalCompanies) * 100}%` }} />
+              <div className="h-full bg-amber-500 rounded-full" style={{ width: `${((adaptationSegments["Capable but Exposed"] || 0) / totalCompanies) * 100}%` }} />
             </div>
           </div>
-          {/* Bottom-left: Mature & Stable */}
-          <div className={`p-4 ${ADAPTATION_SEGMENT_CONFIG["Mature & Stable"].bg}`}>
+          {/* Bottom-left: Limited but Sheltered */}
+          <div className={`p-4 ${ADAPTATION_SEGMENT_CONFIG["Limited but Sheltered"].bg}`}>
             <div className="flex items-center justify-between mb-2">
-              <div className={`text-sm font-bold ${ADAPTATION_SEGMENT_CONFIG["Mature & Stable"].color}`}>Mature &amp; Stable</div>
-              <div className="text-2xl font-bold text-blue-400">{adaptationSegments["Mature & Stable"] || 0}</div>
+              <div className={`text-sm font-bold ${ADAPTATION_SEGMENT_CONFIG["Limited but Sheltered"].color}`}>Limited but Sheltered</div>
+              <div className="text-2xl font-bold text-blue-400">{adaptationSegments["Limited but Sheltered"] || 0}</div>
             </div>
-            <div className="text-[9px] text-slate-400 mb-1">{ADAPTATION_SEGMENT_CONFIG["Mature & Stable"].condition}</div>
-            <div className="text-[9px] text-blue-300/70">{ADAPTATION_SEGMENT_CONFIG["Mature & Stable"].description}</div>
+            <div className="text-[9px] text-slate-400 mb-1">{ADAPTATION_SEGMENT_CONFIG["Limited but Sheltered"].condition}</div>
+            <div className="text-[9px] text-blue-300/70">{ADAPTATION_SEGMENT_CONFIG["Limited but Sheltered"].description}</div>
             <div className="mt-2 h-1 rounded-full bg-white/5 overflow-hidden">
-              <div className="h-full bg-blue-500 rounded-full" style={{ width: `${((adaptationSegments["Mature & Stable"] || 0) / totalCompanies) * 100}%` }} />
+              <div className="h-full bg-blue-500 rounded-full" style={{ width: `${((adaptationSegments["Limited but Sheltered"] || 0) / totalCompanies) * 100}%` }} />
             </div>
           </div>
           {/* Bottom-right: Future-Ready */}
@@ -2661,23 +2824,23 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
         {data.favi_cutoffs && (
           <div className="mt-3 text-[10px] text-slate-500 leading-relaxed">
             Cutoffs (
-            {data.favi_cutoffs.source?.startsWith('percentile')
-              ? data.favi_cutoffs.source.replace('percentile:', '').replace(/p(\d+(\.\d+)?)/g, '$1th percentile').replace(/,/g, ', ').replace('favi=', 'FAVI ').replace('current=', 'Current ')
+            {(data.favi_cutoffs.v2_source || data.favi_cutoffs.source || '').startsWith('percentile')
+              ? (data.favi_cutoffs.v2_source || data.favi_cutoffs.source).replace('percentile:', '').replace(/p(\d+(\.\d+)?)/g, '$1th percentile').replace(/,/g, ', ').replace('future=', 'Future ').replace('current_v2=', 'Current ').replace('adaptation=', 'Adaptation ').replace('demand=', 'Demand ')
               : 'fixed fallback'}
-            ): FAVI &ge; <span className="font-mono text-slate-300">{data.favi_cutoffs.favi}</span>
-            {' '}&middot; FAC median &ge; <span className="font-mono text-slate-300">{facCutoff.toFixed(1)}</span>
+            ): Future gap &ge; <span className="font-mono text-slate-300">{futureCutoff}</span>
+            {' '}&middot; Adaptation capacity &ge; <span className="font-mono text-slate-300">{capacityCutoff.toFixed(1)}</span>
           </div>
         )}
         {/* Matrix axis labels */}
         <div className="flex justify-between mt-3 text-[8px] text-slate-500 uppercase tracking-wider">
           <div className="flex items-center gap-1">
             <span className="inline-block w-8 h-px bg-slate-600" />
-            Financial Adaptation Capacity (x-axis)
+            Adaptation Capacity (x-axis)
             <span className="inline-block w-8 h-px bg-slate-600" />
           </div>
           <div className="flex items-center gap-1">
             <span className="inline-block w-8 h-px bg-slate-600" />
-            Foresight-Adjusted Vulnerability Index (y-axis)
+            Future Exposure Gap (y-axis)
             <span className="inline-block w-8 h-px bg-slate-600" />
           </div>
         </div>
@@ -2711,57 +2874,42 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
         </div>
         )}
 
-        {/* Adaptation Capacity x Future Vulnerability — replaces the old Domain
-            Foresight Pressure bar. X = Financial Adaptation Capacity (FAC).
-            Y = Foresight Vulnerability (FAVI). Quadrants are anchored on the
-            calibrated FAVI cutoff and the median FAC of this portfolio. */}
+        {/* Adaptation Capacity x Future Exposure Gap — separates capacity to
+            act from future pressure instead of reusing composite FAVI. */}
         {sorted.length > 0 && ScatterChart ? (() => {
-          const facValues = sorted.map((v: any) => v.fac || 0).filter((x: number) => x >= 0);
-          const facMedian = facValues.length
-            ? (() => {
-                const s = [...facValues].sort((a, b) => a - b);
-                const mid = Math.floor(s.length / 2);
-                return s.length % 2 === 0 ? (s[mid - 1] + s[mid]) / 2 : s[mid];
-              })()
-            : 50;
-          const faviCutoff = data.favi_cutoffs?.favi ?? 48;
           return (
             <div className="bg-black/20 border border-white/10 rounded-lg p-4">
-              <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-1">Adaptation Capacity x Future Vulnerability</h4>
-              <p className="text-[10px] text-slate-500 mb-3">X = financial capacity to absorb change. Y = foresight-driven future pressure. Top-left = trapped; bottom-right = future-ready.</p>
+              <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-1">Adaptation Capacity x Future Exposure Gap</h4>
+              <p className="text-[10px] text-slate-500 mb-3">X = capacity to act. Y = future exposure that may create demand before visible pain. Top-left = trapped; bottom-right = future-ready.</p>
               <ResponsiveContainer width="100%" height={250}>
                 <ScatterChart margin={{ left: 10, right: 20, top: 10, bottom: 25 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                  <XAxis type="number" dataKey="fac" name="FAC" tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[0, 100]}
-                    label={{ value: 'Financial Adaptation Capacity', fill: '#64748b', fontSize: 9, position: 'bottom', offset: 10 }} />
-                  <YAxis type="number" dataKey="favi_score" name="FAVI" tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[0, 100]}
-                    label={{ value: 'Foresight Vulnerability', fill: '#64748b', fontSize: 9, angle: -90, position: 'insideLeft' }} />
+                  <XAxis type="number" dataKey="adaptation_capacity" name="Adaptation Capacity" tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[0, 100]}
+                    label={{ value: 'Adaptation Capacity', fill: '#64748b', fontSize: 9, position: 'bottom', offset: 10 }} />
+                  <YAxis type="number" dataKey="future_exposure_gap" name="Future Exposure Gap" tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[0, 100]}
+                    label={{ value: 'Future Exposure Gap', fill: '#64748b', fontSize: 9, angle: -90, position: 'insideLeft' }} />
                   <Tooltip cursor={{ strokeDasharray: '3 3' }}
                     contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11, color: '#e2e8f0' }} labelStyle={{ color: '#f1f5f9', fontWeight: 600 }} itemStyle={{ color: '#e2e8f0' }}
                     content={({ active, payload }: any) => {
                       if (!active || !payload?.length) return null;
                       const d = payload[0]?.payload;
-                      const adaptationSegment = getAdaptationSegment(d, faviCutoff, facMedian);
+                      const adaptationSegment = getAdaptationSegment(d, futureCutoff, capacityCutoff);
                       const adaptationCfg = ADAPTATION_SEGMENT_CONFIG[adaptationSegment];
                       return (
                         <div className="bg-[#0f172a] border border-white/20 rounded-lg p-2 text-[10px]">
                           <div className="font-bold text-white">{d?.name}</div>
                           <div className="text-slate-400">{d?.domain}</div>
-                          <div className="mt-1 text-cyan-300">Adaptability (FAC): {d?.fac}</div>
-                          <div className="text-rose-300">Foresight Vulnerability: {d?.favi_score}</div>
+                          <div className="mt-1 text-cyan-300">Adaptation Capacity: {d?.adaptation_capacity ?? d?.fac}</div>
+                          <div className="text-rose-300">Future Exposure Gap: {d?.future_exposure_gap ?? d?.favi_score}</div>
                           <div className={`mt-1 font-bold ${adaptationCfg?.color || 'text-slate-300'}`}>{adaptationSegment}</div>
                         </div>
                       );
                     }} />
-                  {/* Quadrant reference lines: vertical at FAC median; horizontal
-                      at the calibrated FAVI cutoff visually nudged down by 2 so
-                      points right on the boundary read clearly. The label keeps
-                      the actual cutoff value since that is what classifies. */}
-                  {ReferenceLine && <ReferenceLine x={facMedian} stroke="#475569" strokeDasharray="6 4" label={{ value: `FAC=${facMedian.toFixed(0)}`, fill: '#475569', fontSize: 8, position: 'top' }} />}
-                  {ReferenceLine && <ReferenceLine y={Math.max(0, faviCutoff - 2)} stroke="#475569" strokeDasharray="6 4" label={{ value: `FAVI=${faviCutoff}`, fill: '#475569', fontSize: 8, position: 'right' }} />}
-                  <Scatter data={sorted.filter((v: any) => v.favi_score > 0 || v.fac > 0)} name="Companies">
-                    {sorted.filter((v: any) => v.favi_score > 0 || v.fac > 0).map((v: any, i: number) => {
-                      const segment = getAdaptationSegment(v, faviCutoff, facMedian);
+                  {ReferenceLine && <ReferenceLine x={capacityCutoff} stroke="#475569" strokeDasharray="6 4" label={{ value: `Capacity=${capacityCutoff.toFixed(0)}`, fill: '#475569', fontSize: 8, position: 'top' }} />}
+                  {ReferenceLine && <ReferenceLine y={Math.max(0, futureCutoff - 2)} stroke="#475569" strokeDasharray="6 4" label={{ value: `Future=${futureCutoff}`, fill: '#475569', fontSize: 8, position: 'right' }} />}
+                  <Scatter data={sorted.filter((v: any) => (v.future_exposure_gap ?? v.favi_score ?? 0) > 0 || (v.adaptation_capacity ?? v.fac ?? 0) > 0)} name="Companies">
+                    {sorted.filter((v: any) => (v.future_exposure_gap ?? v.favi_score ?? 0) > 0 || (v.adaptation_capacity ?? v.fac ?? 0) > 0).map((v: any, i: number) => {
+                      const segment = getAdaptationSegment(v, futureCutoff, capacityCutoff);
                       const segColor = ADAPTATION_SEGMENT_CONFIG[segment]?.hex || '#94a3b8';
                       return <Cell key={i} fill={segColor} fillOpacity={0.75} />;
                     })}
@@ -2771,51 +2919,50 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
               {/* Quadrant labels overlaid as a small legend strip */}
               <div className="grid grid-cols-2 gap-2 mt-2 text-[9px] text-slate-400">
                 <div><span className="text-rose-300 font-bold">TRAPPED</span> <span className="text-slate-500">(top-left)</span> — low cushion, future bad</div>
-                <div><span className="text-amber-300 font-bold">WEALTHY UNDER PRESSURE</span> <span className="text-slate-500">(top-right)</span> — should evaluate investment priorities</div>
-                <div><span className="text-blue-300 font-bold">MATURE &amp; STABLE</span> <span className="text-slate-500">(bottom-left)</span> — financially fine, no future pressure</div>
+                <div><span className="text-amber-300 font-bold">CAPABLE BUT EXPOSED</span> <span className="text-slate-500">(top-right)</span> — capacity exists, future is building</div>
+                <div><span className="text-blue-300 font-bold">LIMITED BUT SHELTERED</span> <span className="text-slate-500">(bottom-left)</span> — lower capacity, lower future pressure</div>
                 <div><span className="text-emerald-300 font-bold">FUTURE-READY</span> <span className="text-slate-500">(bottom-right)</span> — best position</div>
               </div>
             </div>
           );
         })() : null}
 
-        {/* Foresight Vulnerability vs Current Vulnerability Scatter */}
+        {/* Future Exposure Gap vs Current Vulnerability Scatter */}
         {sorted.length > 0 && ScatterChart ? (
           <div className="bg-black/20 border border-white/10 rounded-lg p-4">
-            <h4 className="text-[10px] font-bold text-rose-300 uppercase tracking-wide mb-1">Foresight-Adjusted Vulnerability vs Current Vulnerability</h4>
-            <p className="text-[10px] text-slate-500 mb-3">X = how vulnerable today. Y = how vulnerable tomorrow. The reference lines split the plane into the four strategic segments (Critical / Sleepwalking / Wounded / Safe Harbor).</p>
+            <h4 className="text-[10px] font-bold text-rose-300 uppercase tracking-wide mb-1">Future Exposure Gap vs Current Vulnerability</h4>
+            <p className="text-[10px] text-slate-500 mb-3">X = visible weakness today. Y = future pressure. This separates emerging risk from urgent remediation.</p>
             <ResponsiveContainer width="100%" height={250}>
               <ScatterChart margin={{ left: 10, right: 20, top: 10, bottom: 48 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                <XAxis type="number" dataKey="current_vulnerability" name="Current Vuln." tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[0, 100]}
+                <XAxis type="number" dataKey="current_vulnerability_v2" name="Current Vuln." tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[0, 100]}
                   label={{ value: 'Current Vulnerability', fill: '#64748b', fontSize: 9, position: 'bottom', offset: 10 }} />
-                <YAxis type="number" dataKey="favi_score" name="Foresight Vulnerability" tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[0, 100]}
-                  label={{ value: 'Foresight Vulnerability', fill: '#64748b', fontSize: 9, angle: -90, position: 'insideLeft' }} />
+                <YAxis type="number" dataKey="future_exposure_gap" name="Future Exposure Gap" tick={{ fill: '#94a3b8', fontSize: 10 }} domain={[0, 100]}
+                  label={{ value: 'Future Exposure Gap', fill: '#64748b', fontSize: 9, angle: -90, position: 'insideLeft' }} />
                 <Tooltip cursor={{ strokeDasharray: '3 3' }}
                   contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11, color: '#e2e8f0' }} labelStyle={{ color: '#f1f5f9', fontWeight: 600 }} itemStyle={{ color: '#e2e8f0' }}
                   content={({ active, payload }: any) => {
                     if (!active || !payload?.length) return null;
                     const d = payload[0]?.payload;
+                    const segment = getCurrentFutureSegment(d, futureCutoff, currentV2Cutoff);
                     return (
                       <div className="bg-[#0f172a] border border-white/20 rounded-lg p-2 text-[10px]">
                         <div className="font-bold text-white">{d?.name}</div>
                         <div className="text-slate-400">{d?.domain}</div>
-                        <div className="mt-1 text-rose-300">Foresight Vulnerability: {d?.favi_score}</div>
-                        <div className="text-amber-300">Current Vuln: {d?.current_vulnerability}</div>
-                        <div className={`mt-1 font-bold ${SEGMENT_CONFIG[d?.segment]?.color || 'text-slate-300'}`}>{d?.segment}</div>
+                        <div className="mt-1 text-rose-300">Future Exposure Gap: {d?.future_exposure_gap ?? d?.favi_score}</div>
+                        <div className="text-amber-300">Current Vuln: {d?.current_vulnerability_v2 ?? d?.current_vulnerability}</div>
+                        <div className="mt-1 font-bold text-slate-200">{segment}</div>
                       </div>
                     );
                   }} />
-                {/* Quadrant reference lines at calibrated segment cutoffs.
-                    Falls back to the legacy fixed thresholds if the cutoffs
-                    are absent on the API payload. */}
-                {ReferenceLine && <ReferenceLine x={data.favi_cutoffs?.current_vulnerability ?? 14} stroke="#475569" strokeDasharray="6 4" label={{ value: `Vuln=${data.favi_cutoffs?.current_vulnerability ?? 14}`, fill: '#475569', fontSize: 8, position: 'top' }} />}
-                {ReferenceLine && <ReferenceLine y={data.favi_cutoffs?.favi ?? 48} stroke="#475569" strokeDasharray="6 4" label={{ value: `FAVI=${data.favi_cutoffs?.favi ?? 48}`, fill: '#475569', fontSize: 8, position: 'right' }} />}
-                <Scatter data={sorted.filter((v: any) => v.favi_score > 0 || v.current_vulnerability > 0)} name="Companies">
-                  {sorted.filter((v: any) => v.favi_score > 0 || v.current_vulnerability > 0).map((v: any, i: number) => {
-                    const segColor = v.segment === 'Critical' ? '#f43f5e' :
-                      v.segment === 'Sleepwalking' ? '#f59e0b' :
-                      v.segment === 'Wounded but Sheltered' ? '#3b82f6' : '#10b981';
+                {ReferenceLine && <ReferenceLine x={currentV2Cutoff} stroke="#475569" strokeDasharray="6 4" label={{ value: `Vuln=${currentV2Cutoff}`, fill: '#475569', fontSize: 8, position: 'top' }} />}
+                {ReferenceLine && <ReferenceLine y={futureCutoff} stroke="#475569" strokeDasharray="6 4" label={{ value: `Future=${futureCutoff}`, fill: '#475569', fontSize: 8, position: 'right' }} />}
+                <Scatter data={sorted.filter((v: any) => (v.future_exposure_gap ?? v.favi_score ?? 0) > 0 || (v.current_vulnerability_v2 ?? v.current_vulnerability ?? 0) > 0)} name="Companies">
+                  {sorted.filter((v: any) => (v.future_exposure_gap ?? v.favi_score ?? 0) > 0 || (v.current_vulnerability_v2 ?? v.current_vulnerability ?? 0) > 0).map((v: any, i: number) => {
+                    const segment = getCurrentFutureSegment(v, futureCutoff, currentV2Cutoff);
+                    const segColor = segment === 'Critical' ? '#f43f5e' :
+                      segment === 'Emerging Risk' ? '#f59e0b' :
+                      segment === 'Current Recovery Need' ? '#3b82f6' : '#10b981';
                     return <Cell key={i} fill={segColor} fillOpacity={0.75} />;
                   })}
                 </Scatter>
@@ -2823,20 +2970,20 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
             </ResponsiveContainer>
             {/* Quadrant -> segment legend, mirroring the Adaptability chart. */}
             <div className="grid grid-cols-2 gap-2 mt-2 text-[9px] text-slate-400">
-              <div><span className="text-amber-300 font-bold">SLEEPWALKING</span> <span className="text-slate-500">(top-left)</span> — looks fine today, future is building</div>
-              <div><span className="text-rose-300 font-bold">CRITICAL</span> <span className="text-slate-500">(top-right)</span> — struggling now AND blind to what is coming</div>
-              <div><span className="text-emerald-300 font-bold">SAFE HARBOR</span> <span className="text-slate-500">(bottom-left)</span> — healthy and future-ready</div>
-              <div><span className="text-blue-300 font-bold">WOUNDED BUT SHELTERED</span> <span className="text-slate-500">(bottom-right)</span> — problems are real but future is not adding pressure</div>
+              <div><span className="text-amber-300 font-bold">EMERGING RISK</span> <span className="text-slate-500">(top-left)</span> — future pressure is building before visible pain</div>
+              <div><span className="text-rose-300 font-bold">CRITICAL</span> <span className="text-slate-500">(top-right)</span> — vulnerable now and exposed to future pressure</div>
+              <div><span className="text-emerald-300 font-bold">WELL POSITIONED</span> <span className="text-slate-500">(bottom-left)</span> — lower current and future pressure</div>
+              <div><span className="text-blue-300 font-bold">CURRENT RECOVERY NEED</span> <span className="text-slate-500">(bottom-right)</span> — current issues dominate future pressure</div>
             </div>
           </div>
         ) : null}
       </div>
 
-      {/* FAVI Company Table */}
+      {/* Future Exposure & Demand Potential Company Table */}
       <div className="bg-black/20 border border-white/10 rounded-lg p-4">
         <div className="flex justify-between items-center mb-3">
           <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide flex items-center gap-2">
-            <AlertTriangle size={12} /> Foresight-Adjusted Vulnerability Index
+            <AlertTriangle size={12} /> Future Exposure & Demand Potential
           </h4>
           <button onClick={handleExportCSV} className="flex items-center gap-1 px-2 py-1 text-[10px] bg-white/5 hover:bg-white/10 border border-white/10 rounded text-slate-300">
             <Download size={10} /> CSV
@@ -2851,19 +2998,24 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
                   <th className="p-2 text-left">#</th>
                   <th className="p-2 text-left">Company</th>
                   <th className="p-2 text-left">Domain</th>
-                  <SortHeader label="Vulnerability" dataKey="favi_score" />
+                  <SortHeader label="Future Gap" dataKey="future_exposure_gap" />
+                  <SortHeader label="Demand Potential" dataKey="demand_creation_potential" />
+                  <SortHeader label="Adapt." dataKey="adaptation_capacity" />
+                  <SortHeader label="Curr. Vuln" dataKey="current_vulnerability_v2" />
                   <SortHeader label="Pressure" dataKey="fps" />
                   <SortHeader label="Gap" dataKey="readiness_gap" />
-                  <SortHeader label="Adapt." dataKey="fac" />
-                  <SortHeader label="Megatrend" dataKey="megatrend_exposure" />
-                  <SortHeader label="Curr. Vuln" dataKey="current_vulnerability" />
-                  <th className="p-2 text-left">FAC x FAVI Segment</th>
+                  <SortHeader label="Legacy FAVI" dataKey="favi_score" />
+                  <th className="p-2 text-left">Segment</th>
                   <th className="p-2 text-left"></th>
                 </tr>
               </thead>
               <tbody>
                 {sorted.map((v: any, i: number) => {
-                  const adaptationSegment = getAdaptationSegment(v, faviCutoff, facCutoff);
+                  const futureGap = v.future_exposure_gap ?? v.favi_score ?? 0;
+                  const demandPotential = v.demand_creation_potential ?? 0;
+                  const adaptationCapacity = v.adaptation_capacity ?? v.fac ?? 0;
+                  const currentVuln = v.current_vulnerability_v2 ?? v.current_vulnerability ?? 0;
+                  const adaptationSegment = getAdaptationSegment(v, futureCutoff, capacityCutoff);
                   const segCfg = ADAPTATION_SEGMENT_CONFIG[adaptationSegment] || ADAPTATION_SEGMENT_CONFIG["Future-Ready"];
                   const isExpanded = expandedCompany === v.name;
                   return (
@@ -2873,8 +3025,17 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
                         <td className="p-2 text-cyan-300 font-medium cursor-pointer hover:underline"
                           onClick={() => onCompanyClick({ companyName: v.name, domain: v.domain })}>{v.name}</td>
                         <td className="p-2 text-slate-400">{v.domain}</td>
-                        <td className="p-2 font-mono font-bold" style={{ color: FAVI_COLOR(v.favi_score) }}>
-                          {v.favi_score}
+                        <td className="p-2 font-mono font-bold" style={{ color: FAVI_COLOR(futureGap) }}>
+                          {futureGap}
+                        </td>
+                        <td className={`p-2 font-mono ${demandPotential >= 60 ? 'text-rose-400' : demandPotential >= 40 ? 'text-amber-400' : 'text-slate-400'}`}>
+                          {demandPotential}
+                        </td>
+                        <td className={`p-2 font-mono ${adaptationCapacity >= 60 ? 'text-emerald-400' : adaptationCapacity >= 30 ? 'text-amber-400' : 'text-rose-400'}`}>
+                          {adaptationCapacity}
+                        </td>
+                        <td className={`p-2 font-mono ${currentVuln >= currentV2Cutoff ? 'text-rose-400' : 'text-slate-400'}`}>
+                          {currentVuln}
                         </td>
                         <td className={`p-2 font-mono ${v.fps >= 50 ? 'text-rose-400' : v.fps >= 25 ? 'text-amber-400' : 'text-slate-400'}`}>
                           {v.fps}
@@ -2882,14 +3043,8 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
                         <td className={`p-2 font-mono ${v.readiness_gap >= 50 ? 'text-rose-400' : v.readiness_gap >= 25 ? 'text-amber-400' : 'text-slate-400'}`}>
                           {v.readiness_gap}
                         </td>
-                        <td className={`p-2 font-mono ${v.fac >= 60 ? 'text-emerald-400' : v.fac >= 30 ? 'text-amber-400' : 'text-rose-400'}`}>
-                          {v.fac}
-                        </td>
-                        <td className={`p-2 font-mono ${v.megatrend_exposure >= 50 ? 'text-rose-400' : 'text-slate-400'}`}>
-                          {v.megatrend_exposure}%
-                        </td>
-                        <td className={`p-2 font-mono ${v.current_vulnerability >= 40 ? 'text-rose-400' : 'text-slate-400'}`}>
-                          {v.current_vulnerability}
+                        <td className="p-2 font-mono text-slate-400">
+                          {v.favi_score}
                         </td>
                         <td className="p-2">
                           <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${segCfg.bg} ${segCfg.color} border ${segCfg.border}`}>
@@ -2905,7 +3060,7 @@ const ForesightVulnerabilityTab = ({ data, onCompanyClick }: { data: any; onComp
                       </tr>
                       {isExpanded && v.gap_details && v.gap_details.length > 0 && (
                         <tr key={`${v.name}-detail`} className="bg-black/30">
-                          <td colSpan={11} className="p-3">
+                          <td colSpan={12} className="p-3">
                             <div className="text-[9px] text-slate-400 mb-2 font-bold uppercase tracking-wide">
                               Dimension Readiness Gaps — {v.formula === 'geometric' ? 'Full Model' : 'Additive (sparse data)'}
                               {' '}— {v.foresight_count} foresight signals across {v.dimensions_covered} dimensions
@@ -2970,9 +3125,9 @@ const OpportunityMapTab = ({ data, onCompanyClick }: { data: any; onCompanyClick
   return (
     <div className="space-y-6">
       <div className="bg-black/20 border border-white/10 rounded-lg p-4">
-        <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-1">Opportunity Map — Future Pressure vs Current Capability Gaps</h4>
+        <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-1">Opportunity Map — Demand Creation Potential</h4>
         <p className="text-[10px] text-slate-500 mb-3">
-          Ranked by high foresight pressure, low readiness, financial capacity, intent-reality gap, and repeated WHY/WHAT clusters.
+          Ranked by proactive demand creation: future exposure, adaptation capacity, latent need delta, readiness gap, and score confidence. Current vulnerability is context, not the main driver.
         </p>
         {opportunityMap.formula && (
           <div className="text-[10px] text-slate-500 font-mono">Score formula: {opportunityMap.formula}</div>
@@ -2984,19 +3139,19 @@ const OpportunityMapTab = ({ data, onCompanyClick }: { data: any; onCompanyClick
         <div className="overflow-x-auto">
           <table className="w-full text-[10px]">
             <thead><tr className="text-slate-500 border-b border-white/10">
-              <th className="p-2 text-left">#</th><th className="p-2 text-left">Domain</th><th className="p-2 text-left">Opportunity</th>
-              <th className="p-2 text-left">Pressure</th><th className="p-2 text-left">Readiness Gap</th><th className="p-2 text-left">Fin. Capacity</th><th className="p-2 text-left">Intent-Reality Gap</th><th className="p-2 text-left">WHY/WHAT Signal</th><th className="p-2 text-left">Companies</th>
+              <th className="p-2 text-left">#</th><th className="p-2 text-left">Domain</th><th className="p-2 text-left">Demand Potential</th>
+              <th className="p-2 text-left">Future Gap</th><th className="p-2 text-left">Adapt. Capacity</th><th className="p-2 text-left">Current Vuln.</th><th className="p-2 text-left">Latent Delta</th><th className="p-2 text-left">WHY/WHAT Signal</th><th className="p-2 text-left">Companies</th>
             </tr></thead>
             <tbody>
               {domains.map((d: any, i: number) => (
                 <tr key={d.domain} className="border-t border-white/5">
                   <td className="p-2 text-slate-500">{i + 1}</td>
                   <td className="p-2 text-cyan-300 font-medium">{d.domain}</td>
-                  <td className="p-2 font-mono font-bold text-rose-300">{d.opportunity_score}</td>
-                  <td className="p-2 font-mono text-violet-300">{d.foresight_pressure}</td>
-                  <td className="p-2 font-mono text-amber-300">{d.readiness_gap}</td>
-                  <td className="p-2 font-mono text-emerald-300">{d.financial_capacity}</td>
-                  <td className="p-2 font-mono text-rose-300">{d.intent_reality_gap}</td>
+                  <td className="p-2 font-mono font-bold text-rose-300">{d.demand_creation_potential ?? d.opportunity_score}</td>
+                  <td className="p-2 font-mono text-violet-300">{d.future_exposure_gap ?? d.foresight_pressure}</td>
+                  <td className="p-2 font-mono text-emerald-300">{d.adaptation_capacity ?? d.financial_capacity}</td>
+                  <td className="p-2 font-mono text-amber-300">{d.current_vulnerability_v2 ?? d.intent_reality_gap}</td>
+                  <td className="p-2 font-mono text-cyan-300">{d.latent_need_delta ?? '—'}</td>
                   <td className="p-2 font-mono text-cyan-300">{d.proposal_cluster_signal}</td>
                   <td className="p-2 font-mono text-slate-400">{d.company_count}</td>
                 </tr>
@@ -3011,8 +3166,8 @@ const OpportunityMapTab = ({ data, onCompanyClick }: { data: any; onCompanyClick
         <div className="overflow-x-auto">
           <table className="w-full text-[10px]">
             <thead><tr className="text-slate-500 border-b border-white/10">
-              <th className="p-2 text-left">#</th><th className="p-2 text-left">Company</th><th className="p-2 text-left">Domain</th><th className="p-2 text-left">Opportunity</th>
-              <th className="p-2 text-left">Pressure</th><th className="p-2 text-left">Readiness Gap</th><th className="p-2 text-left">Fin. Capacity</th><th className="p-2 text-left">Intent-Reality Gap</th><th className="p-2 text-left">WHY/WHAT Signal</th>
+              <th className="p-2 text-left">#</th><th className="p-2 text-left">Company</th><th className="p-2 text-left">Domain</th><th className="p-2 text-left">Demand Potential</th>
+              <th className="p-2 text-left">Future Gap</th><th className="p-2 text-left">Adapt. Capacity</th><th className="p-2 text-left">Current Vuln.</th><th className="p-2 text-left">Latent Delta</th><th className="p-2 text-left">WHY/WHAT Signal</th>
             </tr></thead>
             <tbody>
               {companies.slice(0, 30).map((c: any, i: number) => (
@@ -3020,11 +3175,11 @@ const OpportunityMapTab = ({ data, onCompanyClick }: { data: any; onCompanyClick
                   <td className="p-2 text-slate-500">{i + 1}</td>
                   <td className="p-2 text-cyan-300 font-medium">{c.name}</td>
                   <td className="p-2 text-slate-400">{c.domain}</td>
-                  <td className="p-2 font-mono font-bold text-rose-300">{c.opportunity_score}</td>
-                  <td className="p-2 font-mono text-violet-300">{c.foresight_pressure}</td>
-                  <td className="p-2 font-mono text-amber-300">{c.readiness_gap}</td>
-                  <td className="p-2 font-mono text-emerald-300">{c.financial_capacity}</td>
-                  <td className="p-2 font-mono text-rose-300">{c.intent_reality_gap}</td>
+                  <td className="p-2 font-mono font-bold text-rose-300">{c.demand_creation_potential ?? c.opportunity_score}</td>
+                  <td className="p-2 font-mono text-violet-300">{c.future_exposure_gap ?? c.foresight_pressure}</td>
+                  <td className="p-2 font-mono text-emerald-300">{c.adaptation_capacity ?? c.financial_capacity}</td>
+                  <td className="p-2 font-mono text-amber-300">{c.current_vulnerability_v2 ?? c.intent_reality_gap}</td>
+                  <td className="p-2 font-mono text-cyan-300">{c.latent_need_delta ?? '—'}</td>
                   <td className="p-2 font-mono text-cyan-300">{c.proposal_cluster_signal}</td>
                 </tr>
               ))}
@@ -3042,8 +3197,8 @@ const SwedenSummaryTab = ({ data, onCompanyClick }: { data: any; onCompanyClick:
   const faviRows = cohort.favi_companies || [];
   const matched = cohort.matched_companies || [];
   const missing = cohort.missing_companies || [];
-  const faviCutoff = data.favi_cutoffs?.favi ?? 48;
-  const facCutoff = getFacCutoff(faviRows);
+  const futureCutoff = getFutureExposureCutoff(data);
+  const capacityCutoff = getFacCutoff(faviRows);
 
   if (!matched.length) {
     return (
@@ -3066,7 +3221,7 @@ const SwedenSummaryTab = ({ data, onCompanyClick }: { data: any; onCompanyClick:
           <Globe size={12} /> SWEDEN - SUMMARY
         </h4>
         <p className="text-[10px] text-slate-500 mb-4">
-          Curated Sweden cohort matched by company name and URL host. Uses the same opportunity and FAVI scoring as the global Market Intelligence views.
+          Curated Sweden cohort matched by company name and URL host. Uses the same demand potential and future exposure scoring as the global Market Intelligence views.
         </p>
         <div className="grid grid-cols-3 gap-3">
           <div className="bg-white/5 rounded-lg border border-white/10 p-3 text-center">
@@ -3089,8 +3244,8 @@ const SwedenSummaryTab = ({ data, onCompanyClick }: { data: any; onCompanyClick:
         <div className="overflow-x-auto">
           <table className="w-full text-[10px]">
             <thead><tr className="text-slate-500 border-b border-white/10">
-              <th className="p-2 text-left">#</th><th className="p-2 text-left">Company</th><th className="p-2 text-left">Domain</th><th className="p-2 text-left">Opportunity</th>
-              <th className="p-2 text-left">Pressure</th><th className="p-2 text-left">Readiness Gap</th><th className="p-2 text-left">Fin. Capacity</th><th className="p-2 text-left">Intent-Reality Gap</th><th className="p-2 text-left">WHY/WHAT Signal</th>
+              <th className="p-2 text-left">#</th><th className="p-2 text-left">Company</th><th className="p-2 text-left">Domain</th><th className="p-2 text-left">Demand Potential</th>
+              <th className="p-2 text-left">Future Gap</th><th className="p-2 text-left">Adapt. Capacity</th><th className="p-2 text-left">Current Vuln.</th><th className="p-2 text-left">Latent Delta</th><th className="p-2 text-left">WHY/WHAT Signal</th>
             </tr></thead>
             <tbody>
               {opportunities.length > 0 ? opportunities.map((c: any, i: number) => (
@@ -3098,11 +3253,11 @@ const SwedenSummaryTab = ({ data, onCompanyClick }: { data: any; onCompanyClick:
                   <td className="p-2 text-slate-500">{i + 1}</td>
                   <td className="p-2 text-cyan-300 font-medium">{c.name}</td>
                   <td className="p-2 text-slate-400">{c.domain}</td>
-                  <td className="p-2 font-mono font-bold text-rose-300">{c.opportunity_score}</td>
-                  <td className="p-2 font-mono text-violet-300">{c.foresight_pressure}</td>
-                  <td className="p-2 font-mono text-amber-300">{c.readiness_gap}</td>
-                  <td className="p-2 font-mono text-emerald-300">{c.financial_capacity}</td>
-                  <td className="p-2 font-mono text-rose-300">{c.intent_reality_gap}</td>
+                  <td className="p-2 font-mono font-bold text-rose-300">{c.demand_creation_potential ?? c.opportunity_score}</td>
+                  <td className="p-2 font-mono text-violet-300">{c.future_exposure_gap ?? c.foresight_pressure}</td>
+                  <td className="p-2 font-mono text-emerald-300">{c.adaptation_capacity ?? c.financial_capacity}</td>
+                  <td className="p-2 font-mono text-amber-300">{c.current_vulnerability_v2 ?? c.intent_reality_gap}</td>
+                  <td className="p-2 font-mono text-cyan-300">{c.latent_need_delta ?? '—'}</td>
                   <td className="p-2 font-mono text-cyan-300">{c.proposal_cluster_signal}</td>
                 </tr>
               )) : (
@@ -3116,27 +3271,30 @@ const SwedenSummaryTab = ({ data, onCompanyClick }: { data: any; onCompanyClick:
       </div>
 
       <div className="bg-black/20 border border-white/10 rounded-lg p-4">
-        <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-3">Foresight Vulnerability</h4>
+        <h4 className="text-[10px] font-bold text-cyan-300 uppercase tracking-wide mb-3">Future Exposure & Adaptation Capacity</h4>
         <div className="overflow-x-auto">
           <table className="w-full text-[10px]">
             <thead><tr className="text-slate-500 border-b border-white/10">
-              <th className="p-2 text-left">#</th><th className="p-2 text-left">Company</th><th className="p-2 text-left">Domain</th><th className="p-2 text-left">FAVI</th>
-              <th className="p-2 text-left">Pressure</th><th className="p-2 text-left">Gap</th><th className="p-2 text-left">Adapt.</th><th className="p-2 text-left">Curr. Vuln</th><th className="p-2 text-left">FAC x FAVI Segment</th>
+              <th className="p-2 text-left">#</th><th className="p-2 text-left">Company</th><th className="p-2 text-left">Domain</th><th className="p-2 text-left">Future Gap</th>
+              <th className="p-2 text-left">Pressure</th><th className="p-2 text-left">Readiness Gap</th><th className="p-2 text-left">Adapt.</th><th className="p-2 text-left">Curr. Vuln</th><th className="p-2 text-left">Segment</th>
             </tr></thead>
             <tbody>
               {faviRows.length > 0 ? faviRows.map((c: any, i: number) => {
-                const adaptationSegment = getAdaptationSegment(c, faviCutoff, facCutoff);
+                const adaptationSegment = getAdaptationSegment(c, futureCutoff, capacityCutoff);
                 const segCfg = ADAPTATION_SEGMENT_CONFIG[adaptationSegment] || ADAPTATION_SEGMENT_CONFIG["Future-Ready"];
+                const futureGap = c.future_exposure_gap ?? c.favi_score;
+                const currentVuln = c.current_vulnerability_v2 ?? c.current_vulnerability;
+                const adaptationCapacity = c.adaptation_capacity ?? c.fac;
                 return (
                   <tr key={c.name} className="border-t border-white/5 hover:bg-white/5 cursor-pointer transition-colors" onClick={() => onCompanyClick({ companyName: c.name, domain: c.domain })}>
                     <td className="p-2 text-slate-500">{i + 1}</td>
                     <td className="p-2 text-cyan-300 font-medium">{c.name}</td>
                     <td className="p-2 text-slate-400">{c.domain}</td>
-                    <td className="p-2 font-mono font-bold" style={{ color: FAVI_COLOR(c.favi_score) }}>{c.favi_score}</td>
+                    <td className="p-2 font-mono font-bold" style={{ color: FAVI_COLOR(futureGap) }}>{futureGap}</td>
                     <td className="p-2 font-mono text-violet-300">{c.fps}</td>
                     <td className="p-2 font-mono text-amber-300">{c.readiness_gap}</td>
-                    <td className="p-2 font-mono text-emerald-300">{c.fac}</td>
-                    <td className="p-2 font-mono text-rose-300">{c.current_vulnerability}</td>
+                    <td className="p-2 font-mono text-emerald-300">{adaptationCapacity}</td>
+                    <td className="p-2 font-mono text-rose-300">{currentVuln}</td>
                     <td className="p-2">
                       <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${segCfg.bg} ${segCfg.color} border ${segCfg.border}`}>
                         {adaptationSegment}
@@ -3146,7 +3304,7 @@ const SwedenSummaryTab = ({ data, onCompanyClick }: { data: any; onCompanyClick:
                 );
               }) : (
                 <tr className="border-t border-white/5">
-                  <td colSpan={9} className="p-4 text-center text-slate-500">No Sweden Foresight Vulnerability rows available yet.</td>
+                  <td colSpan={9} className="p-4 text-center text-slate-500">No Sweden future exposure rows available yet.</td>
                 </tr>
               )}
             </tbody>
@@ -3166,11 +3324,11 @@ const TABS = [
   { id: 'executive', label: 'Executive Summary', icon: Gauge },
   { id: 'future', label: 'Future Demand', icon: TrendingUp },
   { id: 'current', label: 'Current Demand', icon: Target },
-  { id: 'favi', label: 'Foresight Vulnerability', icon: Eye },
+  { id: 'favi', label: 'Future Exposure', icon: Eye },
   { id: 'sweden', label: 'SWEDEN - SUMMARY', icon: Globe },
 ];
 
-const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, onCompanyClick, observatoryData = null, crossImpactInterpretationData = null, onRefreshCrossImpactInterpretation, crossImpactInterpretationLoading = false }: {
+const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, onCompanyClick, observatoryData = null, crossImpactInterpretationData = null, pipelineGlobal = null, onRefreshCrossImpactInterpretation, crossImpactInterpretationLoading = false, crossImpactInterpretationStatus = null }: {
   isOpen: boolean;
   data: any;
   loading: boolean;
@@ -3179,8 +3337,10 @@ const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, on
   onCompanyClick: (company: any) => void;
   observatoryData?: any;
   crossImpactInterpretationData?: any;
+  pipelineGlobal?: any;
   onRefreshCrossImpactInterpretation?: () => void;
   crossImpactInterpretationLoading?: boolean;
+  crossImpactInterpretationStatus?: any;
 }) => {
   const [activeTab, setActiveTab] = useState('opportunity');
 
@@ -3256,7 +3416,7 @@ const MarketIntelligenceModal = ({ isOpen, data, loading, onClose, onRefresh, on
             <>
               {activeTab === 'opportunity' && <OpportunityMapTab data={data} onCompanyClick={onCompanyClick} />}
               {activeTab === 'executive' && <ExecutiveSummaryTab data={data} observatoryData={observatoryData} />}
-              {activeTab === 'future' && <FutureDemandTab data={data} observatoryData={observatoryData} crossImpactInterpretationData={crossImpactInterpretationData} onRefreshCrossImpactInterpretation={onRefreshCrossImpactInterpretation} crossImpactInterpretationLoading={crossImpactInterpretationLoading} />}
+              {activeTab === 'future' && <FutureDemandTab data={data} observatoryData={observatoryData} crossImpactInterpretationData={crossImpactInterpretationData} pipelineGlobal={pipelineGlobal} onRefreshCrossImpactInterpretation={onRefreshCrossImpactInterpretation} crossImpactInterpretationLoading={crossImpactInterpretationLoading} crossImpactInterpretationStatus={crossImpactInterpretationStatus} />}
               {activeTab === 'current' && <CurrentDemandTab data={data} />}
               {activeTab === 'favi' && <ForesightVulnerabilityTab data={data} onCompanyClick={onCompanyClick} />}
               {activeTab === 'sweden' && <SwedenSummaryTab data={data} onCompanyClick={onCompanyClick} />}

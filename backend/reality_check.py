@@ -125,6 +125,7 @@ _AUDIT_NOTE_LABELS = {
     "citation_scope_note": "Citation scope",
     "structured_payload_supported": "Structured payload supported",
     "inference_scope_note": "Inference scope",
+    "scanner_evidence_state_note": "Scanner evidence state",
     "unsafe_inference_wording": "Inference wording",
     "evidence_handoff_failure": "Evidence handoff",
 }
@@ -166,6 +167,30 @@ def sanitize_inference_wording(value):
         text,
         flags=re.IGNORECASE,
     )
+    proof_gap_rewrites = (
+        (
+            r'\b(?:the\s+)?(?:current\s+)?promoted evidence set contains no source verifying\s+([^.;\n]+)',
+            r'the current promoted evidence set does not yet provide enough direct support to confirm \1',
+        ),
+        (
+            r'\bno promoted source directly verifies\s+([^.;\n]+)',
+            r'the promoted source set does not yet provide enough direct support to confirm \1',
+        ),
+        (
+            r'\bno source verifying\s+([^.;\n]+)',
+            r'not enough source support to confirm \1',
+        ),
+        (
+            r'\bdoes not verify broader\s+([^.;\n]+)',
+            r'does not yet independently confirm broader \1',
+        ),
+        (
+            r'\bdoes not verify the breadth of\s+([^.;\n]+)',
+            r'does not yet independently confirm the breadth of \1',
+        ),
+    )
+    for pattern, replacement in proof_gap_rewrites:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
     text = re.sub(r'\s+([.;,])', r'\1', text)
     return text
 
@@ -213,7 +238,7 @@ def _classify_fact_check_issue(fc: dict, scan_payload: dict | None) -> tuple[str
 
     if error_type == "prohibited scanner observation":
         if _is_actual_scanner_process_observation(claim_text, reasoning):
-            return "blocking_false_claim", True
+            return "scanner_evidence_state_note", False
         return "inference_scope_note", False
 
     if claim_class == "structured_financial_payload_fact":

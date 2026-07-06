@@ -308,16 +308,29 @@ interface FAVIGapDetail {
 interface FAVICompany {
   name: string;
   domain: string;
-  favi_score: number;
+  favi_score: number;             // Legacy composite score kept for backward compatibility
   fps: number;                    // Foresight Pressure Score (0-100)
   readiness_gap: number;          // Readiness Gap (0-100)
   fac: number;                    // Financial Adaptation Capacity (0-100)
+  adaptation_capacity?: number;   // Broader capacity to act (financial + reality + evidence stability)
   megatrend_exposure: number;     // Megatrend Exposure (0-100)
   current_vulnerability: number;  // Current vulnerability score
+  current_vulnerability_v2?: number; // Current weakness separated from future pressure
+  future_exposure_gap?: number;   // Future-side pressure/readiness gap used as MI y-axis
+  demand_creation_potential?: number; // Proactive demand creation rank score
+  urgent_remediation_potential?: number; // Current-pain remediation rank score
+  latent_need_delta?: number;     // Future exposure minus visible current vulnerability
+  score_confidence?: {
+    score: number;
+    band: string;
+    foresight_count?: number;
+    dimensions_covered?: number;
+  };
+  score_percentiles?: Record<string, number>;
   intent_readiness_gap?: number;  // Raw intent-dimension readiness gap before current-risk adjustment
   current_vulnerability_signal?: number; // Current-risk floor used to prevent false zero FAVI
   readiness_gap_source?: string;  // "intent_dimensions" | "current_vulnerability_adjusted"
-  segment: string;                // Legacy Current x FAVI segment; UI may derive FAC x FAVI segment
+  segment: string;                // Legacy Current x FAVI segment; UI derives v2 visual segments
   formula: string;                // "geometric" | "additive"
   foresight_count: number;
   dimensions_covered: number;
@@ -341,7 +354,12 @@ interface FAVIDomainPressure {
 interface FAVICutoffs {
   favi: number;
   current_vulnerability: number;
+  future_exposure_gap?: number;
+  current_vulnerability_v2?: number;
+  adaptation_capacity?: number;
+  demand_creation_potential?: number;
   source: string;
+  v2_source?: string;
 }
 
 interface MarketIntelligenceData {

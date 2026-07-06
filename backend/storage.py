@@ -470,6 +470,94 @@ class BlobStorage:
         data = self.retrieve_latest_data("index/company_source_ledger")
         return data if isinstance(data, list) else []
 
+    def get_pipeline_readiness_index(self):
+        data = self.retrieve_latest_data("index/pipeline_readiness")
+        return data if isinstance(data, dict) else None
+
+    def save_pipeline_readiness_index(self, snapshot):
+        new_url = self._put("index/pipeline_readiness.json", snapshot)
+        if new_url:
+            self._prune_old_versions("index/pipeline_readiness", keep=3)
+        return new_url
+
+    def get_market_readiness_report_index(self):
+        data = self.retrieve_latest_data("index/market_readiness_report")
+        return data if isinstance(data, list) else []
+
+    def _update_market_readiness_report_index(self, metadata):
+        with BlobStorage._index_lock:
+            index = self.get_market_readiness_report_index()
+            report_key = metadata.get("report_key") or "latest"
+            updated = False
+            for idx, item in enumerate(index):
+                if (item.get("report_key") or "latest") == report_key:
+                    index[idx] = metadata
+                    updated = True
+                    break
+            if not updated:
+                index.append(metadata)
+            index.sort(key=lambda item: item.get("generated_at", ""), reverse=True)
+            new_url = self._put("index/market_readiness_report.json", index[:10])
+            if new_url:
+                self._prune_old_versions("index/market_readiness_report", keep=3)
+            return new_url
+
+    def save_market_readiness_report(self, report_json, html_report):
+        generated_at = report_json.get("generated_at") or datetime.utcnow().isoformat()
+        report_json["generated_at"] = generated_at
+        report_json["report_key"] = report_json.get("report_key") or "latest"
+        prefix = "market_readiness/latest"
+
+        html_url = self._put_text(f"{prefix}.html", html_report, "text/html; charset=utf-8")
+        if not html_url:
+            return None
+        payload = {**report_json, "html_url": html_url}
+        json_url = self._put(f"{prefix}.json", payload)
+        if not json_url:
+            return None
+
+        self._prune_old_versions(prefix, keep=6)
+        metadata = {
+            "report_key": payload.get("report_key", "latest"),
+            "title": payload.get("title", "Market Readiness and Emerging Demand Outlook"),
+            "generated_at": generated_at,
+            "json_url": json_url,
+            "html_url": html_url,
+            "status": payload.get("status", "ready"),
+            "company_count": payload.get("metadata", {}).get("company_count"),
+            "domain_count": payload.get("metadata", {}).get("domain_count"),
+            "warnings": payload.get("warnings", []),
+        }
+        self._update_market_readiness_report_index(metadata)
+        return metadata
+
+    def get_market_readiness_report(self):
+        prefix = "market_readiness/latest"
+        blobs = self._list(prefix=prefix, limit=20)
+        json_blobs = [b for b in blobs if str(b.get("pathname", "")).endswith(".json")]
+        if not json_blobs:
+            return {"exists": False}
+        json_blobs.sort(key=lambda x: x.get("uploadedAt", ""), reverse=True)
+        latest_json_url = json_blobs[0].get("url")
+        report = self._get(latest_json_url)
+        if not report:
+            return {"exists": False}
+        return {
+            "exists": True,
+            "metadata": {
+                "report_key": report.get("report_key", "latest"),
+                "title": report.get("title", "Market Readiness and Emerging Demand Outlook"),
+                "generated_at": report.get("generated_at"),
+                "json_url": latest_json_url,
+                "html_url": report.get("html_url"),
+                "status": report.get("status", "ready"),
+                "company_count": report.get("metadata", {}).get("company_count"),
+                "domain_count": report.get("metadata", {}).get("domain_count"),
+                "warnings": report.get("warnings", []),
+            },
+            "report": report,
+        }
+
     def _update_company_evidence_index(self, metadata):
         with BlobStorage._index_lock:
             index = self.get_company_evidence_index()

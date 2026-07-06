@@ -110,7 +110,7 @@ const getAdaptationSegment = (company, faviCutoff = 50, facCutoff = 50) => {
   return "Future-Ready";
 };
 
-const CompanySummary = ({ data, faviData, observatoryData = null, isAdmin = false, authToken = '' }) => {
+const CompanySummary = ({ data, faviData, observatoryData = null, companyReadiness = null, pipelineGlobal = null, isAdmin = false, authToken = '' }) => {
   const summaryRef = useRef(null);
   const [copied, setCopied] = useState(false);
   const [pitchCopied, setPitchCopied] = useState(false);
@@ -118,6 +118,25 @@ const CompanySummary = ({ data, faviData, observatoryData = null, isAdmin = fals
   const [activeTab, setActiveTab] = useState("diagnosis");
   const [buyingInsightMeta, setBuyingInsightMeta] = useState(null);
   const companyDisplayName = data?.companyName || data?.company_name || data?.name || '';
+  const readinessTone = (state?: string) => {
+    if (state === 'ready') return 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30';
+    if (state === 'warning') return 'bg-amber-500/10 text-amber-300 border-amber-500/30';
+    if (state === 'missing') return 'bg-rose-500/10 text-rose-300 border-rose-500/30';
+    if (state === 'running') return 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30';
+    return 'bg-slate-500/10 text-slate-400 border-slate-500/20';
+  };
+  const readinessDate = (value?: string) => {
+    if (!value) return '';
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? String(value).slice(0, 10) : d.toLocaleDateString('fi-FI');
+  };
+  const readinessBadge = (key: string, item: any, label: string) => (
+    <div key={key} title={`${item?.label || label}: ${item?.detail || 'No status'}${item?.recommended_action ? `\n${item.recommended_action}` : ''}`} className={`rounded-lg border px-3 py-2 ${readinessTone(item?.state)}`}>
+      <div className="text-[9px] font-mono font-bold uppercase tracking-wider">{label}</div>
+      <div className="text-[10px] mt-1 leading-snug">{item?.detail || 'No status'}</div>
+      {item?.updated_at && <div className="text-[9px] opacity-70 mt-1 font-mono">{readinessDate(item.updated_at)}</div>}
+    </div>
+  );
 
   useEffect(() => {
     if (!isAdmin || !authToken || !companyDisplayName) {
@@ -445,9 +464,10 @@ const isForesightContext = (link) => {
 
   // --- CHART DATA PREPARATION ---
   const historyRaw = data.history || [];
+  const hasRealHistory = historyRaw.length > 0;
   let chartData = [];
 
-  if (historyRaw.length > 0) {
+  if (hasRealHistory) {
       chartData = historyRaw.map(h => ({
           date: new Date(h.date).toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
           gap: h.gap
@@ -459,20 +479,10 @@ const isForesightContext = (link) => {
   } else {
       const current = new Date(data.lastUpdated);
       const currentGap = data.reality_gap;
-      chartData = [];
-      for(let i=5; i>=1; i--) {
-          const d = new Date(current);
-          d.setMonth(d.getMonth() - i);
-          const variance = Math.floor(Math.random() * 16) - 8; 
-          chartData.push({
-              date: d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
-              gap: Math.max(-100, Math.min(100, currentGap + variance))
-          });
-      }
-      chartData.push({
+      chartData = [{
           date: current.toLocaleDateString('en-US', { month: 'short', year: '2-digit' }),
           gap: currentGap
-      });
+      }];
   }
 
   // --- EXPORT LOGIC ---
@@ -496,7 +506,10 @@ const isForesightContext = (link) => {
   const handleCopyWhyWhat = () => {
     const why = data.why_proposals || [];
     const what = data.what_proposals || [];
-    const text = `WHY (Desired Impact):\n1. ${why[0] || ''}\n2. ${why[1] || ''}\n\nWHAT (Desired Effect):\n1. ${what[0] || ''}\n2. ${what[1] || ''}`;
+    const progress = data.what_progress_proposals || [];
+    const maxItems = Math.max(why.length, what.length, progress.length, 2);
+    const numbered = (items: any[]) => Array.from({ length: maxItems }, (_, i) => `${i + 1}. ${items[i] || ''}`).join('\n');
+    const text = `WHY (Customer value / consequence):\n${numbered(why)}\n\nWHAT (Outcome / deliverable):\n${numbered(what)}\n\nPROGRESS PROOF:\n${numbered(progress)}`;
     navigator.clipboard.writeText(text).then(() => {
         setWhyWhatCopied(true);
         setTimeout(() => setWhyWhatCopied(false), 2000);
@@ -544,6 +557,25 @@ const isForesightContext = (link) => {
                 if (!trimmed) return '';
                 return '<p>' + renderInlineMarkdown(trimmed).replace(/\n/g, '<br>') + '</p>';
             }).join('');
+        };
+        var renderStrategicSynthesisParagraphs = function(text) {
+            if (!hasText(text)) return '';
+            var splitLongBlock = function(block) {
+                var trimmed = block.trim();
+                if (trimmed.length < 900) return [trimmed];
+                var chunks = trimmed
+                    .split(/\s+(?=(?:The (?:first|second|third|fourth) tension is|In the next \d|Over \d|AI creates|External agentic|External signals|At the same time|Financially,|The thesis would change|This thesis would change|That pattern suggests)\b)/g)
+                    .map(function(part) { return part.trim(); })
+                    .filter(Boolean);
+                return chunks.length > 1 ? chunks : [trimmed];
+            };
+            return String(text)
+                .split(/\n\n+/)
+                .flatMap(splitLongBlock)
+                .map(function(block) {
+                    return '<p>' + renderInlineMarkdown(block).replace(/\n/g, '<br>') + '</p>';
+                })
+                .join('');
         };
         var renderReportBlocks = function(text) {
             if (!hasText(text)) return '';
@@ -705,6 +737,12 @@ const isForesightContext = (link) => {
             exportData.ai_verification && exportData.ai_verification.audit_notes,
             exportData.re_synthesis && exportData.re_synthesis.audit_notes
         );
+        var isVerboseAuditNote = function(note) {
+            var text = String(note || '');
+            return text.length > 240
+                || /\[[^\]]+\]\s*[^.]{20,}\s+—\s+/.test(text)
+                || /Large order book is absent|Structured payload supported|Inference scope|underlying strategic inference/i.test(text);
+        };
         var getSummaryLengthWordCount = function(note) {
             var match = String(note || '').match(/Summary (?:unusually long|length outside target range) \((\d+) words, expected 325-(?:375|475)\)/i);
             return match ? Number(match[1]) : null;
@@ -732,12 +770,24 @@ const isForesightContext = (link) => {
             return (link.title || link.source || link.url || 'Evidence source') + ': ' + String(link.entity_match_reason || link.verification_reason || 'wrong entity').replace(/_/g, ' ');
         });
         var gap = Number(exportData.intent_score || 0) - Number(exportData.reality_score || 0);
+        var acquisitionHealth = exportData.forensic_acquisition_health && typeof exportData.forensic_acquisition_health === 'object'
+            ? exportData.forensic_acquisition_health
+            : {};
+        var claimRewriteLabel = [
+            acquisitionHealth.too_strong_rewritten || 0,
+            acquisitionHealth.too_strong_question_only || 0,
+            acquisitionHealth.too_strong_context_only || 0,
+            acquisitionHealth.too_strong_blocked || 0
+        ].join('/');
         var metrics = [
             renderMetric('Ambition Score', formatScore(exportData.intent_score, '/100'), 'Narrative clarity'),
             renderMetric('Reality Score', formatScore(exportData.reality_score, '/100'), 'Evidence check'),
             renderMetric('Integrity Delta', (gap > 0 ? '+' : '') + Math.round(gap), 'Ambition minus reality'),
             renderMetric('Confidence', formatScore(exportData.confidence_score ?? exportData.scan_quality?.confidence_score ?? exportData.evidence_sufficiency?.score, '%'), 'Model confidence'),
             renderMetric('Financial Health', formatScore(exportData.financial_index, '/100'), 'Adaptation capacity'),
+            renderMetric('Acq Fresh', formatScore(acquisitionHealth.fresh_packets_accepted, '') + '/' + formatScore(acquisitionHealth.fresh_packets_acquired, ''), 'accepted / acquired'),
+            renderMetric('Acq Repair', acquisitionHealth.repair_dependency || 'n/a', acquisitionHealth.confidence_reason || 'acquisition dependency'),
+            renderMetric('Claim Rewrite', claimRewriteLabel, 'narrow/question/context/blocked'),
             renderMetric('URL Verified', verifiedSources, weakSources + ' weak/unverified'),
             renderMetric('Content Readable', contentReadableSources, 'readable page text'),
             renderMetric('Target Entity Verified', entityVerifiedSources, 'right company/scope'),
@@ -798,7 +848,7 @@ const isForesightContext = (link) => {
             + (contradictionWarnings.length ? '<div class="callout amber"><h3>Contradiction Warnings</h3>' + renderList(contradictionWarnings) + '</div>' : '<p class="muted">No contradiction warnings detected.</p>')
             + (wrongEntityWarnings.length ? '<div class="callout"><h3>Wrong-Entity Warnings</h3>' + renderList(wrongEntityWarnings) + '</div>' : '<p class="muted">No wrong-entity evidence detected.</p>')
             + (blockingWarnings.length ? '<div class="callout rose"><h3>Blocking Issues</h3>' + renderList(blockingWarnings) + '</div>' : '<p class="muted">No blocking false claims detected.</p>')
-            + (hallucinationWarnings.length ? '<div class="callout"><h3>Inference / Methodology Audit Notes</h3>' + renderList(hallucinationWarnings) + '</div>' : '<p class="muted">No inference or methodology audit notes detected.</p>')
+            + (hallucinationWarnings.filter(function(note) { return !isVerboseAuditNote(note); }).length ? '<div class="callout"><h3>Inference / Methodology Audit Notes</h3>' + renderList(hallucinationWarnings.filter(function(note) { return !isVerboseAuditNote(note); })) + '</div>' : '<p class="muted">Inference and methodology audit details are retained in the raw payload.</p>')
             + (qualityNotes.length ? '<div class="callout cyan"><h3>Quality Notes</h3>' + renderList(qualityNotes) + '</div>' : '<p class="muted">No format or style notes detected.</p>');
         var sourceTable = evidencePool.length ? '<div class="table-wrap source-register-wrap"><table class="source-register"><thead><tr><th>Ref</th><th>Stable ID</th><th>Source</th><th>Type</th><th>URL</th><th>Verification</th><th>Entity / Scope</th><th>Source Context</th><th>Claim Support</th><th>Exact Passage</th><th>Claim IDs</th></tr></thead><tbody>'
             + evidencePool.map(function(link) {
@@ -956,12 +1006,22 @@ const isForesightContext = (link) => {
             return '<div class="callout cyan"><h3>Copied From Buying Insight</h3><p>This stakeholder list is copied from the stored Admin Buying Insight report. Treat it as sales-prep and discovery guidance, not as core Scanner diagnostic evidence or confirmed buying intent.</p></div>'
                 + '<div class="stakeholders">' + cards + '</div>';
         };
-        var activationHTML = '<div class="two-col"><div><h3>WHY</h3>' + renderList(exportData.why_proposals) + '</div><div><h3>WHAT</h3>' + renderList(exportData.what_proposals) + '</div></div>'
+        var activationProgressHTML = Array.isArray(exportData.what_progress_proposals) && exportData.what_progress_proposals.length
+            ? '<div class="section nested"><h3>PROGRESS — Observable Proof</h3>' + renderList(exportData.what_progress_proposals) + '</div>'
+            : '';
+        var activationHTML = '<div class="two-col"><div><h3>WHY — Customer Value / Consequence</h3>' + renderList(exportData.why_proposals) + '</div><div><h3>WHAT — Outcome / Deliverable</h3>' + renderList(exportData.what_proposals) + '</div></div>'
+            + activationProgressHTML
             + renderSection('Strategic Pitch', 'Outbound narrative', renderParagraphs(exportData.pitch_text), 'nested');
         var strategicForesightData = exportData.strategic_foresight || {};
         var strategicForesightHTML = renderStrategicForesightEvidence(strategicForesightData);
         var buyingInsightStakeholdersHTML = renderBuyingInsightStakeholders(buyingInsightReport);
         var rawDataHTML = '<details><summary>Open complete raw JSON payload</summary><pre>' + escapeHTML(JSON.stringify(exportData, null, 2)) + '</pre></details>';
+        var detailedReportStatus = exportData.detailed_report_status || '';
+        var detailedReportHTML = exportData.detailed_report && detailedReportStatus !== 'incomplete'
+            ? renderReportBlocks(exportData.detailed_report)
+            : (detailedReportStatus && detailedReportStatus !== 'generated'
+                ? '<div class="callout amber"><h3>Detailed Report unavailable</h3><p>The detailed forensic report was not rendered because generation was incomplete or did not pass the completeness gate. Open Scanner to rerun or inspect the source evidence.</p><p><strong>Status:</strong> ' + escapeHTML(detailedReportStatus) + '</p></div>'
+                : '');
         var htmlContent = '<!DOCTYPE html>\n<html lang="en">\n<head>\n'
             + '<meta charset="UTF-8">\n'
             + '<meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
@@ -973,11 +1033,11 @@ const isForesightContext = (link) => {
             + '<header class="hero"><div class="kicker">Master Data HTML Export</div><h1>' + escapeHTML(companyName) + '</h1><p class="page-note">Complete uploadable evidence and analysis package. This file includes collected sources, trust metadata, diagnosis, activation context, foresight analysis, detailed forensic report, and the raw JSON payload.</p><div class="meta">' + headerMeta + '</div></header>\n'
             + renderSection('General Summary', 'Executive context', renderParagraphs(exportData.general_summary))
             + renderSection('AI Diagnosis', 'Interpretation and risks', diagnosisHTML)
-            + renderSection('Strategic Synthesis', 'Current reality × external pressure', renderParagraphs(exportData.strategic_synthesis))
+            + renderSection('Strategic Synthesis', 'Current reality × external pressure', renderStrategicSynthesisParagraphs(exportData.strategic_synthesis))
             + renderSection('Master Metrics', 'All score and trust signals', '<div class="metrics">' + metrics.join('') + '</div>' + breakdownHTML)
             + renderSection('Evidence Trust', 'Source verification and promotion state', trustHTML)
             + renderSection('Strategic Activation', 'WHY, WHAT, and pitch', activationHTML)
-            + renderSection('Detailed Forensic Report', 'Diagnostic detail', renderReportBlocks(exportData.detailed_report))
+            + renderSection('Detailed Forensic Report', 'Diagnostic detail', detailedReportHTML)
             + renderSection(exportData.domain ? 'Domain Force Dossier: ' + exportData.domain : 'Domain Force Dossier', 'Market context', domainDossierHTML)
             + renderSection('Strategic Foresight Evidence', 'Key forces, cross-impact, scenarios, and climate exposure', strategicForesightHTML)
             + renderSection('Reality Checklist', 'Forensic reality markers', checklistHTML)
@@ -1068,6 +1128,26 @@ const isForesightContext = (link) => {
         }).join('');
     };
 
+    const renderStrategicSynthesisParagraphs = function(text) {
+        if (!hasText(text)) return '';
+        const splitLongBlock = function(block) {
+            const trimmed = block.trim();
+            if (trimmed.length < 900) return [trimmed];
+            const chunks = trimmed
+                .split(/\s+(?=(?:The (?:first|second|third|fourth) tension is|In the next \d|Over \d|AI creates|At the same time|Financially,|The thesis would change|This thesis would change|That pattern suggests)\b)/g)
+                .map(function(part) { return part.trim(); })
+                .filter(Boolean);
+            return chunks.length > 1 ? chunks : [trimmed];
+        };
+        return String(text)
+            .split(/\n\n+/)
+            .flatMap(splitLongBlock)
+            .map(function(block) {
+                return '<p>' + renderInlineMarkdown(block).replace(/\n/g, '<br>') + '</p>';
+            })
+            .join('');
+    };
+
     const renderReportBlocks = function(text) {
         if (!hasText(text)) return '';
         return String(text).split(/\n\n+/).map(function(block) {
@@ -1104,12 +1184,6 @@ const isForesightContext = (link) => {
         const num = Number(value);
         if (!Number.isFinite(num)) return escapeHTML(value);
         return Math.round(num).toString() + (suffix || '');
-    };
-
-    const getDossier = function(exportData) {
-        const domain = exportData?.domain;
-        if (!domain || !observatoryData?.domain_dossiers) return null;
-        return observatoryData.domain_dossiers.find(function(d) { return d.domain === domain; }) || null;
     };
 
     const buildAndDownloadExecutive = function(exportData) {
@@ -1209,13 +1283,22 @@ const isForesightContext = (link) => {
         const evidenceSufficiency = exportData.evidence_sufficiency && typeof exportData.evidence_sufficiency === 'object' ? exportData.evidence_sufficiency : null;
         const lowEvidenceLabel = exportData.low_evidence_label || (evidenceSufficiency && evidenceSufficiency.label) || '';
         const isLowEvidenceMode = exportData.low_evidence_mode === true || !!lowEvidenceLabel;
-
+        const acquisitionHealth = exportData.forensic_acquisition_health && typeof exportData.forensic_acquisition_health === 'object'
+            ? exportData.forensic_acquisition_health
+            : {};
+        const claimRewriteLabel = [
+            acquisitionHealth.too_strong_rewritten || 0,
+            acquisitionHealth.too_strong_question_only || 0,
+            acquisitionHealth.too_strong_context_only || 0,
+            acquisitionHealth.too_strong_blocked || 0
+        ].join('/');
         const metrics = [
             renderMetric('Ambition Score', formatScore(exportData.intent_score, '/100'), 'Narrative clarity'),
             renderMetric('Reality Score', formatScore(exportData.reality_score, '/100'), 'Evidence check'),
             renderMetric('Integrity Delta', (gap > 0 ? '+' : '') + Math.round(gap), 'Ambition minus reality'),
             renderMetric('Confidence', formatScore(exportData.confidence_score ?? exportData.scan_quality?.confidence_score ?? exportData.evidence_sufficiency?.score, '%'), 'Model confidence'),
             renderMetric('Financial Health', formatScore(exportData.financial_index, '/100'), 'Adaptation capacity'),
+            renderMetric('Claim Rewrite', claimRewriteLabel, 'narrow/question/context/blocked'),
             renderMetric('URL Verified Sources', verifiedSources, weakSources + ' weak/unverified'),
             renderMetric('Analysis Verified', analysisVerifiedSources, 'content supports claim'),
             renderMetric('Generation Eligible', generationEligibleSources, 'safe for prose'),
@@ -1257,32 +1340,43 @@ const isForesightContext = (link) => {
             exportData.lastUpdated ? '<span>Scanned ' + escapeHTML(new Date(exportData.lastUpdated).toLocaleDateString('en-FI', { day: 'numeric', month: 'long', year: 'numeric' })) + '</span>' : ''
         ].filter(Boolean).join('');
 
-        const whyWhatHTML = '<div class="two-col"><div><h3>WHY</h3>' + renderList(exportData.why_proposals) + '</div><div><h3>WHAT</h3>' + renderList(exportData.what_proposals) + '</div></div>';
+        const whyWhatProgressHTML = Array.isArray(exportData.what_progress_proposals) && exportData.what_progress_proposals.length
+            ? '<div class="section nested"><h3>PROGRESS — Observable Proof</h3>' + renderList(exportData.what_progress_proposals) + '</div>'
+            : '';
+        const whyWhatHTML = '<div class="two-col"><div><h3>WHY — Customer Value / Consequence</h3>' + renderList(exportData.why_proposals) + '</div><div><h3>WHAT — Outcome / Deliverable</h3>' + renderList(exportData.what_proposals) + '</div></div>' + whyWhatProgressHTML;
         const pitchHTML = renderParagraphs(exportData.pitch_text);
         const diagnosisHTML = renderParagraphs(exportData.summary_text)
             + (Array.isArray(exportData.evidence_based_risks) && exportData.evidence_based_risks.length > 0
                 ? '<div class="callout"><h3>Evidence-Based Risks</h3>' + renderList(exportData.evidence_based_risks) + '</div>'
                 : '');
-
-        const dossier = getDossier(exportData);
-        let dossierHTML = '';
-        if (dossier?.text) {
-            const archDist = dossier.archetype_distribution || {};
-            const forces = dossier.forces_by_timescale || {};
-            const dossierStats = '<div class="chips">'
-                + (dossier.company_count != null ? '<span>' + escapeHTML(dossier.company_count) + ' companies</span>' : '')
-                + Object.keys(archDist).map(function(key) { return '<span>' + escapeHTML(key) + ': ' + escapeHTML(archDist[key]) + '</span>'; }).join('')
-                + (forces.act_now?.length ? '<span>Act Now: ' + escapeHTML(forces.act_now.length) + '</span>' : '')
-                + (forces.prepare?.length ? '<span>Prepare: ' + escapeHTML(forces.prepare.length) + '</span>' : '')
-                + (forces.position?.length ? '<span>Position: ' + escapeHTML(forces.position.length) + '</span>' : '')
-                + '</div>';
-            const dossierBody = String(dossier.text).split(/\n\n+/).filter(function(block) {
-                const trimmed = block.trim();
-                return trimmed && !/^#\s+Domain Force Dossier/i.test(trimmed);
-            }).join('\n\n');
-            dossierHTML = '<div class="callout cyan"><h3>Scanner Portfolio Context</h3><p>These domain metrics are derived from the Scanner’s analyzed company portfolio. They summarize observed company statuses and foresight pressure inside the Scanner dataset, rather than claiming to be a complete external market census.</p></div>'
-                + dossierStats + renderReportBlocks(dossierBody);
-        }
+        const renderBuyingInsightStakeholders = function(report) {
+            const stakeholders = report && Array.isArray(report.stakeholder_map) ? report.stakeholder_map : [];
+            const cards = stakeholders.filter(function(item) {
+                return item && typeof item === 'object' && (item.name || item.role || item.likely_buying_committee_role);
+            }).slice(0, 12).map(function(item) {
+                const confidence = item.confidence === null || item.confidence === undefined || item.confidence === ''
+                    ? 'n/a'
+                    : formatScore(item.confidence, '/100');
+                const evidenceBasis = item.evidence_basis || item.source_basis || item.verification_reason || '';
+                return '<article>'
+                    + '<h3>' + escapeHTML(item.name || 'Role-level stakeholder') + '</h3>'
+                    + (item.role ? '<div class="role">' + escapeHTML(item.role) + '</div>' : '')
+                    + (item.likely_buying_committee_role ? '<small><strong>Buying role:</strong> ' + escapeHTML(item.likely_buying_committee_role) + '</small>' : '')
+                    + (evidenceBasis ? '<small><strong>Evidence basis:</strong> ' + escapeHTML(String(evidenceBasis).slice(0, 420)) + '</small>' : '')
+                    + '<small><strong>Allowed use:</strong> ' + escapeHTML(item.allowed_use || 'sales-prep') + ' · <strong>Confidence:</strong> ' + escapeHTML(confidence) + '</small>'
+                    + '</article>';
+            }).join('');
+            if (!cards) return '';
+            return '<div class="callout cyan"><h3>Copied From Buying Insight</h3><p>This stakeholder list is copied from the stored Admin Buying Insight report. Treat it as sales-prep and discovery guidance, not as confirmed buying intent.</p></div>'
+                + '<div class="stakeholders">' + cards + '</div>';
+        };
+        const buyingInsightStakeholdersHTML = renderBuyingInsightStakeholders(exportData.buying_insight_report);
+        const detailedReportStatus = exportData.detailed_report_status || '';
+        const detailedReportHTML = exportData.detailed_report && detailedReportStatus !== 'incomplete'
+            ? renderReportBlocks(exportData.detailed_report)
+            : (detailedReportStatus && detailedReportStatus !== 'generated'
+                ? '<div class="callout amber"><h3>Detailed Report unavailable</h3><p>The detailed forensic report was not rendered because generation was incomplete or did not pass the completeness gate. Open Scanner to rerun or inspect the source evidence.</p><p><strong>Status:</strong> ' + escapeHTML(detailedReportStatus) + '</p></div>'
+                : '');
 
         const htmlContent = '<!DOCTYPE html>\n<html lang="en">\n<head>\n'
             + '<meta charset="UTF-8">\n'
@@ -1290,18 +1384,18 @@ const isForesightContext = (link) => {
             + '<title>' + escapeHTML(companyName) + ' - Executive Summary</title>\n'
             + '<style>\n'
             + ':root{color-scheme:dark;--bg:#0f172a;--panel:#172033;--panel2:#111827;--line:#334155;--text:#e5e7eb;--muted:#94a3b8;--cyan:#67e8f9;--green:#6ee7b7;--amber:#fbbf24;--rose:#fda4af;--violet:#c4b5fd;}\n'
-            + '*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Arial,sans-serif;line-height:1.55}main{max-width:1120px;margin:0 auto;padding:40px 28px 56px}.hero{border:1px solid var(--line);background:linear-gradient(135deg,#172033,#0f172a);border-radius:8px;padding:30px;margin-bottom:20px}.kicker{color:var(--cyan);font-size:11px;font-weight:800;letter-spacing:.16em;text-transform:uppercase}.hero h1{margin:8px 0 10px;font-size:34px;line-height:1.1}.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.meta span,.chips span{border:1px solid rgba(148,163,184,.28);background:rgba(15,23,42,.62);border-radius:999px;padding:5px 9px;color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:20px 0}.metric{border:1px solid rgba(148,163,184,.22);background:rgba(15,23,42,.72);border-radius:8px;padding:14px}.metric span{display:block;color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em}.metric strong{display:block;margin-top:4px;font-size:24px;color:white}.metric em{display:block;margin-top:3px;color:var(--muted);font-size:11px;font-style:normal}.section{border:1px solid rgba(148,163,184,.22);background:rgba(17,24,39,.78);border-radius:8px;padding:24px;margin-top:16px}.section h2{margin:0 0 14px;color:white;font-size:20px}.section h3{margin:20px 0 8px;color:var(--cyan);font-size:14px;text-transform:uppercase;letter-spacing:.08em}.section h4{margin:16px 0 6px;color:white;font-size:14px}.section p{margin:0 0 13px;color:#dbe4f0}.eyebrow{margin-bottom:6px;color:var(--muted);font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}.two-col{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px}.two-col h3{color:var(--amber)}ul{margin:0;padding-left:20px}li{margin:8px 0}.callout{margin-top:18px;border-left:3px solid var(--rose);background:rgba(244,63,94,.08);padding:14px 16px}.callout.cyan{border-left-color:var(--cyan);background:rgba(34,211,238,.08)}.stakeholders{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.stakeholders article{border:1px solid rgba(148,163,184,.18);background:rgba(15,23,42,.55);border-radius:8px;padding:15px}.stakeholders h3{margin:0;color:white;text-transform:none;letter-spacing:0;font-size:15px}.role{color:var(--green);font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin:4px 0 8px}.stakeholders small{display:block;margin-top:10px;color:var(--muted);font-size:11px}.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}.table-wrap{overflow-x:auto;margin-top:10px;margin-bottom:18px;border:1px solid rgba(148,163,184,.18);border-radius:8px}table{width:100%;border-collapse:collapse;font-size:11px;min-width:820px}th,td{padding:8px 10px;text-align:left;border-bottom:1px solid rgba(148,163,184,.14)}th{color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.08em;background:rgba(15,23,42,.68)}td{color:#dbe4f0}td:nth-child(4){color:var(--rose);font-weight:800}.scanner-link{display:inline-block;border:1px solid rgba(103,232,249,.38);background:rgba(8,145,178,.18);color:var(--cyan);border-radius:8px;padding:10px 14px;font-weight:800;text-decoration:none}.scanner-link:hover{background:rgba(8,145,178,.28);color:white}.formula{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}.inline-meta{color:var(--muted);font-size:.92em;font-weight:700;letter-spacing:.01em}.muted{color:var(--muted)!important}strong{color:white}hr{border:0;border-top:1px solid var(--line);margin:20px 0}.footer{margin-top:28px;color:#64748b;font-size:11px;text-align:center}.page-note{color:var(--muted);max-width:820px;margin:0}\n'
+            + '*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,Arial,sans-serif;line-height:1.55}main{max-width:1120px;margin:0 auto;padding:40px 28px 56px}.hero{border:1px solid var(--line);background:linear-gradient(135deg,#172033,#0f172a);border-radius:8px;padding:30px;margin-bottom:20px}.kicker{color:var(--cyan);font-size:11px;font-weight:800;letter-spacing:.16em;text-transform:uppercase}.hero h1{margin:8px 0 10px;font-size:34px;line-height:1.1}.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.meta span,.chips span{border:1px solid rgba(148,163,184,.28);background:rgba(15,23,42,.62);border-radius:999px;padding:5px 9px;color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:20px 0}.metric{border:1px solid rgba(148,163,184,.22);background:rgba(15,23,42,.72);border-radius:8px;padding:14px}.metric span{display:block;color:var(--muted);font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.1em}.metric strong{display:block;margin-top:4px;font-size:24px;color:white}.metric em{display:block;margin-top:3px;color:var(--muted);font-size:11px;font-style:normal}.section{border:1px solid rgba(148,163,184,.22);background:rgba(17,24,39,.78);border-radius:8px;padding:24px;margin-top:16px}.section h2{margin:0 0 14px;color:white;font-size:20px}.section h3{margin:20px 0 8px;color:var(--cyan);font-size:14px;text-transform:uppercase;letter-spacing:.08em}.section h4{margin:16px 0 6px;color:white;font-size:14px}.section p{margin:0 0 13px;color:#dbe4f0}.eyebrow{margin-bottom:6px;color:var(--muted);font-size:10px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}.two-col{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px}.two-col h3{color:var(--amber)}ul{margin:0;padding-left:20px}li{margin:8px 0}.callout{margin-top:18px;border-left:3px solid var(--rose);background:rgba(244,63,94,.08);padding:14px 16px}.callout.cyan{border-left-color:var(--cyan);background:rgba(34,211,238,.08)}.callout.amber{border-left-color:var(--amber);background:rgba(251,191,36,.08)}.stakeholders{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}.stakeholders article{border:1px solid rgba(148,163,184,.18);background:rgba(15,23,42,.55);border-radius:8px;padding:15px}.stakeholders h3{margin:0;color:white;text-transform:none;letter-spacing:0;font-size:15px}.role{color:var(--green);font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin:4px 0 8px}.stakeholders small{display:block;margin-top:10px;color:var(--muted);font-size:11px}.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}.table-wrap{overflow-x:auto;margin-top:10px;margin-bottom:18px;border:1px solid rgba(148,163,184,.18);border-radius:8px}table{width:100%;border-collapse:collapse;font-size:11px;min-width:820px}th,td{padding:8px 10px;text-align:left;border-bottom:1px solid rgba(148,163,184,.14)}th{color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.08em;background:rgba(15,23,42,.68)}td{color:#dbe4f0}td:nth-child(4){color:var(--rose);font-weight:800}.scanner-link{display:inline-block;border:1px solid rgba(103,232,249,.38);background:rgba(8,145,178,.18);color:var(--cyan);border-radius:8px;padding:10px 14px;font-weight:800;text-decoration:none}.scanner-link:hover{background:rgba(8,145,178,.28);color:white}.formula{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}.inline-meta{color:var(--muted);font-size:.92em;font-weight:700;letter-spacing:.01em}.muted{color:var(--muted)!important}strong{color:white}hr{border:0;border-top:1px solid var(--line);margin:20px 0}.footer{margin-top:28px;color:#64748b;font-size:11px;text-align:center}.page-note{color:var(--muted);max-width:820px;margin:0}\n'
             + '</style>\n</head>\n<body>\n<main>\n'
             + '<header class="hero"><div class="kicker">Executive Summary HTML Export</div><h1>' + escapeHTML(companyName) + '</h1><p class="page-note">Compact context package for leadership review and upload workflows. This file intentionally excludes the full raw JSON payload.</p><div class="meta">' + headerMeta + '<span>Generated ' + escapeHTML(generatedDate) + '</span></div></header>\n'
             + (isLowEvidenceMode ? '<section class="section"><div class="eyebrow">Evidence status</div><h2>' + escapeHTML(lowEvidenceLabel || 'Low promoted evidence') + '</h2><p class="muted">Promoted source-register evidence is limited. The summary remains usable, but precise external company claims require source-backed support.</p></section>' : '')
             + renderSection('General Summary', 'Executive context', renderParagraphs(exportData.general_summary))
-            + renderSection('AI Diagnosis', 'Interpretation and risks', diagnosisHTML)
-            + renderSection('Strategic Synthesis', 'Current reality x external pressure', renderParagraphs(exportData.strategic_synthesis))
             + renderSection('Core Metrics', 'Scorecard', '<div class="metrics">' + metrics.join('') + '</div>')
+            + renderSection('AI Diagnosis', 'Interpretation and risks', diagnosisHTML)
+            + renderSection('Strategic Synthesis', 'Current reality x external pressure', renderStrategicSynthesisParagraphs(exportData.strategic_synthesis))
             + renderSection('WHY and WHAT', 'Activation thesis', whyWhatHTML)
             + renderSection('Strategic Pitch', 'Outbound narrative', pitchHTML)
-            + renderSection(exportData.domain ? 'Domain Force Dossier: ' + exportData.domain : 'Domain Force Dossier', 'Market context', dossierHTML)
-            + renderSection('Detailed Forensic Report', 'Diagnostic detail', renderReportBlocks(exportData.detailed_report))
+            + renderSection('Detailed Forensic Report', 'Diagnostic detail', detailedReportHTML)
+            + renderSection('Buying Insight Stakeholders', 'Sales-prep stakeholders', buyingInsightStakeholdersHTML)
             + '<section class="section"><div class="eyebrow">Continue analysis</div><h2>See Detailed Report</h2><p class="muted">For the full interactive scanner view, source context, and deeper company diagnostics, open the Scanner.</p><p><a class="scanner-link" href="https://the-demand-scanner.up.railway.app/" target="_blank" rel="noopener noreferrer">See detailed report - Scanner</a></p></section>'
             + '<div class="footer">AdaptabilityScanner | Executive export | No raw JSON embedded</div>\n'
             + '</main>\n</body>\n</html>';
@@ -1315,7 +1409,8 @@ const isForesightContext = (link) => {
         URL.revokeObjectURL(url);
     };
 
-    fetch('/company/' + encodeURIComponent(data.companyName) + '?t=' + Date.now())
+    const companyNameForLookup = companyDisplayName || data.companyName || '';
+    const companyDataPromise = fetch('/company/' + encodeURIComponent(data.companyName) + '?t=' + Date.now())
         .then(function(res) {
             if (res.ok) return res.json();
             console.warn('[Executive HTML Export] Fetch response not ok:', res.status);
@@ -1324,9 +1419,29 @@ const isForesightContext = (link) => {
         .catch(function(err) {
             console.warn('[Executive HTML Export] Fetch error:', err);
             return null;
+        });
+    const buyingInsightPromise = isAdmin && authToken && buyingInsightMeta?.html_url && companyNameForLookup
+        ? fetch('/admin/buying-potential/' + encodeURIComponent(companyNameForLookup), {
+            headers: { 'Authorization': 'Bearer ' + authToken }
         })
-        .then(function(fresh) {
+            .then(function(res) {
+                if (res.ok) return res.json();
+                console.warn('[Executive HTML Export] Buying Insight fetch response not ok:', res.status);
+                return null;
+            })
+            .catch(function(err) {
+                console.warn('[Executive HTML Export] Buying Insight fetch error:', err);
+                return null;
+            })
+        : Promise.resolve(null);
+    Promise.all([companyDataPromise, buyingInsightPromise])
+        .then(function(results) {
+            const fresh = results[0];
+            const buyingInsight = results[1];
             const exportData = fresh ? Object.assign({}, data, fresh) : data;
+            if (buyingInsight && buyingInsight.report) {
+                exportData.buying_insight_report = buyingInsight.report;
+            }
             buildAndDownloadExecutive(exportData);
         });
   };
@@ -1342,6 +1457,9 @@ const isForesightContext = (link) => {
     a.rel = 'noopener noreferrer';
     a.click();
   };
+  const detailedReportStatus = data?.detailed_report_status || '';
+  const showDetailedReport = Boolean(data?.detailed_report && detailedReportStatus !== 'incomplete');
+  const showDetailedReportUnavailable = Boolean(detailedReportStatus && detailedReportStatus !== 'generated' && !showDetailedReport);
 
   return (
     <div className="space-y-4">
@@ -1385,6 +1503,35 @@ const isForesightContext = (link) => {
 
       {/* CONTENT WRAPPER FOR SNAPSHOT */}
       <div ref={summaryRef} className="space-y-8">
+        {isAdmin && companyReadiness && (
+          <div className="bg-white/5 p-5 rounded-2xl border border-cyan-500/20 backdrop-blur-md">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
+              <div>
+                <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                  <Activity className="text-cyan-400" size={16} />
+                  Pipeline Readiness
+                </h3>
+                <p className="text-[10px] text-slate-500 uppercase tracking-wider font-mono mt-1">
+                  Advisory status for separately runnable Admin stages
+                </p>
+              </div>
+              {pipelineGlobal?.foresight_kb && (
+                <div className="flex flex-wrap gap-2">
+                  {readinessBadge('global-fs', pipelineGlobal.foresight_kb, 'Foresight KB')}
+                  {readinessBadge('global-obs', pipelineGlobal.observatory, 'Observatory')}
+                </div>
+              )}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
+              {readinessBadge('scan', companyReadiness.scan, 'Scan')}
+              {readinessBadge('ev', companyReadiness.evidence_verified, 'Evidence Verified')}
+              {readinessBadge('edb', companyReadiness.company_evidence_db, 'Evidence DB')}
+              {readinessBadge('ledger', companyReadiness.source_ledger, 'Source Ledger')}
+              {readinessBadge('act', companyReadiness.activation_pairs, 'Activation Pairs')}
+              {readinessBadge('bi', companyReadiness.buying_insight, 'Buying Insight')}
+            </div>
+          </div>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="bg-white/5 backdrop-blur-md p-6 rounded-2xl border border-white/10 flex flex-col items-center justify-center relative group overflow-hidden">
             <div className="absolute inset-0 bg-indigo-500/10 opacity-0 group-hover:opacity-100 transition-opacity"></div>
@@ -1500,8 +1647,11 @@ const isForesightContext = (link) => {
             <div className="bg-white/5 p-5 rounded-2xl border border-white/10 backdrop-blur-md flex flex-col">
                 <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
                 <Activity className="text-cyan-400" size={14} />
-                Integrity Delta Trend (6 Mo)
+                {hasRealHistory ? 'Integrity Delta Trend (6 Mo)' : 'Integrity Delta Snapshot'}
                 </h3>
+                {!hasRealHistory && (
+                    <p className="text-[10px] text-slate-500 mb-2">No real historical series available.</p>
+                )}
                 <div className="flex-grow min-h-[120px]">
                     <ResponsiveContainer width="100%" height="100%">
                         <LineChart data={chartData}>
@@ -2148,7 +2298,7 @@ const isForesightContext = (link) => {
                 <div className="relative group">
                     <div className="space-y-4">
                         <div>
-                            <p className="text-[11px] font-bold text-amber-400 uppercase tracking-wider mb-2">WHY — Desired Impact</p>
+                            <p className="text-[11px] font-bold text-amber-400 uppercase tracking-wider mb-2">WHY — Customer Value / Consequence</p>
                             <div className="space-y-2">
                                 {data.why_proposals.map((why, i) => (
                                     <div key={i} className="bg-black/30 p-3 rounded-lg border border-amber-500/15">
@@ -2160,7 +2310,7 @@ const isForesightContext = (link) => {
                             </div>
                         </div>
                         <div>
-                            <p className="text-[11px] font-bold text-orange-400 uppercase tracking-wider mb-2">WHAT — Desired Effect</p>
+                            <p className="text-[11px] font-bold text-orange-400 uppercase tracking-wider mb-2">WHAT — Outcome / Deliverable</p>
                             <div className="space-y-2">
                                 {data.what_proposals.map((what, i) => (
                                     <div key={i} className="bg-black/30 p-3 rounded-lg border border-orange-500/15">
@@ -2171,6 +2321,20 @@ const isForesightContext = (link) => {
                                 ))}
                             </div>
                         </div>
+                        {data.what_progress_proposals && data.what_progress_proposals.length > 0 && (
+                            <div>
+                                <p className="text-[11px] font-bold text-cyan-400 uppercase tracking-wider mb-2">PROGRESS — Observable Proof</p>
+                                <div className="space-y-2">
+                                    {data.what_progress_proposals.map((progress, i) => (
+                                        <div key={i} className="bg-black/30 p-3 rounded-lg border border-cyan-500/15">
+                                            <p className="text-xs text-slate-300 leading-relaxed">
+                                                <span className="text-cyan-400 font-bold mr-2">{i + 1}.</span>{progress}
+                                            </p>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </div>
                     <button
                         onClick={handleCopyWhyWhat}
@@ -2449,7 +2613,7 @@ const isForesightContext = (link) => {
         {/* These sections are wrapped with report-only class which is display:none in the app
             but the downloaded HTML overrides it to display:block */}
 
-        {data.detailed_report && (
+        {(showDetailedReport || showDetailedReportUnavailable) && (
             <div className="report-only-section" style={{ display: 'none' }}>
                 <div className="bg-black/20 p-8 rounded-2xl border-l-4 border-violet-500 backdrop-blur-sm">
                     <h3 className="text-xl font-bold text-white mb-2 flex items-center gap-2">
@@ -2459,7 +2623,7 @@ const isForesightContext = (link) => {
                     <p className="text-[10px] text-slate-500 mb-4 uppercase tracking-wider font-mono">
                         Deep diagnostic with current evidence and reasoning trace
                     </p>
-                    <div>
+                    {showDetailedReport ? <div>
                         {data.detailed_report.split(/\n\n+/).map((block, pi) => {
                             const headingMatch = block.match(/^##\s+(.+)/);
                             if (headingMatch) {
@@ -2475,7 +2639,14 @@ const isForesightContext = (link) => {
                                 </p>
                             );
                         })}
-                    </div>
+                    </div> : (
+                        <div className="bg-amber-500/10 border border-amber-400/20 rounded-lg p-4">
+                            <p className="text-amber-100 text-sm leading-relaxed">
+                                Detailed Report unavailable: generation was incomplete or did not pass the completeness gate.
+                                Status: {detailedReportStatus || 'unavailable'}.
+                            </p>
+                        </div>
+                    )}
                 </div>
             </div>
         )}

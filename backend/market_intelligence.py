@@ -659,18 +659,20 @@ def compute_demand_intensity(company_details, dashboard_data):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 12. OPPORTUNITY MAP (PRESSURE × READINESS GAP × CAPACITY × CLUSTER SIGNAL)
+# 12. OPPORTUNITY MAP (PRESSURE × READINESS GAP × CAPACITY × CURRENT VULN)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def compute_opportunity_map(dashboard_data, top_causes, favi_companies):
-    """Rank domains and companies where future pressure meets current capability gaps.
+    """Rank proactive demand-creation opportunities.
 
     Priority logic:
-      1) High foresight pressure
-      2) Low readiness (high readiness gap)
-      3) Sufficient financial capacity
-      4) Large intent-reality gap (current vulnerability)
-      5) Repeated WHY/WHAT proposal clusters
+      1) Future exposure is building
+      2) Need is still latent compared with visible current vulnerability
+      3) Company has enough adaptation capacity to act
+      4) Readiness gap is meaningful enough to justify discovery
+    Repeated WHY/WHAT proposal clusters are retained as narrative context, but
+    they do not add score. Generated hypotheses should not increase their own
+    evidence confidence.
     """
     favi_by_company = {c.get("name"): c for c in (favi_companies or []) if c.get("name")}
 
@@ -697,36 +699,54 @@ def compute_opportunity_map(dashboard_data, top_causes, favi_companies):
 
         pressure = float(favi.get("fps") or 0)
         readiness_gap = float(favi.get("readiness_gap") or 0)
+        future_exposure_gap = float(favi.get("future_exposure_gap") or favi.get("favi_score") or 0)
+        adaptation_capacity = float(favi.get("adaptation_capacity") or favi.get("fac") or 0)
         fac = float(favi.get("fac") or 0)
-        current_vulnerability = float(favi.get("current_vulnerability") or max(0, c.get("reality_gap") or 0))
+        current_vulnerability = float(
+            favi.get("current_vulnerability_v2")
+            if favi.get("current_vulnerability_v2") is not None
+            else favi.get("current_vulnerability") or max(0, c.get("reality_gap") or 0)
+        )
+        legacy_current_vulnerability = float(favi.get("current_vulnerability") or current_vulnerability)
         cluster_signal = float(company_cluster_counts.get(name, 0))
 
         financial_capacity = min(100.0, fac)
-        opportunity_score = (
-            pressure * 0.30 +
-            readiness_gap * 0.25 +
-            financial_capacity * 0.15 +
-            current_vulnerability * 0.20 +
-            min(100.0, cluster_signal * 8.0) * 0.10
-        )
+        opportunity_score = float(favi.get("demand_creation_potential") or 0)
+        urgent_remediation = float(favi.get("urgent_remediation_potential") or 0)
+        latent_need_delta = float(favi.get("latent_need_delta") or max(0, future_exposure_gap - current_vulnerability))
+        score_confidence = favi.get("score_confidence") or {}
 
         company_rows.append({
             "name": name,
             "domain": domain,
             "opportunity_score": round(opportunity_score, 1),
+            "demand_creation_potential": round(opportunity_score, 1),
+            "urgent_remediation_potential": round(urgent_remediation, 1),
             "foresight_pressure": round(pressure, 1),
+            "future_exposure_gap": round(future_exposure_gap, 1),
             "readiness_gap": round(readiness_gap, 1),
             "financial_capacity": round(financial_capacity, 1),
+            "adaptation_capacity": round(adaptation_capacity, 1),
+            "current_vulnerability_v2": round(current_vulnerability, 1),
+            "current_vulnerability": round(legacy_current_vulnerability, 1),
+            "latent_need_delta": round(latent_need_delta, 1),
             "intent_reality_gap": round(current_vulnerability, 1),
             "proposal_cluster_signal": round(cluster_signal, 1),
+            "score_confidence": score_confidence,
         })
 
         domain_bucket = domain_rows[domain]
         domain_bucket["count"] += 1
         domain_bucket["pressure"].append(pressure)
+        domain_bucket.setdefault("future_gap", []).append(future_exposure_gap)
         domain_bucket["gap"].append(readiness_gap)
         domain_bucket["fac"].append(financial_capacity)
+        domain_bucket.setdefault("adaptation", []).append(adaptation_capacity)
         domain_bucket["vuln"].append(current_vulnerability)
+        domain_bucket.setdefault("legacy_vuln", []).append(legacy_current_vulnerability)
+        domain_bucket.setdefault("latent", []).append(latent_need_delta)
+        domain_bucket.setdefault("demand", []).append(opportunity_score)
+        domain_bucket.setdefault("urgent", []).append(urgent_remediation)
         domain_bucket["clusters"].append(cluster_signal)
         domain_cluster_counts[domain] += cluster_signal
 
@@ -736,31 +756,37 @@ def compute_opportunity_map(dashboard_data, top_causes, favi_companies):
         if vals["count"] == 0:
             continue
         avg_pressure = statistics.mean(vals["pressure"]) if vals["pressure"] else 0
+        avg_future_gap = statistics.mean(vals["future_gap"]) if vals.get("future_gap") else 0
         avg_gap = statistics.mean(vals["gap"]) if vals["gap"] else 0
         avg_fac = statistics.mean(vals["fac"]) if vals["fac"] else 0
+        avg_adaptation = statistics.mean(vals["adaptation"]) if vals.get("adaptation") else 0
         avg_vuln = statistics.mean(vals["vuln"]) if vals["vuln"] else 0
+        avg_legacy_vuln = statistics.mean(vals["legacy_vuln"]) if vals.get("legacy_vuln") else avg_vuln
+        avg_latent = statistics.mean(vals["latent"]) if vals.get("latent") else 0
         avg_clusters = statistics.mean(vals["clusters"]) if vals["clusters"] else 0
-        domain_score = (
-            avg_pressure * 0.30 +
-            avg_gap * 0.25 +
-            avg_fac * 0.15 +
-            avg_vuln * 0.20 +
-            min(100.0, avg_clusters * 8.0) * 0.10
-        )
+        domain_score = statistics.mean(vals["demand"]) if vals.get("demand") else 0
+        avg_urgent = statistics.mean(vals["urgent"]) if vals.get("urgent") else 0
         domain_results.append({
             "domain": domain,
             "company_count": vals["count"],
             "opportunity_score": round(domain_score, 1),
+            "demand_creation_potential": round(domain_score, 1),
+            "urgent_remediation_potential": round(avg_urgent, 1),
             "foresight_pressure": round(avg_pressure, 1),
+            "future_exposure_gap": round(avg_future_gap, 1),
             "readiness_gap": round(avg_gap, 1),
             "financial_capacity": round(avg_fac, 1),
+            "adaptation_capacity": round(avg_adaptation, 1),
+            "current_vulnerability_v2": round(avg_vuln, 1),
+            "current_vulnerability": round(avg_legacy_vuln, 1),
+            "latent_need_delta": round(avg_latent, 1),
             "intent_reality_gap": round(avg_vuln, 1),
             "proposal_cluster_signal": round(avg_clusters, 1),
         })
     domain_results.sort(key=lambda x: x["opportunity_score"], reverse=True)
 
     return {
-        "formula": "0.30*pressure + 0.25*readiness_gap + 0.15*financial_capacity + 0.20*intent_reality_gap + 0.10*proposal_cluster_signal_scaled",
+        "formula": "Demand Creation Potential = 0.30*future_exposure_gap + 0.25*adaptation_capacity + 0.20*latent_need_delta + 0.15*readiness_gap + 0.10*score_confidence; current vulnerability is context, not the main driver",
         "domain_rankings": domain_results,
         "company_rankings": company_rows[:50],
     }
