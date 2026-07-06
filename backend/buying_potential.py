@@ -46,6 +46,41 @@ ALLOWED_GATES = {
 EVIDENCE_BASIS_PREFIXES = ("SRC-", "FIN-", "CED-", "LEDGER-", "EVD-")
 _modernization_tactics_cache = {"url": None, "items": None}
 
+RELIABILITY_STATUS_SCALE = [
+    {
+        "code": "A",
+        "label": "Ready for Discovery",
+        "summary": "Strongest internal discovery basis; still not confirmed buying intent.",
+        "allowed_use": "Use for disciplined sales discovery and proposal-prep framing with evidence boundaries.",
+        "publication_status": "sales_prep_ready",
+        "tone": "green",
+    },
+    {
+        "code": "B",
+        "label": "Cautious Hypothesis",
+        "summary": "Usable as a sales hypothesis when discovery validates timing, owner, and consequence.",
+        "allowed_use": "Use for internal sales planning and cautious discovery questions.",
+        "publication_status": "sales_prep_ready",
+        "tone": "cyan",
+    },
+    {
+        "code": "C",
+        "label": "Question-Led Draft",
+        "summary": "Evidence or input is constrained; treat output as questions and watch themes.",
+        "allowed_use": "Use internally only as discovery prompts and qualification hypotheses.",
+        "publication_status": "internal_review_required",
+        "tone": "amber",
+    },
+    {
+        "code": "D",
+        "label": "Draft - Do Not Use",
+        "summary": "Evidence/input is too weak or guardrails are unresolved for sales use.",
+        "allowed_use": "Store for audit and internal thinking only. Do not use customer-facing.",
+        "publication_status": "draft_do_not_use",
+        "tone": "rose",
+    },
+]
+
 
 BUYER_ROLE_LENSES = {
     "CEO / Managing Director": {
@@ -1194,6 +1229,114 @@ def _normalize_priority_band(value: Any, readiness_band: str = "") -> str:
     return _priority_band(readiness_band)
 
 
+def _source_item_gate(item: dict, fallback: str = "allowed_as_discovery_question") -> str:
+    """Preserve source-level sales/evidence gates instead of promoting them in Buying Insight."""
+    if not isinstance(item, dict):
+        return fallback
+    explicit = item.get("gate") or item.get("allowed_use") or item.get("sales_use")
+    gate = _normalize_gate(explicit, "")
+    if gate:
+        return gate
+    if item.get("blocked") or item.get("wrong_entity"):
+        return "blocked"
+    if item.get("internal_only"):
+        return "internal_only"
+    if item.get("allowed_as_fact"):
+        return "allowed_as_fact"
+    if item.get("allowed_as_hypothesis"):
+        return "allowed_as_hypothesis"
+    if item.get("allowed_as_discovery_question"):
+        return "allowed_as_discovery_question"
+    if item.get("generation_eligible") or item.get("buying_evidence_eligible"):
+        return "allowed_as_hypothesis"
+    return fallback
+
+
+def _status_scale() -> list[dict]:
+    return [item.copy() for item in RELIABILITY_STATUS_SCALE]
+
+
+def _status_template(code: str) -> dict:
+    code = str(code or "C").upper()
+    for item in RELIABILITY_STATUS_SCALE:
+        if item["code"] == code:
+            return item.copy()
+    return RELIABILITY_STATUS_SCALE[2].copy()
+
+
+def _compute_reliability_status(report: dict, payload: dict, gate_review: dict | None, *, low_evidence: bool) -> dict:
+    verified_count = len(payload.get("verified_evidence") or [])
+    financial_count = len(payload.get("financial_sources") or [])
+    signal_count = len(_list(payload.get("account_signal_map")))
+    plays = [item for item in _list(report.get("recommended_sales_plays")) if isinstance(item, dict)]
+    eligible_play_count = 0
+    strong_play_count = 0
+    blocked_play_count = 0
+    question_only_count = 0
+
+    for play in plays:
+        gate = _normalize_gate(play.get("gate"), "allowed_as_hypothesis")
+        readiness = str(play.get("readiness_band") or "")
+        classification = str(play.get("play_classification") or "")
+        if readiness in {"Validate now", "Validate when trigger appears"} and gate in {"allowed_as_fact", "allowed_as_hypothesis", "allowed_as_discovery_question"}:
+            eligible_play_count += 1
+        if readiness == "Validate now" and gate in {"allowed_as_fact", "allowed_as_hypothesis"}:
+            strong_play_count += 1
+        if gate in {"allowed_as_discovery_question", "internal_only"}:
+            question_only_count += 1
+        if gate == "blocked" or classification == "do_not_use":
+            blocked_play_count += 1
+
+    evidence_confidence = _dict(report.get("evidence_confidence"))
+    do_not_say_count = len(_list(evidence_confidence.get("do_not_say") or evidence_confidence.get("do_not_use_claims")))
+    gate_blocked_count = len(_list(_dict(gate_review).get("blocked_claims"))) if gate_review else 0
+    gate_unavailable = bool(gate_review and gate_review.get("approved") is not True)
+    deterministic_fallback = any(
+        "deterministic fallback" in str(note).lower()
+        for note in _list(report.get("model_notes")) + _list(report.get("missing_input_warnings"))
+    )
+
+    reasons: list[str] = []
+    code = "B"
+    if verified_count == 0 and financial_count == 0:
+        reasons.append("No generation-eligible evidence or financial references were available.")
+    elif low_evidence:
+        reasons.append("Evidence coverage is constrained; customer-facing wording must remain question-led.")
+    else:
+        reasons.append(f"{verified_count} generation-eligible evidence item(s) and {financial_count} financial reference(s) support internal analysis.")
+    if signal_count == 0:
+        reasons.append("No account signal map was available.")
+    if not plays:
+        reasons.append("No recommended sales plays were generated.")
+    elif eligible_play_count == 0:
+        reasons.append("No sales play reached a discovery-ready gate.")
+    if question_only_count:
+        reasons.append(f"{question_only_count} play(s) are question-led or internal-only.")
+    if blocked_play_count or gate_blocked_count or do_not_say_count:
+        reasons.append("Guardrails contain blocked or do-not-say material that must not be used customer-facing.")
+    if gate_unavailable:
+        reasons.append("Independent gate review did not fully approve the report; deterministic post-processing applied.")
+    if deterministic_fallback:
+        reasons.append("One or more generated sections used deterministic fallback.")
+
+    if (verified_count == 0 and financial_count == 0 and eligible_play_count == 0) or not plays:
+        code = "D"
+    elif blocked_play_count >= max(1, len(plays)) or (gate_blocked_count >= 3 and low_evidence):
+        code = "D"
+    elif low_evidence or eligible_play_count == 0 or question_only_count == len(plays) or gate_unavailable or deterministic_fallback:
+        code = "C"
+    elif strong_play_count >= 1 and verified_count >= 4 and financial_count >= 1 and not gate_blocked_count:
+        code = "A"
+    else:
+        code = "B"
+
+    status = _status_template(code)
+    status["reasons"] = list(dict.fromkeys(reason for reason in reasons if reason))[:8]
+    status["scale"] = _status_scale()
+    status["current"] = True
+    return status
+
+
 def _readiness_band(score: int, *, has_signal: bool, has_service: bool, has_question: bool, gate: str = "") -> str:
     gate = _normalize_gate(gate, "allowed_as_hypothesis")
     if gate == "blocked" or not has_signal:
@@ -1543,7 +1686,11 @@ def _build_account_signal_map(
         if not isinstance(item, dict):
             continue
         text = _first_nonempty(item.get("title"), item.get("quote"), item.get("url"), limit=700)
-        add_signal("verified_evidence", text, [item.get("id")], 60 if item.get("generation_eligible") else 45, "allowed_as_hypothesis", item.get("quote"))
+        gate = _source_item_gate(item)
+        confidence = 65 if gate == "allowed_as_fact" else 58 if gate == "allowed_as_hypothesis" else 42
+        if not item.get("generation_eligible") and gate not in {"allowed_as_fact", "allowed_as_hypothesis"}:
+            confidence = min(confidence, 35)
+        add_signal("verified_evidence", text, [item.get("id")], confidence, gate, item.get("quote"))
 
     for item in _list(payload_seed.get("financial_sources"))[:5]:
         if not isinstance(item, dict):
@@ -1554,7 +1701,8 @@ def _build_account_signal_map(
             item.get("title"),
             limit=700,
         )
-        add_signal("financial_evidence", text, [item.get("id")], 65 if item.get("generation_eligible") else 50, "allowed_as_hypothesis", item.get("quote"))
+        gate = _source_item_gate(item, "allowed_as_hypothesis" if item.get("generation_eligible") else "allowed_as_discovery_question")
+        add_signal("financial_evidence", text, [item.get("id")], 65 if gate in {"allowed_as_fact", "allowed_as_hypothesis"} else 45, gate, item.get("quote"))
 
     for key, source in (("ai_diagnosis", "scanner_ai_diagnosis"), ("pitch", "scanner_pitch"), ("domain_force_dossier", "scanner_domain_force")):
         add_signal(source, scanner_outputs.get(key), ["SCANNER"], 45, "allowed_as_hypothesis")
@@ -2177,10 +2325,6 @@ def _clean_evidence_confidence_buckets(evidence_confidence: dict) -> dict:
     questions = [str(item).strip() for item in _list(evidence_confidence.get("use_only_as_question")) if str(item).strip()]
     safe_hypotheses = [str(item).strip() for item in _list(evidence_confidence.get("safe_hypotheses")) if str(item).strip()]
 
-    moved_facts = [item for item in questions if _looks_like_verified_fact(item)]
-    questions = [item for item in questions if item not in moved_facts]
-    verified = list(dict.fromkeys(verified + moved_facts))
-
     do_not_say, question_from_blocked = _safe_guardrail_items(
         _list(evidence_confidence.get("do_not_say"))
         + _list(evidence_confidence.get("do_not_use_claims"))
@@ -2370,6 +2514,7 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         }
         report["recommended_sales_plays"].append(generated_play)
     evidence_confidence = _dict(report.get("evidence_confidence"))
+    evidence_confidence["verified_facts"] = _verified_fact_items_from_payload(payload)
     weak_notes = evidence_confidence.setdefault("weak_or_missing_evidence", [])
     for item in report.get("pain_to_solution_map", []):
         has_signal = _has_signal_reference(item, known_signal_ids)
@@ -2442,10 +2587,19 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
                 "Timing, business consequence, or measurable priority is confirmed",
             ]
         score = _score_play(play, has_signal=has_signal, has_service=has_service, has_question=bool(play["discovery_questions"]))
-        play["play_score"] = max(0, min(100, _safe_int(play.get("play_score"), score)))
+        gate = _normalize_gate(play.get("gate"), "allowed_as_hypothesis")
+        if low_evidence:
+            score = min(score, 55)
+        if gate == "allowed_as_discovery_question":
+            score = min(score, 55)
+        elif gate == "internal_only":
+            score = min(score, 40)
+        elif gate == "blocked":
+            score = min(score, 15)
+        play["play_score"] = max(0, min(100, score))
         play["hypothesis_strength"] = play["play_score"]
         play["score_label"] = "Internal compatibility score"
-        play["play_classification"] = play.get("play_classification") or _classify_play_score(play["play_score"])
+        play["play_classification"] = _classify_play_score(play["play_score"])
         evidence_coverage = _evidence_coverage(
             has_signal=has_signal,
             has_service=has_service,
@@ -2459,10 +2613,10 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             has_question=bool(play["discovery_questions"]),
             gate=play.get("gate"),
         )
-        play["readiness_band"] = play.get("readiness_band") or readiness
-        play["evidence_coverage"] = play.get("evidence_coverage") or evidence_coverage
-        play["confidence_boundary"] = play.get("confidence_boundary") or _confidence_boundary(play.get("gate"), play["evidence_coverage"])
-        play["priority_band"] = _normalize_priority_band(play.get("priority_band"), play["readiness_band"])
+        play["readiness_band"] = readiness
+        play["evidence_coverage"] = evidence_coverage
+        play["confidence_boundary"] = _confidence_boundary(play.get("gate"), play["evidence_coverage"])
+        play["priority_band"] = _priority_band(play["readiness_band"])
         play["response_directions"] = _dict(play.get("response_directions")) or _response_directions_from_play(play, play["need_hypothesis"])
         response_directions = play["response_directions"]
         default_response = _response_directions_from_play(play, play["need_hypothesis"])
@@ -2574,11 +2728,6 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         warnings.append("Low promoted evidence: keep customer-facing wording cautious and question-led.")
         report["missing_input_warnings"] = warnings
         evidence_confidence.setdefault("weak_or_missing_evidence", []).append("Few generation-eligible source-register items were available.")
-    if not _list(evidence_confidence.get("verified_facts")):
-        evidence_confidence["verified_facts"] = [
-            str(item) for item in _list(evidence_confidence.get("strongest_evidence"))[:8]
-            if str(item).strip()
-        ]
     if not _list(evidence_confidence.get("safe_hypotheses")):
         evidence_confidence["safe_hypotheses"] = [
             _clip(item.get("trigger") or item.get("description") or item.get("business_consequence"), 260)
@@ -2678,6 +2827,11 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         "financial_sources": financial_count,
         "blocked_or_display_only": len(payload.get("blocked_or_display_only_sources") or []),
     }
+    reliability_status = _compute_reliability_status(report, payload, gate_review, low_evidence=low_evidence)
+    report["reliability_status"] = reliability_status
+    report["publication_status"] = reliability_status.get("publication_status") or "internal_review_required"
+    report["status_reasons"] = _list(reliability_status.get("reasons"))
+    report["status_scale"] = _status_scale()
     return _polish_generated_text_tree(report, _dict(payload.get("company")).get("name"))
 
 
@@ -2693,6 +2847,30 @@ def _basis_from_payload(payload: dict, limit: int = 4) -> list[str]:
     basis = [item.get("id") for item in _list(payload.get("verified_evidence")) if isinstance(item, dict) and item.get("id")]
     basis.extend(item.get("id") for item in _list(payload.get("financial_sources")) if isinstance(item, dict) and item.get("id"))
     return [str(item) for item in basis[:limit]]
+
+
+def _verified_fact_items_from_payload(payload: dict, limit: int = 12) -> list[str]:
+    facts: list[str] = []
+    for item in _list(payload.get("verified_evidence")):
+        if not isinstance(item, dict) or _source_item_gate(item) != "allowed_as_fact":
+            continue
+        text = _first_nonempty(item.get("title"), item.get("quote"), item.get("url"), limit=260)
+        if text:
+            facts.append(f"{item.get('id')}: {text}" if item.get("id") else text)
+    for item in _list(payload.get("financial_sources")):
+        if not isinstance(item, dict):
+            continue
+        if not (item.get("generation_eligible") or _source_item_gate(item) == "allowed_as_fact"):
+            continue
+        text = _first_nonempty(
+            f"{item.get('metric') or 'Financial reference'} {item.get('value') or ''} {item.get('year') or ''}",
+            item.get("quote"),
+            item.get("title"),
+            limit=260,
+        )
+        if text:
+            facts.append(f"{item.get('id')}: {text}" if item.get("id") else text)
+    return list(dict.fromkeys(facts))[:limit]
 
 
 def _deterministic_buying_report(payload: dict, reason: str) -> dict:
@@ -3006,7 +3184,7 @@ def _deterministic_buying_report(payload: dict, reason: str) -> dict:
         "recommended_sales_plays": sales_plays,
         "evidence_confidence": {
             "strongest_evidence": strongest,
-            "verified_facts": strongest,
+            "verified_facts": [],
             "safe_hypotheses": [
                 _clip(signal.get("why") or signal.get("commercial_pressure") or signal.get("account_movement"), 260)
                 for signal in activation_signals[:3]
@@ -3257,6 +3435,12 @@ def render_buying_potential_html(report: dict) -> str:
     sales_spine = _dict(report.get("sales_spine"))
     evidence = _dict(report.get("evidence_confidence"))
     self_scan = _dict(report.get("self_scan_context"))
+    reliability = _dict(report.get("reliability_status"))
+    if not reliability.get("code"):
+        reliability = _status_template("B" if _safe_int(confidence, 0) >= 45 else "C")
+        reliability["reasons"] = _list(report.get("status_reasons"))
+    status_scale = _list(report.get("status_scale")) or _list(reliability.get("scale")) or _status_scale()
+    current_status_code = str(reliability.get("code") or "C").upper()
 
     def overall_stance(value):
         score = _safe_int(value, 0)
@@ -3270,6 +3454,36 @@ def render_buying_potential_html(report: dict) -> str:
 
     def simple_items(items, limit=10):
         return "".join(f"<li>{_esc(x)}</li>" for x in _list(items)[:limit]) or "<li>No items generated.</li>"
+
+    def status_scale_html():
+        chips = []
+        for status in status_scale:
+            if not isinstance(status, dict):
+                continue
+            code = str(status.get("code") or "").upper()
+            tone = re.sub(r"[^a-z0-9_-]+", "", str(status.get("tone") or "cyan").lower())
+            active = code == current_status_code
+            chips.append(
+                f"""<div class="status-chip status-{_esc(tone)} {'active' if active else ''}">
+                  <span class="status-code">{_esc(code)}</span>
+                  <span class="status-label">{_esc(status.get('label'))}</span>
+                </div>"""
+            )
+        reasons = "".join(f"<li>{_esc(reason)}</li>" for reason in _list(reliability.get("reasons"))[:4])
+        return f"""
+        <div class="status-panel">
+          <div class="status-head">
+            <div>
+              <div class="status-kicker">Reliability Status</div>
+              <strong>{_esc(current_status_code)} — {_esc(reliability.get('label'))}</strong>
+            </div>
+            <span class="pill status-publication">{_esc(str(report.get('publication_status') or reliability.get('publication_status') or '').replace('_', ' '))}</span>
+          </div>
+          <div class="status-scale">{''.join(chips)}</div>
+          <p class="status-summary">{_esc(reliability.get('summary'))}</p>
+          <p class="status-use"><b>Current use boundary:</b> {_esc(reliability.get('allowed_use'))}</p>
+          {f'<ul class="status-reasons">{reasons}</ul>' if reasons else ''}
+        </div>"""
 
     signal_lookup = {
         str(signal.get("id")): signal
@@ -3551,6 +3765,16 @@ def render_buying_potential_html(report: dict) -> str:
     .lede {{ max-width:850px; color:#c8d3e5; font-size:18px; }}
     .meta {{ display:flex; flex-wrap:wrap; gap:10px; margin-top:18px; }}
     .pill,.gate,.risk {{ display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line); border-radius:999px; padding:5px 10px; color:var(--muted); font:700 11px ui-monospace,monospace; text-transform:uppercase; letter-spacing:.12em; }}
+    .status-panel {{ margin-top:22px; border:1px solid rgba(142,160,187,.2); border-radius:12px; padding:14px; background:rgba(7,17,31,.52); }}
+    .status-head {{ display:flex; justify-content:space-between; align-items:flex-start; gap:14px; margin-bottom:12px; }}
+    .status-kicker {{ color:var(--muted); font:800 10px ui-monospace,monospace; letter-spacing:.14em; text-transform:uppercase; margin-bottom:2px; }}
+    .status-scale {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; }}
+    .status-chip {{ border:1px solid rgba(142,160,187,.18); border-radius:10px; padding:9px 10px; opacity:.46; background:rgba(16,27,46,.52); }}
+    .status-chip.active {{ opacity:1; box-shadow:0 0 0 1px currentColor inset; }}
+    .status-code {{ display:block; font:900 14px ui-monospace,monospace; letter-spacing:.08em; }}
+    .status-label {{ display:block; font:700 11px ui-monospace,monospace; letter-spacing:.08em; text-transform:uppercase; margin-top:2px; }}
+    .status-green {{ color:var(--green); }} .status-cyan {{ color:var(--cyan); }} .status-amber {{ color:var(--amber); }} .status-rose {{ color:var(--rose); }}
+    .status-summary,.status-use {{ margin:10px 0 0; color:#c8d3e5; }} .status-reasons {{ margin-top:10px; color:var(--muted); }} .status-publication {{ white-space:nowrap; }}
     .tiny {{ font-size:9px; padding:4px 7px; margin:2px 4px 2px 0; }} .service {{ color:var(--cyan); border-color:rgba(103,232,249,.28); }} .muted-pill {{ opacity:.65; }}
     .gate-allowed_as_fact {{ color:var(--green); border-color:rgba(110,231,183,.5); }} .gate-allowed_as_hypothesis {{ color:var(--cyan); border-color:rgba(103,232,249,.45); }}
     .gate-allowed_as_discovery_question {{ color:var(--amber); border-color:rgba(250,204,21,.45); }} .gate-internal_only {{ color:var(--violet); border-color:rgba(167,139,250,.45); }} .gate-blocked {{ color:var(--rose); border-color:rgba(251,113,133,.45); }}
@@ -3562,7 +3786,7 @@ def render_buying_potential_html(report: dict) -> str:
     ul {{ margin:8px 0 0 18px; padding:0; }} li {{ margin:5px 0; }} .warning {{ border-color:rgba(250,204,21,.4); background:rgba(250,204,21,.08); }} .danger {{ border-color:rgba(251,113,133,.4); background:rgba(251,113,133,.08); }}
     .role-line {{ color:var(--green); font:800 12px ui-monospace,monospace; text-transform:uppercase; letter-spacing:.12em; margin:-2px 0 12px; }} .theme-row {{ display:flex; flex-wrap:wrap; gap:4px; margin:8px 0; }}
     .simple-list-block {{ margin-top:18px; border-top:1px solid rgba(142,160,187,.18); padding-top:18px; }}
-    @media (max-width:820px) {{ main {{ padding:24px 14px 48px; }} .grid,.grid-3 {{ grid-template-columns:1fr; }} .card-top {{ flex-direction:column; }} }}
+    @media (max-width:820px) {{ main {{ padding:24px 14px 48px; }} .grid,.grid-3,.status-scale {{ grid-template-columns:1fr; }} .card-top,.status-head {{ flex-direction:column; }} }}
   </style>
 </head>
 <body>
@@ -3573,10 +3797,12 @@ def render_buying_potential_html(report: dict) -> str:
     <p class="lede">{_esc(report.get('safety_statement'))}</p>
     <div class="meta">
       <span class="pill">Generated {_esc(generated)}</span>
+      <span class="pill">Status {_esc(current_status_code)} — {_esc(reliability.get('label'))}</span>
       <span class="pill">{_esc(overall_stance(confidence))}</span>
       <span class="pill">Sources {_esc(_dict(report.get('source_counts')).get('generation_eligible', 0))} eligible</span>
       <span class="pill">Financial refs {_esc(_dict(report.get('source_counts')).get('financial_sources', 0))}</span>
     </div>
+    {status_scale_html()}
   </header>
 
   <section>
@@ -3620,7 +3846,7 @@ def render_buying_potential_html(report: dict) -> str:
   <section class="warning">
     <h2>Evidence, Confidence & Sales Guardrails</h2>
     <div class="grid grid-3">
-      <div><h3>Verified Facts</h3><ul>{simple_items(evidence.get('verified_facts') or evidence.get('strongest_evidence'), 12)}</ul></div>
+      <div><h3>Verified Facts</h3><ul>{simple_items(evidence.get('verified_facts'), 12)}</ul></div>
       <div><h3>Safe Hypotheses</h3><ul>{simple_items(evidence.get('safe_hypotheses'), 12)}</ul></div>
       <div><h3>Use Only As Question</h3><ul>{simple_items(evidence.get('use_only_as_question') or evidence.get('claims_as_questions_only'), 12)}</ul></div>
       <div><h3>Weak Or Missing</h3><ul>{simple_items(evidence.get('weak_or_missing_evidence'), 12)}</ul></div>
