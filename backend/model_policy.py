@@ -1,0 +1,114 @@
+"""Central model policy defaults for Scanner.
+
+The policy is intentionally small in v1: it names approved production models,
+keeps expensive Pro usage explicit, and prevents distrusted lightweight models
+from becoming silent fallbacks.
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Any
+
+
+MODEL_POLICY_VERSION = os.environ.get("SCANNER_MODEL_POLICY_VERSION", "model-policy-v1").strip() or "model-policy-v1"
+
+GPT_REASONING_MODEL = os.environ.get("SCANNER_DEFAULT_FRONTIER_MODEL", "gpt-5.5").strip() or "gpt-5.5"
+GPT_PRO_MODEL = os.environ.get("SCANNER_PREMIUM_MODEL", "gpt-5.5-pro").strip() or "gpt-5.5-pro"
+GPT_VERIFIER_MODEL = os.environ.get("SCANNER_VALIDATOR_MODEL", "gpt-5.4").strip() or "gpt-5.4"
+
+CLAUDE_OPUS_MODEL = os.environ.get("CLAUDE_OPUS_MODEL", "claude-opus-4-8").strip() or "claude-opus-4-8"
+CLAUDE_SONNET_MODEL = os.environ.get("CLAUDE_SONNET_MODEL", "claude-sonnet-5").strip() or "claude-sonnet-5"
+
+GEMINI_GROUNDED_MODEL = os.environ.get("SCANNER_GROUNDED_RESEARCH_MODEL", "gemini-3.5-flash").strip() or "gemini-3.5-flash"
+GEMINI_HARVEST_MODEL = os.environ.get("GEMINI_HARVEST_MODEL", GEMINI_GROUNDED_MODEL).strip() or GEMINI_GROUNDED_MODEL
+GEMINI_FORENSIC_MODEL = os.environ.get("GEMINI_FORENSIC_MODEL", GEMINI_GROUNDED_MODEL).strip() or GEMINI_GROUNDED_MODEL
+GEMINI_FAST_FALLBACK_MODEL = os.environ.get("GEMINI_FAST_FALLBACK_MODEL", "gemini-3.5-flash").strip() or "gemini-3.5-flash"
+
+BUYING_MODEL_MODE = os.environ.get("SCANNER_BUYING_MODEL_MODE", "quality").strip().lower() or "quality"
+
+
+def dedupe_chain(*models: str | None) -> tuple[str, ...]:
+    seen: set[str] = set()
+    chain: list[str] = []
+    for model in models:
+        model = str(model or "").strip().strip('"').strip("'")
+        if not model or model in seen:
+            continue
+        seen.add(model)
+        chain.append(model)
+    return tuple(chain)
+
+
+def buying_generation_chain(mode: str | None = None) -> tuple[str, ...]:
+    mode = (mode or BUYING_MODEL_MODE or "quality").strip().lower()
+    if mode == "economy":
+        return dedupe_chain(GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL)
+    if mode == "balanced":
+        return dedupe_chain(CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL)
+    if mode == "board_grade":
+        return dedupe_chain(GPT_REASONING_MODEL, CLAUDE_OPUS_MODEL, CLAUDE_SONNET_MODEL)
+    return dedupe_chain(GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL, CLAUDE_OPUS_MODEL)
+
+
+def buying_gate_chain(_mode: str | None = None) -> tuple[str, ...]:
+    return dedupe_chain(GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL)
+
+
+def json_repair_chain(_mode: str | None = None) -> tuple[str, ...]:
+    return dedupe_chain(GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL)
+
+
+def source_claim_chain() -> tuple[str, ...]:
+    return dedupe_chain(GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL)
+
+
+MODEL_POLICIES: dict[str, dict[str, Any]] = {
+    "grounded_acquisition": {
+        "primary": GEMINI_GROUNDED_MODEL,
+        "thinking_level": "low",
+        "availability_fallback": (GPT_REASONING_MODEL, GEMINI_FAST_FALLBACK_MODEL),
+    },
+    "json_repair": {
+        "chain": json_repair_chain(),
+        "terminal": "deterministic_fallback",
+    },
+    "source_claim_validation": {
+        "chain": source_claim_chain(),
+        "terminal": "manual_or_deterministic_review",
+    },
+    "buying_insight_generation": {
+        "mode": BUYING_MODEL_MODE,
+        "chain": buying_generation_chain(BUYING_MODEL_MODE),
+    },
+    "buying_insight_gate": {
+        "chain": buying_gate_chain(),
+    },
+    "general_summary": {
+        "primary": GPT_REASONING_MODEL,
+        "independent_review": CLAUDE_SONNET_MODEL,
+    },
+    "detailed_report": {
+        "standard": CLAUDE_SONNET_MODEL,
+        "complex": GPT_REASONING_MODEL,
+        "premium": CLAUDE_OPUS_MODEL,
+    },
+    "activation_strategic_synthesis": {
+        "primary": GPT_PRO_MODEL,
+        "fallback": CLAUDE_SONNET_MODEL,
+    },
+    "cross_impact_interpretation": {
+        "primary": GPT_PRO_MODEL,
+        "guardrails": ("numeric", "structure", "public_output_hygiene"),
+    },
+    "observatory": {
+        "l1": GPT_PRO_MODEL,
+        "l2": GPT_PRO_MODEL,
+        "l3": CLAUDE_OPUS_MODEL,
+        "repair": json_repair_chain(),
+    },
+}
+
+
+def policy_for(task: str) -> dict[str, Any]:
+    return dict(MODEL_POLICIES.get(task, {}))

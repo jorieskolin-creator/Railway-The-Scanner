@@ -9,7 +9,7 @@ Synthesizes existing Scanner data into macro-level strategic intelligence:
 Model pipeline:
   - GPT-5.5 Pro: Layer 1 and Layer 2 strategic analysis
   - Claude Opus 4.8: Layer 3 domain dossiers
-  - GPT-5.5 high / Sonnet 4.6: Independent verification
+  - GPT-5.5 high / Sonnet: Independent verification
 
 All data comes from existing DB — no new scanning or web search required.
 """
@@ -26,6 +26,8 @@ from datetime import datetime
 import anthropic
 
 from llm_clients import (
+    CLAUDE_OPUS_MODEL,
+    CLAUDE_SONNET_MODEL,
     GPT_PRO_MODEL,
     GPT_REASONING_MODEL,
     GPT_VERIFIER_MODEL,
@@ -59,7 +61,7 @@ PUBLIC OUTPUT RULE — Write for an executive reader. Do not expose internal met
 OBSERVATORY_DOSSIER_VERSION = "observatory_dossier_v1"
 OBSERVATORY_L1_MODEL = GPT_PRO_MODEL
 OBSERVATORY_L2_MODEL = GPT_PRO_MODEL
-OBSERVATORY_L3_MODEL = "claude-opus-4-8"
+OBSERVATORY_L3_MODEL = CLAUDE_OPUS_MODEL
 OBSERVATORY_INTERNAL_ID_RE = re.compile(r"\bL[123]-(?:CLAIM|FALLBACK)-\d+\b")
 OBSERVATORY_FALLBACK_PAREN_RE = re.compile(r"\s*\(\s*L[123]-FALLBACK-\d+(?:\s*[/,;]\s*\d+)*\s*\)")
 OBSERVATORY_METHOD_LABEL_RE = re.compile(
@@ -1080,7 +1082,7 @@ ANALYSIS:
     try:
         parsed, model_used = _call_observatory_json(
             prompt,
-            (GPT_VERIFIER_MODEL, GPT_REASONING_MODEL, "claude-sonnet-4-6"),
+            (GPT_VERIFIER_MODEL, GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL),
             max_tokens=1800,
             timeout=90,
             reasoning_effort="low",
@@ -1812,7 +1814,7 @@ OUTPUT FORMAT:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _generate_sonnet(prompt: str, max_tokens: int = 5000) -> tuple[str, int]:
-    """Generate text via Sonnet 4.6. Returns (text, word_count)."""
+    """Generate text via Sonnet 5. Returns (text, word_count)."""
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not anthropic_key:
         raise ValueError("ANTHROPIC_API_KEY not configured")
@@ -1821,7 +1823,7 @@ def _generate_sonnet(prompt: str, max_tokens: int = 5000) -> tuple[str, int]:
     t0 = time.time()
 
     response = client.messages.create(
-        model="claude-sonnet-4-6",
+        model=CLAUDE_SONNET_MODEL,
         max_tokens=max_tokens,
         thinking={"type": "adaptive"},
         extra_body={"output_config": {"effort": "medium"}},
@@ -1839,7 +1841,7 @@ def _generate_sonnet(prompt: str, max_tokens: int = 5000) -> tuple[str, int]:
 
     wc = len(text.split())
     elapsed = int((time.time() - t0) * 1000)
-    print(f"   [Observatory] Sonnet 4.6: {wc} words ({elapsed}ms)")
+    print(f"   [Observatory] {CLAUDE_SONNET_MODEL}: {wc} words ({elapsed}ms)")
     return text, wc
 
 
@@ -1905,9 +1907,9 @@ def _generate_gpt_pro(prompt: str, max_tokens: int = 16000, log_label: str = "Ob
 
     try:
         text, wc = _generate_sonnet(prompt, max_tokens=min(max_tokens, 8000))
-        return text, wc, "claude-sonnet-4-6"
+        return text, wc, CLAUDE_SONNET_MODEL
     except Exception as exc:
-        errors.append(f"claude-sonnet-4-6: {exc}")
+        errors.append(f"{CLAUDE_SONNET_MODEL}: {exc}")
         raise ValueError("All Observatory L1/L2 generation models failed: " + " | ".join(errors))
 
 
@@ -1957,7 +1959,7 @@ RESPOND IN JSON FORMAT ONLY:
     try:
         parsed, model_used = _call_observatory_json(
             prompt,
-            (GPT_VERIFIER_MODEL, GPT_REASONING_MODEL, "claude-sonnet-4-6"),
+            (GPT_VERIFIER_MODEL, GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL),
             max_tokens=1800,
             timeout=90,
             reasoning_effort="low",
@@ -1992,7 +1994,7 @@ def _generate_with_verification(
     else:
         generate_fn = _generate_opus if use_opus else _generate_sonnet
         text, wc = generate_fn(prompt)
-        generation_model = OBSERVATORY_L3_MODEL if use_opus else "claude-sonnet-4-6"
+        generation_model = OBSERVATORY_L3_MODEL if use_opus else CLAUDE_SONNET_MODEL
 
     if wc < 50:
         raise ValueError(f"Generation too short: {wc} words")
@@ -2338,8 +2340,8 @@ def generate_observatory(progress_callback=None):
         "generation_status": "partial" if failed_units or reused_units else "complete",
         "failed_units": failed_units,
         "reused_units": reused_units,
-        "model": "gpt-5.5-pro (Layers 1-2) + claude-opus-4-8 (Layer 3)",
-        "verification_model": "gpt-5.5 high / claude-sonnet-4-6",
+        "model": f"{GPT_PRO_MODEL} (Layers 1-2) + {OBSERVATORY_L3_MODEL} (Layer 3)",
+        "verification_model": f"{GPT_REASONING_MODEL} high / {CLAUDE_SONNET_MODEL}",
         "company_count": len(data["dashboard_data"]),
         "domain_count": len(active_domains),
         "domain_count_generated": len(domain_dossiers),

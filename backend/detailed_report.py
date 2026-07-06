@@ -15,7 +15,8 @@ import re
 import time
 
 import anthropic
-from llm_clients import CLAUDE_OPUS_MODEL, call_openai_text
+from llm_clients import call_openai_text
+from model_policy import CLAUDE_OPUS_MODEL, CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL
 from source_quality import (
     assess_source_scope, is_generation_eligible_source,
     is_analysis_premise_source, source_analysis_support_mode,
@@ -423,7 +424,7 @@ def complete_detailed_report_draft(
     t0 = time.time()
     text = call_openai_text(
         prompt,
-        model="gpt-5.5",
+        model=GPT_REASONING_MODEL,
         max_output_tokens=token_budget,
         timeout=timeout,
     )
@@ -434,7 +435,7 @@ def complete_detailed_report_draft(
         "   📝 [Detailed Report] GPT completion/repair: "
         f"{quality['word_count']} words, complete={quality['complete']} ({elapsed}ms)"
     )
-    return (text if quality["complete"] else ""), "gpt-5.5-completion", quality
+    return (text if quality["complete"] else ""), f"{GPT_REASONING_MODEL}-completion", quality
 
 
 def generate_detailed_report(
@@ -454,7 +455,7 @@ def generate_detailed_report(
     analyses rather than duplicating analysis from raw evidence. No new searches
     are performed — it works entirely from data already in memory.
 
-    Model chain: Opus 4.8 → GPT 5.5 → Sonnet 4.6.
+    Model chain: Sonnet 5 → GPT frontier → Opus premium fallback.
     Returns (report_text, model_used).
     Returns ("", "") on failure.
     """
@@ -490,96 +491,35 @@ def generate_detailed_report(
             print(f"   ⏭ [Detailed Report] GPT completion skipped ({reason}); insufficient report budget")
             return "", ""
         try:
-            print(f"   📝 [Detailed Report] Attempting gpt-5.5 completion ({reason})...")
+            print(f"   📝 [Detailed Report] Attempting {GPT_REASONING_MODEL} completion ({reason})...")
             t0 = time.time()
             completion_prompt = _build_completion_prompt(payload, company_name, draft, compact=compact)
             repaired = call_openai_text(
                 completion_prompt,
-                model="gpt-5.5",
+                model=GPT_REASONING_MODEL,
                 max_output_tokens=token_budget,
                 timeout=remaining_timeout(reserve=5, cap=110, floor=30),
             )
             repaired = _strip_links((repaired or "").strip())
             wc = _word_count(repaired)
             elapsed = int((time.time() - t0) * 1000)
-            print(f"   📝 [Detailed Report] gpt-5.5 completion: {wc} words ({elapsed}ms)")
+            print(f"   📝 [Detailed Report] {GPT_REASONING_MODEL} completion: {wc} words ({elapsed}ms)")
             if repaired and quality_ok(repaired):
-                return repaired, "gpt-5.5-completion"
+                return repaired, f"{GPT_REASONING_MODEL}-completion"
             return "", ""
         except Exception as exc:
             elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
-            print(f"   ❌ [Detailed Report] gpt-5.5 completion failed ({elapsed}ms): {exc}")
+            print(f"   ❌ [Detailed Report] {GPT_REASONING_MODEL} completion failed ({elapsed}ms): {exc}")
             return "", ""
 
-    # --- Attempt 1: Claude Opus 4.8 (accuracy-first primary) ---
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if anthropic_key:
-        OPUS_MODEL = CLAUDE_OPUS_MODEL
+        # --- Attempt 1: Claude Sonnet 5 (standard long-form writer) ---
+        SONNET_MODEL = CLAUDE_SONNET_MODEL
         try:
-            print(f"   📝 [Detailed Report] Attempting {OPUS_MODEL}...")
+            print(f"   📝 [Detailed Report] Attempting {SONNET_MODEL}...")
             t0 = time.time()
-            claude_client = anthropic.Anthropic(api_key=anthropic_key, timeout=remaining_timeout(reserve=35 if not compact else 20))
-            response = claude_client.messages.create(
-                model=OPUS_MODEL,
-                max_tokens=token_budget,
-                thinking={"type": "adaptive"},
-                extra_body={"output_config": {"effort": "xhigh"}},
-                messages=[{"role": "user", "content": prompt}],
-            )
-            # Extract text from response blocks (skip thinking blocks)
-            text_parts = []
-            for block in response.content:
-                if block.type == "text":
-                    text_parts.append(block.text)
-            text = _strip_links("\n".join(text_parts).strip())
-            wc = _word_count(text)
-            elapsed = int((time.time() - t0) * 1000)
-            print(f"   📝 [Detailed Report] {OPUS_MODEL}: {wc} words ({elapsed}ms)")
-
-            if text and wc >= target_min and quality_ok(text):
-                return text, OPUS_MODEL
-            if text:
-                repaired, repair_model = complete_with_gpt(text, f"{OPUS_MODEL}_incomplete_or_short")
-                if repaired:
-                    return repaired, f"{OPUS_MODEL}+{repair_model}"
-            print(f"   ⚠️ [Detailed Report] Opus unusable ({wc} words) — falling back to GPT 5.5")
-        except Exception as e:
-            elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
-            print(f"   ❌ [Detailed Report] {OPUS_MODEL} failed ({elapsed}ms): {e}")
-
-    # --- Attempt 2: GPT 5.5 (cross-provider backup) ---
-    try:
-        print("   📝 [Detailed Report] Attempting gpt-5.5 fallback...")
-        t0 = time.time()
-        text = call_openai_text(
-            prompt,
-            model="gpt-5.5",
-            max_output_tokens=token_budget,
-            timeout=remaining_timeout(reserve=20 if not compact else 10, cap=110, floor=30),
-        )
-        text = _strip_links((text or "").strip())
-        wc = _word_count(text)
-        elapsed = int((time.time() - t0) * 1000)
-        print(f"   📝 [Detailed Report] gpt-5.5: {wc} words ({elapsed}ms)")
-
-        if text and wc >= target_min and quality_ok(text):
-            return text, "gpt-5.5"
-        if text:
-            repaired, repair_model = complete_with_gpt(text, "gpt-5.5_incomplete_or_short")
-            if repaired:
-                return repaired, f"gpt-5.5+{repair_model}"
-        print(f"   ⚠️ [Detailed Report] GPT result too short ({wc} words) — falling back to Sonnet")
-    except Exception as e:
-        elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
-        print(f"   ❌ [Detailed Report] gpt-5.5 failed ({elapsed}ms): {e}")
-
-    if anthropic_key:
-        claude_client = anthropic.Anthropic(api_key=anthropic_key, timeout=remaining_timeout(reserve=5, cap=90, floor=30))
-        # --- Attempt 3: Claude Sonnet 4.6 ---
-        SONNET_MODEL = "claude-sonnet-4-6"
-        try:
-            print(f"   📝 [Detailed Report] Attempting {SONNET_MODEL} fallback...")
-            t0 = time.time()
+            claude_client = anthropic.Anthropic(api_key=anthropic_key, timeout=remaining_timeout(reserve=20 if not compact else 10))
             response = claude_client.messages.create(
                 model=SONNET_MODEL,
                 max_tokens=token_budget,
@@ -600,9 +540,69 @@ def generate_detailed_report(
                 repaired, repair_model = complete_with_gpt(text, f"{SONNET_MODEL}_incomplete_or_short")
                 if repaired:
                     return repaired, f"{SONNET_MODEL}+{repair_model}"
-            print(f"   ⚠️ [Detailed Report] Sonnet unusable ({wc} words) — no usable detailed report")
+            print(f"   ⚠️ [Detailed Report] Sonnet unusable ({wc} words) — falling back to {GPT_REASONING_MODEL}")
         except Exception as e:
             elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
             print(f"   ❌ [Detailed Report] {SONNET_MODEL} failed ({elapsed}ms): {e}")
+
+    # --- Attempt 2: GPT frontier model (cross-provider backup) ---
+    try:
+        print(f"   📝 [Detailed Report] Attempting {GPT_REASONING_MODEL} fallback...")
+        t0 = time.time()
+        text = call_openai_text(
+            prompt,
+            model=GPT_REASONING_MODEL,
+            max_output_tokens=token_budget,
+            timeout=remaining_timeout(reserve=20 if not compact else 10, cap=110, floor=30),
+        )
+        text = _strip_links((text or "").strip())
+        wc = _word_count(text)
+        elapsed = int((time.time() - t0) * 1000)
+        print(f"   📝 [Detailed Report] {GPT_REASONING_MODEL}: {wc} words ({elapsed}ms)")
+
+        if text and wc >= target_min and quality_ok(text):
+            return text, GPT_REASONING_MODEL
+        if text:
+            repaired, repair_model = complete_with_gpt(text, f"{GPT_REASONING_MODEL}_incomplete_or_short")
+            if repaired:
+                return repaired, f"{GPT_REASONING_MODEL}+{repair_model}"
+        print(f"   ⚠️ [Detailed Report] GPT result too short ({wc} words) — falling back to Opus premium")
+    except Exception as e:
+        elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
+        print(f"   ❌ [Detailed Report] {GPT_REASONING_MODEL} failed ({elapsed}ms): {e}")
+
+    if anthropic_key:
+        # --- Attempt 3: Claude Opus 4.8 premium fallback ---
+        OPUS_MODEL = CLAUDE_OPUS_MODEL
+        try:
+            print(f"   📝 [Detailed Report] Attempting {OPUS_MODEL} premium fallback...")
+            t0 = time.time()
+            claude_client = anthropic.Anthropic(api_key=anthropic_key, timeout=remaining_timeout(reserve=5, cap=90, floor=30))
+            response = claude_client.messages.create(
+                model=OPUS_MODEL,
+                max_tokens=token_budget,
+                thinking={"type": "adaptive"},
+                extra_body={"output_config": {"effort": "high"}},
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text_parts = []
+            for block in response.content:
+                if block.type == "text":
+                    text_parts.append(block.text)
+            text = _strip_links("\n".join(text_parts).strip())
+            wc = _word_count(text)
+            elapsed = int((time.time() - t0) * 1000)
+            print(f"   📝 [Detailed Report] {OPUS_MODEL}: {wc} words ({elapsed}ms)")
+
+            if text and wc >= target_min and quality_ok(text):
+                return text, OPUS_MODEL
+            if text:
+                repaired, repair_model = complete_with_gpt(text, f"{OPUS_MODEL}_incomplete_or_short")
+                if repaired:
+                    return repaired, f"{OPUS_MODEL}+{repair_model}"
+            print(f"   ⚠️ [Detailed Report] Opus unusable ({wc} words) — no usable detailed report")
+        except Exception as e:
+            elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
+            print(f"   ❌ [Detailed Report] {OPUS_MODEL} failed ({elapsed}ms): {e}")
 
     return "", ""

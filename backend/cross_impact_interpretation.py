@@ -24,6 +24,7 @@ from market_intelligence import (
     compute_archetype_flow,
     shape_cross_impact_for_prompt,
 )
+from model_policy import GPT_PRO_MODEL
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -550,7 +551,7 @@ def build_cross_impact_verification(text: str, matrix_data: list, numeric_check:
         "passed": not issues,
         "status": "verified" if not issues else "guardrail_warning",
         "verification_model": "deterministic_cross_impact_guardrails",
-        "generation_model": "gpt-5.5-pro",
+        "generation_model": GPT_PRO_MODEL,
         "issues": issues,
         "structure": structure,
         "numeric_grounding": numeric_check,
@@ -686,5 +687,5 @@ def generate_cross_impact_interpretation(
         "sources_used": available_sources,
         "matrix_snapshot": matrix_data,
         "generated_at": datetime.utcnow().isoformat() + "Z",
-        "model": f"{verification.get('generation_model', 'gpt-5.5-pro')} + deterministic cross-impact guardrails",
+        "model": f"{verification.get('generation_model', GPT_PRO_MODEL)} + deterministic cross-impact guardrails",
     }

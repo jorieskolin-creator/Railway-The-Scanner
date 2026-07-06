@@ -14,6 +14,7 @@ import re
 from typing import Any
 
 from llm_clients import call_json_model_chain
+from model_policy import CLAUDE_SONNET_MODEL, GPT_VERIFIER_MODEL
 
 _MAX_EVIDENCE_ITEMS = 25
 _MAX_SNIPPET_CHARS = 350
@@ -222,7 +223,7 @@ def detect_contradictions(evidence_items: list, company_name: str = "") -> list:
         prompt = _build_prompt(evidence_items, company_name or "the company")
         parsed, _model_used = call_json_model_chain(
             prompt,
-            ("gpt-5.4", "claude-sonnet-4-6"),
+            (GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL),
             max_tokens=1800,
             timeout=45,
         )

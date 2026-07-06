@@ -54,7 +54,7 @@ from database_sanitizer import sanitize_database
 from foresight_guardrails import sanitize_foresight_collection, sanitize_report_foresight_fields
 from domain_classifier import infer_domain
 from evidence_cleaner import CLEAN_EVIDENCE_MODEL_CHAIN, clean_company_evidence
-from llm_clients import GPT_PRO_MODEL, call_anthropic_text, call_json_model_chain, call_openai_text
+from llm_clients import CLAUDE_SONNET_MODEL, GPT_PRO_MODEL, GPT_REASONING_MODEL, GPT_VERIFIER_MODEL, call_anthropic_text, call_json_model_chain, call_openai_text
 from buying_potential import BuyingPotentialError, generate_buying_potential_report, load_service_portfolio_kb, validate_service_portfolio_kb
 from company_evidence import CompanyEvidenceError, build_company_evidence_database
 from company_source_ledger import CompanySourceLedgerError, build_company_source_ledger
@@ -1529,7 +1529,7 @@ def health_check():
 async def find_company_url(name: str):
     """Find the official homepage URL using GPT/Claude web search."""
     prompt = f"What is the official website homepage URL for the organization '{name}'? Return ONLY the URL string (e.g. https://www.example.com). Do not include markdown or explanations."
-    for model_name, provider in (("gpt-5.5", "openai"), ("claude-sonnet-4-6", "anthropic")):
+    for model_name, provider in ((GPT_REASONING_MODEL, "openai"), (CLAUDE_SONNET_MODEL, "anthropic")):
         try:
             if provider == "anthropic":
                 text = call_anthropic_text(prompt, model=model_name, max_tokens=120, timeout=45, web_search=True, max_searches=2)
@@ -2882,15 +2882,15 @@ Respond with valid JSON only:
     old_why = data.get("why_proposals", [])
     old_what = data.get("what_proposals", [])
 
-    # --- Model chain: GPT-5.5 → Claude Sonnet 4.6 ---
+    # --- Model chain: GPT frontier → Claude Sonnet 5 ---
     response_text = ""
     model_used = ""
     start = _time.time()
 
-    for _model in ("gpt-5.5", "claude-sonnet-4-6"):
+    for _model in (GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL):
         try:
             print(f"   🔄 [Refresh Proposals] {company_name}: Attempting {_model}...")
-            response_text, model_used = call_json_model_chain(prompt, (_model,), max_tokens=2200, timeout=75)
+            response_text, model_used = call_json_model_chain(prompt, (_model,), max_tokens=2200, timeout=75, validate_json=True)
             ms = int((_time.time() - start) * 1000)
             print(f"   ✅ [Refresh Proposals] {company_name}: {model_used} complete ({ms}ms)")
             break
@@ -3423,22 +3423,22 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
     # Primary: GPT 5.5
     try:
         print(f"   🔄 [Clean Re-Synthesis] Attempting gpt-5.5...")
-        resynth_text = _call_openai_text(synthesis_prompt, model="gpt-5.5", max_output_tokens=12000, timeout=120)
-        resynth_model_used = "gpt-5.5"
+        resynth_text = _call_openai_text(synthesis_prompt, model=GPT_REASONING_MODEL, max_output_tokens=12000, timeout=120)
+        resynth_model_used = GPT_REASONING_MODEL
         resynth_ms = int((time.time() - resynth_start) * 1000)
         print(f"   ✅ [Clean Re-Synthesis] GPT 5.5 complete ({resynth_ms}ms)")
     except Exception as gpt_err:
         print(f"   ❌ [Clean Re-Synthesis] GPT 5.5 failed: {gpt_err}")
 
-    # Fallback: Claude Sonnet 4.6 (independent provider — survives OpenAI outages)
+    # Fallback: Claude Sonnet 5 (independent provider — survives OpenAI outages)
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
     if not resynth_text and anthropic_key:
         try:
-            print(f"   🔄 [Clean Re-Synthesis] Falling back to Claude Sonnet 4.6...")
+            print(f"   🔄 [Clean Re-Synthesis] Falling back to {CLAUDE_SONNET_MODEL}...")
             m_start = time.time()
             sonnet_client = anthropic.Anthropic(api_key=anthropic_key)
             sonnet_resp = sonnet_client.messages.create(
-                model="claude-sonnet-4-6",
+                model=CLAUDE_SONNET_MODEL,
                 max_tokens=4000,
                 messages=[{"role": "user", "content": synthesis_prompt}],
             )
@@ -3446,12 +3446,12 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                 if getattr(block, 'type', None) == 'text':
                     resynth_text = block.text
                     break
-            resynth_model_used = "claude-sonnet-4-6"
+            resynth_model_used = CLAUDE_SONNET_MODEL
             resynth_ms = int((time.time() - m_start) * 1000)
-            print(f"   ✅ [Clean Re-Synthesis] Claude Sonnet 4.6 complete ({resynth_ms}ms)")
+            print(f"   ✅ [Clean Re-Synthesis] {CLAUDE_SONNET_MODEL} complete ({resynth_ms}ms)")
         except Exception as sonnet_err:
             resynth_ms = int((time.time() - resynth_start) * 1000)
-            print(f"   ❌ [Clean Re-Synthesis] Claude Sonnet 4.6 failed: {sonnet_err} ({resynth_ms}ms)")
+            print(f"   ❌ [Clean Re-Synthesis] {CLAUDE_SONNET_MODEL} failed: {sonnet_err} ({resynth_ms}ms)")
 
     # Step 4: Parse re-synthesis result and apply
     if resynth_text:
@@ -4852,7 +4852,7 @@ def _execute_scan_pipeline(
                 f"after_core+final_reserve={snap['after_core_and_final_reserve']}s"
             )
 
-        # Model pipeline: Sonnet 4.6 + Web Search (forensic) | GPT/Claude financial search | Opus/GPT/Sonnet synthesis.
+        # Model pipeline: Sonnet 5 + Web Search (forensic) | GPT/Claude financial search | Opus/GPT/Sonnet synthesis.
 
         # --- PROCESS FILES ---
         combined_text = reportText if reportText else ""
@@ -5639,7 +5639,7 @@ Respond with valid JSON only. Required fields:
 Note: diagnostic_summary must contain \n\n between 3-4 current-reality paragraphs. The archetype field is audit-only and must not appear in diagnostic_summary or evidence_based_risks. Do not add a foresight paragraph.
 Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_proposals in this call. Those are generated later from the locked diagnosis, Knowledge Base, and foresight context."""
 
-                # --- Diagnosis synthesis with fallback chain: Opus 4.8 → GPT 5.5 → Sonnet 4.6 ---
+                # --- Diagnosis synthesis with fallback chain: Opus 4.8 → GPT frontier → Sonnet 5 ---
                 # Opus is the judge — it does ONE thing: synthesize. Fallbacks degrade gracefully.
                 # Opus uses Extended Thinking to reason through conflicting intent vs. reality
                 # evidence before generating the synthesis — exactly what a "judge" model should do.
@@ -5756,7 +5756,7 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                             def _synth_gpt():
                                 return _call_openai_text(
                                     synthesis_prompt,
-                                    model="gpt-5.5",
+                                    model=GPT_REASONING_MODEL,
                                     max_output_tokens=12000,
                                     timeout=_gpt_timeout,
                                 )
@@ -5774,14 +5774,14 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                         except Exception as gpt_err:
                             print(f"   ❌ [Synthesis] GPT 5.5 failed: {gpt_err}")
 
-                    # Fallback 2: Claude Sonnet 4.6 (independent provider — survives OpenAI outages)
+                    # Fallback 2: Claude Sonnet 5 (independent provider — survives OpenAI outages)
                     if not response_text and _use_sonnet and _synthesis_budget_left() > 20:
                         try:
                             _sonnet_timeout = min(
                                 SONNET_SYNTH_TIMEOUT,
                                 max(25, _synthesis_budget_left() - 10),
                             )
-                            print(f"   🔄 [Synthesis] Falling back to Claude Sonnet 4.6 (timeout: {_sonnet_timeout}s)...")
+                            print(f"   🔄 [Synthesis] Falling back to {CLAUDE_SONNET_MODEL} (timeout: {_sonnet_timeout}s)...")
                             m_start = time.time()
 
                             _sonnet_system = (
@@ -5794,7 +5794,7 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
 
                             def _synth_sonnet():
                                 return claude_client.messages.create(
-                                    model="claude-sonnet-4-6",
+                                    model=CLAUDE_SONNET_MODEL,
                                     max_tokens=4000,
                                     system=_sonnet_system,
                                     messages=[{"role": "user", "content": synthesis_prompt}],
@@ -5808,10 +5808,10 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                                     if getattr(block, 'type', None) == 'text':
                                         response_text = block.text
                                         break
-                                print(f"   ✅ [Synthesis] Claude Sonnet 4.6 succeeded in {int((time.time() - m_start) * 1000)}ms")
+                                print(f"   ✅ [Synthesis] {CLAUDE_SONNET_MODEL} succeeded in {int((time.time() - m_start) * 1000)}ms")
                             except concurrent.futures.TimeoutError:
                                 m_pool.shutdown(wait=False)
-                                print(f"   ⏰ [Synthesis] Claude Sonnet 4.6 timed out after {_sonnet_timeout}s")
+                                print(f"   ⏰ [Synthesis] {CLAUDE_SONNET_MODEL} timed out after {_sonnet_timeout}s")
                             m_pool.shutdown(wait=False)
                         except Exception as sonnet_err:
                             print(f"   ❌ [Synthesis] All models failed. Last error: {sonnet_err}")
@@ -6036,12 +6036,12 @@ Respond with valid JSON only:
                              if not activation_text and _synthesis_budget_left() > 50:
                                  sonnet_activation_timeout = min(75, max(45, _synthesis_budget_left() - 20))
                                  try:
-                                     print(f"   🔄 [Activation] Falling back to Claude Sonnet 4.6 (timeout: {sonnet_activation_timeout}s)...")
+                                     print(f"   🔄 [Activation] Falling back to {CLAUDE_SONNET_MODEL} (timeout: {sonnet_activation_timeout}s)...")
                                      act_start = time.time()
 
                                      def _activation_sonnet():
                                          return claude_client.messages.create(
-                                             model="claude-sonnet-4-6",
+                                             model=CLAUDE_SONNET_MODEL,
                                              max_tokens=4500,
                                              system="You are a conservative activation writer. Use only the locked diagnosis, evidence packet, and Knowledge Base. Return JSON only.",
                                              messages=[{"role": "user", "content": activation_prompt}],
@@ -6057,12 +6057,12 @@ Respond with valid JSON only:
                                                  break
                                      except concurrent.futures.TimeoutError:
                                          act_pool.shutdown(wait=False)
-                                         print(f"   ⏰ [Activation] Claude Sonnet 4.6 timed out after {sonnet_activation_timeout}s")
+                                         print(f"   ⏰ [Activation] {CLAUDE_SONNET_MODEL} timed out after {sonnet_activation_timeout}s")
                                      act_pool.shutdown(wait=False)
                                      if activation_text:
-                                         print(f"   ✅ [Activation] Claude Sonnet 4.6 complete ({int((time.time() - act_start) * 1000)}ms)")
+                                         print(f"   ✅ [Activation] {CLAUDE_SONNET_MODEL} complete ({int((time.time() - act_start) * 1000)}ms)")
                                  except Exception as act_sonnet_err:
-                                     print(f"   ❌ [Activation] Claude Sonnet 4.6 failed: {act_sonnet_err}")
+                                     print(f"   ❌ [Activation] {CLAUDE_SONNET_MODEL} failed: {act_sonnet_err}")
 
                              if activation_text:
                                  prior_activation = {
@@ -6087,7 +6087,7 @@ TEXT TO REPAIR:
 {activation_text[:7000]}"""
                                          repaired_text = call_openai_text(
                                              repair_prompt,
-                                             model="gpt-5.4",
+                                             model=GPT_VERIFIER_MODEL,
                                              max_output_tokens=2600,
                                              timeout=repair_timeout,
                                          )

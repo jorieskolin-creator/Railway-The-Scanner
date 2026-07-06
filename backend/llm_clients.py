@@ -12,13 +12,13 @@ import json
 import os
 from typing import Any
 
-
-CLAUDE_OPUS_MODEL = "claude-opus-4-8"
-CLAUDE_SONNET_MODEL = "claude-sonnet-4-6"
-CLAUDE_HAIKU_MODEL = (os.environ.get("CLAUDE_HAIKU_MODEL") or "claude-haiku-4-5").strip().strip('"').strip("'")
-GPT_REASONING_MODEL = "gpt-5.5"
-GPT_PRO_MODEL = "gpt-5.5-pro"
-GPT_VERIFIER_MODEL = "gpt-5.4"
+from model_policy import (
+    CLAUDE_OPUS_MODEL,
+    CLAUDE_SONNET_MODEL,
+    GPT_PRO_MODEL,
+    GPT_REASONING_MODEL,
+    GPT_VERIFIER_MODEL,
+)
 
 
 def clean_env_var(value: str | None) -> str:
@@ -101,6 +101,7 @@ def call_anthropic_text(
     web_search: bool = False,
     max_searches: int = 8,
     thinking_budget: int | None = None,
+    reasoning_effort: str | None = None,
 ) -> str:
     api_key = anthropic_api_key()
     if not api_key:
@@ -119,9 +120,14 @@ def call_anthropic_text(
             "name": "web_search",
             "max_uses": max_searches,
         }]
-    if thinking_budget:
+    # Backward compatibility: older call sites pass a numeric thinking_budget.
+    # Treat it as a request for medium effort, but do not send unsupported
+    # thinking controls to Sonnet 5, where adaptive thinking is the default.
+    if thinking_budget and not reasoning_effort:
+        reasoning_effort = "medium"
+    if reasoning_effort and "sonnet-5" not in model:
         kwargs["thinking"] = {"type": "adaptive"}
-        kwargs["extra_body"] = {"output_config": {"effort": "medium"}}
+        kwargs["extra_body"] = {"output_config": {"effort": reasoning_effort}}
     response = client.messages.create(**kwargs)
     return extract_anthropic_text(response)
 
@@ -133,20 +139,34 @@ def call_json_model_chain(
     max_tokens: int = 1200,
     timeout: int = 60,
     reasoning_effort: str | None = None,
+    validate_json: bool = False,
+    required_fields: tuple[str, ...] | list[str] | None = None,
 ) -> tuple[str, str]:
     errors: list[str] = []
     for model in model_chain:
         try:
             if model.startswith("gpt-"):
-                return call_openai_text(
+                text = call_openai_text(
                     prompt,
                     model,
                     max_output_tokens=max_tokens,
                     timeout=timeout,
                     reasoning_effort=reasoning_effort,
-                ), model
+                )
+                if validate_json:
+                    parsed = parse_json_object(text)
+                    missing = [field for field in (required_fields or []) if field not in parsed]
+                    if missing:
+                        raise ValueError(f"JSON missing required fields: {missing}")
+                return text, model
             if model.startswith("claude-"):
-                return call_anthropic_text(prompt, model, max_tokens=max_tokens, timeout=timeout), model
+                text = call_anthropic_text(prompt, model, max_tokens=max_tokens, timeout=timeout)
+                if validate_json:
+                    parsed = parse_json_object(text)
+                    missing = [field for field in (required_fields or []) if field not in parsed]
+                    if missing:
+                        raise ValueError(f"JSON missing required fields: {missing}")
+                return text, model
             raise ValueError(f"Unsupported model provider: {model}")
         except Exception as exc:
             errors.append(f"{model}: {str(exc)[:120]}")

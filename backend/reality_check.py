@@ -3,7 +3,7 @@ Reality Check — Hallucination Detection for AI-Generated Summaries
 
 Two layers:
 1. Heuristic pattern matching (zero API cost) — catches obvious fakes
-2. AI-powered fact-check (GPT-5.4 with Claude Sonnet 4.6 fallback)
+2. AI-powered fact-check (GPT verifier with Claude Sonnet fallback)
    — verifies synthesis claims against generation-eligible evidence
    — if false claims found, also produces corrected summary in a follow-up call
 
@@ -16,6 +16,7 @@ import json
 import os
 import time
 from foresight_guardrails import sanitize_future_insight, validate_foresight_text, validate_future_deadlines
+from model_policy import CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL, GPT_VERIFIER_MODEL
 
 
 def _clean_env_var(value: str) -> str:
@@ -42,7 +43,7 @@ def _get_openai_text(response) -> str:
     return "\n".join(parts).strip()
 
 
-def _call_openai_text(prompt: str, model: str = "gpt-5.5", max_output_tokens: int = 10000, timeout: int = 90) -> str:
+def _call_openai_text(prompt: str, model: str = GPT_REASONING_MODEL, max_output_tokens: int = 10000, timeout: int = 90) -> str:
     api_key = _clean_env_var(os.environ.get("GPT_API_KEY") or os.environ.get("OPENAI_API_KEY") or "")
     if not api_key:
         raise ValueError("No GPT_API_KEY configured")
@@ -827,8 +828,8 @@ def validate_pitch(pitch_text, company_name):
 
 
 # --- AI-POWERED FACT-CHECK (Layer 2) ---
-# Two-stage verification: GPT-5.4 detects false claims, then GPT-5.5 or
-# Claude Sonnet 4.6 surgically corrects them when needed.
+# Two-stage verification: GPT verifier detects false claims, then GPT frontier
+# or Claude Sonnet surgically corrects them when needed.
 # This catches both evidence-sourced errors AND fabricated claims with no basis.
 #
 # Architecture rationale:
@@ -1120,7 +1121,7 @@ If false claims found: {{"false_claims": [{{"section": "section heading", "claim
                 })
         return parsed
 
-    stage1_chain = ("gpt-5.4", "claude-sonnet-4-6")
+    stage1_chain = (GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL)
     for model_name in stage1_chain:
         try:
             print(f"   🔄 [Fact-Check S1] Trying {model_name}...")
@@ -1211,7 +1212,7 @@ Rules:
     corrected_sections = {}
     elapsed2 = 0
     s2_model_name = None
-    for model_name in ("gpt-5.5", "claude-sonnet-4-6"):
+    for model_name in (GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL):
         try:
             print(f"   🔄 [Fact-Check S2] Trying {model_name} correction...")
             start = time.time()
@@ -1253,8 +1254,8 @@ Rules:
 def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text=None, scan_payload=None, analysis_sections=None, document_label="AI Diagnosis", foresight_links=None, evidence_manifest=None, claim_graph=None):
     """
     AI-powered fact-check — two-stage pipeline:
-      Stage 1: GPT-5.4 → Claude Sonnet 4.6 — detects false claims.
-      Stage 2: GPT-5.5 → Claude Sonnet 4.6 — surgically corrects false claims.
+      Stage 1: GPT verifier → Claude Sonnet — detects false claims.
+      Stage 2: GPT frontier → Claude Sonnet — surgically corrects false claims.
 
     The fact-checker independently verifies the synthesis claims against live
     web data. This catches both evidence-sourced errors (contaminated evidence)
@@ -1602,15 +1603,15 @@ Output ONLY valid JSON:
 
 
 def _clean_with_models(prompt):
-    """Rewrite summary using GPT-5.5, with Claude Sonnet 4.6 fallback."""
+    """Rewrite summary using GPT frontier model, with Claude Sonnet fallback."""
     try:
         start = time.time()
-        print(f"   🔄 [Clean] Attempting gpt-5.5 summary rewrite...")
-        response_text = _call_openai_text(prompt, model="gpt-5.5", max_output_tokens=6000, timeout=90)
+        print(f"   🔄 [Clean] Attempting {GPT_REASONING_MODEL} summary rewrite...")
+        response_text = _call_openai_text(prompt, model=GPT_REASONING_MODEL, max_output_tokens=6000, timeout=90)
         elapsed_ms = int((time.time() - start) * 1000)
         if response_text:
-            return response_text, elapsed_ms, "gpt-5.5"
-        raise ValueError("gpt-5.5 returned empty response")
+            return response_text, elapsed_ms, GPT_REASONING_MODEL
+        raise ValueError(f"{GPT_REASONING_MODEL} returned empty response")
     except Exception as gpt_err:
         print(f"   ❌ [Clean] GPT 5.5 failed: {gpt_err}")
 
@@ -1618,11 +1619,11 @@ def _clean_with_models(prompt):
     if anthropic_key:
         try:
             import anthropic
-            print(f"   🔄 [Clean] Falling back to Claude Sonnet 4.6...")
+            print(f"   🔄 [Clean] Falling back to {CLAUDE_SONNET_MODEL}...")
             m_start = time.time()
             sonnet_client = anthropic.Anthropic(api_key=anthropic_key)
             sonnet_resp = sonnet_client.messages.create(
-                model="claude-sonnet-4-6",
+                model=CLAUDE_SONNET_MODEL,
                 max_tokens=6000,
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -1632,12 +1633,12 @@ def _clean_with_models(prompt):
             ).strip()
             m_elapsed = int((time.time() - m_start) * 1000)
             if m_text:
-                return m_text, m_elapsed, "claude-sonnet-4-6"
+                return m_text, m_elapsed, CLAUDE_SONNET_MODEL
             print(f"   ⚠️ [Clean] Sonnet returned empty response")
         except Exception as sonnet_err:
-            print(f"   ❌ [Clean] Claude Sonnet 4.6 fallback failed: {sonnet_err}")
+            print(f"   ❌ [Clean] {CLAUDE_SONNET_MODEL} fallback failed: {sonnet_err}")
 
-    raise ValueError("All clean-summary models failed (gpt-5.5, claude-sonnet-4-6)")
+    raise ValueError(f"All clean-summary models failed ({GPT_REASONING_MODEL}, {CLAUDE_SONNET_MODEL})")
 
 
 def _validate_clean_result(result, summary_text, pitch_text, model_name, elapsed_ms):

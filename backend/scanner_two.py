@@ -31,7 +31,8 @@ from entity_identity import (
     ENTITY_SCOPE_LOCAL_LEGAL_ENTITY,
     ENTITY_SCOPE_UNKNOWN,
 )
-from llm_clients import call_anthropic_text, call_json_model_chain, call_openai_text
+from llm_clients import CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL, GPT_VERIFIER_MODEL, call_anthropic_text, call_json_model_chain, call_openai_text
+from model_policy import GEMINI_FAST_FALLBACK_MODEL, GEMINI_FORENSIC_MODEL
 from gemini_client import call_gemini_forensic_text, gemini_api_key
 from evidence_contracts import (
     VERIFIED_COMPANY_EVIDENCE,
@@ -263,7 +264,7 @@ FORENSIC_PROVIDER_SEQUENCE_SECONDS = (
     + FORENSIC_GEMINI_FLASH_SCOUT_SECONDS
 )
 FORENSIC_PROVIDER_SEQUENCE_OVERHEAD_SECONDS = 5
-FORENSIC_GEMINI_FAST_FALLBACK_MODEL = "gemini-3.5-flash"
+FORENSIC_GEMINI_FAST_FALLBACK_MODEL = GEMINI_FAST_FALLBACK_MODEL
 FORENSIC_LANE_REPLACEMENT_MIN_SECONDS = 30
 FORENSIC_LANE_REPLACEMENT_TIMEOUT_SECONDS = 42
 FORENSIC_JURIES = tuple(JURY_SOURCE_TARGETS.keys())
@@ -4077,7 +4078,7 @@ TEXT TO PARSE:
 Return ONLY valid JSON, no explanation."""
 
         response = client.messages.create(
-            model="claude-sonnet-4-6",
+            model=CLAUDE_SONNET_MODEL,
             max_tokens=12000,
             messages=[{"role": "user", "content": structuring_prompt}]
         )
@@ -4115,7 +4116,7 @@ Return ONLY valid JSON, no explanation."""
         return None
 
 
-def _structure_with_model(raw_text, company_name, model_name="gpt-5.4"):
+def _structure_with_model(raw_text, company_name, model_name=GPT_VERIFIER_MODEL):
     """Structure free-form forensic evidence text into JSON using GPT/Claude."""
     structuring_prompt = f"""The following text is a forensic reality-check analysis for "{company_name}" produced by a web-search-grounded AI model. Your job is to structure this analysis into valid JSON, preserving ALL evidence, scores, and assessments exactly as stated.
 
@@ -4140,9 +4141,10 @@ Return ONLY valid JSON, no explanation."""
     try:
         text, used_model = call_json_model_chain(
             structuring_prompt,
-            (model_name, "claude-sonnet-4-6") if model_name.startswith("gpt-") else (model_name, "gpt-5.4"),
+            (model_name, CLAUDE_SONNET_MODEL) if model_name.startswith("gpt-") else (model_name, GPT_VERIFIER_MODEL),
             max_tokens=8000,
             timeout=90,
+            validate_json=True,
         )
         json_payload = extract_json_from_text(text)
         if not json_payload:
@@ -5145,7 +5147,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 local_timeout,
                 lambda: call_openai_text(
                     relaxed_prompt,
-                    model="gpt-5.5",
+                    model=GPT_REASONING_MODEL,
                     max_output_tokens=7000,
                     timeout=local_timeout,
                     web_search=True,
@@ -5341,7 +5343,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
     def _run_acquisition_provider_sequence(prompt: str, jury_name: str) -> tuple[dict | None, str, str]:
         """Run the first acquisition scout. Retries happen after deterministic precheck."""
         payload = None
-        provider = "gemini-3.1-pro-preview"
+        provider = GEMINI_FORENSIC_MODEL
         status = "provider_unavailable"
 
         if gemini_api_key():
@@ -5405,7 +5407,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             and _seeded_coverage_can_skip_live_search(jury_name, jury_seeds, req)
         )
         target_valid = 0 if seeded_sufficient else _lane_fresh_target(jury_name, focus_key)
-        provider = "governed-seed" if seeded_sufficient else "gemini-3.1-pro-preview"
+        provider = "governed-seed" if seeded_sufficient else GEMINI_FORENSIC_MODEL
         status = "seeded_sufficient_live_search_skipped" if seeded_sufficient else "provider_unavailable"
         sources = []
         if not seeded_sufficient:
@@ -5609,7 +5611,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         # Gemini remains the first acquisition scout. If its structurally valid
         # candidates fail deterministic URL/entity/page-type checks, spend a
         # bounded lane-local retry on GPT, then Gemini Flash as the last resort.
-        if _needs_survival_retry() and "gpt-5.5" not in str(lane.get("provider") or ""):
+        if _needs_survival_retry() and GPT_REASONING_MODEL not in str(lane.get("provider") or ""):
             _run_survival_retry(
                 retry_provider="gpt",
                 label="gpt_round_2",
@@ -5829,13 +5831,13 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     gemini_sources = _normalize_acquisition_payload(
                         gemini_payload or {},
                         jury_name,
-                        "gemini-3.1-pro-preview-repair",
+                        f"{GEMINI_FORENSIC_MODEL}-repair",
                     )
                     if gemini_sources:
                         gemini_lane, _gemini_stats = _validate_repair_candidate(
                             {
                                 "jury": jury_name,
-                                "provider": "gemini-3.1-pro-preview-repair",
+                                "provider": f"{GEMINI_FORENSIC_MODEL}-repair",
                                 "status": gemini_status,
                                 "sources": gemini_sources,
                             },
@@ -5843,7 +5845,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                         )
                         gemini_sources = list(gemini_lane.get("sources", []) or [])
                     sources.extend(gemini_sources)
-                    providers.append("gemini-3.1-pro-preview-repair")
+                    providers.append(f"{GEMINI_FORENSIC_MODEL}-repair")
                     statuses.append(gemini_status)
                     print(
                         f"   {'✅' if gemini_sources else '⚠️'} [Forensic Acquisition Repair] {jury_name}: "
@@ -6005,7 +6007,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
         def _run_jury_prompt(chunk_packets: list, chunk_label: str = "") -> tuple[dict | None, str]:
             prompt = _build_jury_analysis_prompt(search_name, jury_name, chunk_packets)
-            provider_name = "gpt-5.5"
+            provider_name = GPT_REASONING_MODEL
             chunk_payload = None
             remaining = max(1, int(analysis_deadline - time.time()))
             try:
@@ -6023,7 +6025,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                         f"{jury_name} {chunk_label or 'full'} gpt-5.5 no-web jury analysis",
                         gpt_timeout,
                         lambda: call_openai_text(
-                            prompt, model="gpt-5.5", max_output_tokens=6500,
+                            prompt, model=GPT_REASONING_MODEL, max_output_tokens=6500,
                             timeout=max(1, min(gpt_timeout - 5, gpt_timeout)), web_search=False,
                         ),
                     )
@@ -6039,7 +6041,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                         "using GPT rescue path for compact conservative findings."
                     )
                 elif remaining >= 20:
-                    provider_name = "claude-sonnet-4-6"
+                    provider_name = CLAUDE_SONNET_MODEL
                     try:
                         sonnet_base = FORENSIC_JURY_SONNET_TIMEOUTS.get(jury_name, FORENSIC_JURY_SONNET_TIMEOUT_SECONDS)
                         if chunk_label and chunk_label != "full":
@@ -6049,10 +6051,10 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                                 sonnet_base = min(sonnet_base, 45)
                         sonnet_timeout = min(sonnet_base, remaining)
                         text = _hard_timeout_call(
-                            f"{jury_name} {chunk_label or 'full'} claude-sonnet-4-6 no-web jury analysis",
+                            f"{jury_name} {chunk_label or 'full'} {CLAUDE_SONNET_MODEL} no-web jury analysis",
                             sonnet_timeout,
                             lambda: call_anthropic_text(
-                                prompt, model="claude-sonnet-4-6", max_tokens=6500,
+                                prompt, model=CLAUDE_SONNET_MODEL, max_tokens=6500,
                                 timeout=max(1, min(sonnet_timeout - 5, sonnet_timeout)), web_search=False,
                             ),
                         )
@@ -6075,7 +6077,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     rescue_timeout,
                     lambda: call_openai_text(
                         prompt,
-                        model="gpt-5.5",
+                        model=GPT_REASONING_MODEL,
                         max_output_tokens=3500,
                         timeout=max(1, rescue_timeout - 5),
                         web_search=False,
@@ -6092,7 +6094,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
 
         lane_started = time.time()
         payload = None
-        provider = "gpt-5.5"
+        provider = GPT_REASONING_MODEL
         split_labels = []
         split_chunks = _split_jury_packets(jury_name, packets)
         if len(split_chunks) > 1:
@@ -6849,7 +6851,7 @@ def financial_health_search(company_name: str, company_url: str = None, model_id
     Uses Claude/OpenAI web search to find financial data.
     Returns a 0-100 composite score with 4 sub-dimensions (0-25 each).
     """
-    primary_model = model_id or "claude-sonnet-4-6"
+    primary_model = model_id or CLAUDE_SONNET_MODEL
     _fh_start = time.time()
     _FH_BUDGET = 180  # seconds — abort remaining attempts if cumulative elapsed exceeds this
 
@@ -6996,10 +6998,10 @@ CONFIDENCE GUIDE:
             print(f"   ⏭ [Financial Health] Budget exceeded before fallback. Aborting.")
         else:
             print(f"   [Financial Health] Primary exhausted. Falling back to GPT-5.5 web search...")
-            data = _execute_financial_search("gpt-5.5", prompt, company_name, timeout=120)
+            data = _execute_financial_search(GPT_REASONING_MODEL, prompt, company_name, timeout=120)
     if not data and (time.time() - _fh_start) <= _FH_BUDGET:
         time.sleep(2)
-        data = _execute_financial_search("gpt-5.5", prompt, company_name, timeout=120)
+        data = _execute_financial_search(GPT_REASONING_MODEL, prompt, company_name, timeout=120)
 
     # Abort: all attempts exhausted — return explicit no-data result
     if not data:

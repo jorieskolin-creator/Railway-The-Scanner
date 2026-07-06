@@ -24,6 +24,7 @@ from bs4 import BeautifulSoup
 
 from entity_identity import assess_entity_match
 from llm_clients import call_json_model_chain
+from model_policy import CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL, GPT_VERIFIER_MODEL, source_claim_chain
 
 
 # ── Page content extraction ─────────────────────────────────────────────────
@@ -36,8 +37,8 @@ _MAX_PAGE_CHARS = 3000  # Keep page text compact for the LLM prompt
 _DEFAULT_FETCH_TIMEOUT = 12
 _ANALYSIS_SUPPORT_THRESHOLD = 55
 _PARTIAL_SUPPORT_THRESHOLD = 40
-DEFAULT_MODEL_CHAIN = ("gpt-5.4", "claude-sonnet-4-6")
-CLEAN_EVIDENCE_MODEL_CHAIN = ("gpt-5.4", "claude-sonnet-4-6", "gpt-5.5")
+DEFAULT_MODEL_CHAIN = source_claim_chain()
+CLEAN_EVIDENCE_MODEL_CHAIN = (GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL)
 
 
 def _fetch_page_text(url: str, timeout: int = _DEFAULT_FETCH_TIMEOUT) -> str:
@@ -435,7 +436,13 @@ def _rewrite_overstrong_claim(
         unsupported_reason=unsupported_reason,
         entity_scope=entity_scope,
     )
-    raw, model_used = call_json_model_chain(prompt, ("gpt-5.5", "claude-sonnet-4-6"), max_tokens=520, timeout=timeout)
+    raw, model_used = call_json_model_chain(
+        prompt,
+        (GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL),
+        max_tokens=520,
+        timeout=timeout,
+        validate_json=True,
+    )
     parsed = _parse_claim_rewrite_json(raw)
     parsed["rewrite_model"] = model_used
     quote = parsed.get("supporting_quote") or source_excerpt
@@ -680,7 +687,13 @@ def _check_relevance(
     primary_result = None
     for model in model_chain or DEFAULT_MODEL_CHAIN:
         try:
-            raw, model_used = call_json_model_chain(prompt, (model,), max_tokens=320, timeout=timeout)
+            raw, model_used = call_json_model_chain(
+                prompt,
+                (model,),
+                max_tokens=320,
+                timeout=timeout,
+                validate_json=True,
+            )
 
             parsed = _parse_relevance_json(raw)
             primary_result = _evaluate_parsed_relevance(
@@ -700,13 +713,14 @@ def _check_relevance(
                 company_domain=company_domain,
                 context_only=context_only,
             )
-            if review_needed and model_used != "claude-sonnet-4-6":
+            if review_needed and model_used != CLAUDE_SONNET_MODEL:
                 try:
                     raw2, model_used2 = call_json_model_chain(
                         prompt,
-                        ("claude-sonnet-4-6",),
+                        (CLAUDE_SONNET_MODEL,),
                         max_tokens=320,
                         timeout=timeout,
+                        validate_json=True,
                     )
                     parsed2 = _parse_relevance_json(raw2)
                     secondary_result = _evaluate_parsed_relevance(

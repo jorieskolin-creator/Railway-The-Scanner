@@ -21,13 +21,14 @@ import requests
 from pypdf import PdfReader
 
 from llm_clients import (
-    CLAUDE_HAIKU_MODEL,
-    CLAUDE_OPUS_MODEL,
-    CLAUDE_SONNET_MODEL,
-    GPT_REASONING_MODEL,
-    GPT_VERIFIER_MODEL,
     call_json_model_chain,
     parse_json_object,
+)
+from model_policy import (
+    BUYING_MODEL_MODE,
+    buying_gate_chain as policy_buying_gate_chain,
+    buying_generation_chain as policy_buying_generation_chain,
+    json_repair_chain as policy_json_repair_chain,
 )
 from source_quality import is_generation_eligible_source
 from knowledge_base import REMOTE_KNOWLEDGE_URL as DEFAULT_MODERNIZATION_TACTICS_URL
@@ -239,17 +240,6 @@ def _clean_env(value: str | None) -> str:
     return value.strip().strip('"').strip("'")
 
 
-def _dedupe_chain(models: tuple[str, ...]) -> tuple[str, ...]:
-    seen = set()
-    cleaned = []
-    for model in models:
-        model = _clean_env(model)
-        if model and model not in seen:
-            seen.add(model)
-            cleaned.append(model)
-    return tuple(cleaned)
-
-
 def _tactic_text(item: dict) -> str:
     return " ".join(
         str(item.get(key) or "")
@@ -371,31 +361,28 @@ def _match_modernization_tactics(text: Any, tactics: list[dict], *, limit: int =
 
 
 def _buying_model_mode(mode: str | None = None) -> str:
-    return "quality"
-
-
-def _haiku_model() -> str:
-    return _clean_env(os.environ.get("CLAUDE_HAIKU_MODEL") or CLAUDE_HAIKU_MODEL)
+    mode = _clean_env(mode or os.environ.get("SCANNER_BUYING_MODEL_MODE") or BUYING_MODEL_MODE or "quality").lower()
+    return mode if mode in {"economy", "balanced", "quality", "board_grade"} else "quality"
 
 
 def buying_generation_chain(mode: str | None = None) -> tuple[str, ...]:
-    return _dedupe_chain((CLAUDE_OPUS_MODEL, GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL))
+    return policy_buying_generation_chain(_buying_model_mode(mode))
 
 
 def buying_gate_chain(mode: str | None = None) -> tuple[str, ...]:
-    return _dedupe_chain((GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL))
+    return policy_buying_gate_chain(_buying_model_mode(mode))
 
 
 def service_kb_extraction_chain(mode: str | None = None) -> tuple[str, ...]:
-    return _dedupe_chain((GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL, _haiku_model()))
+    return policy_json_repair_chain(_buying_model_mode(mode))
 
 
 def service_kb_repair_chain(mode: str | None = None) -> tuple[str, ...]:
-    return _dedupe_chain((GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL, _haiku_model()))
+    return policy_json_repair_chain(_buying_model_mode(mode))
 
 
 def buying_report_repair_chain(mode: str | None = None) -> tuple[str, ...]:
-    return _dedupe_chain((GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL, _haiku_model()))
+    return policy_json_repair_chain(_buying_model_mode(mode))
 
 
 def _latest_blob(storage, prefix: str, suffixes: tuple[str, ...] | None = None) -> dict | None:
@@ -630,6 +617,7 @@ def _structure_service_kb_from_pdf(storage, pdf_blob: dict, pdf_text: str) -> di
             service_kb_extraction_chain(),
             max_tokens=12000,
             timeout=120,
+            validate_json=True,
         )
     except Exception as model_exc:
         print(f"   ⚠️ [Buying Potential] Service KB model extraction failed; using deterministic PDF fallback: {model_exc}")
@@ -653,6 +641,7 @@ def _structure_service_kb_from_pdf(storage, pdf_blob: dict, pdf_text: str) -> di
                 service_kb_repair_chain(),
                 max_tokens=12000,
                 timeout=90,
+                validate_json=True,
             )
             kb = _validate_service_kb(parse_json_object(repair_raw))
             model_used = f"{model_used} -> repaired by {repair_model}"
@@ -3225,6 +3214,7 @@ def _parse_or_repair_report(
                 buying_report_repair_chain(model_mode),
                 max_tokens=5200,
                 timeout=90,
+                validate_json=True,
             )
             report = parse_json_object(repair_raw)
             if not isinstance(report, dict):
@@ -3274,6 +3264,7 @@ def _parse_or_repair_section(
                 buying_report_repair_chain(model_mode),
                 max_tokens=_section_token_limit(section),
                 timeout=60,
+                validate_json=True,
             )
             parsed = parse_json_object(repair_raw)
             if not isinstance(parsed, dict):
@@ -3303,6 +3294,7 @@ def _generate_buying_section(
             buying_generation_chain(model_mode),
             max_tokens=_section_token_limit(section),
             timeout=75,
+            validate_json=True,
         )
         section_data, parse_status = _parse_or_repair_section(section, raw, payload, model_mode, stage_callback)
         meta = {"section": section, "model": model_used, "parse_status": parse_status}
@@ -3392,7 +3384,14 @@ def generate_buying_potential_report(
     if stage_callback:
         stage_callback("gate_review", 70, "Reviewing sales evidence gates")
     try:
-        gate_raw, gate_model = call_json_model_chain(_gate_prompt(report, payload), buying_gate_chain(model_mode), max_tokens=1800, timeout=60)
+        gate_raw, gate_model = call_json_model_chain(
+            _gate_prompt(report, payload),
+            buying_gate_chain(model_mode),
+            max_tokens=1800,
+            timeout=60,
+            validate_json=True,
+            required_fields=("approved",),
+        )
         gate_review = parse_json_object(gate_raw)
         gate_review["model"] = gate_model
     except Exception as exc:

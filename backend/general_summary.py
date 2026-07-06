@@ -28,6 +28,7 @@ from source_quality import (
 from contradiction_detector import detect_contradictions
 from prompts import PROMPT_VERSION, build_shared_guardrails
 from entity_identity import apply_entity_scope, get_company_identity
+from model_policy import CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL, GPT_VERIFIER_MODEL
 
 
 def _general_summary_guardrails() -> str:
@@ -61,7 +62,7 @@ def _get_openai_text(response) -> str:
     return "\n".join(parts).strip()
 
 
-def _call_openai_summary(prompt: str, model: str = "gpt-5.5", timeout: int = 90) -> str:
+def _call_openai_summary(prompt: str, model: str = GPT_REASONING_MODEL, timeout: int = 90) -> str:
     api_key = _clean_env_var(os.environ.get("GPT_API_KEY") or os.environ.get("OPENAI_API_KEY") or "")
     if not api_key:
         raise ValueError("No GPT_API_KEY configured")
@@ -588,9 +589,9 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
     payload = _build_input_payload(full_data, company_name)
     prompt = _build_prompt(payload, company_name)
 
-    # Primary: GPT-5.5 (evidence-bound prose from already-built structured payload)
+    # Primary: GPT frontier model (evidence-bound prose from already-built structured payload)
     try:
-        PRIMARY_MODEL = "gpt-5.5"
+        PRIMARY_MODEL = GPT_REASONING_MODEL
         print(f"   [General Summary] Trying primary {PRIMARY_MODEL}")
         t0 = time.time()
         text = _strip_links(_call_openai_summary(prompt, model=PRIMARY_MODEL, timeout=90))
@@ -612,14 +613,14 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
     except Exception as e:
         print(f"   ❌ [General Summary] GPT-5.5 primary failed: {e}")
 
-    # Backup 1: Sonnet 4.6 (independent provider)
+    # Backup 1: Sonnet independent provider
     try:
         import anthropic
         anthropic_key = _clean_env_var(os.environ.get("ANTHROPIC_API_KEY", ""))
         if not anthropic_key:
             print("   ⚠️ [General Summary] No ANTHROPIC_API_KEY — skipping Sonnet backup")
         else:
-            SONNET_MODEL = "claude-sonnet-4-6"
+            SONNET_MODEL = CLAUDE_SONNET_MODEL
             print(f"   [General Summary] GPT-5.5 unavailable — trying {SONNET_MODEL}")
             t0 = time.time()
             claude_client = anthropic.Anthropic(api_key=anthropic_key)
@@ -709,8 +710,8 @@ def fact_check_general_summary(
     """
     Verify the General Summary against its own input payload.
 
-    Stage 1: Claude Sonnet 4.6 / GPT-5.4 detects unsupported claims.
-    Stage 2: If false claims are found, GPT-5.5 re-generates cleanly.
+    Stage 1: Claude Sonnet / GPT verifier detects unsupported claims.
+    Stage 2: If false claims are found, GPT frontier model re-generates cleanly.
 
     Returns:
         dict with:
@@ -739,8 +740,8 @@ def fact_check_general_summary(
     # General Summary is normally GPT-generated, so Sonnet checks first. GPT-5.4
     # remains as fallback for provider availability and manual regeneration cases.
     CHECK_MODELS = [
-        ("claude-sonnet-4-6", "anthropic"),
-        ("gpt-5.4", "openai"),
+        (CLAUDE_SONNET_MODEL, "anthropic"),
+        (GPT_VERIFIER_MODEL, "openai"),
     ]
     false_claims = []
     detection_succeeded = False
@@ -812,7 +813,7 @@ def fact_check_general_summary(
     # Stage 2: Re-generate with false claims as explicit warnings
     regen_prompt = _build_regen_prompt(payload, company_name, summary_text, false_claims)
 
-    REGEN_MODEL = "gpt-5.5"
+    REGEN_MODEL = GPT_REASONING_MODEL
     corrected_summary = ""
     corrected_model = ""
 
