@@ -2302,6 +2302,12 @@ def _humanize_report_quality_note(note: Any) -> str:
     lower = text.lower()
     if not text:
         return ""
+    if re.search(r"\bBuying Insight section\(s\) required JSON repair\b", text):
+        return text
+    if re.search(r"\bBuying Insight section\(s\) used deterministic fallback\b", text):
+        return text
+    if re.search(r"\bcompleted \d+ conversation field\(s\)\b", text):
+        return text
     if "deterministic fallback" in lower:
         return "One generated section used deterministic fallback; treat the affected content as draft guidance."
     if any(marker in lower for marker in ("malformed", "json", "parse failed", "invalid json", "original parse error")):
@@ -2309,6 +2315,25 @@ def _humanize_report_quality_note(note: Any) -> str:
     if "repair failed" in lower:
         return "One generated section could not be fully repaired; review affected wording before reuse."
     return text
+
+
+def _previous_buying_report(previous_report: Any) -> dict:
+    if not isinstance(previous_report, dict):
+        return {}
+    report = previous_report.get("report") if isinstance(previous_report.get("report"), dict) else previous_report
+    return report if isinstance(report, dict) else {}
+
+
+def _previous_conversation_directions_by_signal(previous_report: Any) -> dict[str, dict]:
+    previous = _previous_buying_report(previous_report)
+    by_signal: dict[str, dict] = {}
+    for item in _list(previous.get("pain_to_solution_map")):
+        if not isinstance(item, dict):
+            continue
+        for signal_id in _item_signal_ids(item):
+            if signal_id and signal_id not in by_signal:
+                by_signal[signal_id] = item
+    return by_signal
 
 
 def _looks_like_context_not_fact(text: Any) -> bool:
@@ -2682,7 +2707,30 @@ def _role_level_stakeholder_map(signals_by_id: dict[str, dict], existing: list[d
     return stakeholders
 
 
-def _is_meaningful_conversation_direction(item: Any, known_signal_ids: set[str]) -> bool:
+CONVERSATION_REQUIRED_TEXT_FIELDS = (
+    "interpreted_pressure",
+    "buyer_lens",
+    "why_this_service",
+    "safe_wording",
+    "missing_evidence",
+    "proof_point",
+)
+
+
+def _conversation_missing_fields(item: Any) -> list[str]:
+    if not isinstance(item, dict):
+        return list(CONVERSATION_REQUIRED_TEXT_FIELDS)
+    missing = [
+        key
+        for key in CONVERSATION_REQUIRED_TEXT_FIELDS
+        if _word_count(item.get(key)) < 5
+    ]
+    if not _list(item.get("disqualifiers")):
+        missing.append("disqualifiers")
+    return missing
+
+
+def _is_meaningful_conversation_direction(item: Any, known_signal_ids: set[str], *, require_complete: bool = False) -> bool:
     if not isinstance(item, dict):
         return False
     signal_ok = _has_signal_reference(item, known_signal_ids)
@@ -2696,7 +2744,11 @@ def _is_meaningful_conversation_direction(item: Any, known_signal_ids: set[str])
     )
     if _normalize_gate(item.get("gate"), "allowed_as_discovery_question") == "blocked" and content_score == 0:
         return False
-    return bool(service_text and content_score >= 2)
+    if not service_text or content_score < 2:
+        return False
+    if require_complete and _conversation_missing_fields(item):
+        return False
+    return True
 
 
 def _conversation_direction_from_signal(signal: dict) -> dict:
@@ -2756,12 +2808,79 @@ def _conversation_direction_from_signal(signal: dict) -> dict:
     }
 
 
-def _add_missing_conversation_directions(report: dict, signals_by_id: dict[str, dict], activation_signal_ids: set[str], known_signal_ids: set[str]) -> None:
-    items = [
-        item
-        for item in _list(report.get("pain_to_solution_map"))
-        if _is_meaningful_conversation_direction(item, known_signal_ids)
-    ]
+def _complete_conversation_direction_from_signal(
+    item: dict,
+    signal: dict,
+    previous_by_signal: dict[str, dict],
+) -> tuple[dict, list[str]]:
+    signal_id = str(signal.get("id") or "")
+    completed = dict(item) if isinstance(item, dict) else {}
+    deterministic = _conversation_direction_from_signal(signal)
+    previous = previous_by_signal.get(signal_id) or {}
+    recovered: list[str] = []
+
+    completed["account_signal_id"] = completed.get("account_signal_id") or signal_id
+    completed["gate"] = _normalize_gate(completed.get("gate"), "allowed_as_discovery_question")
+    completed["confidence"] = min(60, _safe_int(completed.get("confidence"), _safe_int(deterministic.get("confidence"), 45)))
+
+    for key in ("service", *CONVERSATION_REQUIRED_TEXT_FIELDS):
+        if _word_count(completed.get(key)) >= 5 or (key == "service" and _clip(completed.get(key), 120)):
+            continue
+        previous_value = previous.get(key)
+        if _word_count(previous_value) >= 5 or (key == "service" and _clip(previous_value, 120)):
+            completed[key] = previous_value
+            recovered.append(f"{key}:previous")
+        else:
+            completed[key] = deterministic.get(key)
+            recovered.append(f"{key}:deterministic")
+
+    if not _list(completed.get("disqualifiers")):
+        previous_disqualifiers = _list(previous.get("disqualifiers"))
+        completed["disqualifiers"] = previous_disqualifiers[:4] or _list(deterministic.get("disqualifiers"))[:4]
+        recovered.append("disqualifiers:previous" if previous_disqualifiers else "disqualifiers:deterministic")
+
+    if recovered:
+        notes = _list(completed.get("recovery_notes"))
+        notes.append(
+            f"Conversation direction for {signal_id} completed missing fields from "
+            f"{'previous same-company output and deterministic signal data' if any(':previous' in item for item in recovered) else 'deterministic signal data'}."
+        )
+        completed["recovery_notes"] = list(dict.fromkeys(notes))[:4]
+        completed["completed_missing_fields"] = recovered
+    return completed, recovered
+
+
+def _add_missing_conversation_directions(
+    report: dict,
+    signals_by_id: dict[str, dict],
+    activation_signal_ids: set[str],
+    known_signal_ids: set[str],
+    previous_report: dict | None = None,
+) -> None:
+    previous_by_signal = _previous_conversation_directions_by_signal(previous_report)
+    items: list[dict] = []
+    recovery_notes: list[str] = []
+    seen_primary_ids: set[str] = set()
+    for item in _list(report.get("pain_to_solution_map")):
+        if not isinstance(item, dict):
+            continue
+        item_signal_ids = [signal_id for signal_id in _item_signal_ids(item) if signal_id in known_signal_ids]
+        primary_signal_id = next((signal_id for signal_id in item_signal_ids if signal_id in activation_signal_ids), None)
+        if primary_signal_id and primary_signal_id in seen_primary_ids:
+            continue
+        if primary_signal_id and signals_by_id.get(primary_signal_id):
+            item, recovered = _complete_conversation_direction_from_signal(
+                item,
+                signals_by_id[primary_signal_id],
+                previous_by_signal,
+            )
+            if recovered:
+                recovery_notes.append(f"{primary_signal_id}: completed {len(recovered)} conversation field(s).")
+        if _is_meaningful_conversation_direction(item, known_signal_ids, require_complete=bool(primary_signal_id)):
+            items.append(item)
+            if primary_signal_id:
+                seen_primary_ids.add(primary_signal_id)
+
     present_ids = {
         signal_id
         for item in items
@@ -2776,9 +2895,13 @@ def _add_missing_conversation_directions(report: dict, signals_by_id: dict[str, 
             continue
         items.append(_conversation_direction_from_signal(signal))
         present_ids.add(signal_id)
+        recovery_notes.append(f"{signal_id}: deterministic conversation direction added.")
         if len(items) >= 4:
             break
     report["pain_to_solution_map"] = items[:4]
+    if recovery_notes:
+        existing_notes = _list(report.get("recovery_notes"))
+        report["recovery_notes"] = list(dict.fromkeys(existing_notes + recovery_notes))[:12]
 
 
 def _enrich_short_opening_sections(report: dict, payload: dict) -> None:
@@ -2836,6 +2959,7 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
     scanner_outputs = _dict(payload.get("scanner_outputs"))
     self_scan_context = _dict(payload.get("self_scan_context"))
     modernization_tactics = [item for item in _list(payload.get("modernization_tactics")) if isinstance(item, dict)]
+    previous_report = _previous_buying_report(payload.get("previous_buying_insight"))
 
     def fix_item(item: Any, default_gate: str = "allowed_as_hypothesis") -> Any:
         if not isinstance(item, dict):
@@ -2909,7 +3033,7 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         if isinstance(item, dict) and _clip(item.get("description") or item.get("business_consequence") or item.get("trigger"), 40)
     ]
     report["pain_to_solution_map"] = [fix_item(item) for item in _list(report.get("pain_to_solution_map")) if isinstance(item, dict)]
-    _add_missing_conversation_directions(report, signals_by_id, activation_signal_ids, known_signal_ids)
+    _add_missing_conversation_directions(report, signals_by_id, activation_signal_ids, known_signal_ids, previous_report)
     report["pain_to_solution_map"] = [fix_item(item) for item in _list(report.get("pain_to_solution_map")) if isinstance(item, dict)]
     report["recommended_sales_plays"] = [fix_item(item) for item in _list(report.get("recommended_sales_plays")) if isinstance(item, dict)]
     referenced_activation_ids = {
@@ -2989,6 +3113,32 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
     evidence_confidence = _dict(report.get("evidence_confidence"))
     evidence_confidence["verified_facts"] = _verified_fact_items_from_payload(payload)
     quality_notes = evidence_confidence.setdefault("report_quality_notes", [])
+    repaired_sections = [
+        str(meta.get("section"))
+        for meta in _list(report.get("section_generation"))
+        if isinstance(meta, dict) and "repaired" in str(meta.get("parse_status") or "").lower()
+    ]
+    fallback_sections = [
+        str(meta.get("section"))
+        for meta in _list(report.get("section_generation"))
+        if isinstance(meta, dict) and "fallback" in str(meta.get("parse_status") or "").lower()
+    ]
+    if repaired_sections:
+        quality_notes.append(
+            f"{len(repaired_sections)} Buying Insight section(s) required JSON repair before finalization: "
+            + ", ".join(repaired_sections[:8])
+            + "."
+        )
+    if fallback_sections:
+        quality_notes.append(
+            f"{len(fallback_sections)} Buying Insight section(s) used deterministic fallback: "
+            + ", ".join(fallback_sections[:8])
+            + "."
+        )
+    for note in _list(report.get("recovery_notes")):
+        note_text = _clip(note, 260)
+        if note_text:
+            quality_notes.append(note_text)
     for note in _list(report.get("model_notes")) + _list(report.get("missing_input_warnings")):
         note_text = _clip(note, 320)
         if not note_text:
@@ -3189,6 +3339,16 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         ]
     if len(fixed_stakeholders) < 3:
         for item in _role_level_stakeholder_map(signals_by_id, fixed_stakeholders, limit=3 - len(fixed_stakeholders)):
+            if isinstance(item, dict):
+                fixed_stakeholders.append(fix_item(item, "allowed_as_discovery_question"))
+    has_role_level_guidance = any(
+        str(item.get("name") or "").lower() == "role-level target"
+        or str(item.get("evidence_basis") or "").startswith("SIG-")
+        for item in fixed_stakeholders
+        if isinstance(item, dict)
+    )
+    if not has_role_level_guidance and len(fixed_stakeholders) < 6:
+        for item in _role_level_stakeholder_map(signals_by_id, fixed_stakeholders, limit=min(2, 6 - len(fixed_stakeholders))):
             if isinstance(item, dict):
                 fixed_stakeholders.append(fix_item(item, "allowed_as_discovery_question"))
     report["stakeholder_map"] = fixed_stakeholders
@@ -3920,6 +4080,7 @@ def generate_buying_potential_report(
     *,
     company_evidence: dict | None = None,
     company_source_ledger: dict | None = None,
+    previous_report: dict | None = None,
     stage_callback=None,
     model_mode: str | None = None,
 ) -> tuple[dict, str]:
@@ -3950,6 +4111,8 @@ def generate_buying_potential_report(
     except Exception as exc:
         gate_review = {"approved": False, "notes": [f"Gate model unavailable; deterministic post-processing applied: {str(exc)[:160]}"]}
 
+    if previous_report:
+        payload["previous_buying_insight"] = previous_report
     report = _post_process_report(report, payload, gate_review)
     report["account_signal_map"] = _list(payload.get("account_signal_map"))[:12]
     report["buyer_role_lens_version"] = "v1"

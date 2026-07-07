@@ -2063,6 +2063,12 @@ def _run_buying_potential_job(job_id: str, company_name: str):
             _append_buying_job_log(job_id, f"Company Source Ledger loaded: {stats.get('buying_eligible', 0)} buying-eligible records")
         else:
             _append_buying_job_log(job_id, "No Company Source Ledger found")
+        previous_lookup = buying_storage.get_buying_potential_report(resolved_company)
+        previous_report = previous_lookup.get("report") if previous_lookup.get("exists") else None
+        if previous_report:
+            _append_buying_job_log(job_id, "Previous Buying Insight loaded for same-company continuity recovery")
+        else:
+            _append_buying_job_log(job_id, "No previous Buying Insight found for continuity recovery")
 
         def stage_callback(stage: str, progress: int, message: str):
             set_stage(stage, progress, message)
@@ -2072,6 +2078,7 @@ def _run_buying_potential_job(job_id: str, company_name: str):
             service_kb,
             company_evidence=company_evidence,
             company_source_ledger=company_source_ledger,
+            previous_report=previous_report,
             stage_callback=stage_callback,
         )
 
