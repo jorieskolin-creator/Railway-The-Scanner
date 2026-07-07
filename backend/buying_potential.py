@@ -2634,6 +2634,153 @@ def _fallback_stakeholder_map(payload: dict, signals_by_id: dict[str, dict], lim
     return stakeholders
 
 
+def _role_level_stakeholder_map(signals_by_id: dict[str, dict], existing: list[dict] | None = None, limit: int = 3) -> list[dict]:
+    stakeholders: list[dict] = []
+    seen: set[str] = set()
+    for item in _list(existing):
+        if not isinstance(item, dict):
+            continue
+        role = _clip(item.get("role"), 140).lower()
+        if role:
+            seen.add(role)
+    for signal in list(signals_by_id.values()):
+        if not isinstance(signal, dict):
+            continue
+        for role in _list(signal.get("buyer_roles")):
+            role_text = _clip(role, 120)
+            if not role_text:
+                continue
+            role_key = role_text.lower()
+            if any(role_key in existing_role or existing_role in role_key for existing_role in seen):
+                continue
+            seen.add(role_key)
+            stakeholders.append({
+                "name": "Role-level target",
+                "role": role_text,
+                "likely_buying_committee_role": _clip(signal.get("buyer_role_concern") or "Likely buying-committee role to validate in discovery.", 260),
+                "relevance_rationale": _clip(
+                    signal.get("commercial_pressure")
+                    or signal.get("business_consequence")
+                    or signal.get("why")
+                    or "Role-level buying committee guidance generated from Scanner account signals.",
+                    420,
+                ),
+                "linked_pressure_themes": [str(signal.get("theme") or signal.get("pressure_type") or signal.get("id") or "Account signal")],
+                "linked_service_themes": [
+                    str(hint.get("service") or hint.get("category"))
+                    for hint in _list(signal.get("service_fit_hints"))[:4]
+                    if isinstance(hint, dict) and (hint.get("service") or hint.get("category"))
+                ],
+                "evidence_basis": signal.get("id") or "Scanner account signal",
+                "confidence": min(55, _safe_int(signal.get("confidence"), 45)),
+                "allowed_use": "allowed_as_discovery_question",
+                "do_not_say": ["Do not claim a named stakeholder exists without source-bound evidence."],
+                "safety_notes": ["Use as role-level buying committee guidance; validate owner, remit, and timing before outreach."],
+            })
+            if len(stakeholders) >= limit:
+                return stakeholders
+    return stakeholders
+
+
+def _is_meaningful_conversation_direction(item: Any, known_signal_ids: set[str]) -> bool:
+    if not isinstance(item, dict):
+        return False
+    signal_ok = _has_signal_reference(item, known_signal_ids)
+    if not signal_ok:
+        return False
+    service_text = _clip(item.get("service"), 120)
+    content_score = sum(
+        1
+        for key in ("interpreted_pressure", "buyer_lens", "why_this_service", "safe_wording", "missing_evidence", "proof_point")
+        if _word_count(item.get(key)) >= 5
+    )
+    if _normalize_gate(item.get("gate"), "allowed_as_discovery_question") == "blocked" and content_score == 0:
+        return False
+    return bool(service_text and content_score >= 2)
+
+
+def _conversation_direction_from_signal(signal: dict) -> dict:
+    service_hints = [hint for hint in _list(signal.get("service_fit_hints")) if isinstance(hint, dict)]
+    hint = service_hints[0] if service_hints else {}
+    service_name = _first_nonempty(
+        hint.get("service"),
+        hint.get("category"),
+        "Discovery validation - offer to be selected after qualification",
+        limit=220,
+    )
+    safe_wording = _first_nonempty(
+        *_list(hint.get("safe_wording"))[:2],
+        signal.get("what_to_do"),
+        signal.get("what"),
+        "Explore whether this account signal connects to a current priority, owner, and timing window.",
+        limit=360,
+    )
+    proof_point = _first_nonempty(
+        *_list(hint.get("proof_points"))[:2],
+        signal.get("what_progress_shows"),
+        "Generated from Scanner WHY/WHAT activation logic; validate before customer-facing use.",
+        limit=320,
+    )
+    pressure = _first_nonempty(
+        signal.get("commercial_pressure"),
+        signal.get("business_consequence"),
+        signal.get("why"),
+        signal.get("account_movement"),
+        limit=520,
+    )
+    return {
+        "account_signal_id": signal.get("id"),
+        "evidence": _clip(signal.get("account_movement") or signal.get("theme"), 280),
+        "interpreted_pressure": pressure,
+        "buyer_lens": _clip(
+            signal.get("buyer_role_concern")
+            or "; ".join(str(role) for role in _list(signal.get("buyer_roles"))[:4]),
+            360,
+        ),
+        "service": service_name,
+        "why_this_service": _clip(
+            _first_nonempty(
+                hint.get("fit_rationale"),
+                hint.get("why_this_service"),
+                f"{service_name} may be relevant only if the account signal is confirmed in discovery.",
+                limit=420,
+            ),
+            420,
+        ),
+        "proof_point": proof_point,
+        "safe_wording": safe_wording,
+        "missing_evidence": "Customer confirmation, a named owner, timing, and business consequence are still needed before treating this as an active opportunity.",
+        "gate": "allowed_as_discovery_question",
+        "confidence": min(60, _safe_int(signal.get("confidence"), 45)),
+        "disqualifiers": _list(hint.get("disqualifiers"))[:4] or _list(signal.get("disqualifiers"))[:4],
+    }
+
+
+def _add_missing_conversation_directions(report: dict, signals_by_id: dict[str, dict], activation_signal_ids: set[str], known_signal_ids: set[str]) -> None:
+    items = [
+        item
+        for item in _list(report.get("pain_to_solution_map"))
+        if _is_meaningful_conversation_direction(item, known_signal_ids)
+    ]
+    present_ids = {
+        signal_id
+        for item in items
+        for signal_id in _item_signal_ids(item)
+        if signal_id in activation_signal_ids
+    }
+    for signal_id in sorted(activation_signal_ids):
+        if signal_id in present_ids:
+            continue
+        signal = signals_by_id.get(signal_id)
+        if not signal:
+            continue
+        items.append(_conversation_direction_from_signal(signal))
+        present_ids.add(signal_id)
+        if len(items) >= 4:
+            break
+    report["pain_to_solution_map"] = items[:4]
+
+
 def _enrich_short_opening_sections(report: dict, payload: dict) -> None:
     snapshot = _dict(report.get("account_snapshot"))
     thesis = _dict(report.get("buying_potential_thesis"))
@@ -2761,6 +2908,8 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         for item in _list(report.get("pressure_signals"))
         if isinstance(item, dict) and _clip(item.get("description") or item.get("business_consequence") or item.get("trigger"), 40)
     ]
+    report["pain_to_solution_map"] = [fix_item(item) for item in _list(report.get("pain_to_solution_map")) if isinstance(item, dict)]
+    _add_missing_conversation_directions(report, signals_by_id, activation_signal_ids, known_signal_ids)
     report["pain_to_solution_map"] = [fix_item(item) for item in _list(report.get("pain_to_solution_map")) if isinstance(item, dict)]
     report["recommended_sales_plays"] = [fix_item(item) for item in _list(report.get("recommended_sales_plays")) if isinstance(item, dict)]
     referenced_activation_ids = {
@@ -3038,6 +3187,10 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             for item in _fallback_stakeholder_map(payload, signals_by_id)
             if isinstance(item, dict)
         ]
+    if len(fixed_stakeholders) < 3:
+        for item in _role_level_stakeholder_map(signals_by_id, fixed_stakeholders, limit=3 - len(fixed_stakeholders)):
+            if isinstance(item, dict):
+                fixed_stakeholders.append(fix_item(item, "allowed_as_discovery_question"))
     report["stakeholder_map"] = fixed_stakeholders
     extra_people = []
     extra_seen: set[str] = set()
