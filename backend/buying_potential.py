@@ -5106,11 +5106,14 @@ def render_buying_potential_html(report: dict) -> str:
     .grid {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }} .grid-3 {{ grid-template-columns:repeat(3,minmax(0,1fr)); }}
     .card {{ background:rgba(7,17,31,.72); border:1px solid rgba(142,160,187,.18); border-radius:12px; padding:16px; }} .compact {{ padding:13px; }}
     .card-top {{ display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:8px; }}
+    .source-basis {{ display:flex; justify-content:space-between; align-items:center; gap:18px; margin:4px 0 18px; border:1px solid rgba(103,232,249,.22); border-radius:12px; padding:14px 16px; background:rgba(7,17,31,.55); }}
+    .scanner-link {{ display:inline-flex; align-items:center; justify-content:center; min-height:38px; white-space:nowrap; border:1px solid rgba(103,232,249,.45); color:var(--cyan); border-radius:999px; padding:8px 14px; font:800 11px ui-monospace,monospace; letter-spacing:.12em; text-transform:uppercase; text-decoration:none; }}
+    .scanner-link:hover {{ background:rgba(103,232,249,.1); }}
     small,.muted {{ color:var(--muted); }} table {{ width:100%; border-collapse:collapse; overflow:hidden; border-radius:10px; }} th,td {{ padding:11px; border-bottom:1px solid rgba(142,160,187,.16); text-align:left; vertical-align:top; }} th {{ color:var(--muted); font:700 11px ui-monospace,monospace; text-transform:uppercase; letter-spacing:.12em; }}
     ul {{ margin:8px 0 0 18px; padding:0; }} li {{ margin:5px 0; }} .warning {{ border-color:rgba(250,204,21,.4); background:rgba(250,204,21,.08); }} .danger {{ border-color:rgba(251,113,133,.4); background:rgba(251,113,133,.08); }}
     .role-line {{ color:var(--green); font:800 12px ui-monospace,monospace; text-transform:uppercase; letter-spacing:.12em; margin:-2px 0 12px; }} .theme-row {{ display:flex; flex-wrap:wrap; gap:4px; margin:8px 0; }}
     .simple-list-block {{ margin-top:18px; border-top:1px solid rgba(142,160,187,.18); padding-top:18px; }}
-    @media (max-width:820px) {{ main {{ padding:24px 14px 48px; }} .grid,.grid-3,.status-scale {{ grid-template-columns:1fr; }} .card-top,.status-head {{ flex-direction:column; }} }}
+    @media (max-width:820px) {{ main {{ padding:24px 14px 48px; }} .grid,.grid-3,.status-scale {{ grid-template-columns:1fr; }} .card-top,.status-head,.source-basis {{ flex-direction:column; align-items:flex-start; }} }}
   </style>
 </head>
 <body>
@@ -5169,11 +5172,12 @@ def render_buying_potential_html(report: dict) -> str:
 
   <section class="warning">
     <h2>Evidence, Confidence & Sales Guardrails</h2>
+    <div class="source-basis">
+      <p class="muted"><b>Evidence basis:</b> derived from Scanner Company Summary, Company Evidence DB, Source Ledger, Foresight Knowledge Base, Market Intelligence, and Buying Insight generation gates. Source-level audit stays in Scanner; this report presents the sales hypothesis and guardrails.</p>
+      <a class="scanner-link" href="https://the-scanner.up.railway.app/" target="_blank" rel="noopener noreferrer">Open Scanner</a>
+    </div>
     <div class="grid grid-3">
-      <div><h3>Verified Facts</h3><ul>{simple_items(evidence.get('verified_facts'), 12)}</ul></div>
-      <div><h3>Safe Hypotheses</h3><ul>{simple_items(evidence.get('safe_hypotheses'), 12)}</ul></div>
       <div><h3>Use Only As Question</h3><ul>{simple_items(evidence.get('use_only_as_question') or evidence.get('claims_as_questions_only'), 12)}</ul></div>
-      <div><h3>Analysis Context</h3><ul>{simple_items(evidence.get('analysis_context'), 12, "N/A - no separate analysis-context items in this run.")}</ul></div>
       <div><h3>Weak / Missing Evidence</h3><ul>{simple_items(evidence.get('weak_or_missing_evidence'), 12, "N/A - no weak or missing evidence items were separated in this run.")}</ul></div>
       <div><h3>Report Quality Notes</h3><ul>{simple_items(evidence.get('report_quality_notes'), 12, "N/A - no generation or repair notes for this run.")}</ul></div>
       <div><h3>Do Not Say</h3><ul>{simple_items(evidence.get('do_not_say') or evidence.get('do_not_use_claims'), 12, "N/A - no blocked customer-facing claims were generated.")}</ul></div>

@@ -162,6 +162,49 @@ def test_buying_potential_renderer_uses_new_section_order_and_nested_play_angles
     assert html.index("Recommended Growth Plays") < html.index("Evidence, Confidence & Sales Guardrails")
 
 
+def test_buying_potential_footer_points_to_scanner_instead_of_rendering_evidence_register(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+
+    html = bp.render_buying_potential_html(
+        {
+            "companyName": "Sisu Auto",
+            "generated_at": "2026-07-07T00:00:00",
+            "overall_confidence": 58,
+            "account_snapshot": {"text": "Snapshot", "gate": "allowed_as_hypothesis"},
+            "buying_potential_thesis": {"text": "Thesis", "gate": "allowed_as_hypothesis"},
+            "sales_spine": {"top_buying_hypotheses": ["SIG-01: hypothesis"]},
+            "pressure_signals": [],
+            "why_now": [],
+            "stakeholder_map": [],
+            "pain_to_solution_map": [],
+            "recommended_sales_plays": [],
+            "evidence_confidence": {
+                "verified_facts": ["Fact"],
+                "safe_hypotheses": ["Hypothesis"],
+                "analysis_context": ["Context"],
+                "use_only_as_question": ["Question?"],
+                "weak_or_missing_evidence": ["Missing evidence"],
+                "report_quality_notes": ["Repair note"],
+                "do_not_say": ["Blocked claim"],
+                "sensitive_claims": ["Sensitive claim"],
+            },
+            "source_counts": {},
+        }
+    )
+
+    assert "Open Scanner" in html
+    assert "https://the-scanner.up.railway.app/" in html
+    assert "Scanner Company Summary" in html
+    assert "<h3>Verified Facts</h3>" not in html
+    assert "<h3>Safe Hypotheses</h3>" not in html
+    assert "<h3>Analysis Context</h3>" not in html
+    assert "<h3>Use Only As Question</h3>" in html
+    assert "<h3>Weak / Missing Evidence</h3>" in html
+    assert "<h3>Report Quality Notes</h3>" in html
+    assert "<h3>Do Not Say</h3>" in html
+    assert "<h3>Sensitive Claims</h3>" in html
+
+
 def test_account_signal_map_translates_sisu_like_evidence_into_buyer_pressure(monkeypatch):
     bp = load_buying_potential(monkeypatch)
 
