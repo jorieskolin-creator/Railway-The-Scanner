@@ -8,6 +8,7 @@ account insight, and returns standalone JSON/HTML artifacts.
 
 from __future__ import annotations
 
+import ast
 import html
 import io
 import json
@@ -2503,6 +2504,180 @@ def _activation_signal_ids(payload: dict) -> set[str]:
     }
 
 
+def _word_count(value: Any) -> int:
+    return len(re.findall(r"\b\w+\b", str(value or "")))
+
+
+def _format_top_buying_hypothesis_item(item: Any) -> str:
+    if isinstance(item, str) and item.strip().startswith("{"):
+        try:
+            parsed = ast.literal_eval(item)
+            if isinstance(parsed, dict):
+                item = parsed
+        except Exception:
+            pass
+    if isinstance(item, dict):
+        title = _first_nonempty(
+            item.get("hypothesis"),
+            item.get("title"),
+            item.get("theme"),
+            item.get("buying_hypothesis"),
+            limit=140,
+        )
+        activation_pair = _first_nonempty(item.get("activation_pair"), item.get("signal_id"), item.get("id"), limit=40)
+        rationale = _first_nonempty(
+            item.get("why"),
+            item.get("combined_activation_hypothesis"),
+            item.get("company_context"),
+            item.get("market_context"),
+            item.get("what_to_do"),
+            limit=420,
+        )
+        if not title and not rationale:
+            return ""
+        label = title or "Buying hypothesis"
+        if activation_pair and activation_pair.lower() not in label.lower():
+            label = f"{label} ({activation_pair})"
+        return _clip(f"{label}: {rationale}" if rationale else label, 560)
+    text = _clean_generated_text(item)
+    if re.match(r"^\{['\"]?hypothesis['\"]?\s*:", text, re.I):
+        return ""
+    return _clip(text, 560)
+
+
+def _activation_hypothesis_items(payload: dict, limit: int = 3) -> list[str]:
+    items: list[str] = []
+    for signal in _list(payload.get("account_signal_map")):
+        if not isinstance(signal, dict):
+            continue
+        if signal.get("source") != "scanner_activation_pair" and not signal.get("activation_pair_index"):
+            continue
+        title = _first_nonempty(signal.get("theme"), signal.get("account_movement"), limit=140)
+        signal_id = str(signal.get("id") or "").strip()
+        why = _first_nonempty(signal.get("why"), signal.get("commercial_pressure"), signal.get("business_consequence"), limit=420)
+        if not title and not why:
+            continue
+        label = title or "Buying hypothesis"
+        if signal_id and signal_id.lower() not in label.lower():
+            label = f"{label} ({signal_id})"
+        items.append(_clip(f"{label}: {why}" if why else label, 560))
+        if len(items) >= limit:
+            break
+    return list(dict.fromkeys(item for item in items if item))[:limit]
+
+
+def _normalize_top_buying_hypotheses(sales_spine: dict, payload: dict) -> dict:
+    normalized = [
+        item
+        for item in (_format_top_buying_hypothesis_item(raw) for raw in _list(sales_spine.get("top_buying_hypotheses")))
+        if item
+    ]
+    if not normalized:
+        normalized = _activation_hypothesis_items(payload, limit=3)
+    sales_spine["top_buying_hypotheses"] = list(dict.fromkeys(normalized))[:3]
+    return sales_spine
+
+
+def _fallback_stakeholder_map(payload: dict, signals_by_id: dict[str, dict], limit: int = 4) -> list[dict]:
+    stakeholders: list[dict] = []
+    seen: set[str] = set()
+    for person in _list(payload.get("stakeholders")):
+        if not isinstance(person, dict):
+            continue
+        name = _clip(person.get("name"), 100)
+        role = _clip(person.get("role") or person.get("position") or person.get("title"), 120)
+        if not name and not role:
+            continue
+        key = f"{name}|{role}".lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        stakeholders.append({
+            "name": name or "Source-bound stakeholder",
+            "role": role or "Role to validate",
+            "likely_buying_committee_role": _clip(person.get("stakeholder_role_match_reason") or person.get("insight") or "Potential buying-committee relevance; validate remit before outreach.", 260),
+            "relevance_rationale": _clip(person.get("insight") or person.get("stakeholder_role_match_reason") or "Source-bound professional role context for sales preparation.", 420),
+            "linked_pressure_themes": [str(x) for x in _list(person.get("matched_demand_groups"))[:6] if x],
+            "linked_service_themes": [str(x) for x in _list(person.get("linked_service_ids"))[:5] if x],
+            "evidence_basis": person.get("evidence_basis") or person.get("source") or "Stored Scanner stakeholder data",
+            "confidence": _safe_int(person.get("confidence"), 45),
+            "allowed_use": person.get("allowed_use") or "allowed_as_discovery_question",
+            "do_not_say": _list(person.get("do_not_say"))[:4] or ["Do not imply buying intent from role/title alone."],
+            "safety_notes": _list(person.get("safety_notes"))[:4] or ["Validate current role and decision remit before use."],
+        })
+        if len(stakeholders) >= limit:
+            return stakeholders
+    for signal in list(signals_by_id.values()):
+        if not isinstance(signal, dict):
+            continue
+        for role in _list(signal.get("buyer_roles")) or ["Executive sponsor"]:
+            role = _clip(role, 120)
+            key = f"role|{role}".lower()
+            if not role or key in seen:
+                continue
+            seen.add(key)
+            stakeholders.append({
+                "name": "Role-level target",
+                "role": role,
+                "likely_buying_committee_role": _clip(signal.get("buyer_role_concern") or "Likely role to validate in discovery.", 260),
+                "relevance_rationale": _clip(signal.get("commercial_pressure") or signal.get("business_consequence") or signal.get("why"), 420),
+                "linked_pressure_themes": [str(signal.get("pressure_type") or signal.get("theme") or "Account signal")],
+                "linked_service_themes": [str(hint.get("service") or hint.get("category")) for hint in _list(signal.get("service_fit_hints"))[:4] if isinstance(hint, dict) and (hint.get("service") or hint.get("category"))],
+                "evidence_basis": signal.get("id") or "Scanner account signal",
+                "confidence": min(55, _safe_int(signal.get("confidence"), 45)),
+                "allowed_use": "allowed_as_discovery_question",
+                "do_not_say": ["Do not claim a named stakeholder exists without source-bound evidence."],
+                "safety_notes": ["Role-level buying committee guidance generated from account signals."],
+            })
+            if len(stakeholders) >= limit:
+                return stakeholders
+    return stakeholders
+
+
+def _enrich_short_opening_sections(report: dict, payload: dict) -> None:
+    snapshot = _dict(report.get("account_snapshot"))
+    thesis = _dict(report.get("buying_potential_thesis"))
+    sales_spine = _dict(report.get("sales_spine"))
+    scanner_outputs = _dict(payload.get("scanner_outputs"))
+    if _word_count(snapshot.get("text")) < 55:
+        facts = [
+            re.sub(r"^[A-Z]+-[A-Z0-9]+:\s*", "", fact).strip()
+            for fact in _verified_fact_items_from_payload(payload, limit=4)
+        ]
+        facts = [fact for fact in facts if fact and fact.lower() not in str(snapshot.get("text") or "").lower()]
+        if facts:
+            snapshot["text"] = _clip(
+                f"{_clip(snapshot.get('text'), 520)} Additional verified context: {' '.join(facts[:2])}",
+                1050,
+            )
+            snapshot.setdefault("gate", "allowed_as_fact")
+    if _word_count(thesis.get("text")) < 45:
+        support = _first_nonempty(
+            sales_spine.get("account_thesis"),
+            sales_spine.get("strategic_synthesis_basis"),
+            scanner_outputs.get("strategic_synthesis"),
+            limit=620,
+        )
+        if support:
+            thesis["text"] = _clip(f"{_clip(thesis.get('text'), 420)} Sales spine: {support}", 1050)
+            thesis["gate"] = _normalize_gate(thesis.get("gate"), "allowed_as_hypothesis")
+    if _word_count(thesis.get("rationale")) < 35:
+        risk_context = " ".join(_clip(item, 260) for item in _list(scanner_outputs.get("evidence_based_risks"))[:2] if _clip(item, 260))
+        rationale = _first_nonempty(
+            sales_spine.get("strategic_synthesis_basis"),
+            risk_context,
+            scanner_outputs.get("general_summary"),
+            limit=620,
+        )
+        if rationale:
+            thesis["rationale"] = _clip(
+                f"{_clip(thesis.get('rationale'), 360)} Evidence boundary: {rationale}",
+                950,
+            )
+    report["account_snapshot"] = snapshot
+    report["buying_potential_thesis"] = thesis
+
+
 def _post_process_report(report: dict, payload: dict, gate_review: dict | None = None) -> dict:
     verified_count = len(payload.get("verified_evidence") or [])
     financial_count = len(payload.get("financial_sources") or [])
@@ -2566,6 +2741,7 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             sales_spine["risk_themes"] = [_clip(item, 240) for item in _list(scanner_outputs.get("evidence_based_risks"))[:4]]
         if self_scan_context.get("is_self_scan"):
             sales_spine["self_scan_note"] = sales_spine.get("self_scan_note") or self_scan_context.get("framing")
+    sales_spine = _normalize_top_buying_hypotheses(sales_spine, payload)
     report["sales_spine"] = _strip_archetype_terms(sales_spine)
     for key in ("why_now",):
         report[key] = [
@@ -2856,6 +3032,12 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         if not fixed["safety_notes"]:
             fixed["safety_notes"] = ["Use as sales-prep context; validate current role and remit before outreach."]
         fixed_stakeholders.append(fixed)
+    if not fixed_stakeholders:
+        fixed_stakeholders = [
+            fix_item(item, "allowed_as_discovery_question")
+            for item in _fallback_stakeholder_map(payload, signals_by_id)
+            if isinstance(item, dict)
+        ]
     report["stakeholder_map"] = fixed_stakeholders
     extra_people = []
     extra_seen: set[str] = set()
@@ -2970,6 +3152,7 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
     report["pain_to_solution_map"] = _strip_archetype_terms(report.get("pain_to_solution_map"))
     report["recommended_sales_plays"] = _strip_archetype_terms(report.get("recommended_sales_plays"))
     report["evidence_confidence"] = _strip_archetype_terms(evidence_confidence)
+    _enrich_short_opening_sections(report, payload)
 
     report["overall_confidence"] = max(0, min(100, _safe_int(report.get("overall_confidence"), 45)))
     if low_evidence:
@@ -3668,8 +3851,14 @@ def render_buying_potential_html(report: dict) -> str:
             return "Evidence stance: constrained / question-led"
         return "Evidence stance: not scored"
 
-    def simple_items(items, limit=10, empty_label="N/A - no separate items for this run."):
-        rendered = "".join(f"<li>{_esc(_clip(x, 520))}</li>" for x in _list(items)[:limit] if _clip(x, 520))
+    def simple_items(items, limit=10, empty_label="N/A - no separate items for this run.", formatter=None):
+        values = []
+        for item in _list(items)[:limit]:
+            text = formatter(item) if formatter else (_format_top_buying_hypothesis_item(item) if isinstance(item, dict) else _clip(item, 520))
+            text = _clip(text, 520)
+            if text:
+                values.append(text)
+        rendered = "".join(f"<li>{_esc(x)}</li>" for x in values)
         return rendered or f"<li>{_esc(empty_label)}</li>"
 
     def status_scale_html():
@@ -4041,7 +4230,7 @@ def render_buying_potential_html(report: dict) -> str:
     <p><b>Account thesis:</b> {_esc(sales_spine.get('account_thesis'))}</p>
     <p><b>Strategic synthesis basis:</b> {_esc(sales_spine.get('strategic_synthesis_basis'))}</p>
     <div class="grid grid-3">
-      <div class="card compact"><h3>Top Buying Hypotheses</h3><ul>{simple_items(sales_spine.get('top_buying_hypotheses'), 5)}</ul></div>
+      <div class="card compact"><h3>Top Buying Hypotheses</h3><ul>{simple_items(sales_spine.get('top_buying_hypotheses'), 5, "N/A - no separate top buying hypotheses were generated.", _format_top_buying_hypothesis_item)}</ul></div>
       <div class="card compact"><h3>Risk Themes For Discovery</h3><ul>{simple_items(sales_spine.get('risk_themes'), 5)}</ul></div>
       <div class="card compact"><h3>Where Need May Emerge</h3><ul>{combined_need_items(5)}</ul></div>
     </div>
