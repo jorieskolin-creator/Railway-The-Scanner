@@ -2505,19 +2505,78 @@ def _looks_like_verified_fact(text: str) -> bool:
     return any(marker in lower for marker in fact_markers) and not any(marker in lower for marker in question_markers)
 
 
+def _looks_question_led(text: Any) -> bool:
+    clean = str(text or "").strip()
+    if not clean:
+        return False
+    lower = clean.lower()
+    return (
+        clean.endswith("?")
+        or lower.startswith(("how ", "what ", "where ", "which ", "whether ", "can ", "could ", "is ", "are ", "does ", "do "))
+        or "?" in clean
+        or "use as question" in lower
+        or "ask " in lower
+    )
+
+
+def _evidence_bucket_text(item: Any, *, limit: int = 520) -> str:
+    if isinstance(item, dict):
+        for key in (
+            "hypothesis",
+            "statement",
+            "text",
+            "claim",
+            "question",
+            "safe_wording",
+            "summary",
+            "description",
+            "reason",
+            "title",
+        ):
+            text = _clip(item.get(key), limit)
+            if text:
+                return text
+        return ""
+    text = str(item or "").strip()
+    if not text:
+        return ""
+    if text.startswith("{") and any(marker in text.lower() for marker in ("source", "url", "snippet", "quote", "evidence")):
+        try:
+            parsed = ast.literal_eval(text)
+            if isinstance(parsed, dict):
+                return _evidence_bucket_text(parsed, limit=limit)
+        except Exception:
+            return ""
+    return _clip(text, limit)
+
+
 def _clean_evidence_confidence_buckets(evidence_confidence: dict) -> dict:
     """Keep facts, hypotheses, questions, and blocked claims in separate buckets."""
     evidence_confidence = _dict(evidence_confidence).copy()
-    verified = [str(item).strip() for item in _list(evidence_confidence.get("verified_facts")) if str(item).strip()]
-    questions = [str(item).strip() for item in _list(evidence_confidence.get("use_only_as_question")) if str(item).strip()]
-    safe_hypotheses = [str(item).strip() for item in _list(evidence_confidence.get("safe_hypotheses")) if str(item).strip()]
-    analysis_context = [str(item).strip() for item in _list(evidence_confidence.get("analysis_context")) if str(item).strip()]
+    omitted_fragments: list[str] = []
+
+    def bucket_items(key: str) -> list[str]:
+        cleaned: list[str] = []
+        for item in _list(evidence_confidence.get(key)):
+            raw = str(item or "").strip()
+            text = _evidence_bucket_text(item)
+            if text:
+                cleaned.append(text)
+            elif raw:
+                omitted_fragments.append(f"Omitted malformed evidence-confidence item from {key}.")
+        return cleaned
+
+    verified = bucket_items("verified_facts")
+    questions = bucket_items("use_only_as_question")
+    safe_hypotheses = bucket_items("safe_hypotheses")
+    analysis_context = bucket_items("analysis_context")
     weak_or_missing: list[str] = []
     report_quality_notes = [
         _humanize_report_quality_note(item)
         for item in _list(evidence_confidence.get("report_quality_notes"))
         if _humanize_report_quality_note(item)
     ]
+    report_quality_notes.extend(omitted_fragments)
     for item in _list(evidence_confidence.get("weak_or_missing_evidence")):
         text = str(item or "").strip()
         if not text:
@@ -2540,6 +2599,17 @@ def _clean_evidence_confidence_buckets(evidence_confidence: dict) -> dict:
         + _list(evidence_confidence.get("do_not_use_claims"))
     )
     questions = list(dict.fromkeys(questions + question_from_blocked))
+    routed_questions: list[str] = []
+    for question in questions:
+        if _looks_unsafe_claim(question):
+            do_not_say.append(question)
+        elif _looks_like_verified_fact(question):
+            verified.append(question)
+        elif _looks_question_led(question):
+            routed_questions.append(question)
+        else:
+            safe_hypotheses.append(question)
+    questions = routed_questions
 
     evidence_confidence["verified_facts"] = [
         item for item in list(dict.fromkeys(_clean_fact_statement(item, limit=520) for item in verified)) if item
@@ -2632,6 +2702,53 @@ def _activation_hypothesis_items(payload: dict, limit: int = 3) -> list[str]:
     return list(dict.fromkeys(item for item in items if item))[:limit]
 
 
+def _finalize_top_buying_hypotheses(items: list[Any], payload: dict) -> list[str]:
+    formatted = [_format_top_buying_hypothesis_item(item) for item in _list(items)]
+    formatted = [item for item in formatted if item]
+    signals_by_id = _signal_by_id(payload)
+    active_ids = sorted(_activation_signal_ids(payload))
+    selected: list[str] = []
+    used_ids: set[str] = set()
+
+    for signal_id in active_ids:
+        match = next((item for item in formatted if signal_id in _text_signal_ids(item)), "")
+        if not match and signals_by_id.get(signal_id):
+            match = _top_hypothesis_from_signal(signals_by_id[signal_id])
+        if match:
+            selected.append(match)
+            used_ids.add(signal_id)
+
+    for item in formatted:
+        item_ids = set(_text_signal_ids(item))
+        if item_ids and item_ids <= used_ids:
+            continue
+        if not item_ids and any(_similar_hypothesis(item, selected_item) for selected_item in selected):
+            continue
+        selected.append(item)
+        used_ids.update(item_ids)
+        if len(selected) >= max(3, len(active_ids)):
+            break
+
+    return list(dict.fromkeys(selected))[:max(3, len(active_ids))]
+
+
+def _similar_hypothesis(left: Any, right: Any) -> bool:
+    left_words = {
+        word
+        for word in re.findall(r"[a-zA-ZåäöÅÄÖ0-9]{5,}", str(left or "").lower())
+        if word not in {"because", "scanner", "buying", "hypothesis", "evidence", "strength"}
+    }
+    right_words = {
+        word
+        for word in re.findall(r"[a-zA-ZåäöÅÄÖ0-9]{5,}", str(right or "").lower())
+        if word not in {"because", "scanner", "buying", "hypothesis", "evidence", "strength"}
+    }
+    if not left_words or not right_words:
+        return False
+    overlap = len(left_words & right_words)
+    return overlap >= 5 or overlap / max(1, min(len(left_words), len(right_words))) >= 0.6
+
+
 def _normalize_top_buying_hypotheses(sales_spine: dict, payload: dict) -> dict:
     normalized = [
         item
@@ -2640,7 +2757,7 @@ def _normalize_top_buying_hypotheses(sales_spine: dict, payload: dict) -> dict:
     ]
     if not normalized:
         normalized = _activation_hypothesis_items(payload, limit=3)
-    sales_spine["top_buying_hypotheses"] = list(dict.fromkeys(normalized))[:3]
+    sales_spine["top_buying_hypotheses"] = _finalize_top_buying_hypotheses(normalized, payload)
     return sales_spine
 
 
@@ -3296,7 +3413,7 @@ def _recover_required_spine_sections(report: dict, payload: dict, model_mode: st
             _record_recovery(report, "sales_spine.top_buying_hypotheses", signal_id, path)
         else:
             _mark_unavailable(report, "sales_spine.top_buying_hypotheses", signal_id, "No current, ledger, or previous-report basis could rebuild the hypothesis.")
-    sales_spine["top_buying_hypotheses"] = list(dict.fromkeys(top_items))[:max(3, len(active_ids))]
+    sales_spine["top_buying_hypotheses"] = _finalize_top_buying_hypotheses(top_items, payload)
     report["sales_spine"] = sales_spine
 
     for section, key, builder, min_words in (

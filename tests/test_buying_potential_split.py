@@ -249,6 +249,73 @@ def test_post_process_downgrades_generic_sales_play_without_signal_or_service_br
     assert "signal" in " ".join(play["do_not_say"]).lower()
 
 
+def test_top_buying_hypotheses_preserve_active_signal_coverage(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+
+    payload = {
+        "account_signal_map": [
+            {
+                "id": "SIG-01",
+                "source": "scanner_activation_pair",
+                "theme": "Operating-model verification gap",
+                "why": "Growth and profitability are visible, but operating-model evidence still needs validation.",
+                "what_to_do": "Validate the operating-model baseline.",
+            },
+            {
+                "id": "SIG-02",
+                "source": "scanner_activation_pair",
+                "theme": "Industrial AI readiness gap",
+                "why": "External industrial AI pressure may require clearer data and governance readiness.",
+                "what_to_do": "Validate AI readiness around practical operational use cases.",
+            },
+            {
+                "id": "SIG-03",
+                "source": "scanner_activation_pair",
+                "theme": "Lifecycle data opportunity",
+                "why": "Traceability pressure may make lifecycle data a commercial and compliance topic.",
+                "what_to_do": "Validate lifecycle-data readiness and ownership.",
+            },
+        ]
+    }
+    sales_spine = {
+        "top_buying_hypotheses": [
+            "Operating-model verification buying hypothesis (SIG-01): Validate how growth scales operationally.",
+            "Industrial AI readiness buying hypothesis (SIG-02): Validate where AI readiness matters commercially.",
+            "Operating-model verification gap despite financial strength (Operating model verification gap despite.)",
+        ]
+    }
+
+    processed = bp._normalize_top_buying_hypotheses(sales_spine, payload)
+
+    rendered = " ".join(processed["top_buying_hypotheses"])
+    assert "SIG-01" in rendered
+    assert "SIG-02" in rendered
+    assert "SIG-03" in rendered
+    assert len(processed["top_buying_hypotheses"]) == 3
+
+
+def test_evidence_confidence_reroutes_facts_and_unsafe_items_out_of_questions(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+
+    cleaned = bp._clean_evidence_confidence_buckets(
+        {
+            "verified_facts": [],
+            "safe_hypotheses": [],
+            "use_only_as_question": [
+                "Business ID 1749559-9 is listed for Sisu Auto.",
+                "Confirmed buying intent exists.",
+                "Could lifecycle traceability become a relevant discovery topic?",
+            ],
+            "weak_or_missing_evidence": [],
+            "do_not_use_claims": [],
+        }
+    )
+
+    assert any("Business ID" in item for item in cleaned["verified_facts"])
+    assert any("Confirmed buying intent" in item for item in cleaned["do_not_say"])
+    assert cleaned["use_only_as_question"] == ["Could lifecycle traceability become a relevant discovery topic?"]
+
+
 def test_deterministic_fallback_uses_account_signal_map_not_generic_service_triggers(monkeypatch):
     bp = load_buying_potential(monkeypatch)
 
