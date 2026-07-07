@@ -1046,6 +1046,46 @@ def _company_source_ledger_records(company_source_ledger: dict | None) -> tuple[
     return strongest[:30], blocked[:30]
 
 
+def _company_source_ledger_recovery_records(company_source_ledger: dict | None, limit: int = 24) -> list[dict]:
+    if not isinstance(company_source_ledger, dict):
+        return []
+    records: list[dict] = []
+    for idx, rec in enumerate(_list(company_source_ledger.get("records")), start=1):
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("blocked") is True or rec.get("wrong_entity") is True:
+            continue
+        usable = (
+            rec.get("buying_evidence_eligible") is True
+            or rec.get("allowed_as_fact") is True
+            or rec.get("allowed_as_hypothesis") is True
+            or rec.get("allowed_as_discovery_question") is True
+            or rec.get("usable_for_buying_insight") is True
+        )
+        if not usable:
+            continue
+        records.append({
+            "id": rec.get("id") or f"LEDGER-{idx:03d}",
+            "title": _clip(rec.get("title") or rec.get("url"), 180),
+            "url": rec.get("url"),
+            "quote": _clip(rec.get("source_quote") or rec.get("snippet") or rec.get("summary"), 520),
+            "source_type": rec.get("source_type") or rec.get("source_category"),
+            "gate": _source_item_gate(rec, "allowed_as_discovery_question"),
+            "buying_evidence_eligible": rec.get("buying_evidence_eligible") is True,
+            "allowed_as_fact": rec.get("allowed_as_fact") is True,
+            "allowed_as_hypothesis": rec.get("allowed_as_hypothesis") is True,
+            "allowed_as_discovery_question": rec.get("allowed_as_discovery_question") is True,
+            "internal_only": rec.get("internal_only") is True,
+            "source_freshness": rec.get("source_freshness"),
+            "last_checked": rec.get("last_checked"),
+            "verification_reason": rec.get("verification_reason"),
+            "origins": rec.get("origins", []),
+        })
+        if len(records) >= limit:
+            break
+    return records
+
+
 def _extract_evidence(
     company_data: dict,
     company_evidence: dict | None = None,
@@ -1896,6 +1936,7 @@ def _build_input_payload(
             "stats": company_source_ledger.get("stats", {}) if isinstance(company_source_ledger, dict) else {},
             "warnings": company_source_ledger.get("warnings", []) if isinstance(company_source_ledger, dict) else [],
         },
+        "source_ledger_recovery_records": _company_source_ledger_recovery_records(company_source_ledger),
         "stakeholders": key_people,
         "stakeholder_name_list": _stakeholder_name_list(company_data, company_evidence, company_source_ledger),
         "foresight_forces": forces,
@@ -2904,6 +2945,449 @@ def _add_missing_conversation_directions(
         report["recovery_notes"] = list(dict.fromkeys(existing_notes + recovery_notes))[:12]
 
 
+def _signal_label(signal: dict) -> str:
+    signal_id = str(signal.get("id") or "")
+    theme = _clip(signal.get("theme") or signal.get("pressure_type") or signal.get("account_movement"), 140)
+    return f"{theme} ({signal_id})" if theme and signal_id else theme or signal_id
+
+
+def _top_hypothesis_from_signal(signal: dict) -> str:
+    label = _signal_label(signal)
+    why = _clip(
+        signal.get("why")
+        or signal.get("commercial_pressure")
+        or signal.get("account_movement")
+        or signal.get("business_consequence"),
+        460,
+    )
+    what = _clip(signal.get("what_to_do") or signal.get("what"), 260)
+    if why and what and what.lower() not in why.lower():
+        return f"{label}: {why} Next validation: {what}"
+    return f"{label}: {why}" if why else label
+
+
+def _pressure_signal_from_signal(signal: dict, ledger_records: list[dict] | None = None) -> dict:
+    ledger_basis = [rec.get("id") for rec in _list(ledger_records)[:2] if isinstance(rec, dict) and rec.get("id")]
+    signal_id = str(signal.get("id") or "")
+    gate = _normalize_gate(signal.get("gate"), "allowed_as_hypothesis")
+    if ledger_records and gate == "allowed_as_fact":
+        gate = "allowed_as_hypothesis"
+    return {
+        "signal_type": _clip(signal.get("theme") or signal.get("pressure_type") or "Buying hypothesis pressure", 120),
+        "trigger": _clip(f"{signal_id} activation pair: {signal.get('theme') or signal.get('account_movement') or signal_id}", 260),
+        "description": _clip(
+            signal.get("commercial_pressure")
+            or signal.get("why")
+            or signal.get("account_movement")
+            or "Required activation signal recovered from Scanner structure.",
+            620,
+        ),
+        "business_consequence": _clip(
+            signal.get("business_consequence")
+            or signal.get("what_progress_shows")
+            or "Treat as a need hypothesis until discovery confirms owner, timing, and business consequence.",
+            520,
+        ),
+        "buyer_role_concern": _clip(
+            signal.get("buyer_role_concern")
+            or "; ".join(str(role) for role in _list(signal.get("buyer_roles"))[:4])
+            or "Buyer role to validate in discovery.",
+            360,
+        ),
+        "gate": gate,
+        "confidence": min(60, _safe_int(signal.get("confidence"), 45)),
+        "evidence_basis": [signal_id] + ledger_basis,
+    }
+
+
+def _why_now_from_signal(signal: dict, ledger_records: list[dict] | None = None) -> dict:
+    signal_id = str(signal.get("id") or "")
+    ledger_basis = [rec.get("id") for rec in _list(ledger_records)[:2] if isinstance(rec, dict) and rec.get("id")]
+    timing = _clip(signal.get("timing_relevance") or _infer_timing(_activation_pair_text(signal)), 300)
+    why = _clip(
+        signal.get("commercial_pressure")
+        or signal.get("why")
+        or signal.get("business_consequence")
+        or "The activation signal should remain visible as a discovery theme.",
+        560,
+    )
+    return {
+        "trigger": _clip(f"{signal_id}: {signal.get('theme') or signal.get('account_movement') or 'Activation signal'}", 260),
+        "why_it_matters_now": _clip(f"{timing} {why}", 720),
+        "buyer_relevance": _clip(
+            signal.get("buyer_role_concern")
+            or "; ".join(str(role) for role in _list(signal.get("buyer_roles"))[:4])
+            or "Validate the owner, timing, and business consequence in discovery.",
+            420,
+        ),
+        "safe_discovery_question": _clip(
+            _dict(signal.get("need_hypothesis")).get("discovery_question")
+            or "Where would this pressure become visible if it starts affecting priorities, operating capacity, or investment choices?",
+            320,
+        ),
+        "gate": _normalize_gate(signal.get("gate"), "allowed_as_hypothesis"),
+        "confidence": min(60, _safe_int(signal.get("confidence"), 45)),
+        "evidence_basis": [signal_id] + ledger_basis,
+    }
+
+
+def _ledger_match_records(payload: dict, signal: dict, limit: int = 4) -> list[dict]:
+    terms_text = " ".join(
+        _clip(signal.get(key), 500)
+        for key in ("theme", "why", "what", "what_to_do", "account_movement", "commercial_pressure", "business_consequence")
+        if signal.get(key)
+    ).lower()
+    terms = {
+        term
+        for term in re.findall(r"[a-zA-ZåäöÅÄÖ0-9]{4,}", terms_text)
+        if term not in {
+            "this", "that", "with", "from", "into", "while", "where", "what",
+            "when", "need", "could", "would", "should", "company", "signal",
+            "scanner", "current", "future", "evidence", "validate",
+        }
+    }
+    matches: list[tuple[int, dict]] = []
+    for rec in _list(payload.get("source_ledger_recovery_records")):
+        if not isinstance(rec, dict):
+            continue
+        haystack = " ".join(str(rec.get(key) or "") for key in ("title", "quote", "source_type", "verification_reason")).lower()
+        score = sum(1 for term in terms if term in haystack)
+        if score <= 0:
+            continue
+        gate = _normalize_gate(rec.get("gate"), "allowed_as_discovery_question")
+        if gate == "blocked":
+            continue
+        matches.append((score + (2 if rec.get("buying_evidence_eligible") else 0), rec))
+    matches.sort(key=lambda item: item[0], reverse=True)
+    return [rec for _, rec in matches[:limit]]
+
+
+def _focused_reanalysis_prompt(section: str, signal: dict, payload: dict, ledger_records: list[dict] | None = None) -> str:
+    compact_payload = {
+        "company": payload.get("company"),
+        "signal": signal,
+        "strategic_synthesis": _dict(payload.get("scanner_outputs")).get("strategic_synthesis"),
+        "activation_pairs": _dict(payload.get("scanner_outputs")).get("activation_pairs"),
+        "services": _list(payload.get("services"))[:12],
+        "ledger_records": _list(ledger_records)[:4],
+    }
+    schemas = {
+        "top_buying_hypotheses": '{"item": "One concise buying hypothesis string preserving the SIG id."}',
+        "pressure_signals": BUYING_SECTION_SCHEMAS["pressure_evidence"],
+        "why_now": BUYING_SECTION_SCHEMAS["why_now"],
+        "pain_to_solution_map": BUYING_SECTION_SCHEMAS["pain_to_solution"],
+    }
+    return f"""
+Reconstruct one missing Buying Insight section item from existing stored data only.
+
+Section: {section}
+Rules:
+- Return ONLY JSON.
+- Do not browse web, invent facts, invent services, or upgrade evidence gates.
+- Preserve the SIG id and use question/hypothesis wording if evidence is incomplete.
+- Source Ledger records are source memory; use their gates as boundaries.
+- If the item cannot be supported, return {{"unavailable": true, "reason": "..."}}.
+
+Required JSON shape:
+{schemas.get(section, '{"item": {}}')}
+
+Stored payload:
+{json.dumps(compact_payload, ensure_ascii=False)}
+""".strip()
+
+
+def _focused_reanalysis_item(
+    section: str,
+    signal: dict,
+    payload: dict,
+    *,
+    ledger_records: list[dict] | None = None,
+    model_mode: str | None = None,
+) -> Any:
+    try:
+        raw, _model = call_json_model_chain(
+            _focused_reanalysis_prompt(section, signal, payload, ledger_records),
+            buying_generation_chain(model_mode),
+            max_tokens=1400,
+            timeout=45,
+            validate_json=True,
+        )
+        parsed = parse_json_object(raw)
+        if not isinstance(parsed, dict) or parsed.get("unavailable"):
+            return None
+        if section == "top_buying_hypotheses":
+            return _format_top_buying_hypothesis_item(parsed.get("item"))
+        if section in {"pressure_signals", "why_now", "pain_to_solution_map"}:
+            values = _list(parsed.get(section))
+            return values[0] if values and isinstance(values[0], dict) else None
+    except Exception as exc:
+        print(f"   ⚠️ [Buying Potential] Focused recovery failed for {section}/{signal.get('id')}: {exc}")
+    return None
+
+
+def _text_signal_ids(value: Any) -> list[str]:
+    return sorted(set(re.findall(r"\bSIG-\d{2}\b", str(value or ""))))
+
+
+def _section_signal_ids(items: Any) -> set[str]:
+    ids: set[str] = set()
+    for item in _list(items):
+        if isinstance(item, dict):
+            ids.update(_item_signal_ids(item))
+            ids.update(_text_signal_ids(json.dumps(item, ensure_ascii=False)))
+        else:
+            ids.update(_text_signal_ids(item))
+    return ids
+
+
+def _previous_section_item(previous_report: dict, section: str, signal_id: str) -> Any:
+    previous = _previous_buying_report(previous_report)
+    if not previous:
+        return None
+    if section == "top_buying_hypotheses":
+        for item in _list(_dict(previous.get("sales_spine")).get("top_buying_hypotheses")):
+            if signal_id in _text_signal_ids(item):
+                return item
+        return None
+    key = {
+        "pressure_signals": "pressure_signals",
+        "why_now": "why_now",
+        "pain_to_solution_map": "pain_to_solution_map",
+        "recommended_sales_plays": "recommended_sales_plays",
+    }.get(section)
+    if not key:
+        return None
+    for item in _list(previous.get(key)):
+        if isinstance(item, dict) and signal_id in set(_item_signal_ids(item) + _text_signal_ids(json.dumps(item, ensure_ascii=False))):
+            return item
+    return None
+
+
+def _sales_play_from_signal(signal: dict, sales_spine: dict) -> dict:
+    signal_id = str(signal.get("id") or "")
+    play_type = _normalize_play_type(signal.get("sales_play_type") or signal.get("theme_type"))
+    need = signal.get("need_hypothesis") if isinstance(signal.get("need_hypothesis"), dict) else _need_hypothesis_from_signal(signal)
+    service_hints = [hint for hint in _list(signal.get("service_fit_hints")) if isinstance(hint, dict)]
+    service_name = _first_nonempty(
+        *(hint.get("service") or hint.get("category") for hint in service_hints[:2]),
+        "Discovery validation - offer to be selected after qualification",
+        limit=220,
+    )
+    readiness = "Validate now" if play_type == "current_status" else "Validate when trigger appears"
+    gate = _normalize_gate(signal.get("gate"), "allowed_as_discovery_question")
+    coverage = "Recovered from required Scanner activation spine; validate owner, timing, and business consequence before use."
+    return {
+        "play_name": f"{_clip(signal.get('theme') or 'Activation theme', 90)} discovery play",
+        "linked_signal_ids": [signal_id],
+        "activation_pair_index": _safe_int(signal.get("activation_pair_index"), 0),
+        "play_type": play_type,
+        "service_or_offer": service_name,
+        "need_hypothesis": need,
+        "response_directions": _response_directions_from_play({"service_or_offer": service_name}, need),
+        "readiness_band": readiness,
+        "evidence_coverage": coverage,
+        "confidence_boundary": _confidence_boundary(gate, coverage),
+        "priority_band": _priority_band(readiness),
+        "primary_buyer": (_list(signal.get("buyer_roles")) or ["Role to validate"])[0],
+        "secondary_buyers": _list(signal.get("buyer_roles"))[1:4],
+        "trigger": _clip(signal.get("account_movement") or signal.get("theme"), 260),
+        "account_thesis": sales_spine.get("account_thesis"),
+        "buying_hypothesis": _clip(signal.get("why") or signal.get("commercial_pressure"), 420),
+        "trigger_to_offer_bridge": _clip(signal.get("what_to_do") or signal.get("what") or signal.get("business_consequence"), 420),
+        "business_hypothesis": _clip(signal.get("business_consequence") or signal.get("commercial_pressure"), 420),
+        "why_relevant": _clip(signal.get("commercial_pressure") or signal.get("why"), 420),
+        "target_stakeholder": (_list(signal.get("buyer_roles")) or ["Role to validate"])[0],
+        "first_meeting_objective": "Validate whether the signal has a real owner, timing window, and business consequence before selecting an offer.",
+        "opening_angle": "Use this as a discovery theme, not as a proposal or asserted customer need.",
+        "executive_angle": "Explore whether this theme is becoming commercially material and who owns it.",
+        "technical_angle": "Validate the current process, data, integration, governance, or operating baseline before recommending technology.",
+        "safe_customer_wording": "This may be worth exploring as a forward-looking topic if it connects to a current priority or upcoming pressure.",
+        "discovery_questions": [need.get("discovery_question") or "Where would this pressure become visible if it starts to matter?"],
+        "discovery_questions_by_role": [{
+            "role": (_list(signal.get("buyer_roles")) or ["Role to validate"])[0],
+            "questions": [need.get("discovery_question") or "Where would this pressure become visible if it starts to matter?"],
+        }],
+        "proof_point": _clip(signal.get("what_progress_shows") or "Generated from Scanner WHY/WHAT activation logic; validate before customer-facing use.", 360),
+        "do_not_say": ["Do not present this as a confirmed project, budget, or buying intent."],
+        "qualification_upgrade_criteria": [
+            "Customer confirms the pressure is real",
+            "A named owner or decision forum exists",
+            _clip(signal.get("what_progress_shows") or "Timing or business consequence is confirmed", 260),
+        ],
+        "confidence": min(55, _safe_int(signal.get("confidence"), 45)),
+        "play_score": 55 if readiness == "Validate when trigger appears" else 65,
+        "hypothesis_strength": 55 if readiness == "Validate when trigger appears" else 65,
+        "score_label": "Internal compatibility score",
+        "play_classification": "qualified_discovery_play",
+        "overclaim_risk": "medium",
+        "gate": gate,
+        "evidence_basis": [signal_id],
+        "disqualifiers": _list(signal.get("disqualifiers"))[:4],
+    }
+
+
+def _record_recovery(report: dict, section: str, signal_id: str, path: str, detail: str = "") -> None:
+    recovered = report.setdefault("recovered_sections", [])
+    recovered.append({"section": section, "signal_id": signal_id, "path": path, "detail": _clip(detail, 220)})
+    paths = report.setdefault("recovery_path_by_section", {})
+    paths.setdefault(section, {})[signal_id] = path
+    if path.startswith("ledger"):
+        report.setdefault("ledger_recovered_sections", []).append({"section": section, "signal_id": signal_id})
+    if path == "previous_report":
+        report.setdefault("previous_report_recovered_sections", []).append({"section": section, "signal_id": signal_id})
+    note = f"{section}: {signal_id} recovered via {path.replace('_', ' ')}."
+    if detail:
+        note += f" {detail}"
+    notes = _list(report.get("recovery_notes"))
+    notes.append(note)
+    report["recovery_notes"] = list(dict.fromkeys(notes))[:20]
+
+
+def _mark_unavailable(report: dict, section: str, signal_id: str, reason: str) -> None:
+    item = {"section": section, "signal_id": signal_id, "reason": _clip(reason, 260)}
+    unavailable = _list(report.get("unavailable_required_items"))
+    unavailable.append(item)
+    report["unavailable_required_items"] = unavailable[:20]
+    _record_recovery(report, section, signal_id, "unavailable", reason)
+
+
+def _recover_required_spine_sections(report: dict, payload: dict, model_mode: str | None = None) -> None:
+    signals_by_id = _signal_by_id(payload)
+    active_ids = sorted(_activation_signal_ids(payload))
+    active_signals = [signals_by_id[signal_id] for signal_id in active_ids if signals_by_id.get(signal_id)]
+    if not active_signals:
+        return
+    previous_report = _previous_buying_report(payload.get("previous_buying_insight"))
+    coverage: dict[str, dict] = {}
+
+    def missing_for(section: str, items: Any) -> list[str]:
+        present = _section_signal_ids(items)
+        coverage[section] = {"required": active_ids, "present": sorted(present & set(active_ids))}
+        return [signal_id for signal_id in active_ids if signal_id not in present]
+
+    sales_spine = _dict(report.get("sales_spine"))
+    top_items = [_format_top_buying_hypothesis_item(item) for item in _list(sales_spine.get("top_buying_hypotheses"))]
+    top_items = [item for item in top_items if item]
+    for signal_id in missing_for("sales_spine.top_buying_hypotheses", top_items):
+        signal = signals_by_id.get(signal_id)
+        if not signal:
+            _mark_unavailable(report, "sales_spine.top_buying_hypotheses", signal_id, "Upstream activation signal missing.")
+            continue
+        item = _top_hypothesis_from_signal(signal)
+        path = "current_structure"
+        if _word_count(item) < 8:
+            focused = _focused_reanalysis_item("top_buying_hypotheses", signal, payload, model_mode=model_mode)
+            if focused:
+                item = focused
+                path = "focused_reanalysis"
+            else:
+                ledger_records = _ledger_match_records(payload, signal)
+                ledger_item = _focused_reanalysis_item("top_buying_hypotheses", signal, payload, ledger_records=ledger_records, model_mode=model_mode) if ledger_records else None
+                if ledger_item:
+                    item = ledger_item
+                    path = "ledger_reanalysis"
+                else:
+                    previous = _previous_section_item(previous_report, "top_buying_hypotheses", signal_id)
+                    if previous:
+                        item = _format_top_buying_hypothesis_item(previous)
+                        path = "previous_report"
+        if item:
+            top_items.append(item)
+            _record_recovery(report, "sales_spine.top_buying_hypotheses", signal_id, path)
+        else:
+            _mark_unavailable(report, "sales_spine.top_buying_hypotheses", signal_id, "No current, ledger, or previous-report basis could rebuild the hypothesis.")
+    sales_spine["top_buying_hypotheses"] = list(dict.fromkeys(top_items))[:max(3, len(active_ids))]
+    report["sales_spine"] = sales_spine
+
+    for section, key, builder, min_words in (
+        ("pressure_signals", "pressure_signals", _pressure_signal_from_signal, 10),
+        ("why_now", "why_now", _why_now_from_signal, 12),
+    ):
+        items = [item for item in _list(report.get(key)) if isinstance(item, dict)]
+        for signal_id in missing_for(section, items):
+            signal = signals_by_id.get(signal_id)
+            if not signal:
+                _mark_unavailable(report, section, signal_id, "Upstream activation signal missing.")
+                continue
+            ledger_records = _ledger_match_records(payload, signal)
+            item = builder(signal, [])
+            path = "current_structure"
+            item_text = json.dumps(item, ensure_ascii=False)
+            if _word_count(item_text) < min_words:
+                focused = _focused_reanalysis_item(section, signal, payload, model_mode=model_mode)
+                if focused:
+                    item = focused
+                    path = "focused_reanalysis"
+                else:
+                    ledger_item = _focused_reanalysis_item(section, signal, payload, ledger_records=ledger_records, model_mode=model_mode) if ledger_records else None
+                    if ledger_item:
+                        item = ledger_item
+                        path = "ledger_reanalysis"
+                    else:
+                        previous = _previous_section_item(previous_report, section, signal_id)
+                        if previous:
+                            item = previous
+                            path = "previous_report"
+            elif ledger_records and _word_count(signal.get("why")) < 8:
+                item = builder(signal, ledger_records)
+                path = "ledger_context"
+            if item:
+                items.append(item)
+                _record_recovery(report, section, signal_id, path)
+            else:
+                _mark_unavailable(report, section, signal_id, "No current, ledger, or previous-report basis could rebuild the item.")
+        report[key] = items[:max(6, len(items))]
+
+    for section, key in (("pain_to_solution_map", "pain_to_solution_map"), ("recommended_sales_plays", "recommended_sales_plays")):
+        items = [item for item in _list(report.get(key)) if isinstance(item, dict)]
+        for signal_id in missing_for(section, items):
+            signal = signals_by_id.get(signal_id)
+            if not signal:
+                _mark_unavailable(report, section, signal_id, "Upstream activation signal missing.")
+                continue
+            if section == "pain_to_solution_map":
+                ledger_records = _ledger_match_records(payload, signal)
+                item = _conversation_direction_from_signal(signal)
+                path = "current_structure"
+                if _conversation_missing_fields(item):
+                    focused = _focused_reanalysis_item(section, signal, payload, model_mode=model_mode)
+                    if focused:
+                        item = focused
+                        path = "focused_reanalysis"
+                    else:
+                        ledger_item = _focused_reanalysis_item(section, signal, payload, ledger_records=ledger_records, model_mode=model_mode) if ledger_records else None
+                        if ledger_item:
+                            item = ledger_item
+                            path = "ledger_reanalysis"
+                        else:
+                            previous = _previous_section_item(previous_report, section, signal_id)
+                            if previous:
+                                item = previous
+                                path = "previous_report"
+            else:
+                item = _sales_play_from_signal(signal, sales_spine)
+                path = "current_structure"
+            if item:
+                items.append(item)
+                _record_recovery(report, section, signal_id, path)
+            else:
+                _mark_unavailable(report, section, signal_id, "No current, ledger, or previous-report basis could rebuild the item.")
+        report[key] = items[:max(6, len(items))]
+
+    role_items = [item for item in _list(report.get("stakeholder_map")) if isinstance(item, dict)]
+    role_ids = _section_signal_ids(role_items)
+    if not (role_ids & set(active_ids)):
+        additions = _role_level_stakeholder_map(signals_by_id, role_items, limit=2)
+        if additions:
+            report["stakeholder_map"] = role_items + additions
+            _record_recovery(report, "stakeholder_map", "ROLE", "current_structure", "Role-level buyer lenses added from active SIGs.")
+    coverage["stakeholder_map"] = {
+        "required": active_ids,
+        "present": sorted(_section_signal_ids(report.get("stakeholder_map")) & set(active_ids)),
+    }
+    report["section_coverage"] = coverage
+
+
 def _enrich_short_opening_sections(report: dict, payload: dict) -> None:
     snapshot = _dict(report.get("account_snapshot"))
     thesis = _dict(report.get("buying_potential_thesis"))
@@ -2948,7 +3432,7 @@ def _enrich_short_opening_sections(report: dict, payload: dict) -> None:
     report["buying_potential_thesis"] = thesis
 
 
-def _post_process_report(report: dict, payload: dict, gate_review: dict | None = None) -> dict:
+def _post_process_report(report: dict, payload: dict, gate_review: dict | None = None, model_mode: str | None = None) -> dict:
     verified_count = len(payload.get("verified_evidence") or [])
     financial_count = len(payload.get("financial_sources") or [])
     low_evidence = verified_count < 2 and financial_count < 1
@@ -3110,6 +3594,7 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             "disqualifiers": _list(activation_signal.get("disqualifiers"))[:4],
         }
         report["recommended_sales_plays"].append(generated_play)
+    _recover_required_spine_sections(report, payload, model_mode=model_mode)
     evidence_confidence = _dict(report.get("evidence_confidence"))
     evidence_confidence["verified_facts"] = _verified_fact_items_from_payload(payload)
     quality_notes = evidence_confidence.setdefault("report_quality_notes", [])
@@ -4113,7 +4598,7 @@ def generate_buying_potential_report(
 
     if previous_report:
         payload["previous_buying_insight"] = previous_report
-    report = _post_process_report(report, payload, gate_review)
+    report = _post_process_report(report, payload, gate_review, model_mode=model_mode)
     report["account_signal_map"] = _list(payload.get("account_signal_map"))[:12]
     report["buyer_role_lens_version"] = "v1"
     report["companyName"] = company_data.get("companyName")
