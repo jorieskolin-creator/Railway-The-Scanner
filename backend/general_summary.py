@@ -29,6 +29,7 @@ from contradiction_detector import detect_contradictions
 from prompts import PROMPT_VERSION, build_shared_guardrails
 from entity_identity import apply_entity_scope, get_company_identity
 from model_policy import CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL, GPT_VERIFIER_MODEL
+from llm_clients import extract_anthropic_text
 
 
 def _general_summary_guardrails() -> str:
@@ -629,7 +630,7 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
                 max_tokens=4000,
                 messages=[{"role": "user", "content": prompt}],
             )
-            text = _strip_links((claude_resp.content[0].text or "").strip())
+            text = _strip_links(extract_anthropic_text(claude_resp))
             wc = _word_count(text)
             elapsed = int((time.time() - t0) * 1000)
             print(f"   [General Summary] {SONNET_MODEL} backup: {wc} words ({elapsed}ms)")
@@ -763,7 +764,7 @@ def fact_check_general_summary(
                     max_tokens=2200,
                     messages=[{"role": "user", "content": check_prompt}],
                 )
-                raw = (claude_resp.content[0].text or "").strip()
+                raw = extract_anthropic_text(claude_resp)
             else:
                 raw = _call_openai_summary(check_prompt, model=model_id, timeout=60)
 

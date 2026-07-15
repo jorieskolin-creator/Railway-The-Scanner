@@ -5976,14 +5976,14 @@ Evidence-based risks:
 
 ### STRATEGIC SYNTHESIS
 Write 300-500 words. This is the deepest company-specific reasoning layer, not a sales pitch.
-It must include:
-- Current adaptation thesis: the company's present position in one clear opening sentence.
-- 2-3 strategic tensions grounded in the locked diagnosis, risks, financial context, or evidence gaps.
-- At least 2 external foresight pressure links, each connected to a current company readiness or proof condition.
-- At least 1 financial-capacity implication.
-- At least 2 time horizons (for example: "next 6-12 months" and "12-36 months").
-- 1 uncertainty or invalidation condition that would change the thesis.
-Do not use section headings inside strategic_synthesis. Write coherent executive prose.
+Write exactly 4-5 short paragraphs separated by \\n\\n inside the strategic_synthesis JSON string. This paragraphing is required for readability.
+Use this structure:
+- Paragraph 1: current adaptation thesis — the company's present position in one clear opening paragraph.
+- Paragraph 2: 2-3 strategic tensions grounded in the locked diagnosis, risks, financial context, or evidence gaps.
+- Paragraph 3: at least 2 external foresight pressure links, each connected to a current company readiness or proof condition.
+- Paragraph 4: at least 1 financial-capacity implication plus at least 2 time horizons (for example: "next 6-12 months" and "12-36 months").
+- Optional paragraph 5: 1 uncertainty or invalidation condition that would change the thesis.
+Do not use section headings inside strategic_synthesis. Write coherent executive prose with paragraph breaks.
 
 ### PITCH
 Write a direct cold-outreach message to a C-level executive at {companyName}.
@@ -6014,6 +6014,8 @@ Respond with valid JSON only:
 {{"strategic_synthesis": "...", "commercial_pitch": "...", "activation_pairs": [{{"theme_type": "current_status", "sales_use": "current_status", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "..."}}, {{"theme_type": "foresight_driven", "sales_use": "foresight_driven", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "..."}}], "why_proposals": ["WHY texts only"], "what_proposals": ["WHAT_TO_DO texts only"], "what_progress_proposals": ["WHAT_PROGRESS_SHOWS texts only"]}}"""
 
                              activation_text = ""
+                             activation_provider = ""
+                             activation_fallback_reason = ""
                              activation_timeout = min(95, max(50, _activation_left - 25))
                              try:
                                  print(f"   🔄 [Activation] Generating Strategic Synthesis/WHY/WHAT/Pitch from locked diagnosis via {GPT_PRO_MODEL} (timeout: {activation_timeout}s)...")
@@ -6034,16 +6036,25 @@ Respond with valid JSON only:
                                  except concurrent.futures.TimeoutError:
                                      act_pool.shutdown(wait=False)
                                      print(f"   ⏰ [Activation] {GPT_PRO_MODEL} timed out after {activation_timeout}s")
+                                     activation_fallback_reason = f"{GPT_PRO_MODEL} timed out"
                                      raise Exception(f"GPT activation timeout after {activation_timeout}s")
                                  act_pool.shutdown(wait=False)
-                                 print(f"   ✅ [Activation] {GPT_PRO_MODEL} complete ({int((time.time() - act_start) * 1000)}ms)")
+                                 if str(activation_text or "").strip():
+                                     activation_provider = GPT_PRO_MODEL
+                                     print(f"   ✅ [Activation] {GPT_PRO_MODEL} complete ({int((time.time() - act_start) * 1000)}ms)")
+                                 else:
+                                     activation_fallback_reason = f"{GPT_PRO_MODEL} returned empty or non-text response"
+                                     print(f"   ⚠️ [Activation] {activation_fallback_reason} ({int((time.time() - act_start) * 1000)}ms)")
                              except Exception as act_gpt_err:
+                                 if not activation_fallback_reason:
+                                     activation_fallback_reason = f"{GPT_PRO_MODEL} failed: {act_gpt_err}"
                                  print(f"   ❌ [Activation] {GPT_PRO_MODEL} failed: {act_gpt_err}")
 
                              if not activation_text and _synthesis_budget_left() > 50:
                                  sonnet_activation_timeout = min(75, max(45, _synthesis_budget_left() - 20))
                                  try:
-                                     print(f"   🔄 [Activation] Falling back to {CLAUDE_SONNET_MODEL} (timeout: {sonnet_activation_timeout}s)...")
+                                     reason_text = f" after {activation_fallback_reason}" if activation_fallback_reason else ""
+                                     print(f"   🔄 [Activation] Falling back to {CLAUDE_SONNET_MODEL}{reason_text} (timeout: {sonnet_activation_timeout}s)...")
                                      act_start = time.time()
 
                                      def _activation_sonnet():
@@ -6067,7 +6078,10 @@ Respond with valid JSON only:
                                          print(f"   ⏰ [Activation] {CLAUDE_SONNET_MODEL} timed out after {sonnet_activation_timeout}s")
                                      act_pool.shutdown(wait=False)
                                      if activation_text:
+                                         activation_provider = CLAUDE_SONNET_MODEL
                                          print(f"   ✅ [Activation] {CLAUDE_SONNET_MODEL} complete ({int((time.time() - act_start) * 1000)}ms)")
+                                     else:
+                                         print(f"   ⚠️ [Activation] {CLAUDE_SONNET_MODEL} returned no usable text")
                                  except Exception as act_sonnet_err:
                                      print(f"   ❌ [Activation] {CLAUDE_SONNET_MODEL} failed: {act_sonnet_err}")
 
@@ -6124,7 +6138,7 @@ TEXT TO REPAIR:
                                  if pitch or why_proposals or what_proposals or strategic_synthesis:
                                      print(
                                          f"   ✅ [Activation] Grounded activation complete "
-                                         f"(why={len(why_proposals)}, what={len(what_proposals)}, pitch={'yes' if pitch and pitch != 'Pitch Unavailable' else 'no'}, synthesis={'yes' if strategic_synthesis else 'no'})"
+                                         f"(provider={activation_provider or 'unknown'}, why={len(why_proposals)}, what={len(what_proposals)}, pitch={'yes' if pitch and pitch != 'Pitch Unavailable' else 'no'}, synthesis={'yes' if strategic_synthesis else 'no'})"
                                      )
                          elif summary:
                              print(f"   ⏭ [Activation] Budget < 60s before final reserve ({_activation_left}s) — skipping WHY/WHAT/Pitch")

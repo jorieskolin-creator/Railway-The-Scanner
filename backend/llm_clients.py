@@ -56,7 +56,14 @@ def extract_openai_text(response: Any) -> str:
 def extract_anthropic_text(response: Any) -> str:
     parts: list[str] = []
     for block in getattr(response, "content", []) or []:
-        text = getattr(block, "text", None)
+        if isinstance(block, dict):
+            if block.get("type") not in {None, "text"}:
+                continue
+            text = block.get("text")
+        elif getattr(block, "type", None) not in {None, "text"}:
+            continue
+        else:
+            text = getattr(block, "text", None)
         if text:
             parts.append(str(text))
     return "\n".join(parts).strip()

@@ -564,7 +564,7 @@ const isForesightContext = (link) => {
                 var trimmed = block.trim();
                 if (trimmed.length < 900) return [trimmed];
                 var chunks = trimmed
-                    .split(/\s+(?=(?:The (?:first|second|third|fourth) tension is|In the next \d|Over \d|AI creates|External agentic|External signals|At the same time|Financially,|The thesis would change|This thesis would change|That pattern suggests)\b)/g)
+                    .split(/\s+(?=(?:This creates the first strategic tension|The (?:first|second|third|fourth) tension is|A second tension|The second tension|A third tension|The third tension|Layered onto this|Separately,|Given the (?:profitability|financial)|In the next \d|Over \d|Over a \d|AI creates|External agentic|External signals|At the same time|Financially,|The thesis would be invalidated|The thesis would change|This thesis would change|That pattern suggests)\b)/g)
                     .map(function(part) { return part.trim(); })
                     .filter(Boolean);
                 return chunks.length > 1 ? chunks : [trimmed];
@@ -1134,7 +1134,7 @@ const isForesightContext = (link) => {
             const trimmed = block.trim();
             if (trimmed.length < 900) return [trimmed];
             const chunks = trimmed
-                .split(/\s+(?=(?:The (?:first|second|third|fourth) tension is|In the next \d|Over \d|AI creates|At the same time|Financially,|The thesis would change|This thesis would change|That pattern suggests)\b)/g)
+                .split(/\s+(?=(?:This creates the first strategic tension|The (?:first|second|third|fourth) tension is|A second tension|The second tension|A third tension|The third tension|Layered onto this|Separately,|Given the (?:profitability|financial)|In the next \d|Over \d|Over a \d|AI creates|External agentic|External signals|At the same time|Financially,|The thesis would be invalidated|The thesis would change|This thesis would change|That pattern suggests)\b)/g)
                 .map(function(part) { return part.trim(); })
                 .filter(Boolean);
             return chunks.length > 1 ? chunks : [trimmed];
