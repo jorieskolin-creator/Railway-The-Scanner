@@ -16,7 +16,7 @@ import time
 
 import anthropic
 from llm_clients import call_openai_text
-from model_policy import CLAUDE_OPUS_MODEL, CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL
+from model_policy import CLAUDE_OPUS_MODEL, CLAUDE_SONNET_MODEL, DETAILED_COMPLETION_MODEL, GPT_REASONING_MODEL
 from source_quality import (
     assess_source_scope, is_generation_eligible_source,
     is_analysis_premise_source, source_analysis_support_mode,
@@ -424,7 +424,7 @@ def complete_detailed_report_draft(
     t0 = time.time()
     text = call_openai_text(
         prompt,
-        model=GPT_REASONING_MODEL,
+        model=DETAILED_COMPLETION_MODEL,
         max_output_tokens=token_budget,
         timeout=timeout,
     )
@@ -433,9 +433,9 @@ def complete_detailed_report_draft(
     elapsed = int((time.time() - t0) * 1000)
     print(
         "   📝 [Detailed Report] GPT completion/repair: "
-        f"{quality['word_count']} words, complete={quality['complete']} ({elapsed}ms)"
+        f"{quality['word_count']} words, complete={quality['complete']}, model={DETAILED_COMPLETION_MODEL} ({elapsed}ms)"
     )
-    return (text if quality["complete"] else ""), f"{GPT_REASONING_MODEL}-completion", quality
+    return (text if quality["complete"] else ""), f"{DETAILED_COMPLETION_MODEL}-completion", quality
 
 
 def generate_detailed_report(
@@ -491,25 +491,25 @@ def generate_detailed_report(
             print(f"   ⏭ [Detailed Report] GPT completion skipped ({reason}); insufficient report budget")
             return "", ""
         try:
-            print(f"   📝 [Detailed Report] Attempting {GPT_REASONING_MODEL} completion ({reason})...")
+            print(f"   📝 [Detailed Report] Attempting {DETAILED_COMPLETION_MODEL} completion ({reason})...")
             t0 = time.time()
             completion_prompt = _build_completion_prompt(payload, company_name, draft, compact=compact)
             repaired = call_openai_text(
                 completion_prompt,
-                model=GPT_REASONING_MODEL,
+                model=DETAILED_COMPLETION_MODEL,
                 max_output_tokens=token_budget,
                 timeout=remaining_timeout(reserve=5, cap=110, floor=30),
             )
             repaired = _strip_links((repaired or "").strip())
             wc = _word_count(repaired)
             elapsed = int((time.time() - t0) * 1000)
-            print(f"   📝 [Detailed Report] {GPT_REASONING_MODEL} completion: {wc} words ({elapsed}ms)")
+            print(f"   📝 [Detailed Report] {DETAILED_COMPLETION_MODEL} completion: {wc} words ({elapsed}ms)")
             if repaired and quality_ok(repaired):
-                return repaired, f"{GPT_REASONING_MODEL}-completion"
+                return repaired, f"{DETAILED_COMPLETION_MODEL}-completion"
             return "", ""
         except Exception as exc:
             elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
-            print(f"   ❌ [Detailed Report] {GPT_REASONING_MODEL} completion failed ({elapsed}ms): {exc}")
+            print(f"   ❌ [Detailed Report] {DETAILED_COMPLETION_MODEL} completion failed ({elapsed}ms): {exc}")
             return "", ""
 
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()

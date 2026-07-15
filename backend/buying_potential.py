@@ -1945,8 +1945,114 @@ def _build_input_payload(
         "self_scan_context": self_scan_context,
     }
     payload["account_signal_map"] = _build_account_signal_map(payload, services)
+    payload["required_sales_spine"] = _required_sales_spine(payload)
     payload["buyer_role_lens"] = BUYER_ROLE_LENSES
     return payload
+
+
+def _required_sales_spine(payload: dict) -> list[dict]:
+    required = []
+    for signal in _list(payload.get("account_signal_map")):
+        if not isinstance(signal, dict) or signal.get("source") != "scanner_activation_pair":
+            continue
+        signal_id = str(signal.get("id") or "").strip()
+        if not signal_id:
+            continue
+        required.append({
+            "id": signal_id,
+            "activation_pair_index": signal.get("activation_pair_index"),
+            "play_type": _normalize_play_type(signal.get("sales_play_type") or signal.get("theme_type")),
+            "theme": _clip(signal.get("theme") or signal.get("account_movement"), 180),
+            "gate": _normalize_gate(signal.get("gate"), "allowed_as_hypothesis"),
+            "why": _clip(signal.get("why") or signal.get("commercial_pressure"), 520),
+            "what_to_do": _clip(signal.get("what_to_do") or signal.get("what"), 520),
+            "what_progress_shows": _clip(signal.get("what_progress_shows") or signal.get("business_consequence"), 420),
+            "buyer_roles": _list(signal.get("buyer_roles"))[:5],
+            "need_hypothesis": signal.get("need_hypothesis") if isinstance(signal.get("need_hypothesis"), dict) else _need_hypothesis_from_signal(signal),
+            "service_fit_hints": _list(signal.get("service_fit_hints"))[:4],
+        })
+        if len(required) >= 3:
+            break
+    return required
+
+
+def _compact_signal(signal: dict) -> dict:
+    return {
+        "id": signal.get("id"),
+        "source": signal.get("source"),
+        "activation_pair_index": signal.get("activation_pair_index"),
+        "theme": _clip(signal.get("theme") or signal.get("account_movement"), 180),
+        "gate": _normalize_gate(signal.get("gate"), "allowed_as_hypothesis"),
+        "why": _clip(signal.get("why") or signal.get("commercial_pressure"), 420),
+        "what_to_do": _clip(signal.get("what_to_do") or signal.get("what"), 420),
+        "what_progress_shows": _clip(signal.get("what_progress_shows") or signal.get("business_consequence"), 360),
+        "buyer_roles": _list(signal.get("buyer_roles"))[:4],
+        "service_fit_hints": _list(signal.get("service_fit_hints"))[:3],
+        "need_hypothesis": signal.get("need_hypothesis") if isinstance(signal.get("need_hypothesis"), dict) else {},
+    }
+
+
+def _section_payload(section: str, payload: dict) -> dict:
+    scanner_outputs = _dict(payload.get("scanner_outputs"))
+    account_signals = [
+        _compact_signal(signal)
+        for signal in _list(payload.get("account_signal_map"))
+        if isinstance(signal, dict)
+    ][:8]
+    compact = {
+        "company": payload.get("company"),
+        "required_sales_spine": _list(payload.get("required_sales_spine"))[:3],
+        "account_signal_map": account_signals,
+        "scanner_outputs": {
+            "general_summary": _clip(scanner_outputs.get("general_summary"), 900),
+            "strategic_synthesis": _clip(scanner_outputs.get("strategic_synthesis"), 1500),
+            "evidence_based_risks": _list(scanner_outputs.get("evidence_based_risks"))[:5],
+            "activation_pairs": _list(scanner_outputs.get("activation_pairs"))[:3],
+            "why": _list(scanner_outputs.get("why"))[:3],
+            "what": _list(scanner_outputs.get("what"))[:3],
+            "what_progress": _list(scanner_outputs.get("what_progress"))[:3],
+        },
+        "self_scan_context": payload.get("self_scan_context"),
+        "buyer_role_lens": payload.get("buyer_role_lens"),
+    }
+    if section in {"snapshot_thesis", "pressure_evidence", "why_now"}:
+        compact["verified_evidence"] = _list(payload.get("verified_evidence"))[:8]
+        compact["financial_sources"] = _list(payload.get("financial_sources"))[:4]
+        compact["source_ledger_recovery_records"] = _list(payload.get("source_ledger_recovery_records"))[:6]
+    if section in {"pain_to_solution", "sales_plays"}:
+        compact["services"] = _list(payload.get("services"))[:14]
+        compact["modernization_tactics"] = _list(payload.get("modernization_tactics"))[:18]
+        compact["source_ledger_recovery_records"] = _list(payload.get("source_ledger_recovery_records"))[:8]
+    if section == "stakeholders":
+        compact["stakeholders"] = _list(payload.get("stakeholders"))[:12]
+        compact["stakeholder_name_list"] = _list(payload.get("stakeholder_name_list"))[:12]
+    return compact
+
+
+def _is_likely_json_truncated(raw: str) -> bool:
+    text = (raw or "").strip()
+    if not text:
+        return True
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    return not re.search(r"[\}\]]\s*$", text)
+
+
+def _pressure_signal_has_renderable_basis(item: dict, known_signal_ids: set[str]) -> bool:
+    if not isinstance(item, dict):
+        return False
+    basis_values = []
+    basis = item.get("evidence_basis")
+    if isinstance(basis, list):
+        basis_values.extend(str(value).strip() for value in basis if str(value).strip())
+    elif basis:
+        basis_values.append(str(basis).strip())
+    text_ids = _text_signal_ids(json.dumps(item, ensure_ascii=False))
+    if any(value in known_signal_ids for value in basis_values + text_ids):
+        return True
+    if any(value.startswith(EVIDENCE_BASIS_PREFIXES + ("FOR-", "ABS-", "SCANNER", "ACT-")) for value in basis_values):
+        return True
+    return False
 
 
 def _generation_prompt(payload: dict) -> str:
@@ -2070,10 +2176,11 @@ BUYING_SECTION_INSTRUCTIONS = {
         "Do not create a separate conversation-angles section or a delivery plan."
     ),
     "pressure_evidence": (
-        "Summarize Commercial Pressure Signals and evidence confidence. Use account_signal_map first and keep "
-        "verified facts, safe hypotheses, question-only claims, and do-not-say items in separate buckets. "
-        "Do not create empty pressure descriptions. Be precise about what is strong, weak, question-only, "
-        "sensitive, or blocked."
+        "Create Commercial Pressure Signals from required_sales_spine first. Produce one complete pressure signal "
+        "per required SIG and do not add extra signals unless there is a non-empty SIG/source evidence basis. "
+        "Keep evidence_confidence buckets short and conservative; deterministic post-processing will finalize "
+        "verified facts, weak/missing evidence, question-only claims, and do-not-say guardrails. "
+        "Do not create empty pressure descriptions or blank evidence_basis values."
     ),
     "stakeholders": (
         "Create a rich Buying Committee & Influence Map. Use named stakeholders only when source-bound and "
@@ -2095,6 +2202,7 @@ BUYING_SECTION_KEYS = {
 
 
 def _section_prompt(section: str, payload: dict) -> str:
+    compact_payload = _section_payload(section, payload)
     return f"""
 You are creating one section of an Admin-only Evidence-Gated Buying Potential & Insight report.
 
@@ -2122,12 +2230,14 @@ Evidence contract:
 - Every recommended play must separate company_context, market_context, combined_activation_hypothesis, falsifier, and response_directions. Response directions are not delivery scope, staffing, pricing, schedule, or implementation design.
 - If a bridge from account signal to service is weak, use allowed_as_discovery_question or internal_only.
 - Do not output empty pressure descriptions or generic buyer targets such as "relevant owner".
+- required_sales_spine is authoritative. For required sections, preserve one complete item for each SIG in required_sales_spine unless the SIG is explicitly unavailable.
+- Do not add extra pressure_signals unless they have a non-empty evidence_basis from a SIG or source identifier.
 
 Return ONLY valid JSON with this exact section schema:
 {BUYING_SECTION_SCHEMAS[section]}
 
-Payload:
-{json.dumps(payload, ensure_ascii=False)}
+Task-specific payload:
+{json.dumps(compact_payload, ensure_ascii=False)}
 """.strip()
 
 
@@ -3561,6 +3671,7 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
     self_scan_context = _dict(payload.get("self_scan_context"))
     modernization_tactics = [item for item in _list(payload.get("modernization_tactics")) if isinstance(item, dict)]
     previous_report = _previous_buying_report(payload.get("previous_buying_insight"))
+    render_quality_notes: list[str] = []
 
     def fix_item(item: Any, default_gate: str = "allowed_as_hypothesis") -> Any:
         if not isinstance(item, dict):
@@ -3628,11 +3739,20 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
                 min_len=12,
             )
         ]
-    report["pressure_signals"] = [
-        fix_item(item)
-        for item in _list(report.get("pressure_signals"))
-        if isinstance(item, dict) and _clip(item.get("description") or item.get("business_consequence") or item.get("trigger"), 40)
-    ]
+    pressure_signals = []
+    for item in _list(report.get("pressure_signals")):
+        if not isinstance(item, dict) or not _clip(item.get("description") or item.get("business_consequence") or item.get("trigger"), 40):
+            continue
+        fixed = fix_item(item)
+        if not _pressure_signal_has_renderable_basis(fixed, known_signal_ids):
+            render_quality_notes.append(
+                "Pressure signal removed before rendering because its evidence basis was empty or incomplete: "
+                + _clip(fixed.get("signal_type") or fixed.get("trigger") or fixed.get("description"), 180)
+                + "."
+            )
+            continue
+        pressure_signals.append(fixed)
+    report["pressure_signals"] = pressure_signals
     report["pain_to_solution_map"] = [fix_item(item) for item in _list(report.get("pain_to_solution_map")) if isinstance(item, dict)]
     _add_missing_conversation_directions(report, signals_by_id, activation_signal_ids, known_signal_ids, previous_report)
     report["pain_to_solution_map"] = [fix_item(item) for item in _list(report.get("pain_to_solution_map")) if isinstance(item, dict)]
@@ -3715,6 +3835,7 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
     evidence_confidence = _dict(report.get("evidence_confidence"))
     evidence_confidence["verified_facts"] = _verified_fact_items_from_payload(payload)
     quality_notes = evidence_confidence.setdefault("report_quality_notes", [])
+    quality_notes.extend(render_quality_notes)
     repaired_sections = [
         str(meta.get("section"))
         for meta in _list(report.get("section_generation"))
@@ -3749,6 +3870,12 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         if any(marker in lower for marker in ("deterministic fallback", "malformed", "json", "parse failed", "repair failed", "generation failed")):
             quality_notes.append(note_text)
     weak_notes = evidence_confidence.setdefault("weak_or_missing_evidence", [])
+    for item in _list(report.get("pain_to_solution_map")):
+        if not isinstance(item, dict):
+            continue
+        missing = _clip(item.get("missing_evidence"), 360)
+        if missing and missing.lower() not in {"n/a", "none"}:
+            weak_notes.append(missing)
     for item in report.get("pain_to_solution_map", []):
         has_signal = _has_signal_reference(item, known_signal_ids)
         has_service = _service_match_exists(item, service_names)
@@ -3932,6 +4059,9 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             fixed["do_not_say"] = ["Do not imply confirmed buying intent from role/title alone."]
         if not fixed["safety_notes"]:
             fixed["safety_notes"] = ["Use as sales-prep context; validate current role and remit before outreach."]
+        basis_text = str(fixed.get("evidence_basis") or "").strip()
+        if basis_text.lower().endswith("use only"):
+            fixed["evidence_basis"] = basis_text + " as sales-prep context."
         fixed_stakeholders.append(fixed)
     if not fixed_stakeholders:
         fixed_stakeholders = [
@@ -4567,7 +4697,12 @@ def _parse_or_repair_section(
             raise ValueError("Section JSON root was not an object")
         return parsed, "parsed"
     except Exception as parse_exc:
-        print(f"   ⚠️ [Buying Potential] Section JSON parse failed ({section}); attempting repair: {parse_exc}")
+        likely_truncated = _is_likely_json_truncated(raw)
+        tail = _clip((raw or "")[-180:], 180)
+        print(
+            f"   ⚠️ [Buying Potential] Section JSON parse failed ({section}); attempting repair: {parse_exc} "
+            f"(raw_chars={len(raw or '')}, likely_truncated={likely_truncated}, tail={tail!r})"
+        )
         if stage_callback:
             stage_callback("generate_report", 55, f"Repairing malformed Buying Insight section: {section}")
         try:
@@ -4582,7 +4717,11 @@ def _parse_or_repair_section(
             if not isinstance(parsed, dict):
                 raise ValueError("Repaired section JSON root was not an object")
             notes = _list(parsed.get("model_notes"))
-            notes.append(f"Malformed section JSON repaired by {repair_model}. Original parse error: {str(parse_exc)[:160]}")
+            notes.append(
+                f"Malformed section JSON repaired by {repair_model}. "
+                f"Original parse error: {str(parse_exc)[:120]}; raw_chars={len(raw or '')}; "
+                f"likely_truncated={likely_truncated}."
+            )
             parsed["model_notes"] = notes
             print(f"   ✅ [Buying Potential] Section {section} JSON repaired by {repair_model}")
             return parsed, f"repaired by {repair_model}"
@@ -4603,15 +4742,28 @@ def _generate_buying_section(
     if stage_callback:
         stage_callback("generate_report", progress, f"Generating Buying Insight section: {section}")
     try:
+        token_limit = _section_token_limit(section)
         raw, model_used = call_json_model_chain(
             _section_prompt(section, payload),
             buying_generation_chain(model_mode),
-            max_tokens=_section_token_limit(section),
+            max_tokens=token_limit,
             timeout=75,
+        )
+        print(
+            f"   🧾 [Buying Potential] Section {section} raw output: "
+            f"model={model_used}, raw_chars={len(raw or '')}, token_limit={token_limit}, "
+            f"likely_truncated={_is_likely_json_truncated(raw)}"
         )
         section_data, parse_status = _parse_or_repair_section(section, raw, payload, model_mode, stage_callback)
         print(f"   ✅ [Buying Potential] Section {section}: model={model_used}, parse_status={parse_status}")
-        meta = {"section": section, "model": model_used, "parse_status": parse_status}
+        meta = {
+            "section": section,
+            "model": model_used,
+            "parse_status": parse_status,
+            "raw_chars": len(raw or ""),
+            "token_limit": token_limit,
+            "likely_truncated": _is_likely_json_truncated(raw),
+        }
         return section_data, meta
     except Exception as exc:
         reason = f"Section '{section}' generation failed: {exc}"

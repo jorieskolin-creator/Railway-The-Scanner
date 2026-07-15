@@ -16,6 +16,16 @@ MODEL_POLICY_VERSION = os.environ.get("SCANNER_MODEL_POLICY_VERSION", "model-pol
 GPT_REASONING_MODEL = os.environ.get("SCANNER_DEFAULT_FRONTIER_MODEL", "gpt-5.5").strip() or "gpt-5.5"
 GPT_PRO_MODEL = os.environ.get("SCANNER_PREMIUM_MODEL", "gpt-5.5-pro").strip() or "gpt-5.5-pro"
 GPT_VERIFIER_MODEL = os.environ.get("SCANNER_VALIDATOR_MODEL", "gpt-5.4").strip() or "gpt-5.4"
+GPT_EXPERIMENTAL_MODEL = os.environ.get("SCANNER_GPT56_SOL_MODEL", "gpt-5.6-sol").strip() or "gpt-5.6-sol"
+ENABLE_GPT56_SOL_TEST = os.environ.get("SCANNER_ENABLE_GPT56_SOL_TEST", "").strip().lower() in {"1", "true", "yes", "on"}
+BUYING_GENERATION_MODEL_OVERRIDE = (
+    os.environ.get("SCANNER_BUYING_GENERATION_MODEL", "").strip()
+    or (GPT_EXPERIMENTAL_MODEL if ENABLE_GPT56_SOL_TEST else "")
+)
+DETAILED_COMPLETION_MODEL = (
+    os.environ.get("SCANNER_DETAILED_COMPLETION_MODEL", "").strip()
+    or (GPT_EXPERIMENTAL_MODEL if ENABLE_GPT56_SOL_TEST else GPT_REASONING_MODEL)
+)
 
 CLAUDE_OPUS_MODEL = os.environ.get("CLAUDE_OPUS_MODEL", "claude-opus-4-8").strip() or "claude-opus-4-8"
 CLAUDE_SONNET_MODEL = os.environ.get("CLAUDE_SONNET_MODEL", "claude-sonnet-5").strip() or "claude-sonnet-5"
@@ -42,13 +52,14 @@ def dedupe_chain(*models: str | None) -> tuple[str, ...]:
 
 def buying_generation_chain(mode: str | None = None) -> tuple[str, ...]:
     mode = (mode or BUYING_MODEL_MODE or "quality").strip().lower()
+    override = BUYING_GENERATION_MODEL_OVERRIDE
     if mode == "economy":
-        return dedupe_chain(GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL)
+        return dedupe_chain(override, GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL)
     if mode == "balanced":
-        return dedupe_chain(CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL)
+        return dedupe_chain(override, CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL)
     if mode == "board_grade":
-        return dedupe_chain(GPT_REASONING_MODEL, CLAUDE_OPUS_MODEL, CLAUDE_SONNET_MODEL)
-    return dedupe_chain(GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL, CLAUDE_OPUS_MODEL)
+        return dedupe_chain(override, GPT_REASONING_MODEL, CLAUDE_OPUS_MODEL, CLAUDE_SONNET_MODEL)
+    return dedupe_chain(override, GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL, CLAUDE_OPUS_MODEL)
 
 
 def buying_gate_chain(_mode: str | None = None) -> tuple[str, ...]:
@@ -92,6 +103,7 @@ MODEL_POLICIES: dict[str, dict[str, Any]] = {
         "standard": CLAUDE_SONNET_MODEL,
         "complex": GPT_REASONING_MODEL,
         "premium": CLAUDE_OPUS_MODEL,
+        "completion_repair": DETAILED_COMPLETION_MODEL,
     },
     "activation_strategic_synthesis": {
         "primary": GPT_PRO_MODEL,
