@@ -401,3 +401,119 @@ def test_deterministic_fallback_uses_account_signal_map_not_generic_service_trig
     assert play["linked_signal_ids"] == ["SIG-01"]
     assert "Partner" in play["trigger"]
     assert "AI pilots do not scale" not in play["why_relevant"]
+
+
+def test_generated_text_cleanup_preserves_pronoun_and_removes_markdown_media(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+
+    cleaned = bp._clean_generated_text(
+        "It matters when it is evidenced. IT architecture is relevant. "
+        "![image](https://example.com/image.png) [Company news](https://example.com/news) "
+        "https://example.com/dangling"
+    )
+
+    assert "when it is evidenced" in cleaned
+    assert "IT architecture" in cleaned
+    assert "![" not in cleaned
+    assert "https://" not in cleaned
+    assert "Company news" in cleaned
+
+
+def test_truncated_pressure_section_salvages_complete_items(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    raw = (
+        '{"pressure_signals": ['
+        '{"signal_type": "One", "description": "Complete", "evidence_basis": ["SIG-01"]},'
+        '{"signal_type": "Two", "description": "Truncated"'
+    )
+
+    salvaged = bp._salvage_truncated_section("pressure_evidence", raw)
+
+    assert salvaged is not None
+    assert len(salvaged["pressure_signals"]) == 1
+    assert salvaged["pressure_signals"][0]["evidence_basis"] == ["SIG-01"]
+    assert salvaged["evidence_confidence"] == {}
+
+
+def test_sales_play_fallback_does_not_force_ambiguous_service(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    signal = {
+        "id": "SIG-03",
+        "source": "scanner_activation_pair",
+        "activation_pair_index": 3,
+        "theme": "Strategy and financial capacity alignment",
+        "why": "Validate whether execution capacity supports the stated ambition.",
+        "what_to_do": "Create a validated alignment position.",
+        "buyer_roles": ["CFO / Finance Lead", "COO / Operations Lead"],
+        "service_fit_hints": [
+            {"service": "Enterprise AI Services / AI for Outcomes"},
+            {"service": "AI Business Consulting / AI-First Alignment"},
+        ],
+    }
+    candidates = [
+        {"name": "Enterprise AI Services / AI for Outcomes"},
+        {"name": "AI Business Consulting / AI-First Alignment"},
+    ]
+
+    play = bp._sales_play_from_signal(signal, {"account_thesis": "Thesis"}, service_candidates=candidates)
+
+    assert play["linked_signal_ids"] == ["SIG-03"]
+    assert play["service_or_offer"] == "Discovery validation - offer to be selected after qualification"
+
+
+def test_sales_plays_are_limited_to_one_primary_play_per_activation_sig(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    payload = {
+        "services": [
+            {"name": "Service A"},
+            {"name": "Service B"},
+            {"name": "Service C"},
+        ],
+        "account_signal_map": [
+            {
+                "id": f"SIG-0{index}",
+                "source": "scanner_activation_pair",
+                "activation_pair_index": index,
+                "theme": f"Theme {index}",
+                "why": f"Why theme {index} matters commercially.",
+                "what_to_do": f"Validate outcome {index}.",
+                "buyer_roles": ["CIO / CTO"],
+                "service_fit_hints": [{"service": f"Service {chr(64 + index)}"}],
+            }
+            for index in range(1, 4)
+        ],
+    }
+    report = {
+        "sales_spine": {"account_thesis": "Account thesis"},
+        "recommended_sales_plays": [
+            {
+                "play_name": f"Candidate {signal_id}-{candidate}",
+                "linked_signal_ids": [signal_id],
+                "evidence_basis": [signal_id],
+                "service_or_offer": service,
+                "buying_hypothesis": "A sufficiently complete buying hypothesis.",
+                "trigger_to_offer_bridge": "A sufficiently complete response direction.",
+                "first_meeting_objective": "Validate owner, timing, and consequence.",
+                "safe_customer_wording": "Explore whether this pressure matters.",
+                "proof_point": "A validated position exists.",
+                "discovery_questions": ["Where would this become visible?"],
+            }
+            for signal_id, service in (
+                ("SIG-01", "Service A"),
+                ("SIG-01", "Service B"),
+                ("SIG-02", "Service B"),
+                ("SIG-02", "Service C"),
+                ("SIG-03", "Service C"),
+            )
+            for candidate in (1,)
+        ],
+    }
+
+    bp._enforce_one_primary_sales_play(report, payload)
+
+    assert len(report["recommended_sales_plays"]) == 3
+    assert [play["linked_signal_ids"] for play in report["recommended_sales_plays"]] == [
+        ["SIG-01"],
+        ["SIG-02"],
+        ["SIG-03"],
+    ]
