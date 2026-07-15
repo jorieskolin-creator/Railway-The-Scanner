@@ -1911,7 +1911,7 @@ def _build_input_payload(
         "scanner_outputs": {
             "general_summary": _clip(company_data.get("general_summary"), 1800),
             "ai_diagnosis": _clip(company_data.get("summary_text"), 2200),
-            "strategic_synthesis": _clip(company_data.get("strategic_synthesis"), 2600),
+            "strategic_synthesis": _clip(company_data.get("strategic_synthesis"), 5200),
             "evidence_based_risks": _list(company_data.get("evidence_based_risks"))[:6],
             "activation_pairs": _list(company_data.get("activation_pairs"))[:4],
             "why": _list(company_data.get("why_proposals"))[:4],
@@ -2001,6 +2001,7 @@ def _compact_signal(signal: dict) -> dict:
 
 def _section_payload(section: str, payload: dict) -> dict:
     scanner_outputs = _dict(payload.get("scanner_outputs"))
+    opening_section = section == "snapshot_thesis"
     account_signals = [
         _compact_signal(signal)
         for signal in _list(payload.get("account_signal_map"))
@@ -2011,8 +2012,10 @@ def _section_payload(section: str, payload: dict) -> dict:
         "required_sales_spine": _list(payload.get("required_sales_spine"))[:3],
         "account_signal_map": account_signals,
         "scanner_outputs": {
-            "general_summary": _clip(scanner_outputs.get("general_summary"), 900),
-            "strategic_synthesis": _clip(scanner_outputs.get("strategic_synthesis"), 1500),
+            "general_summary": _clip(scanner_outputs.get("general_summary"), 1800 if opening_section else 900),
+            # The opening qualification thesis needs the financial implication,
+            # horizons, and invalidation boundary that often sit near the end.
+            "strategic_synthesis": _clip(scanner_outputs.get("strategic_synthesis"), 5200 if opening_section else 1500),
             "evidence_based_risks": _list(scanner_outputs.get("evidence_based_risks"))[:5],
             "activation_pairs": _list(scanner_outputs.get("activation_pairs"))[:3],
             "why": _list(scanner_outputs.get("why"))[:3],
@@ -2163,9 +2166,22 @@ Payload:
 BUYING_SECTION_SCHEMAS = {
     "snapshot_thesis": """
 {
-  "account_snapshot": {"text": "...", "gate": "allowed_as_fact|allowed_as_hypothesis|allowed_as_discovery_question|internal_only|blocked", "evidence_basis": ["SRC-01"]},
-  "sales_spine": {"account_thesis": "...", "strategic_synthesis_basis": "...", "risk_themes": []},
-  "buying_potential_thesis": {"text": "...", "rationale": "...", "gate": "allowed_as_hypothesis", "confidence": 0, "evidence_basis": ["SIG-01"], "overclaim_risk": "low|medium|high"},
+  "qualification_reasoning": {
+    "account_thesis": "...",
+    "current_position": "...",
+    "verified_strengths": ["..."],
+    "evidence_boundaries": ["..."],
+    "structural_exposure": "...",
+    "strategic_tension": "...",
+    "external_pressure": "...",
+    "likely_business_consequence": "...",
+    "emerging_need": "...",
+    "ability_to_act": "...",
+    "validation_question": "...",
+    "falsifier": "...",
+    "causal_sequence": "...",
+    "evidence_basis": ["SIG-01"]
+  },
   "model_notes": []
 }
 """.strip(),
@@ -2223,12 +2239,13 @@ BUYING_SALES_PLAY_ANALYSIS_SCHEMA = """
 
 BUYING_SECTION_INSTRUCTIONS = {
     "snapshot_thesis": (
-        "Create the account context and Account Opportunity Hypothesis. Start from account_signal_map, "
-        "especially scanner_activation_pair signals. Use strategic_synthesis as the sales spine, General Summary "
-        "only for factual context, and AI Diagnosis / evidence_based_risks only for internal sales reasoning. "
-        "Return only the concise account snapshot, account thesis, strategic-synthesis basis, risk themes, and "
-        "the Buying Potential thesis/rationale. Scanner adds top hypotheses, buyer roles, service families, and "
-        "repeated metadata deterministically from the active SIG spine."
+        "Create one shared Qualification Reasoning Spine for the opening of the report. Start from verified account "
+        "condition and Scanner activation pairs, then reason in this order: current position, structural exposure, "
+        "strategic tension, external pressure, likely business consequence, emerging need, ability to act, validation "
+        "question, and falsifier. Use the complete Strategic Synthesis as the analytical backbone and General Summary "
+        "only for factual context. Do not list services, buyer roles, raw SIG contracts, WHY/WHAT field labels, or source "
+        "records. Account thesis and causal_sequence must be fluent executive prose that integrates the 2-3 active "
+        "signals rather than repeating them. Evidence gaps define uncertainty; they are not proof that a need exists."
     ),
     "why_now": (
         "Create Timing Triggers & Urgency Signals. Each item must cite a SIG id, explain what changed, "
@@ -2275,7 +2292,7 @@ BUYING_SECTION_INSTRUCTIONS = {
 
 
 BUYING_SECTION_KEYS = {
-    "snapshot_thesis": ("account_snapshot", "sales_spine", "buying_potential_thesis"),
+    "snapshot_thesis": ("qualification_reasoning", "account_snapshot", "sales_spine", "buying_potential_thesis"),
     "why_now": ("why_now",),
     "pain_to_solution": ("pain_to_solution_map",),
     "sales_plays": ("recommended_sales_plays",),
@@ -2322,6 +2339,299 @@ Return ONLY valid JSON with this exact section schema:
 Task-specific payload:
 {json.dumps(compact_payload, ensure_ascii=False)}
 """.strip()
+
+
+QUALIFICATION_REASONING_FIELDS = (
+    "account_thesis",
+    "current_position",
+    "structural_exposure",
+    "strategic_tension",
+    "external_pressure",
+    "likely_business_consequence",
+    "emerging_need",
+    "ability_to_act",
+    "validation_question",
+    "falsifier",
+    "causal_sequence",
+)
+
+
+def _clean_reasoning_sentence(value: Any, limit: int = 900) -> str:
+    text = _clean_generated_text(value)
+    text = re.sub(r"\S+\.(?:jpe?g|png|gif|webp|svg)\b", " ", text, flags=re.I)
+    text = re.sub(r"\s+", " ", text).strip(" -;")
+    return _clip(text, limit)
+
+
+def _reasoning_list(value: Any, limit: int = 4) -> list[str]:
+    items: list[str] = []
+    for raw in _list(value):
+        text = _clean_reasoning_sentence(raw, 520)
+        if text and text not in items:
+            items.append(text)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _qualification_reasoning_fallback(payload: dict) -> dict:
+    company = _dict(payload.get("company"))
+    company_name = str(company.get("name") or company.get("companyName") or "The company").strip()
+    scanner_outputs = _dict(payload.get("scanner_outputs"))
+    signals = [
+        signal for signal in _list(payload.get("account_signal_map"))
+        if isinstance(signal, dict) and signal.get("source") == "scanner_activation_pair"
+    ][:3]
+    if not signals:
+        signals = [signal for signal in _list(payload.get("account_signal_map")) if isinstance(signal, dict)][:3]
+
+    whys = [_clean_reasoning_sentence(signal.get("why"), 520) for signal in signals]
+    whys = [item for item in whys if item]
+    outcomes = [
+        _clean_reasoning_sentence(signal.get("what_to_do") or signal.get("what"), 520)
+        for signal in signals
+    ]
+    outcomes = [item for item in outcomes if item]
+    progress = [
+        _clean_reasoning_sentence(signal.get("what_progress_shows") or signal.get("business_consequence"), 420)
+        for signal in signals
+    ]
+    progress = [item for item in progress if item]
+    summary = _clean_reasoning_sentence(scanner_outputs.get("general_summary"), 900)
+    synthesis = _clean_reasoning_sentence(scanner_outputs.get("strategic_synthesis"), 1500)
+    boundary_items = _reasoning_list(scanner_outputs.get("evidence_based_risks"), 3)
+    signal_ids = [str(signal.get("id")) for signal in signals if signal.get("id")]
+
+    tension = whys[0] if whys else f"The current evidence does not yet establish how {company_name}'s stated priorities translate into operating reality."
+    pressure = whys[1] if len(whys) > 1 else "External change may increase the value of validating whether current capabilities remain sufficient."
+    emerging_need = " ".join(outcomes[:2]) or "A decision-ready view of the relevant capability, ownership, and progress expectations may be needed before priorities are set."
+    consequence = progress[0] if progress else "Without validation, investment choices may remain disconnected from the pressure the company is preparing to absorb."
+    causal = _clip(" ".join(item for item in (tension, pressure, consequence, emerging_need) if item), 1700)
+    return {
+        "account_thesis": _clip(synthesis or causal, 1100),
+        "current_position": summary or f"{company_name} has an active Scanner record, but its current position requires qualification from the stored evidence.",
+        "verified_strengths": [],
+        "evidence_boundaries": boundary_items or ["The available evidence does not confirm ownership, timing, or a material business consequence."],
+        "structural_exposure": tension,
+        "strategic_tension": tension,
+        "external_pressure": pressure,
+        "likely_business_consequence": consequence,
+        "emerging_need": emerging_need,
+        "ability_to_act": "Ability and willingness to act should be established from current priorities, ownership, and investment capacity in discovery.",
+        "validation_question": "Where would this pressure first become visible in priorities, operating performance, or investment decisions?",
+        "falsifier": "The hypothesis weakens if the relevant capability is already controlled or the pressure has no material owner, timing, or business consequence.",
+        "causal_sequence": causal,
+        "evidence_basis": signal_ids,
+    }
+
+
+def _normalize_qualification_reasoning(value: Any, payload: dict, *, fill_missing: bool = True) -> dict:
+    raw = _dict(value)
+    fallback = _qualification_reasoning_fallback(payload)
+    result: dict[str, Any] = {}
+    for field in QUALIFICATION_REASONING_FIELDS:
+        cleaned = _clean_reasoning_sentence(raw.get(field), 1700 if field == "causal_sequence" else 1100)
+        result[field] = cleaned or (fallback.get(field, "") if fill_missing else "")
+    result["verified_strengths"] = _reasoning_list(raw.get("verified_strengths"), 3)
+    result["evidence_boundaries"] = _reasoning_list(raw.get("evidence_boundaries"), 4)
+    if fill_missing and not result["evidence_boundaries"]:
+        result["evidence_boundaries"] = fallback["evidence_boundaries"]
+    basis = [str(item).strip() for item in _list(raw.get("evidence_basis")) if str(item).strip()]
+    result["evidence_basis"] = basis or (fallback["evidence_basis"] if fill_missing else [])
+    return result
+
+
+def _qualification_reasoning_issues(reasoning: dict, company_name: str = "") -> list[str]:
+    issues: list[str] = []
+    required_lengths = {
+        "account_thesis": 80,
+        "current_position": 70,
+        "structural_exposure": 45,
+        "strategic_tension": 55,
+        "external_pressure": 55,
+        "likely_business_consequence": 45,
+        "emerging_need": 55,
+        "ability_to_act": 35,
+        "validation_question": 35,
+        "falsifier": 35,
+        "causal_sequence": 140,
+    }
+    for field, minimum in required_lengths.items():
+        if len(str(reasoning.get(field) or "").strip()) < minimum:
+            issues.append(f"{field}:too_short")
+    if not _reasoning_list(reasoning.get("evidence_boundaries"), 1):
+        issues.append("evidence_boundaries:missing")
+    combined = json.dumps(reasoning, ensure_ascii=False)
+    if re.search(r"(?:https?://|!\[|<[^>]+>|\b[\w.-]+\.(?:jpe?g|png|gif|webp|svg)\b)", combined, re.I):
+        issues.append("public_text:page_or_markup_debris")
+    if re.search(r"\b(?:WHAT_TO_DO|WHAT_PROGRESS_SHOWS)\b|SIG-\d{2}\s*[—:-]\s*WHY\b", combined, re.I):
+        issues.append("public_text:raw_activation_contract")
+    if company_name:
+        account_text = f"{reasoning.get('account_thesis', '')} {reasoning.get('current_position', '')}".lower()
+        if company_name.lower() not in account_text:
+            issues.append("account_context:not_company_specific")
+    return sorted(set(issues))
+
+
+def _qualification_repair_prompt(reasoning: dict, payload: dict, issues: list[str]) -> str:
+    compact = _section_payload("snapshot_thesis", payload)
+    return f"""
+Rewrite one Qualification Reasoning Spine using stored Scanner data only.
+
+This is a focused no-web quality repair, not a new research task.
+Problems detected: {json.dumps(issues, ensure_ascii=False)}
+
+Rules:
+- Return ONLY valid JSON using the exact snapshot_thesis schema.
+- Preserve evidence boundaries and do not strengthen claims, gates, financial scope, ownership, timing, or buying intent.
+- Reason in sequence: verified current position -> structural exposure -> strategic tension -> external pressure -> likely business consequence -> emerging need -> ability to act -> validation question -> falsifier.
+- Integrate the active signals into fluent executive prose. Do not serialize SIG/WHY/WHAT fields or list services and buyer roles.
+- Evidence absence defines a validation boundary; it is not proof of weakness or demand.
+- Remove page navigation, filenames, URLs, markup, and source-record fragments.
+
+Current reasoning:
+{json.dumps(reasoning, ensure_ascii=False)}
+
+Stored payload:
+{json.dumps(compact, ensure_ascii=False)}
+
+Required schema:
+{BUYING_SECTION_SCHEMAS['snapshot_thesis']}
+""".strip()
+
+
+def _compose_qualification_sections(reasoning: dict, payload: dict) -> dict:
+    boundaries = _reasoning_list(reasoning.get("evidence_boundaries"), 3)
+    strengths = _reasoning_list(reasoning.get("verified_strengths"), 3)
+    first_paragraph = " ".join(
+        item for item in (_clean_reasoning_sentence(reasoning.get("current_position"), 1000), " ".join(strengths)) if item
+    )
+    second_paragraph = " ".join(boundaries)
+    qualification_implication = _clean_reasoning_sentence(reasoning.get("structural_exposure"), 720)
+    if qualification_implication:
+        implication_clause = qualification_implication.rstrip(".")
+        implication_clause = implication_clause[0].lower() + implication_clause[1:] if len(implication_clause) > 1 else implication_clause
+        second_paragraph = f"{second_paragraph} The qualification issue is whether {implication_clause}.".strip()
+
+    thesis_first = " ".join(
+        item for item in (
+            _clean_reasoning_sentence(reasoning.get("strategic_tension"), 720),
+            _clean_reasoning_sentence(reasoning.get("external_pressure"), 720),
+        ) if item
+    )
+    thesis_second = " ".join(
+        item for item in (
+            _clean_reasoning_sentence(reasoning.get("likely_business_consequence"), 620),
+            _clean_reasoning_sentence(reasoning.get("emerging_need"), 720),
+        ) if item
+    )
+    thesis_text = " ".join(item for item in (thesis_first, thesis_second) if item)
+    thesis_rationale = " ".join(
+        item for item in (
+            _clean_reasoning_sentence(reasoning.get("ability_to_act"), 520),
+            _clean_reasoning_sentence(reasoning.get("validation_question"), 520),
+            _clean_reasoning_sentence(reasoning.get("falsifier"), 520),
+        ) if item
+    )
+    basis = [str(item) for item in _list(reasoning.get("evidence_basis")) if str(item).strip()]
+    risk_themes = boundaries + _reasoning_list(_dict(payload.get("scanner_outputs")).get("evidence_based_risks"), 3)
+    return {
+        "qualification_reasoning": reasoning,
+        "account_snapshot": {
+            "text": _clip(f"{first_paragraph}\n\n{second_paragraph}".strip(), 1900),
+            "paragraphs": [item for item in (first_paragraph, second_paragraph) if item],
+            "gate": "allowed_as_hypothesis",
+            "evidence_basis": basis,
+        },
+        "buying_potential_thesis": {
+            "text": _clip(thesis_text, 2100),
+            "paragraphs": [item for item in (thesis_first, thesis_second) if item],
+            "rationale": _clip(thesis_rationale, 1300),
+            "gate": "allowed_as_hypothesis",
+            "confidence": 50,
+            "evidence_basis": basis,
+            "overclaim_risk": "medium",
+        },
+        "sales_spine": {
+            "account_thesis": _clip(reasoning.get("account_thesis"), 1500),
+            "strategic_synthesis_basis": _clip(reasoning.get("causal_sequence"), 2000),
+            "risk_themes": risk_themes[:5],
+        },
+    }
+
+
+def _finalize_qualification_section(
+    section_data: dict,
+    payload: dict,
+    *,
+    model_mode: str | None = None,
+) -> tuple[dict, dict]:
+    reasoning = _normalize_qualification_reasoning(
+        section_data.get("qualification_reasoning"),
+        payload,
+        fill_missing=False,
+    )
+    company = _dict(payload.get("company"))
+    company_name = str(company.get("name") or company.get("companyName") or "")
+    initial_issues = _qualification_reasoning_issues(reasoning, company_name)
+    repair_model = ""
+    if initial_issues:
+        try:
+            raw, repair_model = call_json_model_chain(
+                _qualification_repair_prompt(reasoning, payload, initial_issues),
+                buying_generation_chain(model_mode),
+                max_tokens=2400,
+                timeout=75,
+                reasoning_effort="high",
+                validate_json=True,
+                required_fields=("qualification_reasoning",),
+            )
+            repaired = parse_json_object(raw)
+            reasoning = _normalize_qualification_reasoning(
+                repaired.get("qualification_reasoning"),
+                payload,
+                fill_missing=False,
+            )
+        except Exception as exc:
+            print(f"   ⚠️ [Buying Potential] Qualification reasoning repair unavailable: {exc}")
+    remaining_issues = _qualification_reasoning_issues(reasoning, company_name)
+    if remaining_issues:
+        fallback = _normalize_qualification_reasoning(_qualification_reasoning_fallback(payload), payload)
+        for field in QUALIFICATION_REASONING_FIELDS:
+            if f"{field}:too_short" in remaining_issues:
+                reasoning[field] = fallback[field]
+        if any(issue.startswith("public_text:") for issue in remaining_issues):
+            for field in QUALIFICATION_REASONING_FIELDS:
+                if re.search(r"(?:https?://|!\[|<[^>]+>|WHAT_TO_DO|WHAT_PROGRESS_SHOWS|SIG-\d{2}\s*[—:-]\s*WHY)", str(reasoning.get(field) or ""), re.I):
+                    reasoning[field] = fallback[field]
+        if "account_context:not_company_specific" in remaining_issues:
+            reasoning["account_thesis"] = fallback["account_thesis"]
+            reasoning["current_position"] = fallback["current_position"]
+        if not reasoning.get("evidence_boundaries"):
+            reasoning["evidence_boundaries"] = fallback["evidence_boundaries"]
+        if not reasoning.get("evidence_basis"):
+            reasoning["evidence_basis"] = fallback["evidence_basis"]
+        remaining_issues = _qualification_reasoning_issues(reasoning, company_name)
+
+    result = _compose_qualification_sections(reasoning, payload)
+    result["model_notes"] = _list(section_data.get("model_notes"))
+    quality = {
+        "initial_issues": initial_issues,
+        "remaining_issues": remaining_issues,
+        "repair_model": repair_model,
+        "status": "clean" if not initial_issues else "repaired" if not remaining_issues else "deterministic_completion",
+    }
+    result["qualification_reasoning_quality"] = quality
+    print(
+        f"   🧠 [Buying Potential] Qualification reasoning: status={quality['status']}, "
+        f"initial_issues={len(initial_issues)}, remaining_issues={len(remaining_issues)}, "
+        f"repair_model={repair_model or 'none'}"
+    )
+    if initial_issues:
+        result["model_notes"].append(
+            f"Opening qualification reasoning quality path: {quality['status']}; issues={', '.join(initial_issues)}."
+        )
+    return result, quality
 
 
 def _section_repair_prompt(section: str, raw_json: str) -> str:
@@ -3857,43 +4167,30 @@ def _recover_required_spine_sections(report: dict, payload: dict, model_mode: st
 def _enrich_short_opening_sections(report: dict, payload: dict) -> None:
     snapshot = _dict(report.get("account_snapshot"))
     thesis = _dict(report.get("buying_potential_thesis"))
-    sales_spine = _dict(report.get("sales_spine"))
-    scanner_outputs = _dict(payload.get("scanner_outputs"))
-    if _word_count(snapshot.get("text")) < 55:
-        facts = [
-            re.sub(r"^[A-Z]+-[A-Z0-9]+:\s*", "", fact).strip()
-            for fact in _verified_fact_items_from_payload(payload, limit=4)
-        ]
-        facts = [fact for fact in facts if fact and fact.lower() not in str(snapshot.get("text") or "").lower()]
-        if facts:
-            snapshot["text"] = _clip(
-                f"{_clip(snapshot.get('text'), 520)} Additional verified context: {' '.join(facts[:2])}",
-                1050,
-            )
-            snapshot.setdefault("gate", "allowed_as_fact")
-    if _word_count(thesis.get("text")) < 45:
-        support = _first_nonempty(
-            sales_spine.get("account_thesis"),
-            sales_spine.get("strategic_synthesis_basis"),
-            scanner_outputs.get("strategic_synthesis"),
-            limit=620,
-        )
-        if support:
-            thesis["text"] = _clip(f"{_clip(thesis.get('text'), 420)} Sales spine: {support}", 1050)
-            thesis["gate"] = _normalize_gate(thesis.get("gate"), "allowed_as_hypothesis")
-    if _word_count(thesis.get("rationale")) < 35:
-        risk_context = " ".join(_clip(item, 260) for item in _list(scanner_outputs.get("evidence_based_risks"))[:2] if _clip(item, 260))
-        rationale = _first_nonempty(
-            sales_spine.get("strategic_synthesis_basis"),
-            risk_context,
-            scanner_outputs.get("general_summary"),
-            limit=620,
-        )
-        if rationale:
-            thesis["rationale"] = _clip(
-                f"{_clip(thesis.get('rationale'), 360)} Evidence boundary: {rationale}",
-                950,
-            )
+    reasoning = _dict(report.get("qualification_reasoning"))
+    if reasoning:
+        composed = _compose_qualification_sections(reasoning, payload)
+        if _word_count(snapshot.get("text")) < 70 or _qualification_reasoning_issues(reasoning):
+            snapshot = _dict(composed.get("account_snapshot"))
+        if _word_count(thesis.get("text")) < 70:
+            thesis = _dict(composed.get("buying_potential_thesis"))
+
+    # Never pad these executive sections with arbitrary source records. Raw
+    # evidence remains available in Scanner; opening prose must come from the
+    # governed qualification reasoning spine.
+    snapshot["text"] = _clean_reasoning_sentence(snapshot.get("text"), 1900)
+    snapshot["paragraphs"] = [
+        _clean_reasoning_sentence(item, 1100)
+        for item in _list(snapshot.get("paragraphs"))
+        if _clean_reasoning_sentence(item, 1100)
+    ]
+    thesis["text"] = _clean_reasoning_sentence(thesis.get("text"), 2100)
+    thesis["paragraphs"] = [
+        _clean_reasoning_sentence(item, 1200)
+        for item in _list(thesis.get("paragraphs"))
+        if _clean_reasoning_sentence(item, 1200)
+    ]
+    thesis["rationale"] = _clean_reasoning_sentence(thesis.get("rationale"), 1300)
     report["account_snapshot"] = snapshot
     report["buying_potential_thesis"] = thesis
 
@@ -5053,12 +5350,13 @@ def _generate_buying_section(
         stage_callback("generate_report", progress, f"Generating Buying Insight section: {section}")
     try:
         token_limit = _section_token_limit(section)
+        reasoning_effort = "high" if section == "snapshot_thesis" else "low"
         raw, model_used = call_json_model_chain(
             _section_prompt(section, payload),
             buying_generation_chain(model_mode),
             max_tokens=token_limit,
             timeout=75,
-            reasoning_effort="low",
+            reasoning_effort=reasoning_effort,
         )
         print(
             f"   🧾 [Buying Potential] Section {section} raw output: "
@@ -5066,6 +5364,13 @@ def _generate_buying_section(
             f"likely_truncated={_is_likely_json_truncated(raw)}"
         )
         section_data, parse_status = _parse_or_repair_section(section, raw, payload, model_mode, stage_callback)
+        qualification_quality = None
+        if section == "snapshot_thesis":
+            section_data, qualification_quality = _finalize_qualification_section(
+                section_data,
+                payload,
+                model_mode=model_mode,
+            )
         print(f"   ✅ [Buying Potential] Section {section}: model={model_used}, parse_status={parse_status}")
         meta = {
             "section": section,
@@ -5073,18 +5378,32 @@ def _generate_buying_section(
             "parse_status": parse_status,
             "raw_chars": len(raw or ""),
             "token_limit": token_limit,
+            "reasoning_effort": reasoning_effort,
             "likely_truncated": _is_likely_json_truncated(raw),
         }
+        if qualification_quality is not None:
+            meta["qualification_reasoning_quality"] = qualification_quality
         return section_data, meta
     except Exception as exc:
         reason = f"Section '{section}' generation failed: {exc}"
         print(f"   ❌ [Buying Potential] Section {section}: generation failed, deterministic fallback used: {exc}")
-        return _section_fallback(section, payload, reason), {
+        fallback = _section_fallback(section, payload, reason)
+        qualification_quality = None
+        if section == "snapshot_thesis":
+            fallback, qualification_quality = _finalize_qualification_section(
+                {"qualification_reasoning": _qualification_reasoning_fallback(payload), "model_notes": [reason]},
+                payload,
+                model_mode=model_mode,
+            )
+        meta = {
             "section": section,
             "model": "deterministic_fallback",
             "parse_status": "section_generation_failed",
             "error": str(exc)[:220],
         }
+        if qualification_quality is not None:
+            meta["qualification_reasoning_quality"] = qualification_quality
+        return fallback, meta
 
 
 def _assemble_section_report(
@@ -5212,6 +5531,18 @@ def _gate_badge(gate: str) -> str:
 
 def _esc(value: Any) -> str:
     return html.escape(str(value or ""))
+
+
+def _render_prose_paragraphs(paragraphs: Any, fallback: Any = "", class_name: str = "") -> str:
+    values = [
+        _clean_reasoning_sentence(item, 1800)
+        for item in _list(paragraphs)
+        if _clean_reasoning_sentence(item, 1800)
+    ]
+    if not values and fallback:
+        values = [part.strip() for part in re.split(r"\n\s*\n", str(fallback)) if part.strip()]
+    class_attr = f' class="{html.escape(class_name)}"' if class_name else ""
+    return "".join(f"<p{class_attr}>{_esc(value)}</p>" for value in values)
 
 
 def render_buying_potential_html(report: dict) -> str:
@@ -5606,22 +5937,24 @@ def render_buying_potential_html(report: dict) -> str:
 
   <section>
     <h2>Account Context & Qualification Snapshot</h2>
-    <p>{_esc(snapshot.get('text'))}</p>
+    {_render_prose_paragraphs(snapshot.get('paragraphs'), snapshot.get('text'))}
     {_gate_badge(snapshot.get('gate'))}
   </section>
 
   <section>
     <h2>Account Need Hypothesis</h2>
-    <p>{_esc(thesis.get('text'))}</p>
-    <p class="muted">{_esc(thesis.get('rationale'))}</p>
+    {_render_prose_paragraphs(thesis.get('paragraphs'), thesis.get('text'))}
+    {_render_prose_paragraphs([], thesis.get('rationale'), 'muted')}
     {_gate_badge(thesis.get('gate'))}
   </section>
 
   <section>
     <h2>Sales Spine</h2>
     {f'<article class="card warning"><p>{_esc(self_scan.get("framing"))}</p></article>' if self_scan.get("is_self_scan") else ''}
-    <p><b>Account thesis:</b> {_esc(sales_spine.get('account_thesis'))}</p>
-    <p><b>Strategic synthesis basis:</b> {_esc(sales_spine.get('strategic_synthesis_basis'))}</p>
+    <h3>Account Thesis</h3>
+    {_render_prose_paragraphs([], sales_spine.get('account_thesis'))}
+    <h3>Why This May Become Relevant</h3>
+    {_render_prose_paragraphs([], sales_spine.get('strategic_synthesis_basis'))}
     <div class="grid grid-3">
       <div class="card compact"><h3>Top Buying Hypotheses</h3><ul>{simple_items(sales_spine.get('top_buying_hypotheses'), 5, "N/A - no separate top buying hypotheses were generated.", _format_top_buying_hypothesis_item)}</ul></div>
       <div class="card compact"><h3>Risk Themes For Discovery</h3><ul>{simple_items(sales_spine.get('risk_themes'), 5)}</ul></div>

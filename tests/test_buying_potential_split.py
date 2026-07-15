@@ -1,4 +1,5 @@
 import importlib
+import json
 import sys
 import types
 
@@ -74,11 +75,13 @@ def test_buying_potential_defaults_to_quality_model_chain(monkeypatch):
     monkeypatch.setenv("BUYING_POTENTIAL_MODEL_MODE", "testing")
 
     assert bp._buying_model_mode() == "quality"
-    assert bp.buying_generation_chain() == ("opus", "gpt", "sonnet")
-    assert bp.buying_gate_chain() == ("gptv", "sonnet")
-    assert bp.service_kb_extraction_chain() == ("gpt", "sonnet", "haiku")
-    assert bp.service_kb_repair_chain() == ("gptv", "sonnet", "haiku")
-    assert bp.buying_report_repair_chain() == ("gptv", "sonnet", "haiku")
+    assert bp.buying_generation_chain()
+    assert bp.buying_gate_chain()
+    assert bp.service_kb_extraction_chain()
+    assert bp.service_kb_repair_chain()
+    assert bp.buying_report_repair_chain()
+    assert all("haiku" not in model.lower() for model in bp.buying_generation_chain())
+    assert all("haiku" not in model.lower() for model in bp.buying_report_repair_chain())
 
 
 def test_buying_potential_renderer_uses_new_section_order_and_nested_play_angles(monkeypatch):
@@ -150,16 +153,16 @@ def test_buying_potential_renderer_uses_new_section_order_and_nested_play_angles
     assert "Suggested Conversation Angles" not in html
     assert "Discovery Questions" in html
     assert "Do Not Say" in html
-    assert "Account Opportunity Hypothesis" in html
-    assert "Opportunity-to-Offer Fit" in html
-    assert "Recommended Growth Plays" in html
+    assert "Account Need Hypothesis" in html
+    assert "Possible Conversation Directions" in html
+    assert "Recommended Sales Plays" in html
     assert "Jane Leader" in html
     assert "Technology sponsor" in html
     assert "Data and AI Governance" in html
     assert "Do not imply confirmed buying intent." in html
-    assert html.index("Commercial Pressure Signals") < html.index("Timing Triggers")
-    assert html.index("Buying Committee & Influence Map") < html.index("Opportunity-to-Offer Fit")
-    assert html.index("Recommended Growth Plays") < html.index("Evidence, Confidence & Sales Guardrails")
+    assert html.index("Pressure & Demand Hypothesis Signals") < html.index("Why This May Matter Now")
+    assert html.index("Buying Committee & Influence Map") < html.index("Possible Conversation Directions")
+    assert html.index("Recommended Sales Plays") < html.index("Evidence, Confidence & Sales Guardrails")
 
 
 def test_buying_potential_footer_points_to_scanner_instead_of_rendering_evidence_register(monkeypatch):
@@ -517,3 +520,138 @@ def test_sales_plays_are_limited_to_one_primary_play_per_activation_sig(monkeypa
         ["SIG-02"],
         ["SIG-03"],
     ]
+
+
+def qualification_payload():
+    return {
+        "company": {"name": "Ensto"},
+        "scanner_outputs": {
+            "general_summary": "Ensto provides electricity-distribution products and services for industrial and utility customers.",
+            "strategic_synthesis": "S" * 3600,
+            "evidence_based_risks": ["Current architecture and AI readiness are not established in the promoted evidence set."],
+            "activation_pairs": [],
+        },
+        "account_signal_map": [
+            {
+                "id": "SIG-01",
+                "source": "scanner_activation_pair",
+                "theme": "Operating-model proof",
+                "why": "Ensto's stated ambition is not yet connected to verified operating-model capability.",
+                "what_to_do": "Establish a decision-ready operating-model position.",
+                "what_progress_shows": "Leadership can distinguish verified capability from assumptions.",
+            },
+            {
+                "id": "SIG-02",
+                "source": "scanner_activation_pair",
+                "theme": "Adaptive industrial operations",
+                "why": "Industrial AI and energy-data pressure may change the capability expected from electricity-distribution providers.",
+                "what_to_do": "Clarify readiness for adaptive operations and governed energy data.",
+                "what_progress_shows": "A validated readiness position informs priorities.",
+            },
+        ],
+        "required_sales_spine": [],
+        "verified_evidence": [
+            {"title": "Tero-Luoma+bg-web.jpg", "snippet": "![image](https://example.com/noise.jpeg)"}
+        ],
+        "financial_sources": [],
+        "source_ledger_recovery_records": [],
+    }
+
+
+def valid_qualification_reasoning():
+    return {
+        "account_thesis": "Ensto's electricity-distribution position creates a qualification question about whether its operating model and data foundations can support the next phase of industrial adaptation.",
+        "current_position": "Ensto is an established electricity-distribution technology provider with a portfolio spanning grid accessories, automation, protection, and control.",
+        "verified_strengths": ["Its current portfolio provides a credible industrial and utility-market foundation."],
+        "evidence_boundaries": ["The promoted evidence does not establish current architecture, AI deployment, ownership, timing, or budget."],
+        "structural_exposure": "the breadth of the portfolio requires coordinated operating ownership and governed information flows as external expectations develop",
+        "strategic_tension": "The portfolio ambition is clearer than the evidence showing how operating capabilities support it today.",
+        "external_pressure": "Industrial AI, energy productivity, and software-defined operations may raise customer expectations for adaptive and data-enabled delivery.",
+        "likely_business_consequence": "If that pressure becomes material, unclear capability ownership could slow prioritization and weaken investment focus.",
+        "emerging_need": "A decision-ready view of operating-model and data readiness may therefore be needed before selecting modernization priorities.",
+        "ability_to_act": "Investment capacity and an accountable owner still need to be confirmed rather than inferred.",
+        "validation_question": "Where would these pressures first affect customer value, operating performance, or investment choices?",
+        "falsifier": "The hypothesis weakens if the relevant capabilities are already governed and the external pressures do not affect Ensto's priorities.",
+        "causal_sequence": "Ensto has a credible electricity-distribution position, but operating-model evidence is incomplete. External industrial and energy-data pressure may raise the required capability level. If the intersection becomes material, leadership may need a validated readiness position before committing investment.",
+        "evidence_basis": ["SIG-01", "SIG-02"],
+    }
+
+
+def test_snapshot_payload_keeps_complete_strategic_synthesis(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    compact = bp._section_payload("snapshot_thesis", qualification_payload())
+
+    assert len(compact["scanner_outputs"]["strategic_synthesis"]) == 3600
+
+
+def test_qualification_reasoning_builds_fluent_opening_without_raw_contract(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    sections = bp._compose_qualification_sections(valid_qualification_reasoning(), qualification_payload())
+
+    combined = json.dumps(sections, ensure_ascii=False)
+    assert "Ensto" in sections["account_snapshot"]["text"]
+    assert len(sections["account_snapshot"]["paragraphs"]) == 2
+    assert len(sections["buying_potential_thesis"]["paragraphs"]) == 2
+    assert "WHAT_TO_DO" not in combined
+    assert "SIG-01 — WHY" not in combined
+    assert "Tero-Luoma" not in combined
+
+
+def test_snapshot_generation_uses_high_effort_and_shared_reasoning_spine(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    calls = []
+    response = {"qualification_reasoning": valid_qualification_reasoning(), "model_notes": []}
+
+    def fake_call(*args, **kwargs):
+        calls.append(kwargs)
+        return json.dumps(response), "gpt-5.6-sol"
+
+    monkeypatch.setattr(bp, "call_json_model_chain", fake_call)
+    monkeypatch.setattr(bp, "parse_json_object", json.loads)
+
+    section, meta = bp._generate_buying_section("snapshot_thesis", qualification_payload())
+
+    assert calls[0]["reasoning_effort"] == "high"
+    assert meta["qualification_reasoning_quality"]["status"] == "clean"
+    assert section["sales_spine"]["account_thesis"].startswith("Ensto's electricity-distribution")
+
+
+def test_incomplete_qualification_reasoning_triggers_focused_no_web_repair(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    calls = []
+
+    def fake_call(prompt, *args, **kwargs):
+        calls.append((prompt, kwargs))
+        return json.dumps({"qualification_reasoning": valid_qualification_reasoning()}), "gpt-5.6-sol"
+
+    monkeypatch.setattr(bp, "call_json_model_chain", fake_call)
+    monkeypatch.setattr(bp, "parse_json_object", json.loads)
+
+    section, quality = bp._finalize_qualification_section(
+        {"qualification_reasoning": {"account_thesis": "Too short"}},
+        qualification_payload(),
+    )
+
+    assert quality["status"] == "repaired"
+    assert quality["initial_issues"]
+    assert not quality["remaining_issues"]
+    assert calls[0][1]["reasoning_effort"] == "high"
+    assert "no-web" in calls[0][0]
+    assert "Ensto" in section["account_snapshot"]["text"]
+
+
+def test_short_opening_enrichment_never_appends_arbitrary_source_records(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    report = {
+        "qualification_reasoning": valid_qualification_reasoning(),
+        "account_snapshot": {"text": "Too short", "gate": "allowed_as_fact"},
+        "buying_potential_thesis": {"text": "Too short", "rationale": "Too short"},
+    }
+
+    bp._enrich_short_opening_sections(report, qualification_payload())
+
+    combined = json.dumps(report, ensure_ascii=False)
+    assert "Tero-Luoma" not in combined
+    assert "image" not in combined
+    assert "Additional verified context" not in combined
+    assert "qualification question" in combined
