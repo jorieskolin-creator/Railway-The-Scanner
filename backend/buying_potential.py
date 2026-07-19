@@ -3060,6 +3060,20 @@ _BUYING_GATE_REANALYSIS_SCHEMA = _strict_object({
     "notes": _STRING_LIST,
 })
 
+_BUYING_LANGUAGE_QA_SCHEMA = _strict_object({
+    "repairs": {
+        "type": "array",
+        "items": _strict_object({
+            "qa_id": _STRING,
+            "path": _STRING,
+            "action": {"type": "string", "enum": ["replace", "remove"]},
+            "replacement": _STRING,
+            "reason": _STRING,
+        }),
+    },
+    "notes": _STRING_LIST,
+})
+
 # Backward-compatible name retained for tests and integrations that inspect the schema.
 _BUYING_GATE_REVIEW_SCHEMA = _BUYING_GATE_DECISION_SCHEMA
 
@@ -3848,6 +3862,79 @@ Bounded context:
 """.strip()
 
 
+def _stable_contract_ids(value: Any) -> set[str]:
+    return set(re.findall(r"\b(?:SIG|HYP|EVD|SRC|FIN|CED|LEDGER)-[A-Z0-9._-]+\b", str(value or ""), re.I))
+
+
+def _gate_repair_contract_issue(packet: dict, raw: dict) -> str:
+    claim = _gate_claim_lookup(packet).get(str(raw.get("claim_id") or ""))
+    if not claim:
+        return "Repair references an unknown claim_id."
+    if str(raw.get("path") or "") != str(claim.get("path") or ""):
+        return "Repair path does not match the reviewed claim."
+    if str(raw.get("object_id") or "") != str(claim.get("object_id") or ""):
+        return "Repair object_id does not match the reviewed claim."
+    action = str(raw.get("action") or "")
+    replacement = _clean_generated_text(raw.get("replacement"))
+    if action == "replace" and len(replacement) < 20:
+        return "Replacement is missing or too short."
+    if action != "replace":
+        return ""
+    allowed_ids = _stable_contract_ids(claim.get("text"))
+    allowed_ids.update(str(item) for item in _list(claim.get("signal_ids")))
+    allowed_ids.update(str(item) for item in _list(claim.get("hypothesis_ids")))
+    allowed_ids.update(str(item) for item in _list(claim.get("evidence_ids")))
+    added_ids = _stable_contract_ids(replacement) - allowed_ids
+    if added_ids:
+        return f"Replacement introduced unsupported IDs: {', '.join(sorted(added_ids))}."
+    linked_hypotheses = set(str(item) for item in _list(claim.get("hypothesis_ids")))
+    for contract in _list(packet.get("hypothesis_contracts")):
+        contract = _dict(contract)
+        if linked_hypotheses and str(contract.get("hypothesis_id") or "") not in linked_hypotheses:
+            continue
+        for prohibited in _list(contract.get("prohibited_claims")):
+            if _blocked_claim_matches(replacement, str(prohibited)):
+                return "Replacement repeats a prohibited hypothesis-contract claim."
+    return ""
+
+
+def _gate_repair_batches(
+    packet: dict,
+    decisions: list[dict],
+    *,
+    max_items: int = 5,
+    max_chars: int = 24000,
+) -> list[list[dict]]:
+    claim_lookup = _gate_claim_lookup(packet)
+
+    def sort_key(decision: dict) -> tuple[str, str, str]:
+        claim = claim_lookup.get(str(decision.get("claim_id") or ""), {})
+        lineage_values = (
+            _list(claim.get("hypothesis_ids"))
+            + _list(claim.get("signal_ids"))
+            + [claim.get("object_id")]
+        )
+        lineage = next((str(item) for item in lineage_values if item), "")
+        section = str(claim.get("path") or "").split(".", 1)[0].split("[", 1)[0]
+        return str(lineage), section, str(claim.get("path") or "")
+
+    ordered = sorted((_dict(item) for item in decisions), key=sort_key)
+    batches: list[list[dict]] = []
+    current: list[dict] = []
+    for decision in ordered:
+        candidate = current + [decision]
+        exceeds_items = len(candidate) > max(1, max_items)
+        exceeds_chars = len(_gate_repair_prompt(packet, candidate)) > max_chars
+        if current and (exceeds_items or exceeds_chars):
+            batches.append(current)
+            current = [decision]
+        else:
+            current = candidate
+    if current:
+        batches.append(current)
+    return batches
+
+
 def _gate_reanalysis_prompt(packet: dict, repairs: list[dict]) -> str:
     claim_ids = [str(item.get("claim_id") or "") for item in repairs]
     context = _gate_context_for_claims(packet, claim_ids)
@@ -4027,44 +4114,75 @@ def _run_gate_review_workflow(report: dict, payload: dict, model_mode: str | Non
     repair_models: list[str] = []
     if rewrite_decisions:
         repair_policy = policy_for("buying_insight_gate_repair")
-        expected_ids = {str(item.get("claim_id")) for item in rewrite_decisions}
+        repair_batches = _gate_repair_batches(
+            packet,
+            rewrite_decisions,
+            max_items=_safe_int(repair_policy.get("max_batch_items"), 5),
+            max_chars=_safe_int(repair_policy.get("max_batch_chars"), 24000),
+        )
+        print(
+            f"   ✍️ [Buying Potential Gate Repair] batches={len(repair_batches)} "
+            f"claims={len(rewrite_decisions)} primary={tuple(repair_policy.get('chain') or ())[:1]}",
+            flush=True,
+        )
+        for batch_index, repair_batch in enumerate(repair_batches, start=1):
+            expected_ids = {str(item.get("claim_id")) for item in repair_batch}
 
-        def repair_complete(value: dict) -> tuple[bool, str]:
-            repaired_ids = {str(item.get("claim_id")) for item in _list(_dict(value).get("repairs"))}
-            return (repaired_ids == expected_ids, "Repair coverage does not match flagged claim IDs.")
+            def repair_complete(value: dict, current_ids=expected_ids) -> tuple[bool, str]:
+                repairs = [_dict(item) for item in _list(_dict(value).get("repairs"))]
+                repaired_ids = {str(item.get("claim_id")) for item in repairs}
+                if repaired_ids != current_ids:
+                    return False, "Repair coverage does not match flagged claim IDs."
+                for raw_repair in repairs:
+                    issue = _gate_repair_contract_issue(packet, raw_repair)
+                    if issue:
+                        return False, issue
+                return True, ""
 
-        try:
-            repaired, repair_model = _call_gate_stage(
-                _gate_repair_prompt(packet, rewrite_decisions),
-                repair_policy.get("chain") or buying_gate_chain(model_mode),
-                policy=repair_policy,
-                schema=_BUYING_GATE_REPAIR_SCHEMA,
-                schema_name="buying_insight_gate_wording_repair",
-                log_label="Buying Insight Gate Wording Repair",
-                validator=repair_complete,
+            repair_prompt = _gate_repair_prompt(packet, repair_batch)
+            print(
+                f"   ✍️ [Buying Potential Gate Repair] batch={batch_index}/{len(repair_batches)} "
+                f"packet_chars={len(repair_prompt)} approx_tokens={max(1, len(repair_prompt) // 4)} "
+                f"claims={len(repair_batch)}",
+                flush=True,
             )
-            repair_models.append(repair_model)
-            notes.extend(_list(repaired.get("notes")))
-            for raw in _list(repaired.get("repairs")):
-                raw = _dict(raw)
-                claim = claim_lookup.get(str(raw.get("claim_id") or ""))
-                if not claim:
-                    continue
-                action = _normalize_repair_action(raw, claim)
-                if action["action"] == "reanalysis_required":
-                    reanalysis_items.append(action)
-                else:
-                    field_actions.append(action)
-                    if action["action"] == "remove":
-                        blocked_claims.append(_clean_generated_text(claim.get("text")))
-        except Exception as exc:
-            notes.append(f"Bounded wording repair unavailable; focused reanalysis was requested: {str(exc)[:180]}")
-            for decision in rewrite_decisions:
-                claim = claim_lookup.get(str(decision.get("claim_id") or ""))
-                if claim:
-                    reanalysis_items.append(_normalize_repair_action(
-                        {"action": "reanalysis_required", "reason": decision.get("reason")}, claim,
+            try:
+                repaired, repair_model = _call_gate_stage(
+                    repair_prompt,
+                    repair_policy.get("chain"),
+                    policy=repair_policy,
+                    schema=_BUYING_GATE_REPAIR_SCHEMA,
+                    schema_name="buying_insight_gate_wording_repair",
+                    log_label=f"Buying Insight Gate Wording Repair {batch_index}/{len(repair_batches)}",
+                    validator=repair_complete,
+                )
+                repair_models.append(repair_model)
+                notes.extend(_list(repaired.get("notes")))
+                for raw in _list(repaired.get("repairs")):
+                    raw = _dict(raw)
+                    claim = claim_lookup.get(str(raw.get("claim_id") or ""))
+                    if not claim:
+                        continue
+                    action = _normalize_repair_action(raw, claim)
+                    if action["action"] == "reanalysis_required":
+                        reanalysis_items.append(action)
+                    else:
+                        field_actions.append(action)
+                        if action["action"] == "remove":
+                            blocked_claims.append(_clean_generated_text(claim.get("text")))
+            except Exception as exc:
+                notes.append(
+                    f"Bounded wording repair batch {batch_index} was unavailable; "
+                    f"its unsafe wording was removed: {str(exc)[:160]}"
+                )
+                for decision in repair_batch:
+                    claim = claim_lookup.get(str(decision.get("claim_id") or ""))
+                    if not claim:
+                        continue
+                    field_actions.append(_normalize_repair_action(
+                        {"action": "remove", "reason": decision.get("reason")}, claim,
                     ))
+                    blocked_claims.append(_clean_generated_text(claim.get("text")))
 
     reanalysis_models: list[str] = []
     if reanalysis_items:
@@ -4365,6 +4483,324 @@ def _remove_blocked_claims_from_public_sections(report: dict, blocked_claims: li
         if key in report:
             report[key] = clean(report[key])
     return removed
+
+
+_LANGUAGE_PUBLIC_KEYS = (
+    "account_snapshot",
+    "buying_potential_thesis",
+    "sales_spine",
+    "pressure_signals",
+    "why_now",
+    "pain_to_solution_map",
+    "recommended_sales_plays",
+    "stakeholder_map",
+)
+
+_LANGUAGE_PROSE_FIELDS = {
+    "text", "account_thesis", "strategic_synthesis_basis", "hypothesis", "rationale",
+    "description", "trigger", "business_consequence", "buyer_role_concern",
+    "why_it_matters_now", "safe_discovery_question", "interpreted_pressure", "buyer_lens",
+    "why_this_service", "proof_point", "safe_wording", "missing_evidence",
+    "buying_hypothesis", "business_hypothesis", "why_relevant", "trigger_to_offer_bridge",
+    "first_meeting_objective", "safe_customer_wording", "opening_angle", "executive_angle",
+    "technical_angle", "relevance_rationale", "current_condition", "future_pressure",
+    "market_context", "company_context", "combined_activation_hypothesis",
+    "likely_business_consequence", "what_to_propose", "what_to_do", "what_progress_shows",
+    "validation_question", "falsifier", "service_fit_rationale",
+}
+
+_LANGUAGE_TITLE_FIELDS = {
+    "play_name", "signal_type", "pressure_type", "theme", "service_or_offer", "service",
+}
+
+_LANGUAGE_LIST_FIELDS = {
+    "paragraphs", "top_buying_hypotheses", "discovery_questions", "qualification_upgrade_criteria",
+}
+
+
+def _public_path_tokens(path: str) -> list[tuple[str, str]]:
+    return re.findall(r"([a-zA-Z_]+)|\[(\d+)\]", str(path or ""))
+
+
+def _public_path_value(report: dict, path: str) -> Any:
+    current: Any = report
+    for name, index_text in _public_path_tokens(path):
+        if name:
+            if not isinstance(current, dict) or name not in current:
+                return None
+            current = current[name]
+        else:
+            index = _safe_int(index_text, -1)
+            if not isinstance(current, list) or not (0 <= index < len(current)):
+                return None
+            current = current[index]
+    return current
+
+
+def _set_public_path_value(report: dict, path: str, value: Any) -> bool:
+    tokens = _public_path_tokens(path)
+    if not tokens or tokens[0][0] not in _LANGUAGE_PUBLIC_KEYS:
+        return False
+    current: Any = report
+    for offset, (name, index_text) in enumerate(tokens):
+        final = offset == len(tokens) - 1
+        key: Any = name if name else _safe_int(index_text, -1)
+        if isinstance(current, dict) and isinstance(key, str) and key in current:
+            if final:
+                current[key] = value
+                return True
+            current = current[key]
+        elif isinstance(current, list) and isinstance(key, int) and 0 <= key < len(current):
+            if final:
+                current[key] = value
+                return True
+            current = current[key]
+        else:
+            return False
+    return False
+
+
+def _language_issue_codes(path: str, value: Any) -> list[str]:
+    text = _clean_generated_text(value)
+    if not text:
+        return []
+    field = next((name for name, _index in reversed(_public_path_tokens(path)) if name), "")
+    issues: list[str] = []
+    lower = text.lower()
+    if re.search(r"\bwhether\s+(?:because|if)\b", text, re.I):
+        issues.append("malformed_whether_clause")
+    if re.search(r"\b(?:and|or|because|whether|if|while|although|but|given that|with|to|for|of)\s*[.!?]?$", text, re.I):
+        issues.append("trailing_connector")
+    if re.search(r"\bgiven that no separate external pressure\s*[.!?]?$", lower):
+        issues.append("incomplete_causal_clause")
+    if text.count("(") != text.count(")") or text.count("[") != text.count("]"):
+        issues.append("unbalanced_delimiter")
+    if re.match(r"^(?:sales hypothesis|account-specific question|model fallback|deterministic fallback)\s*:", text, re.I):
+        issues.append("internal_prefix")
+    if field in _LANGUAGE_TITLE_FIELDS and (text.endswith("...") or re.search(r"\b(?:and|or|with|to|for|of)\s*$", text, re.I)):
+        issues.append("truncated_title")
+    if field in _LANGUAGE_PROSE_FIELDS and len(text) >= 28 and not re.search(r"[.!?]$", text):
+        issues.append("missing_sentence_ending")
+    return list(dict.fromkeys(issues))
+
+
+def _language_public_items(report: dict) -> list[dict]:
+    items: list[dict] = []
+
+    def visit(value: Any, path: str, parent_field: str = ""):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                child_path = f"{path}.{key}" if path else str(key)
+                visit(child, child_path, str(key))
+            return
+        if isinstance(value, list):
+            for index, child in enumerate(value):
+                visit(child, f"{path}[{index}]", parent_field)
+            return
+        if not isinstance(value, str):
+            return
+        field = next((name for name, _index in reversed(_public_path_tokens(path)) if name), parent_field)
+        if field not in _LANGUAGE_PROSE_FIELDS and field not in _LANGUAGE_TITLE_FIELDS and parent_field not in _LANGUAGE_LIST_FIELDS:
+            return
+        issues = _language_issue_codes(path, value)
+        if not issues:
+            return
+        qa_key = f"{path}|{_clean_generated_text(value)}".encode("utf-8")
+        items.append({
+            "qa_id": f"LQA-{hashlib.sha256(qa_key).hexdigest()[:12].upper()}",
+            "path": path,
+            "text": _clean_generated_text(value),
+            "issues": issues,
+        })
+
+    for key in _LANGUAGE_PUBLIC_KEYS:
+        if key in report:
+            visit(report[key], key, key)
+    return items
+
+
+def _deterministic_language_cleanup(path: str, value: Any) -> str:
+    text = _clean_generated_text(value)
+    if not text:
+        return ""
+    text = re.sub(
+        r"\b(The qualification (?:issue|question) is) whether because\b",
+        r"\1 that",
+        text,
+        flags=re.I,
+    )
+    text = re.sub(r"\bwhether\s+if\b", "whether", text, flags=re.I)
+    text = re.sub(r"^(?:Sales hypothesis|Model fallback|Deterministic fallback)\s*:\s*", "", text, flags=re.I)
+    text = re.sub(r"^Account-specific question\s*:\s*whether\s+", "Validate whether ", text, flags=re.I)
+    field = next((name for name, _index in reversed(_public_path_tokens(path)) if name), "")
+    issues = _language_issue_codes(path, text)
+    if field in _LANGUAGE_PROSE_FIELDS and issues == ["missing_sentence_ending"]:
+        text = text.rstrip(" ,;:-") + "."
+    return _clean_generated_text(text)
+
+
+def _language_qa_prompt(items: list[dict]) -> str:
+    return f"""
+Repair only the grammar and sentence completeness of these final Buying Insight fields.
+Return only JSON matching the supplied schema.
+
+Rules:
+- Preserve each sentence's meaning, evidence boundary, entity scope, uncertainty, linked IDs, and allowed-use posture.
+- Do not add facts, evidence, services, timing, owners, competitors, causal claims, or strategic analysis.
+- Produce exactly one repair per qa_id and keep path unchanged.
+- Use replace for a complete fluent correction. Use remove only when the fragment cannot be repaired without inventing meaning.
+- Titles must be concise noun phrases. Prose must be a complete reader-facing sentence.
+- Remove internal generation labels and do not emit markdown.
+
+Flagged final fields:
+{json.dumps(items, ensure_ascii=False)}
+""".strip()
+
+
+def _language_qa_batches(items: list[dict], *, max_items: int = 8, max_chars: int = 20000) -> list[list[dict]]:
+    batches: list[list[dict]] = []
+    current: list[dict] = []
+    for item in items:
+        candidate = current + [item]
+        if current and (len(candidate) > max_items or len(_language_qa_prompt(candidate)) > max_chars):
+            batches.append(current)
+            current = [item]
+        else:
+            current = candidate
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _prune_empty_public_labels(report: dict) -> int:
+    removable_fields = {"safe_wording", "safe_customer_wording", "opening_angle", "executive_angle", "technical_angle"}
+    removed = 0
+
+    def prune(value: Any) -> Any:
+        nonlocal removed
+        if isinstance(value, dict):
+            cleaned = {}
+            for key, child in value.items():
+                if key in removable_fields and not _clean_generated_text(child):
+                    removed += 1
+                    continue
+                cleaned[key] = prune(child)
+            return cleaned
+        if isinstance(value, list):
+            return [prune(item) for item in value]
+        return value
+
+    for key in _LANGUAGE_PUBLIC_KEYS:
+        if key in report:
+            report[key] = prune(report[key])
+    return removed
+
+
+def _run_final_language_qa(report: dict, gate_review: dict | None = None, *, run_model: bool = True) -> dict:
+    initial_items = _language_public_items(report)
+    for item in initial_items:
+        cleaned = _deterministic_language_cleanup(item["path"], item["text"])
+        _set_public_path_value(report, item["path"], cleaned)
+
+    remaining = _language_public_items(report)
+    model_repairs = 0
+    model_failures = 0
+    qa_models: list[str] = []
+    qa_notes: list[str] = []
+    if remaining and run_model:
+        policy = policy_for("buying_insight_language_qa")
+        batches = _language_qa_batches(
+            remaining,
+            max_items=_safe_int(policy.get("max_batch_items"), 8),
+            max_chars=_safe_int(policy.get("max_batch_chars"), 20000),
+        )
+        for batch_index, batch in enumerate(batches, start=1):
+            expected = {str(item.get("qa_id")): item for item in batch}
+
+            def language_complete(value: dict, current=expected) -> tuple[bool, str]:
+                repairs = [_dict(item) for item in _list(_dict(value).get("repairs"))]
+                repair_ids = {str(item.get("qa_id")) for item in repairs}
+                if repair_ids != set(current):
+                    return False, "Language QA coverage does not match flagged field IDs."
+                for repair in repairs:
+                    original = current[str(repair.get("qa_id"))]
+                    if str(repair.get("path") or "") != str(original.get("path") or ""):
+                        return False, "Language QA path does not match the flagged field."
+                    replacement = _clean_generated_text(repair.get("replacement"))
+                    if str(repair.get("action") or "") == "replace":
+                        if len(replacement) < 8:
+                            return False, "Language QA replacement is empty or too short."
+                        if _stable_contract_ids(replacement) - _stable_contract_ids(original.get("text")):
+                            return False, "Language QA introduced a new stable evidence or lineage ID."
+                return True, ""
+
+            try:
+                fixed, used_model = _call_gate_stage(
+                    _language_qa_prompt(batch),
+                    policy.get("chain"),
+                    policy=policy,
+                    schema=_BUYING_LANGUAGE_QA_SCHEMA,
+                    schema_name="buying_insight_final_language_qa",
+                    log_label=f"Buying Insight Final Language QA {batch_index}/{len(batches)}",
+                    validator=language_complete,
+                )
+                qa_models.append(used_model)
+                qa_notes.extend(str(item) for item in _list(fixed.get("notes")) if item)
+                for repair in _list(fixed.get("repairs")):
+                    repair = _dict(repair)
+                    replacement = "" if repair.get("action") == "remove" else _clean_generated_text(repair.get("replacement"))
+                    if _set_public_path_value(report, str(repair.get("path") or ""), replacement):
+                        model_repairs += 1
+            except Exception as exc:
+                model_failures += 1
+                qa_notes.append(f"Final language QA batch {batch_index} was unavailable: {str(exc)[:160]}")
+
+    unresolved = _language_public_items(report)
+    deterministically_removed = 0
+    for item in unresolved:
+        text = _clean_generated_text(_public_path_value(report, item["path"]))
+        complete_sentences = re.findall(r"[^.!?]+[.!?]", text)
+        fallback = " ".join(sentence.strip() for sentence in complete_sentences).strip()
+        if fallback and not _language_issue_codes(item["path"], fallback):
+            _set_public_path_value(report, item["path"], fallback)
+        else:
+            _set_public_path_value(report, item["path"], "")
+            deterministically_removed += 1
+
+    empty_fields_removed = _prune_empty_public_labels(report)
+    blocked_recurrences_removed = _remove_blocked_claims_from_public_sections(
+        report,
+        [_clean_generated_text(item) for item in _list(_dict(gate_review).get("blocked_claims")) if _clean_generated_text(item)],
+    )
+    final_issues = _language_public_items(report)
+    status = "clean" if not initial_items else "repaired" if not final_issues else "warning"
+    report["language_quality"] = {
+        "status": status,
+        "initial_issue_count": len(initial_items),
+        "model_repair_count": model_repairs,
+        "model_failure_count": model_failures,
+        "deterministic_removal_count": deterministically_removed,
+        "empty_field_count": empty_fields_removed,
+        "blocked_recurrence_removal_count": blocked_recurrences_removed,
+        "remaining_issue_count": len(final_issues),
+        "models": list(dict.fromkeys(qa_models)),
+        "notes": qa_notes[:8],
+    }
+    if initial_items or empty_fields_removed or blocked_recurrences_removed:
+        evidence = _dict(report.get("evidence_confidence"))
+        quality_notes = _list(evidence.get("report_quality_notes"))
+        quality_notes.append(
+            f"Final language QA repaired {model_repairs} field(s), removed {deterministically_removed} unresolved fragment(s), "
+            f"and suppressed {empty_fields_removed} empty public field(s)."
+        )
+        evidence["report_quality_notes"] = list(dict.fromkeys(quality_notes))[:12]
+        report["evidence_confidence"] = evidence
+    print(
+        f"   ✨ [Buying Potential Language QA] status={status} initial={len(initial_items)} "
+        f"model_repairs={model_repairs} removed={deterministically_removed} remaining={len(final_issues)}",
+        flush=True,
+    )
+    return report
 
 
 def _has_basis(item: dict) -> bool:
@@ -7367,6 +7803,8 @@ def generate_buying_potential_report(
     report["buyer_role_lens_version"] = "v1"
     report["companyName"] = company_data.get("companyName")
     report["companyUrl"] = company_data.get("companyUrl")
+    report = _polish_generated_text_tree(report, report.get("companyName"))
+    report = _run_final_language_qa(report, gate_review)
     if stage_callback:
         stage_callback("render_html", 82, "Rendering Buying Insight HTML")
     html_report = render_buying_potential_html(report)

@@ -90,6 +90,17 @@ def _openai_response_diagnostics(response: Any) -> dict[str, Any]:
     }
 
 
+def _anthropic_response_diagnostics(response: Any) -> dict[str, Any]:
+    usage = _value(response, "usage", {}) or {}
+    output_details = _value(usage, "output_tokens_details", {}) or {}
+    return {
+        "stop_reason": str(_value(response, "stop_reason", "unknown") or "unknown"),
+        "input_tokens": int(_value(usage, "input_tokens", 0) or 0),
+        "output_tokens": int(_value(usage, "output_tokens", 0) or 0),
+        "thinking_tokens": int(_value(output_details, "thinking_tokens", 0) or 0),
+    }
+
+
 def _structured_output_format(schema: dict[str, Any], name: str) -> dict[str, Any]:
     safe_name = re.sub(r"[^a-zA-Z0-9_-]+", "_", name or "scanner_output")[:64]
     return {
@@ -181,6 +192,9 @@ def call_anthropic_text(
     max_searches: int = 8,
     thinking_budget: int | None = None,
     reasoning_effort: str | None = None,
+    json_schema: dict[str, Any] | None = None,
+    json_schema_name: str = "scanner_output",
+    log_label: str = "Anthropic",
 ) -> str:
     api_key = anthropic_api_key()
     if not api_key:
@@ -200,15 +214,42 @@ def call_anthropic_text(
             "max_uses": max_searches,
         }]
     # Backward compatibility: older call sites pass a numeric thinking_budget.
-    # Treat it as a request for medium effort, but do not send unsupported
-    # thinking controls to Sonnet 5, where adaptive thinking is the default.
+    # Treat it as a request for medium effort under the current output config.
     if thinking_budget and not reasoning_effort:
         reasoning_effort = "medium"
-    if reasoning_effort and "sonnet-5" not in model:
-        kwargs["thinking"] = {"type": "adaptive"}
-        kwargs["extra_body"] = {"output_config": {"effort": reasoning_effort}}
+    output_config: dict[str, Any] = {}
+    if reasoning_effort:
+        output_config["effort"] = reasoning_effort
+    if json_schema:
+        output_config["format"] = {
+            "type": "json_schema",
+            "schema": json_schema,
+        }
+    if output_config:
+        kwargs["output_config"] = output_config
+
+    started = time.time()
     response = client.messages.create(**kwargs)
-    return extract_anthropic_text(response)
+    diagnostics = _anthropic_response_diagnostics(response)
+    elapsed_ms = int((time.time() - started) * 1000)
+    print(
+        f"   [{log_label}] model={model}, stop_reason={diagnostics['stop_reason']}, "
+        f"input_tokens={diagnostics['input_tokens']}, output_tokens={diagnostics['output_tokens']}, "
+        f"thinking_tokens={diagnostics['thinking_tokens']}, elapsed_ms={elapsed_ms}, "
+        f"effort={reasoning_effort or '-'}, structured={bool(json_schema)}, "
+        f"schema={json_schema_name if json_schema else '-'}"
+    )
+    if diagnostics["stop_reason"] == "max_tokens":
+        raise ValueError(
+            f"Anthropic response incomplete: stop_reason=max_tokens, "
+            f"output_tokens={diagnostics['output_tokens']}, max_tokens={max_tokens}"
+        )
+    text = extract_anthropic_text(response)
+    if not text:
+        raise ValueError(
+            f"Anthropic returned no usable text (stop_reason={diagnostics['stop_reason']})"
+        )
+    return text
 
 
 def call_json_model_chain(
@@ -251,7 +292,16 @@ def call_json_model_chain(
                         raise ValueError(f"JSON missing required fields: {missing}")
                 return text, model
             if model.startswith("claude-"):
-                text = call_anthropic_text(prompt, model, max_tokens=max_tokens, timeout=timeout)
+                text = call_anthropic_text(
+                    prompt,
+                    model,
+                    max_tokens=max_tokens,
+                    timeout=timeout,
+                    reasoning_effort=reasoning_effort,
+                    json_schema=json_schema,
+                    json_schema_name=json_schema_name,
+                    log_label=log_label,
+                )
                 if validate_json:
                     parsed = parse_json_object(text)
                     missing = [field for field in (required_fields or []) if field not in parsed]

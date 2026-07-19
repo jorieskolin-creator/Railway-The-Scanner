@@ -101,7 +101,11 @@ def test_buying_potential_uses_reasoning_aware_sol_budgets_and_strict_schemas(mo
     assert gate_policy["max_output_tokens"] == 5000
     assert gate_policy["timeout_seconds"] == 90
     assert bp._BUYING_GATE_REVIEW_SCHEMA["additionalProperties"] is False
-    assert bp.policy_for("buying_insight_gate_repair")["effort"] == "medium"
+    repair_policy = bp.policy_for("buying_insight_gate_repair")
+    assert repair_policy["effort"] == "medium"
+    assert repair_policy["chain"][0] == "claude-sonnet-5"
+    assert repair_policy["max_batch_items"] == 5
+    assert bp.policy_for("buying_insight_language_qa")["chain"][0] == "claude-sonnet-5"
     assert bp.policy_for("buying_insight_gate_reanalysis")["chain"][0] == "gpt-5.6-sol"
 
 
@@ -189,7 +193,7 @@ def test_gate_workflow_splits_decision_and_wording_repair(monkeypatch):
     monkeypatch.setattr(bp, "_call_gate_stage", fake_stage)
     review = bp._run_gate_review_workflow(report, {})
 
-    assert calls == ["Buying Insight Gate Decision 1/1", "Buying Insight Gate Wording Repair"]
+    assert calls == ["Buying Insight Gate Decision 1/1", "Buying Insight Gate Wording Repair 1/1"]
     assert review["field_actions"][0]["replacement"].startswith("Discovery should establish")
     assert review["deterministic_removal_count"] == 0
 
@@ -255,6 +259,99 @@ def test_gate_decision_batches_preserve_all_claims_without_order_truncation(monk
 
     assert [len(batch["claims"]) for batch in batches] == [30, 30, 7]
     assert claim_ids == [f"CLM-{index:03d}" for index in range(67)]
+
+
+def test_gate_wording_repair_batches_are_bounded_and_keep_all_claims(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    packet = {
+        "claims": [
+            {
+                "claim_id": f"CLM-{index:03d}",
+                "path": f"recommended_sales_plays[{index}].buying_hypothesis",
+                "object_id": f"HYP-{index:02d}",
+                "text": f"Unsafe claim {index} with enough text to require a bounded rewrite.",
+                "gate": "allowed_as_hypothesis",
+                "signal_ids": [f"SIG-{index:02d}"],
+                "hypothesis_ids": [f"HYP-{index:02d}"],
+                "evidence_ids": [],
+            }
+            for index in range(12)
+        ],
+        "hypothesis_contracts": [],
+        "signals": [],
+        "evidence_index": [],
+    }
+    decisions = [
+        {"claim_id": f"CLM-{index:03d}", "decision": "rewrite", "reason": "Narrow the claim."}
+        for index in range(12)
+    ]
+
+    batches = bp._gate_repair_batches(packet, decisions, max_items=5, max_chars=50000)
+
+    assert [len(batch) for batch in batches] == [5, 5, 2]
+    assert [item["claim_id"] for batch in batches for item in batch] == [f"CLM-{index:03d}" for index in range(12)]
+
+
+def test_failed_gate_repair_batch_is_removed_without_sol_reanalysis(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    report = {
+        "recommended_sales_plays": [
+            {
+                "hypothesis_id": f"HYP-{index:02d}",
+                "linked_signal_ids": [f"SIG-{index:02d}"],
+                "buying_hypothesis": f"Unsupported buying claim {index} proves immediate demand.",
+                "gate": "allowed_as_hypothesis",
+            }
+            for index in range(6)
+        ]
+    }
+    packet = bp._build_gate_review_packet(report, {})
+    claims = packet["claims"]
+    calls = []
+
+    def fake_stage(_prompt, chain, **kwargs):
+        calls.append((kwargs["log_label"], tuple(chain or ())))
+        if "Decision" in kwargs["log_label"]:
+            return ({
+                "status": "changes_required",
+                "reviewed_claim_ids": [item["claim_id"] for item in claims],
+                "claim_decisions": [
+                    {
+                        "claim_id": item["claim_id"],
+                        "decision": "rewrite",
+                        "new_gate": "allowed_as_discovery_question",
+                        "unsafe_text": item["text"],
+                        "reason": "Immediate demand is unsupported.",
+                    }
+                    for item in claims
+                ],
+                "notes": [],
+            }, "gpt-5.4")
+        if kwargs["log_label"].endswith("1/2"):
+            batch_ids = [item["claim_id"] for item in claims[:5]]
+            return ({
+                "repairs": [
+                    {
+                        "claim_id": claim_id,
+                        "object_id": next(item["object_id"] for item in claims if item["claim_id"] == claim_id),
+                        "path": next(item["path"] for item in claims if item["claim_id"] == claim_id),
+                        "action": "replace",
+                        "replacement": "Discovery should establish whether this demand exists.",
+                        "reason": "Reframed as a discovery question.",
+                    }
+                    for claim_id in batch_ids
+                ],
+                "notes": [],
+            }, "claude-sonnet-5")
+        raise ValueError("repair batch unavailable")
+
+    monkeypatch.setattr(bp, "_call_gate_stage", fake_stage)
+    review = bp._run_gate_review_workflow(report, {})
+
+    assert len(review["field_actions"]) == 6
+    assert sum(action["action"] == "remove" for action in review["field_actions"]) == 1
+    assert not review["reanalysis_models"]
+    assert calls[1][1][0] == "claude-sonnet-5"
 
 
 def test_buying_potential_renderer_uses_new_section_order_and_nested_play_angles(monkeypatch):
@@ -1206,3 +1303,58 @@ def test_title_grammar_and_risk_theme_hygiene(monkeypatch):
     assert bp._normalize_discovery_play_title("Energy productivity.") == "Energy productivity discovery play"
     assert bp._clean_generated_text("Validate whether if timing exists.") == "Validate whether timing exists."
     assert bp._dedupe_text_items(["Repeated risk", "Repeated risk", "Different risk"]) == ["Repeated risk", "Different risk"]
+
+
+def test_final_language_qa_repairs_deterministic_defects_and_hides_empty_fields(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    report = {
+        "companyName": "Ensto",
+        "buying_potential_thesis": {
+            "text": "The qualification issue is whether because the promoted evidence remains incomplete",
+        },
+        "recommended_sales_plays": [{
+            "play_name": "Energy productivity and passport readiness and",
+            "safe_customer_wording": "",
+            "buying_hypothesis": "A complete hypothesis remains available.",
+        }],
+        "evidence_confidence": {"report_quality_notes": []},
+    }
+
+    result = bp._run_final_language_qa(report, run_model=False)
+
+    assert result["buying_potential_thesis"]["text"] == "The qualification issue is that the promoted evidence remains incomplete."
+    assert "safe_customer_wording" not in result["recommended_sales_plays"][0]
+    assert result["recommended_sales_plays"][0]["play_name"] == ""
+    assert result["language_quality"]["remaining_issue_count"] == 0
+
+
+def test_final_language_qa_uses_sonnet_batches_for_remaining_fragments(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    report = {
+        "companyName": "Ensto",
+        "sales_spine": {"account_thesis": "The operating question remains because."},
+        "evidence_confidence": {"report_quality_notes": []},
+    }
+    calls = []
+
+    def fake_stage(_prompt, chain, **kwargs):
+        calls.append((tuple(chain or ()), kwargs["log_label"]))
+        item = bp._language_public_items(report)[0]
+        return ({
+            "repairs": [{
+                "qa_id": item["qa_id"],
+                "path": item["path"],
+                "action": "replace",
+                "replacement": "The operating question remains open because current evidence is incomplete.",
+                "reason": "Completed the causal sentence without adding a claim.",
+            }],
+            "notes": [],
+        }, "claude-sonnet-5")
+
+    monkeypatch.setattr(bp, "_call_gate_stage", fake_stage)
+    result = bp._run_final_language_qa(report)
+
+    assert calls[0][0][0] == "claude-sonnet-5"
+    assert result["sales_spine"]["account_thesis"].endswith("incomplete.")
+    assert result["language_quality"]["model_repair_count"] == 1
+    assert result["language_quality"]["remaining_issue_count"] == 0

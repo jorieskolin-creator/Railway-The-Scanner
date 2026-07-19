@@ -130,11 +130,13 @@ MODEL_POLICIES: dict[str, dict[str, Any]] = {
         "timeout_seconds": 90,
     },
     "buying_insight_gate_repair": {
-        "chain": buying_gate_chain(),
+        "chain": dedupe_chain(CLAUDE_SONNET_MODEL, GPT_VERIFIER_MODEL),
         "effort": "medium",
         "verbosity": "low",
-        "max_output_tokens": 6000,
+        "max_output_tokens": 4000,
         "timeout_seconds": 90,
+        "max_batch_items": 5,
+        "max_batch_chars": 24000,
     },
     "buying_insight_gate_reanalysis": {
         "chain": dedupe_chain(GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL),
@@ -142,6 +144,15 @@ MODEL_POLICIES: dict[str, dict[str, Any]] = {
         "verbosity": "medium",
         "max_output_tokens": 7000,
         "timeout_seconds": 120,
+    },
+    "buying_insight_language_qa": {
+        "chain": dedupe_chain(CLAUDE_SONNET_MODEL, GPT_VERIFIER_MODEL),
+        "effort": "medium",
+        "verbosity": "low",
+        "max_output_tokens": 3500,
+        "timeout_seconds": 75,
+        "max_batch_items": 8,
+        "max_batch_chars": 20000,
     },
     "general_summary": {
         "primary": GPT_REASONING_MODEL,
