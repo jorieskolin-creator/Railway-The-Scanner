@@ -48,6 +48,7 @@ ALLOWED_GATES = {
 }
 EVIDENCE_BASIS_PREFIXES = ("SRC-", "FIN-", "CED-", "LEDGER-", "EVD-")
 SIGNAL_MAP_LIMIT = 10
+BUYING_GATE_PACKET_CHAR_LIMIT = 80000
 SIGNAL_LANE_QUOTAS = {
     "activation_hypothesis": 3,
     "account_fact": 2,
@@ -180,6 +181,7 @@ def _clean_generated_text(value: Any) -> str:
     text = re.sub(r"([!?])\.", r"\1", text)
     text = re.sub(r"\bThe external pressure is\s+", "External pressure: ", text, flags=re.I)
     text = re.sub(r"\bThe account-specific question is whether\s+", "Account-specific question: whether ", text, flags=re.I)
+    text = re.sub(r"\bwhether\s+if\b", "whether", text, flags=re.I)
     for acronym in ACRONYM_FIXES:
         text = re.sub(rf"\b{re.escape(acronym.lower())}\b", acronym, text, flags=re.I)
     return text.strip()
@@ -268,6 +270,21 @@ def _list(value: Any) -> list:
 
 def _dict(value: Any) -> dict:
     return value if isinstance(value, dict) else {}
+
+
+def _dedupe_text_items(items: Any, *, limit: int = 12, clip_limit: int = 520) -> list[str]:
+    values: list[str] = []
+    seen: set[str] = set()
+    for item in _list(items):
+        text = _clip(item, clip_limit)
+        key = re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+        if not text or not key or key in seen:
+            continue
+        seen.add(key)
+        values.append(text)
+        if len(values) >= limit:
+            break
+    return values
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -379,7 +396,8 @@ def _match_modernization_tactics(text: Any, tactics: list[dict], *, limit: int =
     for tactic in tactics:
         tactic_words = _keyword_set(tactic.get("match_text") or _tactic_text(tactic))
         overlap = sorted(query & tactic_words)
-        if not overlap:
+        # A single generic keyword is not an explicit account-to-tactic bridge.
+        if len(overlap) < 2:
             continue
         scored.append((len(overlap), tactic.get("category") or "", tactic.get("concept") or "", overlap[:8], tactic))
     scored.sort(key=lambda item: (-item[0], item[1], item[2]))
@@ -391,6 +409,7 @@ def _match_modernization_tactics(text: Any, tactics: list[dict], *, limit: int =
             continue
         seen.add(key)
         matches.append({
+            "tactic_id": tactic.get("tactic_id") or tactic.get("id") or tactic.get("concept"),
             "category": tactic.get("category"),
             "concept": tactic.get("concept"),
             "problem_pattern": tactic.get("problem_pattern"),
@@ -1441,7 +1460,9 @@ def _compute_reliability_status(report: dict, payload: dict, gate_review: dict |
     evidence_confidence = _dict(report.get("evidence_confidence"))
     do_not_say_count = len(_list(evidence_confidence.get("do_not_say") or evidence_confidence.get("do_not_use_claims")))
     gate_blocked_count = len(_list(_dict(gate_review).get("blocked_claims"))) if gate_review else 0
-    gate_unavailable = bool(gate_review and gate_review.get("approved") is not True)
+    gate_status = str(_dict(gate_review).get("status") or ("approved" if _dict(gate_review).get("approved") is True else "")).lower()
+    gate_unavailable = gate_status == "unavailable"
+    gate_changes_required = gate_status == "changes_required"
     deterministic_fallback = any(
         "deterministic fallback" in str(note).lower()
         for note in _list(report.get("model_notes")) + _list(report.get("missing_input_warnings"))
@@ -1471,7 +1492,9 @@ def _compute_reliability_status(report: dict, payload: dict, gate_review: dict |
     if blocked_play_count or gate_blocked_count or do_not_say_count:
         reasons.append("Guardrails contain blocked or do-not-say material that must not be used customer-facing.")
     if gate_unavailable:
-        reasons.append("Independent gate review did not fully approve the report; deterministic post-processing applied.")
+        reasons.append("Independent semantic gate review was unavailable; deterministic evidence controls remain authoritative.")
+    elif gate_changes_required:
+        reasons.append("Independent semantic gate review required bounded wording or gate corrections, which were applied.")
     if deterministic_fallback:
         reasons.append("One or more generated sections used deterministic fallback.")
     if sufficiency_status != "complete":
@@ -1597,7 +1620,17 @@ def _need_hypothesis_from_signal(signal: dict) -> dict:
     pressure_label, pressure, consequence = _infer_pressure(text)
     play_type = _normalize_play_type(signal.get("sales_play_type") or signal.get("play_type") or signal.get("theme_type"))
     current_condition = _clip(signal.get("why") or signal.get("account_movement") or text, 420)
-    future_pressure = _clip(pressure if play_type != "current_status" else signal.get("commercial_pressure") or pressure, 420)
+    explicit_need = _dict(signal.get("need_hypothesis"))
+    explicit_pressure = _first_nonempty(
+        explicit_need.get("future_pressure"),
+        signal.get("external_pressure"),
+        signal.get("foresight_pressure"),
+        limit=520,
+    )
+    if play_type == "current_status" and not explicit_pressure:
+        future_pressure = "No separate external pressure is established for this current-status hypothesis."
+    else:
+        future_pressure = _clip(explicit_pressure or pressure, 520)
     structural_exposure = _clip(signal.get("theme") or pressure_label, 260)
     likely_business_consequence = _clip(signal.get("business_consequence") or consequence, 420)
     what_to_propose = _clip(
@@ -1610,7 +1643,11 @@ def _need_hypothesis_from_signal(signal: dict) -> dict:
     why_now_or_soon = _clip(signal.get("timing_relevance") or _infer_timing(text), 360)
     context_type = _normalize_context_type(signal.get("context_type"), play_type)
     company_context = _clip(current_condition, 520)
-    market_context = _clip(future_pressure if play_type != "current_status" else signal.get("commercial_pressure") or pressure, 520)
+    market_context = _clip(
+        explicit_need.get("market_context")
+        or future_pressure,
+        520,
+    )
     if play_type == "current_status":
         combined_activation = (
             f"Account signal: {current_condition}. Sales hypothesis: validate the response direction "
@@ -1686,11 +1723,7 @@ def _response_directions_from_play(play: dict, need: dict) -> dict:
         or play.get("why_relevant"),
         700,
     )
-    directions = [
-        "Validate the current operating baseline before proposing a solution.",
-        "Identify whether process, governance, data, integration, technology, or capability development is the binding constraint.",
-        "Use Evolving Modernization as a completeness lens, not as a pre-scoped delivery plan.",
-    ]
+    directions: list[str] = []
     other_capabilities = [
         "Customer-owned operating ownership and change capacity",
         "Specialist domain expertise where the need touches industrial engineering, PLM, MES/MOM, OT, regulation, or sector-specific quality assurance",
@@ -1704,6 +1737,13 @@ def _response_directions_from_play(play: dict, need: dict) -> dict:
         ),
         "other_capabilities_may_be_required": other_capabilities,
     }
+
+
+def _normalize_discovery_play_title(value: Any, fallback: Any = "") -> str:
+    title = _clip(value or fallback or "Activation theme", 120)
+    title = re.sub(r"\s+discovery\s+play\.?$", "", title, flags=re.I).strip()
+    title = title.rstrip(" .,:;-–—")
+    return f"{title} discovery play" if title else "Discovery play"
 
 
 def _canonical_service_id(service: dict) -> str:
@@ -2594,7 +2634,6 @@ Return ONLY valid JSON with this schema:
   "recommended_sales_plays": [{{"service_or_offer": "...", "need_hypothesis": {{"future_pressure": "...", "current_condition": "...", "structural_exposure": "...", "likely_business_consequence": "...", "why_now_or_soon": "...", "what_to_propose": "...", "what_progress_shows": "...", "discovery_question": "...", "disqualifier": "...", "company_context": "...", "market_context": "...", "combined_activation_hypothesis": "...", "falsifier": "...", "context_type": "company_only|market_watch|combined_activation"}}, "response_directions": {{"potential_need": "...", "evolving_modernization_directions": [], "vivicta_potential_contribution": "...", "other_capabilities_may_be_required": []}}, "readiness_band": "Validate now|Validate when trigger appears|Monitor|Insufficient account connection", "evidence_coverage": "...", "confidence_boundary": "...", "priority_band": "...", "why_relevant": "...", "target_stakeholder": "...", "opening_angle": "...", "executive_angle": "...", "technical_angle": "...", "discovery_questions": ["..."], "do_not_say": ["..."], "confidence": 0, "hypothesis_strength": 0, "score_label": "Internal compatibility score", "overclaim_risk": "low|medium|high", "evidence_basis": [], "disqualifiers": []}}],
   "sales_spine": {{"account_thesis": "", "strategic_synthesis_basis": "", "top_buying_hypotheses": [], "risk_themes": [], "self_scan_note": ""}},
   "evidence_confidence": {{"strongest_evidence": [], "verified_facts": [], "safe_hypotheses": [], "use_only_as_question": [], "weak_or_missing_evidence": [], "do_not_use_claims": [], "do_not_say": [], "sensitive_claims": [], "claims_as_questions_only": []}},
-  "overall_confidence": 0,
   "missing_input_warnings": [],
   "model_notes": []
 }}
@@ -2648,7 +2687,6 @@ BUYING_SECTION_SCHEMAS = {
 {
   "pressure_signals": [{"signal_type": "...", "trigger": "...", "description": "...", "business_consequence": "...", "buyer_role_concern": "...", "gate": "allowed_as_hypothesis|allowed_as_discovery_question|internal_only|blocked", "confidence": 0, "evidence_basis": ["SIG-01"]}],
   "evidence_confidence": {"strongest_evidence": [], "verified_facts": [], "safe_hypotheses": [], "use_only_as_question": [], "weak_or_missing_evidence": [], "do_not_use_claims": [], "do_not_say": [], "sensitive_claims": [], "claims_as_questions_only": []},
-  "overall_confidence": 0,
   "missing_input_warnings": [],
   "model_notes": []
 }
@@ -2799,7 +2837,6 @@ BUYING_SECTION_JSON_SCHEMAS = {
             }),
         },
         "evidence_confidence": _EVIDENCE_CONFIDENCE_SCHEMA,
-        "overall_confidence": _NUMBER,
         "missing_input_warnings": _STRING_LIST,
         "model_notes": _STRING_LIST,
     }),
@@ -2826,6 +2863,33 @@ BUYING_SECTION_JSON_SCHEMAS = {
         "model_notes": _STRING_LIST,
     }),
 }
+
+_BUYING_GATE_REVIEW_SCHEMA = _strict_object({
+    "status": {
+        "type": "string",
+        "enum": ["approved", "changes_required", "unavailable"],
+    },
+    "required_downgrades": {
+        "type": "array",
+        "items": _strict_object({
+            "path": _STRING,
+            "reason": _STRING,
+            "new_gate": _GATE,
+        }),
+    },
+    "field_actions": {
+        "type": "array",
+        "items": _strict_object({
+            "object_id": _STRING,
+            "path": _STRING,
+            "action": {"type": "string", "enum": ["replace", "remove"]},
+            "replacement": _STRING,
+            "reason": _STRING,
+        }),
+    },
+    "blocked_claims": _STRING_LIST,
+    "notes": _STRING_LIST,
+})
 
 
 BUYING_SECTION_INSTRUCTIONS = {
@@ -2887,7 +2951,7 @@ BUYING_SECTION_KEYS = {
     "why_now": ("why_now",),
     "pain_to_solution": ("pain_to_solution_map",),
     "sales_plays": ("recommended_sales_plays",),
-    "pressure_evidence": ("pressure_signals", "evidence_confidence", "overall_confidence", "missing_input_warnings"),
+    "pressure_evidence": ("pressure_signals", "evidence_confidence", "missing_input_warnings"),
     "stakeholders": ("stakeholder_map",),
 }
 
@@ -3125,7 +3189,11 @@ def _compose_qualification_sections(reasoning: dict, payload: dict) -> dict:
         ) if item
     )
     basis = [str(item) for item in _list(reasoning.get("evidence_basis")) if str(item).strip()]
-    risk_themes = boundaries + _reasoning_list(_dict(payload.get("scanner_outputs")).get("evidence_based_risks"), 3)
+    risk_themes = _dedupe_text_items(
+        boundaries + _reasoning_list(_dict(payload.get("scanner_outputs")).get("evidence_based_risks"), 3),
+        limit=5,
+        clip_limit=240,
+    )
     return {
         "qualification_reasoning": reasoning,
         "account_snapshot": {
@@ -3259,7 +3327,7 @@ Rules:
 - Preserve the original meaning where possible.
 - If a field is malformed or incomplete, repair it conservatively or use an empty array/string.
 - Every gate must be one of: allowed_as_fact, allowed_as_hypothesis, allowed_as_discovery_question, internal_only, blocked.
-- overall_confidence and all confidence fields must be integers from 0 to 100.
+- Item-level confidence fields must be integers from 0 to 100.
 
 Required top-level schema:
 {{
@@ -3271,7 +3339,6 @@ Required top-level schema:
   "pain_to_solution_map": [],
   "recommended_sales_plays": [],
   "evidence_confidence": {{"strongest_evidence": [], "weak_or_missing_evidence": [], "do_not_use_claims": [], "sensitive_claims": [], "claims_as_questions_only": []}},
-  "overall_confidence": 0,
   "missing_input_warnings": [],
   "model_notes": []
 }}
@@ -3281,38 +3348,169 @@ Malformed JSON:
 """.strip()
 
 
+def _gate_claim_packet_item(path: str, value: Any, parent: dict | None = None) -> dict | None:
+    parent = _dict(parent)
+    text = _clip(value, 720)
+    if not text:
+        return None
+    signal_ids = _item_signal_ids(parent) or _text_signal_ids(text)
+    hypothesis_ids = [str(item) for item in _list(parent.get("linked_hypothesis_ids")) if item]
+    if parent.get("hypothesis_id"):
+        hypothesis_ids.append(str(parent.get("hypothesis_id")))
+    evidence_basis = [str(item) for item in _list(parent.get("evidence_basis")) if item]
+    return {
+        "path": path,
+        "object_id": (signal_ids + hypothesis_ids + [path.split("[", 1)[0]])[0],
+        "text": text,
+        "gate": _normalize_gate(parent.get("gate"), "allowed_as_hypothesis"),
+        "signal_ids": signal_ids[:3],
+        "hypothesis_ids": list(dict.fromkeys(hypothesis_ids))[:3],
+        "evidence_ids": list(dict.fromkeys(evidence_basis))[:8],
+    }
+
+
+def _build_gate_review_packet(report: dict, payload: dict) -> dict:
+    claims: list[dict] = []
+
+    def add(path: str, value: Any, parent: dict | None = None):
+        item = _gate_claim_packet_item(path, value, parent)
+        if item:
+            claims.append(item)
+
+    for section in ("account_snapshot", "buying_potential_thesis"):
+        item = _dict(report.get(section))
+        add(f"{section}.text", item.get("text"), item)
+    spine = _dict(report.get("sales_spine"))
+    add("sales_spine.account_thesis", spine.get("account_thesis"), spine)
+    add("sales_spine.strategic_synthesis_basis", spine.get("strategic_synthesis_basis"), spine)
+    for index, item in enumerate(_list(spine.get("top_buying_hypotheses"))[:3]):
+        parent = _dict(item)
+        add(
+            f"sales_spine.top_buying_hypotheses[{index}]",
+            parent.get("hypothesis") or parent.get("combined_activation_hypothesis") or item,
+            parent,
+        )
+
+    section_fields = {
+        "pressure_signals": ("trigger", "description", "business_consequence"),
+        "why_now": ("trigger", "why_it_matters_now", "safe_discovery_question"),
+        "pain_to_solution_map": ("interpreted_pressure", "why_this_service", "safe_wording"),
+        "recommended_sales_plays": (
+            "buying_hypothesis", "trigger_to_offer_bridge", "safe_customer_wording",
+            "first_meeting_objective", "proof_point",
+        ),
+    }
+    for section, fields in section_fields.items():
+        for index, item in enumerate(_list(report.get(section))[:6]):
+            parent = _dict(item)
+            for field in fields:
+                add(f"{section}[{index}].{field}", parent.get(field), parent)
+            need = _dict(parent.get("need_hypothesis"))
+            for field in ("current_condition", "future_pressure", "combined_activation_hypothesis"):
+                add(f"{section}[{index}].need_hypothesis.{field}", need.get(field), {**parent, **need})
+
+    cited_ids = {
+        evidence_id
+        for claim in claims
+        for evidence_id in _list(claim.get("evidence_ids"))
+        if evidence_id
+    }
+    evidence_index: list[dict] = []
+    evidence_sources = (
+        _list(payload.get("verified_evidence"))
+        + _list(payload.get("financial_sources"))
+        + _list(payload.get("source_ledger_recovery_records"))
+    )
+    for raw in evidence_sources:
+        item = _dict(raw)
+        evidence_id = str(item.get("id") or item.get("source_id") or "").strip()
+        if not evidence_id or (cited_ids and evidence_id not in cited_ids):
+            continue
+        evidence_index.append({
+            "id": evidence_id,
+            "gate": _source_item_gate(item),
+            "entity_scope": item.get("entity_scope") or item.get("scope"),
+            "generation_eligible": bool(item.get("generation_eligible") or item.get("buying_evidence_eligible")),
+            "independent_source_count": _safe_int(item.get("independent_source_count"), 0),
+            "excerpt": _first_nonempty(
+                item.get("source_quote"), item.get("quote"), item.get("snippet"),
+                item.get("claim"), item.get("finding"), item.get("description"), limit=420,
+            ),
+        })
+        if len(evidence_index) >= 48:
+            break
+
+    signal_index = [_compact_signal(item) for item in _list(payload.get("account_signal_map")) if isinstance(item, dict)][:10]
+    service_bridges = []
+    for index, play in enumerate(_list(report.get("recommended_sales_plays"))[:6]):
+        play = _dict(play)
+        service_bridges.append({
+            "path": f"recommended_sales_plays[{index}]",
+            "signal_ids": _item_signal_ids(play),
+            "service_id": play.get("service_id"),
+            "service_name": play.get("service_or_offer"),
+            "bridge": _clip(play.get("service_fit_rationale") or play.get("trigger_to_offer_bridge"), 420),
+            "gate": _normalize_gate(play.get("gate"), "allowed_as_hypothesis"),
+        })
+
+    packet = {
+        "review_scope": "Evidence safety, claim strength, service bridges, and customer-facing wording only.",
+        "allowed_use_boundary": _dict(report.get("reliability_status")).get("allowed_use")
+        or "Internal sales hypothesis; customer-facing claims require evidence-gate compliance.",
+        "evidence_sufficiency": payload.get("evidence_sufficiency"),
+        "required_sales_spine": _list(payload.get("required_sales_spine"))[:3],
+        "claims": claims[:60],
+        "signals": signal_index,
+        "evidence_index": evidence_index,
+        "service_bridges": service_bridges,
+    }
+    serialized = json.dumps(packet, ensure_ascii=False)
+    if len(serialized) > BUYING_GATE_PACKET_CHAR_LIMIT:
+        packet["claims"] = packet["claims"][:40]
+        packet["evidence_index"] = packet["evidence_index"][:24]
+        for item in packet["claims"]:
+            item["text"] = _clip(item.get("text"), 420)
+        for item in packet["evidence_index"]:
+            item["excerpt"] = _clip(item.get("excerpt"), 260)
+    return packet
+
+
 def _gate_prompt(report: dict, payload: dict) -> str:
+    packet = _build_gate_review_packet(report, payload)
     return f"""
-Review this Buying Potential report for evidence safety. Use only the payload.
-Return JSON with:
-{{
-  "approved": true,
-  "required_downgrades": [{{"path": "pressure_signals[0]", "reason": "...", "new_gate": "allowed_as_hypothesis|allowed_as_discovery_question|internal_only|blocked"}}],
-  "field_actions": [{{"object_id": "SIG-01", "path": "recommended_sales_plays[0].safe_customer_wording", "action": "replace|remove", "replacement": "Evidence-safe replacement or empty string", "reason": "..."}}],
-  "blocked_claims": ["..."],
-  "confidence_adjustment": 0,
-  "notes": ["..."]
-}}
+Review this compact Buying Insight gate packet. This is a bounded semantic safety check, not a second analysis.
+Return only JSON matching the supplied schema.
 
-Rules:
-- Factual claims need generation-eligible evidence or verified structured financial evidence.
-- Weak evidence can be hypothesis/question only.
-- Unsupported exact dates, financial numbers, ownership percentages, partnerships, and named implementations must be blocked.
-- Internal Scanner observations are allowed only as internal metrics, not external market facts.
-- Service recommendations must be grounded in account_signal_map. A Service KB pain trigger alone is not enough.
-- Downgrade or block sales plays that lack a linked SIG id, activation_pair_index when activation-pair SIGs exist, buyer-role concern, service match, safe discovery question, qualification criteria, safe customer wording, or disqualifier.
-- Downgrade sales plays that use scores as proof, skip company/market context separation, or turn response directions into delivery scope.
-- Evidence confidence must keep verified facts, safe hypotheses, question-only claims, and do-not-say claims separate.
-- When a specific sentence is unsafe, use field_actions to replace or remove that sentence itself. Do not merely copy it into Do Not Say.
-- field_actions may target only an existing report object/field. Use the linked SIG or HYP as object_id and never invent IDs.
-- Empty pressure signals, generic buyer targets, and unsupported service-fit leaps should be downgraded.
+Review rules:
+- Review only evidence safety, claim strength, service bridges, and customer-facing wording.
+- Do not assess originality, analytical depth, writing style, or whether a different hypothesis would be better.
+- Factual claims require fact-grade eligible evidence with correct entity scope.
+- Weak or incomplete support may be hypothesis/question only; unsupported specifics must be replaced, removed, or blocked.
+- Service recommendations require an existing SIG/HYP bridge and an exact service ID/name from the packet.
+- Use field_actions only for existing allowlisted paths and use the linked SIG/HYP as object_id.
+- Use status=approved when no corrections are needed; changes_required when actions/downgrades are supplied.
+- Use status=unavailable only when the packet cannot be evaluated. Do not invent evidence or IDs.
 
-Report:
-{json.dumps(report, ensure_ascii=False)}
-
-Payload:
-{json.dumps(payload, ensure_ascii=False)}
+Compact gate packet:
+{json.dumps(packet, ensure_ascii=False)}
 """.strip()
+
+
+def _normalize_gate_review(review: Any, *, model: str = "", unavailable_note: str = "") -> dict:
+    normalized = _dict(review).copy()
+    status = str(normalized.get("status") or "").strip().lower()
+    if status not in {"approved", "changes_required", "unavailable"}:
+        status = "approved" if normalized.get("approved") is True else "unavailable"
+    normalized["status"] = status
+    normalized["approved"] = status == "approved"
+    normalized["model"] = model or normalized.get("model")
+    normalized["required_downgrades"] = _list(normalized.get("required_downgrades"))[:20]
+    normalized["field_actions"] = _list(normalized.get("field_actions"))[:20]
+    normalized["blocked_claims"] = _list(normalized.get("blocked_claims"))[:20]
+    normalized["notes"] = _list(normalized.get("notes"))[:10]
+    if unavailable_note:
+        normalized["notes"].append(_clip(unavailable_note, 360))
+    return normalized
 
 
 def _normalize_gate(value: Any, fallback: str = "allowed_as_hypothesis") -> str:
@@ -3338,6 +3536,7 @@ def _apply_gate_field_actions(report: dict, actions: Any) -> tuple[list[dict], l
         "safe_discovery_question", "safe_customer_wording", "opening_angle", "executive_angle",
         "technical_angle", "buying_hypothesis", "business_hypothesis", "why_relevant",
         "trigger_to_offer_bridge", "proof_point", "first_meeting_objective", "service_fit_rationale",
+        "why_this_service", "need_hypothesis",
         "current_condition", "future_pressure", "market_context", "company_context",
         "combined_activation_hypothesis", "likely_business_consequence", "what_to_propose",
     }
@@ -4596,7 +4795,7 @@ def _sales_play_from_signal(
     )
     service_fit_rationale = _clip(analysis.get("service_fit_rationale"), 420)
     play = {
-        "play_name": f"{_clip(signal.get('theme') or 'Activation theme', 90)} discovery play",
+        "play_name": _normalize_discovery_play_title(signal.get("theme"), "Activation theme"),
         "linked_signal_ids": [signal_id],
         "activation_pair_index": _safe_int(signal.get("activation_pair_index"), 0),
         "play_type": play_type,
@@ -4952,6 +5151,11 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
     known_signal_ids = {str(signal.get("id")) for signal in _list(payload.get("account_signal_map")) if isinstance(signal, dict) and signal.get("id")}
     signals_by_id = _signal_by_id(payload)
     hypothesis_registry = [item for item in _list(payload.get("hypothesis_registry")) if isinstance(item, dict)]
+    hypothesis_record_by_signal = {
+        str(item.get("activation_signal_id")): item
+        for item in hypothesis_registry
+        if item.get("activation_signal_id")
+    }
     hypothesis_by_signal = {
         str(item.get("activation_signal_id")): str(item.get("hypothesis_id"))
         for item in hypothesis_registry
@@ -5029,6 +5233,7 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         if self_scan_context.get("is_self_scan"):
             sales_spine["self_scan_note"] = sales_spine.get("self_scan_note") or self_scan_context.get("framing")
     sales_spine = _normalize_top_buying_hypotheses(sales_spine, payload)
+    sales_spine["risk_themes"] = _dedupe_text_items(sales_spine.get("risk_themes"), limit=5, clip_limit=240)
     all_hypothesis_ids = [str(item.get("hypothesis_id")) for item in hypothesis_registry if item.get("hypothesis_id")]
     if all_hypothesis_ids:
         sales_spine["linked_hypothesis_ids"] = all_hypothesis_ids[:3]
@@ -5054,6 +5259,17 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         if not isinstance(item, dict) or not _clip(item.get("description") or item.get("business_consequence") or item.get("trigger"), 40):
             continue
         fixed = fix_item(item)
+        linked_signal = next(
+            (signals_by_id.get(signal_id) for signal_id in _item_signal_ids(fixed) if signals_by_id.get(signal_id)),
+            None,
+        )
+        lineage = hypothesis_record_by_signal.get(str(_dict(linked_signal).get("id") or ""), {})
+        if lineage.get("external_pressure") and _normalize_play_type(_dict(linked_signal).get("play_type")) != "current_status":
+            fixed["description"] = _clip(lineage.get("external_pressure"), 520)
+            fixed["business_consequence"] = _clip(
+                lineage.get("likely_business_consequence") or fixed.get("business_consequence"),
+                520,
+            )
         if not _pressure_signal_has_renderable_basis(fixed, known_signal_ids):
             render_quality_notes.append(
                 "Pressure signal removed before rendering because its evidence basis was empty or incomplete: "
@@ -5140,6 +5356,7 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         has_signal = _has_signal_reference(play, known_signal_ids)
         linked_signals = [signals_by_id.get(signal_id) for signal_id in _item_signal_ids(play) if signals_by_id.get(signal_id)]
         activation_signal = next((signal for signal in linked_signals if signal.get("id") in activation_signal_ids), None)
+        hypothesis_record = hypothesis_record_by_signal.get(str(_dict(activation_signal).get("id") or ""), {})
         if activation_signal:
             play["activation_pair_index"] = _safe_int(play.get("activation_pair_index"), _safe_int(activation_signal.get("activation_pair_index"), 0))
             play["play_type"] = _normalize_play_type(play.get("play_type") or activation_signal.get("sales_play_type"))
@@ -5181,7 +5398,21 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             "commercial_pressure": play.get("business_hypothesis"),
             "business_consequence": play.get("business_hypothesis"),
         }
+        if activation_signal:
+            fallback_signal = {**fallback_signal, **activation_signal}
+        if hypothesis_record:
+            fallback_signal["external_pressure"] = hypothesis_record.get("external_pressure")
+            fallback_signal["business_consequence"] = hypothesis_record.get("likely_business_consequence")
+            fallback_signal["pressure_horizon"] = hypothesis_record.get("pressure_horizon")
         play["need_hypothesis"] = _normalize_need_hypothesis(play.get("need_hypothesis"), fallback_signal, play.get("play_type"))
+        if hypothesis_record.get("external_pressure") and play.get("play_type") != "current_status":
+            play["need_hypothesis"]["future_pressure"] = _clip(hypothesis_record.get("external_pressure"), 520)
+            play["need_hypothesis"]["market_context"] = _clip(hypothesis_record.get("external_pressure"), 520)
+        if hypothesis_record.get("likely_business_consequence"):
+            play["need_hypothesis"]["likely_business_consequence"] = _clip(
+                hypothesis_record.get("likely_business_consequence"),
+                520,
+            )
         role_questions = _list(play.get("discovery_questions_by_role"))
         if not role_questions:
             play["discovery_questions_by_role"] = [{
@@ -5282,6 +5513,9 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             response_directions["evolving_modernization_directions"] = [
                 match.get("lens") for match in tactic_matches if match.get("lens")
             ][:3]
+        else:
+            response_directions.pop("modernization_lenses", None)
+            response_directions["evolving_modernization_directions"] = []
         if play["play_classification"] in {"weak_signal", "do_not_use"} and play.get("gate") != "blocked":
             play["gate"] = "internal_only"
             play["confidence_boundary"] = _confidence_boundary(play.get("gate"), play["evidence_coverage"])
@@ -5301,6 +5535,10 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             "proof_point",
         ):
             play[text_key] = _strip_archetype_terms(play.get(text_key))
+        play["play_name"] = _normalize_discovery_play_title(
+            play.get("play_name"),
+            play.get("service_or_offer") or play.get("trigger"),
+        )
         play["need_hypothesis"] = _strip_archetype_terms(play["need_hypothesis"])
         play["response_directions"] = _strip_archetype_terms(play["response_directions"])
     fixed_stakeholders = []
@@ -5441,7 +5679,9 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         if blocked_questions:
             evidence_confidence.setdefault("use_only_as_question", []).extend(blocked_questions)
         report["gate_review"] = {
+            "status": gate_review.get("status") or ("approved" if gate_review.get("approved") is True else "unavailable"),
             "approved": gate_review.get("approved") is True,
+            "model": gate_review.get("model"),
             "required_downgrades": downgrades[:20],
             "applied_field_actions": applied_field_actions[:20],
             "rejected_field_actions": rejected_field_actions[:20],
@@ -5449,6 +5689,15 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             "blocked_claims": blocked[:20],
             "notes": _list(gate_review.get("notes"))[:10],
         }
+        quality_notes = evidence_confidence.setdefault("report_quality_notes", [])
+        if gate_review.get("status") == "unavailable":
+            quality_notes.append(
+                "Independent semantic Gate Review was unavailable; deterministic evidence controls were applied and reliability was capped at Question-Led Draft."
+            )
+        elif gate_review.get("status") == "changes_required":
+            quality_notes.append(
+                f"Independent semantic Gate Review applied {len(applied_field_actions)} field action(s) and {len(downgrades)} gate downgrade(s)."
+            )
         clean_do_not, clean_questions = _safe_guardrail_items(_list(evidence_confidence.get("do_not_say")))
         evidence_confidence["do_not_say"] = clean_do_not[:12]
         evidence_confidence["use_only_as_question"] = list(dict.fromkeys(
@@ -5468,9 +5717,9 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
     report["evidence_confidence"] = _strip_archetype_terms(evidence_confidence)
     _enrich_short_opening_sections(report, payload)
 
-    report["overall_confidence"] = max(0, min(100, _safe_int(report.get("overall_confidence"), 45)))
-    if low_evidence:
-        report["overall_confidence"] = min(report["overall_confidence"], 55)
+    # Retained only as a nullable compatibility field for older stored reports.
+    # Reliability Status and governed evidence sufficiency are authoritative.
+    report["overall_confidence"] = None
     report["report_type"] = "buying_potential"
     report["generated_at"] = datetime.utcnow().isoformat()
     report["safety_statement"] = "Need hypothesis and demand-creation potential, not confirmed buying intent. Customer-facing use must follow each insight gate."
@@ -5485,7 +5734,8 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             "general_summary_verified": _dict(scanner_outputs.get("general_summary_fact_check")).get("verified") is True,
             "general_summary_false_claim_count": len(_list(_dict(scanner_outputs.get("general_summary_fact_check")).get("false_or_unsupported_claims"))),
             "evidence_sufficiency": sufficiency_status or "unknown",
-            "gate_review_approved": gate_review.get("approved") is True if gate_review else None,
+            "gate_review_status": gate_review.get("status") if gate_review else "unavailable",
+            "gate_review_approved": gate_review.get("status") == "approved" if gate_review else None,
             "hypothesis_registry_count": len(hypothesis_registry),
         },
         "hygiene_repair": {
@@ -5732,7 +5982,7 @@ def _deterministic_buying_report(payload: dict, reason: str) -> dict:
                 "disqualifiers": disqualifiers,
             })
             sales_plays.append({
-                "play_name": f"{service_name} discovery play",
+                "play_name": _normalize_discovery_play_title(service_name),
                 "linked_signal_ids": [signal.get("id")],
                 "activation_pair_index": signal.get("activation_pair_index"),
                 "play_type": play_type,
@@ -5908,7 +6158,7 @@ def _deterministic_buying_report(payload: dict, reason: str) -> dict:
             "sensitive_claims": [],
             "claims_as_questions_only": ["Service-fit and timing signals should be used as discovery questions unless independently verified."],
         },
-        "overall_confidence": 42,
+        "overall_confidence": None,
         "missing_input_warnings": [
             "Generated with deterministic fallback after malformed model JSON.",
             _clip(reason, 220),
@@ -6010,7 +6260,7 @@ def _salvage_truncated_section(section: str, raw: str) -> dict | None:
     if section == "pressure_evidence":
         result.update({
             "evidence_confidence": {},
-            "overall_confidence": 45,
+            "overall_confidence": None,
             "missing_input_warnings": [],
         })
     return result
@@ -6288,7 +6538,7 @@ def _assemble_section_report(
     report.setdefault("stakeholder_map", [])
     report.setdefault("additional_stakeholder_names", [])
     report.setdefault("evidence_confidence", {})
-    report.setdefault("overall_confidence", 45)
+    report.setdefault("overall_confidence", None)
     report.setdefault("missing_input_warnings", [])
     report["section_generation"] = generation_meta
     report["generation_parse_status"] = "section_assembled"
@@ -6323,18 +6573,43 @@ def generate_buying_potential_report(
     if stage_callback:
         stage_callback("gate_review", 70, "Reviewing sales evidence gates")
     try:
+        gate_policy = policy_for("buying_insight_gate")
+        gate_packet = _build_gate_review_packet(report, payload)
+        gate_packet_json = json.dumps(gate_packet, ensure_ascii=False)
+        print(
+            f"   🔐 [Buying Potential Gate] packet_chars={len(gate_packet_json)} "
+            f"approx_tokens={max(1, len(gate_packet_json) // 4)} claims={len(_list(gate_packet.get('claims')))}",
+            flush=True,
+        )
+        gate_started = time.time()
         gate_raw, gate_model = call_json_model_chain(
             _gate_prompt(report, payload),
             buying_gate_chain(model_mode),
-            max_tokens=1800,
-            timeout=60,
+            max_tokens=_safe_int(gate_policy.get("max_output_tokens"), 5000),
+            timeout=_safe_int(gate_policy.get("timeout_seconds"), 90),
+            reasoning_effort=str(gate_policy.get("effort") or "low"),
+            text_verbosity=str(gate_policy.get("verbosity") or "low"),
+            json_schema=_BUYING_GATE_REVIEW_SCHEMA,
+            json_schema_name="buying_insight_gate_review",
+            log_label="Buying Insight Gate Review",
             validate_json=True,
-            required_fields=("approved",),
+            required_fields=("status",),
         )
-        gate_review = parse_json_object(gate_raw)
-        gate_review["model"] = gate_model
+        gate_review = _normalize_gate_review(parse_json_object(gate_raw), model=gate_model)
+        print(
+            f"   🔐 [Buying Potential Gate] status={gate_review.get('status')} model={gate_model} "
+            f"actions={len(_list(gate_review.get('field_actions')))} "
+            f"downgrades={len(_list(gate_review.get('required_downgrades')))} "
+            f"blocked={len(_list(gate_review.get('blocked_claims')))} "
+            f"elapsed_ms={int((time.time() - gate_started) * 1000)}",
+            flush=True,
+        )
     except Exception as exc:
-        gate_review = {"approved": False, "notes": [f"Gate model unavailable; deterministic post-processing applied: {str(exc)[:160]}"]}
+        gate_review = _normalize_gate_review(
+            {"status": "unavailable"},
+            unavailable_note=f"Gate model unavailable; deterministic post-processing applied: {str(exc)[:160]}",
+        )
+        print(f"   ⚠️ [Buying Potential Gate] unavailable: {str(exc)[:240]}", flush=True)
 
     if previous_report:
         payload["previous_buying_insight"] = previous_report
@@ -6387,6 +6662,10 @@ def render_buying_potential_html(report: dict) -> str:
     sales_spine = _dict(report.get("sales_spine"))
     evidence = _dict(report.get("evidence_confidence"))
     self_scan = _dict(report.get("self_scan_context"))
+    sufficiency_status = str(
+        _dict(_dict(report.get("quality_controls")).get("reasoning_verification")).get("evidence_sufficiency")
+        or ""
+    ).lower()
     reliability = _dict(report.get("reliability_status"))
     if not reliability.get("code"):
         reliability = _status_template("B" if _safe_int(confidence, 0) >= 45 else "C")
@@ -6394,15 +6673,20 @@ def render_buying_potential_html(report: dict) -> str:
     status_scale = _list(report.get("status_scale")) or _list(reliability.get("scale")) or _status_scale()
     current_status_code = str(reliability.get("code") or "C").upper()
 
-    def overall_stance(value):
-        score = _safe_int(value, 0)
+    def overall_stance():
+        if sufficiency_status == "complete":
+            return "Evidence stance: strong discovery basis"
+        if sufficiency_status == "partial":
+            return "Evidence stance: constrained / question-led"
+        if sufficiency_status == "insufficient":
+            return "Evidence stance: draft / do not use"
+        # Compatibility for reports saved before deterministic sufficiency/status.
+        score = _safe_int(confidence, 0)
         if score >= 70:
             return "Evidence stance: strong discovery basis"
         if score >= 45:
             return "Evidence stance: cautious hypothesis basis"
-        if score > 0:
-            return "Evidence stance: constrained / question-led"
-        return "Evidence stance: not scored"
+        return "Evidence stance: constrained / question-led"
 
     def simple_items(items, limit=10, empty_label="N/A - no separate items for this run.", formatter=None):
         values = []
@@ -6760,7 +7044,7 @@ def render_buying_potential_html(report: dict) -> str:
     <div class="meta">
       <span class="pill">Generated {_esc(generated)}</span>
       <span class="pill">Status {_esc(current_status_code)} — {_esc(reliability.get('label'))}</span>
-      <span class="pill">{_esc(overall_stance(confidence))}</span>
+      <span class="pill">{_esc(overall_stance())}</span>
       <span class="pill">Sources {_esc(_dict(report.get('source_counts')).get('generation_eligible', 0))} eligible</span>
       <span class="pill">Financial refs {_esc(_dict(report.get('source_counts')).get('financial_sources', 0))}</span>
     </div>
@@ -6808,7 +7092,7 @@ def render_buying_potential_html(report: dict) -> str:
 
 
   <section class="warning">
-    <h2>Evidence, Confidence & Sales Guardrails</h2>
+    <h2>Evidence & Sales Guardrails</h2>
     <div class="source-basis">
       <p class="muted"><b>Evidence basis:</b> derived from Scanner Company Summary, Company Evidence DB, Source Ledger, Foresight Knowledge Base, Market Intelligence, and Buying Insight generation gates. Source-level audit stays in Scanner; this report presents the sales hypothesis and guardrails.</p>
       <a class="scanner-link" href="https://the-scanner.up.railway.app/" target="_blank" rel="noopener noreferrer">Open Scanner</a>

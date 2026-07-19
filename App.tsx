@@ -1217,9 +1217,16 @@ const App = () => {
  if (!finalStatus) throw new Error('Buying Insight timed out while polling status.');
  const counts = finalStatus.source_counts || {};
  const warnings = (finalStatus.warnings || []).slice(0, 5);
+ const reliability = finalStatus.reliability_status || {};
+ const reliabilityLabel = reliability.code
+   ? `${reliability.code} — ${reliability.label || 'Reliability status'}`
+   : (finalStatus.confidence != null ? `Legacy confidence ${finalStatus.confidence}` : 'Status unavailable');
+ const allowedUse = reliability.allowed_use
+   || String(finalStatus.publication_status || 'internal_review_required').replaceAll('_', ' ');
  alert(
  `Buying Insight created for "${companyName}".\n\n` +
- `Confidence: ${finalStatus.confidence ?? 'n/a'}\n` +
+ `Reliability: ${reliabilityLabel}\n` +
+ `Allowed use: ${allowedUse}\n` +
  `Generation-eligible evidence: ${counts.generation_eligible ?? 0}\n` +
  `Financial sources: ${counts.financial_sources ?? 0}\n` +
  `Blocked/display-only sources: ${counts.blocked_or_display_only ?? 0}` +

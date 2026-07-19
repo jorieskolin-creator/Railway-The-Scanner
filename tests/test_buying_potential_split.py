@@ -95,6 +95,12 @@ def test_buying_potential_uses_reasoning_aware_sol_budgets_and_strict_schemas(mo
     assert bp._section_generation_controls("pressure_evidence") == ("low", "low")
     assert bp.BUYING_SECTION_JSON_SCHEMAS["snapshot_thesis"]["additionalProperties"] is False
     assert bp._BUYING_SALES_PLAY_JSON_SCHEMA["additionalProperties"] is False
+    gate_policy = bp.policy_for("buying_insight_gate")
+    assert gate_policy["effort"] == "low"
+    assert gate_policy["verbosity"] == "low"
+    assert gate_policy["max_output_tokens"] == 5000
+    assert gate_policy["timeout_seconds"] == 90
+    assert bp._BUYING_GATE_REVIEW_SCHEMA["additionalProperties"] is False
 
 
 def test_buying_potential_renderer_uses_new_section_order_and_nested_play_angles(monkeypatch):
@@ -175,7 +181,7 @@ def test_buying_potential_renderer_uses_new_section_order_and_nested_play_angles
     assert "Do not imply confirmed buying intent." in html
     assert html.index("Pressure & Demand Hypothesis Signals") < html.index("Why This May Matter Now")
     assert html.index("Buying Committee & Influence Map") < html.index("Possible Conversation Directions")
-    assert html.index("Recommended Sales Plays") < html.index("Evidence, Confidence & Sales Guardrails")
+    assert html.index("Recommended Sales Plays") < html.index("Evidence & Sales Guardrails")
 
 
 def test_buying_potential_footer_points_to_scanner_instead_of_rendering_evidence_register(monkeypatch):
@@ -817,3 +823,126 @@ def test_unverified_general_summary_caps_publication_reliability(monkeypatch):
 
     assert status["code"] == "C"
     assert status["publication_status"] == "internal_review_required"
+
+
+def test_gate_review_packet_is_compact_and_excludes_full_payload(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    report = {
+        "account_snapshot": {"text": "Account condition", "gate": "allowed_as_hypothesis", "evidence_basis": ["CED-01"]},
+        "recommended_sales_plays": [{
+            "linked_signal_ids": ["SIG-01"],
+            "service_id": "SVC-01",
+            "service_or_offer": "Service One",
+            "trigger_to_offer_bridge": "Signal-backed bridge",
+            "safe_customer_wording": "Explore whether the pressure is material.",
+            "gate": "allowed_as_discovery_question",
+        }],
+    }
+    payload = {
+        "account_signal_map": [{"id": "SIG-01", "theme": "Pressure theme", "gate": "allowed_as_hypothesis"}],
+        "verified_evidence": [{
+            "id": "CED-01",
+            "gate": "allowed_as_hypothesis",
+            "generation_eligible": True,
+            "entity_scope": "canonical_legal_entity",
+            "source_quote": "A concise source excerpt.",
+        }],
+        "services": [{"service_id": "SVC-01", "name": "Service One", "large_internal_blob": "x" * 200000}],
+        "source_ledger_recovery_records": [],
+        "required_sales_spine": [{"id": "SIG-01", "hypothesis_id": "HYP-01"}],
+        "evidence_sufficiency": {"status": "partial"},
+        "scanner_outputs": {"strategic_synthesis": "x" * 200000},
+    }
+
+    packet = bp._build_gate_review_packet(report, payload)
+    serialized = json.dumps(packet)
+
+    assert len(serialized) < bp.BUYING_GATE_PACKET_CHAR_LIMIT
+    assert "large_internal_blob" not in serialized
+    assert "strategic_synthesis" not in serialized
+    assert packet["claims"]
+    assert packet["service_bridges"][0]["service_id"] == "SVC-01"
+
+
+def test_gate_unavailable_is_distinct_and_caps_reliability(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    review = bp._normalize_gate_review({}, unavailable_note="Verifier timed out.")
+    report = {
+        "recommended_sales_plays": [{
+            "gate": "allowed_as_hypothesis",
+            "readiness_band": "Validate now",
+            "play_classification": "strong_account_play",
+        }],
+        "evidence_confidence": {},
+    }
+    payload = {
+        "verified_evidence": [{"id": f"CED-{index}"} for index in range(5)],
+        "financial_sources": [{"id": "FIN-01"}],
+        "account_signal_map": [{"id": "SIG-01"}],
+        "evidence_sufficiency": {"status": "complete"},
+        "scanner_outputs": {"general_summary_fact_check": {"verified": True, "false_or_unsupported_claims": []}},
+    }
+
+    status = bp._compute_reliability_status(report, payload, review, low_evidence=False)
+
+    assert review["status"] == "unavailable"
+    assert review["approved"] is False
+    assert status["code"] == "C"
+    assert any("unavailable" in reason.lower() for reason in status["reasons"])
+
+
+def test_renderer_uses_deterministic_sufficiency_instead_of_numeric_confidence(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    html = bp.render_buying_potential_html({
+        "companyName": "TestCo",
+        "reliability_status": bp._status_template("C"),
+        "publication_status": "internal_review_required",
+        "quality_controls": {"reasoning_verification": {"evidence_sufficiency": "partial"}},
+        "overall_confidence": None,
+        "account_snapshot": {},
+        "buying_potential_thesis": {},
+        "sales_spine": {},
+        "evidence_confidence": {},
+    })
+
+    assert "Evidence stance: constrained / question-led" in html
+    assert "Confidence: 0" not in html
+
+
+def test_need_hypothesis_preserves_explicit_same_signal_future_pressure(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    need = bp._need_hypothesis_from_signal({
+        "id": "SIG-02",
+        "play_type": "foresight_driven",
+        "theme": "Industrial AI readiness",
+        "why": "Current account condition requires validation.",
+        "need_hypothesis": {
+            "future_pressure": "Industrial AI is moving from pilots into governed production workflows.",
+            "market_context": "Industrial AI adoption raises data, governance, and operating-model requirements.",
+        },
+    })
+
+    assert need["future_pressure"].startswith("Industrial AI is moving")
+    assert need["market_context"].startswith("Industrial AI adoption")
+
+
+def test_weak_modernization_keyword_overlap_is_not_rendered_as_a_lens(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    tactics = [{
+        "concept": "Beyond Budgeting",
+        "category": "Governance",
+        "problem_pattern": "Annual budgeting constrains adaptive planning.",
+        "solution_mechanism": "Use rolling planning and delegated decisions.",
+        "match_text": "governance planning budgeting decisions",
+    }]
+
+    assert bp._match_modernization_tactics("A generic governance question", tactics) == []
+    assert bp._match_modernization_tactics("Planning and budgeting constraints", tactics)
+
+
+def test_title_grammar_and_risk_theme_hygiene(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+
+    assert bp._normalize_discovery_play_title("Energy productivity.") == "Energy productivity discovery play"
+    assert bp._clean_generated_text("Validate whether if timing exists.") == "Validate whether timing exists."
+    assert bp._dedupe_text_items(["Repeated risk", "Repeated risk", "Different risk"]) == ["Repeated risk", "Different risk"]

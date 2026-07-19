@@ -2111,6 +2111,8 @@ def _run_buying_potential_job(job_id: str, company_name: str):
             progress=100,
             metadata=metadata,
             confidence=report_json.get("overall_confidence"),
+            reliability_status=report_json.get("reliability_status", {}),
+            publication_status=report_json.get("publication_status"),
             source_counts=report_json.get("source_counts", {}),
             warnings=report_json.get("missing_input_warnings", []),
             completed_at=datetime.utcnow().isoformat(),

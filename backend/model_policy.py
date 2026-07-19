@@ -117,6 +117,10 @@ MODEL_POLICIES: dict[str, dict[str, Any]] = {
     },
     "buying_insight_gate": {
         "chain": buying_gate_chain(),
+        "effort": "low",
+        "verbosity": "low",
+        "max_output_tokens": 5000,
+        "timeout_seconds": 90,
     },
     "general_summary": {
         "primary": GPT_REASONING_MODEL,
