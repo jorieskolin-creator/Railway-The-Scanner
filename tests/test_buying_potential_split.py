@@ -655,3 +655,152 @@ def test_short_opening_enrichment_never_appends_arbitrary_source_records(monkeyp
     assert "image" not in combined
     assert "Additional verified context" not in combined
     assert "qualification question" in combined
+
+
+def test_account_signal_map_uses_governed_lanes_instead_of_insertion_order(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    services = [{"service_id": "SVC-DATA", "name": "Data Foundation", "category": "Data", "pain_triggers": ["data", "growth"]}]
+    payload = {
+        "company": {"name": "Balanced Co"},
+        "scanner_outputs": {
+            "activation_pairs": [
+                {
+                    "theme_type": play_type,
+                    "theme": f"Theme {index}",
+                    "why": f"Customer pressure {index} matters for growth and data readiness.",
+                    "what_to_do": f"A decision-ready outcome {index} is established.",
+                    "what_progress_shows": f"Progress evidence {index} is visible.",
+                }
+                for index, play_type in enumerate(("current_status", "foresight_driven", "proactive_opportunity"), start=1)
+            ],
+            "ai_diagnosis": "Strategic context about operating capability and growth.",
+            "pitch": "This must not become a signal.",
+            "domain_force_dossier": "Domain context about changing customer expectations.",
+            "evidence_absence_signals": ["Current data ownership is not verified."],
+            "evidence_trust": {"false_or_unsupported_claims": []},
+        },
+        "verified_evidence": [
+            {
+                "id": f"CED-{index:02d}",
+                "title": f"Account movement {index}",
+                "quote": f"Verified account fact {index} about growth and operations.",
+                "gate": "allowed_as_fact",
+                "generation_eligible": True,
+                "independence": "independent",
+                "source_freshness": "fresh",
+            }
+            for index in range(1, 9)
+        ],
+        "financial_sources": [
+            {"id": "FIN-01", "metric": "Revenue", "value": "growing", "year": "2026", "generation_eligible": True}
+        ],
+        "foresight_forces": [
+            {"id": f"FORCE-{index:02d}", "description": f"External pressure {index} changes data and operating expectations.", "confidence": 70, "horizon": "12-24 months"}
+            for index in range(1, 4)
+        ],
+    }
+
+    signals = bp._build_account_signal_map(payload, services)
+    lanes = [signal["signal_lane"] for signal in signals]
+
+    assert len(signals) == 10
+    assert lanes[:3] == ["activation_hypothesis"] * 3
+    assert lanes.count("account_fact") == 2
+    assert lanes.count("financial_capacity") == 1
+    assert lanes.count("external_pressure") == 2
+    assert lanes.count("contradiction_or_gap") == 1
+    assert lanes.count("strategic_context") == 1
+    assert [signal["id"] for signal in signals[:3]] == ["SIG-01", "SIG-02", "SIG-03"]
+    assert all(signal["source"] != "scanner_pitch" for signal in signals)
+
+
+def test_hypothesis_registry_preserves_stable_activation_lineage(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    payload = {
+        "account_signal_map": [
+            {
+                "id": f"SIG-0{index}",
+                "signal_lane": "activation_hypothesis",
+                "source": "scanner_activation_pair",
+                "activation_pair_index": index,
+                "theme": f"Theme {index}",
+                "why": f"Why {index}",
+                "what_to_do": f"Outcome {index}",
+                "gate": "allowed_as_hypothesis",
+            }
+            for index in range(1, 4)
+        ] + [
+            {
+                "id": "SIG-04",
+                "signal_lane": "account_fact",
+                "account_movement": "Theme evidence verifies an operating fact",
+                "parent_evidence_ids": ["CED-01"],
+                "gate": "allowed_as_fact",
+                "independent_source_count": 1,
+            },
+            {
+                "id": "SIG-05",
+                "signal_lane": "external_pressure",
+                "account_movement": "Theme pressure changes the external market",
+                "parent_foresight_ids": ["FORCE-01"],
+                "gate": "allowed_as_hypothesis",
+            },
+        ]
+    }
+    payload["required_sales_spine"] = bp._required_sales_spine(payload)
+    registry = bp._build_hypothesis_registry(payload)
+
+    assert [item["hypothesis_id"] for item in registry] == ["HYP-01", "HYP-02", "HYP-03"]
+    assert [item["activation_signal_id"] for item in registry] == ["SIG-01", "SIG-02", "SIG-03"]
+    assert all(item["parent_evidence_ids"] == ["CED-01"] for item in registry)
+    assert all(item["parent_foresight_ids"] == ["FORCE-01"] for item in registry)
+
+
+def test_service_validation_requires_exact_name_or_id_not_category_overlap(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    known = bp._known_service_names({"services": [{"service_id": "SVC-AI", "name": "AI Readiness Assessment", "category": "AI"}]})
+
+    assert bp._service_match_exists({"service_id": "SVC-AI"}, known)
+    assert bp._service_match_exists({"service_or_offer": "AI Readiness Assessment"}, known)
+    assert not bp._service_match_exists({"service_or_offer": "AI", "why_relevant": "AI category overlap"}, known)
+    assert not bp._service_match_exists({"service_or_offer": "Generic consulting", "safe_customer_wording": "AI Readiness Assessment may help"}, known)
+
+
+def test_gate_field_action_replaces_the_unsafe_sentence_itself(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    report = {
+        "recommended_sales_plays": [
+            {"linked_signal_ids": ["SIG-01"], "hypothesis_id": "HYP-01", "safe_customer_wording": "Unsafe factual claim."}
+        ]
+    }
+    applied, rejected = bp._apply_gate_field_actions(report, [{
+        "object_id": "HYP-01",
+        "path": "recommended_sales_plays[0].safe_customer_wording",
+        "action": "replace",
+        "replacement": "A question-led replacement.",
+        "reason": "Original wording exceeded its evidence gate.",
+    }])
+
+    assert report["recommended_sales_plays"][0]["safe_customer_wording"] == "A question-led replacement."
+    assert len(applied) == 1
+    assert rejected == []
+
+
+def test_unverified_general_summary_caps_publication_reliability(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    report = {
+        "recommended_sales_plays": [{"gate": "allowed_as_hypothesis", "readiness_band": "Validate now", "play_classification": "strong_account_play"}],
+        "evidence_confidence": {},
+    }
+    payload = {
+        "verified_evidence": [{"id": f"CED-{index}"} for index in range(5)],
+        "financial_sources": [{"id": "FIN-01"}],
+        "account_signal_map": [{"id": "SIG-01"}],
+        "evidence_sufficiency": {"status": "complete"},
+        "scanner_outputs": {"general_summary_fact_check": {"verified": False, "false_or_unsupported_claims": []}},
+    }
+
+    status = bp._compute_reliability_status(report, payload, None, low_evidence=False)
+
+    assert status["code"] == "C"
+    assert status["publication_status"] == "internal_review_required"

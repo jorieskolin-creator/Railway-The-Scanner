@@ -46,6 +46,15 @@ ALLOWED_GATES = {
     "blocked",
 }
 EVIDENCE_BASIS_PREFIXES = ("SRC-", "FIN-", "CED-", "LEDGER-", "EVD-")
+SIGNAL_MAP_LIMIT = 10
+SIGNAL_LANE_QUOTAS = {
+    "activation_hypothesis": 3,
+    "account_fact": 2,
+    "financial_capacity": 1,
+    "external_pressure": 2,
+    "contradiction_or_gap": 1,
+    "strategic_context": 1,
+}
 _modernization_tactics_cache = {"url": None, "items": None}
 
 RELIABILITY_STATUS_SCALE = [
@@ -817,6 +826,8 @@ def _company_evidence_records(company_evidence: dict | None) -> tuple[list[dict]
             "blocked": rec.get("blocked") is True,
             "source_freshness": rec.get("source_freshness"),
             "fetched_at": rec.get("fetched_at"),
+            "independence": rec.get("independence") or rec.get("source_independence"),
+            "entity_match": rec.get("entity_match") or ("exact" if rec.get("entity_verified") else "unknown"),
             "source_database": "company_evidence",
             "sales_use": rec.get("sales_use"),
         }
@@ -1041,6 +1052,8 @@ def _company_source_ledger_records(company_source_ledger: dict | None) -> tuple[
             "blocked": rec.get("blocked") is True,
             "source_freshness": rec.get("source_freshness"),
             "last_checked": rec.get("last_checked"),
+            "independence": rec.get("independence") or rec.get("source_independence"),
+            "entity_match": rec.get("entity_match") or ("exact" if rec.get("entity_verified") else "wrong" if rec.get("wrong_entity") else "unknown"),
             "source_database": "company_source_ledger",
             "origins": rec.get("origins", []),
             "wrong_entity": rec.get("wrong_entity") is True,
@@ -1117,6 +1130,10 @@ def _extract_evidence(
             "generation_eligible": is_generation_eligible_source(link),
             "verification_reason": link.get("verification_reason"),
             "wrong_entity": link.get("wrong_entity") is True,
+            "source_freshness": link.get("source_freshness") or link.get("freshness"),
+            "fetched_at": link.get("fetched_at") or link.get("last_checked"),
+            "independence": link.get("independence") or link.get("source_independence"),
+            "entity_match": link.get("entity_match") or ("exact" if link.get("entity_verified") else "wrong" if link.get("wrong_entity") else "unknown"),
         }
         if item["generation_eligible"]:
             strongest.append(item)
@@ -1144,8 +1161,77 @@ def _financial_evidence(company_data: dict) -> list[dict]:
                 "value": item.get("value"),
                 "year": item.get("year"),
                 "generation_eligible": bool(item.get("generation_eligible") or item.get("analysis_verified")),
+                "source_freshness": item.get("source_freshness") or item.get("freshness"),
+                "entity_match": item.get("entity_match") or item.get("entity_scope") or "unknown",
+                "independence": item.get("independence") or "unknown",
             })
     return items[:12]
+
+
+def _is_independent_source_item(item: dict) -> bool:
+    independence = str(item.get("independence") or "").strip().lower()
+    if independence:
+        return independence in {"independent", "third_party", "third-party", "external", "official_registry"}
+    source_type = str(item.get("source_type") or item.get("source_category") or item.get("credibility") or "").lower()
+    return any(token in source_type for token in ("registry", "filing", "government", "authority", "financial database", "news", "media", "analyst"))
+
+
+def _derive_evidence_sufficiency(evidence: list[dict], financial_sources: list[dict], stored: dict | None = None) -> dict:
+    stored = _dict(stored)
+    stored_status = str(stored.get("status") or "")
+    normalized_stored_status = {
+        "low_promoted_evidence": "partial",
+        "source_register_incomplete": "partial",
+    }.get(stored_status, stored_status)
+    eligible = [item for item in evidence if isinstance(item, dict) and item.get("generation_eligible") is True]
+    independent = [item for item in eligible if _is_independent_source_item(item)]
+    fresh = [
+        item for item in eligible
+        if str(item.get("source_freshness") or "").lower() in {"fresh", "current", "recent"}
+        or bool(item.get("fetched_at") or item.get("last_checked"))
+    ]
+    exact_entity = [
+        item for item in eligible
+        if str(item.get("entity_match") or "").lower() in {"exact", "verified", "canonical", "canonical_legal_entity"}
+    ]
+    claim_types = {
+        str(item.get("source_type") or item.get("source_category") or "unknown").strip().lower()
+        for item in eligible
+    }
+    stored_complete = normalized_stored_status == "complete"
+    if not eligible and not financial_sources:
+        status = "insufficient"
+    elif (
+        len(eligible) >= 4
+        and len(independent) >= 1
+        and len(claim_types) >= 2
+        and (len(fresh) >= 1 or stored_complete)
+        and (len(exact_entity) >= 1 or stored_complete)
+    ):
+        status = "complete"
+    else:
+        status = "partial"
+    if normalized_stored_status in {"insufficient", "partial", "complete"}:
+        status_order = {"insufficient": 0, "partial": 1, "complete": 2}
+        if status_order[normalized_stored_status] < status_order[status]:
+            status = normalized_stored_status
+    return {
+        **stored,
+        "status": status,
+        "generation_eligible_count": len(eligible),
+        "independent_source_count": len(independent),
+        "fresh_source_count": len(fresh),
+        "exact_entity_count": len(exact_entity),
+        "claim_type_coverage": len(claim_types),
+        "financial_source_count": len(financial_sources),
+        "confidence_boundary": (
+            "Evidence supports disciplined discovery use."
+            if status == "complete"
+            else "Evidence is partial; preserve question-led or hypothesis wording."
+            if status == "partial"
+            else "Evidence is insufficient for customer-facing use."
+        ),
+    }
 
 
 def _infer_buyer_roles(text: str, limit: int = 3) -> list[str]:
@@ -1359,6 +1445,11 @@ def _compute_reliability_status(report: dict, payload: dict, gate_review: dict |
         "deterministic fallback" in str(note).lower()
         for note in _list(report.get("model_notes")) + _list(report.get("missing_input_warnings"))
     )
+    sufficiency = _dict(payload.get("evidence_sufficiency"))
+    sufficiency_status = str(sufficiency.get("status") or "partial")
+    general_summary_check = _dict(_dict(payload.get("scanner_outputs")).get("general_summary_fact_check"))
+    general_summary_verified = general_summary_check.get("verified") is True
+    general_summary_false_claims = _list(general_summary_check.get("false_or_unsupported_claims"))
 
     reasons: list[str] = []
     code = "B"
@@ -1382,6 +1473,12 @@ def _compute_reliability_status(report: dict, payload: dict, gate_review: dict |
         reasons.append("Independent gate review did not fully approve the report; deterministic post-processing applied.")
     if deterministic_fallback:
         reasons.append("One or more generated sections used deterministic fallback.")
+    if sufficiency_status != "complete":
+        reasons.append(f"Scanner evidence sufficiency is {sufficiency_status}; independence, freshness, entity certainty, or claim coverage remains constrained.")
+    if not general_summary_verified:
+        reasons.append("General Summary fact-check was skipped, unavailable, or not fully verified.")
+    if general_summary_false_claims:
+        reasons.append("General Summary fact-check retained unsupported-claim warnings that require internal review.")
 
     if (verified_count == 0 and financial_count == 0 and eligible_play_count == 0) or not plays:
         code = "D"
@@ -1393,6 +1490,13 @@ def _compute_reliability_status(report: dict, payload: dict, gate_review: dict |
         code = "A"
     else:
         code = "B"
+
+    if (not general_summary_verified or general_summary_false_claims) and code in {"A", "B"}:
+        code = "C"
+    elif sufficiency_status == "partial" and code == "A":
+        code = "B"
+    elif sufficiency_status == "insufficient" and code in {"A", "B"}:
+        code = "C"
 
     status = _status_template(code)
     status["reasons"] = list(dict.fromkeys(reason for reason in reasons if reason))[:8]
@@ -1414,6 +1518,25 @@ def _readiness_band(score: int, *, has_signal: bool, has_service: bool, has_ques
     if score >= 45:
         return "Validate when trigger appears"
     return "Monitor"
+
+
+def _has_current_timing_basis(signal: dict | None, play: dict | None = None) -> bool:
+    signal = _dict(signal)
+    play = _dict(play)
+    explicit = " ".join(
+        str(value or "")
+        for value in (
+            signal.get("timing_basis"),
+            signal.get("sales_validation_window"),
+            play.get("timing_basis"),
+            play.get("trigger"),
+        )
+    ).lower()
+    if not explicit.strip():
+        return False
+    current_markers = ("current", "already", "now", "this quarter", "this year", "active", "near-term", "near term")
+    unsupported_markers = ("until customer timing is confirmed", "when a trigger appears", "if the pressure develops")
+    return any(marker in explicit for marker in current_markers) and not any(marker in explicit for marker in unsupported_markers)
 
 
 def _priority_band(readiness_band: str) -> str:
@@ -1582,6 +1705,15 @@ def _response_directions_from_play(play: dict, need: dict) -> dict:
     }
 
 
+def _canonical_service_id(service: dict) -> str:
+    explicit = str(service.get("service_id") or service.get("id") or service.get("code") or "").strip()
+    if explicit:
+        return explicit
+    name = str(service.get("name") or "").strip()
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-").upper()
+    return f"SVC-{slug[:48]}" if slug else ""
+
+
 def _service_fit_hints(text: str, services: list[dict], limit: int = 4) -> list[dict]:
     text_l = str(text or "").lower()
     matches = []
@@ -1600,17 +1732,18 @@ def _service_fit_hints(text: str, services: list[dict], limit: int = 4) -> list[
         overlap = sorted({word for word in re.findall(r"[a-zA-ZåäöÅÄÖ0-9]{4,}", text_l) if word in haystack})
         if overlap:
             matches.append({
-                "service": svc.get("name") or svc.get("category") or "Service",
+                "service_id": _canonical_service_id(svc),
+                "service": svc.get("name") or "Service",
                 "category": svc.get("category"),
                 "match_terms": overlap[:8],
+                "match_status": "candidate_only",
                 "proof_points": _list(svc.get("proof_points"))[:3],
                 "safe_wording": _list(svc.get("safe_wording"))[:3] or svc.get("safe_wording"),
                 "do_not_claim": _list(svc.get("do_not_claim"))[:3],
                 "disqualifiers": _list(svc.get("disqualifiers"))[:3],
             })
-        if len(matches) >= limit:
-            break
-    return matches
+    matches.sort(key=lambda item: (-len(_list(item.get("match_terms"))), str(item.get("service_id") or item.get("service") or "")))
+    return matches[:limit]
 
 
 def _signal_from_text(
@@ -1623,6 +1756,12 @@ def _signal_from_text(
     confidence: int = 45,
     gate: str = "allowed_as_hypothesis",
     quote: str = "",
+    origin_kind: str = "generated_context",
+    signal_lane: str = "strategic_context",
+    parent_evidence_ids: list[str] | None = None,
+    parent_foresight_ids: list[str] | None = None,
+    independent_source_count: int = 0,
+    source_freshness: str = "",
 ) -> dict:
     pressure, movement_pressure, consequence = _infer_pressure(text)
     roles = _infer_buyer_roles(text)
@@ -1630,7 +1769,13 @@ def _signal_from_text(
     return {
         "id": signal_id,
         "source": source,
+        "origin_kind": origin_kind,
+        "signal_lane": signal_lane,
         "evidence_basis": [str(item) for item in evidence_basis[:6]],
+        "parent_evidence_ids": [str(item) for item in (parent_evidence_ids or [])[:8]],
+        "parent_foresight_ids": [str(item) for item in (parent_foresight_ids or [])[:8]],
+        "independent_source_count": max(0, _safe_int(independent_source_count, 0)),
+        "source_freshness": _clip(source_freshness, 80),
         "account_movement": _clip(text, 420),
         "commercial_pressure": movement_pressure,
         "pressure_type": pressure,
@@ -1654,11 +1799,22 @@ def _build_account_signal_map(
     payload_seed: dict,
     services: list[dict],
     *,
-    limit: int = 10,
+    limit: int = SIGNAL_MAP_LIMIT,
 ) -> list[dict]:
-    signals = []
+    candidates: dict[str, list[dict]] = {lane: [] for lane in SIGNAL_LANE_QUOTAS}
+    valid_evidence_ids = {
+        str(item.get("id"))
+        for item in _list(payload_seed.get("verified_evidence")) + _list(payload_seed.get("financial_sources"))
+        if isinstance(item, dict) and item.get("id")
+    }
+    valid_foresight_ids = {
+        str(item.get("id") or item.get("force_id"))
+        for item in _list(payload_seed.get("foresight_forces"))
+        if isinstance(item, dict) and (item.get("id") or item.get("force_id"))
+    }
 
-    def add_signal(
+    def add_candidate(
+        lane: str,
         source: str,
         text: str,
         basis: list[str],
@@ -1667,14 +1823,20 @@ def _build_account_signal_map(
         quote: str = "",
         extra: dict | None = None,
     ):
-        if len(signals) >= limit:
-            return None
         text = _clip(text, 900)
         if not text:
             return None
-        signal_id = f"SIG-{len(signals) + 1:02d}"
+        metadata = extra.copy() if isinstance(extra, dict) else {}
+        parent_evidence_ids = [
+            str(item) for item in _list(metadata.pop("parent_evidence_ids", []))
+            if str(item) in valid_evidence_ids
+        ]
+        parent_foresight_ids = [
+            str(item) for item in _list(metadata.pop("parent_foresight_ids", []))
+            if str(item) in valid_foresight_ids
+        ]
         signal = _signal_from_text(
-            signal_id,
+            "",
             source=source,
             text=text,
             evidence_basis=basis,
@@ -1682,11 +1844,49 @@ def _build_account_signal_map(
             confidence=confidence,
             gate=gate,
             quote=quote,
+            origin_kind=str(metadata.pop("origin_kind", source)),
+            signal_lane=lane,
+            parent_evidence_ids=parent_evidence_ids,
+            parent_foresight_ids=parent_foresight_ids,
+            independent_source_count=_safe_int(metadata.pop("independent_source_count", 0), 0),
+            source_freshness=str(metadata.pop("source_freshness", "") or ""),
         )
-        if extra:
-            signal.update(extra)
-        signals.append(signal)
+        signal.update(metadata)
+        candidates.setdefault(lane, []).append(signal)
         return signal
+
+    gate_rank = {
+        "allowed_as_fact": 0,
+        "allowed_as_hypothesis": 1,
+        "allowed_as_discovery_question": 2,
+        "internal_only": 3,
+        "blocked": 4,
+    }
+
+    def candidate_rank(signal: dict) -> tuple:
+        freshness = str(signal.get("source_freshness") or "").lower()
+        freshness_rank = 0 if freshness in {"fresh", "current", "recent"} else 1 if freshness else 2
+        return (
+            gate_rank.get(_normalize_gate(signal.get("gate")), 3),
+            0 if signal.get("independent_source_count") else 1,
+            freshness_rank,
+            -_safe_int(signal.get("confidence"), 0),
+            str((signal.get("evidence_basis") or [""])[0]),
+            str(signal.get("account_movement") or "").lower(),
+        )
+
+    def dedupe(items: list[dict]) -> list[dict]:
+        result = []
+        seen = set()
+        for item in sorted(items, key=candidate_rank):
+            basis = "|".join(sorted(str(value) for value in _list(item.get("evidence_basis")) if value))
+            normalized = re.sub(r"[^a-z0-9]+", " ", str(item.get("account_movement") or "").lower()).strip()
+            key = basis or normalized[:220]
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            result.append(item)
+        return result
 
     scanner_outputs = _dict(payload_seed.get("scanner_outputs"))
     activation_pairs = [
@@ -1712,7 +1912,8 @@ def _build_account_signal_map(
         what_to_do = _clip(pair.get("what_to_do") or pair.get("what"), 700)
         what_progress_shows = _clip(pair.get("what_progress_shows"), 700)
         text = _activation_pair_text(pair)
-        signal = add_signal(
+        signal = add_candidate(
+            "activation_hypothesis",
             "scanner_activation_pair",
             text,
             [f"ACT-{idx:02d}"],
@@ -1720,6 +1921,11 @@ def _build_account_signal_map(
             "allowed_as_hypothesis",
             quote=pair.get("why") or pair.get("theme") or text,
             extra={
+                "origin_kind": "scanner_activation_pair",
+                "parent_evidence_ids": _list(pair.get("parent_evidence_ids")),
+                "parent_foresight_ids": _list(pair.get("parent_foresight_ids")),
+                "independent_source_count": pair.get("independent_source_count"),
+                "source_freshness": pair.get("source_freshness"),
                 "activation_pair_index": idx,
                 "pair_index": idx,
                 "theme_type": play_type,
@@ -1741,12 +1947,15 @@ def _build_account_signal_map(
                     if play_type == "foresight_driven"
                     else "Use as a proactive opportunity hypothesis until customer timing is confirmed."
                 ),
+                "pressure_horizon": _clip(pair.get("pressure_horizon") or pair.get("horizon"), 120),
+                "sales_validation_window": _clip(pair.get("sales_validation_window"), 120),
+                "timing_basis": _clip(pair.get("timing_basis"), 320),
             },
         )
         if signal:
             signal["need_hypothesis"] = _need_hypothesis_from_signal(signal)
 
-    for item in _list(payload_seed.get("verified_evidence"))[:8]:
+    for item in _list(payload_seed.get("verified_evidence")):
         if not isinstance(item, dict):
             continue
         text = _first_nonempty(item.get("title"), item.get("quote"), item.get("url"), limit=700)
@@ -1754,7 +1963,23 @@ def _build_account_signal_map(
         confidence = 65 if gate == "allowed_as_fact" else 58 if gate == "allowed_as_hypothesis" else 42
         if not item.get("generation_eligible") and gate not in {"allowed_as_fact", "allowed_as_hypothesis"}:
             confidence = min(confidence, 35)
-        add_signal("verified_evidence", text, [item.get("id")], confidence, gate, item.get("quote"))
+        item_id = str(item.get("id") or "")
+        add_candidate(
+            "account_fact",
+            "verified_evidence",
+            text,
+            [item_id],
+            confidence,
+            gate,
+            item.get("quote"),
+            {
+                "origin_kind": "account_evidence",
+                "parent_evidence_ids": [item_id],
+                "independent_source_count": 1 if _is_independent_source_item(item) else 0,
+                "source_freshness": item.get("source_freshness") or item.get("fetched_at") or item.get("last_checked"),
+                "generation_eligible": item.get("generation_eligible") is True,
+            },
+        )
 
     for item in _list(payload_seed.get("financial_sources"))[:5]:
         if not isinstance(item, dict):
@@ -1766,34 +1991,118 @@ def _build_account_signal_map(
             limit=700,
         )
         gate = _source_item_gate(item, "allowed_as_hypothesis" if item.get("generation_eligible") else "allowed_as_discovery_question")
-        add_signal("financial_evidence", text, [item.get("id")], 65 if gate in {"allowed_as_fact", "allowed_as_hypothesis"} else 45, gate, item.get("quote"))
+        item_id = str(item.get("id") or "")
+        add_candidate(
+            "financial_capacity",
+            "financial_evidence",
+            text,
+            [item_id],
+            65 if gate in {"allowed_as_fact", "allowed_as_hypothesis"} else 45,
+            gate,
+            item.get("quote"),
+            {
+                "origin_kind": "financial_evidence",
+                "parent_evidence_ids": [item_id],
+                "independent_source_count": 1 if _is_independent_source_item(item) else 0,
+                "source_freshness": item.get("source_freshness") or item.get("year"),
+                "generation_eligible": item.get("generation_eligible") is True,
+            },
+        )
 
-    for key, source in (("ai_diagnosis", "scanner_ai_diagnosis"), ("pitch", "scanner_pitch"), ("domain_force_dossier", "scanner_domain_force")):
-        add_signal(source, scanner_outputs.get(key), ["SCANNER"], 45, "allowed_as_hypothesis")
+    for key, source in (("ai_diagnosis", "scanner_ai_diagnosis"), ("domain_force_dossier", "scanner_domain_force")):
+        add_candidate("strategic_context", source, scanner_outputs.get(key), ["SCANNER"], 45, "allowed_as_hypothesis", extra={"origin_kind": source})
 
     for item in _list(scanner_outputs.get("why"))[:3]:
         if isinstance(item, dict):
             text = _first_nonempty(item.get("title"), item.get("text"), item.get("rationale"), limit=700)
         else:
             text = item
-        add_signal("scanner_why", text, ["SCANNER-WHY"], 45, "allowed_as_discovery_question")
+        add_candidate("strategic_context", "scanner_why", text, ["SCANNER-WHY"], 45, "allowed_as_discovery_question", extra={"origin_kind": "scanner_why"})
 
     for force in _list(payload_seed.get("foresight_forces"))[:5]:
         if not isinstance(force, dict):
             continue
         text = _first_nonempty(force.get("description"), force.get("theme"), force.get("dimension"), limit=700)
-        add_signal("foresight_force", text, ["FORESIGHT"], _safe_int(force.get("confidence"), 45), "allowed_as_hypothesis")
-
-    if not signals:
-        company = _dict(payload_seed.get("company"))
-        add_signal(
-            "minimal_company_context",
-            f"{company.get('name') or 'The account'} has limited stored evidence. Treat any buying-potential logic as discovery-only until stronger evidence is available.",
-            ["LOW-EVIDENCE"],
-            25,
-            "allowed_as_discovery_question",
+        force_id = str(force.get("id") or force.get("force_id") or "")
+        add_candidate(
+            "external_pressure",
+            "foresight_force",
+            text,
+            [force_id or "FORESIGHT"],
+            _safe_int(force.get("confidence"), 45),
+            "allowed_as_hypothesis",
+            extra={
+                "origin_kind": "foresight_force",
+                "parent_foresight_ids": [force_id] if force_id else [],
+                "source_freshness": force.get("source_freshness") or force.get("updated_at"),
+                "pressure_horizon": force.get("horizon") or force.get("time_horizon") or force.get("timeframe"),
+                "geography": force.get("geography"),
+                "domain_relevance": force.get("domain_relevance"),
+            },
         )
-    return signals[:limit]
+
+    evidence_trust = _dict(scanner_outputs.get("evidence_trust"))
+    gap_items = _list(scanner_outputs.get("evidence_absence_signals")) + _list(evidence_trust.get("false_or_unsupported_claims"))
+    for item in gap_items[:8]:
+        text = _first_nonempty(
+            item.get("claim") if isinstance(item, dict) else item,
+            item.get("reason") if isinstance(item, dict) else "",
+            limit=700,
+        )
+        add_candidate(
+            "contradiction_or_gap",
+            "scanner_evidence_gap",
+            text,
+            ["SCANNER-GAP"],
+            38,
+            "allowed_as_discovery_question",
+            extra={"origin_kind": "evidence_gap", "selection_reason": "Preserves a falsifier or missing-evidence boundary."},
+        )
+
+    for lane in list(candidates):
+        candidates[lane] = dedupe(candidates[lane])
+
+    selected: list[dict] = []
+    selected_keys: set[str] = set()
+
+    def select_from(lane: str, count: int, reason: str) -> None:
+        for candidate in candidates.get(lane, []):
+            if len(selected) >= limit or count <= 0:
+                break
+            key = "|".join(str(item) for item in _list(candidate.get("evidence_basis"))) or str(candidate.get("account_movement"))
+            if key in selected_keys:
+                continue
+            candidate["selection_reason"] = candidate.get("selection_reason") or reason
+            selected.append(candidate)
+            selected_keys.add(key)
+            count -= 1
+
+    for lane, quota in SIGNAL_LANE_QUOTAS.items():
+        select_from(lane, min(quota, max(0, limit - len(selected))), f"Reserved {lane.replace('_', ' ')} lane.")
+
+    for lane in ("account_fact", "strategic_context", "financial_capacity", "external_pressure", "contradiction_or_gap"):
+        select_from(lane, max(0, limit - len(selected)), "Filled unused capacity with the next eligible governed signal.")
+
+    if not selected:
+        company = _dict(payload_seed.get("company"))
+        fallback = _signal_from_text(
+            "",
+            source="minimal_company_context",
+            text=f"{company.get('name') or 'The account'} has limited stored evidence. Treat any buying-potential logic as discovery-only until stronger evidence is available.",
+            evidence_basis=["LOW-EVIDENCE"],
+            services=services,
+            confidence=25,
+            gate="allowed_as_discovery_question",
+            origin_kind="minimal_company_context",
+            signal_lane="contradiction_or_gap",
+        )
+        fallback["selection_reason"] = "No eligible lane candidates were available."
+        selected.append(fallback)
+
+    for index, signal in enumerate(selected[:limit], start=1):
+        signal["id"] = f"SIG-{index:02d}"
+        signal["need_hypothesis"] = signal.get("need_hypothesis") or _need_hypothesis_from_signal(signal)
+    return selected[:limit]
 
 
 def _build_input_payload(
@@ -1845,19 +2154,26 @@ def _build_input_payload(
 
     strategic_foresight = _dict(company_data.get("strategic_foresight"))
     forces = []
-    for force in _list(strategic_foresight.get("dimension_forces"))[:10]:
+    for force_index, force in enumerate(_list(strategic_foresight.get("dimension_forces"))[:10], start=1):
         if isinstance(force, dict):
             forces.append({
+                "id": force.get("id") or force.get("force_id") or f"FORESIGHT-{force_index:02d}",
+                "force_id": force.get("force_id") or force.get("id") or f"FORESIGHT-{force_index:02d}",
                 "theme": force.get("theme") or force.get("force") or force.get("name"),
                 "dimension": force.get("dimension"),
                 "description": _clip(force.get("description") or force.get("rationale") or force.get("signal"), 500),
                 "confidence": force.get("confidence"),
                 "credibility": force.get("source_credibility") or force.get("credibility"),
+                "horizon": force.get("horizon") or force.get("time_horizon") or force.get("timeframe"),
+                "geography": force.get("geography") or force.get("region"),
+                "domain_relevance": force.get("domain_relevance") or force.get("relevance"),
+                "source_freshness": force.get("source_freshness") or force.get("updated_at"),
+                "source_ids": _list(force.get("source_ids") or force.get("evidence_ids"))[:8],
             })
 
     services = []
     for svc in _list(service_kb.get("services"))[:24]:
-        services.append({
+        service = {
             "name": svc.get("name"),
             "category": svc.get("category"),
             "buyer_personas": _list(svc.get("buyer_personas"))[:8],
@@ -1867,7 +2183,9 @@ def _build_input_payload(
             "safe_wording": _list(svc.get("safe_wording"))[:8] or svc.get("safe_wording"),
             "do_not_claim": _list(svc.get("do_not_claim"))[:8],
             "disqualifiers": _list(svc.get("disqualifiers"))[:8],
-        })
+        }
+        service["service_id"] = _canonical_service_id({**svc, **service})
+        services.append(service)
     modernization_tactics = [
         {
             "category": tactic.get("category"),
@@ -1910,6 +2228,11 @@ def _build_input_payload(
         },
         "scanner_outputs": {
             "general_summary": _clip(company_data.get("general_summary"), 1800),
+            "general_summary_fact_check": {
+                "verified": company_data.get("general_summary_verified") is True,
+                "status": "verified" if company_data.get("general_summary_verified") is True else "unverified_or_skipped",
+                "false_or_unsupported_claims": _list(company_data.get("general_summary_false_claims"))[:12],
+            },
             "ai_diagnosis": _clip(company_data.get("summary_text"), 2200),
             "strategic_synthesis": _clip(company_data.get("strategic_synthesis"), 5200),
             "evidence_based_risks": _list(company_data.get("evidence_based_risks"))[:6],
@@ -1919,6 +2242,7 @@ def _build_input_payload(
             "what_progress": _list(company_data.get("what_progress_proposals"))[:4],
             "pitch": _clip(company_data.get("pitch_text"), 900),
             "domain_force_dossier": _clip(company_data.get("domain_force_dossier"), 1800),
+            "evidence_absence_signals": _list(company_data.get("evidence_absence_signals"))[:12],
             "evidence_trust": {
                 "confidence_score": company_data.get("confidence_score"),
                 "hallucination_flags": _list(company_data.get("hallucination_flags"))[:12],
@@ -1950,9 +2274,19 @@ def _build_input_payload(
         "services": services,
         "modernization_tactics": modernization_tactics,
         "self_scan_context": self_scan_context,
+        "evidence_sufficiency": _derive_evidence_sufficiency(
+            evidence,
+            financial_sources,
+            _dict(company_data.get("evidence_sufficiency")),
+        ),
     }
     payload["account_signal_map"] = _build_account_signal_map(payload, services)
     payload["required_sales_spine"] = _required_sales_spine(payload)
+    payload["hypothesis_registry"] = _build_hypothesis_registry(payload)
+    payload["account_signal_lanes"] = {
+        lane: [_compact_signal(signal) for signal in payload["account_signal_map"] if signal.get("signal_lane") == lane]
+        for lane in SIGNAL_LANE_QUOTAS
+    }
     payload["buyer_role_lens"] = BUYER_ROLE_LENSES
     return payload
 
@@ -1965,8 +2299,11 @@ def _required_sales_spine(payload: dict) -> list[dict]:
         signal_id = str(signal.get("id") or "").strip()
         if not signal_id:
             continue
+        hypothesis_id = f"HYP-{len(required) + 1:02d}"
+        signal["hypothesis_id"] = hypothesis_id
         required.append({
             "id": signal_id,
+            "hypothesis_id": hypothesis_id,
             "activation_pair_index": signal.get("activation_pair_index"),
             "play_type": _normalize_play_type(signal.get("sales_play_type") or signal.get("theme_type")),
             "theme": _clip(signal.get("theme") or signal.get("account_movement"), 180),
@@ -1983,10 +2320,104 @@ def _required_sales_spine(payload: dict) -> list[dict]:
     return required
 
 
+def _weakest_gate(gates: list[str]) -> str:
+    rank = {
+        "allowed_as_fact": 0,
+        "allowed_as_hypothesis": 1,
+        "allowed_as_discovery_question": 2,
+        "internal_only": 3,
+        "blocked": 4,
+    }
+    normalized = [_normalize_gate(gate, "allowed_as_discovery_question") for gate in gates if gate]
+    return max(normalized, key=lambda gate: rank.get(gate, 3)) if normalized else "allowed_as_discovery_question"
+
+
+def _signal_overlap(left: dict, right: dict) -> int:
+    def words(item: dict) -> set[str]:
+        text = " ".join(
+            str(item.get(key) or "")
+            for key in ("theme", "why", "account_movement", "commercial_pressure", "business_consequence")
+        ).lower()
+        return {word for word in re.findall(r"[a-z0-9åäö]{4,}", text) if word not in {"this", "that", "with", "from", "should", "could", "would"}}
+    return len(words(left) & words(right))
+
+
+def _build_hypothesis_registry(payload: dict) -> list[dict]:
+    signals = [item for item in _list(payload.get("account_signal_map")) if isinstance(item, dict)]
+    activations = [item for item in signals if item.get("signal_lane") == "activation_hypothesis"][:3]
+    registry = []
+    for index, activation in enumerate(activations, start=1):
+        hypothesis_id = str(activation.get("hypothesis_id") or f"HYP-{index:02d}")
+        activation["hypothesis_id"] = hypothesis_id
+        supporting = []
+        for lane in ("account_fact", "financial_capacity", "external_pressure", "contradiction_or_gap"):
+            lane_items = [item for item in signals if item.get("signal_lane") == lane]
+            if lane_items:
+                ranked = sorted(lane_items, key=lambda item: (-_signal_overlap(activation, item), str(item.get("id") or "")))
+                best = ranked[0]
+                if _signal_overlap(activation, best) > 0:
+                    supporting.append(best)
+        for signal in supporting:
+            links = _list(signal.get("linked_hypothesis_ids"))
+            if hypothesis_id not in links:
+                links.append(hypothesis_id)
+            signal["linked_hypothesis_ids"] = links[:3]
+        need = _normalize_need_hypothesis(activation.get("need_hypothesis"), activation, activation.get("play_type"))
+        external = next((item for item in supporting if item.get("signal_lane") == "external_pressure"), {})
+        contradiction = next((item for item in supporting if item.get("signal_lane") == "contradiction_or_gap"), {})
+        gates = [activation.get("gate")] + [item.get("gate") for item in supporting]
+        parent_evidence = list(dict.fromkeys(
+            str(parent)
+            for item in [activation] + supporting
+            for parent in _list(item.get("parent_evidence_ids"))
+            if parent
+        ))
+        parent_foresight = list(dict.fromkeys(
+            str(parent)
+            for item in [activation] + supporting
+            for parent in _list(item.get("parent_foresight_ids"))
+            if parent
+        ))
+        registry.append({
+            "hypothesis_id": hypothesis_id,
+            "activation_signal_id": activation.get("id"),
+            "activation_pair_index": activation.get("activation_pair_index"),
+            "play_type": _normalize_play_type(activation.get("play_type")),
+            "theme": _clip(activation.get("theme") or activation.get("account_movement"), 180),
+            "current_condition": _clip(need.get("current_condition"), 520),
+            "external_pressure": _clip(external.get("account_movement") or need.get("future_pressure"), 520),
+            "causal_bridge": _clip(need.get("combined_activation_hypothesis"), 700),
+            "likely_business_consequence": _clip(need.get("likely_business_consequence"), 520),
+            "pressure_horizon": _clip(external.get("pressure_horizon") or activation.get("pressure_horizon"), 120),
+            "sales_validation_window": _clip(activation.get("sales_validation_window") or "Validate through discovery when an owner, consequence, and timing trigger are confirmed.", 220),
+            "timing_basis": _clip(activation.get("timing_basis") or external.get("timing_relevance"), 360),
+            "counter_hypothesis": _clip(contradiction.get("account_movement") or "The apparent pressure may already be controlled or may not be commercially material for this account.", 420),
+            "falsifier": _clip(need.get("falsifier"), 520),
+            "maximum_permitted_gate": _weakest_gate(gates),
+            "parent_signal_ids": [item.get("id") for item in supporting if item.get("id")],
+            "parent_evidence_ids": parent_evidence[:10],
+            "parent_foresight_ids": parent_foresight[:10],
+            "independent_source_count": sum(_safe_int(item.get("independent_source_count"), 0) for item in supporting),
+            "service_candidates": _list(activation.get("service_fit_hints"))[:4],
+        })
+    return registry
+
+
 def _compact_signal(signal: dict) -> dict:
     return {
         "id": signal.get("id"),
+        "hypothesis_id": signal.get("hypothesis_id"),
         "source": signal.get("source"),
+        "origin_kind": signal.get("origin_kind"),
+        "signal_lane": signal.get("signal_lane"),
+        "selection_reason": signal.get("selection_reason"),
+        "parent_evidence_ids": _list(signal.get("parent_evidence_ids"))[:8],
+        "parent_foresight_ids": _list(signal.get("parent_foresight_ids"))[:8],
+        "independent_source_count": signal.get("independent_source_count"),
+        "source_freshness": signal.get("source_freshness"),
+        "pressure_horizon": signal.get("pressure_horizon"),
+        "sales_validation_window": signal.get("sales_validation_window"),
+        "timing_basis": signal.get("timing_basis"),
         "activation_pair_index": signal.get("activation_pair_index"),
         "theme": _clip(signal.get("theme") or signal.get("account_movement"), 180),
         "gate": _normalize_gate(signal.get("gate"), "allowed_as_hypothesis"),
@@ -2006,13 +2437,17 @@ def _section_payload(section: str, payload: dict) -> dict:
         _compact_signal(signal)
         for signal in _list(payload.get("account_signal_map"))
         if isinstance(signal, dict)
-    ][:8]
+    ][:SIGNAL_MAP_LIMIT]
     compact = {
         "company": payload.get("company"),
         "required_sales_spine": _list(payload.get("required_sales_spine"))[:3],
         "account_signal_map": account_signals,
+        "account_signal_lanes": payload.get("account_signal_lanes"),
+        "hypothesis_registry": _list(payload.get("hypothesis_registry"))[:3],
+        "evidence_sufficiency": payload.get("evidence_sufficiency"),
         "scanner_outputs": {
             "general_summary": _clip(scanner_outputs.get("general_summary"), 1800 if opening_section else 900),
+            "general_summary_fact_check": scanner_outputs.get("general_summary_fact_check"),
             # The opening qualification thesis needs the financial implication,
             # horizons, and invalidation boundary that often sit near the end.
             "strategic_synthesis": _clip(scanner_outputs.get("strategic_synthesis"), 5200 if opening_section else 1500),
@@ -2044,20 +2479,25 @@ def _sales_play_service_candidates(signal: dict, payload: dict, limit: int = 6) 
     for service in _list(payload.get("services")):
         if not isinstance(service, dict):
             continue
-        name = str(service.get("name") or service.get("category") or "").strip()
+        name = str(service.get("name") or "").strip()
         if name:
             services_by_name[name.lower()] = service
+        service_id = str(service.get("service_id") or "").strip()
+        if service_id:
+            services_by_name[service_id.lower()] = service
 
     candidates: list[dict] = []
     seen: set[str] = set()
     for hint in _list(signal.get("service_fit_hints")):
         if not isinstance(hint, dict):
             continue
-        name = str(hint.get("service") or hint.get("category") or "").strip()
+        name = str(hint.get("service") or "").strip()
+        service_id = str(hint.get("service_id") or "").strip()
         if not name or name.lower() in seen:
             continue
-        source = services_by_name.get(name.lower(), {})
+        source = services_by_name.get(service_id.lower()) or services_by_name.get(name.lower(), {})
         candidates.append({
+            "service_id": source.get("service_id") or service_id,
             "name": name,
             "category": source.get("category") or hint.get("category"),
             "match_terms": _list(hint.get("match_terms"))[:8],
@@ -2085,7 +2525,7 @@ Rules:
 - Return ONLY valid JSON using the exact schema below.
 - Preserve account_signal_id exactly as {signal.get('id')}.
 - Use only the supplied signal and candidate services. Do not browse or invent facts, services, projects, owners, budgets, or timing.
-- Choose one exact candidate service only when the signal-to-service bridge is commercially coherent. Otherwise return an empty service_or_offer.
+- Choose one exact candidate service ID and name only when the signal-to-service bridge is commercially coherent. Otherwise return empty service_id and service_or_offer.
 - Keep service_fit_rationale concise and explain the causal bridge, not keyword overlap.
 - Keep the customer wording hypothesis-led and suitable for discovery.
 - Do not repeat the account thesis, full WHY/WHAT, scores, gates, evidence, or standard report metadata; Scanner assembles those deterministically.
@@ -2224,6 +2664,8 @@ BUYING_SECTION_SCHEMAS = {
 BUYING_SALES_PLAY_ANALYSIS_SCHEMA = """
 {
   "account_signal_id": "SIG-01",
+  "hypothesis_id": "HYP-01",
+  "service_id": "Exact candidate service ID or empty string",
   "service_or_offer": "Exact candidate service name or empty string",
   "service_fit_rationale": "...",
   "primary_buyer": "...",
@@ -2693,6 +3135,7 @@ Return JSON with:
 {{
   "approved": true,
   "required_downgrades": [{{"path": "pressure_signals[0]", "reason": "...", "new_gate": "allowed_as_hypothesis|allowed_as_discovery_question|internal_only|blocked"}}],
+  "field_actions": [{{"object_id": "SIG-01", "path": "recommended_sales_plays[0].safe_customer_wording", "action": "replace|remove", "replacement": "Evidence-safe replacement or empty string", "reason": "..."}}],
   "blocked_claims": ["..."],
   "confidence_adjustment": 0,
   "notes": ["..."]
@@ -2707,6 +3150,8 @@ Rules:
 - Downgrade or block sales plays that lack a linked SIG id, activation_pair_index when activation-pair SIGs exist, buyer-role concern, service match, safe discovery question, qualification criteria, safe customer wording, or disqualifier.
 - Downgrade sales plays that use scores as proof, skip company/market context separation, or turn response directions into delivery scope.
 - Evidence confidence must keep verified facts, safe hypotheses, question-only claims, and do-not-say claims separate.
+- When a specific sentence is unsafe, use field_actions to replace or remove that sentence itself. Do not merely copy it into Do Not Say.
+- field_actions may target only an existing report object/field. Use the linked SIG or HYP as object_id and never invent IDs.
 - Empty pressure signals, generic buyer targets, and unsupported service-fit leaps should be downgraded.
 
 Report:
@@ -2720,6 +3165,110 @@ Payload:
 def _normalize_gate(value: Any, fallback: str = "allowed_as_hypothesis") -> str:
     gate = str(value or "").strip().lower()
     return gate if gate in ALLOWED_GATES else fallback
+
+
+def _apply_gate_field_actions(report: dict, actions: Any) -> tuple[list[dict], list[dict]]:
+    allowed_sections = {
+        "account_snapshot",
+        "buying_potential_thesis",
+        "sales_spine",
+        "pressure_signals",
+        "why_now",
+        "pain_to_solution_map",
+        "recommended_sales_plays",
+        "stakeholder_map",
+        "evidence_confidence",
+    }
+    allowed_fields = {
+        "text", "statement", "rationale", "account_thesis", "strategic_synthesis_basis",
+        "description", "trigger", "interpretation", "business_consequence", "why_it_matters_now",
+        "safe_discovery_question", "safe_customer_wording", "opening_angle", "executive_angle",
+        "technical_angle", "buying_hypothesis", "business_hypothesis", "why_relevant",
+        "trigger_to_offer_bridge", "proof_point", "first_meeting_objective", "service_fit_rationale",
+        "current_condition", "future_pressure", "market_context", "company_context",
+        "combined_activation_hypothesis", "likely_business_consequence", "what_to_propose",
+    }
+    applied: list[dict] = []
+    rejected: list[dict] = []
+    for raw_action in _list(actions):
+        action = _dict(raw_action)
+        path = str(action.get("path") or "").strip()
+        operation = str(action.get("action") or "").strip().lower()
+        match = re.match(r"^([a-zA-Z_]+)(?:\[(\d+)\])?\.([a-zA-Z_]+)(?:\.([a-zA-Z_]+))?$", path)
+        if not match or operation not in {"replace", "remove"}:
+            rejected.append({**action, "rejection_reason": "Invalid or unsupported field action path."})
+            continue
+        section, index_text, field, nested_field = match.groups()
+        if section not in allowed_sections or field not in allowed_fields or (nested_field and nested_field not in allowed_fields):
+            rejected.append({**action, "rejection_reason": "Field is outside the verifier allowlist."})
+            continue
+        target: Any = report.get(section)
+        if index_text is not None:
+            index = _safe_int(index_text, -1)
+            if not isinstance(target, list) or not (0 <= index < len(target)):
+                rejected.append({**action, "rejection_reason": "Target list item does not exist."})
+                continue
+            target = target[index]
+        if not isinstance(target, dict):
+            rejected.append({**action, "rejection_reason": "Target object does not exist."})
+            continue
+        object_id = str(action.get("object_id") or "").strip()
+        target_ids = set(_item_signal_ids(target) + _text_signal_ids(json.dumps(target, ensure_ascii=False)))
+        target_ids.update(str(value) for value in _list(target.get("linked_hypothesis_ids")) if value)
+        if target.get("hypothesis_id"):
+            target_ids.add(str(target.get("hypothesis_id")))
+        if object_id and object_id not in target_ids and object_id not in {section, str(target.get("id") or "")}:
+            rejected.append({**action, "rejection_reason": "object_id does not match the targeted report object."})
+            continue
+        container = target
+        target_field = field
+        if nested_field:
+            container = target.get(field)
+            target_field = nested_field
+            if not isinstance(container, dict):
+                rejected.append({**action, "rejection_reason": "Nested target object does not exist."})
+                continue
+        replacement = "" if operation == "remove" else _clean_generated_text(action.get("replacement"))
+        container[target_field] = replacement
+        applied.append({
+            "object_id": object_id,
+            "path": path,
+            "action": operation,
+            "reason": _clip(action.get("reason"), 260),
+        })
+    return applied, rejected
+
+
+def _remove_blocked_claims_from_public_sections(report: dict, blocked_claims: list[str]) -> int:
+    claims = [_clean_generated_text(claim) for claim in blocked_claims if len(_clean_generated_text(claim)) >= 18]
+    if not claims:
+        return 0
+    public_keys = (
+        "account_snapshot", "buying_potential_thesis", "sales_spine", "pressure_signals",
+        "why_now", "pain_to_solution_map", "recommended_sales_plays", "stakeholder_map",
+    )
+    removed = 0
+
+    def clean(value: Any) -> Any:
+        nonlocal removed
+        if isinstance(value, dict):
+            return {key: clean(item) for key, item in value.items()}
+        if isinstance(value, list):
+            cleaned = [clean(item) for item in value]
+            return [item for item in cleaned if item not in (None, "", [], {})]
+        if not isinstance(value, str):
+            return value
+        result = value
+        for claim in claims:
+            pattern = re.compile(re.escape(claim), re.I)
+            result, count = pattern.subn("", result)
+            removed += count
+        return _clean_generated_text(result)
+
+    for key in public_keys:
+        if key in report:
+            report[key] = clean(report[key])
+    return removed
 
 
 def _has_basis(item: dict) -> bool:
@@ -2749,7 +3298,7 @@ def _known_service_names(payload: dict) -> set[str]:
     names = set()
     for svc in _list(payload.get("services")):
         if isinstance(svc, dict):
-            for key in ("name", "category"):
+            for key in ("name", "service_id"):
                 value = str(svc.get(key) or "").strip().lower()
                 if value:
                     names.add(value)
@@ -2759,19 +3308,12 @@ def _known_service_names(payload: dict) -> set[str]:
 def _service_match_exists(item: dict, service_names: set[str]) -> bool:
     if not service_names:
         return False
-    text = " ".join(
-        str(item.get(key) or "")
-        for key in (
-            "service",
-            "service_or_offer",
-            "why_relevant",
-            "opening_angle",
-            "safe_customer_wording",
-            "trigger_to_offer_bridge",
-            "proof_point",
-        )
-    ).lower()
-    return any(name and name in text for name in service_names)
+    explicit = {
+        str(item.get(key) or "").strip().lower()
+        for key in ("service_id", "service", "service_or_offer")
+        if str(item.get(key) or "").strip()
+    }
+    return any(value in service_names for value in explicit)
 
 
 def _classify_play_score(score: int) -> str:
@@ -2786,11 +3328,35 @@ def _classify_play_score(score: int) -> str:
     return "do_not_use"
 
 
-def _score_play(play: dict, *, has_signal: bool, has_service: bool, has_question: bool) -> int:
-    evidence_strength = 25 if has_signal else 0
+def _signal_evidence_quality(signal: dict | None) -> int:
+    signal = _dict(signal)
+    if not signal:
+        return 0
+    base = {
+        "allowed_as_fact": 18,
+        "allowed_as_hypothesis": 14,
+        "allowed_as_discovery_question": 9,
+        "internal_only": 5,
+        "blocked": 0,
+    }.get(_normalize_gate(signal.get("gate")), 5)
+    parent_count = len(_list(signal.get("parent_evidence_ids"))) + len(_list(signal.get("parent_foresight_ids")))
+    independence = min(4, 2 * _safe_int(signal.get("independent_source_count"), 0))
+    freshness = 2 if str(signal.get("source_freshness") or "").lower() in {"fresh", "current", "recent"} else 0
+    return min(25, base + min(3, parent_count) + independence + freshness)
+
+
+def _score_play(
+    play: dict,
+    *,
+    has_signal: bool,
+    has_service: bool,
+    has_question: bool,
+    signal: dict | None = None,
+) -> int:
+    evidence_strength = _signal_evidence_quality(signal) if signal else (25 if has_signal else 0)
     business_pressure = 20 if _clip(play.get("business_hypothesis") or play.get("why_relevant"), 80) else 5
     buyer_relevance = 15 if _clip(play.get("primary_buyer") or play.get("target_stakeholder"), 80) else 0
-    timing_strength = 15 if _clip(play.get("trigger"), 80) else 5
+    timing_strength = 15 if _has_current_timing_basis(signal, play) else 7 if _clip(play.get("trigger"), 80) else 3
     vivicta_fit = 15 if has_service else 0
     safe_outreach = 10 if has_question else 0
     return evidence_strength + business_pressure + buyer_relevance + timing_strength + vivicta_fit + safe_outreach
@@ -3779,7 +4345,15 @@ def _previous_section_item(previous_report: dict, section: str, signal_id: str) 
         return None
     for item in _list(previous.get(key)):
         if isinstance(item, dict) and signal_id in set(_item_signal_ids(item) + _text_signal_ids(json.dumps(item, ensure_ascii=False))):
-            return item
+            wording_only = item.copy()
+            wording_only["linked_signal_ids"] = [signal_id]
+            wording_only["evidence_basis"] = [signal_id]
+            wording_only["gate"] = "allowed_as_discovery_question"
+            wording_only.pop("parent_evidence_ids", None)
+            wording_only.pop("parent_foresight_ids", None)
+            wording_only.pop("source_url", None)
+            wording_only["recovery_boundary"] = "Previous report wording only; current Scanner structure remains the evidence authority."
+            return wording_only
     return None
 
 
@@ -3800,14 +4374,34 @@ def _sales_play_from_signal(
         for item in _list(service_candidates)
         if isinstance(item, dict) and str(item.get("name") or "").strip()
     }
+    candidate_ids = {
+        str(item.get("service_id") or "").strip().lower(): item
+        for item in _list(service_candidates)
+        if isinstance(item, dict) and str(item.get("service_id") or "").strip()
+    }
     selected_service = str(analysis.get("service_or_offer") or "").strip()
-    service_name = candidate_names.get(selected_service.lower(), "") if selected_service else ""
+    selected_service_id = str(analysis.get("service_id") or "").strip()
+    selected_candidate = candidate_ids.get(selected_service_id.lower()) if selected_service_id else None
+    service_name = str(selected_candidate.get("name") or "").strip() if selected_candidate else ""
+    if not service_name and selected_service:
+        service_name = candidate_names.get(selected_service.lower(), "")
+        selected_candidate = next(
+            (item for item in _list(service_candidates) if isinstance(item, dict) and str(item.get("name") or "").strip().lower() == selected_service.lower()),
+            None,
+        )
+        selected_service_id = str(_dict(selected_candidate).get("service_id") or "")
     if not service_name and not analysis_provided and len(candidate_names) == 1:
         service_name = next(iter(candidate_names.values()))
+        selected_candidate = next(
+            (item for item in _list(service_candidates) if isinstance(item, dict) and str(item.get("name") or "").strip() == service_name),
+            None,
+        )
+        selected_service_id = str(_dict(selected_candidate).get("service_id") or "")
     if not service_name and not candidate_names and len(service_hints) == 1:
-        service_name = str(service_hints[0].get("service") or service_hints[0].get("category") or "").strip()
+        service_name = str(service_hints[0].get("service") or "").strip()
+        selected_service_id = str(service_hints[0].get("service_id") or "")
     service_name = service_name or "Discovery validation - offer to be selected after qualification"
-    readiness = "Validate now" if play_type == "current_status" else "Validate when trigger appears"
+    readiness = "Validate now" if play_type == "current_status" and _has_current_timing_basis(signal) else "Validate when trigger appears"
     gate = _normalize_gate(signal.get("gate"), "allowed_as_discovery_question")
     coverage = "Recovered from required Scanner activation spine; validate owner, timing, and business consequence before use."
     buyer_roles = [str(role) for role in _list(signal.get("buyer_roles")) if str(role).strip()]
@@ -3853,6 +4447,8 @@ def _sales_play_from_signal(
         "linked_signal_ids": [signal_id],
         "activation_pair_index": _safe_int(signal.get("activation_pair_index"), 0),
         "play_type": play_type,
+        "hypothesis_id": signal.get("hypothesis_id"),
+        "service_id": selected_service_id,
         "service_or_offer": service_name,
         "service_fit_rationale": service_fit_rationale,
         "need_hypothesis": need,
@@ -4198,9 +4794,16 @@ def _enrich_short_opening_sections(report: dict, payload: dict) -> None:
 def _post_process_report(report: dict, payload: dict, gate_review: dict | None = None, model_mode: str | None = None) -> dict:
     verified_count = len(payload.get("verified_evidence") or [])
     financial_count = len(payload.get("financial_sources") or [])
-    low_evidence = verified_count < 2 and financial_count < 1
+    sufficiency_status = str(_dict(payload.get("evidence_sufficiency")).get("status") or "")
+    low_evidence = sufficiency_status == "insufficient" or (verified_count < 2 and financial_count < 1)
     known_signal_ids = {str(signal.get("id")) for signal in _list(payload.get("account_signal_map")) if isinstance(signal, dict) and signal.get("id")}
     signals_by_id = _signal_by_id(payload)
+    hypothesis_registry = [item for item in _list(payload.get("hypothesis_registry")) if isinstance(item, dict)]
+    hypothesis_by_signal = {
+        str(item.get("activation_signal_id")): str(item.get("hypothesis_id"))
+        for item in hypothesis_registry
+        if item.get("activation_signal_id") and item.get("hypothesis_id")
+    }
     activation_signal_ids = _activation_signal_ids(payload)
     service_names = _known_service_names(payload)
     scanner_outputs = _dict(payload.get("scanner_outputs"))
@@ -4217,6 +4820,18 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             gate = "allowed_as_hypothesis" if not low_evidence else "allowed_as_discovery_question"
         item["gate"] = gate
         item["confidence"] = max(0, min(100, _safe_int(item.get("confidence"), 50)))
+        signal_ids = _item_signal_ids(item) + _text_signal_ids(json.dumps(item, ensure_ascii=False))
+        linked_hypotheses = _list(item.get("linked_hypothesis_ids"))
+        if item.get("hypothesis_id"):
+            linked_hypotheses.append(item.get("hypothesis_id"))
+        for signal_id in signal_ids:
+            hypothesis_id = hypothesis_by_signal.get(signal_id)
+            if hypothesis_id:
+                linked_hypotheses.append(hypothesis_id)
+        linked_hypotheses = list(dict.fromkeys(str(value) for value in linked_hypotheses if value))
+        if linked_hypotheses:
+            item["linked_hypothesis_ids"] = linked_hypotheses[:3]
+            item.setdefault("hypothesis_id", linked_hypotheses[0])
         return item
 
     for key in ("account_snapshot", "buying_potential_thesis"):
@@ -4261,7 +4876,13 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         if self_scan_context.get("is_self_scan"):
             sales_spine["self_scan_note"] = sales_spine.get("self_scan_note") or self_scan_context.get("framing")
     sales_spine = _normalize_top_buying_hypotheses(sales_spine, payload)
+    all_hypothesis_ids = [str(item.get("hypothesis_id")) for item in hypothesis_registry if item.get("hypothesis_id")]
+    if all_hypothesis_ids:
+        sales_spine["linked_hypothesis_ids"] = all_hypothesis_ids[:3]
+        if isinstance(report.get("buying_potential_thesis"), dict):
+            report["buying_potential_thesis"]["linked_hypothesis_ids"] = all_hypothesis_ids[:3]
     report["sales_spine"] = _strip_archetype_terms(sales_spine)
+    report["hypothesis_registry"] = hypothesis_registry
     for key in ("why_now",):
         report[key] = [
             fix_item(item)
@@ -4420,10 +5041,18 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
                 "A named owner or decision forum exists",
                 "Timing, business consequence, or measurable priority is confirmed",
             ]
-        score = _score_play(play, has_signal=has_signal, has_service=has_service, has_question=bool(play["discovery_questions"]))
+        score = _score_play(
+            play,
+            has_signal=has_signal,
+            has_service=has_service,
+            has_question=bool(play["discovery_questions"]),
+            signal=activation_signal or (linked_signals[0] if linked_signals else None),
+        )
         gate = _normalize_gate(play.get("gate"), "allowed_as_hypothesis")
         if low_evidence:
             score = min(score, 55)
+        elif sufficiency_status == "partial":
+            score = min(score, 65)
         if gate == "allowed_as_discovery_question":
             score = min(score, 55)
         elif gate == "internal_only":
@@ -4440,6 +5069,8 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             has_question=bool(play["discovery_questions"]),
             low_evidence=low_evidence,
         )
+        if sufficiency_status == "partial":
+            evidence_coverage = "Partial governed evidence coverage; validate independence, freshness, entity scope, and claim coverage in discovery."
         readiness = _readiness_band(
             play["play_score"],
             has_signal=has_signal,
@@ -4447,6 +5078,9 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             has_question=bool(play["discovery_questions"]),
             gate=play.get("gate"),
         )
+        if readiness == "Validate now" and not _has_current_timing_basis(activation_signal, play):
+            readiness = "Validate when trigger appears"
+            play["timing_boundary"] = "Current timing is not independently established; validate the trigger before treating this as immediate demand."
         play["readiness_band"] = readiness
         play["evidence_coverage"] = evidence_coverage
         play["confidence_boundary"] = _confidence_boundary(play.get("gate"), play["evidence_coverage"])
@@ -4625,6 +5259,10 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
     report["evidence_confidence"] = evidence_confidence
 
     if gate_review:
+        applied_field_actions, rejected_field_actions = _apply_gate_field_actions(
+            report,
+            gate_review.get("field_actions"),
+        )
         downgrades = _list(gate_review.get("required_downgrades"))
         for downgrade in downgrades:
             if not isinstance(downgrade, dict):
@@ -4643,6 +5281,7 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
                     items[index]["gate"] = new_gate
         blocked = _list(gate_review.get("blocked_claims"))
         blocked_claims = [_clip(item, 520) for item in blocked[:12] if _clip(item, 520)]
+        removed_public_claims = _remove_blocked_claims_from_public_sections(report, blocked_claims)
         blocked_guardrails, blocked_questions = _safe_guardrail_items(blocked_claims)
         if blocked_guardrails:
             evidence_confidence.setdefault("do_not_say", []).extend(blocked_guardrails)
@@ -4651,6 +5290,9 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         report["gate_review"] = {
             "approved": gate_review.get("approved") is True,
             "required_downgrades": downgrades[:20],
+            "applied_field_actions": applied_field_actions[:20],
+            "rejected_field_actions": rejected_field_actions[:20],
+            "removed_public_claim_count": removed_public_claims,
             "blocked_claims": blocked[:20],
             "notes": _list(gate_review.get("notes"))[:10],
         }
@@ -4684,6 +5326,19 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         "generation_eligible": verified_count,
         "financial_sources": financial_count,
         "blocked_or_display_only": len(payload.get("blocked_or_display_only_sources") or []),
+    }
+    report["quality_controls"] = {
+        "reasoning_verification": {
+            "general_summary_verified": _dict(scanner_outputs.get("general_summary_fact_check")).get("verified") is True,
+            "general_summary_false_claim_count": len(_list(_dict(scanner_outputs.get("general_summary_fact_check")).get("false_or_unsupported_claims"))),
+            "evidence_sufficiency": sufficiency_status or "unknown",
+            "gate_review_approved": gate_review.get("approved") is True if gate_review else None,
+            "hypothesis_registry_count": len(hypothesis_registry),
+        },
+        "hygiene_repair": {
+            "section_generation": _list(report.get("section_generation")),
+            "report_quality_notes": _list(_dict(report.get("evidence_confidence")).get("report_quality_notes")),
+        },
     }
     reliability_status = _compute_reliability_status(report, payload, gate_review, low_evidence=low_evidence)
     report["reliability_status"] = reliability_status

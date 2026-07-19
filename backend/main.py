@@ -286,6 +286,17 @@ def _activation_pair_candidates(payload: dict) -> list[dict]:
                 "what": what_text,
                 "what_to_do": what_text,
                 "what_progress_shows": progress_text,
+                "parent_evidence_ids": [
+                    str(value) for value in item.get("parent_evidence_ids", []) if value
+                ][:8] if isinstance(item.get("parent_evidence_ids"), list) else [],
+                "parent_foresight_ids": [
+                    str(value) for value in item.get("parent_foresight_ids", []) if value
+                ][:8] if isinstance(item.get("parent_foresight_ids"), list) else [],
+                "independent_source_count": max(0, int(item.get("independent_source_count") or 0)) if str(item.get("independent_source_count") or "0").isdigit() else 0,
+                "source_freshness": str(item.get("source_freshness") or "")[:80],
+                "pressure_horizon": str(item.get("pressure_horizon") or item.get("horizon") or "")[:120],
+                "sales_validation_window": str(item.get("sales_validation_window") or "")[:120],
+                "timing_basis": _clip_sentence(item.get("timing_basis") or "", 320),
             })
     return pairs
 
@@ -2884,7 +2895,7 @@ Rules:
 
 ### OUTPUT
 Respond with valid JSON only:
-{{"activation_pairs": [{{"theme_type": "current_status", "sales_use": "current_status", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "..."}}, {{"theme_type": "foresight_driven", "sales_use": "foresight_driven", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "..."}}], "why_proposals": ["WHY texts"], "what_proposals": ["WHAT_TO_DO texts"], "what_progress_proposals": ["WHAT_PROGRESS_SHOWS texts"]}}"""
+{{"activation_pairs": [{{"theme_type": "current_status", "sales_use": "current_status", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "...", "parent_evidence_ids": [], "parent_foresight_ids": [], "pressure_horizon": "...", "sales_validation_window": "...", "timing_basis": "..."}}, {{"theme_type": "foresight_driven", "sales_use": "foresight_driven", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "...", "parent_evidence_ids": [], "parent_foresight_ids": [], "pressure_horizon": "...", "sales_validation_window": "...", "timing_basis": "..."}}], "why_proposals": ["WHY texts"], "what_proposals": ["WHAT_TO_DO texts"], "what_progress_proposals": ["WHAT_PROGRESS_SHOWS texts"]}}"""
 
     old_why = data.get("why_proposals", [])
     old_what = data.get("what_proposals", [])
@@ -3405,7 +3416,7 @@ Rules:
 
 ### OUTPUT
 Respond with valid JSON only. Required fields:
-{{"diagnostic_summary": "...", "evidence_based_risks": ["..."], "commercial_pitch": "...", "activation_pairs": [{{"theme_type": "current_status|foresight_driven|proactive_opportunity", "sales_use": "current_status|foresight_driven|proactive_opportunity", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "..."}}], "why_proposals": ["WHY texts"], "what_proposals": ["WHAT_TO_DO texts"], "what_progress_proposals": ["WHAT_PROGRESS_SHOWS texts"], "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
+{{"diagnostic_summary": "...", "evidence_based_risks": ["..."], "commercial_pitch": "...", "activation_pairs": [{{"theme_type": "current_status|foresight_driven|proactive_opportunity", "sales_use": "current_status|foresight_driven|proactive_opportunity", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "...", "parent_evidence_ids": [], "parent_foresight_ids": [], "pressure_horizon": "...", "sales_validation_window": "...", "timing_basis": "..."}}], "why_proposals": ["WHY texts"], "what_proposals": ["WHAT_TO_DO texts"], "what_progress_proposals": ["WHAT_PROGRESS_SHOWS texts"], "reality_score": <int 0-100>, "archetype": "<Thriving|Modernizing|Cash Cow|At Risk>"}}
 Note: diagnostic_summary must contain \n\n between paragraphs (3-4 core paragraphs plus one optional final foresight implication paragraph). commercial_pitch must also contain \n\n between its 3 paragraphs.
 The archetype field is audit-only and must not appear in diagnostic_summary, commercial_pitch, why_proposals, what_proposals, or evidence_based_risks.
 Note: why_proposals contains WHY texts, what_proposals contains WHAT_TO_DO texts, and what_progress_proposals contains WHAT_PROGRESS_SHOWS texts. Preserve the same order across all three arrays.
@@ -6008,10 +6019,12 @@ Generate 2-3 paired WHY/WHAT items every time. Do not collapse to one pair becau
 - Each pair must also include sales_use with the same allowed values: current_status, foresight_driven, proactive_opportunity.
 - If evidence is thin, frame the pair as a validation/discovery trigger instead of omitting it.
 - WHY1 pairs with WHAT1, WHY2 with WHAT2, and WHY3 with WHAT3 if present.
+- Preserve lineage when IDs are present in the supplied evidence: parent_evidence_ids and parent_foresight_ids may contain only IDs visible in this prompt. Never invent an ID.
+- Keep pressure_horizon separate from sales_validation_window. Add timing_basis only when the current payload supports the timing.
 
 ### OUTPUT
 Respond with valid JSON only:
-{{"strategic_synthesis": "...", "commercial_pitch": "...", "activation_pairs": [{{"theme_type": "current_status", "sales_use": "current_status", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "..."}}, {{"theme_type": "foresight_driven", "sales_use": "foresight_driven", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "..."}}], "why_proposals": ["WHY texts only"], "what_proposals": ["WHAT_TO_DO texts only"], "what_progress_proposals": ["WHAT_PROGRESS_SHOWS texts only"]}}"""
+{{"strategic_synthesis": "...", "commercial_pitch": "...", "activation_pairs": [{{"theme_type": "current_status", "sales_use": "current_status", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "...", "parent_evidence_ids": [], "parent_foresight_ids": [], "independent_source_count": 0, "source_freshness": "...", "pressure_horizon": "...", "sales_validation_window": "...", "timing_basis": "..."}}, {{"theme_type": "foresight_driven", "sales_use": "foresight_driven", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "...", "parent_evidence_ids": [], "parent_foresight_ids": [], "independent_source_count": 0, "source_freshness": "...", "pressure_horizon": "...", "sales_validation_window": "...", "timing_basis": "..."}}], "why_proposals": ["WHY texts only"], "what_proposals": ["WHAT_TO_DO texts only"], "what_progress_proposals": ["WHAT_PROGRESS_SHOWS texts only"]}}"""
 
                              activation_text = ""
                              activation_provider = ""
@@ -6101,7 +6114,7 @@ Respond with valid JSON only:
                                          print(f"   🔧 [Activation] JSON parse failed; trying cheap JSON repair (timeout: {repair_timeout}s)...")
                                          repair_prompt = f"""Convert the following Strategic Activation output into STRICT JSON only.
 Do not add facts. Preserve the meaning. Required keys:
-{{"strategic_synthesis": "...", "commercial_pitch": "...", "activation_pairs": [{{"theme_type": "current_status|foresight_driven|proactive_opportunity", "sales_use": "current_status|foresight_driven|proactive_opportunity", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "outcome or deliverable state, not HOW/method language", "what_progress_shows": "observable proof of progress"}}], "why_proposals": ["..."], "what_proposals": ["what_to_do outcome/deliverable-state texts"], "what_progress_proposals": ["what_progress_shows texts"]}}
+{{"strategic_synthesis": "...", "commercial_pitch": "...", "activation_pairs": [{{"theme_type": "current_status|foresight_driven|proactive_opportunity", "sales_use": "current_status|foresight_driven|proactive_opportunity", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "outcome or deliverable state, not HOW/method language", "what_progress_shows": "observable proof of progress", "parent_evidence_ids": [], "parent_foresight_ids": [], "pressure_horizon": "...", "sales_validation_window": "...", "timing_basis": "..."}}], "why_proposals": ["..."], "what_proposals": ["what_to_do outcome/deliverable-state texts"], "what_progress_proposals": ["what_progress_shows texts"]}}
 Do not write method-led WHAT text such as run, conduct, workshop, diagnostic, assessment, Value Stream Analysis, AI Readiness Assessment, or Delivery & Capacity Planning.
 
 TEXT TO REPAIR:
