@@ -177,11 +177,14 @@ def _clean_generated_text(value: Any) -> str:
     if not text:
         return ""
     text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    text = re.sub(r"[,;:]\s*\.", ".", text)
     text = re.sub(r"\.{2,}", ".", text)
     text = re.sub(r"([!?])\.", r"\1", text)
     text = re.sub(r"\bThe external pressure is\s+", "External pressure: ", text, flags=re.I)
     text = re.sub(r"\bThe account-specific question is whether\s+", "Account-specific question: whether ", text, flags=re.I)
     text = re.sub(r"\bwhether\s+if\b", "whether", text, flags=re.I)
+    text = re.sub(r"\bremains\s+strongly([.!?])", r"remains strong\1", text, flags=re.I)
+    text = re.sub(r"\bat\s+the\s+pace([.!?])", r"at the required pace\1", text, flags=re.I)
     for acronym in ACRONYM_FIXES:
         text = re.sub(rf"\b{re.escape(acronym.lower())}\b", acronym, text, flags=re.I)
     return text.strip()
@@ -258,10 +261,27 @@ def _clip(value: Any, limit: int = 900) -> str:
         candidate,
         flags=re.I,
     ).rstrip()
+    if re.search(r"\b(?:remains?|becomes?|appears?|seems?)\s+\w+ly$", candidate, flags=re.I):
+        last_clause = max(candidate.rfind(","), candidate.rfind(";"), candidate.rfind(":"))
+        if last_clause >= min_sentence:
+            candidate = candidate[:last_clause].rstrip(" ,;:")
     candidate = candidate.rstrip(" ,;:-")
     if candidate and not re.search(r"[.!?]$", candidate):
         candidate += "."
     return candidate
+
+
+def _clip_label(value: Any, limit: int = 120) -> str:
+    """Clip compact labels without producing mid-word fragments or fake sentences."""
+    text = _clean_generated_text(value)
+    if len(text) <= limit:
+        return text
+    candidate = text[:limit + 1]
+    word_cut = candidate.rfind(" ")
+    if word_cut >= max(24, int(limit * 0.55)):
+        candidate = candidate[:word_cut]
+    candidate = candidate.rstrip(" ,;:-.")
+    return f"{candidate}..." if candidate else ""
 
 
 def _list(value: Any) -> list:
@@ -1279,6 +1299,24 @@ def _buyer_role_concern(roles: list[str], pressure: str) -> str:
 
 def _infer_pressure(text: str) -> tuple[str, str, str]:
     text_l = str(text or "").lower()
+    if any(term in text_l for term in ("industrial ai", "enterprise-ai", "enterprise ai", "agentic ai", "ai readiness", "ai-enabled")):
+        return (
+            "Industrial AI and governed-readiness pressure",
+            "Industrial AI is moving toward governed, adaptive operations, increasing the importance of reliable data, OT/IT integration, architecture, and accountable operating ownership.",
+            "Without a shared readiness view, the company may struggle to prioritize scalable AI-enabled opportunities or distinguish useful investment from isolated experimentation.",
+        )
+    if any(term in text_l for term in ("product passport", "digital passport", "product traceability", "lifecycle traceability", "energy productivity")):
+        return (
+            "Energy-productivity and product-traceability pressure",
+            "Energy productivity and digital-product-passport expectations may increase the value of measurable efficiency, governed lifecycle data, and auditable product traceability.",
+            "If the pressure becomes material, fragmented product and operational data could weaken investment prioritization, compliance readiness, or the ability to convert sustainability activity into measurable business outcomes.",
+        )
+    if any(word in text_l for word in ("security", "cyber", "nis2", "dora", "compliance", "regulation", "csrd", "sovereign")):
+        return (
+            "Regulatory, security, and resilience pressure",
+            "Regulatory or security exposure may increase the need for clearer controls, evidence, resilience, and responsibility structures.",
+            "Compliance and resilience pressure can become a business risk if evidence, ownership, and controls remain fragmented.",
+        )
     if any(word in text_l for word in ("growth", "revenue", "ramp", "capacity", "production", "scale", "scaling")):
         return (
             "Scaling and operating-model pressure",
@@ -1291,17 +1329,13 @@ def _infer_pressure(text: str) -> tuple[str, str, str]:
             "Partner-led delivery or supplier dependency may increase the need for shared visibility, governance, and reliable coordination routines.",
             "Weak coordination can create delivery friction, quality variance, margin leakage, or slower response to customer demand.",
         )
-    if any(word in text_l for word in ("ai", "autonomy", "data", "software", "platform", "digital", "cloud", "erp", "sap")):
+    if re.search(r"\bai\b", text_l) or any(
+        word in text_l for word in ("autonomy", "data", "software", "platform", "digital", "cloud", "erp", "sap")
+    ):
         return (
             "Digital, data, and architecture pressure",
             "Digital or technology-adjacent signals may create pressure for stronger data architecture, platform governance, integration, and secure foundations.",
             "Technology complexity can outgrow ad hoc governance, making architecture, lifecycle data, and operating ownership more important.",
-        )
-    if any(word in text_l for word in ("security", "cyber", "nis2", "dora", "compliance", "regulation", "csrd", "sovereign")):
-        return (
-            "Regulatory, security, and resilience pressure",
-            "Regulatory or security exposure may increase the need for clearer controls, evidence, resilience, and responsibility structures.",
-            "Compliance and resilience pressure can become a business risk if evidence, ownership, and controls remain fragmented.",
         )
     if any(word in text_l for word in ("margin", "cost", "profit", "cash", "investment", "funding")):
         return (
@@ -1953,6 +1987,7 @@ def _build_account_signal_map(
         what_to_do = _clip(pair.get("what_to_do") or pair.get("what"), 700)
         what_progress_shows = _clip(pair.get("what_progress_shows"), 700)
         text = _activation_pair_text(pair)
+        inferred_pair_pressure = _infer_pressure(text)[1] if play_type != "current_status" else ""
         signal = add_candidate(
             "activation_hypothesis",
             "scanner_activation_pair",
@@ -1991,6 +2026,20 @@ def _build_account_signal_map(
                 "pressure_horizon": _clip(pair.get("pressure_horizon") or pair.get("horizon"), 120),
                 "sales_validation_window": _clip(pair.get("sales_validation_window"), 120),
                 "timing_basis": _clip(pair.get("timing_basis"), 320),
+                "external_pressure": _clip(
+                    pair.get("external_pressure")
+                    or pair.get("future_pressure")
+                    or pair.get("foresight_pressure")
+                    or inferred_pair_pressure,
+                    520,
+                ),
+                "financial_scope": _clip(pair.get("financial_scope"), 320),
+                "wording_boundary": _clip(pair.get("wording_boundary"), 320),
+                "prohibited_claims": _dedupe_text_items(
+                    _list(pair.get("prohibited_claims")) + _list(pair.get("do_not_say")),
+                    limit=6,
+                    clip_limit=320,
+                ),
             },
         )
         if signal:
@@ -2047,6 +2096,7 @@ def _build_account_signal_map(
                 "independent_source_count": 1 if _is_independent_source_item(item) else 0,
                 "source_freshness": item.get("source_freshness") or item.get("year"),
                 "generation_eligible": item.get("generation_eligible") is True,
+                "entity_scope": item.get("entity_scope") or item.get("scope") or item.get("financial_scope"),
             },
         )
 
@@ -2324,6 +2374,7 @@ def _build_input_payload(
     payload["account_signal_map"] = _build_account_signal_map(payload, services)
     payload["required_sales_spine"] = _required_sales_spine(payload)
     payload["hypothesis_registry"] = _build_hypothesis_registry(payload)
+    _synchronize_hypothesis_contract(payload)
     payload["account_signal_lanes"] = {
         lane: [_compact_signal(signal) for signal in payload["account_signal_map"] if signal.get("signal_lane") == lane]
         for lane in SIGNAL_LANE_QUOTAS
@@ -2394,9 +2445,20 @@ def _build_hypothesis_registry(payload: dict) -> list[dict]:
         for lane in ("account_fact", "financial_capacity", "external_pressure", "contradiction_or_gap"):
             lane_items = [item for item in signals if item.get("signal_lane") == lane]
             if lane_items:
-                ranked = sorted(lane_items, key=lambda item: (-_signal_overlap(activation, item), str(item.get("id") or "")))
+                activation_parents = set(_list(activation.get("parent_foresight_ids"))) | set(_list(activation.get("parent_evidence_ids")))
+
+                def support_rank(item: dict) -> tuple:
+                    item_parents = set(_list(item.get("parent_foresight_ids"))) | set(_list(item.get("parent_evidence_ids")))
+                    return (
+                        -len(activation_parents & item_parents),
+                        -_signal_overlap(activation, item),
+                        str(item.get("id") or ""),
+                    )
+
+                ranked = sorted(lane_items, key=support_rank)
                 best = ranked[0]
-                if _signal_overlap(activation, best) > 0:
+                best_parents = set(_list(best.get("parent_foresight_ids"))) | set(_list(best.get("parent_evidence_ids")))
+                if _signal_overlap(activation, best) > 0 or bool(activation_parents & best_parents):
                     supporting.append(best)
         for signal in supporting:
             links = _list(signal.get("linked_hypothesis_ids"))
@@ -2405,6 +2467,7 @@ def _build_hypothesis_registry(payload: dict) -> list[dict]:
             signal["linked_hypothesis_ids"] = links[:3]
         need = _normalize_need_hypothesis(activation.get("need_hypothesis"), activation, activation.get("play_type"))
         external = next((item for item in supporting if item.get("signal_lane") == "external_pressure"), {})
+        financial = next((item for item in supporting if item.get("signal_lane") == "financial_capacity"), {})
         contradiction = next((item for item in supporting if item.get("signal_lane") == "contradiction_or_gap"), {})
         gates = [activation.get("gate")] + [item.get("gate") for item in supporting]
         parent_evidence = list(dict.fromkeys(
@@ -2419,6 +2482,26 @@ def _build_hypothesis_registry(payload: dict) -> list[dict]:
             for parent in _list(item.get("parent_foresight_ids"))
             if parent
         ))
+        maximum_gate = _weakest_gate(gates)
+        authoritative_pressure = _first_nonempty(
+            activation.get("external_pressure"),
+            need.get("future_pressure"),
+            external.get("account_movement"),
+            limit=520,
+        )
+        financial_scope = _clip(activation.get("financial_scope"), 320)
+        if not financial_scope and financial:
+            entity_scope = _clip(financial.get("entity_scope"), 120)
+            if financial.get("generation_eligible") is not True or _normalize_gate(financial.get("gate")) not in {"allowed_as_fact", "allowed_as_hypothesis"}:
+                financial_scope = _clip(
+                    "Financial context is entity-scoped and question-only; it must not support group-level margin, budget, or capacity assertions."
+                    + (f" Recorded scope: {entity_scope}." if entity_scope else ""),
+                    320,
+                )
+        wording_boundary = _clip(activation.get("wording_boundary"), 320) or _confidence_boundary(
+            maximum_gate,
+            "Use only the current HYP/SIG lineage and its governed evidence parents",
+        )
         registry.append({
             "hypothesis_id": hypothesis_id,
             "activation_signal_id": activation.get("id"),
@@ -2426,15 +2509,18 @@ def _build_hypothesis_registry(payload: dict) -> list[dict]:
             "play_type": _normalize_play_type(activation.get("play_type")),
             "theme": _clip(activation.get("theme") or activation.get("account_movement"), 180),
             "current_condition": _clip(need.get("current_condition"), 520),
-            "external_pressure": _clip(external.get("account_movement") or need.get("future_pressure"), 520),
+            "external_pressure": authoritative_pressure,
             "causal_bridge": _clip(need.get("combined_activation_hypothesis"), 700),
             "likely_business_consequence": _clip(need.get("likely_business_consequence"), 520),
-            "pressure_horizon": _clip(external.get("pressure_horizon") or activation.get("pressure_horizon"), 120),
+            "pressure_horizon": _clip(activation.get("pressure_horizon") or external.get("pressure_horizon"), 120),
             "sales_validation_window": _clip(activation.get("sales_validation_window") or "Validate through discovery when an owner, consequence, and timing trigger are confirmed.", 220),
             "timing_basis": _clip(activation.get("timing_basis") or external.get("timing_relevance"), 360),
             "counter_hypothesis": _clip(contradiction.get("account_movement") or "The apparent pressure may already be controlled or may not be commercially material for this account.", 420),
             "falsifier": _clip(need.get("falsifier"), 520),
-            "maximum_permitted_gate": _weakest_gate(gates),
+            "maximum_permitted_gate": maximum_gate,
+            "financial_scope": financial_scope,
+            "wording_boundary": wording_boundary,
+            "prohibited_claims": _dedupe_text_items(activation.get("prohibited_claims"), limit=6, clip_limit=320),
             "parent_signal_ids": [item.get("id") for item in supporting if item.get("id")],
             "parent_evidence_ids": parent_evidence[:10],
             "parent_foresight_ids": parent_foresight[:10],
@@ -2442,6 +2528,52 @@ def _build_hypothesis_registry(payload: dict) -> list[dict]:
             "service_candidates": _list(activation.get("service_fit_hints"))[:4],
         })
     return registry
+
+
+def _synchronize_hypothesis_contract(payload: dict) -> None:
+    """Make each HYP/SIG record authoritative across every downstream section payload."""
+    registry_by_signal = {
+        str(item.get("activation_signal_id")): item
+        for item in _list(payload.get("hypothesis_registry"))
+        if isinstance(item, dict) and item.get("activation_signal_id")
+    }
+    signals_by_id = {
+        str(item.get("id")): item
+        for item in _list(payload.get("account_signal_map"))
+        if isinstance(item, dict) and item.get("id")
+    }
+    for signal_id, record in registry_by_signal.items():
+        signal = signals_by_id.get(signal_id)
+        if not signal:
+            continue
+        signal["hypothesis_id"] = record.get("hypothesis_id")
+        signal["external_pressure"] = _clip(record.get("external_pressure"), 520)
+        signal["pressure_horizon"] = _clip(record.get("pressure_horizon"), 120)
+        signal["financial_scope"] = _clip(record.get("financial_scope"), 320)
+        signal["wording_boundary"] = _clip(record.get("wording_boundary"), 320)
+        signal["prohibited_claims"] = _list(record.get("prohibited_claims"))[:6]
+        need = _normalize_need_hypothesis(signal.get("need_hypothesis"), signal, signal.get("play_type"))
+        if record.get("external_pressure") and _normalize_play_type(signal.get("play_type")) != "current_status":
+            need["future_pressure"] = _clip(record.get("external_pressure"), 520)
+            need["market_context"] = _clip(record.get("external_pressure"), 520)
+        if record.get("likely_business_consequence"):
+            need["likely_business_consequence"] = _clip(record.get("likely_business_consequence"), 520)
+        signal["need_hypothesis"] = need
+
+    for item in _list(payload.get("required_sales_spine")):
+        if not isinstance(item, dict):
+            continue
+        signal = signals_by_id.get(str(item.get("id") or ""))
+        record = registry_by_signal.get(str(item.get("id") or ""))
+        if not signal or not record:
+            continue
+        item["hypothesis_id"] = record.get("hypothesis_id")
+        item["need_hypothesis"] = _dict(signal.get("need_hypothesis")).copy()
+        item["external_pressure"] = record.get("external_pressure")
+        item["pressure_horizon"] = record.get("pressure_horizon")
+        item["financial_scope"] = record.get("financial_scope")
+        item["wording_boundary"] = record.get("wording_boundary")
+        item["prohibited_claims"] = _list(record.get("prohibited_claims"))[:6]
 
 
 def _compact_signal(signal: dict) -> dict:
@@ -2457,6 +2589,10 @@ def _compact_signal(signal: dict) -> dict:
         "independent_source_count": signal.get("independent_source_count"),
         "source_freshness": signal.get("source_freshness"),
         "pressure_horizon": signal.get("pressure_horizon"),
+        "external_pressure": _clip(signal.get("external_pressure"), 520),
+        "financial_scope": _clip(signal.get("financial_scope"), 320),
+        "wording_boundary": _clip(signal.get("wording_boundary"), 320),
+        "prohibited_claims": _list(signal.get("prohibited_claims"))[:6],
         "sales_validation_window": signal.get("sales_validation_window"),
         "timing_basis": signal.get("timing_basis"),
         "activation_pair_index": signal.get("activation_pair_index"),
@@ -3459,6 +3595,19 @@ def _build_gate_review_packet(report: dict, payload: dict) -> dict:
         or "Internal sales hypothesis; customer-facing claims require evidence-gate compliance.",
         "evidence_sufficiency": payload.get("evidence_sufficiency"),
         "required_sales_spine": _list(payload.get("required_sales_spine"))[:3],
+        "hypothesis_contracts": [
+            {
+                "hypothesis_id": item.get("hypothesis_id"),
+                "activation_signal_id": item.get("activation_signal_id"),
+                "external_pressure": _clip(item.get("external_pressure"), 420),
+                "financial_scope": _clip(item.get("financial_scope"), 280),
+                "wording_boundary": _clip(item.get("wording_boundary"), 280),
+                "prohibited_claims": _list(item.get("prohibited_claims"))[:6],
+                "maximum_permitted_gate": item.get("maximum_permitted_gate"),
+            }
+            for item in _list(payload.get("hypothesis_registry"))[:3]
+            if isinstance(item, dict)
+        ],
         "claims": claims[:60],
         "signals": signal_index,
         "evidence_index": evidence_index,
@@ -3580,15 +3729,88 @@ def _apply_gate_field_actions(report: dict, actions: Any) -> tuple[list[dict], l
             if not isinstance(container, dict):
                 rejected.append({**action, "rejection_reason": "Nested target object does not exist."})
                 continue
+        original_text = _clean_generated_text(container.get(target_field))
         replacement = "" if operation == "remove" else _clean_generated_text(action.get("replacement"))
         container[target_field] = replacement
         applied.append({
             "object_id": object_id,
             "path": path,
             "action": operation,
+            "original_text": original_text,
+            "replacement": replacement,
             "reason": _clip(action.get("reason"), 260),
         })
     return applied, rejected
+
+
+def _propagate_gate_field_actions(report: dict, applied_actions: list[dict]) -> int:
+    """Apply an approved correction to repeated render occurrences of the same claim."""
+    replacements = []
+    for action in applied_actions:
+        original = _clean_generated_text(action.get("original_text"))
+        if len(original) < 18:
+            continue
+        replacements.append((original, _clean_generated_text(action.get("replacement"))))
+    if not replacements:
+        return 0
+    public_keys = (
+        "account_snapshot", "buying_potential_thesis", "sales_spine", "pressure_signals",
+        "why_now", "pain_to_solution_map", "recommended_sales_plays", "stakeholder_map",
+    )
+    changed = 0
+
+    def replace(value: Any) -> Any:
+        nonlocal changed
+        if isinstance(value, dict):
+            return {key: replace(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [replace(item) for item in value]
+        if not isinstance(value, str):
+            return value
+        result = value
+        for original, replacement in replacements:
+            pattern = re.compile(re.escape(original), re.I)
+            result, count = pattern.subn(replacement, result)
+            changed += count
+        return _clean_generated_text(result)
+
+    for key in public_keys:
+        if key in report:
+            report[key] = replace(report[key])
+    return changed
+
+
+def _normalized_claim_words(value: Any) -> list[str]:
+    stop = {
+        "the", "and", "that", "this", "with", "from", "into", "for", "are", "was",
+        "were", "has", "have", "had", "not", "but", "may", "could", "would", "should",
+    }
+    return [
+        word for word in re.findall(r"[a-z0-9åäö]+", _clean_generated_text(value).lower())
+        if len(word) > 2 and word not in stop
+    ]
+
+
+def _blocked_claim_matches(candidate: str, blocked_claim: str) -> bool:
+    candidate_words = _normalized_claim_words(candidate)
+    blocked_words = _normalized_claim_words(blocked_claim)
+    if len(blocked_words) < 3 or len(candidate_words) < 3:
+        return False
+    candidate_norm = " ".join(candidate_words)
+    blocked_norm = " ".join(blocked_words)
+    if blocked_norm in candidate_norm or (len(candidate_words) >= 6 and candidate_norm in blocked_norm):
+        return True
+    candidate_set = set(candidate_words)
+    blocked_set = set(blocked_words)
+    intersection = len(candidate_set & blocked_set)
+    union = len(candidate_set | blocked_set)
+    smaller = min(len(candidate_set), len(blocked_set))
+    return (
+        intersection >= 4
+        and smaller > 0
+        and intersection / smaller >= 0.80
+        and (union == 0 or intersection / union >= 0.55)
+    )
 
 
 def _remove_blocked_claims_from_public_sections(report: dict, blocked_claims: list[str]) -> int:
@@ -3615,6 +3837,16 @@ def _remove_blocked_claims_from_public_sections(report: dict, blocked_claims: li
             pattern = re.compile(re.escape(claim), re.I)
             result, count = pattern.subn("", result)
             removed += count
+            if count:
+                continue
+            sentences = re.split(r"(?<=[.!?])\s+", result)
+            kept = []
+            for sentence in sentences:
+                if _blocked_claim_matches(sentence, claim):
+                    removed += 1
+                    continue
+                kept.append(sentence)
+            result = " ".join(kept)
         return _clean_generated_text(result)
 
     for key in public_keys:
@@ -5404,6 +5636,14 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             fallback_signal["external_pressure"] = hypothesis_record.get("external_pressure")
             fallback_signal["business_consequence"] = hypothesis_record.get("likely_business_consequence")
             fallback_signal["pressure_horizon"] = hypothesis_record.get("pressure_horizon")
+            play["financial_scope"] = _clip(hypothesis_record.get("financial_scope"), 320)
+            play["wording_boundary"] = _clip(hypothesis_record.get("wording_boundary"), 320)
+            play["prohibited_claims"] = _list(hypothesis_record.get("prohibited_claims"))[:6]
+            play["do_not_say"] = _dedupe_text_items(
+                _list(play.get("do_not_say")) + _list(hypothesis_record.get("prohibited_claims")),
+                limit=6,
+                clip_limit=360,
+            )
         play["need_hypothesis"] = _normalize_need_hypothesis(play.get("need_hypothesis"), fallback_signal, play.get("play_type"))
         if hypothesis_record.get("external_pressure") and play.get("play_type") != "current_status":
             play["need_hypothesis"]["future_pressure"] = _clip(hypothesis_record.get("external_pressure"), 520)
@@ -5486,13 +5726,10 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         play_match_text = " ".join(
             _clip(play.get(key), 700)
             for key in (
-                "play_name",
-                "service_or_offer",
                 "buying_hypothesis",
                 "trigger_to_offer_bridge",
                 "business_hypothesis",
                 "why_relevant",
-                "safe_customer_wording",
             )
             if play.get(key)
         )
@@ -5503,7 +5740,6 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
                 "current_condition",
                 "structural_exposure",
                 "what_to_propose",
-                "combined_activation_hypothesis",
             )
             if play["need_hypothesis"].get(key)
         )
@@ -5654,6 +5890,7 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             report,
             gate_review.get("field_actions"),
         )
+        propagated_field_actions = _propagate_gate_field_actions(report, applied_field_actions)
         downgrades = _list(gate_review.get("required_downgrades"))
         for downgrade in downgrades:
             if not isinstance(downgrade, dict):
@@ -5685,6 +5922,7 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             "required_downgrades": downgrades[:20],
             "applied_field_actions": applied_field_actions[:20],
             "rejected_field_actions": rejected_field_actions[:20],
+            "propagated_field_action_count": propagated_field_actions,
             "removed_public_claim_count": removed_public_claims,
             "blocked_claims": blocked[:20],
             "notes": _list(gate_review.get("notes"))[:10],
@@ -5696,7 +5934,8 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             )
         elif gate_review.get("status") == "changes_required":
             quality_notes.append(
-                f"Independent semantic Gate Review applied {len(applied_field_actions)} field action(s) and {len(downgrades)} gate downgrade(s)."
+                f"Independent semantic Gate Review applied {len(applied_field_actions)} field action(s), "
+                f"propagated {propagated_field_actions} repeated occurrence(s), and applied {len(downgrades)} gate downgrade(s)."
             )
         clean_do_not, clean_questions = _safe_guardrail_items(_list(evidence_confidence.get("do_not_say")))
         evidence_confidence["do_not_say"] = clean_do_not[:12]
@@ -6741,13 +6980,16 @@ def render_buying_potential_html(report: dict) -> str:
         signal = signal_lookup.get(signal_id)
         if not signal:
             return signal_id
-        label = _first_nonempty(
+        label = ""
+        for candidate in (
             signal.get("theme"),
             _dict(signal.get("need_hypothesis")).get("structural_exposure"),
             signal.get("pressure_type"),
             signal.get("account_movement"),
-            limit=80,
-        )
+        ):
+            label = _clip_label(candidate, 80)
+            if label:
+                break
         label = re.sub(r"\s+", " ", label or "").strip(" .:-")
         if not label:
             return signal_id

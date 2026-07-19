@@ -926,6 +926,112 @@ def test_need_hypothesis_preserves_explicit_same_signal_future_pressure(monkeypa
     assert need["market_context"].startswith("Industrial AI adoption")
 
 
+def test_hypothesis_registry_keeps_activation_pressure_authoritative(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    payload = {
+        "account_signal_map": [
+            {
+                "id": "SIG-02",
+                "hypothesis_id": "HYP-02",
+                "signal_lane": "activation_hypothesis",
+                "source": "scanner_activation_pair",
+                "activation_pair_index": 2,
+                "play_type": "foresight_driven",
+                "theme": "Industrial AI readiness",
+                "why": "Industrial AI is moving from pilots into governed production workflows.",
+                "external_pressure": "Industrial AI is moving from pilots into governed production workflows.",
+                "gate": "allowed_as_hypothesis",
+                "need_hypothesis": {
+                    "current_condition": "Current AI and data readiness is not established.",
+                    "future_pressure": "Industrial AI is moving from pilots into governed production workflows.",
+                    "likely_business_consequence": "Prioritization may become harder without a shared readiness view.",
+                },
+            },
+            {
+                "id": "SIG-07",
+                "signal_lane": "external_pressure",
+                "account_movement": "Growth and capacity movement creates generic scaling pressure.",
+                "gate": "allowed_as_hypothesis",
+            },
+        ],
+    }
+    payload["required_sales_spine"] = bp._required_sales_spine(payload)
+    payload["hypothesis_registry"] = bp._build_hypothesis_registry(payload)
+    bp._synchronize_hypothesis_contract(payload)
+
+    record = payload["hypothesis_registry"][0]
+    assert record["external_pressure"].startswith("Industrial AI is moving")
+    assert payload["account_signal_map"][0]["need_hypothesis"]["future_pressure"].startswith("Industrial AI is moving")
+    assert payload["required_sales_spine"][0]["external_pressure"].startswith("Industrial AI is moving")
+
+
+def test_pressure_inference_does_not_read_ai_inside_sustainability(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+
+    ai_pressure = bp._infer_pressure("Industrial AI readiness and adaptive operations")
+    passport_pressure = bp._infer_pressure("Energy productivity and sustainability product passport readiness")
+
+    assert ai_pressure[0] == "Industrial AI and governed-readiness pressure"
+    assert passport_pressure[0] == "Energy-productivity and product-traceability pressure"
+
+
+def test_hygiene_cleanup_repairs_stopped_sentence_artifacts(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+
+    assert bp._clean_generated_text("enterprise-AI in nature,.") == "enterprise-AI in nature."
+    assert bp._clean_generated_text("The balance sheet remains strongly.") == "The balance sheet remains strong."
+    assert bp._clean_generated_text("It may not scale at the pace.") == "It may not scale at the required pace."
+    label = bp._clip_label("Energy productivity and passport readiness could turn margin pressure and sustainability claims into measurable advantage", 80)
+    assert "sustai" not in label
+    assert label.endswith("...")
+
+
+def test_gate_action_propagates_to_repeated_claim_occurrences(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    unsafe = "Ensto's thin operating margin creates urgency."
+    replacement = "Entity-scoped financial context makes economic materiality a discovery question."
+    report = {
+        "sales_spine": {"account_thesis": unsafe, "linked_hypothesis_ids": ["HYP-03"]},
+        "recommended_sales_plays": [{
+            "hypothesis_id": "HYP-03",
+            "linked_signal_ids": ["SIG-03"],
+            "buying_hypothesis": unsafe,
+            "trigger": unsafe,
+        }],
+    }
+    applied, rejected = bp._apply_gate_field_actions(report, [{
+        "object_id": "HYP-03",
+        "path": "recommended_sales_plays[0].buying_hypothesis",
+        "action": "replace",
+        "replacement": replacement,
+        "reason": "The margin source is entity-scoped and question-only.",
+    }])
+    propagated = bp._propagate_gate_field_actions(report, applied)
+
+    assert rejected == []
+    assert propagated == 2
+    assert report["sales_spine"]["account_thesis"] == replacement
+    assert report["recommended_sales_plays"][0]["trigger"] == replacement
+
+
+def test_blocked_claim_removal_catches_close_sentence_variant(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    report = {
+        "sales_spine": {
+            "account_thesis": "Ensto's sustainability messaging remains only a brand-level claim. A valid question remains about traceability."
+        }
+    }
+
+    removed = bp._remove_blocked_claims_from_public_sections(
+        report,
+        ["Sustainability messaging is only a brand-level claim."],
+    )
+
+    assert removed == 1
+    assert "brand-level claim" not in report["sales_spine"]["account_thesis"]
+    assert "valid question" in report["sales_spine"]["account_thesis"]
+
+
 def test_weak_modernization_keyword_overlap_is_not_rendered_as_a_lens(monkeypatch):
     bp = load_buying_potential(monkeypatch)
     tactics = [{
