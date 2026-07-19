@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import time
 from typing import Any
 
 from model_policy import (
@@ -69,6 +71,35 @@ def extract_anthropic_text(response: Any) -> str:
     return "\n".join(parts).strip()
 
 
+def _value(obj: Any, key: str, default: Any = None) -> Any:
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _openai_response_diagnostics(response: Any) -> dict[str, Any]:
+    usage = _value(response, "usage", {}) or {}
+    output_details = _value(usage, "output_tokens_details", {}) or {}
+    incomplete = _value(response, "incomplete_details", {}) or {}
+    return {
+        "status": str(_value(response, "status", "unknown") or "unknown"),
+        "incomplete_reason": str(_value(incomplete, "reason", "") or ""),
+        "input_tokens": int(_value(usage, "input_tokens", 0) or 0),
+        "output_tokens": int(_value(usage, "output_tokens", 0) or 0),
+        "reasoning_tokens": int(_value(output_details, "reasoning_tokens", 0) or 0),
+    }
+
+
+def _structured_output_format(schema: dict[str, Any], name: str) -> dict[str, Any]:
+    safe_name = re.sub(r"[^a-zA-Z0-9_-]+", "_", name or "scanner_output")[:64]
+    return {
+        "type": "json_schema",
+        "name": safe_name or "scanner_output",
+        "strict": True,
+        "schema": schema,
+    }
+
+
 def call_openai_text(
     prompt: str,
     model: str = GPT_REASONING_MODEL,
@@ -79,6 +110,12 @@ def call_openai_text(
     search_context_size: str = "medium",
     max_retries: int = 2,
     reasoning_effort: str | None = None,
+    reasoning_mode: str | None = None,
+    reasoning_context: str | None = "current_turn",
+    text_verbosity: str | None = None,
+    json_schema: dict[str, Any] | None = None,
+    json_schema_name: str = "scanner_output",
+    log_label: str = "OpenAI",
 ) -> str:
     api_key = openai_api_key()
     if not api_key:
@@ -93,10 +130,45 @@ def call_openai_text(
     }
     if web_search:
         kwargs["tools"] = [{"type": "web_search", "search_context_size": search_context_size}]
+    reasoning: dict[str, Any] = {}
+    if reasoning_mode:
+        # Pro is a mode on GPT-5.6 Sol, not a separate model slug.
+        reasoning["mode"] = reasoning_mode
     if reasoning_effort:
-        kwargs["reasoning"] = {"effort": reasoning_effort}
+        reasoning["effort"] = reasoning_effort
+    if reasoning_context and model.startswith("gpt-5.6"):
+        reasoning["context"] = reasoning_context
+    if reasoning:
+        kwargs["reasoning"] = reasoning
+    text_config: dict[str, Any] = {}
+    if text_verbosity:
+        text_config["verbosity"] = text_verbosity
+    if json_schema:
+        text_config["format"] = _structured_output_format(json_schema, json_schema_name)
+    if text_config:
+        kwargs["text"] = text_config
+
+    started = time.time()
     response = client.responses.create(**kwargs)
-    return extract_openai_text(response)
+    diagnostics = _openai_response_diagnostics(response)
+    elapsed_ms = int((time.time() - started) * 1000)
+    print(
+        f"   [{log_label}] model={model}, status={diagnostics['status']}, "
+        f"input_tokens={diagnostics['input_tokens']}, output_tokens={diagnostics['output_tokens']}, "
+        f"reasoning_tokens={diagnostics['reasoning_tokens']}, elapsed_ms={elapsed_ms}, "
+        f"effort={reasoning_effort or '-'}, mode={reasoning_mode or '-'}, "
+        f"verbosity={text_verbosity or '-'}, structured={bool(json_schema)}"
+    )
+    if diagnostics["status"] == "incomplete":
+        reason = diagnostics["incomplete_reason"] or "unspecified"
+        raise ValueError(
+            f"OpenAI response incomplete: reason={reason}, output_tokens={diagnostics['output_tokens']}, "
+            f"reasoning_tokens={diagnostics['reasoning_tokens']}, max_output_tokens={max_output_tokens}"
+        )
+    text = extract_openai_text(response)
+    if not text:
+        raise ValueError(f"OpenAI returned no usable text (status={diagnostics['status']})")
+    return text
 
 
 def call_anthropic_text(
@@ -148,6 +220,12 @@ def call_json_model_chain(
     reasoning_effort: str | None = None,
     validate_json: bool = False,
     required_fields: tuple[str, ...] | list[str] | None = None,
+    reasoning_mode: str | None = None,
+    reasoning_context: str | None = "current_turn",
+    text_verbosity: str | None = None,
+    json_schema: dict[str, Any] | None = None,
+    json_schema_name: str = "scanner_json",
+    log_label: str = "OpenAI JSON",
 ) -> tuple[str, str]:
     errors: list[str] = []
     for model in model_chain:
@@ -159,6 +237,12 @@ def call_json_model_chain(
                     max_output_tokens=max_tokens,
                     timeout=timeout,
                     reasoning_effort=reasoning_effort,
+                    reasoning_mode=reasoning_mode,
+                    reasoning_context=reasoning_context,
+                    text_verbosity=text_verbosity,
+                    json_schema=json_schema,
+                    json_schema_name=json_schema_name,
+                    log_label=log_label,
                 )
                 if validate_json:
                     parsed = parse_json_object(text)

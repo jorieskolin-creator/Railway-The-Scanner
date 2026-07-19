@@ -30,6 +30,7 @@ from model_policy import (
     buying_gate_chain as policy_buying_gate_chain,
     buying_generation_chain as policy_buying_generation_chain,
     json_repair_chain as policy_json_repair_chain,
+    policy_for,
 )
 from source_quality import is_generation_eligible_source
 from knowledge_base import REMOTE_KNOWLEDGE_URL as DEFAULT_MODERNIZATION_TACTICS_URL
@@ -2679,6 +2680,154 @@ BUYING_SALES_PLAY_ANALYSIS_SCHEMA = """
 """.strip()
 
 
+def _strict_object(properties: dict[str, dict]) -> dict:
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(properties),
+        "additionalProperties": False,
+    }
+
+
+_STRING = {"type": "string"}
+_NUMBER = {"type": "number"}
+_STRING_LIST = {"type": "array", "items": _STRING}
+_GATE = {
+    "type": "string",
+    "enum": ["allowed_as_fact", "allowed_as_hypothesis", "allowed_as_discovery_question", "internal_only", "blocked"],
+}
+
+_EVIDENCE_CONFIDENCE_SCHEMA = _strict_object({
+    "strongest_evidence": _STRING_LIST,
+    "verified_facts": _STRING_LIST,
+    "safe_hypotheses": _STRING_LIST,
+    "use_only_as_question": _STRING_LIST,
+    "weak_or_missing_evidence": _STRING_LIST,
+    "do_not_use_claims": _STRING_LIST,
+    "do_not_say": _STRING_LIST,
+    "sensitive_claims": _STRING_LIST,
+    "claims_as_questions_only": _STRING_LIST,
+})
+
+_QUALIFICATION_SCHEMA = _strict_object({
+    "account_thesis": _STRING,
+    "current_position": _STRING,
+    "verified_strengths": _STRING_LIST,
+    "evidence_boundaries": _STRING_LIST,
+    "structural_exposure": _STRING,
+    "strategic_tension": _STRING,
+    "external_pressure": _STRING,
+    "likely_business_consequence": _STRING,
+    "emerging_need": _STRING,
+    "ability_to_act": _STRING,
+    "validation_question": _STRING,
+    "falsifier": _STRING,
+    "causal_sequence": _STRING,
+    "evidence_basis": _STRING_LIST,
+})
+
+_BUYING_SALES_PLAY_JSON_SCHEMA = _strict_object({
+    "account_signal_id": _STRING,
+    "hypothesis_id": _STRING,
+    "service_id": _STRING,
+    "service_or_offer": _STRING,
+    "service_fit_rationale": _STRING,
+    "primary_buyer": _STRING,
+    "secondary_buyers": _STRING_LIST,
+    "first_meeting_objective": _STRING,
+    "safe_customer_wording": _STRING,
+    "discovery_questions_by_role": {
+        "type": "array",
+        "items": _strict_object({"role": _STRING, "questions": _STRING_LIST}),
+    },
+    "disqualifiers": _STRING_LIST,
+    "do_not_say": _STRING_LIST,
+})
+
+BUYING_SECTION_JSON_SCHEMAS = {
+    "snapshot_thesis": _strict_object({
+        "qualification_reasoning": _QUALIFICATION_SCHEMA,
+        "model_notes": _STRING_LIST,
+    }),
+    "why_now": _strict_object({
+        "why_now": {
+            "type": "array",
+            "items": _strict_object({
+                "trigger": _STRING,
+                "why_it_matters_now": _STRING,
+                "buyer_relevance": _STRING,
+                "safe_discovery_question": _STRING,
+                "gate": _GATE,
+                "confidence": _NUMBER,
+                "evidence_basis": _STRING_LIST,
+            }),
+        },
+        "model_notes": _STRING_LIST,
+    }),
+    "pain_to_solution": _strict_object({
+        "pain_to_solution_map": {
+            "type": "array",
+            "items": _strict_object({
+                "account_signal_id": _STRING,
+                "evidence": _STRING,
+                "interpreted_pressure": _STRING,
+                "buyer_lens": _STRING,
+                "service": _STRING,
+                "why_this_service": _STRING,
+                "proof_point": _STRING,
+                "safe_wording": _STRING,
+                "missing_evidence": _STRING,
+                "gate": _GATE,
+                "confidence": _NUMBER,
+                "disqualifiers": _STRING_LIST,
+            }),
+        },
+        "model_notes": _STRING_LIST,
+    }),
+    "pressure_evidence": _strict_object({
+        "pressure_signals": {
+            "type": "array",
+            "items": _strict_object({
+                "signal_type": _STRING,
+                "trigger": _STRING,
+                "description": _STRING,
+                "business_consequence": _STRING,
+                "buyer_role_concern": _STRING,
+                "gate": _GATE,
+                "confidence": _NUMBER,
+                "evidence_basis": _STRING_LIST,
+            }),
+        },
+        "evidence_confidence": _EVIDENCE_CONFIDENCE_SCHEMA,
+        "overall_confidence": _NUMBER,
+        "missing_input_warnings": _STRING_LIST,
+        "model_notes": _STRING_LIST,
+    }),
+    "stakeholders": _strict_object({
+        "stakeholder_map": {
+            "type": "array",
+            "items": _strict_object({
+                "name": _STRING,
+                "role": _STRING,
+                "likely_buying_committee_role": _STRING,
+                "relevance_rationale": _STRING,
+                "linked_pressure_themes": _STRING_LIST,
+                "linked_service_themes": _STRING_LIST,
+                "evidence_basis": _STRING,
+                "confidence": _NUMBER,
+                "allowed_use": {
+                    "type": "string",
+                    "enum": ["internal_only", "allowed_as_discovery_question", "allowed_as_hypothesis"],
+                },
+                "do_not_say": _STRING_LIST,
+                "safety_notes": _STRING_LIST,
+            }),
+        },
+        "model_notes": _STRING_LIST,
+    }),
+}
+
+
 BUYING_SECTION_INSTRUCTIONS = {
     "snapshot_thesis": (
         "Create one shared Qualification Reasoning Spine for the opening of the report. Start from verified account "
@@ -3022,9 +3171,13 @@ def _finalize_qualification_section(
             raw, repair_model = call_json_model_chain(
                 _qualification_repair_prompt(reasoning, payload, initial_issues),
                 buying_generation_chain(model_mode),
-                max_tokens=2400,
-                timeout=75,
+                max_tokens=9000,
+                timeout=120,
                 reasoning_effort="high",
+                text_verbosity="medium",
+                json_schema=BUYING_SECTION_JSON_SCHEMAS["snapshot_thesis"],
+                json_schema_name="buying_qualification_repair",
+                log_label="Buying Qualification Repair",
                 validate_json=True,
                 required_fields=("qualification_reasoning",),
             )
@@ -5808,11 +5961,19 @@ def _section_fallback(section: str, payload: dict, reason: str) -> dict:
 
 
 def _section_token_limit(section: str) -> int:
-    if section in {"pain_to_solution", "sales_plays", "pressure_evidence"}:
-        return 2600
-    if section in {"snapshot_thesis", "stakeholders"}:
-        return 2200
-    return 1800
+    policy = policy_for("buying_insight_generation")
+    if section == "snapshot_thesis":
+        return int(_dict(policy.get("qualification")).get("max_output_tokens") or 9000)
+    if section == "pressure_evidence":
+        return int(_dict(policy.get("cleanup")).get("max_output_tokens") or 5000)
+    return int(_dict(policy.get("per_signal")).get("max_output_tokens") or 6000)
+
+
+def _section_generation_controls(section: str) -> tuple[str, str]:
+    policy = policy_for("buying_insight_generation")
+    policy_key = "qualification" if section == "snapshot_thesis" else "cleanup" if section == "pressure_evidence" else "per_signal"
+    controls = _dict(policy.get(policy_key))
+    return str(controls.get("effort") or "medium"), str(controls.get("verbosity") or "medium")
 
 
 def _salvage_json_array_items(raw: str, key: str) -> list[dict]:
@@ -5891,9 +6052,13 @@ def _generate_sales_plays_by_signal(
             raw, model_used = call_json_model_chain(
                 _sales_play_analysis_prompt(signal, payload),
                 model_chain,
-                max_tokens=1200,
-                timeout=60,
-                reasoning_effort="low",
+                max_tokens=_section_token_limit("sales_plays"),
+                timeout=100,
+                reasoning_effort="medium",
+                text_verbosity="medium",
+                json_schema=_BUYING_SALES_PLAY_JSON_SCHEMA,
+                json_schema_name=f"buying_sales_play_{signal_id.lower().replace('-', '_')}",
+                log_label=f"Buying Sales Play {signal_id}",
                 validate_json=True,
                 required_fields=("account_signal_id",),
             )
@@ -5927,7 +6092,7 @@ def _generate_sales_plays_by_signal(
         "signal_results": signal_results,
         "fallback_count": fallback_count,
         "model_escalation_count": escalation_count,
-        "token_limit_per_signal": 1200,
+        "token_limit_per_signal": _section_token_limit("sales_plays"),
     }
     print(
         f"   ✅ [Buying Potential] Section sales_plays: per_signal={len(plays)}, "
@@ -5970,9 +6135,13 @@ def _parse_or_repair_section(
             repair_raw, repair_model = call_json_model_chain(
                 _section_repair_prompt(section, raw),
                 buying_report_repair_chain(model_mode),
-                max_tokens=_section_token_limit(section),
+                max_tokens=min(5000, _section_token_limit(section)),
                 timeout=60,
                 reasoning_effort="low",
+                text_verbosity="low",
+                json_schema=BUYING_SECTION_JSON_SCHEMAS.get(section),
+                json_schema_name=f"buying_{section}_repair",
+                log_label=f"Buying {section} JSON Repair",
                 validate_json=True,
             )
             parsed = parse_json_object(repair_raw)
@@ -6005,13 +6174,19 @@ def _generate_buying_section(
         stage_callback("generate_report", progress, f"Generating Buying Insight section: {section}")
     try:
         token_limit = _section_token_limit(section)
-        reasoning_effort = "high" if section == "snapshot_thesis" else "low"
+        reasoning_effort, text_verbosity = _section_generation_controls(section)
         raw, model_used = call_json_model_chain(
             _section_prompt(section, payload),
             buying_generation_chain(model_mode),
             max_tokens=token_limit,
-            timeout=75,
+            timeout=120 if section == "snapshot_thesis" else 100,
             reasoning_effort=reasoning_effort,
+            text_verbosity=text_verbosity,
+            json_schema=BUYING_SECTION_JSON_SCHEMAS.get(section),
+            json_schema_name=f"buying_{section}",
+            log_label=f"Buying {section}",
+            validate_json=True,
+            required_fields=tuple(BUYING_SECTION_JSON_SCHEMAS.get(section, {}).get("properties", {})),
         )
         print(
             f"   🧾 [Buying Potential] Section {section} raw output: "
@@ -6034,6 +6209,8 @@ def _generate_buying_section(
             "raw_chars": len(raw or ""),
             "token_limit": token_limit,
             "reasoning_effort": reasoning_effort,
+            "text_verbosity": text_verbosity,
+            "structured_output": section in BUYING_SECTION_JSON_SCHEMAS,
             "likely_truncated": _is_likely_json_truncated(raw),
         }
         if qualification_quality is not None:

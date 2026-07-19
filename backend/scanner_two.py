@@ -5124,7 +5124,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
         search_context_size: str = "medium",
         allow_repair: bool = False,
     ):
-        """Primary web-search path using GPT-5.5 Responses web_search."""
+        """Fallback web-search path using the configured GPT frontier model."""
         elapsed_total = time.time() - _fn_start
         if elapsed_total > _guard_anthropic:
             print(f"   ⏰ [Forensic Scan] Skipping GPT web search — elapsed {int(elapsed_total)}s exceeds {_guard_anthropic}s guard")
@@ -5135,7 +5135,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             print(f"   ⏭️ [Forensic Scan] Skipping GPT web search — only {local_timeout}s available before phase guard")
             return None
         try:
-            print(f"   🔄 [Forensic Scan] Attempting {purpose} gpt-5.5 + web_search for {company_name} (timeout={local_timeout}s)...")
+            print(f"   🔄 [Forensic Scan] Attempting {purpose} {GPT_REASONING_MODEL} + web_search for {company_name} (timeout={local_timeout}s)...")
             start = time.time()
             relaxed_prompt = re.sub(
                 r'RETURN STRICT JSON[^:]*:',
@@ -5143,7 +5143,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 active_prompt,
             )
             text_content = _hard_timeout_call(
-                "gpt-5.5 web search",
+                f"{GPT_REASONING_MODEL} web search",
                 local_timeout,
                 lambda: call_openai_text(
                     relaxed_prompt,
@@ -5152,6 +5152,9 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     timeout=local_timeout,
                     web_search=True,
                     search_context_size=search_context_size,
+                    reasoning_effort="low",
+                    text_verbosity="low",
+                    log_label="Forensic Web Repair",
                 ),
             )
             if text_content is None:
@@ -5544,7 +5547,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             replacement_payload = None
             replacement_status = f"{label}_unavailable"
             if retry_provider == "gpt":
-                replacement_provider = "gpt-5.5-web-survival-retry"
+                replacement_provider = f"{GPT_REASONING_MODEL}-web-survival-retry"
                 try:
                     replacement_payload = execute_with_openai_web(
                         replacement_prompt,
@@ -5748,7 +5751,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             rejected_count = int(status.get("rejected") or 0)
             lane_status = str((lane or {}).get("status") or "").lower()
             lane_provider = str((lane or {}).get("provider") or "").lower()
-            if "gpt-5.5-web-survival-retry" in lane_provider or int((lane or {}).get("survival_retry_attempts") or 0) > 0:
+            if f"{GPT_REASONING_MODEL}-web-survival-retry" in lane_provider or int((lane or {}).get("survival_retry_attempts") or 0) > 0:
                 return True
             if "provider_error" in lane_status or "provider_timeout" in lane_status:
                 return True
@@ -5878,13 +5881,13 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 gpt_sources = _normalize_acquisition_payload(
                     gpt_payload or {},
                     jury_name,
-                    "gpt-5.5-web-repair",
+                    f"{GPT_REASONING_MODEL}-web-repair",
                 )
                 if gpt_sources:
                     gpt_lane, _gpt_stats = _validate_repair_candidate(
                         {
                             "jury": jury_name,
-                            "provider": "gpt-5.5-web-repair",
+                            "provider": f"{GPT_REASONING_MODEL}-web-repair",
                             "status": gpt_status,
                             "sources": gpt_sources,
                         },
@@ -5892,7 +5895,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     )
                     gpt_sources = list(gpt_lane.get("sources", []) or [])
                 sources.extend(gpt_sources)
-                providers.append("gpt-5.5-web-repair")
+                providers.append(f"{GPT_REASONING_MODEL}-web-repair")
                 statuses.append(gpt_status)
                 print(
                     f"   {'✅' if gpt_sources else '⚠️'} [Forensic Acquisition Repair] {jury_name}: "
@@ -6022,11 +6025,13 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                 gpt_timeout = min(base_timeout, remaining)
                 if gpt_timeout >= 15:
                     text = _hard_timeout_call(
-                        f"{jury_name} {chunk_label or 'full'} gpt-5.5 no-web jury analysis",
+                        f"{jury_name} {chunk_label or 'full'} {GPT_REASONING_MODEL} no-web jury analysis",
                         gpt_timeout,
                         lambda: call_openai_text(
                             prompt, model=GPT_REASONING_MODEL, max_output_tokens=6500,
                             timeout=max(1, min(gpt_timeout - 5, gpt_timeout)), web_search=False,
+                            reasoning_effort="medium", text_verbosity="medium",
+                            log_label=f"Forensic Jury {jury_name}",
                         ),
                     )
                     if text:
@@ -6068,12 +6073,12 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
             postprocess_guard = FORENSIC_POSTPROCESS_RESERVE_SECONDS + 8
             remaining_phase = _phase_remaining(buffer=postprocess_guard)
             if remaining_phase < 18:
-                return None, "gpt-5.5-rescue-skipped-low-budget"
+                return None, f"{GPT_REASONING_MODEL}-rescue-skipped-low-budget"
             rescue_timeout = min(FORENSIC_JURY_RESCUE_TIMEOUT_SECONDS, remaining_phase)
             prompt = _build_jury_rescue_prompt(search_name, jury_name, packets)
             try:
                 text = _hard_timeout_call(
-                    f"{jury_name} compact gpt-5.5 no-web rescue jury analysis",
+                    f"{jury_name} compact {GPT_REASONING_MODEL} no-web rescue jury analysis",
                     rescue_timeout,
                     lambda: call_openai_text(
                         prompt,
@@ -6081,16 +6086,19 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                         max_output_tokens=3500,
                         timeout=max(1, rescue_timeout - 5),
                         web_search=False,
+                        reasoning_effort="medium",
+                        text_verbosity="low",
+                        log_label=f"Forensic Jury Rescue {jury_name}",
                     ),
                 )
                 if text:
                     rescue_payload = _parse_provider_payload(text)
                     if rescue_payload:
                         rescue_payload["jury_rescue"] = True
-                        return rescue_payload, "gpt-5.5-rescue"
+                        return rescue_payload, f"{GPT_REASONING_MODEL}-rescue"
             except Exception as error:
                 print(f"   ⚠️ [Forensic Analysis Rescue] {jury_name} GPT rescue failed: {type(error).__name__}: {error}")
-            return None, "gpt-5.5-rescue-failed"
+            return None, f"{GPT_REASONING_MODEL}-rescue-failed"
 
         lane_started = time.time()
         payload = None
@@ -6120,7 +6128,7 @@ def x_ray_search(company_name: str, company_url: str = None, model_id: str = Non
                     f"   🛟 [Forensic Analysis Rescue] {jury_name}: "
                     f"{len(rescue_payload.get('findings', []) or [])} compact finding(s), provider={rescue_provider}."
                 )
-            elif rescue_provider != "gpt-5.5-rescue-skipped-low-budget":
+            elif rescue_provider != f"{GPT_REASONING_MODEL}-rescue-skipped-low-budget":
                 provider = f"{provider}+{rescue_provider}" if provider else rescue_provider
         accepted = len((payload or {}).get("findings", []) or [])
         print(
@@ -6766,6 +6774,9 @@ def _execute_financial_search(model_name, prompt, company_name, timeout=120):
                 timeout=timeout,
                 web_search=True,
                 search_context_size="medium",
+                reasoning_effort="low",
+                text_verbosity="low",
+                log_label="Financial Web Repair",
             )
         json_payload = extract_json_from_text(text_content)
         elapsed = int((time.time() - start) * 1000)

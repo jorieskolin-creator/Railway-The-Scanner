@@ -28,8 +28,8 @@ from source_quality import (
 from contradiction_detector import detect_contradictions
 from prompts import PROMPT_VERSION, build_shared_guardrails
 from entity_identity import apply_entity_scope, get_company_identity
-from model_policy import CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL, GPT_VERIFIER_MODEL
-from llm_clients import extract_anthropic_text
+from model_policy import CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL, GPT_VERIFIER_MODEL, policy_for
+from llm_clients import call_openai_text, extract_anthropic_text
 
 
 def _general_summary_guardrails() -> str:
@@ -64,18 +64,16 @@ def _get_openai_text(response) -> str:
 
 
 def _call_openai_summary(prompt: str, model: str = GPT_REASONING_MODEL, timeout: int = 90) -> str:
-    api_key = _clean_env_var(os.environ.get("GPT_API_KEY") or os.environ.get("OPENAI_API_KEY") or "")
-    if not api_key:
-        raise ValueError("No GPT_API_KEY configured")
-
-    from openai import OpenAI
-    client = OpenAI(api_key=api_key, timeout=timeout)
-    response = client.responses.create(
+    policy = policy_for("general_summary")
+    return call_openai_text(
+        prompt,
         model=model,
-        input=prompt,
-        max_output_tokens=6000,
+        max_output_tokens=8000,
+        timeout=timeout,
+        reasoning_effort=str(policy.get("effort") or "medium"),
+        text_verbosity=str(policy.get("verbosity") or "medium"),
+        log_label="General Summary",
     )
-    return _get_openai_text(response)
 
 
 

@@ -84,6 +84,19 @@ def test_buying_potential_defaults_to_quality_model_chain(monkeypatch):
     assert all("haiku" not in model.lower() for model in bp.buying_report_repair_chain())
 
 
+def test_buying_potential_uses_reasoning_aware_sol_budgets_and_strict_schemas(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+
+    assert bp._section_token_limit("snapshot_thesis") == 9000
+    assert bp._section_generation_controls("snapshot_thesis") == ("high", "medium")
+    assert bp._section_token_limit("sales_plays") == 6000
+    assert bp._section_generation_controls("sales_plays") == ("medium", "medium")
+    assert bp._section_token_limit("pressure_evidence") == 5000
+    assert bp._section_generation_controls("pressure_evidence") == ("low", "low")
+    assert bp.BUYING_SECTION_JSON_SCHEMAS["snapshot_thesis"]["additionalProperties"] is False
+    assert bp._BUYING_SALES_PLAY_JSON_SCHEMA["additionalProperties"] is False
+
+
 def test_buying_potential_renderer_uses_new_section_order_and_nested_play_angles(monkeypatch):
     bp = load_buying_potential(monkeypatch)
 

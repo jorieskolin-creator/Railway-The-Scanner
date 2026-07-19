@@ -1,8 +1,7 @@
 """Central model policy defaults for Scanner.
 
-The policy is intentionally small in v1: it names approved production models,
-keeps expensive Pro usage explicit, and prevents distrusted lightweight models
-from becoming silent fallbacks.
+The policy names approved production models, keeps expensive Pro usage explicit,
+and prevents distrusted lightweight models from becoming silent fallbacks.
 """
 
 from __future__ import annotations
@@ -11,10 +10,12 @@ import os
 from typing import Any
 
 
-MODEL_POLICY_VERSION = os.environ.get("SCANNER_MODEL_POLICY_VERSION", "model-policy-v1").strip() or "model-policy-v1"
+MODEL_POLICY_VERSION = os.environ.get("SCANNER_MODEL_POLICY_VERSION", "model-policy-v2-gpt56-sol").strip() or "model-policy-v2-gpt56-sol"
 
-GPT_REASONING_MODEL = os.environ.get("SCANNER_DEFAULT_FRONTIER_MODEL", "gpt-5.5").strip() or "gpt-5.5"
-GPT_PRO_MODEL = os.environ.get("SCANNER_PREMIUM_MODEL", "gpt-5.5-pro").strip() or "gpt-5.5-pro"
+GPT_REASONING_MODEL = os.environ.get("SCANNER_DEFAULT_FRONTIER_MODEL", "gpt-5.6-sol").strip() or "gpt-5.6-sol"
+# GPT-5.6 Pro is a reasoning mode on the Sol model, not a separate model slug.
+GPT_PRO_MODEL = os.environ.get("SCANNER_PREMIUM_MODEL", "gpt-5.6-sol").strip() or "gpt-5.6-sol"
+GPT_PRO_REASONING_MODE = os.environ.get("SCANNER_PREMIUM_REASONING_MODE", "pro").strip() or "pro"
 GPT_VERIFIER_MODEL = os.environ.get("SCANNER_VALIDATOR_MODEL", "gpt-5.4").strip() or "gpt-5.4"
 GPT_EXPERIMENTAL_MODEL = os.environ.get("SCANNER_GPT56_SOL_MODEL", "gpt-5.6-sol").strip() or "gpt-5.6-sol"
 ENABLE_GPT56_SOL_TEST = os.environ.get("SCANNER_ENABLE_GPT56_SOL_TEST", "").strip().lower() in {"1", "true", "yes", "on"}
@@ -24,7 +25,7 @@ BUYING_GENERATION_MODEL_OVERRIDE = (
 )
 DETAILED_COMPLETION_MODEL = (
     os.environ.get("SCANNER_DETAILED_COMPLETION_MODEL", "").strip()
-    or (GPT_EXPERIMENTAL_MODEL if ENABLE_GPT56_SOL_TEST else GPT_REASONING_MODEL)
+    or GPT_REASONING_MODEL
 )
 
 CLAUDE_OPUS_MODEL = os.environ.get("CLAUDE_OPUS_MODEL", "claude-opus-4-8").strip() or "claude-opus-4-8"
@@ -79,24 +80,48 @@ MODEL_POLICIES: dict[str, dict[str, Any]] = {
         "primary": GEMINI_GROUNDED_MODEL,
         "thinking_level": "low",
         "availability_fallback": (GPT_REASONING_MODEL, GEMINI_FAST_FALLBACK_MODEL),
+        "gpt_reasoning_effort": "low",
+        "gpt_verbosity": "low",
     },
     "json_repair": {
         "chain": json_repair_chain(),
+        "effort": "low",
+        "verbosity": "low",
         "terminal": "deterministic_fallback",
     },
     "source_claim_validation": {
         "chain": source_claim_chain(),
+        "effort": "low",
+        "verbosity": "low",
         "terminal": "manual_or_deterministic_review",
+    },
+    "forensic_jury": {
+        "primary": GPT_REASONING_MODEL,
+        "effort": "medium",
+        "verbosity": "medium",
+        "fallback": CLAUDE_SONNET_MODEL,
+        "terminal": "compact_deterministic_rescue",
+    },
+    "gpt_web_repair": {
+        "primary": GPT_REASONING_MODEL,
+        "effort": "low",
+        "verbosity": "low",
+        "fallback": GEMINI_FAST_FALLBACK_MODEL,
     },
     "buying_insight_generation": {
         "mode": BUYING_MODEL_MODE,
         "chain": buying_generation_chain(BUYING_MODEL_MODE),
+        "qualification": {"effort": "high", "verbosity": "medium", "max_output_tokens": 9000},
+        "per_signal": {"effort": "medium", "verbosity": "medium", "max_output_tokens": 6000},
+        "cleanup": {"effort": "low", "verbosity": "low", "max_output_tokens": 5000},
     },
     "buying_insight_gate": {
         "chain": buying_gate_chain(),
     },
     "general_summary": {
         "primary": GPT_REASONING_MODEL,
+        "effort": "medium",
+        "verbosity": "medium",
         "independent_review": CLAUDE_SONNET_MODEL,
     },
     "detailed_report": {
@@ -104,18 +129,33 @@ MODEL_POLICIES: dict[str, dict[str, Any]] = {
         "complex": GPT_REASONING_MODEL,
         "premium": CLAUDE_OPUS_MODEL,
         "completion_repair": DETAILED_COMPLETION_MODEL,
+        "completion_effort": "medium",
+        "completion_verbosity": "high",
+        "completion_max_output_tokens": 16000,
     },
     "activation_strategic_synthesis": {
         "primary": GPT_PRO_MODEL,
+        "reasoning_mode": GPT_PRO_REASONING_MODE,
+        "effort": "high",
+        "verbosity": "medium",
+        "max_output_tokens": 24000,
         "fallback": CLAUDE_SONNET_MODEL,
     },
     "cross_impact_interpretation": {
         "primary": GPT_PRO_MODEL,
+        "reasoning_mode": GPT_PRO_REASONING_MODE,
+        "effort": "high",
+        "verbosity": "high",
+        "max_output_tokens": 24000,
         "guardrails": ("numeric", "structure", "public_output_hygiene"),
     },
     "observatory": {
         "l1": GPT_PRO_MODEL,
         "l2": GPT_PRO_MODEL,
+        "reasoning_mode": GPT_PRO_REASONING_MODE,
+        "effort": "high",
+        "verbosity": "high",
+        "max_output_tokens": 24000,
         "l3": CLAUDE_OPUS_MODEL,
         "repair": json_repair_chain(),
     },

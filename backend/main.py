@@ -55,6 +55,7 @@ from foresight_guardrails import sanitize_foresight_collection, sanitize_report_
 from domain_classifier import infer_domain
 from evidence_cleaner import CLEAN_EVIDENCE_MODEL_CHAIN, clean_company_evidence
 from llm_clients import CLAUDE_SONNET_MODEL, GPT_PRO_MODEL, GPT_REASONING_MODEL, GPT_VERIFIER_MODEL, call_anthropic_text, call_json_model_chain, call_openai_text
+from model_policy import policy_for
 from buying_potential import BuyingPotentialError, generate_buying_potential_report, load_service_portfolio_kb, validate_service_portfolio_kb
 from company_evidence import CompanyEvidenceError, build_company_evidence_database
 from company_source_ledger import CompanySourceLedgerError, build_company_source_ledger
@@ -3438,15 +3439,15 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
     resynth_text = ""
     resynth_model_used = ""
 
-    # Primary: GPT 5.5
+    # Primary: configured GPT frontier model
     try:
-        print(f"   🔄 [Clean Re-Synthesis] Attempting gpt-5.5...")
+        print(f"   🔄 [Clean Re-Synthesis] Attempting {GPT_REASONING_MODEL}...")
         resynth_text = _call_openai_text(synthesis_prompt, model=GPT_REASONING_MODEL, max_output_tokens=12000, timeout=120)
         resynth_model_used = GPT_REASONING_MODEL
         resynth_ms = int((time.time() - resynth_start) * 1000)
-        print(f"   ✅ [Clean Re-Synthesis] GPT 5.5 complete ({resynth_ms}ms)")
+        print(f"   ✅ [Clean Re-Synthesis] {GPT_REASONING_MODEL} complete ({resynth_ms}ms)")
     except Exception as gpt_err:
-        print(f"   ❌ [Clean Re-Synthesis] GPT 5.5 failed: {gpt_err}")
+        print(f"   ❌ [Clean Re-Synthesis] {GPT_REASONING_MODEL} failed: {gpt_err}")
 
     # Fallback: Claude Sonnet 5 (independent provider — survives OpenAI outages)
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
@@ -5761,22 +5762,25 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                             f"reserved for shorter fallback path"
                         )
 
-                    # Fallback 1: GPT 5.5 (text-only synthesis from verified evidence)
+                    # Fallback 1: configured GPT frontier model (text-only synthesis from verified evidence)
                     if not response_text and _use_gpt and _synthesis_budget_left() > 30:
                         try:
                             _gpt_timeout = min(
                                 GPT_SYNTH_TIMEOUT,
                                 max(30, _synthesis_budget_left() - 10),
                             )
-                            print(f"   🔄 [Synthesis] Falling back to GPT 5.5 (timeout: {_gpt_timeout}s)...")
+                            print(f"   🔄 [Synthesis] Falling back to {GPT_REASONING_MODEL} (timeout: {_gpt_timeout}s)...")
                             gpt_start = time.time()
 
                             def _synth_gpt():
-                                return _call_openai_text(
+                                return call_openai_text(
                                     synthesis_prompt,
                                     model=GPT_REASONING_MODEL,
                                     max_output_tokens=12000,
                                     timeout=_gpt_timeout,
+                                    reasoning_effort="medium",
+                                    text_verbosity="medium",
+                                    log_label="Scanner Synthesis Fallback",
                                 )
 
                             gpt_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -5785,12 +5789,12 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                                 response_text = gpt_future.result(timeout=_gpt_timeout)
                             except concurrent.futures.TimeoutError:
                                 gpt_pool.shutdown(wait=False)
-                                print(f"   ⏰ [Synthesis] GPT 5.5 timed out after {_gpt_timeout}s")
-                                raise Exception(f"GPT 5.5 timeout after {_gpt_timeout}s")
+                                print(f"   ⏰ [Synthesis] {GPT_REASONING_MODEL} timed out after {_gpt_timeout}s")
+                                raise Exception(f"{GPT_REASONING_MODEL} timeout after {_gpt_timeout}s")
                             gpt_pool.shutdown(wait=False)
-                            print(f"   ✅ [Synthesis] GPT 5.5 succeeded in {int((time.time() - gpt_start) * 1000)}ms")
+                            print(f"   ✅ [Synthesis] {GPT_REASONING_MODEL} succeeded in {int((time.time() - gpt_start) * 1000)}ms")
                         except Exception as gpt_err:
-                            print(f"   ❌ [Synthesis] GPT 5.5 failed: {gpt_err}")
+                            print(f"   ❌ [Synthesis] {GPT_REASONING_MODEL} failed: {gpt_err}")
 
                     # Fallback 2: Claude Sonnet 5 (independent provider — survives OpenAI outages)
                     if not response_text and _use_sonnet and _synthesis_budget_left() > 20:
@@ -6029,17 +6033,22 @@ Respond with valid JSON only:
                              activation_text = ""
                              activation_provider = ""
                              activation_fallback_reason = ""
-                             activation_timeout = min(95, max(50, _activation_left - 25))
+                             activation_policy = policy_for("activation_strategic_synthesis")
+                             activation_timeout = min(180, max(45, _activation_left - 20))
                              try:
                                  print(f"   🔄 [Activation] Generating Strategic Synthesis/WHY/WHAT/Pitch from locked diagnosis via {GPT_PRO_MODEL} (timeout: {activation_timeout}s)...")
                                  act_start = time.time()
 
                                  def _activation_gpt():
-                                     return _call_openai_text(
+                                     return call_openai_text(
                                          activation_prompt,
                                          model=GPT_PRO_MODEL,
-                                         max_output_tokens=5000,
+                                         max_output_tokens=int(activation_policy.get("max_output_tokens") or 24000),
                                          timeout=activation_timeout,
+                                         reasoning_mode=str(activation_policy.get("reasoning_mode") or "pro"),
+                                         reasoning_effort=str(activation_policy.get("effort") or "high"),
+                                         text_verbosity=str(activation_policy.get("verbosity") or "medium"),
+                                         log_label="Strategic Activation",
                                      )
 
                                  act_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)

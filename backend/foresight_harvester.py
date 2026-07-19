@@ -1538,14 +1538,14 @@ RESPONSE TO REPAIR:
         }
 
     print(
-        f"   🌐 [Harvest] {theme} {batch_label} → gpt-5.5 "
+        f"   🌐 [Harvest] {theme} {batch_label} → {GPT_REASONING_MODEL} "
         f"(discovery, timeout={gpt_outer}s, queries={len(search_queries)})..."
     )
     call_runner = run_context.call if run_context else (
         lambda provider, label, timeout, fn: _call_harvest_model_with_deadline(label, timeout, fn)
     )
     gpt = call_runner(
-        "openai", f"{theme} {batch_label} gpt-5.5", gpt_outer,
+        "openai", f"{theme} {batch_label} {GPT_REASONING_MODEL}", gpt_outer,
         lambda: call_openai_text(
             prompt,
             model=GPT_REASONING_MODEL,
@@ -1554,6 +1554,9 @@ RESPONSE TO REPAIR:
             web_search=True,
             search_context_size="medium",
             max_retries=0,
+            reasoning_effort="low",
+            text_verbosity="low",
+            log_label=f"Foresight Harvest {theme}",
         ),
     )
     attempts.append({

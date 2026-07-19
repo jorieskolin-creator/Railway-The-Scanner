@@ -146,7 +146,7 @@ def scrape_strategic_content(base_url: str, company_name: str = "Unknown", subsi
         try:
             text = _call_openai_text(fallback_prompt, model=GPT_REASONING_MODEL, max_output_tokens=2048, timeout=45)
             if text:
-                print(f"   [Scanner 1] ✅ AI Context via GPT 5.5 for {company_name}.")
+                print(f"   [Scanner 1] ✅ AI Context via {GPT_REASONING_MODEL} for {company_name}.")
                 return f"--- AI GENERATED CONTEXT FOR {company_name} (GPT FALLBACK — NOT VERIFIED EVIDENCE) ---\n{text}"
         except Exception as e3:
             print(f"   [Scanner 1] ❌ GPT fallback also failed: {e3}")
@@ -682,10 +682,10 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                             except Exception as opus_err:
                                 print(f"   [{company_name}] ❌ [Synthesis] Opus 4.8 failed: {opus_err}")
 
-                        # Fallback 1: GPT 5.5
+                        # Fallback 1: configured GPT frontier model
                         if not response_text and (COMPANY_BUDGET - (time.time() - company_start)) > 60:
                             try:
-                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to GPT 5.5...")
+                                print(f"   [{company_name}] 🔄 [Synthesis] Falling back to {GPT_REASONING_MODEL}...")
                                 m_start = time.time()
                                 response_text = _call_openai_text(
                                     synthesis_prompt,
@@ -693,9 +693,9 @@ Note: why_proposals and what_proposals are arrays of 1-2 strings each. WHY1 pair
                                     max_output_tokens=4000,
                                     timeout=_SEED_SYNTH_TIMEOUT,
                                 )
-                                print(f"   [{company_name}] ✅ [Synthesis] GPT 5.5 succeeded in {int((time.time() - m_start) * 1000)}ms")
+                                print(f"   [{company_name}] ✅ [Synthesis] {GPT_REASONING_MODEL} succeeded in {int((time.time() - m_start) * 1000)}ms")
                             except Exception as gpt_err:
-                                print(f"   [{company_name}] ❌ [Synthesis] GPT 5.5 failed: {gpt_err}")
+                                print(f"   [{company_name}] ❌ [Synthesis] {GPT_REASONING_MODEL} failed: {gpt_err}")
 
                         # Fallback 2: Claude Sonnet 5
                         if not response_text and (COMPANY_BUDGET - (time.time() - company_start)) > 60:
@@ -1124,15 +1124,15 @@ re-introduce any of the false claims listed above."""
                     resynth_model_used = ""
                     resynth_ms = 0
 
-                    # Primary: GPT 5.5
+                    # Primary: configured GPT frontier model
                     try:
-                        print(f"   [{company_name}] 🔄 [Re-Synthesis] Attempting gpt-5.5...")
+                        print(f"   [{company_name}] 🔄 [Re-Synthesis] Attempting {GPT_REASONING_MODEL}...")
                         resynth_text = _call_openai_text(resynth_prompt, model=GPT_REASONING_MODEL, max_output_tokens=12000, timeout=120)
                         resynth_model_used = GPT_REASONING_MODEL
                         resynth_ms = int((time.time() - resynth_start) * 1000)
-                        print(f"   [{company_name}] ✅ [Re-Synthesis] GPT 5.5 complete ({resynth_ms}ms)")
+                        print(f"   [{company_name}] ✅ [Re-Synthesis] {GPT_REASONING_MODEL} complete ({resynth_ms}ms)")
                     except Exception as gpt_err:
-                        print(f"   [{company_name}] ❌ [Re-Synthesis] GPT 5.5 failed: {gpt_err}")
+                        print(f"   [{company_name}] ❌ [Re-Synthesis] {GPT_REASONING_MODEL} failed: {gpt_err}")
 
                     # Fallback: Claude Sonnet 5
                     if not resynth_text:

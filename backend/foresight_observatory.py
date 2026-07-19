@@ -35,6 +35,7 @@ from llm_clients import (
     call_openai_text,
     parse_json_object,
 )
+from model_policy import policy_for
 from foresight_guardrails import build_foresight_guardrails, sanitize_foresight_text, validate_foresight_text, sanitize_future_insight
 from storage import BlobStorage
 from market_intelligence import (
@@ -1879,28 +1880,33 @@ def _generate_opus(prompt: str, max_tokens: int = 16000) -> tuple[str, int]:
 
 
 def _generate_gpt_pro(prompt: str, max_tokens: int = 16000, log_label: str = "Observatory") -> tuple[str, int, str]:
-    """Generate L1/L2 with GPT-5.5 Pro and bounded quality fallbacks."""
+    """Generate L1/L2 with GPT-5.6 Sol Pro and bounded quality fallbacks."""
+    policy = policy_for("cross_impact_interpretation" if log_label == "CrossImpact" else "observatory")
+    output_budget = max(max_tokens, int(policy.get("max_output_tokens") or 24000))
     attempts = (
-        (OBSERVATORY_L1_MODEL, None, 480),
-        (GPT_REASONING_MODEL, "xhigh", 300),
+        (OBSERVATORY_L1_MODEL, None, str(policy.get("reasoning_mode") or "pro"), 480, "pro"),
+        (GPT_REASONING_MODEL, "xhigh", None, 300, "standard-xhigh"),
     )
     errors = []
-    for model, effort, timeout in attempts:
+    for model, effort, mode, timeout, route_label in attempts:
         try:
             t0 = time.time()
             text = call_openai_text(
                 prompt,
                 model=model,
-                max_output_tokens=max_tokens,
+                max_output_tokens=output_budget,
                 timeout=timeout,
                 max_retries=1,
                 reasoning_effort=effort,
+                reasoning_mode=mode,
+                text_verbosity=str(policy.get("verbosity") or "high"),
+                log_label=log_label,
             )
             text = re.sub(r'\[([^\]]+)\]\(https?://[^)]+\)', r'\1', text).strip()
             wc = len(text.split())
             elapsed = int((time.time() - t0) * 1000)
-            print(f"   [{log_label}] {model}{f' ({effort})' if effort else ''}: {wc} words ({elapsed}ms)")
-            return text, wc, model
+            print(f"   [{log_label}] {model} ({route_label}): {wc} words ({elapsed}ms)")
+            return text, wc, f"{model}:{route_label}"
         except Exception as exc:
             errors.append(f"{model}: {exc}")
             print(f"   [Observatory] {model} generation unavailable: {exc}")

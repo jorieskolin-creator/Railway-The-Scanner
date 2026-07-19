@@ -27,6 +27,35 @@ from llm_clients import call_json_model_chain
 from model_policy import CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL, GPT_VERIFIER_MODEL, source_claim_chain
 
 
+RELEVANCE_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "score": {"type": "integer"},
+        "claim_supported": {"type": "boolean"},
+        "entity_match_status": {"type": "string", "enum": ["exact", "scoped", "weak", "wrong", "unknown"]},
+        "entity_name_found": {"type": "string"},
+        "supporting_quote": {"type": "string"},
+        "unsupported_reason": {"type": "string"},
+        "reason": {"type": "string"},
+    },
+    "required": ["score", "claim_supported", "entity_match_status", "entity_name_found", "supporting_quote", "unsupported_reason", "reason"],
+    "additionalProperties": False,
+}
+
+CLAIM_REWRITE_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "classification": {"type": "string", "enum": ["narrow_supported_claim", "question_only_premise", "context_only", "blocked"]},
+        "rewritten_claim": {"type": "string"},
+        "question_premise": {"type": "string"},
+        "supporting_quote": {"type": "string"},
+        "reason": {"type": "string"},
+    },
+    "required": ["classification", "rewritten_claim", "question_premise", "supporting_quote", "reason"],
+    "additionalProperties": False,
+}
+
+
 # ── Page content extraction ─────────────────────────────────────────────────
 
 _HEADERS = {
@@ -439,8 +468,13 @@ def _rewrite_overstrong_claim(
     raw, model_used = call_json_model_chain(
         prompt,
         (GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL),
-        max_tokens=520,
+        max_tokens=3000,
         timeout=timeout,
+        reasoning_effort="medium",
+        text_verbosity="low",
+        json_schema=CLAIM_REWRITE_JSON_SCHEMA,
+        json_schema_name="source_claim_rewrite",
+        log_label="Source Claim Rewrite",
         validate_json=True,
     )
     parsed = _parse_claim_rewrite_json(raw)
@@ -690,8 +724,13 @@ def _check_relevance(
             raw, model_used = call_json_model_chain(
                 prompt,
                 (model,),
-                max_tokens=320,
+                max_tokens=3000,
                 timeout=timeout,
+                reasoning_effort="low",
+                text_verbosity="low",
+                json_schema=RELEVANCE_JSON_SCHEMA,
+                json_schema_name="source_claim_validation",
+                log_label="Source Claim Validation",
                 validate_json=True,
             )
 
@@ -718,8 +757,9 @@ def _check_relevance(
                     raw2, model_used2 = call_json_model_chain(
                         prompt,
                         (CLAUDE_SONNET_MODEL,),
-                        max_tokens=320,
+                        max_tokens=3000,
                         timeout=timeout,
+                        reasoning_effort="low",
                         validate_json=True,
                     )
                     parsed2 = _parse_relevance_json(raw2)

@@ -16,7 +16,7 @@ import time
 
 import anthropic
 from llm_clients import call_openai_text
-from model_policy import CLAUDE_OPUS_MODEL, CLAUDE_SONNET_MODEL, DETAILED_COMPLETION_MODEL, GPT_REASONING_MODEL
+from model_policy import CLAUDE_OPUS_MODEL, CLAUDE_SONNET_MODEL, DETAILED_COMPLETION_MODEL, GPT_REASONING_MODEL, policy_for
 from source_quality import (
     assess_source_scope, is_generation_eligible_source,
     is_analysis_premise_source, source_analysis_support_mode,
@@ -420,22 +420,35 @@ def complete_detailed_report_draft(
     payload = _build_input_payload(full_data, company_name, foresight_data, prior_summaries)
     prompt = _build_completion_prompt(payload, company_name, draft, compact=compact)
     timeout = max(30, min(100, int(time_budget_seconds or 80)))
-    token_budget = 5000 if compact else 8000
-    t0 = time.time()
-    text = call_openai_text(
-        prompt,
-        model=DETAILED_COMPLETION_MODEL,
-        max_output_tokens=token_budget,
-        timeout=timeout,
-    )
-    text = _strip_links((text or "").strip())
-    quality = detailed_report_quality(text, compact=compact)
-    elapsed = int((time.time() - t0) * 1000)
-    print(
-        "   📝 [Detailed Report] GPT completion/repair: "
-        f"{quality['word_count']} words, complete={quality['complete']}, model={DETAILED_COMPLETION_MODEL} ({elapsed}ms)"
-    )
-    return (text if quality["complete"] else ""), f"{DETAILED_COMPLETION_MODEL}-completion", quality
+    policy = policy_for("detailed_report")
+    token_budget = 12000 if compact else int(policy.get("completion_max_output_tokens") or 16000)
+    last_quality: dict = detailed_report_quality("", compact=compact)
+    for effort in (str(policy.get("completion_effort") or "medium"), "high"):
+        t0 = time.time()
+        try:
+            text = call_openai_text(
+                prompt,
+                model=DETAILED_COMPLETION_MODEL,
+                max_output_tokens=token_budget,
+                timeout=timeout,
+                reasoning_effort=effort,
+                text_verbosity=str(policy.get("completion_verbosity") or "high"),
+                log_label="Detailed Report Completion",
+            )
+        except Exception as exc:
+            print(f"   ❌ [Detailed Report] {DETAILED_COMPLETION_MODEL} completion failed at effort={effort}: {exc}")
+            continue
+        text = _strip_links((text or "").strip())
+        last_quality = detailed_report_quality(text, compact=compact)
+        elapsed = int((time.time() - t0) * 1000)
+        print(
+            "   📝 [Detailed Report] GPT completion/repair: "
+            f"{last_quality['word_count']} words, complete={last_quality['complete']}, "
+            f"model={DETAILED_COMPLETION_MODEL}, effort={effort} ({elapsed}ms)"
+        )
+        if last_quality["complete"]:
+            return text, f"{DETAILED_COMPLETION_MODEL}-completion-{effort}", last_quality
+    return "", f"{DETAILED_COMPLETION_MODEL}-completion-incomplete", last_quality
 
 
 def generate_detailed_report(
@@ -468,7 +481,8 @@ def generate_detailed_report(
             "and proportionality rules. Do not omit major verified contradictions or material risks."
         )
     target_min = _COMPACT_WORD_MIN if compact else _WORD_MIN
-    token_budget = 5000 if compact else 8000
+    completion_policy = policy_for("detailed_report")
+    token_budget = 12000 if compact else int(completion_policy.get("completion_max_output_tokens") or 16000)
     started = time.time()
     total_budget = max(60, int(time_budget_seconds or (110 if compact else 180)))
 
@@ -494,18 +508,36 @@ def generate_detailed_report(
             print(f"   📝 [Detailed Report] Attempting {DETAILED_COMPLETION_MODEL} completion ({reason})...")
             t0 = time.time()
             completion_prompt = _build_completion_prompt(payload, company_name, draft, compact=compact)
-            repaired = call_openai_text(
-                completion_prompt,
-                model=DETAILED_COMPLETION_MODEL,
-                max_output_tokens=token_budget,
-                timeout=remaining_timeout(reserve=5, cap=110, floor=30),
-            )
-            repaired = _strip_links((repaired or "").strip())
-            wc = _word_count(repaired)
-            elapsed = int((time.time() - t0) * 1000)
-            print(f"   📝 [Detailed Report] {DETAILED_COMPLETION_MODEL} completion: {wc} words ({elapsed}ms)")
-            if repaired and quality_ok(repaired):
-                return repaired, f"{DETAILED_COMPLETION_MODEL}-completion"
+            for effort in (str(completion_policy.get("completion_effort") or "medium"), "high"):
+                try:
+                    repaired = call_openai_text(
+                        completion_prompt,
+                        model=DETAILED_COMPLETION_MODEL,
+                        max_output_tokens=token_budget,
+                        timeout=remaining_timeout(reserve=5, cap=140, floor=30),
+                        reasoning_effort=effort,
+                        text_verbosity=str(completion_policy.get("completion_verbosity") or "high"),
+                        log_label="Detailed Report Completion",
+                    )
+                except Exception as effort_exc:
+                    print(
+                        f"   ❌ [Detailed Report] {DETAILED_COMPLETION_MODEL} completion "
+                        f"failed at effort={effort}: {effort_exc}"
+                    )
+                    if total_budget - int(time.time() - started) < 40:
+                        break
+                    continue
+                repaired = _strip_links((repaired or "").strip())
+                wc = _word_count(repaired)
+                elapsed = int((time.time() - t0) * 1000)
+                print(
+                    f"   📝 [Detailed Report] {DETAILED_COMPLETION_MODEL} completion: "
+                    f"{wc} words, effort={effort} ({elapsed}ms)"
+                )
+                if repaired and quality_ok(repaired):
+                    return repaired, f"{DETAILED_COMPLETION_MODEL}-completion-{effort}"
+                if total_budget - int(time.time() - started) < 40:
+                    break
             return "", ""
         except Exception as exc:
             elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
@@ -554,6 +586,9 @@ def generate_detailed_report(
             model=GPT_REASONING_MODEL,
             max_output_tokens=token_budget,
             timeout=remaining_timeout(reserve=20 if not compact else 10, cap=110, floor=30),
+            reasoning_effort="medium",
+            text_verbosity="high",
+            log_label="Detailed Report Generation",
         )
         text = _strip_links((text or "").strip())
         wc = _word_count(text)

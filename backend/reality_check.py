@@ -17,6 +17,7 @@ import os
 import time
 from foresight_guardrails import sanitize_future_insight, validate_foresight_text, validate_future_deadlines
 from model_policy import CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL, GPT_VERIFIER_MODEL
+from llm_clients import call_openai_text
 
 
 def _clean_env_var(value: str) -> str:
@@ -44,17 +45,16 @@ def _get_openai_text(response) -> str:
 
 
 def _call_openai_text(prompt: str, model: str = GPT_REASONING_MODEL, max_output_tokens: int = 10000, timeout: int = 90) -> str:
-    api_key = _clean_env_var(os.environ.get("GPT_API_KEY") or os.environ.get("OPENAI_API_KEY") or "")
-    if not api_key:
-        raise ValueError("No GPT_API_KEY configured")
-    from openai import OpenAI
-    client = OpenAI(api_key=api_key, timeout=timeout)
-    response = client.responses.create(
+    verifier_route = model == GPT_VERIFIER_MODEL
+    return call_openai_text(
+        prompt,
         model=model,
-        input=prompt,
         max_output_tokens=max_output_tokens,
+        timeout=timeout,
+        reasoning_effort="low" if verifier_route else "medium",
+        text_verbosity="low" if verifier_route else "medium",
+        log_label="Reality Verifier" if verifier_route else "Scanner Reasoning",
     )
-    return _get_openai_text(response)
 
 try:
     from source_quality import (
@@ -1613,7 +1613,7 @@ def _clean_with_models(prompt):
             return response_text, elapsed_ms, GPT_REASONING_MODEL
         raise ValueError(f"{GPT_REASONING_MODEL} returned empty response")
     except Exception as gpt_err:
-        print(f"   ❌ [Clean] GPT 5.5 failed: {gpt_err}")
+        print(f"   ❌ [Clean] {GPT_REASONING_MODEL} failed: {gpt_err}")
 
     anthropic_key = _get_anthropic_key()
     if anthropic_key:
