@@ -101,6 +101,160 @@ def test_buying_potential_uses_reasoning_aware_sol_budgets_and_strict_schemas(mo
     assert gate_policy["max_output_tokens"] == 5000
     assert gate_policy["timeout_seconds"] == 90
     assert bp._BUYING_GATE_REVIEW_SCHEMA["additionalProperties"] is False
+    assert bp.policy_for("buying_insight_gate_repair")["effort"] == "medium"
+    assert bp.policy_for("buying_insight_gate_reanalysis")["chain"][0] == "gpt-5.6-sol"
+
+
+def test_gate_claim_ids_are_stable_and_nested_spine_path_is_writable(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    report = {
+        "sales_spine": {
+            "top_buying_hypotheses": [{
+                "hypothesis": "An unsupported strong claim.",
+                "linked_signal_ids": ["SIG-01"],
+                "linked_hypothesis_ids": ["HYP-01"],
+            }]
+        }
+    }
+    first = bp._build_gate_review_packet(report, {})["claims"][0]
+    second = bp._build_gate_review_packet(report, {})["claims"][0]
+
+    assert first["claim_id"] == second["claim_id"]
+    assert first["path"] == "sales_spine.top_buying_hypotheses[0].hypothesis"
+
+    applied, rejected = bp._apply_gate_field_actions(report, [{
+        "claim_id": first["claim_id"],
+        "object_id": "SIG-01",
+        "path": first["path"],
+        "action": "replace",
+        "replacement": "A narrower question-led hypothesis.",
+        "reason": "Evidence supports a hypothesis only.",
+    }])
+
+    assert not rejected
+    assert applied[0]["claim_id"] == first["claim_id"]
+    assert report["sales_spine"]["top_buying_hypotheses"][0]["hypothesis"] == "A narrower question-led hypothesis."
+
+
+def test_gate_decision_requires_complete_claim_coverage(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    packet = bp._build_gate_review_packet(
+        {"account_snapshot": {"text": "A factual account statement.", "gate": "allowed_as_fact"}},
+        {},
+    )
+    valid, reason = bp._gate_decision_is_complete({
+        "status": "approved",
+        "reviewed_claim_ids": [],
+        "claim_decisions": [],
+    }, packet)
+
+    assert valid is False
+    assert "coverage incomplete" in reason.lower()
+
+
+def test_gate_workflow_splits_decision_and_wording_repair(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    report = {"account_snapshot": {"text": "Ensto has proven enterprise AI maturity.", "gate": "allowed_as_fact"}}
+    packet = bp._build_gate_review_packet(report, {})
+    claim = packet["claims"][0]
+    calls = []
+
+    def fake_stage(_prompt, _chain, **kwargs):
+        calls.append(kwargs["log_label"])
+        if "Decision" in kwargs["log_label"]:
+            return ({
+                "status": "changes_required",
+                "reviewed_claim_ids": [claim["claim_id"]],
+                "claim_decisions": [{
+                    "claim_id": claim["claim_id"],
+                    "decision": "rewrite",
+                    "new_gate": "allowed_as_discovery_question",
+                    "unsafe_text": claim["text"],
+                    "reason": "Current AI maturity is not verified.",
+                }],
+                "notes": [],
+            }, "gpt-5.4")
+        return ({
+            "repairs": [{
+                "claim_id": claim["claim_id"],
+                "object_id": claim["object_id"],
+                "path": claim["path"],
+                "action": "replace",
+                "replacement": "Discovery should establish Ensto's current enterprise AI maturity.",
+                "reason": "Reframed as a validation question.",
+            }],
+            "notes": [],
+        }, "gpt-5.4")
+
+    monkeypatch.setattr(bp, "_call_gate_stage", fake_stage)
+    review = bp._run_gate_review_workflow(report, {})
+
+    assert calls == ["Buying Insight Gate Decision 1/1", "Buying Insight Gate Wording Repair"]
+    assert review["field_actions"][0]["replacement"].startswith("Discovery should establish")
+    assert review["deterministic_removal_count"] == 0
+
+
+def test_gate_workflow_uses_sol_reanalysis_then_deterministic_removal(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    report = {"buying_potential_thesis": {"text": "The unsupported causal chain proves immediate demand.", "gate": "allowed_as_hypothesis"}}
+    packet = bp._build_gate_review_packet(report, {})
+    claim = packet["claims"][0]
+
+    def fake_stage(_prompt, _chain, **kwargs):
+        if "Decision" in kwargs["log_label"]:
+            return ({
+                "status": "changes_required",
+                "reviewed_claim_ids": [claim["claim_id"]],
+                "claim_decisions": [{
+                    "claim_id": claim["claim_id"],
+                    "decision": "reanalysis_required",
+                    "new_gate": "allowed_as_discovery_question",
+                    "unsafe_text": claim["text"],
+                    "reason": "Removing the sentence would break the account thesis.",
+                }],
+                "notes": [],
+            }, "gpt-5.4")
+        raise ValueError("focused reanalysis unavailable")
+
+    monkeypatch.setattr(bp, "_call_gate_stage", fake_stage)
+    review = bp._run_gate_review_workflow(report, {})
+
+    assert review["deterministic_removal_count"] == 1
+    assert review["field_actions"][0]["action"] == "remove"
+    assert review["field_actions"][0]["claim_id"] == claim["claim_id"]
+
+
+def test_gate_decision_batches_preserve_all_claims_without_order_truncation(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    packet = {
+        "review_scope": "test",
+        "allowed_use_boundary": "internal",
+        "evidence_sufficiency": {},
+        "required_sales_spine": [],
+        "hypothesis_contracts": [],
+        "claims": [
+            {
+                "claim_id": f"CLM-{index:03d}",
+                "path": f"pressure_signals[{index}].description",
+                "object_id": f"SIG-{index:02d}",
+                "text": f"Claim {index}",
+                "gate": "allowed_as_hypothesis",
+                "signal_ids": [f"SIG-{index:02d}"],
+                "hypothesis_ids": [],
+                "evidence_ids": [],
+            }
+            for index in range(67)
+        ],
+        "signals": [],
+        "evidence_index": [],
+        "service_bridges": [],
+    }
+
+    batches = bp._gate_decision_batches(packet, max_claims=30)
+    claim_ids = [item["claim_id"] for batch in batches for item in batch["claims"]]
+
+    assert [len(batch["claims"]) for batch in batches] == [30, 30, 7]
+    assert claim_ids == [f"CLM-{index:03d}" for index in range(67)]
 
 
 def test_buying_potential_renderer_uses_new_section_order_and_nested_play_angles(monkeypatch):

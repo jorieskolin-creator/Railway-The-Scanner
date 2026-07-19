@@ -122,6 +122,27 @@ MODEL_POLICIES: dict[str, dict[str, Any]] = {
         "max_output_tokens": 5000,
         "timeout_seconds": 90,
     },
+    "buying_insight_gate_decision": {
+        "chain": buying_gate_chain(),
+        "effort": "low",
+        "verbosity": "low",
+        "max_output_tokens": 5000,
+        "timeout_seconds": 90,
+    },
+    "buying_insight_gate_repair": {
+        "chain": buying_gate_chain(),
+        "effort": "medium",
+        "verbosity": "low",
+        "max_output_tokens": 6000,
+        "timeout_seconds": 90,
+    },
+    "buying_insight_gate_reanalysis": {
+        "chain": dedupe_chain(GPT_REASONING_MODEL, CLAUDE_SONNET_MODEL),
+        "effort": "medium",
+        "verbosity": "medium",
+        "max_output_tokens": 7000,
+        "timeout_seconds": 120,
+    },
     "general_summary": {
         "primary": GPT_REASONING_MODEL,
         "effort": "medium",

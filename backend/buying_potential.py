@@ -9,6 +9,7 @@ account insight, and returns standalone JSON/HTML artifacts.
 from __future__ import annotations
 
 import ast
+import hashlib
 import html
 import io
 import json
@@ -1503,6 +1504,7 @@ def _compute_reliability_status(report: dict, payload: dict, gate_review: dict |
     )
     sufficiency = _dict(payload.get("evidence_sufficiency"))
     sufficiency_status = str(sufficiency.get("status") or "partial")
+    independent_source_count = _safe_int(sufficiency.get("independent_source_count"), 0)
     general_summary_check = _dict(_dict(payload.get("scanner_outputs")).get("general_summary_fact_check"))
     general_summary_verified = general_summary_check.get("verified") is True
     general_summary_false_claims = _list(general_summary_check.get("false_or_unsupported_claims"))
@@ -1533,6 +1535,8 @@ def _compute_reliability_status(report: dict, payload: dict, gate_review: dict |
         reasons.append("One or more generated sections used deterministic fallback.")
     if sufficiency_status != "complete":
         reasons.append(f"Scanner evidence sufficiency is {sufficiency_status}; independence, freshness, entity certainty, or claim coverage remains constrained.")
+    if independent_source_count == 0:
+        reasons.append("No independent generation-eligible source was available; discovery must remain question-led.")
     if not general_summary_verified:
         reasons.append("General Summary fact-check was skipped, unavailable, or not fully verified.")
     if general_summary_false_claims:
@@ -1554,6 +1558,10 @@ def _compute_reliability_status(report: dict, payload: dict, gate_review: dict |
     elif sufficiency_status == "partial" and code == "A":
         code = "B"
     elif sufficiency_status == "insufficient" and code in {"A", "B"}:
+        code = "C"
+    if independent_source_count == 0 and code in {"A", "B"}:
+        code = "C"
+    if _safe_int(_dict(gate_review).get("deterministic_removal_count"), 0) and code in {"A", "B"}:
         code = "C"
 
     status = _status_template(code)
@@ -3000,22 +3008,48 @@ BUYING_SECTION_JSON_SCHEMAS = {
     }),
 }
 
-_BUYING_GATE_REVIEW_SCHEMA = _strict_object({
+_BUYING_GATE_DECISION_SCHEMA = _strict_object({
     "status": {
         "type": "string",
         "enum": ["approved", "changes_required", "unavailable"],
     },
-    "required_downgrades": {
+    "reviewed_claim_ids": _STRING_LIST,
+    "claim_decisions": {
         "type": "array",
         "items": _strict_object({
-            "path": _STRING,
-            "reason": _STRING,
+            "claim_id": _STRING,
+            "decision": {
+                "type": "string",
+                "enum": ["downgrade", "rewrite", "remove", "reanalysis_required"],
+            },
             "new_gate": _GATE,
+            "unsafe_text": _STRING,
+            "reason": _STRING,
         }),
     },
-    "field_actions": {
+    "notes": _STRING_LIST,
+})
+
+_BUYING_GATE_REPAIR_SCHEMA = _strict_object({
+    "repairs": {
         "type": "array",
         "items": _strict_object({
+            "claim_id": _STRING,
+            "object_id": _STRING,
+            "path": _STRING,
+            "action": {"type": "string", "enum": ["replace", "remove", "reanalysis_required"]},
+            "replacement": _STRING,
+            "reason": _STRING,
+        }),
+    },
+    "notes": _STRING_LIST,
+})
+
+_BUYING_GATE_REANALYSIS_SCHEMA = _strict_object({
+    "repairs": {
+        "type": "array",
+        "items": _strict_object({
+            "claim_id": _STRING,
             "object_id": _STRING,
             "path": _STRING,
             "action": {"type": "string", "enum": ["replace", "remove"]},
@@ -3023,9 +3057,11 @@ _BUYING_GATE_REVIEW_SCHEMA = _strict_object({
             "reason": _STRING,
         }),
     },
-    "blocked_claims": _STRING_LIST,
     "notes": _STRING_LIST,
 })
+
+# Backward-compatible name retained for tests and integrations that inspect the schema.
+_BUYING_GATE_REVIEW_SCHEMA = _BUYING_GATE_DECISION_SCHEMA
 
 
 BUYING_SECTION_INSTRUCTIONS = {
@@ -3494,9 +3530,12 @@ def _gate_claim_packet_item(path: str, value: Any, parent: dict | None = None) -
     if parent.get("hypothesis_id"):
         hypothesis_ids.append(str(parent.get("hypothesis_id")))
     evidence_basis = [str(item) for item in _list(parent.get("evidence_basis")) if item]
+    object_id = (signal_ids + hypothesis_ids + [path.split("[", 1)[0]])[0]
+    claim_key = f"{path}|{object_id}".encode("utf-8")
     return {
+        "claim_id": f"CLM-{hashlib.sha256(claim_key).hexdigest()[:12].upper()}",
         "path": path,
-        "object_id": (signal_ids + hypothesis_ids + [path.split("[", 1)[0]])[0],
+        "object_id": object_id,
         "text": text,
         "gate": _normalize_gate(parent.get("gate"), "allowed_as_hypothesis"),
         "signal_ids": signal_ids[:3],
@@ -3521,9 +3560,17 @@ def _build_gate_review_packet(report: dict, payload: dict) -> dict:
     add("sales_spine.strategic_synthesis_basis", spine.get("strategic_synthesis_basis"), spine)
     for index, item in enumerate(_list(spine.get("top_buying_hypotheses"))[:3]):
         parent = _dict(item)
+        hypothesis_value = parent.get("hypothesis") or parent.get("combined_activation_hypothesis") or item
+        hypothesis_path = (
+            f"sales_spine.top_buying_hypotheses[{index}].hypothesis"
+            if parent.get("hypothesis")
+            else f"sales_spine.top_buying_hypotheses[{index}].combined_activation_hypothesis"
+            if parent.get("combined_activation_hypothesis")
+            else f"sales_spine.top_buying_hypotheses[{index}]"
+        )
         add(
-            f"sales_spine.top_buying_hypotheses[{index}]",
-            parent.get("hypothesis") or parent.get("combined_activation_hypothesis") or item,
+            hypothesis_path,
+            hypothesis_value,
             parent,
         )
 
@@ -3608,24 +3655,15 @@ def _build_gate_review_packet(report: dict, payload: dict) -> dict:
             for item in _list(payload.get("hypothesis_registry"))[:3]
             if isinstance(item, dict)
         ],
-        "claims": claims[:60],
+        "claims": claims,
         "signals": signal_index,
         "evidence_index": evidence_index,
         "service_bridges": service_bridges,
     }
-    serialized = json.dumps(packet, ensure_ascii=False)
-    if len(serialized) > BUYING_GATE_PACKET_CHAR_LIMIT:
-        packet["claims"] = packet["claims"][:40]
-        packet["evidence_index"] = packet["evidence_index"][:24]
-        for item in packet["claims"]:
-            item["text"] = _clip(item.get("text"), 420)
-        for item in packet["evidence_index"]:
-            item["excerpt"] = _clip(item.get("excerpt"), 260)
     return packet
 
 
-def _gate_prompt(report: dict, payload: dict) -> str:
-    packet = _build_gate_review_packet(report, payload)
+def _gate_prompt_for_packet(packet: dict) -> str:
     return f"""
 Review this compact Buying Insight gate packet. This is a bounded semantic safety check, not a second analysis.
 Return only JSON matching the supplied schema.
@@ -3634,14 +3672,200 @@ Review rules:
 - Review only evidence safety, claim strength, service bridges, and customer-facing wording.
 - Do not assess originality, analytical depth, writing style, or whether a different hypothesis would be better.
 - Factual claims require fact-grade eligible evidence with correct entity scope.
-- Weak or incomplete support may be hypothesis/question only; unsupported specifics must be replaced, removed, or blocked.
+- Return every supplied claim_id in reviewed_claim_ids exactly once. claim_decisions contains flagged claims only.
+- Use downgrade only when the existing sentence is already safe and only its usage gate is too permissive.
+- If sentence wording is unsafe or too strong, use rewrite, remove, or reanalysis_required. A gate downgrade alone is not a wording correction.
+- Use reanalysis_required only when simply narrowing/removing the sentence would break the linked SIG/HYP causal chain.
+- Copy the exact unsafe wording into unsafe_text for rewrite, remove, and reanalysis_required decisions.
+- Weak or incomplete support may be hypothesis/question only; unsupported specifics require a claim decision.
 - Service recommendations require an existing SIG/HYP bridge and an exact service ID/name from the packet.
-- Use field_actions only for existing allowlisted paths and use the linked SIG/HYP as object_id.
-- Use status=approved when no corrections are needed; changes_required when actions/downgrades are supplied.
+- Use status=approved when claim_decisions is empty; changes_required when one or more decisions are supplied.
 - Use status=unavailable only when the packet cannot be evaluated. Do not invent evidence or IDs.
 
 Compact gate packet:
 {json.dumps(packet, ensure_ascii=False)}
+""".strip()
+
+
+def _gate_prompt(report: dict, payload: dict) -> str:
+    return _gate_prompt_for_packet(_build_gate_review_packet(report, payload))
+
+
+def _gate_claim_lookup(packet: dict) -> dict[str, dict]:
+    return {
+        str(item.get("claim_id")): item
+        for item in _list(packet.get("claims"))
+        if isinstance(item, dict) and item.get("claim_id")
+    }
+
+
+def _gate_decision_is_complete(review: dict, packet: dict) -> tuple[bool, str]:
+    if str(review.get("status") or "").lower() == "unavailable":
+        return False, "Verifier returned unavailable."
+    claim_lookup = _gate_claim_lookup(packet)
+    reviewed = [str(item) for item in _list(review.get("reviewed_claim_ids")) if item]
+    if set(reviewed) != set(claim_lookup):
+        missing = sorted(set(claim_lookup) - set(reviewed))
+        return False, f"Claim coverage incomplete; missing {', '.join(missing[:6])}."
+    seen: set[str] = set()
+    for raw in _list(review.get("claim_decisions")):
+        item = _dict(raw)
+        claim_id = str(item.get("claim_id") or "")
+        if claim_id not in claim_lookup or claim_id in seen:
+            return False, "Claim decisions contain an unknown or duplicate claim_id."
+        seen.add(claim_id)
+        decision = str(item.get("decision") or "")
+        unsafe_text = _clean_generated_text(item.get("unsafe_text"))
+        if decision in {"rewrite", "remove", "reanalysis_required"} and not unsafe_text:
+            return False, f"{claim_id} requires exact unsafe_text."
+        if decision in {"rewrite", "remove", "reanalysis_required"} and unsafe_text != _clean_generated_text(claim_lookup[claim_id].get("text")):
+            return False, f"{claim_id} unsafe_text must exactly match the reviewed claim text."
+        if decision == "downgrade" and unsafe_text:
+            return False, f"{claim_id} cannot use downgrade while unsafe_text remains."
+        if decision == "downgrade":
+            gate_rank = {
+                "blocked": 0,
+                "internal_only": 1,
+                "allowed_as_discovery_question": 2,
+                "allowed_as_hypothesis": 3,
+                "allowed_as_fact": 4,
+            }
+            current_gate = _normalize_gate(claim_lookup[claim_id].get("gate"), "allowed_as_hypothesis")
+            new_gate = _normalize_gate(item.get("new_gate"), current_gate)
+            if gate_rank.get(new_gate, 0) >= gate_rank.get(current_gate, 0):
+                return False, f"{claim_id} downgrade must select a stricter gate."
+    expected_status = "changes_required" if seen else "approved"
+    if str(review.get("status") or "").lower() != expected_status:
+        return False, f"Gate status must be {expected_status}."
+    return True, ""
+
+
+def _gate_context_for_claims(packet: dict, claim_ids: list[str]) -> dict:
+    claim_lookup = _gate_claim_lookup(packet)
+    claims = []
+    seen: set[str] = set()
+    for raw_claim_id in claim_ids:
+        claim_id = str(raw_claim_id or "")
+        if claim_id and claim_id in claim_lookup and claim_id not in seen:
+            seen.add(claim_id)
+            claims.append(claim_lookup[claim_id])
+    linked_hypotheses = {
+        hypothesis_id
+        for claim in claims
+        for hypothesis_id in _list(claim.get("hypothesis_ids"))
+        if hypothesis_id
+    }
+    linked_signals = {
+        signal_id
+        for claim in claims
+        for signal_id in _list(claim.get("signal_ids"))
+        if signal_id
+    }
+    evidence_ids = {
+        evidence_id
+        for claim in claims
+        for evidence_id in _list(claim.get("evidence_ids"))
+        if evidence_id
+    }
+    return {
+        "allowed_use_boundary": packet.get("allowed_use_boundary"),
+        "claims": claims,
+        "hypothesis_contracts": [
+            item for item in _list(packet.get("hypothesis_contracts"))
+            if isinstance(item, dict)
+            and (not linked_hypotheses or item.get("hypothesis_id") in linked_hypotheses)
+        ],
+        "signals": [
+            item for item in _list(packet.get("signals"))
+            if isinstance(item, dict)
+            and (not linked_signals or item.get("id") in linked_signals)
+        ],
+        "evidence_index": [
+            item for item in _list(packet.get("evidence_index"))
+            if isinstance(item, dict) and item.get("id") in evidence_ids
+        ],
+    }
+
+
+def _gate_decision_batches(packet: dict, *, max_claims: int = 30) -> list[dict]:
+    claims = [item for item in _list(packet.get("claims")) if isinstance(item, dict)]
+    if not claims:
+        return [{**packet, "claims": []}]
+    batches: list[dict] = []
+    for offset in range(0, len(claims), max_claims):
+        batch_claims = [dict(item) for item in claims[offset:offset + max_claims]]
+        claim_ids = [str(item.get("claim_id") or "") for item in batch_claims]
+        context = _gate_context_for_claims(packet, claim_ids)
+        batch_signal_ids = {
+            linked for claim in batch_claims for linked in _list(claim.get("signal_ids"))
+        }
+        batch = {
+            "review_scope": packet.get("review_scope"),
+            "allowed_use_boundary": packet.get("allowed_use_boundary"),
+            "evidence_sufficiency": packet.get("evidence_sufficiency"),
+            "required_sales_spine": packet.get("required_sales_spine"),
+            "hypothesis_contracts": context.get("hypothesis_contracts"),
+            "claims": batch_claims,
+            "signals": context.get("signals"),
+            "evidence_index": context.get("evidence_index"),
+            "service_bridges": [
+                item for item in _list(packet.get("service_bridges"))
+                if isinstance(item, dict)
+                and any(signal_id in batch_signal_ids for signal_id in _list(item.get("signal_ids")))
+            ],
+        }
+        serialized = json.dumps(batch, ensure_ascii=False)
+        if len(serialized) > BUYING_GATE_PACKET_CHAR_LIMIT:
+            for item in batch["claims"]:
+                item["text"] = _clip(item.get("text"), 420)
+            batch["evidence_index"] = _list(batch.get("evidence_index"))[:24]
+            for item in batch["evidence_index"]:
+                item["excerpt"] = _clip(item.get("excerpt"), 260)
+        batches.append(batch)
+    return batches
+
+
+def _gate_repair_prompt(packet: dict, decisions: list[dict]) -> str:
+    claim_ids = [str(item.get("claim_id") or "") for item in decisions]
+    context = _gate_context_for_claims(packet, claim_ids)
+    return f"""
+Repair only the flagged Buying Insight sentences below. Return only JSON matching the supplied schema.
+
+Rules:
+- This is wording calibration, not new strategic analysis.
+- Preserve the linked SIG/HYP meaning and evidence boundary. Add no new facts, services, evidence, timing, owners, or causal claims.
+- Produce one repair per supplied claim_id.
+- Use replace with a complete, fluent, narrower sentence when the supported meaning can be retained.
+- Use remove when no safe supported wording remains.
+- Use reanalysis_required only when replacement/removal would break the hypothesis's causal reasoning.
+- Keep object_id and path exactly as supplied.
+
+Flagged decisions:
+{json.dumps(decisions, ensure_ascii=False)}
+
+Bounded context:
+{json.dumps(context, ensure_ascii=False)}
+""".strip()
+
+
+def _gate_reanalysis_prompt(packet: dict, repairs: list[dict]) -> str:
+    claim_ids = [str(item.get("claim_id") or "") for item in repairs]
+    context = _gate_context_for_claims(packet, claim_ids)
+    return f"""
+Perform focused no-web reanalysis for only the flagged Buying Insight sentences. Return only JSON matching the schema.
+
+Rules:
+- Rebuild the sentence from the supplied current payload and HYP/SIG contract only.
+- Preserve the existing causal chain: company condition, external pressure, consequence, and validation boundary.
+- Do not add evidence, services, timing, owners, or claims not present in the bounded context.
+- Produce one replace or remove action per claim_id. Keep object_id and path exactly as supplied.
+- Use a complete reader-facing sentence. This is section-scoped recovery, not a rewrite of the report.
+
+Items requiring reanalysis:
+{json.dumps(repairs, ensure_ascii=False)}
+
+Bounded context:
+{json.dumps(context, ensure_ascii=False)}
 """.strip()
 
 
@@ -3656,10 +3880,271 @@ def _normalize_gate_review(review: Any, *, model: str = "", unavailable_note: st
     normalized["required_downgrades"] = _list(normalized.get("required_downgrades"))[:20]
     normalized["field_actions"] = _list(normalized.get("field_actions"))[:20]
     normalized["blocked_claims"] = _list(normalized.get("blocked_claims"))[:20]
+    normalized["reviewed_claim_ids"] = _list(normalized.get("reviewed_claim_ids"))[:80]
+    normalized["claim_decisions"] = _list(normalized.get("claim_decisions"))[:40]
+    normalized["unresolved_claim_ids"] = _list(normalized.get("unresolved_claim_ids"))[:40]
+    normalized["deterministic_removal_count"] = _safe_int(normalized.get("deterministic_removal_count"), 0)
     normalized["notes"] = _list(normalized.get("notes"))[:10]
     if unavailable_note:
         normalized["notes"].append(_clip(unavailable_note, 360))
     return normalized
+
+
+def _call_gate_stage(
+    prompt: str,
+    chain: Any,
+    *,
+    policy: dict,
+    schema: dict,
+    schema_name: str,
+    log_label: str,
+    validator=None,
+) -> tuple[dict, str]:
+    errors: list[str] = []
+    for model in tuple(chain or ()):
+        try:
+            raw, used_model = call_json_model_chain(
+                prompt,
+                (model,),
+                max_tokens=_safe_int(policy.get("max_output_tokens"), 5000),
+                timeout=_safe_int(policy.get("timeout_seconds"), 90),
+                reasoning_effort=str(policy.get("effort") or "low"),
+                text_verbosity=str(policy.get("verbosity") or "low"),
+                json_schema=schema,
+                json_schema_name=schema_name,
+                log_label=log_label,
+                validate_json=True,
+                required_fields=tuple(schema.get("required") or ()),
+            )
+            parsed = parse_json_object(raw)
+            if validator:
+                valid, reason = validator(parsed)
+                if not valid:
+                    raise ValueError(reason or "Gate stage semantic contract failed.")
+            return parsed, used_model
+        except Exception as exc:
+            errors.append(f"{model}: {str(exc)[:220]}")
+            print(f"   ⚠️ [{log_label}] {model} fallback: {str(exc)[:220]}", flush=True)
+    raise ValueError("; ".join(errors) or f"{log_label} had no configured model.")
+
+
+def _gate_parent_path(path: str) -> str:
+    if path.startswith("account_snapshot."):
+        return "account_snapshot"
+    if path.startswith("buying_potential_thesis."):
+        return "buying_potential_thesis"
+    match = re.match(r"^([a-zA-Z_]+\[\d+\])", path)
+    return match.group(1) if match else path.split(".", 1)[0]
+
+
+def _normalize_repair_action(raw: dict, claim: dict, *, default_reason: str = "") -> dict:
+    action = str(raw.get("action") or "remove").lower()
+    if action not in {"replace", "remove", "reanalysis_required"}:
+        action = "remove"
+    replacement = _clean_generated_text(raw.get("replacement")) if action == "replace" else ""
+    if action == "replace" and len(replacement) < 20:
+        action = "reanalysis_required"
+        replacement = ""
+    return {
+        "claim_id": claim.get("claim_id"),
+        "object_id": claim.get("object_id"),
+        "path": claim.get("path"),
+        "action": action,
+        "replacement": replacement,
+        "reason": _clip(raw.get("reason") or default_reason, 300),
+    }
+
+
+def _run_gate_review_workflow(report: dict, payload: dict, model_mode: str | None = None) -> dict:
+    packet = _build_gate_review_packet(report, payload)
+    decision_batches = _gate_decision_batches(packet)
+    print(
+        f"   🔐 [Buying Potential Gate Decision] batches={len(decision_batches)} "
+        f"claims={len(_list(packet.get('claims')))}",
+        flush=True,
+    )
+    decision_policy = policy_for("buying_insight_gate_decision")
+    decision_started = time.time()
+    reviewed_claim_ids: list[str] = []
+    decisions: list[dict] = []
+    decision_notes: list[str] = []
+    decision_models: list[str] = []
+    for batch_index, decision_batch in enumerate(decision_batches, start=1):
+        batch_json = json.dumps(decision_batch, ensure_ascii=False)
+        print(
+            f"   🔐 [Buying Potential Gate Decision] batch={batch_index}/{len(decision_batches)} "
+            f"packet_chars={len(batch_json)} approx_tokens={max(1, len(batch_json) // 4)} "
+            f"claims={len(_list(decision_batch.get('claims')))}",
+            flush=True,
+        )
+        batch_review, batch_model = _call_gate_stage(
+            _gate_prompt_for_packet(decision_batch),
+            decision_policy.get("chain") or buying_gate_chain(model_mode),
+            policy=decision_policy,
+            schema=_BUYING_GATE_DECISION_SCHEMA,
+            schema_name="buying_insight_gate_decision",
+            log_label=f"Buying Insight Gate Decision {batch_index}/{len(decision_batches)}",
+            validator=lambda value, current_batch=decision_batch: _gate_decision_is_complete(_dict(value), current_batch),
+        )
+        reviewed_claim_ids.extend(str(item) for item in _list(batch_review.get("reviewed_claim_ids")) if item)
+        decisions.extend(_dict(item) for item in _list(batch_review.get("claim_decisions")))
+        decision_notes.extend(str(item) for item in _list(batch_review.get("notes")) if item)
+        decision_models.append(batch_model)
+    decision_model = ", ".join(dict.fromkeys(decision_models))
+    claim_lookup = _gate_claim_lookup(packet)
+    field_actions: list[dict] = []
+    downgrades: list[dict] = []
+    blocked_claims: list[str] = []
+    notes = decision_notes
+    rewrite_decisions: list[dict] = []
+    reanalysis_items: list[dict] = []
+
+    for decision in decisions:
+        claim = claim_lookup.get(str(decision.get("claim_id") or ""))
+        if not claim:
+            continue
+        kind = str(decision.get("decision") or "")
+        reason = _clip(decision.get("reason"), 300)
+        if kind == "downgrade":
+            downgrades.append({
+                "claim_id": claim.get("claim_id"),
+                "path": _gate_parent_path(str(claim.get("path") or "")),
+                "reason": reason,
+                "new_gate": _normalize_gate(decision.get("new_gate"), "allowed_as_discovery_question"),
+            })
+        elif kind == "remove":
+            field_actions.append(_normalize_repair_action(
+                {"action": "remove", "reason": reason}, claim, default_reason=reason,
+            ))
+            blocked_claims.append(_clean_generated_text(decision.get("unsafe_text") or claim.get("text")))
+        elif kind == "rewrite":
+            rewrite_decisions.append(decision)
+        elif kind == "reanalysis_required":
+            reanalysis_items.append(_normalize_repair_action(
+                {"action": "reanalysis_required", "reason": reason}, claim, default_reason=reason,
+            ))
+
+    repair_models: list[str] = []
+    if rewrite_decisions:
+        repair_policy = policy_for("buying_insight_gate_repair")
+        expected_ids = {str(item.get("claim_id")) for item in rewrite_decisions}
+
+        def repair_complete(value: dict) -> tuple[bool, str]:
+            repaired_ids = {str(item.get("claim_id")) for item in _list(_dict(value).get("repairs"))}
+            return (repaired_ids == expected_ids, "Repair coverage does not match flagged claim IDs.")
+
+        try:
+            repaired, repair_model = _call_gate_stage(
+                _gate_repair_prompt(packet, rewrite_decisions),
+                repair_policy.get("chain") or buying_gate_chain(model_mode),
+                policy=repair_policy,
+                schema=_BUYING_GATE_REPAIR_SCHEMA,
+                schema_name="buying_insight_gate_wording_repair",
+                log_label="Buying Insight Gate Wording Repair",
+                validator=repair_complete,
+            )
+            repair_models.append(repair_model)
+            notes.extend(_list(repaired.get("notes")))
+            for raw in _list(repaired.get("repairs")):
+                raw = _dict(raw)
+                claim = claim_lookup.get(str(raw.get("claim_id") or ""))
+                if not claim:
+                    continue
+                action = _normalize_repair_action(raw, claim)
+                if action["action"] == "reanalysis_required":
+                    reanalysis_items.append(action)
+                else:
+                    field_actions.append(action)
+                    if action["action"] == "remove":
+                        blocked_claims.append(_clean_generated_text(claim.get("text")))
+        except Exception as exc:
+            notes.append(f"Bounded wording repair unavailable; focused reanalysis was requested: {str(exc)[:180]}")
+            for decision in rewrite_decisions:
+                claim = claim_lookup.get(str(decision.get("claim_id") or ""))
+                if claim:
+                    reanalysis_items.append(_normalize_repair_action(
+                        {"action": "reanalysis_required", "reason": decision.get("reason")}, claim,
+                    ))
+
+    reanalysis_models: list[str] = []
+    if reanalysis_items:
+        reanalysis_policy = dict(policy_for("buying_insight_gate_reanalysis"))
+        if any(
+            str(item.get("path") or "").startswith(("account_snapshot", "buying_potential_thesis", "sales_spine"))
+            for item in reanalysis_items
+        ):
+            reanalysis_policy["effort"] = "high"
+        expected_ids = {str(item.get("claim_id")) for item in reanalysis_items}
+
+        def reanalysis_complete(value: dict) -> tuple[bool, str]:
+            repaired_ids = {str(item.get("claim_id")) for item in _list(_dict(value).get("repairs"))}
+            return (repaired_ids == expected_ids, "Focused reanalysis coverage does not match flagged claim IDs.")
+
+        try:
+            rebuilt, reanalysis_model = _call_gate_stage(
+                _gate_reanalysis_prompt(packet, reanalysis_items),
+                reanalysis_policy.get("chain"),
+                policy=reanalysis_policy,
+                schema=_BUYING_GATE_REANALYSIS_SCHEMA,
+                schema_name="buying_insight_gate_focused_reanalysis",
+                log_label="Buying Insight Gate Focused Reanalysis",
+                validator=reanalysis_complete,
+            )
+            reanalysis_models.append(reanalysis_model)
+            notes.extend(_list(rebuilt.get("notes")))
+            reanalysis_items = []
+            for raw in _list(rebuilt.get("repairs")):
+                raw = _dict(raw)
+                claim = claim_lookup.get(str(raw.get("claim_id") or ""))
+                if claim:
+                    action = _normalize_repair_action(raw, claim)
+                    if action["action"] in {"replace", "remove"}:
+                        field_actions.append(action)
+                    if action["action"] == "remove":
+                        blocked_claims.append(_clean_generated_text(claim.get("text")))
+        except Exception as exc:
+            notes.append(f"Focused reanalysis unavailable; unsafe wording was removed deterministically: {str(exc)[:180]}")
+
+    resolved_ids = {str(item.get("claim_id")) for item in field_actions}
+    resolved_ids.update(str(item.get("claim_id")) for item in downgrades)
+    flagged_ids = {str(item.get("claim_id")) for item in decisions}
+    unresolved_ids = sorted(flagged_ids - resolved_ids)
+    deterministic_removals = 0
+    for claim_id in unresolved_ids:
+        claim = claim_lookup.get(claim_id)
+        if not claim:
+            continue
+        field_actions.append(_normalize_repair_action(
+            {"action": "remove", "reason": "Unresolved flagged wording removed by final deterministic safety check."},
+            claim,
+        ))
+        blocked_claims.append(_clean_generated_text(claim.get("text")))
+        deterministic_removals += 1
+
+    status = "changes_required" if decisions else "approved"
+    result = _normalize_gate_review({
+        "status": status,
+        "reviewed_claim_ids": list(dict.fromkeys(reviewed_claim_ids)),
+        "claim_decisions": decisions,
+        "required_downgrades": downgrades,
+        "field_actions": field_actions,
+        "blocked_claims": list(dict.fromkeys(item for item in blocked_claims if item)),
+        "unresolved_claim_ids": [],
+        "deterministically_removed_claim_ids": unresolved_ids if deterministic_removals else [],
+        "deterministic_removal_count": deterministic_removals,
+        "notes": notes,
+        "decision_model": decision_model,
+        "repair_models": repair_models,
+        "reanalysis_models": reanalysis_models,
+    }, model=decision_model)
+    print(
+        f"   🔐 [Buying Potential Gate] status={status} decision_model={decision_model} "
+        f"decisions={len(decisions)} actions={len(field_actions)} downgrades={len(downgrades)} "
+        f"deterministic_removals={deterministic_removals} "
+        f"elapsed_ms={int((time.time() - decision_started) * 1000)}",
+        flush=True,
+    )
+    return result
 
 
 def _normalize_gate(value: Any, fallback: str = "allowed_as_hypothesis") -> str:
@@ -3688,6 +4173,7 @@ def _apply_gate_field_actions(report: dict, actions: Any) -> tuple[list[dict], l
         "why_this_service", "need_hypothesis",
         "current_condition", "future_pressure", "market_context", "company_context",
         "combined_activation_hypothesis", "likely_business_consequence", "what_to_propose",
+        "top_buying_hypotheses", "hypothesis",
     }
     applied: list[dict] = []
     rejected: list[dict] = []
@@ -3695,44 +4181,70 @@ def _apply_gate_field_actions(report: dict, actions: Any) -> tuple[list[dict], l
         action = _dict(raw_action)
         path = str(action.get("path") or "").strip()
         operation = str(action.get("action") or "").strip().lower()
-        match = re.match(r"^([a-zA-Z_]+)(?:\[(\d+)\])?\.([a-zA-Z_]+)(?:\.([a-zA-Z_]+))?$", path)
-        if not match or operation not in {"replace", "remove"}:
+        tokens = re.findall(r"([a-zA-Z_]+)|\[(\d+)\]", path)
+        rebuilt_path = "".join(
+            (f".{name}" if offset and name else name) if name else f"[{index}]"
+            for offset, (name, index) in enumerate(tokens)
+        )
+        if not tokens or rebuilt_path != path or operation not in {"replace", "remove"}:
             rejected.append({**action, "rejection_reason": "Invalid or unsupported field action path."})
             continue
-        section, index_text, field, nested_field = match.groups()
-        if section not in allowed_sections or field not in allowed_fields or (nested_field and nested_field not in allowed_fields):
+        section = tokens[0][0]
+        named_tokens = [name for name, _index in tokens[1:] if name]
+        if section not in allowed_sections or any(field not in allowed_fields for field in named_tokens):
             rejected.append({**action, "rejection_reason": "Field is outside the verifier allowlist."})
             continue
-        target: Any = report.get(section)
-        if index_text is not None:
-            index = _safe_int(index_text, -1)
-            if not isinstance(target, list) or not (0 <= index < len(target)):
-                rejected.append({**action, "rejection_reason": "Target list item does not exist."})
-                continue
-            target = target[index]
-        if not isinstance(target, dict):
+        current: Any = report
+        owner: dict | None = None
+        parent: Any = None
+        target_key: Any = None
+        resolution_failed = False
+        for name, index_text in tokens:
+            parent = current
+            target_key = name if name else _safe_int(index_text, -1)
+            if name:
+                if not isinstance(current, dict) or name not in current:
+                    resolution_failed = True
+                    break
+                current = current[name]
+            else:
+                index = _safe_int(index_text, -1)
+                if not isinstance(current, list) or not (0 <= index < len(current)):
+                    resolution_failed = True
+                    break
+                current = current[index]
+                if isinstance(current, dict):
+                    owner = current
+        if resolution_failed or parent is None:
             rejected.append({**action, "rejection_reason": "Target object does not exist."})
             continue
+        if owner is None and isinstance(report.get(section), dict):
+            owner = report.get(section)
         object_id = str(action.get("object_id") or "").strip()
-        target_ids = set(_item_signal_ids(target) + _text_signal_ids(json.dumps(target, ensure_ascii=False)))
-        target_ids.update(str(value) for value in _list(target.get("linked_hypothesis_ids")) if value)
-        if target.get("hypothesis_id"):
-            target_ids.add(str(target.get("hypothesis_id")))
-        if object_id and object_id not in target_ids and object_id not in {section, str(target.get("id") or "")}:
+        owner = _dict(owner)
+        target_ids = set(_item_signal_ids(owner) + _text_signal_ids(json.dumps(owner, ensure_ascii=False)))
+        target_ids.update(str(value) for value in _list(owner.get("linked_hypothesis_ids")) if value)
+        if owner.get("hypothesis_id"):
+            target_ids.add(str(owner.get("hypothesis_id")))
+        claim_id = str(action.get("claim_id") or "").strip()
+        if not claim_id and object_id and object_id not in target_ids and object_id not in {section, str(owner.get("id") or "")}:
             rejected.append({**action, "rejection_reason": "object_id does not match the targeted report object."})
             continue
-        container = target
-        target_field = field
-        if nested_field:
-            container = target.get(field)
-            target_field = nested_field
-            if not isinstance(container, dict):
-                rejected.append({**action, "rejection_reason": "Nested target object does not exist."})
-                continue
-        original_text = _clean_generated_text(container.get(target_field))
+        if isinstance(parent, dict):
+            original_value = parent.get(target_key)
+        elif isinstance(parent, list) and isinstance(target_key, int) and 0 <= target_key < len(parent):
+            original_value = parent[target_key]
+        else:
+            rejected.append({**action, "rejection_reason": "Resolved target is not writable."})
+            continue
+        original_text = _clean_generated_text(original_value)
         replacement = "" if operation == "remove" else _clean_generated_text(action.get("replacement"))
-        container[target_field] = replacement
+        if isinstance(parent, dict):
+            parent[target_key] = replacement
+        else:
+            parent[target_key] = replacement
         applied.append({
+            "claim_id": claim_id,
             "object_id": object_id,
             "path": path,
             "action": operation,
@@ -5891,6 +6403,17 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             gate_review.get("field_actions"),
         )
         propagated_field_actions = _propagate_gate_field_actions(report, applied_field_actions)
+        rejected_claim_ids = {
+            str(item.get("claim_id")) for item in rejected_field_actions
+            if isinstance(item, dict) and item.get("claim_id")
+        }
+        rejected_claim_text = [
+            _clean_generated_text(item.get("unsafe_text"))
+            for item in _list(gate_review.get("claim_decisions"))
+            if isinstance(item, dict)
+            and str(item.get("claim_id")) in rejected_claim_ids
+            and _clean_generated_text(item.get("unsafe_text"))
+        ]
         downgrades = _list(gate_review.get("required_downgrades"))
         for downgrade in downgrades:
             if not isinstance(downgrade, dict):
@@ -5907,7 +6430,7 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
                 index = _safe_int(index_text, -1)
                 if isinstance(items, list) and 0 <= index < len(items) and isinstance(items[index], dict):
                     items[index]["gate"] = new_gate
-        blocked = _list(gate_review.get("blocked_claims"))
+        blocked = _list(gate_review.get("blocked_claims")) + rejected_claim_text
         blocked_claims = [_clip(item, 520) for item in blocked[:12] if _clip(item, 520)]
         removed_public_claims = _remove_blocked_claims_from_public_sections(report, blocked_claims)
         blocked_guardrails, blocked_questions = _safe_guardrail_items(blocked_claims)
@@ -5919,11 +6442,18 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             "status": gate_review.get("status") or ("approved" if gate_review.get("approved") is True else "unavailable"),
             "approved": gate_review.get("approved") is True,
             "model": gate_review.get("model"),
+            "decision_model": gate_review.get("decision_model") or gate_review.get("model"),
+            "repair_models": _list(gate_review.get("repair_models")),
+            "reanalysis_models": _list(gate_review.get("reanalysis_models")),
+            "reviewed_claim_ids": _list(gate_review.get("reviewed_claim_ids"))[:80],
+            "claim_decisions": _list(gate_review.get("claim_decisions"))[:40],
             "required_downgrades": downgrades[:20],
             "applied_field_actions": applied_field_actions[:20],
             "rejected_field_actions": rejected_field_actions[:20],
             "propagated_field_action_count": propagated_field_actions,
             "removed_public_claim_count": removed_public_claims,
+            "deterministic_removal_count": _safe_int(gate_review.get("deterministic_removal_count"), 0),
+            "deterministically_removed_claim_ids": _list(gate_review.get("deterministically_removed_claim_ids"))[:40],
             "blocked_claims": blocked[:20],
             "notes": _list(gate_review.get("notes"))[:10],
         }
@@ -5936,6 +6466,16 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             quality_notes.append(
                 f"Independent semantic Gate Review applied {len(applied_field_actions)} field action(s), "
                 f"propagated {propagated_field_actions} repeated occurrence(s), and applied {len(downgrades)} gate downgrade(s)."
+            )
+        if rejected_field_actions:
+            quality_notes.append(
+                f"{len(rejected_field_actions)} Gate Review action(s) could not target the requested field; "
+                "their flagged wording was removed from reader-facing sections by the final safety check."
+            )
+        if _safe_int(gate_review.get("deterministic_removal_count"), 0):
+            quality_notes.append(
+                f"{_safe_int(gate_review.get('deterministic_removal_count'), 0)} unresolved flagged claim(s) "
+                "were removed deterministically after bounded repair/reanalysis could not complete them."
             )
         clean_do_not, clean_questions = _safe_guardrail_items(_list(evidence_confidence.get("do_not_say")))
         evidence_confidence["do_not_say"] = clean_do_not[:12]
@@ -6812,37 +7352,7 @@ def generate_buying_potential_report(
     if stage_callback:
         stage_callback("gate_review", 70, "Reviewing sales evidence gates")
     try:
-        gate_policy = policy_for("buying_insight_gate")
-        gate_packet = _build_gate_review_packet(report, payload)
-        gate_packet_json = json.dumps(gate_packet, ensure_ascii=False)
-        print(
-            f"   🔐 [Buying Potential Gate] packet_chars={len(gate_packet_json)} "
-            f"approx_tokens={max(1, len(gate_packet_json) // 4)} claims={len(_list(gate_packet.get('claims')))}",
-            flush=True,
-        )
-        gate_started = time.time()
-        gate_raw, gate_model = call_json_model_chain(
-            _gate_prompt(report, payload),
-            buying_gate_chain(model_mode),
-            max_tokens=_safe_int(gate_policy.get("max_output_tokens"), 5000),
-            timeout=_safe_int(gate_policy.get("timeout_seconds"), 90),
-            reasoning_effort=str(gate_policy.get("effort") or "low"),
-            text_verbosity=str(gate_policy.get("verbosity") or "low"),
-            json_schema=_BUYING_GATE_REVIEW_SCHEMA,
-            json_schema_name="buying_insight_gate_review",
-            log_label="Buying Insight Gate Review",
-            validate_json=True,
-            required_fields=("status",),
-        )
-        gate_review = _normalize_gate_review(parse_json_object(gate_raw), model=gate_model)
-        print(
-            f"   🔐 [Buying Potential Gate] status={gate_review.get('status')} model={gate_model} "
-            f"actions={len(_list(gate_review.get('field_actions')))} "
-            f"downgrades={len(_list(gate_review.get('required_downgrades')))} "
-            f"blocked={len(_list(gate_review.get('blocked_claims')))} "
-            f"elapsed_ms={int((time.time() - gate_started) * 1000)}",
-            flush=True,
-        )
+        gate_review = _run_gate_review_workflow(report, payload, model_mode=model_mode)
     except Exception as exc:
         gate_review = _normalize_gate_review(
             {"status": "unavailable"},
