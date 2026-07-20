@@ -537,8 +537,35 @@ def _pitch_contract_issues(pitch_text: str) -> list[str]:
     return issues
 
 
+def _pitch_contract_severity(pitch_text: str) -> dict:
+    """Separate customer-safety failures from recoverable presentation drift."""
+    pitch = str(pitch_text or "").strip()
+    issues = _pitch_contract_issues(pitch)
+    hard = []
+    soft = []
+    word_count = len(re.findall(r"\b[\w][\w'’/-]*\b", pitch, flags=re.UNICODE))
+    paragraphs = [item.strip() for item in re.split(r"\n\s*\n+", pitch) if item.strip()]
+
+    for issue in issues:
+        if issue.startswith(("internal_evidence_language:", "proof_gap_as_absence")):
+            hard.append(issue)
+        elif issue == "missing_pitch" or issue == "incomplete_paragraph":
+            hard.append(issue)
+        elif issue.startswith("word_count:"):
+            # The 90-110 target remains the preferred contract. A modest
+            # deviation is a readability warning, not grounds to discard an
+            # otherwise safe and complete customer-facing Pitch.
+            (soft if 80 <= word_count <= 125 else hard).append(issue)
+        elif issue.startswith("paragraph_count:"):
+            complete = all(re.search(r"[.!?][\]\)\"']?$", item) for item in paragraphs)
+            (soft if 2 <= len(paragraphs) <= 4 and complete else hard).append(issue)
+        else:
+            hard.append(issue)
+    return {"issues": issues, "hard": hard, "soft": soft}
+
+
 def _pitch_contract_complete(pitch_text: str) -> bool:
-    return not _pitch_contract_issues(pitch_text)
+    return not _pitch_contract_severity(pitch_text)["hard"]
 
 
 def _normalize_activation_payload(payload: dict, prior: dict | None = None) -> dict:
@@ -5109,8 +5136,8 @@ def _execute_scan_pipeline(
         # its maximum only after all downstream minimum floors remain protected.
         DIAGNOSIS_CHAIN_BUDGET = 110
         DIAGNOSIS_CHAIN_MAX = 150
-        ACTIVATION_CHAIN_BUDGET = 150
-        ACTIVATION_CHAIN_MAX = 190
+        ACTIVATION_CHAIN_BUDGET = 170
+        ACTIVATION_CHAIN_MAX = 220
         INFERENCE_FACT_CHECK_BUDGET = 60
         INFERENCE_FACT_CHECK_MAX = 80
         GENERAL_SUMMARY_BUDGET = 95
@@ -6562,9 +6589,11 @@ Return only the schema-constrained strategic_synthesis object.
                                  activation_generation_meta["synthesis_parse_status"] = "failed"
                                  print(f"   ❌ [Activation:Synthesis] {activation_fallback_reason}")
 
-                             if not synthesis_only and _activation_chain_remaining() >= 25:
+                             if not synthesis_only and _activation_chain_remaining() >= 75:
                                  try:
-                                     fallback_timeout = min(45, _activation_chain_remaining() - 20)
+                                     # Preserve enough time for activation pairs and a
+                                     # bounded Pitch-only repair after synthesis fallback.
+                                     fallback_timeout = min(45, _activation_chain_remaining() - 75)
                                      fallback_text = call_anthropic_text(
                                          strategic_synthesis_prompt,
                                          model=CLAUDE_SONNET_MODEL,
@@ -6589,7 +6618,11 @@ Return only the schema-constrained strategic_synthesis object.
                                      print(f"   ❌ [Activation:Synthesis] Sonnet fallback failed: {synthesis_fallback_err}")
 
                              chain_remaining = _activation_chain_remaining()
-                             sonnet_activation_timeout = min(50, chain_remaining)
+                             pitch_repair_reserve = 25
+                             sonnet_activation_timeout = min(
+                                 50,
+                                 max(0, chain_remaining - pitch_repair_reserve),
+                             )
                              if sonnet_activation_timeout >= 18:
                                  try:
                                      sonnet_prompt = activation_context + f"""
@@ -6818,7 +6851,8 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                                          (CLAUDE_SONNET_MODEL, "anthropic"),
                                          (GPT_REASONING_MODEL, "openai"),
                                      ):
-                                         if _activation_chain_remaining() < 12:
+                                         minimum_viable = 12 if pitch_provider == "anthropic" else 18
+                                         if _activation_chain_remaining() < minimum_viable:
                                              break
                                          try:
                                              pitch_timeout = min(25, _activation_chain_remaining())
@@ -6826,10 +6860,10 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                                                  pitch_raw = call_anthropic_text(
                                                      pitch_rewrite_prompt,
                                                      model=pitch_model,
-                                                     max_tokens=1800,
+                                                     max_tokens=1600,
                                                      timeout=pitch_timeout,
                                                      max_retries=0,
-                                                     reasoning_effort="medium",
+                                                     reasoning_effort="low",
                                                      json_schema=_PITCH_ONLY_SCHEMA,
                                                      json_schema_name="scanner_pitch_only_recovery",
                                                      log_label="Strategic Pitch Recovery",
@@ -6841,8 +6875,8 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                                                      max_output_tokens=1800,
                                                      timeout=pitch_timeout,
                                                      max_retries=0,
-                                                     reasoning_effort="medium",
-                                                     text_verbosity="medium",
+                                                     reasoning_effort="low",
+                                                     text_verbosity="low",
                                                      json_schema=_PITCH_ONLY_SCHEMA,
                                                      json_schema_name="scanner_pitch_only_recovery",
                                                      log_label="Strategic Pitch Recovery Fallback",
@@ -6851,17 +6885,18 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                                              candidate_pitch = sanitize_inference_wording(
                                                  str(pitch_json.get("commercial_pitch") or "").strip()
                                              )
-                                             candidate_issues = _pitch_contract_issues(candidate_pitch)
-                                             if candidate_issues:
+                                             candidate_severity = _pitch_contract_severity(candidate_pitch)
+                                             if candidate_severity["hard"]:
                                                  raise ValueError(
-                                                     "Pitch-only recovery did not satisfy contract: "
-                                                     + ", ".join(candidate_issues)
+                                                     "Pitch-only recovery retained blocking defects: "
+                                                     + ", ".join(candidate_severity["hard"])
                                                  )
                                              pitch = candidate_pitch
                                              activation_generation_meta["pitch_recovery"] = {
                                                  "status": "recovered",
                                                  "model": pitch_model,
                                                  "initial_issues": pitch_contract_issues,
+                                                 "remaining_soft_issues": candidate_severity["soft"],
                                              }
                                              print(
                                                  f"   ✅ [Activation:Pitch] Contract recovered with {pitch_model} "
@@ -6870,15 +6905,30 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                                              break
                                          except Exception as pitch_rewrite_err:
                                              pitch_rewrite_errors.append(f"{pitch_model}: {pitch_rewrite_err}")
-                                     if _pitch_contract_issues(pitch):
+                                     final_pitch_severity = _pitch_contract_severity(pitch)
+                                     if final_pitch_severity["hard"]:
                                          pitch = "Pitch Unavailable"
                                          activation_generation_meta["pitch_recovery"] = {
                                              "status": "failed",
                                              "initial_issues": pitch_contract_issues,
                                              "errors": pitch_rewrite_errors,
                                          }
+                                     elif final_pitch_severity["soft"]:
+                                         activation_generation_meta["pitch_recovery"] = {
+                                             "status": "retained_with_warning",
+                                             "initial_issues": pitch_contract_issues,
+                                             "remaining_soft_issues": final_pitch_severity["soft"],
+                                             "errors": pitch_rewrite_errors,
+                                         }
+                                         print(
+                                             "   ⚠️ [Activation:Pitch] Retaining customer-safe Pitch with "
+                                             f"soft format warning(s): {', '.join(final_pitch_severity['soft'])}"
+                                         )
 
-                                 activation_generation_meta["pitch_contract_issues_final"] = _pitch_contract_issues(pitch)
+                                 final_pitch_severity = _pitch_contract_severity(pitch)
+                                 activation_generation_meta["pitch_contract_issues_final"] = final_pitch_severity["issues"]
+                                 activation_generation_meta["pitch_contract_hard_issues"] = final_pitch_severity["hard"]
+                                 activation_generation_meta["pitch_contract_warnings"] = final_pitch_severity["soft"]
                                  activation_contract_complete = bool(
                                      strategic_synthesis
                                      and 2 <= len(activation_pairs) <= 3
@@ -6887,7 +6937,9 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                                      and _pitch_contract_complete(pitch)
                                  )
                                  activation_generation_meta["status"] = (
-                                     "completed" if activation_contract_complete
+                                     "completed_with_pitch_warning"
+                                     if activation_contract_complete and final_pitch_severity["soft"]
+                                     else "completed" if activation_contract_complete
                                      else "synthesis_complete_activation_failed" if strategic_synthesis
                                      else "unavailable"
                                  )
@@ -7163,7 +7215,8 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
             full_data["quality_notes"].append(
                 f"AI Diagnosis used the governed fallback provider ({diagnosis_generation_meta.get('provider') or 'unknown'})."
             )
-        if activation_generation_meta.get("status") != "completed":
+        activation_status = activation_generation_meta.get("status")
+        if activation_status not in {"completed", "completed_with_pitch_warning"}:
             if activation_generation_meta.get("status") == "synthesis_complete_activation_failed":
                 if len(full_data.get("activation_pairs") or []) >= 2 and full_data.get("pitch_text") == "Pitch Unavailable":
                     full_data["quality_notes"].append(
@@ -7179,6 +7232,12 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                 )
             if scan_quality == "complete":
                 scan_quality = "partial_synthesis"
+        elif activation_status == "completed_with_pitch_warning":
+            warning_text = ", ".join(activation_generation_meta.get("pitch_contract_warnings") or [])
+            full_data["quality_notes"].append(
+                "The customer-safe Pitch was retained with a soft presentation warning"
+                + (f" ({warning_text})." if warning_text else ".")
+            )
         elif len(full_data.get("activation_pairs") or []) < 2:
             full_data["quality_notes"].append(
                 "Strategic Activation did not satisfy the required two-pair coverage contract."
@@ -7718,8 +7777,6 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
             attach_evidence_graph(full_data)
             _dr_fc_remaining = _dr_stage_remaining()
             if _dr_fc_remaining >= 20:
-                # Keep a full decision-only recheck reserve whenever the first
-                # verifier may cause sentence replacement or removal.
                 dr_fc_budget = min(40, max(20, _dr_fc_remaining - 30))
                 print(f"   🔍 [Detailed Report Fact-Check] Section-level verification ({dr_fc_budget}s protected budget)...")
                 dr_check = ai_fact_check_summary(
@@ -7733,66 +7790,145 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                     claim_graph=full_data.get("claim_graph", []),
                     time_budget_seconds=dr_fc_budget,
                 )
-                corrected_by_model = bool(dr_check.get("corrected_summary"))
-                if corrected_by_model:
-                    dr_text = dr_check["corrected_summary"]
-                deterministic_replacements = 0
-                for issue in dr_check.get("false_claims_detailed") or []:
-                    if not isinstance(issue, dict):
-                        continue
-                    claim = str(issue.get("claim") or "").strip()
-                    correction = str(issue.get("correction") or "").strip()
-                    if not claim or not correction:
-                        continue
-                    repaired = _replace_flagged_claim(dr_text, claim, correction)
-                    if repaired != dr_text:
-                        dr_text = repaired
-                        deterministic_replacements += 1
-                detailed_blocking_claims = list(dr_check.get("false_claims", []) or [])
-                detailed_blocking_claims.extend([
-                    item.get("claim") for item in (dr_check.get("evidence_handoff_failures") or [])
-                    if isinstance(item, dict) and item.get("claim")
-                ])
-                dr_text, deterministic_removals = remove_flagged_report_sentences(
-                    dr_text,
-                    detailed_blocking_claims,
-                )
-                if deterministic_removals:
-                    print(
-                        f"   🧹 [Detailed Report Fact-Check] Removed {deterministic_removals} "
-                        "flagged sentence(s) deterministically."
-                    )
-                remaining_blocked_claims = flagged_report_claims_remaining(
-                    dr_text,
-                    detailed_blocking_claims,
-                )
-                if detailed_blocking_claims and not corrected_by_model and not deterministic_removals:
-                    remaining_blocked_claims.append("Verifier corrections could not be applied to the final prose.")
-                full_data["detailed_report_verification"] = {
-                    "verified": dr_check.get("verified", False),
-                    "verification_status": dr_check.get("verification_status", "unavailable"),
-                    "fact_check_skipped": dr_check.get("fact_check_skipped", False),
-                    "false_claims": dr_check.get("false_claims", []),
-                    "evidence_handoff_failures": dr_check.get("evidence_handoff_failures", []),
-                    "model": dr_check.get("fact_check_model", ""),
-                    "model_correction_applied": corrected_by_model,
-                    "deterministic_replacements": deterministic_replacements,
-                    "deterministic_removals": deterministic_removals,
-                    "blocking_claim_count": len(detailed_blocking_claims),
-                    "unresolved_blocking_claims": list(dict.fromkeys(remaining_blocked_claims)),
-                    "initial_verification_status": dr_check.get("verification_status", "unavailable"),
-                }
+                initial_dr_check = dr_check
+                verification_history = []
+                total_model_corrections = 0
+                total_replacements = 0
+                total_removals = 0
+                final_check = dr_check
+                final_verified = False
+                final_unresolved = []
+                final_recheck_status = "not_required"
 
-                report_changed_after_check = bool(
-                    corrected_by_model or deterministic_replacements or deterministic_removals
-                )
-                if report_changed_after_check and _dr_stage_remaining() >= 20:
+                def _claim_text(item) -> str:
+                    return str(item.get("claim") or "").strip() if isinstance(item, dict) else str(item or "").strip()
+
+                def _dedupe_claims(items) -> list:
+                    selected = []
+                    seen = set()
+                    for item in items or []:
+                        claim = re.sub(r"\s+", " ", _claim_text(item)).strip()
+                        key = claim.lower().rstrip(".?!")
+                        if not claim or key in seen:
+                            continue
+                        seen.add(key)
+                        selected.append(item)
+                    return selected
+
+                # A recheck may expose a second independent claim. Give that
+                # claim the same bounded replacement/removal treatment instead
+                # of withholding the otherwise complete report immediately.
+                for repair_cycle in range(1, 4):
+                    check_skipped = bool(final_check.get("fact_check_skipped"))
+                    detailed_issues = _dedupe_claims(final_check.get("false_claims_detailed") or [])
+                    blocking_items = _dedupe_claims(
+                        list(final_check.get("false_claims") or [])
+                        + list(final_check.get("evidence_handoff_failures") or [])
+                    )
+                    cycle_changed = False
+                    cycle_model_correction = False
+                    cycle_replacements = 0
+                    cycle_removals = 0
+
+                    corrected_summary = str(final_check.get("corrected_summary") or "").strip()
+                    if corrected_summary and corrected_summary != dr_text:
+                        dr_text = corrected_summary
+                        cycle_changed = True
+                        cycle_model_correction = True
+
+                    # Preserve supported clauses whenever the verifier supplied
+                    # narrower wording. Sentence removal is only the fallback.
+                    for issue in detailed_issues:
+                        if not isinstance(issue, dict):
+                            continue
+                        claim = _claim_text(issue)
+                        correction = str(issue.get("correction") or "").strip()
+                        if not claim or not correction:
+                            continue
+                        repaired = _replace_flagged_claim(dr_text, claim, correction)
+                        if repaired != dr_text:
+                            dr_text = repaired
+                            cycle_replacements += 1
+                            cycle_changed = True
+
+                    remaining_before_removal = flagged_report_claims_remaining(dr_text, blocking_items)
+                    if remaining_before_removal:
+                        dr_text, cycle_removals = remove_flagged_report_sentences(
+                            dr_text,
+                            remaining_before_removal,
+                        )
+                        cycle_changed = cycle_changed or bool(cycle_removals)
+                    remaining_after_actions = flagged_report_claims_remaining(dr_text, blocking_items)
+
+                    total_model_corrections += int(cycle_model_correction)
+                    total_replacements += cycle_replacements
+                    total_removals += cycle_removals
+                    verification_history.append({
+                        "cycle": repair_cycle,
+                        "model": final_check.get("fact_check_model", ""),
+                        "status": final_check.get("verification_status", "unavailable"),
+                        "blocking_claim_count": len(blocking_items),
+                        "model_correction_applied": cycle_model_correction,
+                        "deterministic_replacements": cycle_replacements,
+                        "deterministic_removals": cycle_removals,
+                        "remaining_after_actions": remaining_after_actions,
+                    })
+
+                    clean_decision = bool(
+                        final_check.get("verified")
+                        and not check_skipped
+                        and not blocking_items
+                    )
+                    if clean_decision and not cycle_changed:
+                        final_verified = True
+                        final_unresolved = []
+                        final_recheck_status = final_check.get("verification_status", "verified")
+                        break
+
+                    if check_skipped:
+                        final_unresolved = remaining_after_actions
+                        final_recheck_status = "unavailable"
+                        break
+                    if blocking_items and not cycle_changed:
+                        final_unresolved = remaining_after_actions or [
+                            "Verifier corrections could not be applied to the final prose."
+                        ]
+                        final_recheck_status = "unresolved_blocking_claims"
+                        break
+
+                    # Removal can push a report below its completeness floor.
+                    # A focused completion is allowed, but must be verified in
+                    # the next cycle because it introduces new prose.
+                    cycle_quality = detailed_report_quality(dr_text, compact=dr_compact)
+                    if not cycle_quality.get("complete") and _dr_stage_remaining() >= 45:
+                        try:
+                            completion_budget = min(25, _dr_stage_remaining() - 20)
+                            completed_text, completion_model, completion_quality = complete_detailed_report_draft(
+                                full_data,
+                                companyName,
+                                foresight_data,
+                                dr_text,
+                                prior_summaries=prior_summaries if prior_summaries else None,
+                                compact=dr_compact,
+                                time_budget_seconds=completion_budget,
+                            )
+                            if completed_text and completion_quality.get("complete"):
+                                dr_text = completed_text
+                                dr_model = f"{dr_model}+{completion_model}" if dr_model else completion_model
+                        except Exception as completion_err:
+                            print(f"   ⚠️ [Detailed Report] Post-removal completion failed: {completion_err}")
+
+                    if _dr_stage_remaining() < 20:
+                        final_unresolved = remaining_after_actions
+                        final_recheck_status = "skipped_budget"
+                        break
+
                     recheck_budget = min(30, _dr_stage_remaining())
                     print(
-                        f"   🔁 [Detailed Report Fact-Check] Rechecking final repaired text "
-                        f"({recheck_budget}s)..."
+                        f"   🔁 [Detailed Report Fact-Check] Repair cycle {repair_cycle}: "
+                        f"decision-only recheck ({recheck_budget}s)..."
                     )
-                    recheck = ai_fact_check_summary(
+                    final_check = ai_fact_check_summary(
                         summary_text=dr_text,
                         evidence_links=managed_evidence_links,
                         company_name=companyName,
@@ -7804,38 +7940,45 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                         time_budget_seconds=recheck_budget,
                         verification_only=True,
                     )
-                    recheck_verified = bool(
-                        recheck.get("verified")
-                        and not recheck.get("fact_check_skipped")
-                        and not recheck.get("false_claims")
-                        and not recheck.get("evidence_handoff_failures")
+                    final_recheck_status = final_check.get("verification_status", "unavailable")
+                    if (
+                        final_check.get("verified")
+                        and not final_check.get("fact_check_skipped")
+                        and not final_check.get("false_claims")
+                        and not final_check.get("evidence_handoff_failures")
+                    ):
+                        final_verified = True
+                        final_unresolved = []
+                        break
+                    final_unresolved = _dedupe_claims(
+                        list(final_check.get("false_claims") or [])
+                        + list(final_check.get("evidence_handoff_failures") or [])
                     )
-                    recheck_claims = [
-                        str(item.get("claim") or item)
-                        if isinstance(item, dict) else str(item)
-                        for item in (recheck.get("false_claims") or [])
-                        if item
-                    ]
-                    full_data["detailed_report_verification"].update({
-                        "verified": recheck_verified,
-                        "verification_status": (
-                            "verified_after_removals" if recheck_verified else recheck.get("verification_status", "unavailable")
-                        ),
-                        "final_recheck_model": recheck.get("fact_check_model", ""),
-                        "final_recheck_status": recheck.get("verification_status", "unavailable"),
-                        "final_recheck_false_claims": recheck.get("false_claims", []),
-                        "unresolved_blocking_claims": (
-                            [] if recheck_verified else list(dict.fromkeys(
-                                remaining_blocked_claims + recheck_claims
-                            ))
-                        ),
-                    })
-                elif report_changed_after_check:
-                    full_data["detailed_report_verification"].update({
-                        "verified": False,
-                        "verification_status": "unavailable_final_recheck",
-                        "final_recheck_status": "skipped_budget",
-                    })
+
+                full_data["detailed_report_verification"] = {
+                    "verified": final_verified,
+                    "verification_status": (
+                        "verified_after_removals"
+                        if final_verified and (total_removals or total_replacements or total_model_corrections)
+                        else final_recheck_status
+                    ),
+                    "fact_check_skipped": bool(final_check.get("fact_check_skipped")),
+                    "false_claims": initial_dr_check.get("false_claims", []),
+                    "evidence_handoff_failures": initial_dr_check.get("evidence_handoff_failures", []),
+                    "model": initial_dr_check.get("fact_check_model", ""),
+                    "final_recheck_model": final_check.get("fact_check_model", ""),
+                    "final_recheck_status": final_recheck_status,
+                    "final_recheck_false_claims": final_check.get("false_claims", []),
+                    "model_correction_applied": bool(total_model_corrections),
+                    "deterministic_replacements": total_replacements,
+                    "deterministic_removals": total_removals,
+                    "blocking_claim_count": len(initial_dr_check.get("false_claims", []) or []),
+                    "unresolved_blocking_claims": [
+                        _claim_text(item) for item in _dedupe_claims(final_unresolved) if _claim_text(item)
+                    ],
+                    "initial_verification_status": initial_dr_check.get("verification_status", "unavailable"),
+                    "repair_cycles": verification_history,
+                }
             else:
                 full_data["detailed_report_verification"] = {
                     "verified": False,
@@ -7844,14 +7987,11 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                     "reason": "insufficient_budget",
                 }
 
-            # Only deterministic removal may occur after verification. If that
-            # makes the report incomplete, withhold it rather than regenerating.
+            # Bounded replacements/removals are followed by decision-only
+            # rechecks. Publish only a complete, finally approved report.
             dr_quality = detailed_report_quality(dr_text, compact=dr_compact)
             dr_verification = full_data.get("detailed_report_verification") or {}
-            verification_unavailable = bool(
-                dr_verification.get("fact_check_skipped")
-                or not dr_verification.get("verified")
-            )
+            verification_unavailable = bool(dr_verification.get("fact_check_skipped"))
             unresolved_blocking = bool(dr_verification.get("unresolved_blocking_claims"))
             if not dr_quality.get("complete"):
                 full_data.pop("detailed_report", None)
@@ -7860,12 +8000,16 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                 full_data["detailed_report_skip_reason"] = "detailed_report_incomplete_after_verified_removals"
                 full_data["detailed_report_quality"] = dr_quality
                 dr_text = ""
-            elif verification_unavailable or unresolved_blocking:
+            elif verification_unavailable or unresolved_blocking or not dr_verification.get("verified"):
                 full_data.pop("detailed_report", None)
                 full_data["detailed_report_model"] = dr_model
                 full_data["detailed_report_status"] = "withheld_unverified"
                 full_data["detailed_report_skip_reason"] = (
-                    "verification_unavailable" if verification_unavailable else "unresolved_blocking_claims"
+                    "verification_unavailable"
+                    if verification_unavailable
+                    else "unresolved_blocking_claims"
+                    if unresolved_blocking
+                    else "verification_not_approved"
                 )
                 full_data["detailed_report_quality"] = dr_quality
                 dr_text = ""
@@ -7884,7 +8028,11 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                 full_data["detailed_report_model"] = dr_model
                 full_data["detailed_report_status"] = (
                     "verified_after_removals"
-                    if dr_verification.get("deterministic_removals")
+                    if (
+                        dr_verification.get("deterministic_removals")
+                        or dr_verification.get("deterministic_replacements")
+                        or dr_verification.get("model_correction_applied")
+                    )
                     else "generated_verified"
                 )
                 full_data["detailed_report_quality"] = dr_quality
@@ -7907,9 +8055,25 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
         if full_data.get("detailed_report_status") in {
             "incomplete", "withheld_unverified", "failed", "skipped", "empty"
         }:
-            full_data.setdefault("quality_notes", []).append(
-                "Detailed Report was not published because its completeness or verification contract was not satisfied."
-            )
+            detailed_reason = full_data.get("detailed_report_skip_reason") or "unavailable"
+            detailed_note = {
+                "detailed_report_incomplete_after_repair": (
+                    "Detailed Report was not published because it remained structurally incomplete after bounded repair."
+                ),
+                "detailed_report_incomplete_after_verified_removals": (
+                    "Detailed Report was not published because required content fell below the completeness floor after unsafe wording was removed."
+                ),
+                "verification_unavailable": (
+                    "Detailed Report was generated, but its final verifier was unavailable; the report was withheld."
+                ),
+                "unresolved_blocking_claims": (
+                    "Detailed Report was withheld because material claims remained unresolved after bounded correction cycles."
+                ),
+                "verification_not_approved": (
+                    "Detailed Report was withheld because the completed verifier did not approve the final text."
+                ),
+            }.get(detailed_reason, f"Detailed Report was not published ({detailed_reason}).")
+            full_data.setdefault("quality_notes", []).append(detailed_note)
 
         _record_final_stage(
             "detailed_report",

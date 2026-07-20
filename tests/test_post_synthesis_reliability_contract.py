@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 
@@ -22,6 +23,23 @@ def _activation_schemas() -> dict:
         if not names.intersection(wanted):
             continue
         exec(compile(ast.Module(body=[node], type_ignores=[]), str(MAIN), "exec"), {}, namespace)
+    return namespace
+
+
+def _pitch_contract_functions() -> dict:
+    tree = ast.parse(MAIN.read_text(encoding="utf-8"))
+    wanted_functions = {"_pitch_contract_issues", "_pitch_contract_severity"}
+    wanted_assignments = {"_PITCH_INTERNAL_LANGUAGE"}
+    namespace = {"re": re}
+    nodes = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            names = {target.id for target in node.targets if isinstance(target, ast.Name)}
+            if names.intersection(wanted_assignments):
+                nodes.append(node)
+        elif isinstance(node, ast.FunctionDef) and node.name in wanted_functions:
+            nodes.append(node)
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(MAIN), "exec"), namespace, namespace)
     return namespace
 
 
@@ -73,11 +91,46 @@ def test_pitch_has_post_parse_contract_and_pitch_only_recovery():
     source = MAIN.read_text(encoding="utf-8")
 
     assert "def _pitch_contract_issues" in source
+    assert "def _pitch_contract_severity" in source
     assert "if not 90 <= word_count <= 110" in source
     assert 'if len(paragraphs) != 3' in source
     assert "scanner_pitch_only_recovery" in source
     assert "Do not regenerate, alter," in source
-    assert "and _pitch_contract_complete(pitch)" in source
+    assert '"completed_with_pitch_warning"' in source
+    assert '"retained_with_warning"' in source
+    assert 'reasoning_effort="low"' in source
+
+
+def test_safe_113_word_pitch_is_soft_warning_not_blocking():
+    namespace = _pitch_contract_functions()
+    paragraph_a = " ".join(["value"] * 38) + "."
+    paragraph_b = " ".join(["progress"] * 38) + "."
+    paragraph_c = " ".join(["outcome"] * 37) + "."
+    pitch = "\n\n".join([paragraph_a, paragraph_b, paragraph_c])
+
+    severity = namespace["_pitch_contract_severity"](pitch)
+
+    assert severity["hard"] == []
+    assert severity["soft"] == ["word_count:113"]
+
+
+def test_internal_pitch_language_remains_blocking():
+    namespace = _pitch_contract_functions()
+    pitch = "The Scanner found a proof gap.\n\nCustomer value remains possible.\n\nValidate the outcome carefully."
+
+    severity = namespace["_pitch_contract_severity"](pitch)
+
+    assert any(issue.startswith("internal_evidence_language:") for issue in severity["hard"])
+
+
+def test_detailed_report_has_bounded_multi_cycle_recovery_and_specific_statuses():
+    source = MAIN.read_text(encoding="utf-8")
+
+    assert "for repair_cycle in range(1, 4)" in source
+    assert source.index("correction = str(issue.get") < source.index("remaining_before_removal =")
+    assert '"unresolved_blocking_claims"' in source
+    assert '"verification_not_approved"' in source
+    assert '"repair_cycles": verification_history' in source
 
 
 def test_pitch_scoped_audit_findings_are_customer_safe_blocking_actions():

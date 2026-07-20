@@ -1187,6 +1187,7 @@ INSTRUCTIONS:
 12. Financial evidence may support only financial condition, capacity and investment claims. It cannot substitute for missing operational, architectural, strategic, AI/data, service-delivery or cultural evidence.
 13. Use "Prohibited Scanner Observation" for scanner-process or cross-scan performance statements. Use Fabrication/Contradiction/Misattribution/Organizational Fabrication for external company facts. For macro context or strategic inference, identify the missing or contradicted premise rather than saying only that the conclusion is absent from the payload.
 14. The evidence manifest above is the exact source bibliography supplied to generation. ABS-* identifiers belong to the separate Scanner Premise Manifest and must never be treated as missing source evidence. If a non-ABS source ID is absent, classify it as Evidence Handoff Failure. If an ABS reference cannot be resolved, classify only the reference as Premise Reference Mismatch and continue judging the claim from its available premises.
+15. Return each materially unsupported claim once. If a sentence combines supported and unsupported clauses, isolate the unsupported span and provide a correction that preserves the supported clause. Do not invalidate an entire sentence merely because one separable clause is unsupported.
 
 OUTPUT FORMAT — valid JSON only:
 If accurate: {{"false_claims": [], "summary_accurate": true}}
@@ -1298,7 +1299,17 @@ If false claims found: {{"false_claims": [{{"section": "section heading", "claim
                         claim_text, summary_text, pitch_text, analysis_sections
                     ),
                 })
-        return parsed
+        deduped = {}
+        order = []
+        for item in parsed:
+            normalized_claim = re.sub(r"\s+", " ", str(item.get("claim") or "")).strip().lower().rstrip(".?!")
+            key = (str(item.get("section") or "").strip().lower(), normalized_claim)
+            if key not in deduped:
+                order.append(key)
+                deduped[key] = item
+            elif not str(deduped[key].get("correction") or "").strip() and str(item.get("correction") or "").strip():
+                deduped[key] = item
+        return [deduped[key] for key in order]
 
     stage1_chain = (GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL)
     for model_name in stage1_chain:

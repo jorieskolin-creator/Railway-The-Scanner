@@ -72,3 +72,34 @@ Further validation is required."""
     assert "A supported fact remains." in cleaned
     assert "## Verdict" in cleaned
     assert detailed_report.flagged_report_claims_remaining(cleaned, claims) == []
+
+
+def test_supported_sentence_survives_when_only_flagged_sentence_is_removed():
+    text = """## Key Findings
+
+Supported company context remains. Unsupported market certainty is stated here.
+
+## Operating Model
+
+Supported operating text.
+
+## Strategy
+
+Supported strategy text.
+
+## AI Readiness
+
+Supported readiness text.
+
+## Verdict
+
+Validation remains necessary."""
+
+    cleaned, removed = detailed_report.remove_flagged_report_sentences(
+        text,
+        [{"claim": "Unsupported market certainty is stated here."}],
+    )
+
+    assert removed == 1
+    assert "Supported company context remains." in cleaned
+    assert "Unsupported market certainty" not in cleaned

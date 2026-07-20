@@ -681,6 +681,8 @@ Rules:
 - Do flag invented events, invented people, invented figures, wrong entity claims, unqualified local-entity claims, and future claims presented as facts.
 - People lists belong in the Stakeholder List section, not the General Summary. Flag named stakeholder inventories unless they document a material leadership, ownership, acquisition, carve-out, or governance event in the payload.
 - If the summary says something broader than the payload supports, flag it and explain the scope problem.
+- Return one item per distinct unsupported factual span. Do not repeat the same claim in different wording.
+- When a sentence combines supported and unsupported clauses, quote only the unsupported span when possible. The replacement must preserve any supported clause and narrow or remove only the unsupported part.
 
 PAYLOAD:
 {json.dumps(payload, ensure_ascii=False, indent=2)}
@@ -767,6 +769,43 @@ def _gs_claim_id(claim: str) -> str:
     return "GS-" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12].upper()
 
 
+def _polish_general_summary_text(value: str) -> str:
+    """Repair punctuation seams introduced by narrow claim replacement/removal."""
+    text = str(value or "")
+    text = re.sub(r"\.\s*,", ",", text)
+    text = re.sub(r",\s*\.", ".", text)
+    text = re.sub(r"([.!?])\s*\1+", r"\1", text)
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    text = re.sub(r"([,;:])\s*([,;:])", r"\1", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"\n[ \t]+", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = text.strip()
+    if text and re.search(r"[A-Za-z0-9ÅÄÖåäö)]$", text):
+        text += "."
+    return text
+
+
+def _dedupe_general_summary_claims(claims: list[dict]) -> list[dict]:
+    """Keep one stable verifier action per unsupported span."""
+    selected = {}
+    order = []
+    for raw in claims or []:
+        if not isinstance(raw, dict):
+            continue
+        item = dict(raw)
+        claim = re.sub(r"\s+", " ", str(item.get("claim") or "")).strip()
+        if not claim:
+            continue
+        key = claim.lower().rstrip(".?!")
+        if key not in selected:
+            order.append(key)
+            selected[key] = item
+        elif not str(selected[key].get("replacement") or "").strip() and str(item.get("replacement") or "").strip():
+            selected[key] = item
+    return [selected[key] for key in order]
+
+
 def _apply_general_summary_replacements(summary_text: str, replacements: list[dict]) -> tuple[str, list[str]]:
     corrected = summary_text
     applied = []
@@ -779,11 +818,7 @@ def _apply_general_summary_replacements(summary_text: str, replacements: list[di
         corrected, count = re.subn(pattern, replacement, corrected, flags=re.IGNORECASE)
         if count:
             applied.append(str(item.get("claim_id") or _gs_claim_id(original)))
-    corrected = re.sub(r"\s+([,.;:!?])", r"\1", corrected)
-    corrected = re.sub(r"[ \t]{2,}", " ", corrected)
-    corrected = re.sub(r"\n[ \t]+", "\n", corrected)
-    corrected = re.sub(r"\n{3,}", "\n\n", corrected)
-    return corrected.strip(), list(dict.fromkeys(applied))
+    return _polish_general_summary_text(corrected), list(dict.fromkeys(applied))
 
 
 def _remove_general_summary_sentence(summary_text: str, claim: str) -> tuple[str, bool]:
@@ -807,7 +842,7 @@ def _remove_general_summary_sentence(summary_text: str, claim: str) -> tuple[str
         paragraphs[index] = " ".join(kept)
     cleaned = "".join(paragraphs)
     cleaned = re.sub(r"\n\s*\n(?:\s*\n)+", "\n\n", cleaned)
-    return cleaned.strip(), removed
+    return _polish_general_summary_text(cleaned), removed
 
 
 def _resolve_general_summary_recheck(summary_text: str, claims: list[dict]) -> tuple[str, list[str], list[str], list[dict]]:
@@ -870,7 +905,7 @@ def _resolve_general_summary_recheck(summary_text: str, claims: list[dict]) -> t
                 "replacement": "",
             })
     return (
-        resolved.strip(),
+        _polish_general_summary_text(resolved),
         list(dict.fromkeys(resolved_ids)),
         list(dict.fromkeys(removed_ids)),
         unresolved,
@@ -931,7 +966,9 @@ def fact_check_general_summary(summary_text: str, full_data: dict, company_name:
                 parsed = _extract_json(raw)
                 if not isinstance(parsed, dict):
                     raise ValueError("No schema-valid fact-check object")
-                claims = [item for item in (parsed.get("unsupported_claims") or []) if isinstance(item, dict)]
+                claims = _dedupe_general_summary_claims([
+                    item for item in (parsed.get("unsupported_claims") or []) if isinstance(item, dict)
+                ])
                 return claims, model_id
             except Exception as exc:
                 print(f"   ⚠️ [GS Fact-Check] {model_id} failed: {exc}")
@@ -950,6 +987,7 @@ def fact_check_general_summary(summary_text: str, full_data: dict, company_name:
             "claim": phrase,
             "reason": "General Summary must describe the company, not Scanner process state.",
         })
+    false_claims = _dedupe_general_summary_claims(false_claims)
     for item in false_claims:
         item["claim_id"] = _gs_claim_id(item.get("claim") or "")
 
@@ -964,7 +1002,7 @@ def fact_check_general_summary(summary_text: str, full_data: dict, company_name:
     corrected_model = ""
     repaired_claim_ids = []
     repair_prompt = f"""You are making narrow factual corrections to a General Summary.
-Use only the supplied payload. Return one replacement for every claim ID. A replacement may be empty when the unsupported sentence must be removed. Do not add analysis, recommendations, causes, or new facts.
+Use only the supplied payload. Return one replacement for every claim ID. A replacement may be empty when the unsupported sentence must be removed. When only one clause is unsupported, preserve the supported clause and replace only the quoted unsupported span. Do not add analysis, recommendations, causes, or new facts.
 
 PAYLOAD:
 {json.dumps(payload, ensure_ascii=False)}
@@ -1039,7 +1077,7 @@ UNSUPPORTED CLAIMS:
                 reasoning_effort="medium", text_verbosity="medium", log_label="GS Focused Reanalysis",
             ))
             if regenerated:
-                corrected_summary = regenerated
+                corrected_summary = _polish_general_summary_text(regenerated)
                 corrected_model = GPT_REASONING_MODEL
                 recheck, _ = detect(corrected_summary) if remaining() >= 7 else (unresolved_claims, "")
                 if recheck is not None:
@@ -1059,6 +1097,7 @@ UNSUPPORTED CLAIMS:
         except Exception as exc:
             print(f"   ⚠️ [GS Focused Reanalysis] Failed: {exc}")
 
+    corrected_summary = _polish_general_summary_text(corrected_summary) if corrected_summary else ""
     elapsed = int((time.time() - t0) * 1000)
     return {
         "verified": final_status in {"verified_after_repair", "verified_after_final_resolution"},
