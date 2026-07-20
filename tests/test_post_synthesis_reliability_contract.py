@@ -100,7 +100,8 @@ def test_detailed_report_requires_final_recheck_after_repair():
 
     assert "Detailed Forensic Report (final repaired text)" in source
     assert "verification_only=True" in source
-    assert '"verified_after_removals"' in source
+    assert '"verified_after_targeted_rewrite"' in source
+    assert '"verified_condensed_after_removals"' in source
     assert '"generated_with_removals"' not in source
 
 
@@ -148,13 +149,16 @@ def test_internal_pitch_language_remains_blocking():
     assert any(issue.startswith("internal_evidence_language:") for issue in severity["hard"])
 
 
-def test_detailed_report_has_bounded_multi_cycle_recovery_and_specific_statuses():
+def test_detailed_report_has_damage_aware_single_recovery_and_specific_statuses():
     source = MAIN.read_text(encoding="utf-8")
 
-    assert "for repair_cycle in range(1, 4)" in source
-    assert source.index("correction = str(issue.get") < source.index("remaining_before_removal =")
-    assert '"unresolved_blocking_claims"' in source
-    assert '"verification_not_approved"' in source
+    assert "for repair_cycle in range(1, 4)" not in source
+    assert "_extend_dr_recovery_deadline(90)" in source
+    assert "repair_detailed_report_sections(" in source
+    assert "regenerate_detailed_report_after_claim_actions(" in source
+    assert '"withheld_material_claims"' in source
+    assert '"internal_draft_verification_pending"' in source
+    assert '"regenerated_verified"' in source
     assert '"repair_cycles": verification_history' in source
 
 

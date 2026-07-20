@@ -1035,10 +1035,13 @@ const isForesightContext = (link) => {
         var buyingInsightStakeholdersHTML = renderBuyingInsightStakeholders(buyingInsightReport);
         var rawDataHTML = '<details><summary>Open complete raw JSON payload</summary><pre>' + escapeHTML(JSON.stringify(exportData, null, 2)) + '</pre></details>';
         var detailedReportStatus = exportData.detailed_report_status || '';
+        var detailedReportBoundaryHTML = detailedReportStatus === 'internal_draft_verification_pending'
+            ? '<div class="callout amber"><h3>Internal draft</h3><p>This report is retained for internal analysis, but final semantic verification is pending. Do not use its claims externally until verification completes.</p></div>'
+            : '';
         var detailedReportHTML = exportData.detailed_report && detailedReportStatus !== 'incomplete'
-            ? renderReportBlocks(exportData.detailed_report)
+            ? detailedReportBoundaryHTML + renderReportBlocks(exportData.detailed_report)
             : (detailedReportStatus && detailedReportStatus !== 'generated'
-                ? '<div class="callout amber"><h3>Detailed Report unavailable</h3><p>The detailed forensic report was not rendered because generation was incomplete or did not pass the completeness gate. Open Scanner to rerun or inspect the source evidence.</p><p><strong>Status:</strong> ' + escapeHTML(detailedReportStatus) + '</p></div>'
+                ? '<div class="callout amber"><h3>Detailed Report unavailable</h3><p>The report remained structurally incomplete or retained unresolved material claims after bounded recovery. Open Scanner to inspect its quality metadata and source evidence.</p><p><strong>Status:</strong> ' + escapeHTML(detailedReportStatus) + '</p></div>'
                 : '');
         var htmlContent = '<!DOCTYPE html>\n<html lang="en">\n<head>\n'
             + '<meta charset="UTF-8">\n'
@@ -1395,10 +1398,13 @@ const isForesightContext = (link) => {
         };
         const buyingInsightStakeholdersHTML = renderBuyingInsightStakeholders(exportData.buying_insight_report);
         const detailedReportStatus = exportData.detailed_report_status || '';
+        const detailedReportBoundaryHTML = detailedReportStatus === 'internal_draft_verification_pending'
+            ? '<div class="callout amber"><h3>Internal draft</h3><p>This report is retained for internal analysis, but final semantic verification is pending. Do not use its claims externally until verification completes.</p></div>'
+            : '';
         const detailedReportHTML = exportData.detailed_report && detailedReportStatus !== 'incomplete'
-            ? renderReportBlocks(exportData.detailed_report)
+            ? detailedReportBoundaryHTML + renderReportBlocks(exportData.detailed_report)
             : (detailedReportStatus && detailedReportStatus !== 'generated'
-                ? '<div class="callout amber"><h3>Detailed Report unavailable</h3><p>The detailed forensic report was not rendered because generation was incomplete or did not pass the completeness gate. Open Scanner to rerun or inspect the source evidence.</p><p><strong>Status:</strong> ' + escapeHTML(detailedReportStatus) + '</p></div>'
+                ? '<div class="callout amber"><h3>Detailed Report unavailable</h3><p>The report remained structurally incomplete or retained unresolved material claims after bounded recovery. Open Scanner to inspect its quality metadata and source evidence.</p><p><strong>Status:</strong> ' + escapeHTML(detailedReportStatus) + '</p></div>'
                 : '');
 
         const htmlContent = '<!DOCTYPE html>\n<html lang="en">\n<head>\n'
@@ -2665,6 +2671,13 @@ const isForesightContext = (link) => {
                         Deep diagnostic with current evidence and reasoning trace
                     </p>
                     {showDetailedReport ? <div>
+                        {detailedReportStatus === 'internal_draft_verification_pending' && (
+                            <div className="bg-amber-500/10 border border-amber-400/20 rounded-lg p-4 mb-5">
+                                <p className="text-amber-100 text-sm leading-relaxed">
+                                    Internal draft: final semantic verification is pending. Use for internal analysis only.
+                                </p>
+                            </div>
+                        )}
                         {data.detailed_report.split(/\n\n+/).map((block, pi) => {
                             const headingMatch = block.match(/^##\s+(.+)/);
                             if (headingMatch) {
@@ -2683,7 +2696,7 @@ const isForesightContext = (link) => {
                     </div> : (
                         <div className="bg-amber-500/10 border border-amber-400/20 rounded-lg p-4">
                             <p className="text-amber-100 text-sm leading-relaxed">
-                                Detailed Report unavailable: generation was incomplete or did not pass the completeness gate.
+                                Detailed Report unavailable: the report remained structurally incomplete or retained unresolved material claims after bounded recovery.
                                 Status: {detailedReportStatus || 'unavailable'}.
                             </p>
                         </div>

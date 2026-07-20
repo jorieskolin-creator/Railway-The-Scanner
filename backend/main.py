@@ -7748,6 +7748,30 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
         def _dr_stage_remaining() -> int:
             return max(0, int(_dr_deadline - time.time()))
 
+        def _extend_dr_recovery_deadline(max_recovery_seconds: int = 90) -> int:
+            """Borrow unused global time only when governed report recovery is triggered."""
+            nonlocal _dr_deadline
+            globally_available = max(
+                0,
+                int(_scan_remaining()) - FINAL_SAVE_MIN_FLOOR - OPERATIONAL_OVERHEAD_RESERVE,
+            )
+            recovery_seconds = min(max(0, int(max_recovery_seconds)), globally_available)
+            if recovery_seconds <= 0:
+                return 0
+            prior_deadline = _dr_deadline
+            extension_baseline = max(prior_deadline, time.time())
+            _dr_deadline = max(_dr_deadline, time.time() + recovery_seconds)
+            added_seconds = max(0, int(_dr_deadline - extension_baseline))
+            timing = final_stage_timing.setdefault("detailed_report", {})
+            timing["conditional_recovery_seconds"] = int(
+                timing.get("conditional_recovery_seconds") or 0
+            ) + added_seconds
+            print(
+                f"   ⏱️ [Detailed Report Recovery] granted={recovery_seconds}s | "
+                f"deadline_extension={added_seconds}s | global_remaining={int(_scan_remaining())}s"
+            )
+            return recovery_seconds
+
         full_data["detailed_report_status"] = "pending"
         if _dr_remaining < DETAIL_REPORT_COMPACT_MIN:
             full_data["detailed_report_status"] = "skipped"
@@ -7763,8 +7787,12 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                 from detailed_report import (
                     complete_detailed_report_draft,
                     detailed_report_quality,
+                    detailed_report_repair_impact,
                     flagged_report_claims_remaining,
                     generate_detailed_report,
+                    polish_detailed_report_text,
+                    regenerate_detailed_report_after_claim_actions,
+                    repair_detailed_report_sections,
                     remove_flagged_report_sentences,
                 )
                 dr_start = time.time()
@@ -7844,13 +7872,25 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                     except Exception as repair_err:
                         print(f"   ⚠️ [Detailed Report] Completeness repair failed: {repair_err}")
                 if not dr_quality.get("complete"):
-                    full_data["detailed_report_model"] = dr_model
-                    full_data["detailed_report_status"] = "incomplete"
-                    full_data["detailed_report_skip_reason"] = "detailed_report_incomplete_after_repair"
-                    full_data["detailed_report_quality"] = dr_quality
-                    if scan_quality == "complete":
-                        scan_quality = "partial_report"
-                    dr_text = ""
+                    condensed_quality = detailed_report_quality(
+                        dr_text,
+                        compact=dr_compact,
+                        allow_condensed=True,
+                    )
+                    if condensed_quality.get("complete"):
+                        dr_quality = condensed_quality
+                        print(
+                            "   ℹ️ [Detailed Report] Retaining complete condensed draft: "
+                            f"words={dr_quality.get('word_count')}"
+                        )
+                    else:
+                        full_data["detailed_report_model"] = dr_model
+                        full_data["detailed_report_status"] = "incomplete"
+                        full_data["detailed_report_skip_reason"] = "detailed_report_incomplete_after_repair"
+                        full_data["detailed_report_quality"] = condensed_quality
+                        if scan_quality == "complete":
+                            scan_quality = "partial_report"
+                        dr_text = ""
 
         if dr_text:
             # The verifier sees the exact final generative draft and bibliography.
@@ -7872,15 +7912,22 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                     time_budget_seconds=dr_fc_budget,
                 )
                 initial_dr_check = dr_check
+                original_dr_text = dr_text
                 verification_history = []
-                total_model_corrections = 0
                 total_replacements = 0
                 total_removals = 0
                 final_check = dr_check
                 final_verified = False
                 final_unresolved = []
                 final_recheck_status = "not_required"
-
+                recovery_mode = "none"
+                recovery_status = "not_needed"
+                recovery_model = ""
+                recovery_impact = detailed_report_repair_impact(
+                    original_dr_text,
+                    dr_text,
+                    compact=dr_compact,
+                )
                 def _claim_text(item) -> str:
                     return str(item.get("claim") or "").strip() if isinstance(item, dict) else str(item or "").strip()
 
@@ -7896,151 +7943,254 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                         selected.append(item)
                     return selected
 
-                # A recheck may expose a second independent claim. Give that
-                # claim the same bounded replacement/removal treatment instead
-                # of withholding the otherwise complete report immediately.
-                for repair_cycle in range(1, 4):
-                    check_skipped = bool(final_check.get("fact_check_skipped"))
-                    detailed_issues = _dedupe_claims(final_check.get("false_claims_detailed") or [])
-                    blocking_items = _dedupe_claims(
-                        list(final_check.get("false_claims") or [])
-                        + list(final_check.get("evidence_handoff_failures") or [])
+                def _ensure_detailed_claim_ids(items: list) -> list:
+                    normalized = []
+                    for raw in items or []:
+                        item = dict(raw) if isinstance(raw, dict) else {"claim": str(raw or "").strip()}
+                        claim = re.sub(r"\s+", " ", _claim_text(item)).strip()
+                        if claim and not item.get("claim_id"):
+                            item["claim_id"] = "DR-" + uuid.uuid5(
+                                uuid.NAMESPACE_URL,
+                                claim.lower(),
+                            ).hex[:12].upper()
+                        normalized.append(item)
+                    return normalized
+
+                # Apply every material verifier action once. Audit-only notes are
+                # retained as metadata and never enter this correction packet.
+                detailed_issues = _ensure_detailed_claim_ids(
+                    _dedupe_claims(initial_dr_check.get("false_claims_detailed") or [])
+                )
+                blocking_items = _ensure_detailed_claim_ids(
+                    _dedupe_claims(
+                        list(initial_dr_check.get("false_claims") or [])
+                        + list(initial_dr_check.get("evidence_handoff_failures") or [])
                     )
-                    cycle_changed = False
-                    cycle_model_correction = False
-                    cycle_replacements = 0
-                    cycle_removals = 0
+                )
+                changed_claim_ids = []
+                removed_claim_ids = []
+                for issue in detailed_issues:
+                    claim = _claim_text(issue)
+                    correction = str(issue.get("correction") or "").strip()
+                    if not claim or not correction:
+                        continue
+                    repaired = _replace_flagged_claim(dr_text, claim, correction)
+                    if repaired != dr_text:
+                        dr_text = repaired
+                        total_replacements += 1
+                        changed_claim_ids.append(issue.get("claim_id"))
 
-                    corrected_summary = str(final_check.get("corrected_summary") or "").strip()
-                    if corrected_summary and corrected_summary != dr_text:
-                        dr_text = corrected_summary
-                        cycle_changed = True
-                        cycle_model_correction = True
-
-                    # Preserve supported clauses whenever the verifier supplied
-                    # narrower wording. Sentence removal is only the fallback.
-                    for issue in detailed_issues:
-                        if not isinstance(issue, dict):
-                            continue
-                        claim = _claim_text(issue)
-                        correction = str(issue.get("correction") or "").strip()
-                        if not claim or not correction:
-                            continue
-                        repaired = _replace_flagged_claim(dr_text, claim, correction)
-                        if repaired != dr_text:
-                            dr_text = repaired
-                            cycle_replacements += 1
-                            cycle_changed = True
-
-                    remaining_before_removal = flagged_report_claims_remaining(dr_text, blocking_items)
-                    if remaining_before_removal:
-                        dr_text, cycle_removals = remove_flagged_report_sentences(
-                            dr_text,
-                            remaining_before_removal,
-                        )
-                        cycle_changed = cycle_changed or bool(cycle_removals)
-                    remaining_after_actions = flagged_report_claims_remaining(dr_text, blocking_items)
-
-                    total_model_corrections += int(cycle_model_correction)
-                    total_replacements += cycle_replacements
-                    total_removals += cycle_removals
-                    verification_history.append({
-                        "cycle": repair_cycle,
-                        "model": final_check.get("fact_check_model", ""),
-                        "status": final_check.get("verification_status", "unavailable"),
-                        "blocking_claim_count": len(blocking_items),
-                        "model_correction_applied": cycle_model_correction,
-                        "deterministic_replacements": cycle_replacements,
-                        "deterministic_removals": cycle_removals,
-                        "remaining_after_actions": remaining_after_actions,
-                    })
-
-                    clean_decision = bool(
-                        final_check.get("verified")
-                        and not check_skipped
-                        and not blocking_items
+                remaining_before_removal = flagged_report_claims_remaining(dr_text, blocking_items)
+                if remaining_before_removal:
+                    removal_keys = {
+                        re.sub(r"\s+", " ", claim).strip().lower().rstrip(".?!")
+                        for claim in remaining_before_removal
+                    }
+                    removed_claim_ids.extend(
+                        item.get("claim_id")
+                        for item in blocking_items
+                        if re.sub(r"\s+", " ", _claim_text(item)).strip().lower().rstrip(".?!")
+                        in removal_keys
                     )
-                    if clean_decision and not cycle_changed:
-                        final_verified = True
-                        final_unresolved = []
-                        final_recheck_status = final_check.get("verification_status", "verified")
-                        break
+                    dr_text, removed = remove_flagged_report_sentences(
+                        dr_text,
+                        remaining_before_removal,
+                    )
+                    total_removals += removed
+                remaining_after_actions = flagged_report_claims_remaining(dr_text, blocking_items)
+                dr_text = polish_detailed_report_text(dr_text)
+                recovery_impact = detailed_report_repair_impact(
+                    original_dr_text,
+                    dr_text,
+                    compact=dr_compact,
+                )
+                print(
+                    "   🧭 [Detailed Report Recovery] "
+                    f"retained={recovery_impact.get('retained_ratio')} | "
+                    f"removed={recovery_impact.get('removed_word_ratio')} | "
+                    f"affected_sections={len(recovery_impact.get('affected_sections') or [])} | "
+                    f"mode={recovery_impact.get('repair_mode')}"
+                )
+                verification_history.append({
+                    "stage": "initial_consolidated_actions",
+                    "model": initial_dr_check.get("fact_check_model", ""),
+                    "status": initial_dr_check.get("verification_status", "unavailable"),
+                    "blocking_claim_count": len(blocking_items),
+                    "changed_claim_ids": [value for value in changed_claim_ids if value],
+                    "deterministic_replacements": total_replacements,
+                    "deterministic_removals": total_removals,
+                    "remaining_after_actions": remaining_after_actions,
+                })
 
-                    if check_skipped:
-                        final_unresolved = remaining_after_actions
-                        final_recheck_status = "unavailable"
-                        break
-                    if blocking_items and not cycle_changed:
-                        final_unresolved = remaining_after_actions or [
-                            "Verifier corrections could not be applied to the final prose."
-                        ]
-                        final_recheck_status = "unresolved_blocking_claims"
-                        break
+                changed = bool(total_replacements or total_removals)
+                if remaining_after_actions:
+                    final_unresolved = remaining_after_actions
+                    final_recheck_status = "unresolved_blocking_claims"
+                elif initial_dr_check.get("fact_check_skipped"):
+                    final_recheck_status = "unavailable"
+                elif not blocking_items and initial_dr_check.get("verified"):
+                    final_verified = True
+                    final_recheck_status = initial_dr_check.get("verification_status", "verified")
 
-                    # Removal can push a report below its completeness floor.
-                    # A focused completion is allowed, but must be verified in
-                    # the next cycle because it introduces new prose.
-                    cycle_quality = detailed_report_quality(dr_text, compact=dr_compact)
-                    if not cycle_quality.get("complete") and _dr_stage_remaining() >= 45:
-                        try:
-                            completion_budget = min(25, _dr_stage_remaining() - 20)
-                            completed_text, completion_model, completion_quality = complete_detailed_report_draft(
+                # Generative recovery is conditional. It receives fresh borrowed
+                # time only after governed edits materially changed the report.
+                if changed and not final_unresolved:
+                    recovery_mode = recovery_impact.get("repair_mode") or "targeted_paragraph_repair"
+                    _extend_dr_recovery_deadline(90)
+                    verifier_floor = 30
+                    available_for_repair = max(0, _dr_stage_remaining() - verifier_floor)
+                    try:
+                        if recovery_mode == "targeted_paragraph_repair" and available_for_repair >= 20:
+                            repair_budget = min(45, available_for_repair)
+                            candidate, candidate_model = repair_detailed_report_sections(
+                                dr_text,
+                                affected_sections=recovery_impact.get("affected_sections") or [],
+                                claim_issues=detailed_issues,
+                                time_budget_seconds=repair_budget,
+                            )
+                            candidate_quality = detailed_report_quality(
+                                candidate,
+                                compact=dr_compact,
+                                allow_condensed=True,
+                            )
+                            if candidate and candidate_quality.get("complete"):
+                                dr_text = candidate
+                                recovery_model = candidate_model
+                                recovery_status = "succeeded"
+                                dr_model = f"{dr_model}+{candidate_model}-targeted" if dr_model else candidate_model
+                            else:
+                                recovery_status = "failed_quality"
+                        elif recovery_mode == "full_regeneration" and available_for_repair >= 30:
+                            repair_budget = min(80, available_for_repair)
+                            candidate, candidate_model, candidate_quality = regenerate_detailed_report_after_claim_actions(
                                 full_data,
                                 companyName,
                                 foresight_data,
                                 dr_text,
                                 prior_summaries=prior_summaries if prior_summaries else None,
                                 compact=dr_compact,
-                                time_budget_seconds=completion_budget,
+                                time_budget_seconds=repair_budget,
                             )
-                            if completed_text and completion_quality.get("complete"):
-                                dr_text = completed_text
-                                dr_model = f"{dr_model}+{completion_model}" if dr_model else completion_model
-                        except Exception as completion_err:
-                            print(f"   ⚠️ [Detailed Report] Post-removal completion failed: {completion_err}")
+                            if candidate and candidate_quality.get("complete"):
+                                dr_text = candidate
+                                recovery_model = candidate_model
+                                recovery_status = "succeeded"
+                                dr_model = f"{dr_model}+{candidate_model}" if dr_model else candidate_model
+                            else:
+                                recovery_status = "failed_quality"
+                        else:
+                            recovery_status = "skipped_budget"
+                    except Exception as recovery_err:
+                        recovery_status = "failed"
+                        print(f"   ⚠️ [Detailed Report Recovery] {recovery_mode} failed: {recovery_err}")
+                    dr_text = polish_detailed_report_text(dr_text)
 
-                    if _dr_stage_remaining() < 20:
-                        final_unresolved = remaining_after_actions
-                        final_recheck_status = "skipped_budget"
-                        break
-
-                    recheck_budget = min(30, _dr_stage_remaining())
-                    print(
-                        f"   🔁 [Detailed Report Fact-Check] Repair cycle {repair_cycle}: "
-                        f"decision-only recheck ({recheck_budget}s)..."
-                    )
-                    final_check = ai_fact_check_summary(
-                        summary_text=dr_text,
-                        evidence_links=managed_evidence_links,
-                        company_name=companyName,
-                        scan_payload=_build_fact_check_scan_payload(full_data),
-                        document_label="Detailed Forensic Report (final repaired text)",
-                        foresight_links=full_data.get("foresight_links", []),
-                        evidence_manifest=full_data.get("evidence_manifest", []),
-                        claim_graph=full_data.get("claim_graph", []),
-                        time_budget_seconds=recheck_budget,
-                        verification_only=True,
-                    )
-                    final_recheck_status = final_check.get("verification_status", "unavailable")
-                    if (
-                        final_check.get("verified")
-                        and not final_check.get("fact_check_skipped")
-                        and not final_check.get("false_claims")
-                        and not final_check.get("evidence_handoff_failures")
-                    ):
-                        final_verified = True
+                # One final decision pass verifies the complete reader-facing
+                # report. If it finds a narrow issue, resolve that issue once;
+                # do not restart a broad rewrite/recheck loop.
+                needs_final_check = bool(changed or recovery_status == "succeeded")
+                if needs_final_check and not final_unresolved:
+                    if _dr_stage_remaining() >= 20:
+                        full_data["detailed_report"] = dr_text
+                        recheck_budget = min(35, _dr_stage_remaining())
+                        print(
+                            "   🔁 [Detailed Report Fact-Check] Final decision-only recheck "
+                            f"({recheck_budget}s)..."
+                        )
+                        final_check = ai_fact_check_summary(
+                            summary_text=dr_text,
+                            evidence_links=managed_evidence_links,
+                            company_name=companyName,
+                            scan_payload=_build_fact_check_scan_payload(full_data),
+                            document_label="Detailed Forensic Report (final repaired text)",
+                            foresight_links=full_data.get("foresight_links", []),
+                            evidence_manifest=full_data.get("evidence_manifest", []),
+                            claim_graph=full_data.get("claim_graph", []),
+                            time_budget_seconds=recheck_budget,
+                            verification_only=True,
+                        )
+                        final_recheck_status = final_check.get("verification_status", "unavailable")
+                        final_blocking = _ensure_detailed_claim_ids(
+                            _dedupe_claims(
+                                list(final_check.get("false_claims") or [])
+                                + list(final_check.get("evidence_handoff_failures") or [])
+                            )
+                        )
+                        if (
+                            final_check.get("verified")
+                            and not final_check.get("fact_check_skipped")
+                            and not final_blocking
+                        ):
+                            final_verified = True
+                            final_unresolved = []
+                        elif final_check.get("fact_check_skipped"):
+                            final_verified = False
+                            final_unresolved = []
+                            final_recheck_status = "unavailable"
+                        else:
+                            final_issues = _ensure_detailed_claim_ids(
+                                _dedupe_claims(final_check.get("false_claims_detailed") or [])
+                            )
+                            final_replacements = 0
+                            final_removals = 0
+                            for issue in final_issues:
+                                claim = _claim_text(issue)
+                                correction = str(issue.get("correction") or "").strip()
+                                if not claim or not correction:
+                                    continue
+                                repaired = _replace_flagged_claim(dr_text, claim, correction)
+                                if repaired != dr_text:
+                                    dr_text = repaired
+                                    final_replacements += 1
+                                    changed_claim_ids.append(issue.get("claim_id"))
+                            final_remaining = flagged_report_claims_remaining(dr_text, final_blocking)
+                            if final_remaining:
+                                final_removal_keys = {
+                                    re.sub(r"\s+", " ", claim).strip().lower().rstrip(".?!")
+                                    for claim in final_remaining
+                                }
+                                removed_claim_ids.extend(
+                                    item.get("claim_id")
+                                    for item in final_blocking
+                                    if re.sub(r"\s+", " ", _claim_text(item)).strip().lower().rstrip(".?!")
+                                    in final_removal_keys
+                                )
+                                dr_text, final_removals = remove_flagged_report_sentences(
+                                    dr_text,
+                                    final_remaining,
+                                )
+                            final_remaining = flagged_report_claims_remaining(dr_text, final_blocking)
+                            total_replacements += final_replacements
+                            total_removals += final_removals
+                            dr_text = polish_detailed_report_text(dr_text)
+                            final_unresolved = final_remaining
+                            final_verified = not final_remaining
+                            final_recheck_status = (
+                                "verified_after_final_resolution"
+                                if final_verified
+                                else "unresolved_blocking_claims"
+                            )
+                            verification_history.append({
+                                "stage": "final_focused_resolution",
+                                "model": final_check.get("fact_check_model", ""),
+                                "status": final_check.get("verification_status", "unavailable"),
+                                "blocking_claim_count": len(final_blocking),
+                                "deterministic_replacements": final_replacements,
+                                "deterministic_removals": final_removals,
+                                "remaining_after_actions": final_remaining,
+                            })
+                    else:
+                        final_verified = False
                         final_unresolved = []
-                        break
-                    final_unresolved = _dedupe_claims(
-                        list(final_check.get("false_claims") or [])
-                        + list(final_check.get("evidence_handoff_failures") or [])
-                    )
+                        final_recheck_status = "skipped_budget"
 
                 full_data["detailed_report_verification"] = {
                     "verified": final_verified,
                     "verification_status": (
-                        "verified_after_removals"
-                        if final_verified and (total_removals or total_replacements or total_model_corrections)
+                        "verified_after_final_resolution"
+                        if final_verified and final_recheck_status == "verified_after_final_resolution"
+                        else "verified_after_removals"
+                        if final_verified and (total_removals or total_replacements)
                         else final_recheck_status
                     ),
                     "fact_check_skipped": bool(final_check.get("fact_check_skipped")),
@@ -8050,7 +8200,7 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                     "final_recheck_model": final_check.get("fact_check_model", ""),
                     "final_recheck_status": final_recheck_status,
                     "final_recheck_false_claims": final_check.get("false_claims", []),
-                    "model_correction_applied": bool(total_model_corrections),
+                    "model_correction_applied": recovery_status == "succeeded",
                     "deterministic_replacements": total_replacements,
                     "deterministic_removals": total_removals,
                     "blocking_claim_count": len(initial_dr_check.get("false_claims", []) or []),
@@ -8059,6 +8209,15 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                     ],
                     "initial_verification_status": initial_dr_check.get("verification_status", "unavailable"),
                     "repair_cycles": verification_history,
+                    "changed_claim_ids": list(dict.fromkeys(value for value in changed_claim_ids if value)),
+                    "removed_claim_ids": list(dict.fromkeys(value for value in removed_claim_ids if value)),
+                }
+                full_data["detailed_report_recovery"] = {
+                    **recovery_impact,
+                    "repair_mode": recovery_mode,
+                    "recovery_status": recovery_status,
+                    "recovery_model": recovery_model,
+                    "final_word_count": len(dr_text.split()),
                 }
             else:
                 full_data["detailed_report_verification"] = {
@@ -8068,32 +8227,51 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                     "reason": "insufficient_budget",
                 }
 
-            # Bounded replacements/removals are followed by decision-only
-            # rechecks. Publish only a complete, finally approved report.
-            dr_quality = detailed_report_quality(dr_text, compact=dr_compact)
+            # A report shortened by governed claim correction may fall modestly
+            # below the preferred 800-word target without becoming incomplete.
+            # Structural checks and the 760-word condensed floor remain hard.
+            dr_quality = detailed_report_quality(
+                dr_text,
+                compact=dr_compact,
+                allow_condensed=True,
+            )
             dr_verification = full_data.get("detailed_report_verification") or {}
             verification_unavailable = bool(dr_verification.get("fact_check_skipped"))
             unresolved_blocking = bool(dr_verification.get("unresolved_blocking_claims"))
+            recovery_meta = full_data.get("detailed_report_recovery") or {}
+            recovery_mode = str(recovery_meta.get("repair_mode") or "none")
+            recovery_status = str(recovery_meta.get("recovery_status") or "not_needed")
+            had_governed_actions = bool(
+                dr_verification.get("deterministic_removals")
+                or dr_verification.get("deterministic_replacements")
+                or dr_verification.get("model_correction_applied")
+            )
             if not dr_quality.get("complete"):
                 full_data.pop("detailed_report", None)
                 full_data["detailed_report_model"] = dr_model
                 full_data["detailed_report_status"] = "incomplete"
-                full_data["detailed_report_skip_reason"] = "detailed_report_incomplete_after_verified_removals"
+                full_data["detailed_report_skip_reason"] = "detailed_report_structurally_incomplete_after_recovery"
                 full_data["detailed_report_quality"] = dr_quality
                 dr_text = ""
-            elif verification_unavailable or unresolved_blocking or not dr_verification.get("verified"):
+            elif unresolved_blocking:
                 full_data.pop("detailed_report", None)
                 full_data["detailed_report_model"] = dr_model
-                full_data["detailed_report_status"] = "withheld_unverified"
-                full_data["detailed_report_skip_reason"] = (
-                    "verification_unavailable"
-                    if verification_unavailable
-                    else "unresolved_blocking_claims"
-                    if unresolved_blocking
-                    else "verification_not_approved"
-                )
+                full_data["detailed_report_status"] = "withheld_material_claims"
+                full_data["detailed_report_skip_reason"] = "unresolved_material_claims"
                 full_data["detailed_report_quality"] = dr_quality
                 dr_text = ""
+            elif verification_unavailable or not dr_verification.get("verified"):
+                # Deterministic controls already removed any known blocking
+                # wording. Keep the useful analysis as an explicit internal
+                # draft when the final semantic verifier itself is unavailable.
+                full_data["detailed_report"] = dr_text
+                full_data["detailed_report_model"] = dr_model
+                full_data["detailed_report_status"] = "internal_draft_verification_pending"
+                full_data["detailed_report_quality"] = dr_quality
+                full_data["detailed_report_publication_boundary"] = (
+                    "Internal analysis only. Final semantic verification is pending."
+                )
+                full_data.pop("detailed_report_skip_reason", None)
 
             if not dr_text:
                 full_data.setdefault("report_quality", {})["detailed_report"] = {
@@ -8107,15 +8285,17 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
             else:
                 full_data["detailed_report"] = dr_text
                 full_data["detailed_report_model"] = dr_model
-                full_data["detailed_report_status"] = (
-                    "verified_after_removals"
-                    if (
-                        dr_verification.get("deterministic_removals")
-                        or dr_verification.get("deterministic_replacements")
-                        or dr_verification.get("model_correction_applied")
-                    )
-                    else "generated_verified"
-                )
+                if recovery_mode == "full_regeneration" and recovery_status == "succeeded":
+                    publication_status = "regenerated_verified"
+                elif recovery_mode == "targeted_paragraph_repair" and recovery_status == "succeeded":
+                    publication_status = "verified_after_targeted_rewrite"
+                elif dr_quality.get("condensed") and had_governed_actions:
+                    publication_status = "verified_condensed_after_removals"
+                elif had_governed_actions:
+                    publication_status = "verified_after_targeted_rewrite"
+                else:
+                    publication_status = "generated_verified"
+                full_data["detailed_report_status"] = publication_status
                 full_data["detailed_report_quality"] = dr_quality
                 full_data.setdefault("report_quality", {})["detailed_report"] = {
                     "status": full_data["detailed_report_status"],
@@ -8124,7 +8304,10 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                 }
                 full_data.pop("detailed_report_skip_reason", None)
                 wc = len(dr_text.split())
-                print(f"   ✅ [Detailed Report] {wc} words, model={dr_model} ({dr_ms}ms)")
+                print(
+                    f"   ✅ [Detailed Report] {wc} words, model={dr_model}, "
+                    f"status={full_data['detailed_report_status']} ({dr_ms}ms)"
+                )
         else:
             if full_data.get("detailed_report_status") == "pending":
                 full_data["detailed_report_status"] = "empty"
@@ -8134,27 +8317,33 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
             print(f"   ⚠️ [Detailed Report] Generation returned empty — skipping field")
 
         if full_data.get("detailed_report_status") in {
-            "incomplete", "withheld_unverified", "failed", "skipped", "empty"
+            "incomplete", "withheld_unverified", "withheld_material_claims", "failed", "skipped", "empty"
         }:
             detailed_reason = full_data.get("detailed_report_skip_reason") or "unavailable"
             detailed_note = {
                 "detailed_report_incomplete_after_repair": (
                     "Detailed Report was not published because it remained structurally incomplete after bounded repair."
                 ),
-                "detailed_report_incomplete_after_verified_removals": (
-                    "Detailed Report was not published because required content fell below the completeness floor after unsafe wording was removed."
+                "detailed_report_structurally_incomplete_after_recovery": (
+                    "Detailed Report was not published because its structure or retained content remained incomplete after bounded recovery."
                 ),
                 "verification_unavailable": (
                     "Detailed Report was generated, but its final verifier was unavailable; the report was withheld."
                 ),
-                "unresolved_blocking_claims": (
-                    "Detailed Report was withheld because material claims remained unresolved after bounded correction cycles."
+                "unresolved_material_claims": (
+                    "Detailed Report was withheld because material claims remained unresolved after bounded correction and recovery."
                 ),
                 "verification_not_approved": (
                     "Detailed Report was withheld because the completed verifier did not approve the final text."
                 ),
             }.get(detailed_reason, f"Detailed Report was not published ({detailed_reason}).")
             full_data.setdefault("quality_notes", []).append(detailed_note)
+        elif full_data.get("detailed_report_status") == "internal_draft_verification_pending":
+            full_data.setdefault("quality_notes", []).append(
+                "Detailed Report is retained as an internal draft because its final semantic verifier was unavailable. Known blocking wording was removed, but final verification is still pending."
+            )
+            if scan_quality == "complete":
+                scan_quality = "unverified"
 
         _record_final_stage(
             "detailed_report",

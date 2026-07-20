@@ -613,7 +613,7 @@ def generate_general_summary(full_data: dict, company_name: str, time_budget_sec
             raise RuntimeError("No ANTHROPIC_API_KEY")
         print(f"   [General Summary] Trying primary {primary_model}")
         t0 = time.time()
-        text = _strip_links(call_anthropic_text(
+        text = _polish_general_summary_text(_strip_links(call_anthropic_text(
             prompt,
             model=primary_model,
             max_tokens=4000,
@@ -621,7 +621,7 @@ def generate_general_summary(full_data: dict, company_name: str, time_budget_sec
             max_retries=0,
             reasoning_effort=str(policy.get("effort") or "medium"),
             log_label="General Summary Primary",
-        ))
+        )))
         wc = _word_count(text)
         elapsed = int((time.time() - t0) * 1000)
         print(f"   [General Summary] {primary_model}: {wc} words ({elapsed}ms)")
@@ -647,11 +647,11 @@ def generate_general_summary(full_data: dict, company_name: str, time_budget_sec
             return "", ""
         print(f"   [General Summary] {primary_model} unavailable — trying {fallback_model}")
         t0 = time.time()
-        text = _strip_links(_call_openai_summary(
+        text = _polish_general_summary_text(_strip_links(_call_openai_summary(
             prompt,
             model=fallback_model,
             timeout=min(30, max(8, remaining())),
-        ))
+        )))
         wc = _word_count(text)
         elapsed = int((time.time() - t0) * 1000)
         print(f"   [General Summary] {fallback_model} backup: {wc} words ({elapsed}ms)")
@@ -778,6 +778,12 @@ def _gs_claim_id(claim: str) -> str:
 def _polish_general_summary_text(value: str) -> str:
     """Repair punctuation seams introduced by narrow claim replacement/removal."""
     text = str(value or "")
+    text = re.sub(
+        r"\b([A-Za-zÅÄÖåäö][A-Za-zÅÄÖåäö-]{3,})\s+\1\b",
+        r"\1",
+        text,
+        flags=re.IGNORECASE,
+    )
     text = re.sub(r"\.\s*,", ",", text)
     text = re.sub(r",\s*\.", ".", text)
     text = re.sub(r"([.!?])\s*\1+", r"\1", text)

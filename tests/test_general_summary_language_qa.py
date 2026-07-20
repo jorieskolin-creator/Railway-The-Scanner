@@ -23,6 +23,14 @@ def test_punctuation_seams_are_repaired_after_claim_replacement():
     assert polished.endswith(".")
 
 
+def test_adjacent_duplicate_words_are_removed_after_correction():
+    polished = general_summary._polish_general_summary_text(
+        "The manufacturer manufacturer serves industrial customers."
+    )
+
+    assert polished == "The manufacturer serves industrial customers."
+
+
 def test_duplicate_verifier_claim_prefers_actionable_replacement():
     claims = [
         {"claim": "The unsupported claim.", "reason": "First", "replacement": ""},

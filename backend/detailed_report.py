@@ -13,9 +13,10 @@ import json
 import os
 import re
 import time
+import uuid
 
 import anthropic
-from llm_clients import call_openai_text
+from llm_clients import call_anthropic_text, call_openai_text, parse_json_object
 from model_policy import CLAUDE_OPUS_MODEL, CLAUDE_SONNET_MODEL, DETAILED_COMPLETION_MODEL, GPT_REASONING_MODEL, policy_for
 from source_quality import (
     assess_source_scope, is_generation_eligible_source,
@@ -38,8 +39,30 @@ _FORBIDDEN_TERMS = [
 
 _WORD_MIN = 800
 _WORD_MAX = 1200
+_CONDENSED_WORD_MIN = 760
 _COMPACT_WORD_MIN = 500
 _COMPACT_WORD_MAX = 750
+_REPAIR_REGEN_THRESHOLD = 0.20
+
+_TARGETED_REPAIR_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "sections": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "heading": {"type": "string"},
+                    "content": {"type": "string"},
+                },
+                "required": ["heading", "content"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["sections"],
+    "additionalProperties": False,
+}
 
 
 def _section_headings(text: str) -> list[str]:
@@ -73,11 +96,40 @@ def _claim_terms(value: str) -> set[str]:
     return terms
 
 
-def detailed_report_quality(text: str, compact: bool = False) -> dict:
+def polish_detailed_report_text(value: str) -> str:
+    """Repair deterministic language seams without changing report meaning."""
+    text = str(value or "")
+    text = re.sub(
+        r"\b([A-Za-zÅÄÖåäö][A-Za-zÅÄÖåäö-]{3,})\s+\1\b",
+        r"\1",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\.\s*,", ",", text)
+    text = re.sub(r",\s*\.", ".", text)
+    text = re.sub(r"([.!?])\s*\1+", r"\1", text)
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"\n[ \t]+", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def detailed_report_quality(
+    text: str,
+    compact: bool = False,
+    *,
+    allow_condensed: bool = False,
+) -> dict:
     words = _word_count(text)
     headings = _section_headings(text)
     normalized = [heading.strip().lower() for heading in headings]
-    required_min = _COMPACT_WORD_MIN if compact else _WORD_MIN
+    preferred_min = _COMPACT_WORD_MIN if compact else _WORD_MIN
+    required_min = (
+        preferred_min
+        if compact or not allow_condensed
+        else _CONDENSED_WORD_MIN
+    )
     missing = []
     if words < required_min:
         missing.append(f"word_count_below_{required_min}")
@@ -97,7 +149,192 @@ def detailed_report_quality(text: str, compact: bool = False) -> dict:
         "dimension_section_count": dimension_count,
         "missing": missing,
         "required_min_words": required_min,
+        "preferred_min_words": preferred_min,
+        "condensed_floor_words": _COMPACT_WORD_MIN if compact else _CONDENSED_WORD_MIN,
+        "condensed": bool(not compact and allow_condensed and required_min <= words < preferred_min),
     }
+
+
+def _split_report_sections(text: str) -> tuple[str, list[dict]]:
+    """Split a Markdown report without allowing repaired sections to move."""
+    source = str(text or "").strip()
+    matches = list(re.finditer(r"(?m)^##\s+(.+?)\s*$", source))
+    if not matches:
+        return source, []
+    preamble = source[:matches[0].start()].strip()
+    sections = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(source)
+        sections.append({
+            "heading": match.group(1).strip(),
+            "content": source[match.end():end].strip(),
+        })
+    return preamble, sections
+
+
+def _assemble_report_sections(preamble: str, sections: list[dict]) -> str:
+    parts = [str(preamble or "").strip()] if str(preamble or "").strip() else []
+    for section in sections:
+        heading = str(section.get("heading") or "").strip()
+        content = str(section.get("content") or "").strip()
+        if heading and content:
+            parts.append(f"## {heading}\n\n{content}")
+    return polish_detailed_report_text("\n\n".join(parts))
+
+
+def detailed_report_repair_impact(
+    original_text: str,
+    repaired_text: str,
+    *,
+    compact: bool = False,
+) -> dict:
+    """Choose local editing or full regeneration from measurable report damage."""
+    original_words = _word_count(original_text)
+    repaired_words = _word_count(repaired_text)
+    retained_ratio = min(1.0, repaired_words / max(1, original_words))
+    removed_word_ratio = max(0.0, 1.0 - retained_ratio)
+    original_preamble, original_sections = _split_report_sections(original_text)
+    repaired_preamble, repaired_sections = _split_report_sections(repaired_text)
+    original_map = {
+        str(section.get("heading") or "").strip().lower(): section
+        for section in original_sections
+    }
+    repaired_map = {
+        str(section.get("heading") or "").strip().lower(): section
+        for section in repaired_sections
+    }
+    affected_sections = []
+    for heading, original in original_map.items():
+        current = repaired_map.get(heading)
+        original_content = re.sub(r"\s+", " ", str(original.get("content") or "")).strip()
+        current_content = re.sub(r"\s+", " ", str((current or {}).get("content") or "")).strip()
+        if original_content != current_content:
+            affected_sections.append(str(original.get("heading") or heading))
+    for heading, current in repaired_map.items():
+        if heading not in original_map:
+            affected_sections.append(str(current.get("heading") or heading))
+    if re.sub(r"\s+", " ", original_preamble) != re.sub(r"\s+", " ", repaired_preamble):
+        affected_sections.insert(0, "Report introduction")
+
+    quality = detailed_report_quality(repaired_text, compact=compact, allow_condensed=True)
+    structural_missing = [
+        issue for issue in quality.get("missing", [])
+        if not str(issue).startswith("word_count_below_")
+    ]
+    core_argument_damaged = bool(structural_missing)
+    for core_heading in ("key findings", "verdict"):
+        original = original_map.get(core_heading)
+        current = repaired_map.get(core_heading)
+        if not original or not current:
+            core_argument_damaged = True
+            continue
+        original_count = _word_count(str(original.get("content") or ""))
+        current_count = _word_count(str(current.get("content") or ""))
+        if original_count >= 20 and current_count / max(1, original_count) < 0.60:
+            core_argument_damaged = True
+
+    repair_mode = (
+        "full_regeneration"
+        if removed_word_ratio > _REPAIR_REGEN_THRESHOLD or core_argument_damaged
+        else "targeted_paragraph_repair"
+    )
+    return {
+        "original_word_count": original_words,
+        "repaired_word_count": repaired_words,
+        "retained_ratio": round(retained_ratio, 4),
+        "removed_word_ratio": round(removed_word_ratio, 4),
+        "affected_sections": list(dict.fromkeys(affected_sections)),
+        "core_argument_damaged": core_argument_damaged,
+        "repair_mode": repair_mode,
+        "strict_quality": detailed_report_quality(repaired_text, compact=compact),
+        "publishable_quality": quality,
+    }
+
+
+def _section_context(sections: list[dict], index: int) -> dict:
+    previous = sections[index - 1] if index > 0 else {}
+    following = sections[index + 1] if index + 1 < len(sections) else {}
+    return {
+        "previous_heading": previous.get("heading", ""),
+        "previous_tail": str(previous.get("content") or "")[-500:],
+        "next_heading": following.get("heading", ""),
+        "next_opening": str(following.get("content") or "")[:500],
+    }
+
+
+def repair_detailed_report_sections(
+    repaired_text: str,
+    *,
+    affected_sections: list[str],
+    claim_issues: list[dict],
+    time_budget_seconds: int = 40,
+) -> tuple[str, str]:
+    """Use Sonnet to repair only prose damaged by governed claim actions."""
+    preamble, sections = _split_report_sections(repaired_text)
+    requested = {str(value or "").strip().lower() for value in affected_sections or []}
+    selected = []
+    for index, section in enumerate(sections):
+        if str(section.get("heading") or "").strip().lower() in requested:
+            selected.append({**section, **_section_context(sections, index)})
+    if not selected:
+        return polish_detailed_report_text(repaired_text), "deterministic-language-qa"
+
+    boundaries = []
+    for item in claim_issues or []:
+        if not isinstance(item, dict):
+            continue
+        boundaries.append({
+            "claim_id": item.get("claim_id") or "DR-" + uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                re.sub(r"\s+", " ", str(item.get("claim") or "")).strip().lower(),
+            ).hex[:12].upper(),
+            "unsafe_wording": item.get("claim") or "",
+            "allowed_narrowing": item.get("correction") or "",
+            "reason": item.get("reasoning") or item.get("reason") or "",
+        })
+    prompt = f"""You are repairing fluency in selected sections of an evidence-governed Detailed Report.
+
+Edit only the supplied current section prose. Preserve each heading and return exactly one section for every supplied heading. Restore paragraph transitions, sentence completeness and analytical flow after unsupported wording was narrowed or removed. Do not add facts, values, entities, services, timing, causal assertions or recommendations that are not already present in the current section or an allowed narrowing. Never reintroduce unsafe wording. The neighboring excerpts are continuity context only. Do not rewrite unaffected sections.
+
+TARGET: Keep the full report substantive. If a section became slightly short, add only connective explanation or cautious synthesis already supported by its current prose. Do not pad.
+
+SECTIONS TO REPAIR:
+{json.dumps(selected, ensure_ascii=False)}
+
+GOVERNED CLAIM BOUNDARIES:
+{json.dumps(boundaries, ensure_ascii=False)}
+"""
+    raw = call_anthropic_text(
+        prompt,
+        model=CLAUDE_SONNET_MODEL,
+        max_tokens=5000,
+        timeout=max(15, min(45, int(time_budget_seconds or 40))),
+        max_retries=0,
+        reasoning_effort="medium",
+        json_schema=_TARGETED_REPAIR_SCHEMA,
+        json_schema_name="detailed_report_section_repair",
+        log_label="Detailed Report Targeted Repair",
+    )
+    parsed = parse_json_object(raw)
+    returned = {
+        str(item.get("heading") or "").strip().lower(): str(item.get("content") or "").strip()
+        for item in (parsed.get("sections") or [])
+        if isinstance(item, dict)
+    }
+    if set(returned) != {
+        str(item.get("heading") or "").strip().lower() for item in selected
+    }:
+        raise ValueError("Targeted repair did not return exactly the requested report sections")
+    for section in sections:
+        key = str(section.get("heading") or "").strip().lower()
+        if key in returned:
+            if not returned[key] or returned[key].startswith("##"):
+                raise ValueError(f"Targeted repair returned invalid prose for {section.get('heading')}")
+            section["content"] = returned[key]
+    candidate = _assemble_report_sections(preamble, sections)
+    if flagged_report_claims_remaining(candidate, claim_issues):
+        raise ValueError("Targeted repair reintroduced governed unsafe wording")
+    return candidate, CLAUDE_SONNET_MODEL
 
 
 def remove_flagged_report_sentences(text: str, claims: list) -> tuple[str, int]:
@@ -500,6 +737,7 @@ def complete_detailed_report_draft(
     prior_summaries: dict | None = None,
     compact: bool = False,
     time_budget_seconds: int = 80,
+    efforts: tuple[str, ...] | None = None,
 ) -> tuple[str, str, dict]:
     """Use GPT to expand/repair a short or truncated Detailed Report draft."""
     payload = _build_input_payload(full_data, company_name, foresight_data, prior_summaries)
@@ -509,7 +747,8 @@ def complete_detailed_report_draft(
     policy = policy_for("detailed_report")
     token_budget = 12000 if compact else int(policy.get("completion_max_output_tokens") or 16000)
     last_quality: dict = detailed_report_quality("", compact=compact)
-    for effort in (str(policy.get("completion_effort") or "medium"), "high"):
+    effort_chain = efforts or (str(policy.get("completion_effort") or "medium"), "high")
+    for effort in tuple(dict.fromkeys(effort_chain)):
         remaining = max(0, int(deadline - time.time()))
         if remaining < 8:
             break
@@ -520,6 +759,7 @@ def complete_detailed_report_draft(
                 model=DETAILED_COMPLETION_MODEL,
                 max_output_tokens=token_budget,
                 timeout=min(70, remaining),
+                max_retries=0,
                 reasoning_effort=effort,
                 text_verbosity=str(policy.get("completion_verbosity") or "high"),
                 log_label="Detailed Report Completion",
@@ -538,6 +778,64 @@ def complete_detailed_report_draft(
         if last_quality["complete"]:
             return text, f"{DETAILED_COMPLETION_MODEL}-completion-{effort}", last_quality
     return "", f"{DETAILED_COMPLETION_MODEL}-completion-incomplete", last_quality
+
+
+def regenerate_detailed_report_after_claim_actions(
+    full_data: dict,
+    company_name: str,
+    foresight_data: dict | None,
+    governed_draft: str,
+    *,
+    prior_summaries: dict | None = None,
+    compact: bool = False,
+    time_budget_seconds: int = 90,
+) -> tuple[str, str, dict]:
+    """Rebuild a materially damaged report, with Sonnet as bounded fallback."""
+    started = time.time()
+    budget = max(30, int(time_budget_seconds or 90))
+    gpt_budget = max(20, min(75, budget - 20))
+    text, model, quality = complete_detailed_report_draft(
+        full_data,
+        company_name,
+        foresight_data,
+        governed_draft,
+        prior_summaries=prior_summaries,
+        compact=compact,
+        time_budget_seconds=gpt_budget,
+        efforts=("high",),
+    )
+    if text and quality.get("complete"):
+        return polish_detailed_report_text(text), model, quality
+
+    remaining = max(0, budget - int(time.time() - started))
+    if remaining < 15:
+        return "", model, quality
+    payload = _build_input_payload(full_data, company_name, foresight_data, prior_summaries)
+    prompt = _build_completion_prompt(payload, company_name, governed_draft, compact=compact)
+    prompt += (
+        "\n\nMATERIAL-DAMAGE RECOVERY: Rebuild the complete report because governed claim "
+        "corrections removed too much of the prior argument. Use the structured payload as the "
+        "only factual basis. Preserve supported conclusions, restore the required sections and "
+        "produce a coherent new report rather than padding the damaged draft."
+    )
+    try:
+        candidate = call_anthropic_text(
+            prompt,
+            model=CLAUDE_SONNET_MODEL,
+            max_tokens=12000,
+            timeout=min(60, remaining),
+            max_retries=0,
+            reasoning_effort="high",
+            log_label="Detailed Report Regeneration Fallback",
+        )
+        candidate = polish_detailed_report_text(_strip_links(candidate))
+        candidate_quality = detailed_report_quality(candidate, compact=compact)
+        if candidate_quality.get("complete"):
+            return candidate, f"{CLAUDE_SONNET_MODEL}-regeneration", candidate_quality
+        quality = candidate_quality
+    except Exception as exc:
+        print(f"   ❌ [Detailed Report] {CLAUDE_SONNET_MODEL} regeneration fallback failed: {exc}")
+    return "", f"{model}+{CLAUDE_SONNET_MODEL}-regeneration-incomplete", quality
 
 
 def generate_detailed_report(

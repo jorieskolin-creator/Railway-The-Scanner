@@ -12,6 +12,14 @@ if _BACKEND not in sys.path:
 import detailed_report  # noqa: E402
 
 
+def _report_with_words(words_per_section: int = 160) -> str:
+    sections = ["Key Findings", "Operating Model", "Strategy", "AI Readiness", "Verdict"]
+    return "\n\n".join(
+        f"## {heading}\n\n" + " ".join(f"{heading.replace(' ', '').lower()}{index}" for index in range(words_per_section)) + "."
+        for heading in sections
+    )
+
+
 def test_detailed_report_payload_excludes_model_financial_assessment_prose():
     payload = detailed_report._build_input_payload(
         {
@@ -103,3 +111,85 @@ Validation remains necessary."""
     assert removed == 1
     assert "Supported company context remains." in cleaned
     assert "Unsupported market certainty" not in cleaned
+
+
+def test_condensed_verified_report_can_publish_below_preferred_800_words():
+    report = _report_with_words(156)
+
+    strict = detailed_report.detailed_report_quality(report)
+    condensed = detailed_report.detailed_report_quality(report, allow_condensed=True)
+
+    assert strict["complete"] is False
+    assert "word_count_below_800" in strict["missing"]
+    assert condensed["complete"] is True
+    assert condensed["condensed"] is True
+
+
+def test_damage_threshold_selects_targeted_repair_below_twenty_percent():
+    original = _report_with_words(180)
+    repaired = original.replace("strategy179.", "")
+
+    impact = detailed_report.detailed_report_repair_impact(original, repaired)
+
+    assert impact["removed_word_ratio"] < 0.20
+    assert impact["repair_mode"] == "targeted_paragraph_repair"
+
+
+def test_damage_threshold_selects_regeneration_above_twenty_percent():
+    original = _report_with_words(180)
+    _, sections = detailed_report._split_report_sections(original)
+    sections[1]["content"] = "Short supported operating statement."
+    sections[2]["content"] = "Short supported strategy statement."
+    repaired = detailed_report._assemble_report_sections("", sections)
+
+    impact = detailed_report.detailed_report_repair_impact(original, repaired)
+
+    assert impact["removed_word_ratio"] > 0.20
+    assert impact["repair_mode"] == "full_regeneration"
+
+
+def test_targeted_repair_preserves_unaffected_sections(monkeypatch):
+    report = """## Key Findings
+
+Supported opening remains.
+
+## Operating Model
+
+Supported operating context remains.
+
+## Strategy
+
+The transition became awkward after correction.
+
+## AI Readiness
+
+Supported AI context remains.
+
+## Verdict
+
+Validation remains necessary."""
+    monkeypatch.setattr(
+        detailed_report,
+        "call_anthropic_text",
+        lambda *_args, **_kwargs: '{"sections":[{"heading":"Strategy","content":"The corrected strategy paragraph now reads fluently."}]}',
+    )
+
+    repaired, model = detailed_report.repair_detailed_report_sections(
+        report,
+        affected_sections=["Strategy"],
+        claim_issues=[],
+    )
+
+    assert model == detailed_report.CLAUDE_SONNET_MODEL
+    assert "Supported opening remains." in repaired
+    assert "Supported operating context remains." in repaired
+    assert "Supported AI context remains." in repaired
+    assert "The corrected strategy paragraph now reads fluently." in repaired
+
+
+def test_detailed_report_language_qa_removes_adjacent_duplicate_words():
+    polished = detailed_report.polish_detailed_report_text(
+        "The manufacturer manufacturer expanded its supported portfolio."
+    )
+
+    assert polished == "The manufacturer expanded its supported portfolio."
