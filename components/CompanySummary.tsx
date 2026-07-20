@@ -1014,12 +1014,20 @@ const isForesightContext = (link) => {
             return '<div class="callout cyan"><h3>Copied From Buying Insight</h3><p>This stakeholder list is copied from the stored Admin Buying Insight report. Treat it as sales-prep and discovery guidance, not as core Scanner diagnostic evidence or confirmed buying intent.</p></div>'
                 + '<div class="stakeholders">' + cards + '</div>';
         };
+        var pitchIsAvailable = Boolean(exportData.pitch_text && exportData.pitch_text !== 'Pitch Unavailable');
+        var activationHasPairs = Boolean(
+            Array.isArray(exportData.why_proposals) && exportData.why_proposals.length
+            && Array.isArray(exportData.what_proposals) && exportData.what_proposals.length
+        );
         var activationProgressHTML = Array.isArray(exportData.what_progress_proposals) && exportData.what_progress_proposals.length
             ? '<div class="section nested"><h3>PROGRESS — Observable Proof</h3>' + renderList(exportData.what_progress_proposals) + '</div>'
             : '';
-        var activationHTML = '<div class="two-col"><div><h3>WHY — Customer Value / Consequence</h3>' + renderList(exportData.why_proposals) + '</div><div><h3>WHAT — Outcome / Deliverable</h3>' + renderList(exportData.what_proposals) + '</div></div>'
-            + activationProgressHTML
-            + renderSection('Strategic Pitch', 'Outbound narrative', renderParagraphs(exportData.pitch_text), 'nested');
+        var activationHTML = activationHasPairs || pitchIsAvailable
+            ? (activationHasPairs
+                ? '<div class="two-col"><div><h3>WHY — Customer Value / Consequence</h3>' + renderList(exportData.why_proposals) + '</div><div><h3>WHAT — Outcome / Deliverable</h3>' + renderList(exportData.what_proposals) + '</div></div>' + activationProgressHTML
+                : '')
+                + (pitchIsAvailable ? renderSection('Strategic Pitch', 'Outbound narrative', renderParagraphs(exportData.pitch_text), 'nested') : '')
+            : '<div class="callout amber"><h3>Strategic Activation unavailable</h3><p>This analytical section did not complete within its governed stage deadline.</p></div>';
         var strategicForesightData = exportData.strategic_foresight || {};
         var strategicForesightHTML = renderStrategicForesightEvidence(strategicForesightData);
         var buyingInsightStakeholdersHTML = renderBuyingInsightStakeholders(buyingInsightReport);
@@ -1040,7 +1048,9 @@ const isForesightContext = (link) => {
             + '</style>\n</head>\n<body>\n<main>\n'
             + '<header class="hero"><div class="kicker">Master Data HTML Export</div><h1>' + escapeHTML(companyName) + '</h1><p class="page-note">Complete uploadable evidence and analysis package. This file includes collected sources, trust metadata, diagnosis, activation context, foresight analysis, detailed forensic report, and the raw JSON payload.</p><div class="meta">' + headerMeta + '</div></header>\n'
             + renderSection('General Summary', 'Executive context', renderParagraphs(exportData.general_summary))
-            + renderSection('AI Diagnosis', 'Interpretation and risks', diagnosisHTML)
+            + renderSection('AI Diagnosis', 'Interpretation and risks', exportData.ai_diagnosis_status === 'unavailable'
+                ? '<div class="callout amber"><h3>AI Diagnosis unavailable</h3><p>Downstream synthesis may still use the governed evidence directly.</p></div>'
+                : diagnosisHTML)
             + renderSection('Strategic Synthesis', 'Current reality × external pressure', renderStrategicSynthesisParagraphs(exportData.strategic_synthesis))
             + renderSection('Master Metrics', 'All score and trust signals', '<div class="metrics">' + metrics.join('') + '</div>' + breakdownHTML)
             + renderSection('Evidence Trust', 'Source verification and promotion state', trustHTML)
@@ -1471,6 +1481,11 @@ const isForesightContext = (link) => {
   const detailedReportStatus = data?.detailed_report_status || '';
   const showDetailedReport = Boolean(data?.detailed_report && detailedReportStatus !== 'incomplete');
   const showDetailedReportUnavailable = Boolean(detailedReportStatus && detailedReportStatus !== 'generated' && !showDetailedReport);
+  const aiDiagnosisAvailable = Boolean(data?.summary_text && data?.ai_diagnosis_status !== 'unavailable' && data?.summary_text !== 'AI Summary Unavailable');
+  const strategicPitchAvailable = Boolean(data?.pitch_text && data?.pitch_text !== 'Pitch Unavailable');
+  const strategicActivationAvailable = Boolean(
+    (data?.why_proposals?.length && data?.what_proposals?.length) || strategicPitchAvailable
+  );
 
   return (
     <div className="space-y-4">
@@ -2006,10 +2021,14 @@ const isForesightContext = (link) => {
             <ShieldCheck className="text-indigo-400" />
             AI Diagnosis
             </h3>
-            <p className="text-slate-200 leading-relaxed whitespace-pre-line text-base font-light">
-                <EvidenceCitedText text={data.summary_text} evidenceManifest={data.evidence_manifest} />
-            </p>
-            {data.evidence_based_risks && data.evidence_based_risks.length > 0 && (
+            {aiDiagnosisAvailable ? (
+              <p className="text-slate-200 leading-relaxed whitespace-pre-line text-base font-light">
+                  <EvidenceCitedText text={data.summary_text} evidenceManifest={data.evidence_manifest} />
+              </p>
+            ) : (
+              <p className="text-amber-200/90 text-sm">AI Diagnosis was unavailable. Strategic Synthesis may still be generated directly from governed evidence.</p>
+            )}
+            {aiDiagnosisAvailable && data.evidence_based_risks && data.evidence_based_risks.length > 0 && (
                 <div className="mt-5">
                     <p className="text-[11px] font-bold text-rose-300 uppercase tracking-wider mb-2">Evidence-Based Risks</p>
                     <ul className="space-y-2">
@@ -2269,7 +2288,7 @@ const isForesightContext = (link) => {
 
         {activeTab === "activation" && (<>
         {/* STRATEGIC PITCH SECTION */}
-        {data.pitch_text && (
+        {strategicPitchAvailable && (
             <div className="bg-white/5 p-6 rounded-2xl border border-white/10 backdrop-blur-md">
                 <h3 className="text-lg font-bold text-white mb-3 flex items-center gap-2">
                     <Sparkles className="text-cyan-400" size={20} />
@@ -2360,6 +2379,11 @@ const isForesightContext = (link) => {
                     <Info size={12} />
                     Proposals derived from the weakest Knowledge Base dimensions — intended as conversation starters, not promises.
                 </p>
+            </div>
+        )}
+        {!strategicActivationAvailable && (
+            <div className="bg-amber-500/5 p-6 rounded-2xl border border-amber-400/20 text-sm text-amber-100/90">
+                Strategic Activation was unavailable within its governed stage deadline.
             </div>
         )}
 

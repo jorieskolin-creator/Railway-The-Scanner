@@ -54,7 +54,7 @@ from database_sanitizer import sanitize_database
 from foresight_guardrails import sanitize_foresight_collection, sanitize_report_foresight_fields
 from domain_classifier import infer_domain
 from evidence_cleaner import CLEAN_EVIDENCE_MODEL_CHAIN, clean_company_evidence
-from llm_clients import CLAUDE_SONNET_MODEL, GPT_PRO_MODEL, GPT_REASONING_MODEL, GPT_VERIFIER_MODEL, call_anthropic_text, call_json_model_chain, call_openai_text
+from llm_clients import CLAUDE_OPUS_MODEL, CLAUDE_SONNET_MODEL, GPT_PRO_MODEL, GPT_REASONING_MODEL, GPT_VERIFIER_MODEL, call_anthropic_text, call_json_model_chain, call_openai_text
 from model_policy import policy_for
 from buying_potential import BuyingPotentialError, generate_buying_potential_report, load_service_portfolio_kb, validate_service_portfolio_kb
 from company_evidence import CompanyEvidenceError, build_company_evidence_database
@@ -470,7 +470,10 @@ _ACTIVATION_OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
         "commercial_pitch": {"type": "string"},
-        "activation_pairs": {"type": "array", "minItems": 2, "maxItems": 3, "items": _ACTIVATION_PAIR_SCHEMA},
+        # Anthropic Structured Outputs currently accepts minItems only as 0 or 1.
+        # The Scanner contract still requires 2-3 pairs; enforce that after parse
+        # so the same schema is portable across providers.
+        "activation_pairs": {"type": "array", "minItems": 1, "maxItems": 3, "items": _ACTIVATION_PAIR_SCHEMA},
         "why_proposals": {"type": "array", "items": {"type": "string"}},
         "what_proposals": {"type": "array", "items": {"type": "string"}},
         "what_progress_proposals": {"type": "array", "items": {"type": "string"}},
@@ -4996,18 +4999,33 @@ def _execute_scan_pipeline(
         #                  cannot consume the Detailed Report or save allocation.
         SCAN_TOTAL_BUDGET = 900
         CORE_SYNTHESIS_RESERVE = 240
+
+        # Keep the pre-synthesis reservation unchanged. Scanner 2 and Foresight
+        # use this fixed floor, so post-synthesis recovery cannot reduce their
+        # existing search or jury budgets.
+        FINAL_OUTPUT_RESERVE = 260
+
+        # Post-synthesis allocations are soft targets. A stage may borrow up to
+        # its maximum only after all downstream minimum floors remain protected.
         DIAGNOSIS_CHAIN_BUDGET = 110
-        ACTIVATION_CHAIN_BUDGET = 130
+        DIAGNOSIS_CHAIN_MAX = 150
+        ACTIVATION_CHAIN_BUDGET = 150
+        ACTIVATION_CHAIN_MAX = 190
         INFERENCE_FACT_CHECK_BUDGET = 35
-        GENERAL_SUMMARY_BUDGET = 60
+        INFERENCE_FACT_CHECK_MAX = 50
+        GENERAL_SUMMARY_BUDGET = 80
+        GENERAL_SUMMARY_MAX = 90
         DETAILED_REPORT_BUDGET = 150
-        FINAL_SAVE_BUDGET = 15
-        FINAL_OUTPUT_RESERVE = (
-            INFERENCE_FACT_CHECK_BUDGET
-            + GENERAL_SUMMARY_BUDGET
-            + DETAILED_REPORT_BUDGET
-            + FINAL_SAVE_BUDGET
-        )
+        DETAILED_REPORT_MAX = 170
+        FINAL_SAVE_BUDGET = 20
+
+        ACTIVATION_MIN_FLOOR = 100
+        INFERENCE_FACT_CHECK_MIN_FLOOR = 25
+        # 45 seconds permits the 35-second primary plus a short independent
+        # fallback; the remaining 25 seconds are reserved for verification.
+        GENERAL_SUMMARY_MIN_FLOOR = 70
+        DETAILED_REPORT_MIN_FLOOR = 130
+        FINAL_SAVE_MIN_FLOOR = 20
         OPERATIONAL_OVERHEAD_RESERVE = 20
         REALITY_PHASE_MAX_BUDGET = 380
         DETAIL_REPORT_FULL_MIN = 120
@@ -5053,14 +5071,15 @@ def _execute_scan_pipeline(
             "save_finalize": {"allocated_seconds": FINAL_SAVE_BUDGET},
         }
 
-        def _available_for_final_stage(stage_budget: int, reserve_after: int) -> int:
-            return max(
+        def _available_for_stage(target_budget: int, max_budget: int, reserve_after: int) -> int:
+            """Return a soft stage budget while preserving downstream floors."""
+            available = max(
                 0,
-                min(
-                    stage_budget,
-                    int(_scan_remaining()) - reserve_after - OPERATIONAL_OVERHEAD_RESERVE,
-                ),
+                int(_scan_remaining()) - reserve_after - OPERATIONAL_OVERHEAD_RESERVE,
             )
+            if available <= target_budget:
+                return available
+            return min(max_budget, available)
 
         def _record_final_stage(stage: str, started_at: float, status: str) -> None:
             timing = final_stage_timing.setdefault(stage, {})
@@ -5071,6 +5090,19 @@ def _execute_scan_pipeline(
             )
             timing["remaining_seconds"] = round(_scan_remaining(), 2)
             timing["status"] = status
+
+        def _log_stage_allocation(
+            stage: str,
+            target: int,
+            maximum: int,
+            allowed: int,
+            reserve_after: int,
+        ) -> None:
+            print(
+                f"   ⏱️ [Budget] {stage}: target={target}s | max={maximum}s | allowed={allowed}s | "
+                f"borrowable={max(0, allowed - target)}s | downstream_floor={reserve_after}s | "
+                f"global_remaining={int(_scan_remaining())}s"
+            )
 
         def _log_budget_state(label: str) -> None:
             snap = _budget_snapshot()
@@ -5721,12 +5753,23 @@ def _execute_scan_pipeline(
         scan_quality = "current_reality_unavailable" if _s2_unavailable else "complete"
         diagnosis_generation_status = "not_attempted"
         diagnosis_duration_seconds = 0
+        diagnosis_generation_meta = {
+            "status": "not_attempted",
+            "provider": "",
+            "parse_status": "not_attempted",
+            "fallback_reason": "",
+            "attempts": [],
+            "duration_seconds": 0,
+        }
 
         anthropic_key = clean_env_var(os.environ.get("ANTHROPIC_API_KEY"))
-        has_synth_key = anthropic_key
+        has_synth_key = bool(
+            anthropic_key
+            or clean_env_var(os.environ.get("GPT_API_KEY"))
+            or clean_env_var(os.environ.get("OPENAI_API_KEY"))
+        )
         if has_synth_key:
             try:
-                claude_client = anthropic.Anthropic(api_key=anthropic_key, max_retries=0) if anthropic_key else None
                 intent_narrative = json.dumps(intent_results["breakdown"])
                 synthesis_source_pool = company_evidence_candidates + (reality_results.get("links") or []) + financial_evidence_links
                 verified_links = _analysis_evidence_links(synthesis_source_pool)
@@ -5952,27 +5995,64 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                     0,
                     int(synth_remaining) - FINAL_OUTPUT_RESERVE - OPERATIONAL_OVERHEAD_RESERVE,
                 )
-                _diagnosis_available = max(0, min(DIAGNOSIS_CHAIN_BUDGET, _synth_available - ACTIVATION_CHAIN_BUDGET))
+                diagnosis_downstream_floor = (
+                    ACTIVATION_MIN_FLOOR
+                    + INFERENCE_FACT_CHECK_MIN_FLOOR
+                    + GENERAL_SUMMARY_MIN_FLOOR
+                    + DETAILED_REPORT_MIN_FLOOR
+                    + FINAL_SAVE_MIN_FLOOR
+                )
+                _diagnosis_available = _available_for_stage(
+                    DIAGNOSIS_CHAIN_BUDGET,
+                    DIAGNOSIS_CHAIN_MAX,
+                    diagnosis_downstream_floor,
+                )
                 _diagnosis_deadline = time.time() + _diagnosis_available
+                _log_stage_allocation(
+                    "AI Diagnosis",
+                    DIAGNOSIS_CHAIN_BUDGET,
+                    DIAGNOSIS_CHAIN_MAX,
+                    _diagnosis_available,
+                    diagnosis_downstream_floor,
+                )
 
                 def _diagnosis_budget_left() -> int:
                     return max(0, int(_diagnosis_deadline - time.time()))
 
                 _gpt_available = bool(os.environ.get("GPT_API_KEY") or os.environ.get("OPENAI_API_KEY"))
-                if _diagnosis_available >= 90:
-                    OPUS_SYNTH_TIMEOUT = min(70, _diagnosis_available - 40)
-                    GPT_SYNTH_TIMEOUT = min(40, _diagnosis_available - OPUS_SYNTH_TIMEOUT) if _gpt_available else 0
-                    SONNET_SYNTH_TIMEOUT = min(40, _diagnosis_available - OPUS_SYNTH_TIMEOUT) if not _gpt_available else 0
-                elif _diagnosis_available >= 30:
+                _sonnet_available = bool(anthropic_key)
+                if _gpt_available and not _sonnet_available:
                     OPUS_SYNTH_TIMEOUT = 0
-                    GPT_SYNTH_TIMEOUT = min(40, _diagnosis_available) if _gpt_available else 0
-                    SONNET_SYNTH_TIMEOUT = min(40, _diagnosis_available) if not _gpt_available else 0
+                    GPT_SYNTH_TIMEOUT = min(110, _diagnosis_available)
+                    SONNET_SYNTH_TIMEOUT = 0
+                elif _sonnet_available and not _gpt_available:
+                    OPUS_SYNTH_TIMEOUT = min(70, max(0, _diagnosis_available - 30))
+                    GPT_SYNTH_TIMEOUT = 0
+                    SONNET_SYNTH_TIMEOUT = max(0, _diagnosis_available - OPUS_SYNTH_TIMEOUT)
+                elif _diagnosis_available >= 130:
+                    OPUS_SYNTH_TIMEOUT = 70
+                    GPT_SYNTH_TIMEOUT = 35 if _gpt_available else 0
+                    SONNET_SYNTH_TIMEOUT = (
+                        max(25, _diagnosis_available - OPUS_SYNTH_TIMEOUT - GPT_SYNTH_TIMEOUT)
+                        if _sonnet_available else 0
+                    )
+                elif _diagnosis_available >= 95:
+                    OPUS_SYNTH_TIMEOUT = 0
+                    GPT_SYNTH_TIMEOUT = min(55, _diagnosis_available - 35) if _gpt_available else 0
+                    SONNET_SYNTH_TIMEOUT = (
+                        max(30, _diagnosis_available - GPT_SYNTH_TIMEOUT)
+                        if _sonnet_available else 0
+                    )
+                elif _diagnosis_available >= 55:
+                    OPUS_SYNTH_TIMEOUT = 0
+                    GPT_SYNTH_TIMEOUT = 0
+                    SONNET_SYNTH_TIMEOUT = _diagnosis_available if _sonnet_available else 0
                 else:
                     OPUS_SYNTH_TIMEOUT = GPT_SYNTH_TIMEOUT = SONNET_SYNTH_TIMEOUT = 0
 
-                _use_opus = OPUS_SYNTH_TIMEOUT > 0
+                _use_opus = OPUS_SYNTH_TIMEOUT > 0 and bool(anthropic_key)
                 _use_gpt = GPT_SYNTH_TIMEOUT > 0
-                _use_sonnet = SONNET_SYNTH_TIMEOUT > 0
+                _use_sonnet = SONNET_SYNTH_TIMEOUT > 0 and bool(anthropic_key)
                 _synth_chain_budget = min(
                     _diagnosis_available,
                     OPUS_SYNTH_TIMEOUT + GPT_SYNTH_TIMEOUT + SONNET_SYNTH_TIMEOUT,
@@ -6004,41 +6084,40 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                         f"— skipping all synthesis models, scan stored as partial"
                     )
                 else:
-                    def _synth_opus():
-                        return claude_client.messages.create(
-                            model="claude-opus-4-8",
-                            max_tokens=16000,
-                            thinking={"type": "adaptive"},
-                            extra_body={"output_config": {"effort": "xhigh"}},
-                            messages=[{"role": "user", "content": synthesis_prompt}]
-                        )
-
                     if _use_opus:
+                        attempt_started = time.time()
                         try:
                             _opus_timeout = min(
                                 OPUS_SYNTH_TIMEOUT,
                                 max(8, _diagnosis_budget_left()),
                             )
                             print(f"   🔄 [Synthesis] Attempting claude-opus-4-8 with Extended Thinking (timeout: {_opus_timeout}s)...")
-                            synth_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                            synth_future = synth_pool.submit(_synth_opus)
-                            try:
-                                response = synth_future.result(timeout=_opus_timeout)
-                                # Extended thinking response: [ThinkingBlock, TextBlock]
-                                # Extract the text block (skip thinking blocks)
-                                response_text = ""
-                                if response.content:
-                                    for block in response.content:
-                                        if getattr(block, 'type', None) == 'text':
-                                            response_text = block.text
-                                            break
-                                print(f"   ✅ [Synthesis] claude-opus-4-8 + Extended Thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
-                            except concurrent.futures.TimeoutError:
-                                synth_pool.shutdown(wait=False)
-                                print(f"   ⏰ [Synthesis] claude-opus-4-8 timed out after {_opus_timeout}s")
-                                raise Exception(f"Opus timeout after {_opus_timeout}s")
-                            synth_pool.shutdown(wait=False)
+                            response_text = call_anthropic_text(
+                                synthesis_prompt,
+                                model=CLAUDE_OPUS_MODEL,
+                                max_tokens=6000,
+                                timeout=_opus_timeout,
+                                max_retries=0,
+                                reasoning_effort="xhigh",
+                                log_label="Scanner Diagnosis Opus",
+                            )
+                            diagnosis_generation_meta["provider"] = CLAUDE_OPUS_MODEL
+                            diagnosis_generation_meta["attempts"].append({
+                                "model": CLAUDE_OPUS_MODEL,
+                                "status": "completed",
+                                "timeout_seconds": _opus_timeout,
+                                "elapsed_seconds": round(time.time() - attempt_started, 2),
+                            })
+                            print(f"   ✅ [Synthesis] claude-opus-4-8 + Extended Thinking succeeded in {int((time.time() - synth_start) * 1000)}ms")
                         except Exception as opus_err:
+                            diagnosis_generation_meta["attempts"].append({
+                                "model": CLAUDE_OPUS_MODEL,
+                                "status": "failed",
+                                "timeout_seconds": OPUS_SYNTH_TIMEOUT,
+                                "elapsed_seconds": round(time.time() - attempt_started, 2),
+                                "error": str(opus_err)[:240],
+                            })
+                            diagnosis_generation_meta["fallback_reason"] = f"{CLAUDE_OPUS_MODEL} failed: {opus_err}"
                             print(f"   ❌ [Synthesis] Opus 4.8 failed: {opus_err}")
                     else:
                         print(
@@ -6048,6 +6127,7 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
 
                     # Fallback 1: configured GPT frontier model (text-only synthesis from verified evidence)
                     if not response_text and _use_gpt and _diagnosis_budget_left() >= 8:
+                        attempt_started = time.time()
                         try:
                             _gpt_timeout = min(
                                 GPT_SYNTH_TIMEOUT,
@@ -6056,33 +6136,39 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                             print(f"   🔄 [Synthesis] Falling back to {GPT_REASONING_MODEL} (timeout: {_gpt_timeout}s)...")
                             gpt_start = time.time()
 
-                            def _synth_gpt():
-                                return call_openai_text(
-                                    synthesis_prompt,
-                                    model=GPT_REASONING_MODEL,
-                                    max_output_tokens=12000,
-                                    timeout=_gpt_timeout,
-                                    max_retries=0,
-                                    reasoning_effort="medium",
-                                    text_verbosity="medium",
-                                    log_label="Scanner Synthesis Fallback",
-                                )
-
-                            gpt_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                            gpt_future = gpt_pool.submit(_synth_gpt)
-                            try:
-                                response_text = gpt_future.result(timeout=_gpt_timeout)
-                            except concurrent.futures.TimeoutError:
-                                gpt_pool.shutdown(wait=False)
-                                print(f"   ⏰ [Synthesis] {GPT_REASONING_MODEL} timed out after {_gpt_timeout}s")
-                                raise Exception(f"{GPT_REASONING_MODEL} timeout after {_gpt_timeout}s")
-                            gpt_pool.shutdown(wait=False)
+                            response_text = call_openai_text(
+                                synthesis_prompt,
+                                model=GPT_REASONING_MODEL,
+                                max_output_tokens=7000,
+                                timeout=_gpt_timeout,
+                                max_retries=0,
+                                reasoning_effort="medium",
+                                text_verbosity="medium",
+                                log_label="Scanner Diagnosis GPT Fallback",
+                            )
+                            diagnosis_generation_meta["provider"] = GPT_REASONING_MODEL
+                            diagnosis_generation_meta["attempts"].append({
+                                "model": GPT_REASONING_MODEL,
+                                "status": "completed",
+                                "timeout_seconds": _gpt_timeout,
+                                "elapsed_seconds": round(time.time() - attempt_started, 2),
+                            })
                             print(f"   ✅ [Synthesis] {GPT_REASONING_MODEL} succeeded in {int((time.time() - gpt_start) * 1000)}ms")
                         except Exception as gpt_err:
+                            diagnosis_generation_meta["attempts"].append({
+                                "model": GPT_REASONING_MODEL,
+                                "status": "failed",
+                                "timeout_seconds": GPT_SYNTH_TIMEOUT,
+                                "elapsed_seconds": round(time.time() - attempt_started, 2),
+                                "error": str(gpt_err)[:240],
+                            })
+                            diagnosis_generation_meta["fallback_reason"] = f"{GPT_REASONING_MODEL} failed: {gpt_err}"
                             print(f"   ❌ [Synthesis] {GPT_REASONING_MODEL} failed: {gpt_err}")
 
-                    # Controlled fallback: Sonnet is used only when GPT is not configured.
+                    # Independent-provider fallback remains available after either
+                    # Opus or GPT failure. Provider availability must not suppress it.
                     if not response_text and _use_sonnet and _diagnosis_budget_left() >= 8:
+                        attempt_started = time.time()
                         try:
                             _sonnet_timeout = min(
                                 SONNET_SYNTH_TIMEOUT,
@@ -6099,28 +6185,32 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                                 "from minor details like tool names in job ads."
                             )
 
-                            def _synth_sonnet():
-                                return claude_client.messages.create(
-                                    model=CLAUDE_SONNET_MODEL,
-                                    max_tokens=4000,
-                                    system=_sonnet_system,
-                                    messages=[{"role": "user", "content": synthesis_prompt}],
-                                )
-
-                            m_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                            m_future = m_pool.submit(_synth_sonnet)
-                            try:
-                                sonnet_resp = m_future.result(timeout=_sonnet_timeout)
-                                for block in sonnet_resp.content:
-                                    if getattr(block, 'type', None) == 'text':
-                                        response_text = block.text
-                                        break
-                                print(f"   ✅ [Synthesis] {CLAUDE_SONNET_MODEL} succeeded in {int((time.time() - m_start) * 1000)}ms")
-                            except concurrent.futures.TimeoutError:
-                                m_pool.shutdown(wait=False)
-                                print(f"   ⏰ [Synthesis] {CLAUDE_SONNET_MODEL} timed out after {_sonnet_timeout}s")
-                            m_pool.shutdown(wait=False)
+                            response_text = call_anthropic_text(
+                                f"{_sonnet_system}\n\n{synthesis_prompt}",
+                                model=CLAUDE_SONNET_MODEL,
+                                max_tokens=5000,
+                                timeout=_sonnet_timeout,
+                                max_retries=0,
+                                reasoning_effort="medium",
+                                log_label="Scanner Diagnosis Sonnet Fallback",
+                            )
+                            diagnosis_generation_meta["provider"] = CLAUDE_SONNET_MODEL
+                            diagnosis_generation_meta["attempts"].append({
+                                "model": CLAUDE_SONNET_MODEL,
+                                "status": "completed",
+                                "timeout_seconds": _sonnet_timeout,
+                                "elapsed_seconds": round(time.time() - attempt_started, 2),
+                            })
+                            print(f"   ✅ [Synthesis] {CLAUDE_SONNET_MODEL} succeeded in {int((time.time() - m_start) * 1000)}ms")
                         except Exception as sonnet_err:
+                            diagnosis_generation_meta["attempts"].append({
+                                "model": CLAUDE_SONNET_MODEL,
+                                "status": "failed",
+                                "timeout_seconds": SONNET_SYNTH_TIMEOUT,
+                                "elapsed_seconds": round(time.time() - attempt_started, 2),
+                                "error": str(sonnet_err)[:240],
+                            })
+                            diagnosis_generation_meta["fallback_reason"] = f"{CLAUDE_SONNET_MODEL} failed: {sonnet_err}"
                             print(f"   ❌ [Synthesis] All models failed. Last error: {sonnet_err}")
 
                 if not response_text:
@@ -6138,14 +6228,39 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                 else:
                     diagnosis_generation_status = "generated"
                 diagnosis_duration_seconds = round(time.time() - synth_start, 2)
+                diagnosis_generation_meta.update({
+                    "status": diagnosis_generation_status,
+                    "duration_seconds": diagnosis_duration_seconds,
+                    "parse_status": "pending" if response_text else "unavailable",
+                    "allowed_seconds": _diagnosis_available,
+                    "borrowed_seconds": max(0, _diagnosis_available - DIAGNOSIS_CHAIN_BUDGET),
+                })
 
                 if diagnosis_generation_status == "unavailable" and scan_quality == "complete":
                     scan_quality = "partial_synthesis"
 
                 if response_text:
                     payload = extract_json_from_text(response_text)
+                    if not payload:
+                        # A provider may return usable diagnosis prose without the
+                        # requested wrapper. Preserve it as diagnosis text, but do not
+                        # let wrapper/parse quality gate the independently governed
+                        # Strategic Synthesis and Activation stage.
+                        payload = json.dumps({
+                            "diagnostic_summary": response_text,
+                            "evidence_based_risks": [],
+                            "reality_score": reality_results.get("score", 50),
+                        })
+                        diagnosis_generation_meta["parse_status"] = "plain_text_fallback"
                     if payload:
                          json_data = json.loads(payload, strict=False)
+                         if (
+                             diagnosis_generation_status == "generated"
+                             and diagnosis_generation_meta.get("parse_status") != "plain_text_fallback"
+                         ):
+                             diagnosis_generation_meta["parse_status"] = "valid"
+                         elif diagnosis_generation_status == "unavailable":
+                             diagnosis_generation_meta["parse_status"] = "unavailable_placeholder"
                          summary = strip_archetype_labels_from_text(sanitize_inference_wording(json_data.get("diagnostic_summary", json_data.get("summary", summary))))
                          pitch = strip_archetype_labels_from_text(sanitize_inference_wording(json_data.get("commercial_pitch", json_data.get("pitch", pitch)) or pitch))
                          evidence_based_risks = strip_archetype_labels_from_text(sanitize_inference_wording(json_data.get("evidence_based_risks", evidence_based_risks) or evidence_based_risks))
@@ -6216,12 +6331,28 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                          why_proposals = strip_archetype_labels_from_text(why_proposals)
                          what_proposals = strip_archetype_labels_from_text(what_proposals)
 
-                         # --- STRATEGIC ACTIVATION (WHY / WHAT / PITCH) ---
-                         # This is deliberately split from diagnosis. The first
-                         # call is the strategic judge; this second call activates
-                         # only the locked diagnosis, risks, evidence, and KB.
-                         _activation_left = _synthesis_budget_left()
-                         if _activation_left > 60:
+                         # --- STRATEGIC SYNTHESIS, THEN ACTIVATION ---
+                         # These are separate governed tasks. Diagnosis availability
+                         # may enrich them, but never gates their execution.
+                         _activation_reserve_after = (
+                             INFERENCE_FACT_CHECK_MIN_FLOOR
+                             + GENERAL_SUMMARY_MIN_FLOOR
+                             + DETAILED_REPORT_MIN_FLOOR
+                             + FINAL_SAVE_MIN_FLOOR
+                         )
+                         _activation_left = _available_for_stage(
+                             ACTIVATION_CHAIN_BUDGET,
+                             ACTIVATION_CHAIN_MAX,
+                             _activation_reserve_after,
+                         )
+                         _log_stage_allocation(
+                             "Strategic Synthesis + Activation",
+                             ACTIVATION_CHAIN_BUDGET,
+                             ACTIVATION_CHAIN_MAX,
+                             _activation_left,
+                             _activation_reserve_after,
+                         )
+                         if _activation_left >= 55:
                              generation_graph_input = {
                                  "evidence_links": verified_links,
                                  "foresight_links": foresight_links,
@@ -6230,7 +6361,7 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                              }
                              attach_evidence_graph(generation_graph_input)
                              generation_manifest = generation_graph_input.get("evidence_manifest", [])
-                             activation_evidence_packet = evidence_prompt_packet(generation_manifest, limit=40)
+                             activation_evidence_packet = evidence_prompt_packet(generation_manifest, limit=18)
                              activation_classification_context = build_classification_namespaces(
                                  adaptability_archetype=expected_archetype,
                                  foresight_force_profile={
@@ -6251,24 +6382,19 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                                      )
                                  except Exception as fs_err:
                                      print(f"   ⚠️ [Activation] Foresight context unavailable: {type(fs_err).__name__}: {fs_err}")
-                             activation_prompt = f"""You are writing the Strategic Synthesis and Activation layer for {companyName}.
-The AI Diagnosis below is LOCKED when available. If it says AI Summary Unavailable, do not infer from the placeholder: reason directly from the governed evidence packet, financial context, explicit availability statuses, and foresight context. The Knowledge Base is the mandatory baseline. You may turn governed inputs into WHY/WHAT proposals and a concise pitch, but you may not introduce new facts.
+                             activation_context = f"""COMPANY: {companyName}
 
-### KNOWLEDGE BASE BASELINE — MANDATORY
-{knowledge_context}
-
-### LOCKED DIAGNOSTIC CONTRACT
+### GOVERNED CURRENT CONTEXT
 Reality score: {reality_results["score"]}
 Intent score: {intent_results["score"]}
 Financial context: {financial_context or "No financial interpretation available."}
-Washing / contradiction context: {washing_context or "No washing flag detected."}
-Archetype is audit-only and intentionally omitted from this writing context. Do not write labels such as Thriving, Modernizing, Cash Cow, or At Risk in strategic_synthesis, pitch, WHY, or WHAT.
+Contradiction context: {washing_context or "No washing flag detected."}
+Diagnosis status: {diagnosis_generation_status}
+Diagnosis: {summary if diagnosis_generation_status == "generated" else "Unavailable; use governed evidence directly."}
+Evidence-based risks: {json.dumps(evidence_based_risks, ensure_ascii=False)}
 
-Diagnosis:
-{summary}
-
-Evidence-based risks:
-{json.dumps(evidence_based_risks, ensure_ascii=False)}
+### KNOWLEDGE BASE BASELINE — MANDATORY
+{knowledge_context}
 
 ### CLASSIFICATION NAMESPACES
 {json.dumps(activation_classification_context, ensure_ascii=False)}
@@ -6278,91 +6404,41 @@ Evidence-based risks:
 {negative_findings_context}
 {foresight_context}
 {evidence_absence_context}
+"""
 
-### ACTIVATION RULES
-1. Use the Knowledge Base terminology and proposal logic as the baseline.
-2. Ground every WHY/WHAT/Pitch claim in the locked diagnosis, risks, or evidence packet above.
-3. Do NOT add new facts, people, metrics, events, client names, partnerships, or timelines.
-4. Always produce 2-3 paired WHY/WHAT items. If evidence is thin, frame pairs as validation or discovery triggers instead of omitting them.
-5. WHY1 must pair with WHAT1, WHY2 with WHAT2, and WHY3 with WHAT3 if present.
-6. Keep activation suggestive but evidence-bound: proposals, not promises.
-7. Write strategic_synthesis as the explicit reasoning bridge between CURRENT COMPANY REALITY and EXTERNAL FORESIGHT PRESSURES.
-8. A macro pressure never proves that the company has acted. Use modal language such as "may increase pressure", "creates a question", or "could affect".
-9. Preserve contradictions between current-reality premises; explain what they may mean instead of averaging them away.
-10. Do not compare Scanner outputs across scans or discuss Scanner performance.
-11. Cite company premises with [EVD-*] and macro premises with [FOR-*]. Every material synthesis sentence must cite the IDs it uses.
-12. If you use an absence-of-promoted-evidence signal, phrase it as an evidence/proof gap, never as proof that the capability is absent.
-13. If partial/contextual support exists, say what is partially supported and what remains unconfirmed; do not write absolute "no source verifies" wording for a broader capability.
-14. Treat evidence limits as one qualifier, not the whole thesis. Spend most of the synthesis on bounded interpretation, priorities, and pressure-readiness fit.
-
-### STRATEGIC SYNTHESIS
-Write 300-500 words. This is the deepest company-specific reasoning layer, not a sales pitch.
-Write exactly 4-5 short paragraphs separated by \\n\\n inside the strategic_synthesis JSON string. This paragraphing is required for readability.
-Use this structure:
-- Paragraph 1: current adaptation thesis — the company's present position in one clear opening paragraph.
-- Paragraph 2: 2-3 strategic tensions grounded in the locked diagnosis, risks, financial context, or evidence gaps.
-- Paragraph 3: at least 2 external foresight pressure links, each connected to a current company readiness or proof condition.
-- Paragraph 4: at least 1 financial-capacity implication plus at least 2 time horizons (for example: "next 6-12 months" and "12-36 months").
-- Optional paragraph 5: 1 uncertainty or invalidation condition that would change the thesis.
-Do not use section headings inside strategic_synthesis. Write coherent executive prose with paragraph breaks.
-
-### PITCH
-Write a direct cold-outreach message to a C-level executive at {companyName}.
-- 90-110 words.
-- Exactly 3 short paragraphs separated by \\n\\n.
-- Opening hook / concrete proposal / closing CTA.
-- No generic service names.
-
-### WHY / WHAT
-Generate 2-3 paired WHY/WHAT items every time. Do not collapse to one pair because evidence is thin.
-- WHY = why this matters for the customer: connect a detected challenge/problem to end-value, future strategy, risk, cost of inaction, or missed opportunity.
-- WHAT_TO_DO = the outcome or deliverable state to achieve next. It must describe what becomes clarified, evidenced, decision-ready, or observable for the customer; do not describe HOW to deliver it.
-- WHAT_PROGRESS_SHOWS = observable proof of progress after the activity. It may be qualitative or measurable, but do not invent numeric KPI targets unless already evidenced.
-- The legacy "what" field must contain the same outcome/deliverable-state text as WHAT_TO_DO for backward compatibility.
-- Do NOT lead WHAT with run, conduct, facilitate, perform, execute, or build.
-- Do NOT name consulting methods, tools, workshops, diagnostics, assessments, Evolving Modernization tactics, TAC codes, Value Stream Analysis, AI Readiness Assessment, or Delivery & Capacity Planning in WHAT. Those belong to proposal/HOW later.
-- Each WHY/WHAT field: 1-2 sentences.
-- Each pair must have exactly one theme_type:
-  - current_status: current evidence, operating-model, financial, proof, or portfolio reality.
-  - foresight_driven: external pressure combined with current readiness or uncertainty.
-  - proactive_opportunity: a bounded hypothesis or discovery trigger to validate, not a claim.
-- Each pair must also include sales_use with the same allowed values: current_status, foresight_driven, proactive_opportunity.
-- If evidence is thin, frame the pair as a validation/discovery trigger instead of omitting it.
-- WHY1 pairs with WHAT1, WHY2 with WHAT2, and WHY3 with WHAT3 if present.
-- Preserve lineage when IDs are present in the supplied evidence: parent_evidence_ids and parent_foresight_ids may contain only IDs visible in this prompt. Never invent an ID.
-- Keep pressure_horizon separate from sales_validation_window. Add timing_basis only when the current payload supports the timing.
-
-### OUTPUT
-Respond with valid JSON only:
-{{"strategic_synthesis": "...", "commercial_pitch": "...", "activation_pairs": [{{"theme_type": "current_status", "sales_use": "current_status", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "...", "parent_evidence_ids": [], "parent_foresight_ids": [], "independent_source_count": 0, "source_freshness": "...", "pressure_horizon": "...", "sales_validation_window": "...", "timing_basis": "..."}}, {{"theme_type": "foresight_driven", "sales_use": "foresight_driven", "theme": "...", "why": "...", "what": "same as what_to_do", "what_to_do": "...", "what_progress_shows": "...", "parent_evidence_ids": [], "parent_foresight_ids": [], "independent_source_count": 0, "source_freshness": "...", "pressure_horizon": "...", "sales_validation_window": "...", "timing_basis": "..."}}], "why_proposals": ["WHY texts only"], "what_proposals": ["WHAT_TO_DO texts only"], "what_progress_proposals": ["WHAT_PROGRESS_SHOWS texts only"]}}"""
+                             strategic_synthesis_prompt = activation_context + f"""
+### TASK: STRATEGIC SYNTHESIS ONLY
+Write 300-500 words as exactly 4-5 short paragraphs separated by \\n\\n inside the JSON string.
+Paragraph 1: current adaptation thesis. Paragraph 2: 2-3 strategic tensions.
+Paragraph 3: at least two external pressure/readiness links. Paragraph 4: financial
+capacity and at least two time horizons. Optional paragraph 5: invalidation condition.
+Use evidence IDs already present. Macro pressure never proves company action. Treat
+absence as a proof gap, not proof of absence. Do not write archetype labels, sales pitch,
+WHY/WHAT, section headings, Scanner comparisons, or new facts.
+Return only the schema-constrained strategic_synthesis object.
+"""
 
                              activation_text = ""
                              activation_provider = ""
                              activation_fallback_reason = ""
                              activation_policy = policy_for("activation_strategic_synthesis")
                              activation_chain_started = time.time()
-                             activation_chain_cap = min(ACTIVATION_CHAIN_BUDGET, max(60, int(_activation_left)))
+                             activation_chain_cap = int(_activation_left)
                              activation_chain_deadline = activation_chain_started + activation_chain_cap
 
                              def _activation_chain_remaining() -> int:
                                  return max(0, int(activation_chain_deadline - time.time()))
 
-                             synthesis_timeout = min(85, max(35, activation_chain_cap - 45))
+                             synthesis_timeout = min(110, max(45, activation_chain_cap - 80))
                              synthesis_only = ""
                              try:
-                                 synthesis_prompt = activation_prompt + """
-
-FINAL TASK OVERRIDE:
-Generate only the Strategic Synthesis. Do not generate Pitch or WHY/WHAT in this pass.
-Return the schema-constrained strategic_synthesis object only.
-"""
                                  print(
                                      f"   🔄 [Activation:Synthesis] {GPT_PRO_MODEL} Pro "
                                      f"(timeout={synthesis_timeout}s, chain_cap={activation_chain_cap}s)..."
                                  )
                                  act_start = time.time()
                                  synthesis_text = call_openai_text(
-                                     synthesis_prompt,
+                                     strategic_synthesis_prompt,
                                      model=GPT_PRO_MODEL,
                                      max_output_tokens=16000,
                                      timeout=synthesis_timeout,
@@ -6386,34 +6462,54 @@ Return the schema-constrained strategic_synthesis object only.
                                  activation_generation_meta["synthesis_parse_status"] = "failed"
                                  print(f"   ❌ [Activation:Synthesis] {activation_fallback_reason}")
 
+                             if not synthesis_only and _activation_chain_remaining() >= 25:
+                                 try:
+                                     fallback_timeout = min(45, _activation_chain_remaining() - 20)
+                                     fallback_text = call_anthropic_text(
+                                         strategic_synthesis_prompt,
+                                         model=CLAUDE_SONNET_MODEL,
+                                         max_tokens=5000,
+                                         timeout=max(20, fallback_timeout),
+                                         max_retries=0,
+                                         reasoning_effort="high",
+                                         json_schema=_STRATEGIC_SYNTHESIS_SCHEMA,
+                                         json_schema_name="scanner_strategic_synthesis_fallback",
+                                         log_label="Strategic Synthesis Sonnet Fallback",
+                                     )
+                                     fallback_json = _parse_activation_json(fallback_text) or {}
+                                     synthesis_only = sanitize_inference_wording(
+                                         str(fallback_json.get("strategic_synthesis") or "").strip()
+                                     )
+                                     if not synthesis_only:
+                                         raise ValueError("Sonnet fallback returned no strategic_synthesis")
+                                     strategic_synthesis = synthesis_only
+                                     activation_generation_meta["synthesis_parse_status"] = "valid_fallback"
+                                 except Exception as synthesis_fallback_err:
+                                     activation_fallback_reason += f"; Sonnet synthesis failed: {synthesis_fallback_err}"
+                                     print(f"   ❌ [Activation:Synthesis] Sonnet fallback failed: {synthesis_fallback_err}")
+
                              chain_remaining = _activation_chain_remaining()
-                             sonnet_activation_timeout = min(45, chain_remaining)
+                             sonnet_activation_timeout = min(50, chain_remaining)
                              if sonnet_activation_timeout >= 18:
                                  try:
-                                     if synthesis_only:
-                                         sonnet_prompt = activation_prompt + f"""
+                                     sonnet_prompt = activation_context + f"""
+### LOCKED STRATEGIC SYNTHESIS
+{synthesis_only or "Unavailable. Use the governed context directly and keep every pair question-led."}
 
-LOCKED STRATEGIC SYNTHESIS FROM THE PRO PASS:
-{synthesis_only}
-
-FINAL TASK OVERRIDE:
-Generate only commercial_pitch, activation_pairs, why_proposals, what_proposals, and what_progress_proposals.
-Do not rewrite strategic_synthesis. Return the schema-constrained activation object only.
+### TASK: WHY/WHAT PAIRS AND PITCH ONLY
+Generate 2-3 paired activation items and one 90-110 word, three-paragraph C-level pitch.
+WHY explains customer end-value, strategic consequence, cost of inaction, or missed
+opportunity. WHAT_TO_DO describes an outcome/deliverable state, never a method or HOW.
+WHAT_PROGRESS_SHOWS gives observable proof. Keep legacy what identical to what_to_do.
+Do not lead WHAT with run, conduct, facilitate, perform, execute, or build. Do not name
+workshops, diagnostics, assessments, tactics, TAC codes, or consulting methods.
+Use current_status, foresight_driven, or proactive_opportunity consistently for
+theme_type and sales_use. Use only evidence/foresight IDs present above. Do not invent
+timing, people, metrics, events, services, or facts. Return only the activation schema.
 """
-                                         sonnet_schema = _ACTIVATION_OUTPUT_SCHEMA
-                                         schema_name = "scanner_activation_pairs"
-                                     else:
-                                         sonnet_prompt = activation_prompt + """
-
-FINAL TASK OVERRIDE:
-The Pro synthesis pass was unavailable. Generate the complete Strategic Synthesis, Pitch, and WHY/WHAT activation packet.
-Return the schema-constrained full activation object only.
-"""
-                                         sonnet_schema = _ACTIVATION_FULL_SCHEMA
-                                         schema_name = "scanner_activation_full_fallback"
                                      print(
                                          f"   🔄 [Activation:Pairs] {CLAUDE_SONNET_MODEL} "
-                                         f"(timeout={sonnet_activation_timeout}s, fallback={not bool(synthesis_only)})..."
+                                         f"(timeout={sonnet_activation_timeout}s, synthesis_available={bool(synthesis_only)})..."
                                      )
                                      act_start = time.time()
                                      sonnet_text = call_anthropic_text(
@@ -6423,20 +6519,50 @@ Return the schema-constrained full activation object only.
                                          timeout=sonnet_activation_timeout,
                                          max_retries=0,
                                          reasoning_effort="medium",
-                                         json_schema=sonnet_schema,
-                                         json_schema_name=schema_name,
+                                         json_schema=_ACTIVATION_OUTPUT_SCHEMA,
+                                         json_schema_name="scanner_activation_pairs",
                                          log_label="Strategic Activation Pairs",
                                      )
                                      sonnet_json = _parse_activation_json(sonnet_text)
                                      if not sonnet_json:
                                          raise ValueError("Structured activation response was not parseable")
                                      activation_generation_meta["activation_parse_status"] = "valid"
-                                     if not synthesis_only and sonnet_json.get("strategic_synthesis"):
-                                         activation_generation_meta["synthesis_parse_status"] = "valid_fallback"
-                                     if synthesis_only:
-                                         sonnet_json["strategic_synthesis"] = synthesis_only
+                                     raw_pairs = _activation_pair_candidates(sonnet_json)
+                                     if len(raw_pairs) < 2 and _activation_chain_remaining() >= 18:
+                                         recovery_prompt = activation_context + f"""
+### MISSING-PAIR RECOVERY
+Existing pair: {json.dumps(raw_pairs[:1], ensure_ascii=False)}
+Generate exactly one distinct additional activation pair using the same WHY/WHAT
+contract. Return the normal activation schema with one pair; leave pitch and proposal
+arrays empty. No web research and no new facts.
+"""
+                                         try:
+                                             recovery_text = call_anthropic_text(
+                                                 recovery_prompt,
+                                                 model=CLAUDE_SONNET_MODEL,
+                                                 max_tokens=2200,
+                                                 timeout=min(22, _activation_chain_remaining()),
+                                                 max_retries=0,
+                                                 reasoning_effort="medium",
+                                                 json_schema=_ACTIVATION_OUTPUT_SCHEMA,
+                                                 json_schema_name="scanner_activation_pair_recovery",
+                                                 log_label="Strategic Activation Missing Pair Recovery",
+                                             )
+                                             recovery_json = _parse_activation_json(recovery_text) or {}
+                                             recovered_pairs = _activation_pair_candidates(recovery_json)
+                                             if recovered_pairs:
+                                                 sonnet_json["activation_pairs"] = raw_pairs + recovered_pairs[:1]
+                                                 activation_generation_meta["missing_pair_recovery"] = "model_recovered"
+                                         except Exception as pair_recovery_err:
+                                             activation_generation_meta["missing_pair_recovery"] = f"failed: {pair_recovery_err}"
+                                     sonnet_json["strategic_synthesis"] = synthesis_only
                                      activation_text = json.dumps(sonnet_json, ensure_ascii=False)
-                                     activation_provider = f"{GPT_PRO_MODEL}+{CLAUDE_SONNET_MODEL}" if synthesis_only else CLAUDE_SONNET_MODEL
+                                     synthesis_provider = (
+                                         GPT_PRO_MODEL
+                                         if activation_generation_meta.get("synthesis_parse_status") == "valid"
+                                         else CLAUDE_SONNET_MODEL
+                                     )
+                                     activation_provider = f"{synthesis_provider}+{CLAUDE_SONNET_MODEL}"
                                      print(f"   ✅ [Activation:Pairs] Complete ({int((time.time() - act_start) * 1000)}ms)")
                                  except Exception as act_sonnet_err:
                                      activation_generation_meta["activation_parse_status"] = "failed"
@@ -6449,6 +6575,8 @@ Return the schema-constrained full activation object only.
                                  "provider": activation_provider,
                                  "fallback_reason": activation_fallback_reason,
                                  "duration_seconds": int(time.time() - activation_chain_started),
+                                 "allowed_seconds": activation_chain_cap,
+                                 "borrowed_seconds": max(0, activation_chain_cap - ACTIVATION_CHAIN_BUDGET),
                              })
                              print(
                                  f"   ⏱️ [Activation] Chain complete in {activation_generation_meta['duration_seconds']}s "
@@ -6511,12 +6639,12 @@ TEXT TO REPAIR:
                                          f"   ✅ [Activation] Grounded activation complete "
                                          f"(provider={activation_provider or 'unknown'}, why={len(why_proposals)}, what={len(what_proposals)}, pitch={'yes' if pitch and pitch != 'Pitch Unavailable' else 'no'}, synthesis={'yes' if strategic_synthesis else 'no'})"
                                      )
-                         elif summary:
+                         else:
                              activation_generation_meta.update({
                                  "status": "skipped_budget",
-                                 "fallback_reason": f"Only {_activation_left}s remained before final-output reserve.",
+                                 "fallback_reason": f"Only {_activation_left}s available after protected downstream floors.",
                              })
-                             print(f"   ⏭ [Activation] Budget < 60s before final reserve ({_activation_left}s) — skipping WHY/WHAT/Pitch")
+                             print(f"   ⏭ [Activation] Only {_activation_left}s available after downstream floors")
 
                     else:
                          summary = response_text
@@ -6703,13 +6831,25 @@ TEXT TO REPAIR:
                     "core_stages": {
                         "ai_diagnosis": {
                             "allocated_seconds": DIAGNOSIS_CHAIN_BUDGET,
+                            "maximum_seconds": DIAGNOSIS_CHAIN_MAX,
+                            "allowed_seconds": diagnosis_generation_meta.get("allowed_seconds", 0),
+                            "borrowed_seconds": diagnosis_generation_meta.get("borrowed_seconds", 0),
                             "used_seconds": diagnosis_duration_seconds,
                             "status": diagnosis_generation_status,
+                            "provider": diagnosis_generation_meta.get("provider", ""),
+                            "parse_status": diagnosis_generation_meta.get("parse_status", "not_attempted"),
+                            "attempts": diagnosis_generation_meta.get("attempts", []),
                         },
                         "strategic_activation": {
                             "allocated_seconds": ACTIVATION_CHAIN_BUDGET,
+                            "maximum_seconds": ACTIVATION_CHAIN_MAX,
+                            "allowed_seconds": activation_generation_meta.get("allowed_seconds", 0),
+                            "borrowed_seconds": activation_generation_meta.get("borrowed_seconds", 0),
                             "used_seconds": activation_generation_meta.get("duration_seconds", 0),
                             "status": activation_generation_meta.get("status", "not_attempted"),
+                            "provider": activation_generation_meta.get("provider", ""),
+                            "synthesis_parse_status": activation_generation_meta.get("synthesis_parse_status", "not_attempted"),
+                            "activation_parse_status": activation_generation_meta.get("activation_parse_status", "not_attempted"),
                         },
                     },
                     "final_stages": final_stage_timing,
@@ -6739,6 +6879,39 @@ TEXT TO REPAIR:
         full_data["hallucination_risk"] = summary_check["risk"]
         full_data["hallucination_score"] = summary_check["score"]
 
+        if diagnosis_generation_status == "unavailable":
+            full_data["quality_notes"].append(
+                "AI Diagnosis was unavailable; downstream synthesis was attempted directly from governed evidence."
+            )
+        elif diagnosis_generation_meta.get("provider") != CLAUDE_OPUS_MODEL:
+            full_data["quality_notes"].append(
+                f"AI Diagnosis used the governed fallback provider ({diagnosis_generation_meta.get('provider') or 'unknown'})."
+            )
+        if activation_generation_meta.get("status") != "completed":
+            full_data["quality_notes"].append(
+                "Strategic Synthesis or Activation was unavailable within its protected stage deadline."
+            )
+            if scan_quality == "complete":
+                scan_quality = "partial_synthesis"
+        elif len(full_data.get("activation_pairs") or []) < 2:
+            full_data["quality_notes"].append(
+                "Strategic Activation did not satisfy the required two-pair coverage contract."
+            )
+            if scan_quality == "complete":
+                scan_quality = "partial_synthesis"
+        elif activation_generation_meta.get("synthesis_parse_status") == "valid_fallback":
+            full_data["quality_notes"].append(
+                f"Strategic Synthesis used the governed fallback provider ({CLAUDE_SONNET_MODEL})."
+            )
+        if activation_generation_meta.get("missing_pair_recovery"):
+            full_data["quality_notes"].append(
+                "One missing Strategic Activation pair required bounded no-web recovery."
+            )
+        if diagnosis_generation_meta.get("parse_status") == "plain_text_fallback":
+            full_data["quality_notes"].append(
+                "AI Diagnosis returned usable prose without its requested JSON wrapper; downstream synthesis remained independent."
+            )
+
         if summary_check["risk"] == "high":
             print(f"   ⚠️ [Reality Check] HIGH hallucination risk (score {summary_check['score']}/100)! Flags: {summary_check['flags']}")
             print(f"   ℹ️ [Reality Check] Heuristic is diagnostic only — proceeding to AI fact-check for independent verification.")
@@ -6753,9 +6926,41 @@ TEXT TO REPAIR:
         # premises or weak reasoning, but it must not purge valid evidence or replace
         # the whole analysis with a factual correction.
         _fc_stage_start = time.time()
-        _fc_reserve_after = GENERAL_SUMMARY_BUDGET + DETAILED_REPORT_BUDGET + FINAL_SAVE_BUDGET
-        _fc_budget = _available_for_final_stage(INFERENCE_FACT_CHECK_BUDGET, _fc_reserve_after)
-        if _fc_budget < 20:
+        _fc_reserve_after = GENERAL_SUMMARY_MIN_FLOOR + DETAILED_REPORT_MIN_FLOOR + FINAL_SAVE_MIN_FLOOR
+        _fc_budget = _available_for_stage(
+            INFERENCE_FACT_CHECK_BUDGET,
+            INFERENCE_FACT_CHECK_MAX,
+            _fc_reserve_after,
+        )
+        _log_stage_allocation(
+            "Inference Fact-Check",
+            INFERENCE_FACT_CHECK_BUDGET,
+            INFERENCE_FACT_CHECK_MAX,
+            _fc_budget,
+            _fc_reserve_after,
+        )
+        final_stage_timing["inference_fact_check"]["allowed_seconds"] = _fc_budget
+        _analysis_available_for_check = bool(
+            (full_data.get("ai_diagnosis_status") != "unavailable" and full_data.get("summary_text"))
+            or full_data.get("evidence_based_risks")
+            or full_data.get("strategic_synthesis")
+            or full_data.get("activation_pairs")
+            or (full_data.get("pitch_text") and full_data.get("pitch_text") != "Pitch Unavailable")
+        )
+        if not _analysis_available_for_check:
+            print("   ⏭ [Fact-Check] No generated analytical section is available; placeholder was not fact-checked")
+            fact_check = {
+                "verified": False,
+                "verification_status": "unavailable_no_analysis",
+                "fact_check_skipped": True,
+                "false_claims": [],
+                "false_claims_detailed": [],
+                "audit_notes": [],
+                "audit_notes_detailed": [],
+                "fact_check_model": "skipped_no_analysis",
+                "fact_check_time_ms": 0,
+            }
+        elif _fc_budget < 20:
             print(f"   ⏭ [Fact-Check] Protected stage budget unavailable ({_fc_budget}s) — summary stored as unverified")
             fact_check = {
                 "verified": False,
@@ -6951,8 +7156,20 @@ TEXT TO REPAIR:
         # Failure is non-fatal — old records without these fields are handled gracefully.
         gs_text, gs_model = "", ""
         _gs_stage_start = time.time()
-        _gs_reserve_after = DETAILED_REPORT_BUDGET + FINAL_SAVE_BUDGET
-        _gs_budget = _available_for_final_stage(GENERAL_SUMMARY_BUDGET, _gs_reserve_after)
+        _gs_reserve_after = DETAILED_REPORT_MIN_FLOOR + FINAL_SAVE_MIN_FLOOR
+        _gs_budget = _available_for_stage(
+            GENERAL_SUMMARY_BUDGET,
+            GENERAL_SUMMARY_MAX,
+            _gs_reserve_after,
+        )
+        _log_stage_allocation(
+            "General Summary",
+            GENERAL_SUMMARY_BUDGET,
+            GENERAL_SUMMARY_MAX,
+            _gs_budget,
+            _gs_reserve_after,
+        )
+        final_stage_timing["general_summary"]["allowed_seconds"] = _gs_budget
         gs_ms = 0
         if _gs_budget < 20:
             print(f"   ⏭ [General Summary] Protected stage budget unavailable ({_gs_budget}s) — skipping")
@@ -6961,7 +7178,9 @@ TEXT TO REPAIR:
         else:
             try:
                 gs_start = time.time()
-                gs_generation_budget = min(55, max(15, _gs_budget - 5))
+                # Verification receives a protected 25-second floor. Generation
+                # and provider fallback share only the remainder.
+                gs_generation_budget = min(55, max(15, _gs_budget - 25))
                 gs_text, gs_model = generate_general_summary(
                     full_data,
                     companyName,
@@ -7006,6 +7225,9 @@ TEXT TO REPAIR:
             full_data["general_summary"] = gs_text
             full_data["general_summary_model"] = gs_model
             full_data["general_summary_verified"] = gs_check.get("verified", True)
+            full_data["general_summary_status"] = (
+                "generated_verified" if gs_check.get("verified") else "generated_unverified"
+            )
             full_data["general_summary_false_claims"] = [
                 fc.get("claim", "") for fc in gs_check.get("false_claims", [])
             ]
@@ -7017,11 +7239,24 @@ TEXT TO REPAIR:
                 "model": gs_check.get("verification_model", ""),
                 "time_ms": gs_check.get("check_time_ms", 0),
             }
+            if not gs_check.get("verified"):
+                full_data.setdefault("quality_notes", []).append(
+                    "General Summary was generated but could not be fully verified within its protected stage budget."
+                )
+                if scan_quality == "complete":
+                    scan_quality = "unverified"
+            if gs_model and GPT_REASONING_MODEL not in str(gs_model):
+                full_data.setdefault("quality_notes", []).append(
+                    f"General Summary used the governed fallback provider ({gs_model})."
+                )
         else:
             print(f"   ⚠️ [General Summary] Generation returned empty — skipping field")
             full_data["general_summary_status"] = "unavailable"
             full_data["general_summary_unavailable_reason"] = (
                 "generation_failed_or_stage_deadline" if _gs_budget >= 20 else "insufficient_stage_budget"
+            )
+            full_data.setdefault("quality_notes", []).append(
+                "General Summary was unavailable within its governed stage deadline."
             )
         _record_final_stage(
             "general_summary",
@@ -7038,7 +7273,19 @@ TEXT TO REPAIR:
         dr_ms = 0
         prior_summaries = {}
         _dr_stage_start = time.time()
-        _dr_remaining = _available_for_final_stage(DETAILED_REPORT_BUDGET, FINAL_SAVE_BUDGET)
+        _dr_remaining = _available_for_stage(
+            DETAILED_REPORT_BUDGET,
+            DETAILED_REPORT_MAX,
+            FINAL_SAVE_MIN_FLOOR,
+        )
+        _log_stage_allocation(
+            "Detailed Report",
+            DETAILED_REPORT_BUDGET,
+            DETAILED_REPORT_MAX,
+            _dr_remaining,
+            FINAL_SAVE_MIN_FLOOR,
+        )
+        final_stage_timing["detailed_report"]["allowed_seconds"] = _dr_remaining
         _dr_deadline = time.time() + max(0, _dr_remaining)
 
         def _dr_stage_remaining() -> int:
@@ -7068,9 +7315,10 @@ TEXT TO REPAIR:
                 if dr_compact:
                     dr_time_budget = max(20, min(80, int(_dr_remaining) - 10))
                 else:
-                    # Keep room inside this stage allocation for one bounded
-                    # verification or completion pass. Save has its own reserve.
-                    dr_time_budget = max(75, min(115, int(_dr_remaining) - 30))
+                    # Keep room inside this stage allocation for verification
+                    # and, when text is altered, the mandatory final recheck.
+                    # Save has its own downstream floor.
+                    dr_time_budget = max(75, min(115, int(_dr_remaining) - 45))
                 if dr_compact:
                     print(
                         f"   📝 [Detailed Report] Moderate budget ({int(_dr_remaining)}s) "
@@ -7153,7 +7401,9 @@ TEXT TO REPAIR:
             attach_evidence_graph(full_data)
             _dr_fc_remaining = _dr_stage_remaining()
             if _dr_fc_remaining >= 20:
-                dr_fc_budget = min(45, _dr_fc_remaining)
+                # Keep a bounded recheck reserve whenever the first verifier may
+                # cause model correction or deterministic sentence removal.
+                dr_fc_budget = min(40, max(20, _dr_fc_remaining - 15))
                 print(f"   🔍 [Detailed Report Fact-Check] Section-level verification ({dr_fc_budget}s protected budget)...")
                 dr_check = ai_fact_check_summary(
                     summary_text=dr_text,
@@ -7200,7 +7450,59 @@ TEXT TO REPAIR:
                     "deterministic_removals": deterministic_removals,
                     "blocking_claim_count": len(detailed_blocking_claims),
                     "unresolved_blocking_claims": list(dict.fromkeys(remaining_blocked_claims)),
+                    "initial_verification_status": dr_check.get("verification_status", "unavailable"),
                 }
+
+                report_changed_after_check = bool(corrected_by_model or deterministic_removals)
+                if report_changed_after_check and _dr_stage_remaining() >= 12:
+                    recheck_budget = min(20, _dr_stage_remaining())
+                    print(
+                        f"   🔁 [Detailed Report Fact-Check] Rechecking final repaired text "
+                        f"({recheck_budget}s)..."
+                    )
+                    recheck = ai_fact_check_summary(
+                        summary_text=dr_text,
+                        evidence_links=managed_evidence_links,
+                        company_name=companyName,
+                        scan_payload=_build_fact_check_scan_payload(full_data),
+                        document_label="Detailed Forensic Report (final repaired text)",
+                        foresight_links=full_data.get("foresight_links", []),
+                        evidence_manifest=full_data.get("evidence_manifest", []),
+                        claim_graph=full_data.get("claim_graph", []),
+                        time_budget_seconds=recheck_budget,
+                    )
+                    recheck_verified = bool(
+                        recheck.get("verified")
+                        and not recheck.get("fact_check_skipped")
+                        and not recheck.get("false_claims")
+                        and not recheck.get("evidence_handoff_failures")
+                    )
+                    recheck_claims = [
+                        str(item.get("claim") or item)
+                        if isinstance(item, dict) else str(item)
+                        for item in (recheck.get("false_claims") or [])
+                        if item
+                    ]
+                    full_data["detailed_report_verification"].update({
+                        "verified": recheck_verified,
+                        "verification_status": (
+                            "verified_after_removals" if recheck_verified else recheck.get("verification_status", "unavailable")
+                        ),
+                        "final_recheck_model": recheck.get("fact_check_model", ""),
+                        "final_recheck_status": recheck.get("verification_status", "unavailable"),
+                        "final_recheck_false_claims": recheck.get("false_claims", []),
+                        "unresolved_blocking_claims": (
+                            [] if recheck_verified else list(dict.fromkeys(
+                                remaining_blocked_claims + recheck_claims
+                            ))
+                        ),
+                    })
+                elif report_changed_after_check:
+                    full_data["detailed_report_verification"].update({
+                        "verified": False,
+                        "verification_status": "unavailable_final_recheck",
+                        "final_recheck_status": "skipped_budget",
+                    })
             else:
                 full_data["detailed_report_verification"] = {
                     "verified": False,
@@ -7215,11 +7517,7 @@ TEXT TO REPAIR:
             dr_verification = full_data.get("detailed_report_verification") or {}
             verification_unavailable = bool(
                 dr_verification.get("fact_check_skipped")
-                or dr_verification.get("verification_status") == "unavailable"
-                or (
-                    not dr_verification.get("verified")
-                    and not dr_verification.get("blocking_claim_count")
-                )
+                or not dr_verification.get("verified")
             )
             unresolved_blocking = bool(dr_verification.get("unresolved_blocking_claims"))
             if not dr_quality.get("complete"):
@@ -7252,7 +7550,7 @@ TEXT TO REPAIR:
                 full_data["detailed_report"] = dr_text
                 full_data["detailed_report_model"] = dr_model
                 full_data["detailed_report_status"] = (
-                    "generated_with_removals"
+                    "verified_after_removals"
                     if dr_verification.get("blocking_claim_count")
                     else "generated_verified"
                 )
