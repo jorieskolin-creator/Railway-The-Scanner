@@ -1996,7 +1996,11 @@ const isForesightContext = (link) => {
                     General Summary
                     {data.general_summary_verified === false && (
                         <span className="ml-2 text-xs font-normal text-amber-400 bg-amber-400/10 px-2 py-0.5 rounded-full border border-amber-400/20">
-                            unverified claims removed
+                            {Array.isArray(data.general_summary_false_claims) && data.general_summary_false_claims.length > 0
+                                ? 'unverified wording remains'
+                                : String(data.general_summary_verification?.final_status || '').startsWith('unavailable')
+                                    ? 'verification unavailable'
+                                    : 'verification incomplete'}
                         </span>
                     )}
                 </h3>

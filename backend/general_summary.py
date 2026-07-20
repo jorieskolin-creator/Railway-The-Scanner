@@ -693,7 +693,8 @@ Return STRICT JSON only:
   "unsupported_claims": [
     {{
       "claim": "exact unsupported or over-scoped claim from the summary",
-      "reason": "brief explanation of why the payload does not support it"
+      "reason": "brief explanation of why the payload does not support it",
+      "replacement": "narrow payload-supported replacement for the exact quoted span, or empty string to remove it; write ordinary company prose without mentioning payload, evidence, sources, or verification"
     }}
   ]
 }}
@@ -725,8 +726,12 @@ _GS_FACT_CHECK_SCHEMA = {
             "type": "array",
             "items": {
                 "type": "object",
-                "properties": {"claim": {"type": "string"}, "reason": {"type": "string"}},
-                "required": ["claim", "reason"],
+                "properties": {
+                    "claim": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "replacement": {"type": "string"},
+                },
+                "required": ["claim", "reason", "replacement"],
                 "additionalProperties": False,
             },
         },
@@ -779,6 +784,97 @@ def _apply_general_summary_replacements(summary_text: str, replacements: list[di
     corrected = re.sub(r"\n[ \t]+", "\n", corrected)
     corrected = re.sub(r"\n{3,}", "\n\n", corrected)
     return corrected.strip(), list(dict.fromkeys(applied))
+
+
+def _remove_general_summary_sentence(summary_text: str, claim: str) -> tuple[str, bool]:
+    """Remove the complete sentence containing an unresolved verifier claim."""
+    needle = re.sub(r"\s+", " ", str(claim or "")).strip().lower()
+    if not needle:
+        return summary_text, False
+    paragraphs = re.split(r"(\n\s*\n+)", summary_text)
+    removed = False
+    for index in range(0, len(paragraphs), 2):
+        paragraph = paragraphs[index]
+        sentences = re.split(r"(?<=[.!?])\s+(?=[A-ZÅÄÖ0-9])", paragraph.strip())
+        kept = []
+        for sentence in sentences:
+            normalized = re.sub(r"\s+", " ", sentence).strip().lower()
+            if needle in normalized:
+                removed = True
+                continue
+            if sentence.strip():
+                kept.append(sentence.strip())
+        paragraphs[index] = " ".join(kept)
+    cleaned = "".join(paragraphs)
+    cleaned = re.sub(r"\n\s*\n(?:\s*\n)+", "\n\n", cleaned)
+    return cleaned.strip(), removed
+
+
+def _resolve_general_summary_recheck(summary_text: str, claims: list[dict]) -> tuple[str, list[str], list[str], list[dict]]:
+    """Apply final verifier actions, removing the sentence only as a last resort."""
+    resolved = summary_text
+    resolved_ids = []
+    removed_ids = []
+    unresolved = []
+    for raw_item in claims or []:
+        if not isinstance(raw_item, dict):
+            continue
+        item = dict(raw_item)
+        claim = str(item.get("claim") or "").strip()
+        claim_id = str(item.get("claim_id") or _gs_claim_id(claim))
+        item["claim_id"] = claim_id
+        if not claim:
+            unresolved.append(item)
+            continue
+        replacement = str(item.get("replacement") or "").strip()
+        candidate, applied = (resolved, [])
+        if replacement:
+            candidate, applied = _apply_general_summary_replacements(resolved, [{
+                "claim_id": claim_id,
+                "original_claim": claim,
+                "replacement": replacement,
+            }])
+        if applied:
+            resolved = candidate
+            resolved_ids.append(claim_id)
+        else:
+            resolved, removed = _remove_general_summary_sentence(resolved, claim)
+            if removed:
+                resolved_ids.append(claim_id)
+                removed_ids.append(claim_id)
+            else:
+                unresolved.append(item)
+
+    normalized_text = re.sub(r"\s+", " ", resolved).lower()
+    for item in claims or []:
+        if not isinstance(item, dict):
+            continue
+        claim = re.sub(r"\s+", " ", str(item.get("claim") or "")).strip().lower()
+        claim_id = str(item.get("claim_id") or _gs_claim_id(claim))
+        if claim and claim in normalized_text and not any(
+            str(existing.get("claim_id") or "") == claim_id for existing in unresolved
+        ):
+            unresolved.append({**item, "claim_id": claim_id})
+
+    for phrase in _internal_process_phrases(resolved):
+        process_claim_id = _gs_claim_id(f"internal-process:{phrase}")
+        resolved, removed = _remove_general_summary_sentence(resolved, phrase)
+        if removed:
+            resolved_ids.append(process_claim_id)
+            removed_ids.append(process_claim_id)
+        else:
+            unresolved.append({
+                "claim_id": process_claim_id,
+                "claim": phrase,
+                "reason": "Final replacement exposed Scanner process language.",
+                "replacement": "",
+            })
+    return (
+        resolved.strip(),
+        list(dict.fromkeys(resolved_ids)),
+        list(dict.fromkeys(removed_ids)),
+        unresolved,
+    )
 
 
 def fact_check_general_summary(summary_text: str, full_data: dict, company_name: str, time_budget_seconds: int | None = None, generator_model: str | None = None) -> dict:
@@ -912,13 +1008,27 @@ UNSUPPORTED CLAIMS:
 
     unresolved_claims = false_claims
     final_status = "failed"
+    final_resolution_claim_ids = []
+    final_removed_claim_ids = []
     if corrected_summary and remaining() >= 7:
         recheck, recheck_model = detect(corrected_summary)
         if recheck is not None:
+            for item in recheck:
+                item["claim_id"] = _gs_claim_id(item.get("claim") or "")
             unresolved_claims = recheck
             final_status = "verified_after_repair" if not recheck else "failed_after_repair"
             if recheck_model:
                 corrected_model = f"{corrected_model}+{recheck_model}"
+
+            if recheck:
+                (
+                    corrected_summary,
+                    final_resolution_claim_ids,
+                    final_removed_claim_ids,
+                    unresolved_claims,
+                ) = _resolve_general_summary_recheck(corrected_summary, recheck)
+                if not unresolved_claims:
+                    final_status = "verified_after_final_resolution"
 
     if corrected_summary and unresolved_claims and (_word_count(corrected_summary) < 220 or corrected_summary.count("\n\n") < 2) and remaining() >= 12:
         try:
@@ -933,19 +1043,32 @@ UNSUPPORTED CLAIMS:
                 corrected_model = GPT_REASONING_MODEL
                 recheck, _ = detect(corrected_summary) if remaining() >= 7 else (unresolved_claims, "")
                 if recheck is not None:
+                    for item in recheck:
+                        item["claim_id"] = _gs_claim_id(item.get("claim") or "")
                     unresolved_claims = recheck
                     final_status = "verified_after_repair" if not recheck else "failed_after_repair"
+                    if recheck:
+                        (
+                            corrected_summary,
+                            final_resolution_claim_ids,
+                            final_removed_claim_ids,
+                            unresolved_claims,
+                        ) = _resolve_general_summary_recheck(corrected_summary, recheck)
+                        if not unresolved_claims:
+                            final_status = "verified_after_final_resolution"
         except Exception as exc:
             print(f"   ⚠️ [GS Focused Reanalysis] Failed: {exc}")
 
     elapsed = int((time.time() - t0) * 1000)
     return {
-        "verified": final_status == "verified_after_repair",
+        "verified": final_status in {"verified_after_repair", "verified_after_final_resolution"},
         "false_claims": false_claims,
         "corrected_summary": corrected_summary,
         "corrected_model": corrected_model,
         "check_time_ms": elapsed,
         "repaired_claim_ids": repaired_claim_ids,
+        "final_resolution_claim_ids": final_resolution_claim_ids,
+        "final_removed_claim_ids": final_removed_claim_ids,
         "unresolved_claims": unresolved_claims,
         "initial_verification_status": "failed",
         "final_verification_status": final_status,

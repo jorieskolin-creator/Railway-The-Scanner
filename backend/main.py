@@ -491,6 +491,55 @@ _ACTIVATION_FULL_SCHEMA = {
     "additionalProperties": False,
 }
 
+_PITCH_ONLY_SCHEMA = {
+    "type": "object",
+    "properties": {"commercial_pitch": {"type": "string"}},
+    "required": ["commercial_pitch"],
+    "additionalProperties": False,
+}
+
+_PITCH_INTERNAL_LANGUAGE = (
+    "scanner", "scan payload", "source register", "source gate",
+    "generation-eligible", "display-only", "promoted evidence",
+    "promoted source", "public evidence", "verified evidence",
+    "proof gap", "evidence gap", "no evidence", "no verified",
+    "unverified",
+)
+
+
+def _pitch_contract_issues(pitch_text: str) -> list[str]:
+    """Return reader-facing Pitch contract defects after model parsing."""
+    pitch = str(pitch_text or "").strip()
+    if not pitch or pitch == "Pitch Unavailable":
+        return ["missing_pitch"]
+
+    issues = []
+    word_count = len(re.findall(r"\b[\w][\w'’/-]*\b", pitch, flags=re.UNICODE))
+    if not 90 <= word_count <= 110:
+        issues.append(f"word_count:{word_count}")
+
+    paragraphs = [item.strip() for item in re.split(r"\n\s*\n+", pitch) if item.strip()]
+    if len(paragraphs) != 3:
+        issues.append(f"paragraph_count:{len(paragraphs)}")
+    elif any(not re.search(r"[.!?][\]\)\"']?$", paragraph) for paragraph in paragraphs):
+        issues.append("incomplete_paragraph")
+
+    lowered = pitch.lower()
+    exposed = [term for term in _PITCH_INTERNAL_LANGUAGE if term in lowered]
+    if exposed:
+        issues.append("internal_evidence_language:" + ",".join(exposed[:4]))
+    if re.search(
+        r"\b(?:zero|no)\s+(?:currently\s+)?(?:verified\s+|public\s+)?"
+        r"(?:capability|architecture|integration|platform|cloud|ai|data foundation|governance model)",
+        lowered,
+    ):
+        issues.append("proof_gap_as_absence")
+    return issues
+
+
+def _pitch_contract_complete(pitch_text: str) -> bool:
+    return not _pitch_contract_issues(pitch_text)
+
 
 def _normalize_activation_payload(payload: dict, prior: dict | None = None) -> dict:
     """Accept current and legacy activation aliases without changing meaning."""
@@ -539,6 +588,54 @@ def _replace_flagged_claim(value, claim: str, correction: str):
     return value
 
 
+def _known_foresight_ids(data: dict) -> set[str]:
+    known = set()
+    for collection_key in ("foresight_links", "foresight_evidence", "generation_evidence_manifest"):
+        for item in data.get(collection_key) or []:
+            if not isinstance(item, dict):
+                continue
+            for key in ("evidence_id", "source_id", "foresight_id", "id"):
+                value = str(item.get(key) or "").strip()
+                if value.startswith("FOR-"):
+                    known.add(value)
+    return known
+
+
+def _apply_foresight_citation_correction(data: dict, issue: dict) -> bool:
+    """Attach a verifier-selected foresight ID without rewriting synthesis prose."""
+    if str(issue.get("error_type") or "").strip().lower() != "misattribution":
+        return False
+    synthesis = str(data.get("strategic_synthesis") or "")
+    claim = str(issue.get("claim") or "").strip()
+    if not synthesis or not claim:
+        return False
+
+    known_ids = _known_foresight_ids(data)
+    correction_ids = re.findall(r"\bFOR-[A-Z0-9]+\b", str(issue.get("correction") or "").upper())
+    replacement_id = next((item for item in correction_ids if item in known_ids), "")
+    if not replacement_id:
+        return False
+
+    # Verifiers sometimes quote a sentence with a trailing contextual citation
+    # that the rendered synthesis does not attach to that exact sentence. Keep
+    # the prose locked and attach the correct source directly to the claim.
+    claim_text = re.sub(r"(?:\s*\[[A-Z]+-[^\]]+\])+$", "", claim).strip()
+    if not claim_text:
+        return False
+    pattern = re.escape(claim_text).replace(r"\ ", r"\s+")
+    match = re.search(pattern, synthesis, flags=re.IGNORECASE)
+    if not match:
+        return False
+    if f"[{replacement_id}]" in synthesis[match.end():match.end() + 80]:
+        return False
+    matched = match.group(0)
+    punctuation = matched[-1] if matched[-1:] in ".!?" else ""
+    stem = matched[:-1] if punctuation else matched
+    replacement = f"{stem}[{replacement_id}]{punctuation}"
+    data["strategic_synthesis"] = synthesis[:match.start()] + replacement + synthesis[match.end():]
+    return True
+
+
 def _apply_fact_check_corrections(data: dict, fact_check: dict) -> list[str]:
     """Apply verifier corrections to every reader-facing occurrence."""
     corrected_summary = fact_check.get("corrected_summary") or ""
@@ -571,6 +668,9 @@ def _apply_fact_check_corrections(data: dict, fact_check: dict) -> list[str]:
             continue
         claim = str(issue.get("claim") or "").strip()
         if not claim:
+            continue
+        if _apply_foresight_citation_correction(data, issue):
+            applied_ids.append(str(issue.get("claim_id") or ""))
             continue
         correction = str(issue.get("correction") or "").strip()
         before = {key: json.dumps(data.get(key), ensure_ascii=False, sort_keys=True, default=str) for key in public_keys}
@@ -2755,14 +2855,14 @@ def _recheck_company_data(company_name: str, data: dict) -> dict:
             gs_check = fact_check_general_summary(gs_text, data, company_name, generator_model=gs_model)
             if gs_check.get("corrected_summary"):
                 gs_text = gs_check["corrected_summary"]
-                gs_model = gs_check["corrected_model"] or gs_model
                 print(f"   🔄 [GS Fact-Check] Replaced with corrected summary ({gs_check['check_time_ms']}ms)")
 
             data["general_summary"] = gs_text
             data["general_summary_model"] = gs_model
             data["general_summary_verified"] = gs_check.get("verified", True)
             data["general_summary_false_claims"] = [
-                fc.get("claim", "") for fc in gs_check.get("false_claims", [])
+                fc.get("claim", "") for fc in gs_check.get("unresolved_claims", [])
+                if isinstance(fc, dict) and fc.get("claim")
             ]
         else:
             print(f"   ⚠️ [General Summary] Generation returned empty — skipping field")
@@ -3750,14 +3850,14 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
                     gs_check = fact_check_general_summary(gs_text, data, company_name, generator_model=gs_model)
                     if gs_check.get("corrected_summary"):
                         gs_text = gs_check["corrected_summary"]
-                        gs_model = gs_check["corrected_model"] or gs_model
                         print(f"   🔄 [GS Fact-Check] Replaced with corrected summary ({gs_check['check_time_ms']}ms)")
 
                     data["general_summary"] = gs_text
                     data["general_summary_model"] = gs_model
                     data["general_summary_verified"] = gs_check.get("verified", True)
                     data["general_summary_false_claims"] = [
-                        fc.get("claim", "") for fc in gs_check.get("false_claims", [])
+                        fc.get("claim", "") for fc in gs_check.get("unresolved_claims", [])
+                        if isinstance(fc, dict) and fc.get("claim")
                     ]
                 else:
                     print(f"   ⚠️ [General Summary] Generation returned empty — skipping field")
@@ -6506,6 +6606,11 @@ workshops, diagnostics, assessments, tactics, TAC codes, or consulting methods.
 Use current_status, foresight_driven, or proactive_opportunity consistently for
 theme_type and sales_use. Use only evidence/foresight IDs present above. Do not invent
 timing, people, metrics, events, services, or facts. Return only the activation schema.
+The Pitch is customer-safe commercial language, not an audit note. Write exactly three
+short paragraphs separated by blank lines: current position and tension; future pressure
+and business consequence; response direction and customer value. Do not mention Scanner,
+sources, evidence registers, promoted/public/verified evidence, proof gaps, evidence gaps,
+or claim that an unverified capability is absent. Keep uncertainty modal and proportionate.
 """
                                      print(
                                          f"   🔄 [Activation:Pairs] {CLAUDE_SONNET_MODEL} "
@@ -6677,11 +6782,109 @@ TEXT TO REPAIR:
                                      what_proposals = activation_norm["what_proposals"]
                                  if activation_norm.get("what_progress_proposals"):
                                      what_progress_proposals = activation_norm["what_progress_proposals"]
+
+                                 pitch_contract_issues = _pitch_contract_issues(pitch)
+                                 activation_generation_meta["pitch_contract_issues_initial"] = pitch_contract_issues
+                                 if pitch_contract_issues and 2 <= len(activation_pairs) <= 3:
+                                     locked_pitch_context = {
+                                         "strategic_synthesis": strategic_synthesis,
+                                         "activation_pairs": activation_pairs,
+                                     }
+                                     pitch_rewrite_prompt = f"""You are editing only the customer-facing C-level Pitch.
+The Strategic Synthesis and activation pairs below are locked. Do not regenerate, alter,
+or add activation pairs. Do not add facts, timing, metrics, services, methods, or causal
+claims that are not present in the locked material.
+
+LOCKED MATERIAL:
+{json.dumps(locked_pitch_context, ensure_ascii=False)}
+
+CURRENT PITCH:
+{pitch}
+
+CONTRACT DEFECTS:
+{json.dumps(pitch_contract_issues, ensure_ascii=False)}
+
+Return a 90-110 word Pitch in exactly three short paragraphs separated by blank lines:
+1. current company position and customer-relevant tension;
+2. supported future pressure and proportionate business consequence;
+3. outcome-led response direction and end value.
+
+Use customer-safe language. Do not mention Scanner, source/evidence mechanics, promoted,
+public or verified evidence, proof/evidence gaps, or assert that an unverified capability
+is absent. Keep hypotheses modal. Return only the pitch schema.
+"""
+                                     pitch_rewrite_errors = []
+                                     for pitch_model, pitch_provider in (
+                                         (CLAUDE_SONNET_MODEL, "anthropic"),
+                                         (GPT_REASONING_MODEL, "openai"),
+                                     ):
+                                         if _activation_chain_remaining() < 12:
+                                             break
+                                         try:
+                                             pitch_timeout = min(25, _activation_chain_remaining())
+                                             if pitch_provider == "anthropic":
+                                                 pitch_raw = call_anthropic_text(
+                                                     pitch_rewrite_prompt,
+                                                     model=pitch_model,
+                                                     max_tokens=1800,
+                                                     timeout=pitch_timeout,
+                                                     max_retries=0,
+                                                     reasoning_effort="medium",
+                                                     json_schema=_PITCH_ONLY_SCHEMA,
+                                                     json_schema_name="scanner_pitch_only_recovery",
+                                                     log_label="Strategic Pitch Recovery",
+                                                 )
+                                             else:
+                                                 pitch_raw = call_openai_text(
+                                                     pitch_rewrite_prompt,
+                                                     model=pitch_model,
+                                                     max_output_tokens=1800,
+                                                     timeout=pitch_timeout,
+                                                     max_retries=0,
+                                                     reasoning_effort="medium",
+                                                     text_verbosity="medium",
+                                                     json_schema=_PITCH_ONLY_SCHEMA,
+                                                     json_schema_name="scanner_pitch_only_recovery",
+                                                     log_label="Strategic Pitch Recovery Fallback",
+                                                 )
+                                             pitch_json = _parse_activation_json(pitch_raw) or {}
+                                             candidate_pitch = sanitize_inference_wording(
+                                                 str(pitch_json.get("commercial_pitch") or "").strip()
+                                             )
+                                             candidate_issues = _pitch_contract_issues(candidate_pitch)
+                                             if candidate_issues:
+                                                 raise ValueError(
+                                                     "Pitch-only recovery did not satisfy contract: "
+                                                     + ", ".join(candidate_issues)
+                                                 )
+                                             pitch = candidate_pitch
+                                             activation_generation_meta["pitch_recovery"] = {
+                                                 "status": "recovered",
+                                                 "model": pitch_model,
+                                                 "initial_issues": pitch_contract_issues,
+                                             }
+                                             print(
+                                                 f"   ✅ [Activation:Pitch] Contract recovered with {pitch_model} "
+                                                 f"({len(pitch.split())} words)"
+                                             )
+                                             break
+                                         except Exception as pitch_rewrite_err:
+                                             pitch_rewrite_errors.append(f"{pitch_model}: {pitch_rewrite_err}")
+                                     if _pitch_contract_issues(pitch):
+                                         pitch = "Pitch Unavailable"
+                                         activation_generation_meta["pitch_recovery"] = {
+                                             "status": "failed",
+                                             "initial_issues": pitch_contract_issues,
+                                             "errors": pitch_rewrite_errors,
+                                         }
+
+                                 activation_generation_meta["pitch_contract_issues_final"] = _pitch_contract_issues(pitch)
                                  activation_contract_complete = bool(
                                      strategic_synthesis
                                      and 2 <= len(activation_pairs) <= 3
                                      and pitch
                                      and pitch != "Pitch Unavailable"
+                                     and _pitch_contract_complete(pitch)
                                  )
                                  activation_generation_meta["status"] = (
                                      "completed" if activation_contract_complete
@@ -6962,9 +7165,14 @@ TEXT TO REPAIR:
             )
         if activation_generation_meta.get("status") != "completed":
             if activation_generation_meta.get("status") == "synthesis_complete_activation_failed":
-                full_data["quality_notes"].append(
-                    "Strategic Synthesis completed, but the required activation pairs and Pitch were unavailable."
-                )
+                if len(full_data.get("activation_pairs") or []) >= 2 and full_data.get("pitch_text") == "Pitch Unavailable":
+                    full_data["quality_notes"].append(
+                        "Strategic Synthesis and activation pairs completed, but the Pitch did not satisfy its governed customer-facing contract."
+                    )
+                else:
+                    full_data["quality_notes"].append(
+                        "Strategic Synthesis completed, but the required activation coverage was incomplete."
+                    )
             else:
                 full_data["quality_notes"].append(
                     "Strategic Synthesis or Activation was unavailable within its protected stage deadline."
@@ -7312,7 +7520,6 @@ TEXT TO REPAIR:
                 }
             if gs_check.get("corrected_summary"):
                 gs_text = gs_check["corrected_summary"]
-                gs_model = gs_check["corrected_model"] or gs_model
                 print(f"   🔄 [GS Fact-Check] Replaced with corrected summary ({gs_check['check_time_ms']}ms)")
 
             full_data["general_summary"] = gs_text
@@ -7326,23 +7533,37 @@ TEXT TO REPAIR:
             }
             full_data["general_summary_verified"] = gs_check.get("verified", True)
             full_data["general_summary_status"] = (
-                "generated_verified" if gs_check.get("verified") else "generated_unverified"
+                "generated_verified_after_resolution"
+                if gs_check.get("final_verification_status") == "verified_after_final_resolution"
+                else "generated_verified" if gs_check.get("verified") else "generated_unverified"
             )
             full_data["general_summary_false_claims"] = [
-                fc.get("claim", "") for fc in gs_check.get("false_claims", [])
+                fc.get("claim", "") for fc in gs_check.get("unresolved_claims", [])
+                if isinstance(fc, dict) and fc.get("claim")
             ]
             full_data["general_summary_verification"] = {
                 "initial_status": gs_check.get("initial_verification_status", "verified"),
                 "final_status": gs_check.get("final_verification_status", "verified" if gs_check.get("verified") else "unavailable"),
                 "repaired_claim_ids": gs_check.get("repaired_claim_ids", []),
+                "final_resolution_claim_ids": gs_check.get("final_resolution_claim_ids", []),
+                "final_removed_claim_ids": gs_check.get("final_removed_claim_ids", []),
                 "unresolved_claims": gs_check.get("unresolved_claims", []),
                 "model": gs_check.get("verification_model", ""),
+                "correction_model": gs_check.get("corrected_model", ""),
                 "time_ms": gs_check.get("check_time_ms", 0),
             }
             if not gs_check.get("verified"):
-                full_data.setdefault("quality_notes", []).append(
-                    "General Summary was generated but could not be fully verified within its protected stage budget."
-                )
+                final_gs_status = str(gs_check.get("final_verification_status") or "unavailable")
+                if final_gs_status.startswith("unavailable"):
+                    note = "General Summary was generated, but independent verification was unavailable within its protected stage budget."
+                elif full_data["general_summary_false_claims"]:
+                    note = (
+                        "General Summary retains unresolved wording after bounded verification and final claim resolution; "
+                        "see the listed claim boundaries."
+                    )
+                else:
+                    note = "General Summary verification did not reach a conclusive final status."
+                full_data.setdefault("quality_notes", []).append(note)
                 if scan_quality == "complete":
                     scan_quality = "unverified"
         else:

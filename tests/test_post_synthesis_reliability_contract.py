@@ -69,8 +69,41 @@ def test_synthesis_only_activation_has_distinct_failure_status():
     assert 'pitch != "Pitch Unavailable"' in source
 
 
+def test_pitch_has_post_parse_contract_and_pitch_only_recovery():
+    source = MAIN.read_text(encoding="utf-8")
+
+    assert "def _pitch_contract_issues" in source
+    assert "if not 90 <= word_count <= 110" in source
+    assert 'if len(paragraphs) != 3' in source
+    assert "scanner_pitch_only_recovery" in source
+    assert "Do not regenerate, alter," in source
+    assert "and _pitch_contract_complete(pitch)" in source
+
+
+def test_pitch_scoped_audit_findings_are_customer_safe_blocking_actions():
+    reality_check = (ROOT / "backend" / "reality_check.py").read_text(encoding="utf-8")
+
+    assert 'pitch_scoped = any(str(path).startswith("pitch_text")' in reality_check
+    assert 'issue_type = "pitch_customer_safe_overstatement"' in reality_check
+
+
+def test_foresight_misattribution_uses_citation_only_correction():
+    source = MAIN.read_text(encoding="utf-8")
+
+    assert "def _apply_foresight_citation_correction" in source
+    assert 'data["strategic_synthesis"] = synthesis[:match.start()] + replacement' in source
+
+
 def test_reader_does_not_render_unavailable_placeholders_as_analysis():
     source = COMPANY_SUMMARY.read_text(encoding="utf-8")
 
     assert "data?.summary_text !== 'AI Summary Unavailable'" in source
     assert "data?.pitch_text !== 'Pitch Unavailable'" in source
+
+
+def test_general_summary_badge_matches_final_verification_state():
+    source = COMPANY_SUMMARY.read_text(encoding="utf-8")
+
+    assert "unverified wording remains" in source
+    assert "verification unavailable" in source
+    assert "unverified claims removed" not in source

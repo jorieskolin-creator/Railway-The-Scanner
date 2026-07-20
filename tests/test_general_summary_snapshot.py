@@ -206,3 +206,58 @@ def test_sonnet_generated_summary_uses_gpt_verifier(monkeypatch):
 
     assert result["verified"] is True
     assert calls == [general_summary.GPT_VERIFIER_MODEL]
+
+
+def test_general_summary_final_recheck_actions_are_resolved(monkeypatch):
+    monkeypatch.setattr(
+        general_summary,
+        "_build_input_payload",
+        lambda *_args, **_kwargs: {"evidence_links": [], "financial_findings": []},
+    )
+    calls = []
+
+    def fake_sonnet(_prompt, **_kwargs):
+        calls.append(len(calls) + 1)
+        if len(calls) == 1:
+            return json.dumps({
+                "unsupported_claims": [{
+                    "claim": "ExampleCo's growth proves operational resilience.",
+                    "reason": "The payload supports growth, not resilience.",
+                    "replacement": "ExampleCo has reported growth.",
+                }],
+            })
+        if len(calls) == 2:
+            claim_id = general_summary._gs_claim_id(
+                "ExampleCo's growth proves operational resilience."
+            )
+            return json.dumps({
+                "replacements": [{
+                    "claim_id": claim_id,
+                    "original_claim": "ExampleCo's growth proves operational resilience.",
+                    "replacement": "ExampleCo's growth confirms strong execution.",
+                }],
+            })
+        return json.dumps({
+            "unsupported_claims": [{
+                "claim": "confirms strong execution",
+                "reason": "Execution is not established by the payload.",
+                "replacement": "is documented in available financial material",
+            }],
+        })
+
+    monkeypatch.setattr(general_summary, "call_anthropic_text", fake_sonnet)
+    result = general_summary.fact_check_general_summary(
+        "ExampleCo's growth proves operational resilience.\n\n"
+        "Its industrial products are documented.\n\n"
+        "The company operates in Finland.",
+        {},
+        "ExampleCo",
+        time_budget_seconds=60,
+    )
+
+    assert result["verified"] is True
+    assert result["final_verification_status"] == "verified_after_final_resolution"
+    assert result["unresolved_claims"] == []
+    assert "confirms strong execution" not in result["corrected_summary"]
+    assert "documented in available financial material" in result["corrected_summary"]
+    assert result["final_resolution_claim_ids"]

@@ -1732,6 +1732,15 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
                 "correct_value": correct_value,
             }, scan_payload)
 
+            field_paths = (fc.get("field_paths") or []) if isinstance(fc, dict) else []
+            pitch_scoped = any(str(path).startswith("pitch_text") for path in field_paths)
+            if pitch_scoped and support_level in {"partial", "context_only", "unsupported"}:
+                # Pitch is customer-facing. A scoped overstatement that is acceptable
+                # as an internal synthesis audit note still needs correction or removal
+                # before it can remain in the Pitch.
+                issue_type = "pitch_customer_safe_overstatement"
+                is_blocking = True
+
             if not is_blocking:
                 audit_notes.append(_format_audit_note(issue_type, claim_text, reasoning))
                 audit_notes_detailed.append({
@@ -1747,6 +1756,7 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
                     "source_urls": source_urls,
                     "source_indices": source_indices,
                     "source_ids": (fc.get("source_ids") or []) if isinstance(fc, dict) else [],
+                    "field_paths": field_paths,
                 })
                 print(f"      [Fact-Check] Non-blocking {issue_type}: {claim_text[:80]}...")
                 if reasoning:
