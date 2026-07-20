@@ -19,6 +19,7 @@ import json
 import os
 import re
 import time
+import hashlib
 
 from source_quality import (
     assess_source_scope, infer_source_type, compute_claim_tier, describe_source,
@@ -29,7 +30,7 @@ from contradiction_detector import detect_contradictions
 from prompts import PROMPT_VERSION, build_shared_guardrails
 from entity_identity import apply_entity_scope, get_company_identity
 from model_policy import CLAUDE_SONNET_MODEL, GPT_REASONING_MODEL, GPT_VERIFIER_MODEL, policy_for
-from llm_clients import call_openai_text, extract_anthropic_text
+from llm_clients import call_anthropic_text, call_openai_text, extract_anthropic_text
 
 
 def _general_summary_guardrails() -> str:
@@ -577,7 +578,7 @@ def _internal_process_phrases(text: str) -> list[str]:
     return [phrase for phrase in _INTERNAL_PROCESS_PATTERNS if phrase in lowered]
 
 
-def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, str]:
+def generate_general_summary(full_data: dict, company_name: str, time_budget_seconds: int | None = None) -> tuple[str, str]:
     """
     Generate a 250-320 word General Summary from structured scan data.
 
@@ -587,13 +588,17 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
     full_data = _sanitize_general_summary_input(full_data or {}, f"{company_name}.general_summary_factcheck_input")
     payload = _build_input_payload(full_data, company_name)
     prompt = _build_prompt(payload, company_name)
+    deadline = time.time() + max(12, int(time_budget_seconds or 90))
+
+    def remaining() -> int:
+        return max(0, int(deadline - time.time()))
 
     # Primary: GPT frontier model (evidence-bound prose from already-built structured payload)
     try:
         PRIMARY_MODEL = GPT_REASONING_MODEL
         print(f"   [General Summary] Trying primary {PRIMARY_MODEL}")
         t0 = time.time()
-        text = _strip_links(_call_openai_summary(prompt, model=PRIMARY_MODEL, timeout=90))
+        text = _strip_links(_call_openai_summary(prompt, model=PRIMARY_MODEL, timeout=min(45, max(10, remaining()))))
         wc = _word_count(text)
         elapsed = int((time.time() - t0) * 1000)
         print(f"   [General Summary] {PRIMARY_MODEL}: {wc} words ({elapsed}ms)")
@@ -601,7 +606,7 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
             process_phrases = _internal_process_phrases(text)
             if process_phrases:
                 print(
-                    "   ⚠️ [General Summary] GPT-5.5 exposed internal process language "
+                    f"   ⚠️ [General Summary] {PRIMARY_MODEL} exposed internal process language "
                     f"({', '.join(process_phrases[:4])}) — trying independent backup"
                 )
                 text = ""
@@ -610,25 +615,28 @@ def generate_general_summary(full_data: dict, company_name: str) -> tuple[str, s
                 print(f"   [General Summary] {PRIMARY_MODEL} word count outside [{_WORD_MIN}-{_WORD_MAX}] — using non-empty result")
             return text, PRIMARY_MODEL
     except Exception as e:
-        print(f"   ❌ [General Summary] GPT-5.5 primary failed: {e}")
+        print(f"   ❌ [General Summary] {GPT_REASONING_MODEL} primary failed: {e}")
 
     # Backup 1: Sonnet independent provider
     try:
+        if remaining() < 10:
+            return "", ""
         import anthropic
         anthropic_key = _clean_env_var(os.environ.get("ANTHROPIC_API_KEY", ""))
         if not anthropic_key:
             print("   ⚠️ [General Summary] No ANTHROPIC_API_KEY — skipping Sonnet backup")
         else:
             SONNET_MODEL = CLAUDE_SONNET_MODEL
-            print(f"   [General Summary] GPT-5.5 unavailable — trying {SONNET_MODEL}")
+            print(f"   [General Summary] {GPT_REASONING_MODEL} unavailable — trying {SONNET_MODEL}")
             t0 = time.time()
-            claude_client = anthropic.Anthropic(api_key=anthropic_key)
-            claude_resp = claude_client.messages.create(
+            text = _strip_links(call_anthropic_text(
+                prompt,
                 model=SONNET_MODEL,
                 max_tokens=4000,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            text = _strip_links(extract_anthropic_text(claude_resp))
+                timeout=min(35, max(8, remaining())),
+                reasoning_effort="medium",
+                log_label="General Summary Fallback",
+            ))
             wc = _word_count(text)
             elapsed = int((time.time() - t0) * 1000)
             print(f"   [General Summary] {SONNET_MODEL} backup: {wc} words ({elapsed}ms)")
@@ -701,135 +709,224 @@ Previous rejected summary for context only, not as evidence:
 Regenerate the General Summary from the PAYLOAD in the prompt above. Use only payload-supported facts and keep the same output format: plain prose only."""
 
 
-def fact_check_general_summary(
-    summary_text: str,
-    full_data: dict,
-    company_name: str,
-) -> dict:
-    """
-    Verify the General Summary against its own input payload.
+_GS_FACT_CHECK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "unsupported_claims": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"claim": {"type": "string"}, "reason": {"type": "string"}},
+                "required": ["claim", "reason"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["unsupported_claims"],
+    "additionalProperties": False,
+}
 
-    Stage 1: Claude Sonnet / GPT verifier detects unsupported claims.
-    Stage 2: If false claims are found, GPT frontier model re-generates cleanly.
+_GS_REPAIR_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "replacements": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claim_id": {"type": "string"},
+                    "original_claim": {"type": "string"},
+                    "replacement": {"type": "string"},
+                },
+                "required": ["claim_id", "original_claim", "replacement"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["replacements"],
+    "additionalProperties": False,
+}
 
-    Returns:
-        dict with:
-            - verified: bool
-            - false_claims: list of {claim, reason} dicts
-            - corrected_summary: str (re-generated summary if claims found, else "")
-            - corrected_model: str (model used for re-generation, else "")
-            - check_time_ms: int
-    """
+
+def _gs_claim_id(claim: str) -> str:
+    normalized = re.sub(r"\s+", " ", str(claim or "").strip().lower())
+    return "GS-" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12].upper()
+
+
+def _apply_general_summary_replacements(summary_text: str, replacements: list[dict]) -> tuple[str, list[str]]:
+    corrected = summary_text
+    applied = []
+    for item in replacements or []:
+        original = re.sub(r"\s+", " ", str(item.get("original_claim") or "")).strip()
+        replacement = str(item.get("replacement") or "").strip()
+        if not original:
+            continue
+        pattern = re.escape(original).replace(r"\ ", r"\s+")
+        corrected, count = re.subn(pattern, replacement, corrected, flags=re.IGNORECASE)
+        if count:
+            applied.append(str(item.get("claim_id") or _gs_claim_id(original)))
+    corrected = re.sub(r"\s+([,.;:!?])", r"\1", corrected)
+    corrected = re.sub(r"[ \t]{2,}", " ", corrected)
+    corrected = re.sub(r"\n[ \t]+", "\n", corrected)
+    corrected = re.sub(r"\n{3,}", "\n\n", corrected)
+    return corrected.strip(), list(dict.fromkeys(applied))
+
+
+def fact_check_general_summary(summary_text: str, full_data: dict, company_name: str, time_budget_seconds: int | None = None) -> dict:
+    """Verify, locally repair, and recheck the General Summary."""
     if not summary_text:
         return {"verified": True, "false_claims": [], "corrected_summary": "",
-                "corrected_model": "", "check_time_ms": 0}
+                "corrected_model": "", "check_time_ms": 0, "repaired_claim_ids": [],
+                "unresolved_claims": [], "initial_verification_status": "verified",
+                "final_verification_status": "verified"}
+
+    t0 = time.time()
+    deadline = t0 + max(15, int(time_budget_seconds or 80))
+
+    def remaining() -> int:
+        return max(0, int(deadline - time.time()))
 
     try:
         payload = _build_input_payload(full_data, company_name)
-        check_prompt = _build_fact_check_prompt(summary_text, payload, company_name)
-    except Exception as e:
-        print(f"   ⚠️ [GS Fact-Check] Prompt preparation failed — treating as unverified: {e}")
-        return {"verified": False, "false_claims": [], "corrected_summary": "",
-                "corrected_model": "", "check_time_ms": 0,
-                "fact_check_skipped": True, "error": str(e)}
+    except Exception as exc:
+        return {"verified": False, "false_claims": [], "corrected_summary": "", "corrected_model": "",
+                "check_time_ms": 0, "fact_check_skipped": True, "error": str(exc),
+                "repaired_claim_ids": [], "unresolved_claims": [],
+                "initial_verification_status": "unavailable", "final_verification_status": "unavailable"}
 
-    t0 = time.time()
+    def detect(text: str) -> tuple[list[dict] | None, str]:
+        prompt = _build_fact_check_prompt(text, payload, company_name)
+        for model_id, provider in ((CLAUDE_SONNET_MODEL, "anthropic"), (GPT_VERIFIER_MODEL, "openai")):
+            if remaining() < 8:
+                break
+            try:
+                timeout = min(30, max(7, remaining() - 2))
+                print(f"   🔍 [GS Fact-Check] {model_id} checking claims against payload...")
+                if provider == "anthropic":
+                    raw = call_anthropic_text(
+                        prompt, model=model_id, max_tokens=3000, timeout=timeout,
+                        reasoning_effort="low", json_schema=_GS_FACT_CHECK_SCHEMA,
+                        json_schema_name="general_summary_fact_check", log_label="GS Fact-Check",
+                    )
+                else:
+                    raw = call_openai_text(
+                        prompt, model=model_id, max_output_tokens=3000, timeout=timeout,
+                        reasoning_effort="low", text_verbosity="low", json_schema=_GS_FACT_CHECK_SCHEMA,
+                        json_schema_name="general_summary_fact_check", log_label="GS Fact-Check Fallback",
+                    )
+                parsed = _extract_json(raw)
+                if not isinstance(parsed, dict):
+                    raise ValueError("No schema-valid fact-check object")
+                claims = [item for item in (parsed.get("unsupported_claims") or []) if isinstance(item, dict)]
+                return claims, model_id
+            except Exception as exc:
+                print(f"   ⚠️ [GS Fact-Check] {model_id} failed: {exc}")
+        return None, ""
 
-    # Stage 1: Detect unsupported claims
-    # General Summary is normally GPT-generated, so Sonnet checks first. GPT-5.4
-    # remains as fallback for provider availability and manual regeneration cases.
-    CHECK_MODELS = [
-        (CLAUDE_SONNET_MODEL, "anthropic"),
-        (GPT_VERIFIER_MODEL, "openai"),
-    ]
-    false_claims = []
-    detection_succeeded = False
-
-    for model_id, provider in CHECK_MODELS:
-        if detection_succeeded:
-            break
-        try:
-            print(f"   🔍 [GS Fact-Check] {model_id} checking claims against payload...")
-            if provider == "anthropic":
-                import anthropic
-                anthropic_key = _clean_env_var(os.environ.get("ANTHROPIC_API_KEY", ""))
-                if not anthropic_key:
-                    print(f"   ⚠️ [GS Fact-Check] No ANTHROPIC_API_KEY — skipping {model_id}")
-                    continue
-                claude_client = anthropic.Anthropic(api_key=anthropic_key)
-                claude_resp = claude_client.messages.create(
-                    model=model_id,
-                    max_tokens=2200,
-                    messages=[{"role": "user", "content": check_prompt}],
-                )
-                raw = extract_anthropic_text(claude_resp)
-            else:
-                raw = _call_openai_summary(check_prompt, model=model_id, timeout=60)
-
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-            result = _extract_json(raw)
-            if result is None:
-                raise ValueError(f"No valid JSON object found in response ({len(raw)} chars)")
-            false_claims = result.get("unsupported_claims", [])
-            detection_succeeded = True
-        except Exception as e:
-            remaining = [m for m, _ in CHECK_MODELS if m != model_id and not detection_succeeded]
-            next_info = f" — trying {remaining[0]}" if remaining else ""
-            print(f"   ⚠️ [GS Fact-Check] {model_id} failed: {e}{next_info}")
-
-    if not detection_succeeded:
+    false_claims, detector_model = detect(summary_text)
+    if false_claims is None:
         elapsed = int((time.time() - t0) * 1000)
-        print(f"   ⚠️ [GS Fact-Check] All detection models failed — treating as unverified ({elapsed}ms)")
-        return {"verified": False, "false_claims": [], "corrected_summary": "",
-                "corrected_model": "", "check_time_ms": elapsed,
-                "fact_check_skipped": True}
+        return {"verified": False, "false_claims": [], "corrected_summary": "", "corrected_model": "",
+                "check_time_ms": elapsed, "fact_check_skipped": True, "repaired_claim_ids": [],
+                "unresolved_claims": [], "initial_verification_status": "unavailable",
+                "final_verification_status": "unavailable"}
 
-    # Process narration is invalid independently of factual accuracy. The model
-    # verifier can miss it because field names do exist in the payload, so enforce
-    # this presentation boundary deterministically.
     for phrase in _internal_process_phrases(summary_text):
         false_claims.append({
             "claim": phrase,
-            "reason": (
-                "General Summary must describe the company, not Scanner payload fields, "
-                "evidence promotion states, or the report-generation process."
-            ),
+            "reason": "General Summary must describe the company, not Scanner process state.",
         })
+    for item in false_claims:
+        item["claim_id"] = _gs_claim_id(item.get("claim") or "")
 
     if not false_claims:
         elapsed = int((time.time() - t0) * 1000)
-        print(f"   ✅ [GS Fact-Check] All claims supported by payload ({elapsed}ms)")
-        return {"verified": True, "false_claims": [], "corrected_summary": "",
-                "corrected_model": "", "check_time_ms": elapsed}
+        return {"verified": True, "false_claims": [], "corrected_summary": "", "corrected_model": "",
+                "check_time_ms": elapsed, "repaired_claim_ids": [], "unresolved_claims": [],
+                "initial_verification_status": "verified", "final_verification_status": "verified",
+                "verification_model": detector_model}
 
-    # Log the false claims
-    print(f"   ⚠️ [GS Fact-Check] {len(false_claims)} unsupported claim(s) detected:")
-    for fc in false_claims:
-        print(f"      - {fc.get('claim', '?')[:100]}")
-        print(f"        Reason: {fc.get('reason', '?')[:150]}")
-
-    # Stage 2: Re-generate with false claims as explicit warnings
-    regen_prompt = _build_regen_prompt(payload, company_name, summary_text, false_claims)
-
-    REGEN_MODEL = GPT_REASONING_MODEL
     corrected_summary = ""
     corrected_model = ""
+    repaired_claim_ids = []
+    repair_prompt = f"""You are making narrow factual corrections to a General Summary.
+Use only the supplied payload. Return one replacement for every claim ID. A replacement may be empty when the unsupported sentence must be removed. Do not add analysis, recommendations, causes, or new facts.
 
-    try:
-        corrected_summary = _strip_links(_call_openai_summary(regen_prompt, model=REGEN_MODEL, timeout=90))
-        corrected_model = REGEN_MODEL
-        wc = _word_count(corrected_summary)
-        print(f"   ✅ [GS Fact-Check] Re-generated clean summary: {wc} words ({REGEN_MODEL})")
+PAYLOAD:
+{json.dumps(payload, ensure_ascii=False)}
 
-    except Exception as e:
-        print(f"   ❌ [GS Fact-Check] Re-generation failed: {e} — keeping original (flagged)")
+SUMMARY:
+{summary_text}
+
+UNSUPPORTED CLAIMS:
+{json.dumps(false_claims, ensure_ascii=False)}
+"""
+    if remaining() >= 10:
+        for model_id, provider in ((CLAUDE_SONNET_MODEL, "anthropic"), (GPT_VERIFIER_MODEL, "openai")):
+            if remaining() < 8:
+                break
+            try:
+                timeout = min(25, max(7, remaining() - 2))
+                if provider == "anthropic":
+                    raw = call_anthropic_text(
+                        repair_prompt, model=model_id, max_tokens=3500, timeout=timeout,
+                        reasoning_effort="medium", json_schema=_GS_REPAIR_SCHEMA,
+                        json_schema_name="general_summary_sentence_repair", log_label="GS Sentence Repair",
+                    )
+                else:
+                    raw = call_openai_text(
+                        repair_prompt, model=model_id, max_output_tokens=3500, timeout=timeout,
+                        reasoning_effort="medium", text_verbosity="low", json_schema=_GS_REPAIR_SCHEMA,
+                        json_schema_name="general_summary_sentence_repair", log_label="GS Sentence Repair Fallback",
+                    )
+                parsed = _extract_json(raw)
+                corrected_summary, repaired_claim_ids = _apply_general_summary_replacements(
+                    summary_text, (parsed or {}).get("replacements") or []
+                )
+                if not repaired_claim_ids:
+                    raise ValueError("No flagged sentence was repaired")
+                corrected_model = model_id
+                break
+            except Exception as exc:
+                print(f"   ⚠️ [GS Sentence Repair] {model_id} failed: {exc}")
+
+    unresolved_claims = false_claims
+    final_status = "failed"
+    if corrected_summary and remaining() >= 7:
+        recheck, recheck_model = detect(corrected_summary)
+        if recheck is not None:
+            unresolved_claims = recheck
+            final_status = "verified_after_repair" if not recheck else "failed_after_repair"
+            if recheck_model:
+                corrected_model = f"{corrected_model}+{recheck_model}"
+
+    if corrected_summary and unresolved_claims and (_word_count(corrected_summary) < 220 or corrected_summary.count("\n\n") < 2) and remaining() >= 12:
+        try:
+            regenerated = _strip_links(call_openai_text(
+                _build_regen_prompt(payload, company_name, corrected_summary, unresolved_claims),
+                model=GPT_REASONING_MODEL, max_output_tokens=5000, timeout=min(20, remaining()),
+                reasoning_effort="medium", text_verbosity="medium", log_label="GS Focused Reanalysis",
+            ))
+            if regenerated:
+                corrected_summary = regenerated
+                corrected_model = GPT_REASONING_MODEL
+                recheck, _ = detect(corrected_summary) if remaining() >= 7 else (unresolved_claims, "")
+                if recheck is not None:
+                    unresolved_claims = recheck
+                    final_status = "verified_after_repair" if not recheck else "failed_after_repair"
+        except Exception as exc:
+            print(f"   ⚠️ [GS Focused Reanalysis] Failed: {exc}")
 
     elapsed = int((time.time() - t0) * 1000)
     return {
-        "verified": False,
+        "verified": final_status == "verified_after_repair",
         "false_claims": false_claims,
         "corrected_summary": corrected_summary,
         "corrected_model": corrected_model,
         "check_time_ms": elapsed,
+        "repaired_claim_ids": repaired_claim_ids,
+        "unresolved_claims": unresolved_claims,
+        "initial_verification_status": "failed",
+        "final_verification_status": final_status,
+        "verification_model": detector_model,
     }

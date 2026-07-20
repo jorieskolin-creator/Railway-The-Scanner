@@ -88,6 +88,125 @@ def test_supported_strategic_inference_is_filtered_before_correction(monkeypatch
     assert len(calls) == 1, "A supported inference must be filtered before Stage 2 correction"
 
 
+def test_valid_abs_premise_is_not_reported_as_source_handoff(monkeypatch):
+    premise_id = "ABS-AI-READINESS-1234"
+
+    def fake_call(_prompt, **_kwargs):
+        return json.dumps({
+            "false_claims": [{
+                "section": "Strategic Synthesis",
+                "claim": "The promoted evidence set does not currently verify enterprise AI maturity.",
+                "claim_class": "strategic_inference",
+                "error_type": "Evidence Handoff Failure",
+                "support_level": "context_only",
+                "missing_or_contradicted_premise": premise_id,
+                "reasoning": "The ABS identifier was treated as a missing source.",
+                "correction": "",
+                "source_ids": [premise_id],
+            }],
+            "summary_accurate": False,
+        })
+
+    monkeypatch.setattr(reality_check, "_call_openai_text", fake_call)
+    result = reality_check._provider_fact_check(
+        "The promoted evidence set does not currently verify enterprise AI maturity.",
+        "ExampleCo",
+        scan_payload={
+            "evidence_absence_signals": [{
+                "signal_id": premise_id,
+                "dimension": "AI Readiness",
+                "gap_status": "not_verified",
+                "safe_wording": "The promoted evidence set does not currently verify enterprise AI maturity.",
+            }],
+        },
+    )
+
+    assert result["false_claims"] == []
+
+
+def test_unresolved_abs_reference_is_premise_mismatch_not_handoff(monkeypatch):
+    calls = []
+
+    def fake_call(_prompt, **_kwargs):
+        calls.append(1)
+        return json.dumps({
+            "false_claims": [{
+                "section": "Strategic Synthesis",
+                "claim": "A proof gap remains unresolved.",
+                "claim_class": "strategic_inference",
+                "error_type": "Evidence Handoff Failure",
+                "support_level": "unsupported",
+                "missing_or_contradicted_premise": "ABS-NOT-IN-MANIFEST",
+                "reasoning": "The premise identifier cannot be resolved.",
+                "correction": "",
+                "source_ids": ["ABS-NOT-IN-MANIFEST"],
+            }],
+            "summary_accurate": False,
+        })
+
+    monkeypatch.setattr(reality_check, "_call_openai_text", fake_call)
+    result = reality_check._provider_fact_check(
+        "A proof gap remains unresolved.",
+        "ExampleCo",
+        scan_payload={"evidence_absence_signals": []},
+    )
+
+    assert len(calls) == 1, "Premise mismatch must not trigger wording correction"
+    assert result["false_claims"][0]["error_type"] == "Premise Reference Mismatch"
+    assert result["evidence_handoff_failure"] is False
+
+
+def test_mixed_handoff_and_correction_preserves_correction_status(monkeypatch):
+    blocked_claim = "ExampleCo has deployed enterprise AI across all operations."
+
+    monkeypatch.setattr(reality_check, "_provider_fact_check", lambda *_args, **_kwargs: {
+        "false_claims": [
+            {
+                "claim": blocked_claim,
+                "section": "AI Diagnosis",
+                "error_type": "Fabrication",
+                "claim_class": "external_company_fact",
+                "support_level": "unsupported",
+                "reasoning": "No source supports this deployment claim.",
+                "correction": "The available evidence does not establish enterprise-wide AI deployment.",
+                "source_ids": [],
+                "source_indices": [],
+                "source_urls": [],
+                "claim_id": "FC-BLOCKED",
+            },
+            {
+                "claim": "A separate cited source was not present in the handoff.",
+                "section": "Evidence-Based Risks",
+                "error_type": "Evidence Handoff Failure",
+                "claim_class": "external_company_fact",
+                "support_level": "unsupported",
+                "missing_or_contradicted_premise": "EVD-MISSING",
+                "reasoning": "The source record was absent.",
+                "source_ids": ["EVD-MISSING"],
+                "source_indices": [],
+                "source_urls": [],
+                "claim_id": "FC-HANDOFF",
+            },
+        ],
+        "corrected_summary": "The available evidence does not establish enterprise-wide AI deployment.",
+        "corrected_pitch": "",
+        "corrected_sections": {},
+        "model": "test-verifier+test-corrector",
+        "time_ms": 1,
+    })
+
+    result = reality_check.ai_fact_check_summary(
+        blocked_claim,
+        [],
+        "ExampleCo",
+    )
+
+    assert result["verification_status"] == "corrected_with_handoff_warnings"
+    assert result["corrected_summary"].startswith("The available evidence")
+    assert result["corrected_claim_ids"] == ["FC-BLOCKED"]
+    assert result["unresolved_handoff_ids"] == ["EVD-MISSING"]
+
+
 def test_foresight_cannot_prove_present_company_deployment(monkeypatch):
     def fake_call(prompt, **kwargs):
         if "precise editorial editor" in prompt:

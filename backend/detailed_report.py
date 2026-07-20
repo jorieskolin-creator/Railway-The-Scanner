@@ -419,18 +419,22 @@ def complete_detailed_report_draft(
     """Use GPT to expand/repair a short or truncated Detailed Report draft."""
     payload = _build_input_payload(full_data, company_name, foresight_data, prior_summaries)
     prompt = _build_completion_prompt(payload, company_name, draft, compact=compact)
-    timeout = max(30, min(100, int(time_budget_seconds or 80)))
+    budget = max(15, int(time_budget_seconds or 80))
+    deadline = time.time() + budget
     policy = policy_for("detailed_report")
     token_budget = 12000 if compact else int(policy.get("completion_max_output_tokens") or 16000)
     last_quality: dict = detailed_report_quality("", compact=compact)
     for effort in (str(policy.get("completion_effort") or "medium"), "high"):
+        remaining = max(0, int(deadline - time.time()))
+        if remaining < 8:
+            break
         t0 = time.time()
         try:
             text = call_openai_text(
                 prompt,
                 model=DETAILED_COMPLETION_MODEL,
                 max_output_tokens=token_budget,
-                timeout=timeout,
+                timeout=min(70, remaining),
                 reasoning_effort=effort,
                 text_verbosity=str(policy.get("completion_verbosity") or "high"),
                 log_label="Detailed Report Completion",
@@ -484,11 +488,14 @@ def generate_detailed_report(
     completion_policy = policy_for("detailed_report")
     token_budget = 12000 if compact else int(completion_policy.get("completion_max_output_tokens") or 16000)
     started = time.time()
-    total_budget = max(60, int(time_budget_seconds or (110 if compact else 180)))
+    total_budget = max(20 if compact else 60, int(time_budget_seconds or (110 if compact else 180)))
 
-    def remaining_timeout(*, reserve: int = 8, cap: int = 120, floor: int = 30) -> int:
-        remaining = total_budget - int(time.time() - started) - reserve
-        return max(floor, min(cap, remaining))
+    def remaining_budget() -> int:
+        return max(0, total_budget - int(time.time() - started))
+
+    def remaining_timeout(*, reserve: int = 8, cap: int = 120) -> int:
+        remaining = remaining_budget() - reserve
+        return max(0, min(cap, remaining))
 
     def quality_ok(text: str) -> bool:
         quality = detailed_report_quality(text, compact=compact)
@@ -501,7 +508,7 @@ def generate_detailed_report(
         return False
 
     def complete_with_gpt(draft: str, reason: str) -> tuple[str, str]:
-        if total_budget - int(time.time() - started) < 35:
+        if remaining_budget() < 20:
             print(f"   ⏭ [Detailed Report] GPT completion skipped ({reason}); insufficient report budget")
             return "", ""
         try:
@@ -509,12 +516,15 @@ def generate_detailed_report(
             t0 = time.time()
             completion_prompt = _build_completion_prompt(payload, company_name, draft, compact=compact)
             for effort in (str(completion_policy.get("completion_effort") or "medium"), "high"):
+                call_timeout = remaining_timeout(reserve=3, cap=70)
+                if call_timeout < 8:
+                    break
                 try:
                     repaired = call_openai_text(
                         completion_prompt,
                         model=DETAILED_COMPLETION_MODEL,
                         max_output_tokens=token_budget,
-                        timeout=remaining_timeout(reserve=5, cap=140, floor=30),
+                        timeout=call_timeout,
                         reasoning_effort=effort,
                         text_verbosity=str(completion_policy.get("completion_verbosity") or "high"),
                         log_label="Detailed Report Completion",
@@ -524,7 +534,7 @@ def generate_detailed_report(
                         f"   ❌ [Detailed Report] {DETAILED_COMPLETION_MODEL} completion "
                         f"failed at effort={effort}: {effort_exc}"
                     )
-                    if total_budget - int(time.time() - started) < 40:
+                    if remaining_budget() < 12:
                         break
                     continue
                 repaired = _strip_links((repaired or "").strip())
@@ -536,7 +546,7 @@ def generate_detailed_report(
                 )
                 if repaired and quality_ok(repaired):
                     return repaired, f"{DETAILED_COMPLETION_MODEL}-completion-{effort}"
-                if total_budget - int(time.time() - started) < 40:
+                if remaining_budget() < 12:
                     break
             return "", ""
         except Exception as exc:
@@ -545,13 +555,16 @@ def generate_detailed_report(
             return "", ""
 
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if anthropic_key:
+    if anthropic_key and remaining_budget() >= 10:
         # --- Attempt 1: Claude Sonnet 5 (standard long-form writer) ---
         SONNET_MODEL = CLAUDE_SONNET_MODEL
         try:
             print(f"   📝 [Detailed Report] Attempting {SONNET_MODEL}...")
             t0 = time.time()
-            claude_client = anthropic.Anthropic(api_key=anthropic_key, timeout=remaining_timeout(reserve=20 if not compact else 10))
+            sonnet_timeout = remaining_timeout(reserve=20 if not compact else 8, cap=90)
+            if sonnet_timeout < 8:
+                raise TimeoutError("Detailed Report Sonnet budget unavailable")
+            claude_client = anthropic.Anthropic(api_key=anthropic_key, timeout=sonnet_timeout)
             response = claude_client.messages.create(
                 model=SONNET_MODEL,
                 max_tokens=token_budget,
@@ -579,13 +592,16 @@ def generate_detailed_report(
 
     # --- Attempt 2: GPT frontier model (cross-provider backup) ---
     try:
+        gpt_timeout = remaining_timeout(reserve=12 if not compact else 5, cap=80)
+        if gpt_timeout < 8:
+            raise TimeoutError("Detailed Report GPT fallback budget unavailable")
         print(f"   📝 [Detailed Report] Attempting {GPT_REASONING_MODEL} fallback...")
         t0 = time.time()
         text = call_openai_text(
             prompt,
             model=GPT_REASONING_MODEL,
             max_output_tokens=token_budget,
-            timeout=remaining_timeout(reserve=20 if not compact else 10, cap=110, floor=30),
+            timeout=gpt_timeout,
             reasoning_effort="medium",
             text_verbosity="high",
             log_label="Detailed Report Generation",
@@ -606,13 +622,16 @@ def generate_detailed_report(
         elapsed = int((time.time() - t0) * 1000) if 't0' in dir() else 0
         print(f"   ❌ [Detailed Report] {GPT_REASONING_MODEL} failed ({elapsed}ms): {e}")
 
-    if anthropic_key:
+    if anthropic_key and remaining_budget() >= 10:
         # --- Attempt 3: Claude Opus 4.8 premium fallback ---
         OPUS_MODEL = CLAUDE_OPUS_MODEL
         try:
             print(f"   📝 [Detailed Report] Attempting {OPUS_MODEL} premium fallback...")
             t0 = time.time()
-            claude_client = anthropic.Anthropic(api_key=anthropic_key, timeout=remaining_timeout(reserve=5, cap=90, floor=30))
+            opus_timeout = remaining_timeout(reserve=3, cap=60)
+            if opus_timeout < 8:
+                raise TimeoutError("Detailed Report Opus fallback budget unavailable")
+            claude_client = anthropic.Anthropic(api_key=anthropic_key, timeout=opus_timeout)
             response = claude_client.messages.create(
                 model=OPUS_MODEL,
                 max_tokens=token_budget,

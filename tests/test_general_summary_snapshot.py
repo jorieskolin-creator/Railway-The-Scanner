@@ -6,6 +6,7 @@ Run with: python -m pytest tests/test_general_summary_snapshot.py -v
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -130,3 +131,47 @@ def test_general_summary_rejects_scanner_process_language():
     assert "supplied payload" in phrases
     assert "zero promoted" in phrases
     assert "key_findings" in phrases
+
+
+def test_general_summary_strict_repair_is_rechecked_and_verified(monkeypatch):
+    monkeypatch.setattr(
+        general_summary,
+        "_build_input_payload",
+        lambda *_args, **_kwargs: {"evidence_links": [], "financial_findings": []},
+    )
+    calls = []
+
+    def fake_sonnet(_prompt, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return json.dumps({
+                "unsupported_claims": [{
+                    "claim": "ExampleCo has deployed enterprise AI globally.",
+                    "reason": "The payload does not establish deployment.",
+                }],
+            })
+        if len(calls) == 2:
+            claim_id = general_summary._gs_claim_id("ExampleCo has deployed enterprise AI globally.")
+            return json.dumps({
+                "replacements": [{
+                    "claim_id": claim_id,
+                    "original_claim": "ExampleCo has deployed enterprise AI globally.",
+                    "replacement": "The available payload does not establish enterprise-wide AI deployment.",
+                }],
+            })
+        return json.dumps({"unsupported_claims": []})
+
+    monkeypatch.setattr(general_summary, "call_anthropic_text", fake_sonnet)
+    result = general_summary.fact_check_general_summary(
+        "ExampleCo has deployed enterprise AI globally.\n\nIts products serve industrial customers.\n\nThe record is limited.",
+        {},
+        "ExampleCo",
+        time_budget_seconds=60,
+    )
+
+    assert result["verified"] is True
+    assert result["initial_verification_status"] == "failed"
+    assert result["final_verification_status"] == "verified_after_repair"
+    assert "does not establish" in result["corrected_summary"]
+    assert len(result["repaired_claim_ids"]) == 1
+    assert all(call.get("json_schema") for call in calls)

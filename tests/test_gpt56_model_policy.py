@@ -23,7 +23,7 @@ def test_model_policy_defaults_to_gpt56_sol_without_haiku(monkeypatch):
     assert policy.DETAILED_COMPLETION_MODEL == "gpt-5.6-sol"
     assert all("haiku" not in model.lower() for model in policy.buying_generation_chain())
     assert policy.policy_for("buying_insight_generation")["qualification"]["max_output_tokens"] == 9000
-    assert policy.policy_for("activation_strategic_synthesis")["max_output_tokens"] == 24000
+    assert policy.policy_for("activation_strategic_synthesis")["max_output_tokens"] == 16000
 
 
 def _load_llm_clients(monkeypatch, response):

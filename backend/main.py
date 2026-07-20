@@ -432,6 +432,64 @@ def _parse_activation_json(text: str) -> dict | None:
     return None
 
 
+_STRATEGIC_SYNTHESIS_SCHEMA = {
+    "type": "object",
+    "properties": {"strategic_synthesis": {"type": "string"}},
+    "required": ["strategic_synthesis"],
+    "additionalProperties": False,
+}
+
+_ACTIVATION_PAIR_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "theme_type": {"type": "string", "enum": ["current_status", "foresight_driven", "proactive_opportunity"]},
+        "sales_use": {"type": "string", "enum": ["current_status", "foresight_driven", "proactive_opportunity"]},
+        "theme": {"type": "string"},
+        "why": {"type": "string"},
+        "what": {"type": "string"},
+        "what_to_do": {"type": "string"},
+        "what_progress_shows": {"type": "string"},
+        "parent_evidence_ids": {"type": "array", "items": {"type": "string"}},
+        "parent_foresight_ids": {"type": "array", "items": {"type": "string"}},
+        "independent_source_count": {"type": "integer"},
+        "source_freshness": {"type": "string"},
+        "pressure_horizon": {"type": "string"},
+        "sales_validation_window": {"type": "string"},
+        "timing_basis": {"type": "string"},
+    },
+    "required": [
+        "theme_type", "sales_use", "theme", "why", "what", "what_to_do",
+        "what_progress_shows", "parent_evidence_ids", "parent_foresight_ids",
+        "independent_source_count", "source_freshness", "pressure_horizon",
+        "sales_validation_window", "timing_basis",
+    ],
+    "additionalProperties": False,
+}
+
+_ACTIVATION_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "commercial_pitch": {"type": "string"},
+        "activation_pairs": {"type": "array", "minItems": 2, "maxItems": 3, "items": _ACTIVATION_PAIR_SCHEMA},
+        "why_proposals": {"type": "array", "items": {"type": "string"}},
+        "what_proposals": {"type": "array", "items": {"type": "string"}},
+        "what_progress_proposals": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["commercial_pitch", "activation_pairs", "why_proposals", "what_proposals", "what_progress_proposals"],
+    "additionalProperties": False,
+}
+
+_ACTIVATION_FULL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "strategic_synthesis": {"type": "string"},
+        **_ACTIVATION_OUTPUT_SCHEMA["properties"],
+    },
+    "required": ["strategic_synthesis", *_ACTIVATION_OUTPUT_SCHEMA["required"]],
+    "additionalProperties": False,
+}
+
+
 def _normalize_activation_payload(payload: dict, prior: dict | None = None) -> dict:
     """Accept current and legacy activation aliases without changing meaning."""
     prior = prior or {}
@@ -454,6 +512,109 @@ def _normalize_activation_payload(payload: dict, prior: dict | None = None) -> d
         "what_proposals": sanitize_inference_wording(_activation_list(what)),
         "what_progress_proposals": sanitize_inference_wording(_activation_list(progress)),
     }
+
+
+def _replace_flagged_claim(value, claim: str, correction: str):
+    """Apply one verified correction without changing unrelated structure."""
+    if isinstance(value, str):
+        claim = re.sub(r"\s+", " ", str(claim or "")).strip()
+        if not claim:
+            return value
+        replacement = str(correction or "").strip()
+        pattern = re.escape(claim).replace(r"\ ", r"\s+")
+        updated, count = re.subn(pattern, replacement, value, count=0, flags=re.IGNORECASE)
+        if not count:
+            return value
+        updated = re.sub(r"\s+([,.;:!?])", r"\1", updated)
+        updated = re.sub(r"[ \t]{2,}", " ", updated)
+        updated = re.sub(r"\n[ \t]+", "\n", updated)
+        return updated.strip()
+    if isinstance(value, list):
+        cleaned = [_replace_flagged_claim(item, claim, correction) for item in value]
+        return [item for item in cleaned if item not in (None, "", [], {})]
+    if isinstance(value, dict):
+        return {key: _replace_flagged_claim(item, claim, correction) for key, item in value.items()}
+    return value
+
+
+def _apply_fact_check_corrections(data: dict, fact_check: dict) -> list[str]:
+    """Apply verifier corrections to every reader-facing occurrence."""
+    corrected_summary = fact_check.get("corrected_summary") or ""
+    corrected_pitch = fact_check.get("corrected_pitch") or ""
+    corrected_sections = fact_check.get("corrected_sections") or {}
+    if corrected_summary:
+        data["summary_text"] = _strip_tac_codes(sanitize_inference_wording(corrected_summary))
+    if corrected_pitch:
+        data["pitch_text"] = sanitize_inference_wording(corrected_pitch)
+    if isinstance(corrected_sections, dict):
+        section_map = {
+            "strategic_synthesis": "strategic_synthesis",
+            "evidence_based_risks": "evidence_based_risks",
+            "activation_pairs": "activation_pairs",
+            "why_proposals": "why_proposals",
+            "what_proposals": "what_proposals",
+            "what_progress_proposals": "what_progress_proposals",
+        }
+        for section_key, data_key in section_map.items():
+            if corrected_sections.get(section_key) not in (None, "", [], {}):
+                data[data_key] = sanitize_inference_wording(corrected_sections[section_key])
+
+    public_keys = (
+        "summary_text", "strategic_synthesis", "pitch_text", "evidence_based_risks",
+        "activation_pairs", "why_proposals", "what_proposals", "what_progress_proposals",
+    )
+    applied_ids = []
+    for issue in fact_check.get("false_claims_detailed") or []:
+        if not isinstance(issue, dict):
+            continue
+        claim = str(issue.get("claim") or "").strip()
+        if not claim:
+            continue
+        correction = str(issue.get("correction") or "").strip()
+        before = {key: json.dumps(data.get(key), ensure_ascii=False, sort_keys=True, default=str) for key in public_keys}
+        for key in public_keys:
+            data[key] = _replace_flagged_claim(data.get(key), claim, correction)
+        if any(before[key] != json.dumps(data.get(key), ensure_ascii=False, sort_keys=True, default=str) for key in public_keys):
+            applied_ids.append(str(issue.get("claim_id") or ""))
+
+    activation_norm = _normalize_activation_payload({
+        "strategic_synthesis": data.get("strategic_synthesis"),
+        "commercial_pitch": data.get("pitch_text"),
+        "activation_pairs": data.get("activation_pairs"),
+        "why_proposals": data.get("why_proposals"),
+        "what_proposals": data.get("what_proposals"),
+        "what_progress_proposals": data.get("what_progress_proposals"),
+    })
+    data["strategic_synthesis"] = activation_norm["strategic_synthesis"]
+    data["pitch_text"] = activation_norm["pitch"]
+    data["activation_pairs"] = activation_norm["activation_pairs"]
+    data["why_proposals"] = activation_norm["why_proposals"]
+    data["what_proposals"] = activation_norm["what_proposals"]
+    data["what_progress_proposals"] = activation_norm["what_progress_proposals"]
+    return list(dict.fromkeys(item for item in applied_ids if item))
+
+
+def _unresolved_fact_check_claim_ids(data: dict, fact_check: dict) -> list[str]:
+    """Find exact blocked wording that survived public-field propagation."""
+    public_payload = json.dumps({
+        "summary_text": data.get("summary_text"),
+        "strategic_synthesis": data.get("strategic_synthesis"),
+        "pitch_text": data.get("pitch_text"),
+        "evidence_based_risks": data.get("evidence_based_risks"),
+        "activation_pairs": data.get("activation_pairs"),
+        "why_proposals": data.get("why_proposals"),
+        "what_proposals": data.get("what_proposals"),
+        "what_progress_proposals": data.get("what_progress_proposals"),
+    }, ensure_ascii=False, default=str)
+    normalized_payload = re.sub(r"\s+", " ", public_payload).lower()
+    unresolved = []
+    for issue in fact_check.get("false_claims_detailed") or []:
+        if not isinstance(issue, dict):
+            continue
+        claim = re.sub(r"\s+", " ", str(issue.get("claim") or "")).strip().lower()
+        if claim and claim in normalized_payload:
+            unresolved.append(str(issue.get("claim_id") or ""))
+    return list(dict.fromkeys(item for item in unresolved if item))
 
 
 def _plain_text_activation_fallback(text: str, prior: dict | None = None) -> dict:
@@ -4830,14 +4991,24 @@ def _execute_scan_pipeline(
         #   Financial:     120s (parallel with reality, non-blocking)
         #   No cross-scan score analysis: historical runs seed URLs only
         #   Synthesis:     protected core budget with adaptive fallback chain
-        #   Final outputs: protected reserve for fact-check, General Summary,
-        #                  save/index; Detailed Report is optional when time is tight.
+        #   Final outputs: independently protected budgets. Earlier final stages
+        #                  cannot consume the Detailed Report or save allocation.
         SCAN_TOTAL_BUDGET = 900
-        CORE_SYNTHESIS_RESERVE = 220
-        FINAL_OUTPUT_RESERVE = 120
+        CORE_SYNTHESIS_RESERVE = 240
+        ACTIVATION_CHAIN_BUDGET = 155
+        INFERENCE_FACT_CHECK_BUDGET = 65
+        GENERAL_SUMMARY_BUDGET = 80
+        DETAILED_REPORT_BUDGET = 150
+        FINAL_SAVE_BUDGET = 20
+        FINAL_OUTPUT_RESERVE = (
+            INFERENCE_FACT_CHECK_BUDGET
+            + GENERAL_SUMMARY_BUDGET
+            + DETAILED_REPORT_BUDGET
+            + FINAL_SAVE_BUDGET
+        )
         REALITY_PHASE_MAX_BUDGET = 420
         DETAIL_REPORT_FULL_MIN = 120
-        DETAIL_REPORT_COMPACT_MIN = 75
+        DETAIL_REPORT_COMPACT_MIN = 20
         print(f"🚀 --- LIVE SCAN INITIATED FOR: {companyName} (budget: {SCAN_TOTAL_BUDGET}s) ---")
         if job_id:
             _update_scan_job(job_id, phase="initializing", progress=5)
@@ -4864,6 +5035,22 @@ def _execute_scan_pipeline(
                 "core_synthesis_reserve": CORE_SYNTHESIS_RESERVE,
                 "final_output_reserve": FINAL_OUTPUT_RESERVE,
             }
+
+        final_stage_timing = {
+            "inference_fact_check": {"allocated_seconds": INFERENCE_FACT_CHECK_BUDGET},
+            "general_summary": {"allocated_seconds": GENERAL_SUMMARY_BUDGET},
+            "detailed_report": {"allocated_seconds": DETAILED_REPORT_BUDGET},
+            "save_finalize": {"allocated_seconds": FINAL_SAVE_BUDGET},
+        }
+
+        def _available_for_final_stage(stage_budget: int, reserve_after: int) -> int:
+            return max(0, min(stage_budget, int(_scan_remaining()) - reserve_after))
+
+        def _record_final_stage(stage: str, started_at: float, status: str) -> None:
+            timing = final_stage_timing.setdefault(stage, {})
+            timing["used_seconds"] = round(max(0.0, time.time() - started_at), 2)
+            timing["remaining_seconds"] = round(_scan_remaining(), 2)
+            timing["status"] = status
 
         def _log_budget_state(label: str) -> None:
             snap = _budget_snapshot()
@@ -5442,6 +5629,14 @@ def _execute_scan_pipeline(
         why_proposals = []
         what_proposals = []
         what_progress_proposals = []
+        activation_generation_meta = {
+            "status": "not_attempted",
+            "synthesis_parse_status": "not_attempted",
+            "activation_parse_status": "not_attempted",
+            "provider": "",
+            "fallback_reason": "",
+            "duration_seconds": 0,
+        }
         scan_quality = "empty_reality" if _s2_empty else "complete"  # downgraded if phases are skipped due to time
 
         anthropic_key = clean_env_var(os.environ.get("ANTHROPIC_API_KEY"))
@@ -5671,36 +5866,34 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                 # Dynamic per-attempt timeout: share remaining budget across
                 # fallback attempts while protecting final report/export phases.
                 _synth_available = max(0, int(synth_remaining) - FINAL_OUTPUT_RESERVE)
-                if _synth_available >= 360:
-                    OPUS_SYNTH_TIMEOUT = 120
-                    GPT_SYNTH_TIMEOUT = 120
-                    SONNET_SYNTH_TIMEOUT = 90
-                elif _synth_available >= 240:
-                    OPUS_SYNTH_TIMEOUT = 90
-                    GPT_SYNTH_TIMEOUT = 90
-                    SONNET_SYNTH_TIMEOUT = 60
-                elif _synth_available >= 180:
-                    OPUS_SYNTH_TIMEOUT = 75
-                    GPT_SYNTH_TIMEOUT = 75
-                    SONNET_SYNTH_TIMEOUT = 50
-                elif _synth_available >= 120:
-                    OPUS_SYNTH_TIMEOUT = 60
-                    GPT_SYNTH_TIMEOUT = 45
-                    SONNET_SYNTH_TIMEOUT = 40
-                elif _synth_available >= 75:
+                _diagnosis_available = max(0, min(85, _synth_available - ACTIVATION_CHAIN_BUDGET))
+                _diagnosis_deadline = time.time() + _diagnosis_available
+
+                def _diagnosis_budget_left() -> int:
+                    return max(0, int(_diagnosis_deadline - time.time()))
+
+                if _diagnosis_available >= 75:
+                    OPUS_SYNTH_TIMEOUT = 40
+                    GPT_SYNTH_TIMEOUT = 25
+                    SONNET_SYNTH_TIMEOUT = 20
+                elif _diagnosis_available >= 50:
                     OPUS_SYNTH_TIMEOUT = 0
-                    GPT_SYNTH_TIMEOUT = 45
-                    SONNET_SYNTH_TIMEOUT = 35
+                    GPT_SYNTH_TIMEOUT = 30
+                    SONNET_SYNTH_TIMEOUT = 20
+                elif _diagnosis_available >= 25:
+                    OPUS_SYNTH_TIMEOUT = 0
+                    GPT_SYNTH_TIMEOUT = 0
+                    SONNET_SYNTH_TIMEOUT = _diagnosis_available
                 else:
                     OPUS_SYNTH_TIMEOUT = 0
                     GPT_SYNTH_TIMEOUT = 0
-                    SONNET_SYNTH_TIMEOUT = max(25, min(35, _synth_available - 5))
+                    SONNET_SYNTH_TIMEOUT = 0
 
                 _use_opus = OPUS_SYNTH_TIMEOUT > 0
                 _use_gpt = GPT_SYNTH_TIMEOUT > 0
                 _use_sonnet = SONNET_SYNTH_TIMEOUT > 0
                 _synth_chain_budget = min(
-                    _synth_available,
+                    _diagnosis_available,
                     OPUS_SYNTH_TIMEOUT + GPT_SYNTH_TIMEOUT + SONNET_SYNTH_TIMEOUT,
                 )
 
@@ -5710,7 +5903,7 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                 print(
                     f"   [Synthesis] Time remaining: {int(synth_remaining)}s | "
                     f"protected reserve: {FINAL_OUTPUT_RESERVE}s | "
-                    f"chain budget: {_synth_chain_budget}s | "
+                    f"diagnosis budget: {_synth_chain_budget}s | activation reserve: {ACTIVATION_CHAIN_BUDGET}s | "
                     f"timeouts: opus={OPUS_SYNTH_TIMEOUT}s,gpt={GPT_SYNTH_TIMEOUT}s,sonnet={SONNET_SYNTH_TIMEOUT}s | "
                     f"mode: {'full' if _use_opus else 'gpt/sonnet' if _use_gpt else 'sonnet-only' if _use_sonnet else 'skip'}"
                 )
@@ -5735,7 +5928,7 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                         try:
                             _opus_timeout = min(
                                 OPUS_SYNTH_TIMEOUT,
-                                max(30, _synthesis_budget_left() - 10),
+                                max(8, _diagnosis_budget_left()),
                             )
                             print(f"   🔄 [Synthesis] Attempting claude-opus-4-8 with Extended Thinking (timeout: {_opus_timeout}s)...")
                             synth_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -5765,11 +5958,11 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                         )
 
                     # Fallback 1: configured GPT frontier model (text-only synthesis from verified evidence)
-                    if not response_text and _use_gpt and _synthesis_budget_left() > 30:
+                    if not response_text and _use_gpt and _diagnosis_budget_left() >= 8:
                         try:
                             _gpt_timeout = min(
                                 GPT_SYNTH_TIMEOUT,
-                                max(30, _synthesis_budget_left() - 10),
+                                max(8, _diagnosis_budget_left()),
                             )
                             print(f"   🔄 [Synthesis] Falling back to {GPT_REASONING_MODEL} (timeout: {_gpt_timeout}s)...")
                             gpt_start = time.time()
@@ -5799,11 +5992,11 @@ Do NOT generate strategic_synthesis, commercial_pitch, why_proposals, or what_pr
                             print(f"   ❌ [Synthesis] {GPT_REASONING_MODEL} failed: {gpt_err}")
 
                     # Fallback 2: Claude Sonnet 5 (independent provider — survives OpenAI outages)
-                    if not response_text and _use_sonnet and _synthesis_budget_left() > 20:
+                    if not response_text and _use_sonnet and _diagnosis_budget_left() >= 8:
                         try:
                             _sonnet_timeout = min(
                                 SONNET_SYNTH_TIMEOUT,
-                                max(25, _synthesis_budget_left() - 10),
+                                max(8, _diagnosis_budget_left()),
                             )
                             print(f"   🔄 [Synthesis] Falling back to {CLAUDE_SONNET_MODEL} (timeout: {_sonnet_timeout}s)...")
                             m_start = time.time()
@@ -6036,78 +6229,113 @@ Respond with valid JSON only:
                              activation_provider = ""
                              activation_fallback_reason = ""
                              activation_policy = policy_for("activation_strategic_synthesis")
-                             activation_timeout = min(180, max(45, _activation_left - 20))
+                             activation_chain_started = time.time()
+                             activation_chain_cap = min(ACTIVATION_CHAIN_BUDGET, max(70, int(_activation_left)))
+                             synthesis_timeout = min(110, max(45, activation_chain_cap - 50))
+                             synthesis_only = ""
                              try:
-                                 print(f"   🔄 [Activation] Generating Strategic Synthesis/WHY/WHAT/Pitch from locked diagnosis via {GPT_PRO_MODEL} (timeout: {activation_timeout}s)...")
+                                 synthesis_prompt = activation_prompt + """
+
+FINAL TASK OVERRIDE:
+Generate only the Strategic Synthesis. Do not generate Pitch or WHY/WHAT in this pass.
+Return the schema-constrained strategic_synthesis object only.
+"""
+                                 print(
+                                     f"   🔄 [Activation:Synthesis] {GPT_PRO_MODEL} Pro "
+                                     f"(timeout={synthesis_timeout}s, chain_cap={activation_chain_cap}s)..."
+                                 )
                                  act_start = time.time()
-
-                                 def _activation_gpt():
-                                     return call_openai_text(
-                                         activation_prompt,
-                                         model=GPT_PRO_MODEL,
-                                         max_output_tokens=int(activation_policy.get("max_output_tokens") or 24000),
-                                         timeout=activation_timeout,
-                                         reasoning_mode=str(activation_policy.get("reasoning_mode") or "pro"),
-                                         reasoning_effort=str(activation_policy.get("effort") or "high"),
-                                         text_verbosity=str(activation_policy.get("verbosity") or "medium"),
-                                         log_label="Strategic Activation",
-                                     )
-
-                                 act_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                                 act_future = act_pool.submit(_activation_gpt)
-                                 try:
-                                     activation_text = act_future.result(timeout=activation_timeout)
-                                 except concurrent.futures.TimeoutError:
-                                     act_pool.shutdown(wait=False)
-                                     print(f"   ⏰ [Activation] {GPT_PRO_MODEL} timed out after {activation_timeout}s")
-                                     activation_fallback_reason = f"{GPT_PRO_MODEL} timed out"
-                                     raise Exception(f"GPT activation timeout after {activation_timeout}s")
-                                 act_pool.shutdown(wait=False)
-                                 if str(activation_text or "").strip():
-                                     activation_provider = GPT_PRO_MODEL
-                                     print(f"   ✅ [Activation] {GPT_PRO_MODEL} complete ({int((time.time() - act_start) * 1000)}ms)")
-                                 else:
-                                     activation_fallback_reason = f"{GPT_PRO_MODEL} returned empty or non-text response"
-                                     print(f"   ⚠️ [Activation] {activation_fallback_reason} ({int((time.time() - act_start) * 1000)}ms)")
+                                 synthesis_text = call_openai_text(
+                                     synthesis_prompt,
+                                     model=GPT_PRO_MODEL,
+                                     max_output_tokens=16000,
+                                     timeout=synthesis_timeout,
+                                     reasoning_mode=str(activation_policy.get("reasoning_mode") or "pro"),
+                                     reasoning_effort=str(activation_policy.get("effort") or "high"),
+                                     text_verbosity="medium",
+                                     json_schema=_STRATEGIC_SYNTHESIS_SCHEMA,
+                                     json_schema_name="scanner_strategic_synthesis",
+                                     log_label="Strategic Synthesis",
+                                 )
+                                 synthesis_json = _parse_activation_json(synthesis_text) or {}
+                                 synthesis_only = sanitize_inference_wording(str(synthesis_json.get("strategic_synthesis") or "").strip())
+                                 if not synthesis_only:
+                                     raise ValueError("Strategic Synthesis response did not contain strategic_synthesis")
+                                 strategic_synthesis = synthesis_only
+                                 activation_generation_meta["synthesis_parse_status"] = "valid"
+                                 print(f"   ✅ [Activation:Synthesis] Complete ({int((time.time() - act_start) * 1000)}ms)")
                              except Exception as act_gpt_err:
-                                 if not activation_fallback_reason:
-                                     activation_fallback_reason = f"{GPT_PRO_MODEL} failed: {act_gpt_err}"
-                                 print(f"   ❌ [Activation] {GPT_PRO_MODEL} failed: {act_gpt_err}")
+                                 activation_fallback_reason = f"{GPT_PRO_MODEL} synthesis failed: {act_gpt_err}"
+                                 activation_generation_meta["synthesis_parse_status"] = "failed"
+                                 print(f"   ❌ [Activation:Synthesis] {activation_fallback_reason}")
 
-                             if not activation_text and _synthesis_budget_left() > 50:
-                                 sonnet_activation_timeout = min(75, max(45, _synthesis_budget_left() - 20))
+                             chain_remaining = max(0, activation_chain_cap - int(time.time() - activation_chain_started))
+                             sonnet_activation_timeout = min(50, max(18, chain_remaining))
+                             if sonnet_activation_timeout >= 18:
                                  try:
-                                     reason_text = f" after {activation_fallback_reason}" if activation_fallback_reason else ""
-                                     print(f"   🔄 [Activation] Falling back to {CLAUDE_SONNET_MODEL}{reason_text} (timeout: {sonnet_activation_timeout}s)...")
-                                     act_start = time.time()
+                                     if synthesis_only:
+                                         sonnet_prompt = activation_prompt + f"""
 
-                                     def _activation_sonnet():
-                                         return claude_client.messages.create(
-                                             model=CLAUDE_SONNET_MODEL,
-                                             max_tokens=4500,
-                                             system="You are a conservative activation writer. Use only the locked diagnosis, evidence packet, and Knowledge Base. Return JSON only.",
-                                             messages=[{"role": "user", "content": activation_prompt}],
-                                         )
+LOCKED STRATEGIC SYNTHESIS FROM THE PRO PASS:
+{synthesis_only}
 
-                                     act_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-                                     act_future = act_pool.submit(_activation_sonnet)
-                                     try:
-                                         sonnet_resp = act_future.result(timeout=sonnet_activation_timeout)
-                                         for block in sonnet_resp.content:
-                                             if getattr(block, 'type', None) == 'text':
-                                                 activation_text = block.text
-                                                 break
-                                     except concurrent.futures.TimeoutError:
-                                         act_pool.shutdown(wait=False)
-                                         print(f"   ⏰ [Activation] {CLAUDE_SONNET_MODEL} timed out after {sonnet_activation_timeout}s")
-                                     act_pool.shutdown(wait=False)
-                                     if activation_text:
-                                         activation_provider = CLAUDE_SONNET_MODEL
-                                         print(f"   ✅ [Activation] {CLAUDE_SONNET_MODEL} complete ({int((time.time() - act_start) * 1000)}ms)")
+FINAL TASK OVERRIDE:
+Generate only commercial_pitch, activation_pairs, why_proposals, what_proposals, and what_progress_proposals.
+Do not rewrite strategic_synthesis. Return the schema-constrained activation object only.
+"""
+                                         sonnet_schema = _ACTIVATION_OUTPUT_SCHEMA
+                                         schema_name = "scanner_activation_pairs"
                                      else:
-                                         print(f"   ⚠️ [Activation] {CLAUDE_SONNET_MODEL} returned no usable text")
+                                         sonnet_prompt = activation_prompt + """
+
+FINAL TASK OVERRIDE:
+The Pro synthesis pass was unavailable. Generate the complete Strategic Synthesis, Pitch, and WHY/WHAT activation packet.
+Return the schema-constrained full activation object only.
+"""
+                                         sonnet_schema = _ACTIVATION_FULL_SCHEMA
+                                         schema_name = "scanner_activation_full_fallback"
+                                     print(
+                                         f"   🔄 [Activation:Pairs] {CLAUDE_SONNET_MODEL} "
+                                         f"(timeout={sonnet_activation_timeout}s, fallback={not bool(synthesis_only)})..."
+                                     )
+                                     act_start = time.time()
+                                     sonnet_text = call_anthropic_text(
+                                         sonnet_prompt,
+                                         model=CLAUDE_SONNET_MODEL,
+                                         max_tokens=6000,
+                                         timeout=sonnet_activation_timeout,
+                                         reasoning_effort="medium",
+                                         json_schema=sonnet_schema,
+                                         json_schema_name=schema_name,
+                                         log_label="Strategic Activation Pairs",
+                                     )
+                                     sonnet_json = _parse_activation_json(sonnet_text)
+                                     if not sonnet_json:
+                                         raise ValueError("Structured activation response was not parseable")
+                                     activation_generation_meta["activation_parse_status"] = "valid"
+                                     if not synthesis_only and sonnet_json.get("strategic_synthesis"):
+                                         activation_generation_meta["synthesis_parse_status"] = "valid_fallback"
+                                     if synthesis_only:
+                                         sonnet_json["strategic_synthesis"] = synthesis_only
+                                     activation_text = json.dumps(sonnet_json, ensure_ascii=False)
+                                     activation_provider = f"{GPT_PRO_MODEL}+{CLAUDE_SONNET_MODEL}" if synthesis_only else CLAUDE_SONNET_MODEL
+                                     print(f"   ✅ [Activation:Pairs] Complete ({int((time.time() - act_start) * 1000)}ms)")
                                  except Exception as act_sonnet_err:
-                                     print(f"   ❌ [Activation] {CLAUDE_SONNET_MODEL} failed: {act_sonnet_err}")
+                                     activation_generation_meta["activation_parse_status"] = "failed"
+                                     print(f"   ❌ [Activation:Pairs] {CLAUDE_SONNET_MODEL} failed: {act_sonnet_err}")
+                                     if synthesis_only:
+                                         activation_text = json.dumps({"strategic_synthesis": synthesis_only}, ensure_ascii=False)
+                                         activation_provider = GPT_PRO_MODEL
+                             activation_generation_meta.update({
+                                 "status": "completed" if activation_text else "unavailable",
+                                 "provider": activation_provider,
+                                 "fallback_reason": activation_fallback_reason,
+                                 "duration_seconds": int(time.time() - activation_chain_started),
+                             })
+                             print(
+                                 f"   ⏱️ [Activation] Chain complete in {activation_generation_meta['duration_seconds']}s "
+                                 f"(cap={activation_chain_cap}s, provider={activation_provider or 'none'})"
+                             )
 
                              if activation_text:
                                  prior_activation = {
@@ -6165,6 +6393,10 @@ TEXT TO REPAIR:
                                          f"(provider={activation_provider or 'unknown'}, why={len(why_proposals)}, what={len(what_proposals)}, pitch={'yes' if pitch and pitch != 'Pitch Unavailable' else 'no'}, synthesis={'yes' if strategic_synthesis else 'no'})"
                                      )
                          elif summary:
+                             activation_generation_meta.update({
+                                 "status": "skipped_budget",
+                                 "fallback_reason": f"Only {_activation_left}s remained before final-output reserve.",
+                             })
                              print(f"   ⏭ [Activation] Budget < 60s before final reserve ({_activation_left}s) — skipping WHY/WHAT/Pitch")
 
                     else:
@@ -6326,6 +6558,7 @@ TEXT TO REPAIR:
             "why_proposals": why_proposals,
             "what_proposals": what_proposals,
             "what_progress_proposals": what_progress_proposals,
+            "activation_generation": activation_generation_meta,
             "lastUpdated": new_timestamp,
             "history": history,
             "is_simulated": reality_results.get("is_simulated", False),
@@ -6337,6 +6570,12 @@ TEXT TO REPAIR:
             "strategic_foresight": foresight_data,
             "foresight_links": foresight_links,
             "scan_quality": scan_quality,
+            "scan_timing": {
+                "total_budget_seconds": SCAN_TOTAL_BUDGET,
+                "core_synthesis_reserve_seconds": CORE_SYNTHESIS_RESERVE,
+                "final_output_reserve_seconds": FINAL_OUTPUT_RESERVE,
+                "final_stages": final_stage_timing,
+            },
             # Exact bibliography supplied to generation. Verification uses this
             # frozen packet instead of reconstructing a different bibliography.
             "generation_evidence_manifest": generation_manifest or generation_company_manifest,
@@ -6375,9 +6614,11 @@ TEXT TO REPAIR:
         # Strategic Synthesis are inference layers: the verifier may flag unsupported
         # premises or weak reasoning, but it must not purge valid evidence or replace
         # the whole analysis with a factual correction.
-        _fc_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
-        if _fc_remaining < 60:
-            print(f"   ⏭ [Fact-Check] Budget < 60s remaining ({int(_fc_remaining)}s) — skipping, summary stored as unverified")
+        _fc_stage_start = time.time()
+        _fc_reserve_after = GENERAL_SUMMARY_BUDGET + DETAILED_REPORT_BUDGET + FINAL_SAVE_BUDGET
+        _fc_budget = _available_for_final_stage(INFERENCE_FACT_CHECK_BUDGET, _fc_reserve_after)
+        if _fc_budget < 20:
+            print(f"   ⏭ [Fact-Check] Protected stage budget unavailable ({_fc_budget}s) — summary stored as unverified")
             fact_check = {
                 "verified": False,
                 "fact_check_skipped": True,
@@ -6391,7 +6632,7 @@ TEXT TO REPAIR:
             if scan_quality == "complete":
                 scan_quality = "unverified"
         else:
-            print(f"   🔄 [Fact-Check] Independent GPT/Claude fact-check ({int(_fc_remaining)}s remaining)...")
+            print(f"   🔄 [Fact-Check] Independent GPT/Claude fact-check (protected budget: {_fc_budget}s)...")
             fact_check = ai_fact_check_summary(
                 summary_text=full_data["summary_text"],
                 evidence_links=managed_evidence_links,
@@ -6401,12 +6642,22 @@ TEXT TO REPAIR:
                 analysis_sections={
                     "evidence_based_risks": full_data.get("evidence_based_risks") or [],
                     "strategic_synthesis": full_data.get("strategic_synthesis") or "",
+                    "activation_pairs": full_data.get("activation_pairs") or [],
+                    "why_proposals": full_data.get("why_proposals") or [],
+                    "what_proposals": full_data.get("what_proposals") or [],
+                    "what_progress_proposals": full_data.get("what_progress_proposals") or [],
                 },
                 document_label="AI Diagnosis, Evidence-Based Risks, and Strategic Synthesis",
                 foresight_links=full_data.get("foresight_links", []),
                 evidence_manifest=full_data.get("generation_evidence_manifest", []),
                 claim_graph=full_data.get("claim_graph", []),
+                time_budget_seconds=_fc_budget,
             )
+        _record_final_stage(
+            "inference_fact_check",
+            _fc_stage_start,
+            "skipped" if fact_check.get("fact_check_skipped") else fact_check.get("verification_status", "completed"),
+        )
         full_data["ai_verification"] = {
             "verified": fact_check["verified"],
             "verification_status": fact_check.get("verification_status", "unavailable"),
@@ -6418,7 +6669,20 @@ TEXT TO REPAIR:
             "model": fact_check["fact_check_model"],
             "time_ms": fact_check["fact_check_time_ms"],
             "evidence_handoff_failures": fact_check.get("evidence_handoff_failures", []),
+            "premise_reference_failures": fact_check.get("premise_reference_failures", []),
+            "corrected_claim_ids": fact_check.get("corrected_claim_ids", []),
+            "unresolved_handoff_ids": fact_check.get("unresolved_handoff_ids", []),
         }
+
+        applied_correction_ids = []
+        if not fact_check.get("fact_check_skipped") and fact_check.get("false_claims"):
+            applied_correction_ids = _apply_fact_check_corrections(full_data, fact_check)
+            full_data["ai_verification"]["corrected_claim_ids"] = list(dict.fromkeys(
+                (fact_check.get("corrected_claim_ids") or []) + applied_correction_ids
+            ))
+            full_data["ai_verification"]["unresolved_public_claim_ids"] = (
+                _unresolved_fact_check_claim_ids(full_data, fact_check)
+            )
 
         if fact_check.get("fact_check_skipped"):
             # --- SKIPPED: Budget exhausted or all fact-check models failed. Summary is unverified. ---
@@ -6426,22 +6690,40 @@ TEXT TO REPAIR:
             print(f"   ⚠️ [Fact-Check] Skipped ({_fc_skip_reason}) — summary stored as UNVERIFIED ({fact_check['fact_check_time_ms']}ms)")
             if scan_quality == "complete":
                 scan_quality = "unverified"
-        elif fact_check.get("verification_status") == "failed_handoff" or fact_check.get("evidence_handoff_failures"):
+        elif fact_check.get("evidence_handoff_failures"):
             # The verifier did not receive one or more evidence records cited by
             # generation. This is a pipeline integrity failure, not proof that the
-            # claim or its source is fabricated. Preserve both without correction
-            # or purging and make the unverified state explicit for the report.
+            # claim or its source is fabricated. Preserve unresolved references,
+            # while still applying corrections for independently resolved claims.
             handoff_failures = fact_check.get("evidence_handoff_failures", [])
+            mixed_corrections = bool(applied_correction_ids or fact_check.get("corrected_summary") or fact_check.get("corrected_sections") or fact_check.get("corrected_pitch"))
             print(
-                f"   ⚠️ [Fact-Check] Evidence handoff failed for "
-                f"{len(handoff_failures)} reference(s) — preserving analysis and sources as UNVERIFIED"
+                f"   ⚠️ [Fact-Check] Evidence handoff failed for {len(handoff_failures)} reference(s); "
+                f"{'independent corrections were applied' if mixed_corrections else 'analysis remains unverified'}"
             )
             full_data["ai_verification"]["verified"] = False
-            full_data["ai_verification"]["verification_status"] = "failed_handoff"
+            full_data["ai_verification"]["verification_status"] = (
+                "corrected_with_handoff_warnings" if mixed_corrections else "failed_handoff"
+            )
             full_data["ai_verification"]["note"] = (
                 "Verification could not resolve every cited evidence record. "
-                "No claim correction or evidence purge was applied."
+                + (
+                    "Corrections for independently verified blocking claims were applied; unresolved references remain visible for audit."
+                    if mixed_corrections else
+                    "No source purge was applied; unresolved references remain visible for audit."
+                )
             )
+            full_data["re_synthesis"] = {
+                "was_resynthesized": mixed_corrections,
+                "false_claims_found": fact_check.get("false_claims", []),
+                "false_claims_detailed": fact_check.get("false_claims_detailed", []),
+                "audit_notes": fact_check.get("audit_notes", []),
+                "audit_notes_detailed": fact_check.get("audit_notes_detailed", []),
+                "evidence_purged": {"removed": 0, "skipped": True, "reason": "mixed_outcome_preserved_sources"},
+                "resynth_model": fact_check.get("fact_check_model", ""),
+                "resynth_time_ms": fact_check.get("fact_check_time_ms", 0),
+                "method": "public_correction_with_handoff_warnings" if mixed_corrections else "handoff_warning_preserved_original",
+            }
             if scan_quality == "complete":
                 scan_quality = "unverified"
         elif fact_check["verified"] or fact_check.get("false_claims"):
@@ -6467,23 +6749,11 @@ TEXT TO REPAIR:
                 corrected_summary = fact_check.get("corrected_summary", "")
                 corrected_sections = fact_check.get("corrected_sections") or {}
                 corrected_pitch = fact_check.get("corrected_pitch", "") or ""
-                if corrected_summary:
+                if corrected_summary or corrected_sections or corrected_pitch or applied_correction_ids:
                     print(
-                        f"   🧭 [Fact-Check] Applying corrected public AI Diagnosis "
-                        f"({len(corrected_summary.split())} words); original retained in audit metadata"
+                        f"   🧭 [Fact-Check] Applied public corrections across governed fields "
+                        f"(claims={len(full_data['ai_verification'].get('corrected_claim_ids') or [])})"
                     )
-                    full_data["summary_text"] = _strip_tac_codes(sanitize_inference_wording(corrected_summary))
-                if isinstance(corrected_sections, dict):
-                    if corrected_sections.get("strategic_synthesis"):
-                        full_data["strategic_synthesis"] = _strip_tac_codes(
-                            sanitize_inference_wording(corrected_sections["strategic_synthesis"])
-                        )
-                    if corrected_sections.get("evidence_based_risks"):
-                        full_data["evidence_based_risks"] = sanitize_inference_wording(
-                            corrected_sections["evidence_based_risks"]
-                        )
-                if corrected_pitch:
-                    full_data["pitch_text"] = sanitize_inference_wording(corrected_pitch)
                 full_data["re_synthesis"] = {
                     "was_resynthesized": bool(corrected_summary or corrected_sections or corrected_pitch),
                     "false_claims_found": fact_check["false_claims"],
@@ -6539,16 +6809,23 @@ TEXT TO REPAIR:
         # Runs after fact-check so evidence_links are already purged/verified.
         # Failure is non-fatal — old records without these fields are handled gracefully.
         gs_text, gs_model = "", ""
-        _gs_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
+        _gs_stage_start = time.time()
+        _gs_reserve_after = DETAILED_REPORT_BUDGET + FINAL_SAVE_BUDGET
+        _gs_budget = _available_for_final_stage(GENERAL_SUMMARY_BUDGET, _gs_reserve_after)
         gs_ms = 0
-        if _gs_remaining < 45:
-            print(f"   ⏭ [General Summary] Budget < 45s remaining ({int(_gs_remaining)}s) — skipping")
+        if _gs_budget < 20:
+            print(f"   ⏭ [General Summary] Protected stage budget unavailable ({_gs_budget}s) — skipping")
             if scan_quality == "complete":
                 scan_quality = "partial_summary"
         else:
             try:
                 gs_start = time.time()
-                gs_text, gs_model = generate_general_summary(full_data, companyName)
+                gs_generation_budget = min(45, max(15, _gs_budget - 25))
+                gs_text, gs_model = generate_general_summary(
+                    full_data,
+                    companyName,
+                    time_budget_seconds=gs_generation_budget,
+                )
                 gs_ms = int((time.time() - gs_start) * 1000)
             except Exception as gs_err:
                 print(f"   ⚠️ [General Summary] Failed: {gs_err} — skipping")
@@ -6558,7 +6835,28 @@ TEXT TO REPAIR:
             print(f"   ✅ [General Summary] {wc} words, model={gs_model} ({gs_ms}ms)")
 
             # Fact-check General Summary against its own input payload
-            gs_check = fact_check_general_summary(gs_text, full_data, companyName)
+            gs_elapsed_seconds = int(time.time() - _gs_stage_start)
+            gs_check_budget = max(0, _gs_budget - gs_elapsed_seconds)
+            if gs_check_budget >= 10:
+                gs_check = fact_check_general_summary(
+                    gs_text,
+                    full_data,
+                    companyName,
+                    time_budget_seconds=gs_check_budget,
+                )
+            else:
+                gs_check = {
+                    "verified": False,
+                    "false_claims": [],
+                    "corrected_summary": "",
+                    "corrected_model": "",
+                    "fact_check_skipped": True,
+                    "initial_verification_status": "unavailable_budget",
+                    "final_verification_status": "unavailable_budget",
+                    "repaired_claim_ids": [],
+                    "unresolved_claims": [],
+                    "check_time_ms": 0,
+                }
             if gs_check.get("corrected_summary"):
                 gs_text = gs_check["corrected_summary"]
                 gs_model = gs_check["corrected_model"] or gs_model
@@ -6570,8 +6868,21 @@ TEXT TO REPAIR:
             full_data["general_summary_false_claims"] = [
                 fc.get("claim", "") for fc in gs_check.get("false_claims", [])
             ]
+            full_data["general_summary_verification"] = {
+                "initial_status": gs_check.get("initial_verification_status", "verified"),
+                "final_status": gs_check.get("final_verification_status", "verified" if gs_check.get("verified") else "unavailable"),
+                "repaired_claim_ids": gs_check.get("repaired_claim_ids", []),
+                "unresolved_claims": gs_check.get("unresolved_claims", []),
+                "model": gs_check.get("verification_model", ""),
+                "time_ms": gs_check.get("check_time_ms", 0),
+            }
         else:
             print(f"   ⚠️ [General Summary] Generation returned empty — skipping field")
+        _record_final_stage(
+            "general_summary",
+            _gs_stage_start,
+            "verified" if full_data.get("general_summary_verified") else ("generated_unverified" if gs_text else "skipped"),
+        )
 
         # --- STEP 3.6: DETAILED FORENSIC REPORT (meta-synthesis) ---
         # Runs AFTER General Summary so it can synthesize all
@@ -6581,7 +6892,13 @@ TEXT TO REPAIR:
         dr_text, dr_model = "", ""
         dr_ms = 0
         prior_summaries = {}
-        _dr_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
+        _dr_stage_start = time.time()
+        _dr_remaining = _available_for_final_stage(DETAILED_REPORT_BUDGET, FINAL_SAVE_BUDGET)
+        _dr_deadline = time.time() + max(0, _dr_remaining)
+
+        def _dr_stage_remaining() -> int:
+            return max(0, int(_dr_deadline - time.time()))
+
         full_data["detailed_report_status"] = "pending"
         if _dr_remaining < DETAIL_REPORT_COMPACT_MIN:
             full_data["detailed_report_status"] = "skipped"
@@ -6602,11 +6919,11 @@ TEXT TO REPAIR:
                 dr_start = time.time()
                 dr_compact = _dr_remaining < DETAIL_REPORT_FULL_MIN
                 if dr_compact:
-                    dr_time_budget = max(45, min(110, int(_dr_remaining) - 45))
+                    dr_time_budget = max(20, min(80, int(_dr_remaining) - 10))
                 else:
-                    # Full reports need room for Opus plus one GPT completion pass,
-                    # while preserving time for fact-check, save and job finalization.
-                    dr_time_budget = max(90, min(230, int(_dr_remaining) - 110))
+                    # Keep room inside this stage allocation for one bounded
+                    # verification or completion pass. Save has its own reserve.
+                    dr_time_budget = max(75, min(115, int(_dr_remaining) - 30))
                 if dr_compact:
                     print(
                         f"   📝 [Detailed Report] Moderate budget ({int(_dr_remaining)}s) "
@@ -6651,9 +6968,10 @@ TEXT TO REPAIR:
             # report generator and a claim graph that includes the report itself.
             full_data["detailed_report"] = dr_text
             attach_evidence_graph(full_data)
-            _dr_fc_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
-            if _dr_fc_remaining >= 55:
-                print(f"   🔍 [Detailed Report Fact-Check] Section-level verification ({int(_dr_fc_remaining)}s remaining)...")
+            _dr_fc_remaining = _dr_stage_remaining()
+            if _dr_fc_remaining >= 20:
+                dr_fc_budget = min(45, _dr_fc_remaining)
+                print(f"   🔍 [Detailed Report Fact-Check] Section-level verification ({dr_fc_budget}s protected budget)...")
                 dr_check = ai_fact_check_summary(
                     summary_text=dr_text,
                     evidence_links=managed_evidence_links,
@@ -6663,6 +6981,7 @@ TEXT TO REPAIR:
                     foresight_links=full_data.get("foresight_links", []),
                     evidence_manifest=full_data.get("evidence_manifest", []),
                     claim_graph=full_data.get("claim_graph", []),
+                    time_budget_seconds=dr_fc_budget,
                 )
                 if dr_check.get("corrected_summary"):
                     dr_text = dr_check["corrected_summary"]
@@ -6688,8 +7007,8 @@ TEXT TO REPAIR:
                     "   ⚠️ [Detailed Report] Post-check completeness failed: "
                     f"words={dr_quality.get('word_count')}, missing={dr_quality.get('missing')}"
                 )
-                _dr_repair_remaining = SCAN_TOTAL_BUDGET - (time.time() - scan_start)
-                if _dr_repair_remaining >= 65:
+                _dr_repair_remaining = _dr_stage_remaining()
+                if _dr_repair_remaining >= 20:
                     try:
                         repaired_text, repair_model, repair_quality = complete_detailed_report_draft(
                             full_data,
@@ -6698,7 +7017,7 @@ TEXT TO REPAIR:
                             dr_text,
                             prior_summaries=prior_summaries if prior_summaries else None,
                             compact=dr_compact,
-                            time_budget_seconds=max(35, min(95, int(_dr_repair_remaining) - 35)),
+                            time_budget_seconds=max(20, min(70, int(_dr_repair_remaining))),
                         )
                         if repaired_text and repair_quality.get("complete"):
                             dr_text = repaired_text
@@ -6735,12 +7054,24 @@ TEXT TO REPAIR:
                     scan_quality = "partial_report"
             print(f"   ⚠️ [Detailed Report] Generation returned empty — skipping field")
 
+        _record_final_stage(
+            "detailed_report",
+            _dr_stage_start,
+            full_data.get("detailed_report_status", "unavailable"),
+        )
+
         # Sync final scan quality before save.
         full_data["scan_quality"] = scan_quality
         # Refresh the graph after General Summary and Detailed Report are added.
         attach_evidence_graph(full_data)
 
         # --- STEP 4: SAVE ---
+        _save_stage_start = time.time()
+        final_stage_timing["save_finalize"].update({
+            "status": "in_progress" if saveToDatabase else "not_requested",
+            "used_seconds": 0.0,
+            "remaining_seconds": round(_scan_remaining(), 2),
+        })
         if saveToDatabase:
             print(f"   🔄 [Storage] Saving report to Vercel Blob...")
             save_start = time.time()
@@ -6776,6 +7107,18 @@ TEXT TO REPAIR:
             }
             # Update index
             storage.update_global_index(summary_entry)
+
+        _record_final_stage(
+            "save_finalize",
+            _save_stage_start,
+            "saved" if saveToDatabase else "not_requested",
+        )
+        # _make_json_safe_payload creates a detached JSON-safe copy before the
+        # upload. Refresh the returned in-memory timing view after save; the
+        # stored artifact still contains the allocation and pre-save stages.
+        full_data.setdefault("scan_timing", {})["final_stages"] = {
+            key: dict(value) for key, value in final_stage_timing.items()
+        }
 
         if job_id:
             _update_scan_job(job_id, phase="finalizing", progress=95)

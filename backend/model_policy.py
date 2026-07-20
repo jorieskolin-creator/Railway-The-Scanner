@@ -174,7 +174,7 @@ MODEL_POLICIES: dict[str, dict[str, Any]] = {
         "reasoning_mode": GPT_PRO_REASONING_MODE,
         "effort": "high",
         "verbosity": "medium",
-        "max_output_tokens": 24000,
+        "max_output_tokens": 16000,
         "fallback": CLAUDE_SONNET_MODEL,
     },
     "cross_impact_interpretation": {
