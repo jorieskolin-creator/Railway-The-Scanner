@@ -190,6 +190,7 @@ def call_anthropic_text(
     timeout: int | None = None,
     web_search: bool = False,
     max_searches: int = 8,
+    max_retries: int = 2,
     thinking_budget: int | None = None,
     reasoning_effort: str | None = None,
     json_schema: dict[str, Any] | None = None,
@@ -201,7 +202,10 @@ def call_anthropic_text(
         raise ValueError("No ANTHROPIC_API_KEY configured")
     import anthropic
 
-    client = anthropic.Anthropic(api_key=api_key, timeout=timeout) if timeout else anthropic.Anthropic(api_key=api_key)
+    client_kwargs: dict[str, Any] = {"api_key": api_key, "max_retries": max(0, int(max_retries))}
+    if timeout:
+        client_kwargs["timeout"] = timeout
+    client = anthropic.Anthropic(**client_kwargs)
     kwargs: dict[str, Any] = {
         "model": model,
         "max_tokens": max_tokens,

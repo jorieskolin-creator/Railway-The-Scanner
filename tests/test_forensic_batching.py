@@ -379,6 +379,85 @@ def test_failed_jury_keeps_only_revalidated_seed_as_pending():
     assert result["findings"][0]["analysis_verified"] is False
 
 
+def test_forensic_merge_drops_malformed_lane_and_packet_items_without_losing_valid_lane():
+    jury = "SERVICE PORTFOLIO JURY (Delivery Reality)"
+    supplied = _finding(
+        "https://example.fi/services/support",
+        jury,
+        snippet="Example Oy provides lifecycle support for installed systems.",
+        verified=True,
+        url_verified=True,
+        content_readable=True,
+        content_verified=True,
+        entity_verified=True,
+        entity_match_status="exact",
+        content_entity_match_status="exact",
+        entity_scope="canonical_legal_entity",
+    )
+    result = scanner_two._merge_forensic_jury_results(
+        {"confidence_score": 20, "findings": ["malformed baseline", supplied]},
+        [
+            "malformed lane",
+            {
+                "jury": jury,
+                "status": "completed",
+                "provider": "gpt",
+                "packet_urls": [supplied["url"]],
+                "packets": ["malformed packet", supplied],
+                "data": {
+                    "findings": [
+                        "malformed finding",
+                        {
+                            "url": supplied["url"],
+                            "supported_claim": "Example Oy provides lifecycle support for installed systems.",
+                            "source_quote": supplied["snippet"],
+                            "support_level": "exact",
+                            "title": "Lifecycle support",
+                            "found": True,
+                        },
+                    ],
+                    "rejected_evidence": ["malformed rejection"],
+                    "confidence_score": 75,
+                    "reality_score_adjustment": 0,
+                },
+            },
+        ],
+        {jury: ["malformed seed", supplied]},
+    )
+
+    assert [item["url"] for item in result["findings"]] == [supplied["url"]]
+    assert result["findings"][0]["analysis_verified"] is True
+
+
+def test_split_jury_payload_merge_keeps_atomic_dict_findings_only():
+    jury = "AI & DATA JURY (Future Readiness)"
+    merged = scanner_two._merge_jury_payloads(
+        jury,
+        [
+            "malformed payload",
+            {
+                "findings": ["bad", {"url": "https://example.fi/ai", "supported_claim": "Bounded claim"}],
+                "rejected_evidence": ["bad", {"url": "https://example.fi/old", "reason": "stale"}],
+                "contradictions": ["Valid contradiction", {"bad": True}],
+                "missing_coverage": ["Deployment outcomes"],
+                "confidence_score": 60,
+                "reality_score_adjustment": 0,
+            },
+        ],
+    )
+
+    assert len(merged["findings"]) == 1
+    assert len(merged["rejected_evidence"]) == 1
+    assert merged["contradictions"] == ["Valid contradiction"]
+    assert merged["missing_coverage"] == ["Deployment outcomes"]
+
+
+def test_forensic_jury_schema_caps_atomic_findings():
+    findings_schema = scanner_two._FORENSIC_JURY_JSON_SCHEMA["properties"]["findings"]
+    assert findings_schema["maxItems"] == 4
+    assert findings_schema["items"]["additionalProperties"] is False
+
+
 def test_jury_cannot_promote_url_outside_supplied_packets():
     jury = "STRATEGIC JURY (Business Model, Procurement & Customer Experience)"
     supplied = _finding("https://example.fi/annual-report", jury)

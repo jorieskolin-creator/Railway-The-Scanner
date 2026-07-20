@@ -410,6 +410,7 @@ const isForesightContext = (link) => {
     .map((link) => `${link.title || link.source || link.url || 'Evidence source'}: ${String(link.entity_match_reason || link.verification_reason || 'wrong entity').replace(/_/g, ' ')}`);
   const previousScanCarriedForward = (data.evidence_links || []).some((link) => String(link?.source_type || '').toLowerCase() === 'historical')
     || (data.reality_checklist || []).some((item) => String(item?.source_type || '').toLowerCase() === 'historical');
+  const currentRealityAvailable = data.current_reality_unavailable !== true && data.reality_score_valid !== false;
 
   // ARCHETYPE LOGIC (Reality vs Financial — unified with dashboard)
   // Prefer the stored archetype from the backend (single source of truth).
@@ -422,7 +423,9 @@ const isForesightContext = (link) => {
   };
 
   let gapKey: string;
-  if (data.archetype && ARCHETYPE_COLORS[data.archetype]) {
+  if (!currentRealityAvailable) {
+      gapKey = "Unavailable";
+  } else if (data.archetype && ARCHETYPE_COLORS[data.archetype]) {
       gapKey = data.archetype;
   } else {
       const fin = data.financial_index ?? data.intent_score ?? 0;
@@ -432,7 +435,7 @@ const isForesightContext = (link) => {
           gapKey = fin >= 50 ? "Cash Cow" : "At Risk";
       }
   }
-  const gapLabel = gapKey;
+  const gapLabel = currentRealityAvailable ? gapKey : "Current reality unavailable";
   const gapColor = ARCHETYPE_COLORS[gapKey] || '#94a3b8';
 
   const ARCHETYPE_DESCRIPTIONS = {
@@ -442,7 +445,9 @@ const isForesightContext = (link) => {
     "At Risk": "Low Reality + Weak Financials. Both operations and finances under pressure."
   };
   
-  let gapValueDisplay = data.reality_gap > 0 ? `+${data.reality_gap}` : `${data.reality_gap}`;
+  let gapValueDisplay = currentRealityAvailable
+    ? (data.reality_gap > 0 ? `+${data.reality_gap}` : `${data.reality_gap}`)
+    : 'N/A';
 
   const radarData = data.intent_breakdown.map(item => ({
     subject: item.name,
@@ -769,7 +774,10 @@ const isForesightContext = (link) => {
         var wrongEntityWarnings = companyEvidencePool.filter(isWrongEntity).map(function(link) {
             return (link.title || link.source || link.url || 'Evidence source') + ': ' + String(link.entity_match_reason || link.verification_reason || 'wrong entity').replace(/_/g, ' ');
         });
-        var gap = Number(exportData.intent_score || 0) - Number(exportData.reality_score || 0);
+        var realityAvailable = exportData.current_reality_unavailable !== true && exportData.reality_score_valid !== false;
+        var gap = realityAvailable
+            ? Number(exportData.intent_score || 0) - Number(exportData.reality_score || 0)
+            : null;
         var acquisitionHealth = exportData.forensic_acquisition_health && typeof exportData.forensic_acquisition_health === 'object'
             ? exportData.forensic_acquisition_health
             : {};
@@ -781,8 +789,8 @@ const isForesightContext = (link) => {
         ].join('/');
         var metrics = [
             renderMetric('Ambition Score', formatScore(exportData.intent_score, '/100'), 'Narrative clarity'),
-            renderMetric('Reality Score', formatScore(exportData.reality_score, '/100'), 'Evidence check'),
-            renderMetric('Integrity Delta', (gap > 0 ? '+' : '') + Math.round(gap), 'Ambition minus reality'),
+            renderMetric('Reality Score', realityAvailable ? formatScore(exportData.reality_score, '/100') : 'N/A', realityAvailable ? 'Evidence check' : 'Current result unavailable'),
+            renderMetric('Integrity Delta', gap !== null ? ((gap > 0 ? '+' : '') + Math.round(gap)) : 'N/A', 'Ambition minus reality'),
             renderMetric('Confidence', formatScore(exportData.confidence_score ?? exportData.scan_quality?.confidence_score ?? exportData.evidence_sufficiency?.score, '%'), 'Model confidence'),
             renderMetric('Financial Health', formatScore(exportData.financial_index, '/100'), 'Adaptation capacity'),
             renderMetric('Acq Fresh', formatScore(acquisitionHealth.fresh_packets_accepted, '') + '/' + formatScore(acquisitionHealth.fresh_packets_acquired, ''), 'accepted / acquired'),
@@ -1189,7 +1197,10 @@ const isForesightContext = (link) => {
     const buildAndDownloadExecutive = function(exportData) {
         const companyName = exportData.companyName || exportData.company_name || exportData.name || 'Company';
         const generatedDate = new Date().toISOString().split('T')[0];
-        const gap = Number(exportData.intent_score || 0) - Number(exportData.reality_score || 0);
+        const realityAvailable = exportData.current_reality_unavailable !== true && exportData.reality_score_valid !== false;
+        const gap = realityAvailable
+            ? Number(exportData.intent_score || 0) - Number(exportData.reality_score || 0)
+            : null;
         const evidenceManifest = Array.isArray(exportData.evidence_manifest) ? exportData.evidence_manifest : [];
         executiveEvidenceById = evidenceManifest.reduce(function(acc, item) {
             if (item && item.evidence_id) acc[item.evidence_id] = item;
@@ -1294,8 +1305,8 @@ const isForesightContext = (link) => {
         ].join('/');
         const metrics = [
             renderMetric('Ambition Score', formatScore(exportData.intent_score, '/100'), 'Narrative clarity'),
-            renderMetric('Reality Score', formatScore(exportData.reality_score, '/100'), 'Evidence check'),
-            renderMetric('Integrity Delta', (gap > 0 ? '+' : '') + Math.round(gap), 'Ambition minus reality'),
+            renderMetric('Reality Score', realityAvailable ? formatScore(exportData.reality_score, '/100') : 'N/A', realityAvailable ? 'Evidence check' : 'Current result unavailable'),
+            renderMetric('Integrity Delta', gap !== null ? ((gap > 0 ? '+' : '') + Math.round(gap)) : 'N/A', 'Ambition minus reality'),
             renderMetric('Confidence', formatScore(exportData.confidence_score ?? exportData.scan_quality?.confidence_score ?? exportData.evidence_sufficiency?.score, '%'), 'Model confidence'),
             renderMetric('Financial Health', formatScore(exportData.financial_index, '/100'), 'Adaptation capacity'),
             renderMetric('Claim Rewrite', claimRewriteLabel, 'narrow/question/context/blocked'),
@@ -1543,8 +1554,8 @@ const isForesightContext = (link) => {
             <div className="bg-white/5 backdrop-blur-md p-6 rounded-2xl border border-white/10 flex flex-col items-center justify-center relative group overflow-hidden">
             <div className="absolute inset-0 bg-emerald-500/10 opacity-0 group-hover:opacity-100 transition-opacity"></div>
             <span className="text-emerald-200 font-medium mb-1 text-sm tracking-widest uppercase">Reality Score</span>
-            <span className="text-6xl font-black text-white tracking-tighter drop-shadow-[0_0_15px_rgba(16,185,129,0.5)]">{data.reality_score}</span>
-            <span className="text-xs text-slate-400 mt-2 font-mono">Evidence Check</span>
+            <span className="text-6xl font-black text-white tracking-tighter drop-shadow-[0_0_15px_rgba(16,185,129,0.5)]">{currentRealityAvailable ? data.reality_score : 'N/A'}</span>
+            <span className="text-xs text-slate-400 mt-2 font-mono">{currentRealityAvailable ? 'Evidence Check' : 'Current result unavailable'}</span>
             </div>
             
             <div className="bg-white/5 backdrop-blur-md p-6 rounded-2xl border border-white/10 flex flex-col items-center justify-center relative overflow-hidden group/tooltip">
@@ -1570,7 +1581,7 @@ const isForesightContext = (link) => {
 
         {/* WASHING WARNING BANNER */}
         {/* LOGIC FIX: Ensure Washing only displays if Intent > Reality. */}
-        {data.washing_flag && data.intent_score > data.reality_score && (
+        {currentRealityAvailable && data.washing_flag && data.intent_score > data.reality_score && (
             <div className="animate-in slide-in-from-top-4 bg-rose-500/10 border-l-4 border-rose-500 p-4 rounded-r-xl flex items-start gap-4 shadow-lg shadow-rose-900/20">
                 <AlertOctagon className="text-rose-500 shrink-0 mt-0.5" size={24} />
                 <div>

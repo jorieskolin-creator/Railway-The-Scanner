@@ -71,6 +71,8 @@ def test_general_summary_payload_excludes_key_people(monkeypatch):
     assert "Jane Example" not in str(payload)
     assert len(payload["evidence_links"]) == 1
     assert payload["financial_findings"][0]["dimension"] == "profitability"
+    assert "assessment" not in payload["financial_findings"][0]
+    assert "model-interpreted" not in str(payload)
 
 
 def test_general_summary_prompt_defines_business_snapshot_not_diagnosis(monkeypatch):

@@ -164,7 +164,9 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
   const groupedData = useMemo(() => {
       const groups: { [key: string]: any } = {};
 
-      data.forEach((item: any) => {
+      data
+        .filter((item: any) => item.current_reality_unavailable !== true && item.reality_score_valid !== false)
+        .forEach((item: any) => {
           const fi = item.financial_index ?? item.intent_score;
           const displayItem = { ...item, financial_index: fi };
           const key = `${fi}-${item.reality_score}`;
@@ -183,7 +185,11 @@ const TruthMatrix = ({ data, onSelectCompany }) => {
   // Market average: center of gravity across all companies
   const marketAvg = useMemo(() => {
       if (!data || data.length === 0) return null;
-      const nonRef = data.filter((d: any) => !d.isReference);
+      const nonRef = data.filter((d: any) => (
+          !d.isReference
+          && d.current_reality_unavailable !== true
+          && d.reality_score_valid !== false
+      ));
       if (nonRef.length === 0) return null;
       const avgReality = Math.round(nonRef.reduce((sum: number, d: any) => sum + (d.reality_score ?? 0), 0) / nonRef.length);
       const avgFinancial = Math.round(nonRef.reduce((sum: number, d: any) => sum + (d.financial_index ?? d.intent_score ?? 0), 0) / nonRef.length);

@@ -52,6 +52,7 @@ def _call_openai_text(prompt: str, model: str = GPT_REASONING_MODEL, max_output_
         model=model,
         max_output_tokens=max_output_tokens,
         timeout=timeout,
+        max_retries=0,
         reasoning_effort="low" if verifier_route else "medium",
         text_verbosity="low" if verifier_route else "medium",
         log_label="Reality Verifier" if verifier_route else "Scanner Reasoning",

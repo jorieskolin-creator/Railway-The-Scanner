@@ -69,8 +69,9 @@ def _call_openai_summary(prompt: str, model: str = GPT_REASONING_MODEL, timeout:
     return call_openai_text(
         prompt,
         model=model,
-        max_output_tokens=8000,
+        max_output_tokens=4000,
         timeout=timeout,
+        max_retries=0,
         reasoning_effort=str(policy.get("effort") or "medium"),
         text_verbosity=str(policy.get("verbosity") or "medium"),
         log_label="General Summary",
@@ -350,6 +351,14 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
             source_url = f.get("source_url", "")
             source_title = f.get("source_title", "")
             evidence_snippet = f.get("evidence_snippet", "")
+            if (
+                not source_url
+                or not evidence_snippet
+                or f.get("generation_eligible") is False
+                or str(f.get("entity_match_status") or "").lower() == "wrong"
+                or f.get("wrong_entity") is True
+            ):
+                continue
             # Classify the financial source so the LLM can attribute correctly:
             # third-party database (Finder, Bloomberg) vs company filing (annual report, IR).
             # Without this, financial_findings reach the prompt with no provenance signal
@@ -390,15 +399,12 @@ def _build_input_payload(full_data: dict, company_name: str) -> dict:
                 source_label = "Other source"
             entry = {
                 "dimension": f.get("dimension", ""),
-                "assessment_note": "model-interpreted summary, NOT a direct source quote",
-                "assessment": f.get("assessment", ""),
                 "source_label": source_label,
                 "claim_tier": tier,
                 "entity_scope": scoped_fin.get("entity_scope", "unknown"),
                 "scope_warning": scoped_fin.get("scope_warning", ""),
+                "evidence_snippet": evidence_snippet[:700],
             }
-            if evidence_snippet:
-                entry["evidence_snippet"] = evidence_snippet
             if source_title:
                 entry["source_title"] = source_title
             fin_findings.append(entry)
@@ -598,7 +604,7 @@ def generate_general_summary(full_data: dict, company_name: str, time_budget_sec
         PRIMARY_MODEL = GPT_REASONING_MODEL
         print(f"   [General Summary] Trying primary {PRIMARY_MODEL}")
         t0 = time.time()
-        text = _strip_links(_call_openai_summary(prompt, model=PRIMARY_MODEL, timeout=min(45, max(10, remaining()))))
+        text = _strip_links(_call_openai_summary(prompt, model=PRIMARY_MODEL, timeout=min(35, max(10, remaining()))))
         wc = _word_count(text)
         elapsed = int((time.time() - t0) * 1000)
         print(f"   [General Summary] {PRIMARY_MODEL}: {wc} words ({elapsed}ms)")
@@ -633,7 +639,8 @@ def generate_general_summary(full_data: dict, company_name: str, time_budget_sec
                 prompt,
                 model=SONNET_MODEL,
                 max_tokens=4000,
-                timeout=min(35, max(8, remaining())),
+                timeout=min(20, max(8, remaining())),
+                max_retries=0,
                 reasoning_effort="medium",
                 log_label="General Summary Fallback",
             ))
@@ -805,12 +812,14 @@ def fact_check_general_summary(summary_text: str, full_data: dict, company_name:
                 if provider == "anthropic":
                     raw = call_anthropic_text(
                         prompt, model=model_id, max_tokens=3000, timeout=timeout,
+                        max_retries=0,
                         reasoning_effort="low", json_schema=_GS_FACT_CHECK_SCHEMA,
                         json_schema_name="general_summary_fact_check", log_label="GS Fact-Check",
                     )
                 else:
                     raw = call_openai_text(
                         prompt, model=model_id, max_output_tokens=3000, timeout=timeout,
+                        max_retries=0,
                         reasoning_effort="low", text_verbosity="low", json_schema=_GS_FACT_CHECK_SCHEMA,
                         json_schema_name="general_summary_fact_check", log_label="GS Fact-Check Fallback",
                     )
@@ -870,12 +879,14 @@ UNSUPPORTED CLAIMS:
                 if provider == "anthropic":
                     raw = call_anthropic_text(
                         repair_prompt, model=model_id, max_tokens=3500, timeout=timeout,
+                        max_retries=0,
                         reasoning_effort="medium", json_schema=_GS_REPAIR_SCHEMA,
                         json_schema_name="general_summary_sentence_repair", log_label="GS Sentence Repair",
                     )
                 else:
                     raw = call_openai_text(
                         repair_prompt, model=model_id, max_output_tokens=3500, timeout=timeout,
+                        max_retries=0,
                         reasoning_effort="medium", text_verbosity="low", json_schema=_GS_REPAIR_SCHEMA,
                         json_schema_name="general_summary_sentence_repair", log_label="GS Sentence Repair Fallback",
                     )
@@ -905,6 +916,7 @@ UNSUPPORTED CLAIMS:
             regenerated = _strip_links(call_openai_text(
                 _build_regen_prompt(payload, company_name, corrected_summary, unresolved_claims),
                 model=GPT_REASONING_MODEL, max_output_tokens=5000, timeout=min(20, remaining()),
+                max_retries=0,
                 reasoning_effort="medium", text_verbosity="medium", log_label="GS Focused Reanalysis",
             ))
             if regenerated:

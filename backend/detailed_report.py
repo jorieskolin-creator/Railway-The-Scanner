@@ -56,6 +56,23 @@ def _ends_complete_sentence(text: str) -> bool:
     return bool(re.search(r'[\.\!\?][)"\']?$', cleaned))
 
 
+def _claim_terms(value: str) -> set[str]:
+    """Normalize small wording variations for deterministic claim matching."""
+    stop_words = {
+        "a", "an", "the", "has", "have", "had", "is", "are", "was", "were",
+        "be", "been", "being",
+    }
+    aliases = {"every": "all"}
+    terms = set()
+    for raw in re.findall(r"[a-z0-9]+", str(value or "").lower()):
+        token = aliases.get(raw, raw)
+        if len(token) > 4 and token.endswith("s") and not token.endswith("ss"):
+            token = token[:-1]
+        if token not in stop_words:
+            terms.add(token)
+    return terms
+
+
 def detailed_report_quality(text: str, compact: bool = False) -> dict:
     words = _word_count(text)
     headings = _section_headings(text)
@@ -83,6 +100,72 @@ def detailed_report_quality(text: str, compact: bool = False) -> dict:
     }
 
 
+def remove_flagged_report_sentences(text: str, claims: list) -> tuple[str, int]:
+    """Remove verifier-flagged reader-facing sentences without generating new prose."""
+    claim_texts = []
+    for item in claims or []:
+        value = item.get("claim") if isinstance(item, dict) else item
+        value = re.sub(r"\s+", " ", str(value or "")).strip()
+        if value:
+            claim_texts.append(value)
+    if not text or not claim_texts:
+        return text or "", 0
+
+    removed = 0
+    output_paragraphs = []
+    for paragraph in re.split(r"\n\s*\n", text):
+        stripped = paragraph.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            output_paragraphs.append(stripped)
+            continue
+        sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", stripped)
+        kept = []
+        for sentence in sentences:
+            sentence_norm = re.sub(r"\s+", " ", sentence).strip()
+            sentence_words = _claim_terms(sentence_norm)
+            should_remove = False
+            for claim in claim_texts:
+                claim_words = _claim_terms(claim)
+                overlap = len(sentence_words & claim_words) / max(1, len(claim_words))
+                if claim.lower() in sentence_norm.lower() or sentence_norm.lower() in claim.lower() or (
+                    len(claim_words) >= 5 and overlap >= 0.72
+                ):
+                    should_remove = True
+                    break
+            if should_remove:
+                removed += 1
+            else:
+                kept.append(sentence.strip())
+        if kept:
+            output_paragraphs.append(" ".join(kept))
+    return "\n\n".join(output_paragraphs).strip(), removed
+
+
+def flagged_report_claims_remaining(text: str, claims: list) -> list[str]:
+    """Return material flagged claim wording that still appears after correction."""
+    normalized_text = re.sub(r"\s+", " ", str(text or "")).lower()
+    report_sentences = [
+        re.sub(r"\s+", " ", sentence).strip()
+        for sentence in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", str(text or ""))
+        if sentence.strip()
+    ]
+    remaining = []
+    for item in claims or []:
+        value = item.get("claim") if isinstance(item, dict) else item
+        claim = re.sub(r"\s+", " ", str(value or "")).strip()
+        claim_words = _claim_terms(claim)
+        fuzzy_match = any(
+            len(claim_words) >= 5
+            and len(claim_words & _claim_terms(sentence)) / len(claim_words) >= 0.72
+            for sentence in report_sentences
+        )
+        if claim and (claim.lower() in normalized_text or fuzzy_match):
+            remaining.append(claim)
+    return remaining
+
+
 def _build_input_payload(full_data: dict, company_name: str, foresight_data: dict | None, prior_summaries: dict | None = None) -> dict:
     """Build a rich evidence payload for the detailed report — more depth than general_summary.
 
@@ -101,27 +184,8 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
     def _is_legal_page(url: str) -> bool:
         return any(seg in url.lower() for seg in _LEGAL_PATH_SEGMENTS)
 
-    # Delta from history
-    history = full_data.get("history") or []
+    # Historical Scanner outputs are source memory, not comparable company facts.
     delta = None
-    if history:
-        prev = history[-1]
-        prev_reality = prev.get("reality_score")
-        prev_financial = prev.get("financial_index")
-        prev_date = (prev.get("lastUpdated") or "")[:10]
-        parts = []
-        cur_reality = full_data.get("reality_score", 0)
-        cur_financial = full_data.get("financial_index")
-        if prev_reality is not None:
-            diff = cur_reality - prev_reality
-            direction = "improved" if diff > 0 else ("declined" if diff < 0 else "unchanged")
-            parts.append(f"Reality Score {direction} from {prev_reality} to {cur_reality}")
-        if prev_financial is not None and cur_financial is not None:
-            fdiff = cur_financial - prev_financial
-            fdirection = "improved" if fdiff > 0 else ("declined" if fdiff < 0 else "unchanged")
-            parts.append(f"Financial Health {fdirection} from {prev_financial} to {cur_financial}")
-        if parts:
-            delta = {"previous_scan_date": prev_date, "changes": parts}
 
     # Evidence packets keep routing hints separate from currently verified
     # content. Historical snippets help selection, but never prove a claim.
@@ -207,8 +271,29 @@ def _build_input_payload(full_data: dict, company_name: str, foresight_data: dic
         and not _is_legal_page(item.get("url", ""))
     ][:12]
 
-    # Financial — sub-scores plus findings
-    fin_findings = [str(f) for f in (full_data.get("financial_findings") or [])[:5]]
+    # Financial facts only. Model-authored assessments are deliberately excluded.
+    fin_findings = []
+    for finding in (full_data.get("financial_findings") or [])[:8]:
+        if not isinstance(finding, dict):
+            continue
+        source_url = str(finding.get("source_url") or "").strip()
+        source_quote = str(finding.get("evidence_snippet") or finding.get("source_quote") or "").strip()
+        if (
+            not source_url
+            or not source_quote
+            or finding.get("generation_eligible") is False
+            or finding.get("wrong_entity") is True
+            or str(finding.get("entity_match_status") or "").lower() == "wrong"
+        ):
+            continue
+        fin_findings.append({
+            "dimension": str(finding.get("dimension") or ""),
+            "source_title": str(finding.get("source_title") or "")[:160],
+            "source_url": source_url,
+            "source_quote": source_quote[:900],
+            "entity_scope": str(finding.get("entity_scope") or "unknown"),
+            "source_type": str(finding.get("source_type") or ""),
+        })
     fin_sub = full_data.get("financial_sub_scores", {})
 
     # Washing
@@ -525,6 +610,7 @@ def generate_detailed_report(
                         model=DETAILED_COMPLETION_MODEL,
                         max_output_tokens=token_budget,
                         timeout=call_timeout,
+                        max_retries=0,
                         reasoning_effort=effort,
                         text_verbosity=str(completion_policy.get("completion_verbosity") or "high"),
                         log_label="Detailed Report Completion",
@@ -564,7 +650,11 @@ def generate_detailed_report(
             sonnet_timeout = remaining_timeout(reserve=20 if not compact else 8, cap=90)
             if sonnet_timeout < 8:
                 raise TimeoutError("Detailed Report Sonnet budget unavailable")
-            claude_client = anthropic.Anthropic(api_key=anthropic_key, timeout=sonnet_timeout)
+            claude_client = anthropic.Anthropic(
+                api_key=anthropic_key,
+                timeout=sonnet_timeout,
+                max_retries=0,
+            )
             response = claude_client.messages.create(
                 model=SONNET_MODEL,
                 max_tokens=token_budget,
@@ -602,6 +692,7 @@ def generate_detailed_report(
             model=GPT_REASONING_MODEL,
             max_output_tokens=token_budget,
             timeout=gpt_timeout,
+            max_retries=0,
             reasoning_effort="medium",
             text_verbosity="high",
             log_label="Detailed Report Generation",
@@ -631,7 +722,11 @@ def generate_detailed_report(
             opus_timeout = remaining_timeout(reserve=3, cap=60)
             if opus_timeout < 8:
                 raise TimeoutError("Detailed Report Opus fallback budget unavailable")
-            claude_client = anthropic.Anthropic(api_key=anthropic_key, timeout=opus_timeout)
+            claude_client = anthropic.Anthropic(
+                api_key=anthropic_key,
+                timeout=opus_timeout,
+                max_retries=0,
+            )
             response = claude_client.messages.create(
                 model=OPUS_MODEL,
                 max_tokens=token_budget,
