@@ -296,7 +296,7 @@ def test_unsafe_proof_gap_wording_is_rewritten_locally():
     ) in cleaned
 
 
-def test_unsafe_proof_gap_wording_is_non_blocking_audit_note():
+def test_unsafe_proof_gap_wording_is_blocking_until_rewritten():
     issue_type, blocking = reality_check._classify_fact_check_issue({
         "claim": (
             "The gap is proof that global digital and AI signals translate "
@@ -309,4 +309,32 @@ def test_unsafe_proof_gap_wording_is_non_blocking_audit_note():
     }, scan_payload={})
 
     assert issue_type == "unsafe_inference_wording"
-    assert blocking is False
+    assert blocking is True
+
+
+def test_generation_time_absence_manifest_remains_resolvable():
+    premises = reality_check._build_fact_check_premise_pack({
+        "generation_premise_manifest": [{
+            "signal_id": "ABS-GENERATION",
+            "dimension": "AI readiness",
+            "gap_status": "proof_gap",
+            "safe_wording": "The promoted evidence does not currently confirm deployed AI capability.",
+        }],
+        "evidence_absence_signals": [],
+    })
+
+    assert [item["premise_id"] for item in premises] == ["ABS-GENERATION"]
+
+
+def test_unsupported_causal_attribution_is_blocking():
+    issue_type, blocking = reality_check._classify_fact_check_issue({
+        "claim": "Profitability was driven by military demand.",
+        "claim_class": "strategic_inference",
+        "error_type": "Misattribution",
+        "support_level": "unsupported",
+        "reasoning": "The causal driver is not established by the available evidence.",
+        "correction": "The available evidence records profitability and military demand separately.",
+    }, scan_payload={})
+
+    assert issue_type == "unsupported_causal_attribution"
+    assert blocking is True

@@ -470,10 +470,9 @@ _ACTIVATION_OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
         "commercial_pitch": {"type": "string"},
-        # Anthropic Structured Outputs currently accepts minItems only as 0 or 1.
-        # The Scanner contract still requires 2-3 pairs; enforce that after parse
-        # so the same schema is portable across providers.
-        "activation_pairs": {"type": "array", "minItems": 1, "maxItems": 3, "items": _ACTIVATION_PAIR_SCHEMA},
+        # Provider-facing schemas stay deliberately conservative. Anthropic does
+        # not accept minItems/maxItems here; Scanner enforces 2-3 pairs after parse.
+        "activation_pairs": {"type": "array", "items": _ACTIVATION_PAIR_SCHEMA},
         "why_proposals": {"type": "array", "items": {"type": "string"}},
         "what_proposals": {"type": "array", "items": {"type": "string"}},
         "what_progress_proposals": {"type": "array", "items": {"type": "string"}},
@@ -1274,6 +1273,7 @@ def _build_fact_check_scan_payload(data: dict) -> dict:
                 "strategic inference and is not proof of company action or deployment."
             ),
         },
+        "generation_premise_manifest": data.get("generation_premise_manifest") or [],
         "evidence_absence_signals": data.get("evidence_absence_signals") or [],
         "evidence_absence_contract": (
             "Absence-of-promoted-evidence signals are deterministic Scanner evidence-state findings. "
@@ -2752,7 +2752,7 @@ def _recheck_company_data(company_name: str, data: dict) -> dict:
 
             # Fact-check General Summary against its own input payload
             data = _strip_callables_and_filter_source_lists(data, f"{company_name}.pre_general_summary_factcheck")
-            gs_check = fact_check_general_summary(gs_text, data, company_name)
+            gs_check = fact_check_general_summary(gs_text, data, company_name, generator_model=gs_model)
             if gs_check.get("corrected_summary"):
                 gs_text = gs_check["corrected_summary"]
                 gs_model = gs_check["corrected_model"] or gs_model
@@ -3747,7 +3747,7 @@ CRITICAL: Do not just rephrase the false claims. You must act as if the concepts
 
                     # Fact-check General Summary against its own input payload
                     data = _strip_callables_and_filter_source_lists(data, f"{company_name}.pre_general_summary_factcheck")
-                    gs_check = fact_check_general_summary(gs_text, data, company_name)
+                    gs_check = fact_check_general_summary(gs_text, data, company_name, generator_model=gs_model)
                     if gs_check.get("corrected_summary"):
                         gs_text = gs_check["corrected_summary"]
                         gs_model = gs_check["corrected_model"] or gs_model
@@ -5011,19 +5011,19 @@ def _execute_scan_pipeline(
         DIAGNOSIS_CHAIN_MAX = 150
         ACTIVATION_CHAIN_BUDGET = 150
         ACTIVATION_CHAIN_MAX = 190
-        INFERENCE_FACT_CHECK_BUDGET = 35
-        INFERENCE_FACT_CHECK_MAX = 50
-        GENERAL_SUMMARY_BUDGET = 80
-        GENERAL_SUMMARY_MAX = 90
+        INFERENCE_FACT_CHECK_BUDGET = 60
+        INFERENCE_FACT_CHECK_MAX = 80
+        GENERAL_SUMMARY_BUDGET = 95
+        GENERAL_SUMMARY_MAX = 110
         DETAILED_REPORT_BUDGET = 150
         DETAILED_REPORT_MAX = 170
         FINAL_SAVE_BUDGET = 20
 
         ACTIVATION_MIN_FLOOR = 100
-        INFERENCE_FACT_CHECK_MIN_FLOOR = 25
-        # 45 seconds permits the 35-second primary plus a short independent
-        # fallback; the remaining 25 seconds are reserved for verification.
-        GENERAL_SUMMARY_MIN_FLOOR = 70
+        INFERENCE_FACT_CHECK_MIN_FLOOR = 45
+        # Generation may use up to 60 seconds while retaining an independent
+        # verifier allocation inside the General Summary stage.
+        GENERAL_SUMMARY_MIN_FLOOR = 85
         DETAILED_REPORT_MIN_FLOOR = 130
         FINAL_SAVE_MIN_FLOOR = 20
         OPERATIONAL_OVERHEAD_RESERVE = 20
@@ -6567,11 +6567,54 @@ arrays empty. No web research and no new facts.
                                  except Exception as act_sonnet_err:
                                      activation_generation_meta["activation_parse_status"] = "failed"
                                      print(f"   ❌ [Activation:Pairs] {CLAUDE_SONNET_MODEL} failed: {act_sonnet_err}")
-                                     if synthesis_only:
-                                         activation_text = json.dumps({"strategic_synthesis": synthesis_only}, ensure_ascii=False)
-                                         activation_provider = GPT_PRO_MODEL
+                                     activation_fallback_reason = "; ".join(filter(None, [
+                                         activation_fallback_reason,
+                                         f"{CLAUDE_SONNET_MODEL} activation failed: {act_sonnet_err}",
+                                     ]))
+                                     # Schema/transport failures are provider-specific. Retry only
+                                     # the activation task with the standard GPT route while the
+                                     # locked synthesis and shared deadline remain unchanged.
+                                     if _activation_chain_remaining() >= 18:
+                                         try:
+                                             gpt_activation_timeout = min(45, _activation_chain_remaining())
+                                             print(
+                                                 f"   🔄 [Activation:Pairs] {GPT_REASONING_MODEL} fallback "
+                                                 f"(timeout={gpt_activation_timeout}s)..."
+                                             )
+                                             gpt_activation_text = call_openai_text(
+                                                 sonnet_prompt,
+                                                 model=GPT_REASONING_MODEL,
+                                                 max_output_tokens=6000,
+                                                 timeout=gpt_activation_timeout,
+                                                 max_retries=0,
+                                                 reasoning_effort="medium",
+                                                 text_verbosity="medium",
+                                                 json_schema=_ACTIVATION_OUTPUT_SCHEMA,
+                                                 json_schema_name="scanner_activation_pairs_fallback",
+                                                 log_label="Strategic Activation Pairs GPT Fallback",
+                                             )
+                                             gpt_activation_json = _parse_activation_json(gpt_activation_text)
+                                             if not gpt_activation_json:
+                                                 raise ValueError("GPT activation fallback was not parseable")
+                                             gpt_activation_json["strategic_synthesis"] = synthesis_only
+                                             activation_text = json.dumps(gpt_activation_json, ensure_ascii=False)
+                                             synthesis_provider = (
+                                                 GPT_PRO_MODEL
+                                                 if activation_generation_meta.get("synthesis_parse_status") == "valid"
+                                                 else CLAUDE_SONNET_MODEL
+                                             )
+                                             activation_provider = f"{synthesis_provider}+{GPT_REASONING_MODEL}"
+                                             activation_generation_meta["activation_parse_status"] = "valid_fallback"
+                                             activation_fallback_reason += "; GPT activation fallback succeeded"
+                                         except Exception as gpt_activation_err:
+                                             activation_fallback_reason += f"; GPT activation fallback failed: {gpt_activation_err}"
+                                             print(f"   ❌ [Activation:Pairs] GPT fallback failed: {gpt_activation_err}")
                              activation_generation_meta.update({
-                                 "status": "completed" if activation_text else "unavailable",
+                                 "status": (
+                                     "pending_validation" if activation_text
+                                     else "synthesis_complete_activation_failed" if synthesis_only
+                                     else "unavailable"
+                                 ),
                                  "provider": activation_provider,
                                  "fallback_reason": activation_fallback_reason,
                                  "duration_seconds": int(time.time() - activation_chain_started),
@@ -6634,11 +6677,36 @@ TEXT TO REPAIR:
                                      what_proposals = activation_norm["what_proposals"]
                                  if activation_norm.get("what_progress_proposals"):
                                      what_progress_proposals = activation_norm["what_progress_proposals"]
-                                 if pitch or why_proposals or what_proposals or strategic_synthesis:
+                                 activation_contract_complete = bool(
+                                     strategic_synthesis
+                                     and 2 <= len(activation_pairs) <= 3
+                                     and pitch
+                                     and pitch != "Pitch Unavailable"
+                                 )
+                                 activation_generation_meta["status"] = (
+                                     "completed" if activation_contract_complete
+                                     else "synthesis_complete_activation_failed" if strategic_synthesis
+                                     else "unavailable"
+                                 )
+                                 if activation_contract_complete:
                                      print(
                                          f"   ✅ [Activation] Grounded activation complete "
                                          f"(provider={activation_provider or 'unknown'}, why={len(why_proposals)}, what={len(what_proposals)}, pitch={'yes' if pitch and pitch != 'Pitch Unavailable' else 'no'}, synthesis={'yes' if strategic_synthesis else 'no'})"
                                      )
+                                 else:
+                                     print(
+                                         "   ⚠️ [Activation] Strategic Synthesis completed, but the activation "
+                                         f"contract is incomplete (pairs={len(activation_pairs)}, "
+                                         f"pitch={'yes' if pitch and pitch != 'Pitch Unavailable' else 'no'})."
+                                     )
+                             elif synthesis_only:
+                                 activation_generation_meta["status"] = "synthesis_complete_activation_failed"
+                                 activation_generation_meta["provider"] = activation_provider or GPT_PRO_MODEL
+                                 print("   ⚠️ [Activation] Strategic Synthesis completed; activation pairs and Pitch are unavailable.")
+                             activation_generation_meta["duration_seconds"] = int(
+                                 time.time() - activation_chain_started
+                             )
+                             activation_generation_meta["fallback_reason"] = activation_fallback_reason
                          else:
                              activation_generation_meta.update({
                                  "status": "skipped_budget",
@@ -6797,6 +6865,11 @@ TEXT TO REPAIR:
                 "ai_readiness": ai_readiness_evidence,
                 "absence_signals": final_evidence_absence_signals,
             },
+            # Preserve the exact premise namespace supplied to generation. The
+            # managed evidence pass may legitimately recompute a different final
+            # evidence-state view, but verification must resolve the IDs that the
+            # generated analysis actually received.
+            "generation_premise_manifest": evidence_absence_signals,
             "evidence_absence_signals": final_evidence_absence_signals,
             "ai_readiness_evidence_note": ai_readiness_evidence.get("warning", ""),
             "key_people": key_people,
@@ -6888,9 +6961,14 @@ TEXT TO REPAIR:
                 f"AI Diagnosis used the governed fallback provider ({diagnosis_generation_meta.get('provider') or 'unknown'})."
             )
         if activation_generation_meta.get("status") != "completed":
-            full_data["quality_notes"].append(
-                "Strategic Synthesis or Activation was unavailable within its protected stage deadline."
-            )
+            if activation_generation_meta.get("status") == "synthesis_complete_activation_failed":
+                full_data["quality_notes"].append(
+                    "Strategic Synthesis completed, but the required activation pairs and Pitch were unavailable."
+                )
+            else:
+                full_data["quality_notes"].append(
+                    "Strategic Synthesis or Activation was unavailable within its protected stage deadline."
+                )
             if scan_quality == "complete":
                 scan_quality = "partial_synthesis"
         elif len(full_data.get("activation_pairs") or []) < 2:
@@ -7029,6 +7107,14 @@ TEXT TO REPAIR:
             full_data["ai_verification"]["unresolved_public_claim_ids"] = (
                 _unresolved_fact_check_claim_ids(full_data, fact_check)
             )
+            if (
+                applied_correction_ids
+                and not full_data["ai_verification"]["unresolved_public_claim_ids"]
+                and not fact_check.get("evidence_handoff_failures")
+                and not fact_check.get("premise_reference_failures")
+            ):
+                full_data["ai_verification"]["verified"] = True
+                full_data["ai_verification"]["verification_status"] = "corrected"
 
         if fact_check.get("fact_check_skipped"):
             # --- SKIPPED: Budget exhausted or all fact-check models failed. Summary is unverified. ---
@@ -7073,10 +7159,15 @@ TEXT TO REPAIR:
             if scan_quality == "complete":
                 scan_quality = "unverified"
         elif fact_check["verified"] or fact_check.get("false_claims"):
-            if fact_check["verified"]:
+            if full_data["ai_verification"].get("verified"):
                 # --- CLEAN: No false claims found. Original synthesis stands. Done. ---
                 audit_count = len(fact_check.get("audit_notes", []))
-                if audit_count:
+                if full_data["ai_verification"].get("verification_status") == "corrected":
+                    print(
+                        f"   ✅ [Fact-Check] Blocking wording corrected across all public fields "
+                        f"({len(applied_correction_ids)} claim(s), {fact_check['fact_check_time_ms']}ms)"
+                    )
+                elif audit_count:
                     print(
                         f"   ✅ [Fact-Check] Summary verified with {audit_count} non-blocking audit note(s) "
                         f"({fact_check['fact_check_time_ms']}ms)"
@@ -7178,9 +7269,9 @@ TEXT TO REPAIR:
         else:
             try:
                 gs_start = time.time()
-                # Verification receives a protected 25-second floor. Generation
+                # Verification receives a protected 30-second floor. Generation
                 # and provider fallback share only the remainder.
-                gs_generation_budget = min(55, max(15, _gs_budget - 25))
+                gs_generation_budget = min(60, max(15, _gs_budget - 30))
                 gs_text, gs_model = generate_general_summary(
                     full_data,
                     companyName,
@@ -7193,6 +7284,7 @@ TEXT TO REPAIR:
         if gs_text:
             wc = len(gs_text.split())
             print(f"   ✅ [General Summary] {wc} words, model={gs_model} ({gs_ms}ms)")
+            gs_generation_model = gs_model
 
             # Fact-check General Summary against its own input payload
             gs_elapsed_seconds = int(time.time() - _gs_stage_start)
@@ -7203,6 +7295,7 @@ TEXT TO REPAIR:
                     full_data,
                     companyName,
                     time_budget_seconds=gs_check_budget,
+                    generator_model=gs_generation_model,
                 )
             else:
                 gs_check = {
@@ -7224,6 +7317,13 @@ TEXT TO REPAIR:
 
             full_data["general_summary"] = gs_text
             full_data["general_summary_model"] = gs_model
+            full_data["general_summary_generation"] = {
+                "model": gs_generation_model,
+                "fallback_used": bool(
+                    gs_generation_model and GPT_REASONING_MODEL not in str(gs_generation_model)
+                ),
+                "generation_time_ms": gs_ms,
+            }
             full_data["general_summary_verified"] = gs_check.get("verified", True)
             full_data["general_summary_status"] = (
                 "generated_verified" if gs_check.get("verified") else "generated_unverified"
@@ -7245,10 +7345,6 @@ TEXT TO REPAIR:
                 )
                 if scan_quality == "complete":
                     scan_quality = "unverified"
-            if gs_model and GPT_REASONING_MODEL not in str(gs_model):
-                full_data.setdefault("quality_notes", []).append(
-                    f"General Summary used the governed fallback provider ({gs_model})."
-                )
         else:
             print(f"   ⚠️ [General Summary] Generation returned empty — skipping field")
             full_data["general_summary_status"] = "unavailable"
@@ -7401,9 +7497,9 @@ TEXT TO REPAIR:
             attach_evidence_graph(full_data)
             _dr_fc_remaining = _dr_stage_remaining()
             if _dr_fc_remaining >= 20:
-                # Keep a bounded recheck reserve whenever the first verifier may
-                # cause model correction or deterministic sentence removal.
-                dr_fc_budget = min(40, max(20, _dr_fc_remaining - 15))
+                # Keep a full decision-only recheck reserve whenever the first
+                # verifier may cause sentence replacement or removal.
+                dr_fc_budget = min(40, max(20, _dr_fc_remaining - 30))
                 print(f"   🔍 [Detailed Report Fact-Check] Section-level verification ({dr_fc_budget}s protected budget)...")
                 dr_check = ai_fact_check_summary(
                     summary_text=dr_text,
@@ -7419,6 +7515,18 @@ TEXT TO REPAIR:
                 corrected_by_model = bool(dr_check.get("corrected_summary"))
                 if corrected_by_model:
                     dr_text = dr_check["corrected_summary"]
+                deterministic_replacements = 0
+                for issue in dr_check.get("false_claims_detailed") or []:
+                    if not isinstance(issue, dict):
+                        continue
+                    claim = str(issue.get("claim") or "").strip()
+                    correction = str(issue.get("correction") or "").strip()
+                    if not claim or not correction:
+                        continue
+                    repaired = _replace_flagged_claim(dr_text, claim, correction)
+                    if repaired != dr_text:
+                        dr_text = repaired
+                        deterministic_replacements += 1
                 detailed_blocking_claims = list(dr_check.get("false_claims", []) or [])
                 detailed_blocking_claims.extend([
                     item.get("claim") for item in (dr_check.get("evidence_handoff_failures") or [])
@@ -7447,15 +7555,18 @@ TEXT TO REPAIR:
                     "evidence_handoff_failures": dr_check.get("evidence_handoff_failures", []),
                     "model": dr_check.get("fact_check_model", ""),
                     "model_correction_applied": corrected_by_model,
+                    "deterministic_replacements": deterministic_replacements,
                     "deterministic_removals": deterministic_removals,
                     "blocking_claim_count": len(detailed_blocking_claims),
                     "unresolved_blocking_claims": list(dict.fromkeys(remaining_blocked_claims)),
                     "initial_verification_status": dr_check.get("verification_status", "unavailable"),
                 }
 
-                report_changed_after_check = bool(corrected_by_model or deterministic_removals)
-                if report_changed_after_check and _dr_stage_remaining() >= 12:
-                    recheck_budget = min(20, _dr_stage_remaining())
+                report_changed_after_check = bool(
+                    corrected_by_model or deterministic_replacements or deterministic_removals
+                )
+                if report_changed_after_check and _dr_stage_remaining() >= 20:
+                    recheck_budget = min(30, _dr_stage_remaining())
                     print(
                         f"   🔁 [Detailed Report Fact-Check] Rechecking final repaired text "
                         f"({recheck_budget}s)..."
@@ -7470,6 +7581,7 @@ TEXT TO REPAIR:
                         evidence_manifest=full_data.get("evidence_manifest", []),
                         claim_graph=full_data.get("claim_graph", []),
                         time_budget_seconds=recheck_budget,
+                        verification_only=True,
                     )
                     recheck_verified = bool(
                         recheck.get("verified")
@@ -7551,7 +7663,7 @@ TEXT TO REPAIR:
                 full_data["detailed_report_model"] = dr_model
                 full_data["detailed_report_status"] = (
                     "verified_after_removals"
-                    if dr_verification.get("blocking_claim_count")
+                    if dr_verification.get("deterministic_removals")
                     else "generated_verified"
                 )
                 full_data["detailed_report_quality"] = dr_quality

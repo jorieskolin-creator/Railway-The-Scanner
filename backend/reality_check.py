@@ -241,7 +241,7 @@ def _classify_fact_check_issue(fc: dict, scan_payload: dict | None) -> tuple[str
 
     if error_type == "prohibited scanner observation":
         if _is_actual_scanner_process_observation(claim_text, reasoning):
-            return "scanner_evidence_state_note", False
+            return "blocking_scanner_process_language", True
         return "inference_scope_note", False
 
     if claim_class == "structured_financial_payload_fact":
@@ -269,9 +269,26 @@ def _classify_fact_check_issue(fc: dict, scan_payload: dict | None) -> tuple[str
         combined,
         re.IGNORECASE,
     ):
-        if wrong_value or correct_value:
-            return "blocking_false_claim", True
-        return "unsafe_inference_wording", False
+        return "unsafe_inference_wording", True
+
+    # Unsupported causality is material even when the surrounding company and
+    # market facts are individually true. A narrower supported replacement must
+    # be applied rather than downgrading the issue to a citation note.
+    causal_markers = (
+        "driven by", "caused by", "because of", "as a result of", "resulting from",
+        "the driver", "primary driver", "main driver", "attributable to",
+    )
+    if (
+        support_level == "unsupported"
+        and (
+            any(marker in combined for marker in causal_markers)
+            or (
+                "causal" in combined
+                and any(marker in combined for marker in ("unsupported", "not supported", "not established"))
+            )
+        )
+    ):
+        return "unsupported_causal_attribution", True
 
     # A source supporting a narrower claim is an audit/scope note unless the
     # generated statement has a wrong value/entity/date or material contradiction.
@@ -966,7 +983,11 @@ def _build_fact_check_source_pack(evidence_links=None, foresight_links=None, evi
 def _build_fact_check_premise_pack(scan_payload=None):
     """Return deterministic Scanner premises separately from source evidence."""
     payload = scan_payload if isinstance(scan_payload, dict) else {}
-    candidates = list(payload.get("evidence_absence_signals") or [])
+    # The generation-time manifest is authoritative for resolving ABS IDs. The
+    # final evidence-state signals are additive context only because evidence
+    # management may recompute them after synthesis.
+    candidates = list(payload.get("generation_premise_manifest") or [])
+    candidates.extend(payload.get("evidence_absence_signals") or [])
     dimension_notes = payload.get("dimension_evidence_notes") or {}
     if isinstance(dimension_notes, dict):
         candidates.extend(dimension_notes.get("absence_signals") or [])
@@ -1051,7 +1072,7 @@ def _fact_check_field_paths(claim, summary_text, pitch_text, analysis_sections):
     return matches
 
 
-def _provider_fact_check(summary_text, company_name, evidence_links=None, foresight_links=None, pitch_text=None, scan_payload=None, analysis_sections=None, document_label="AI Diagnosis", evidence_manifest=None, claim_graph=None, time_budget_seconds=None):
+def _provider_fact_check(summary_text, company_name, evidence_links=None, foresight_links=None, pitch_text=None, scan_payload=None, analysis_sections=None, document_label="AI Diagnosis", evidence_manifest=None, claim_graph=None, time_budget_seconds=None, verification_only=False):
     """Two-stage GPT/Claude fact-check pipeline."""
     verified_links = _build_fact_check_source_pack(evidence_links, foresight_links, evidence_manifest=evidence_manifest)
     deadline = time.time() + max(15, int(time_budget_seconds or 120))
@@ -1118,6 +1139,25 @@ CANONICAL CLAIM GRAPH (claims cite stable evidence IDs):
 {json.dumps(claim_graph, ensure_ascii=False, indent=2)[:18000]}
 """
 
+    document_lower = str(document_label or "").lower()
+    if "general summary" in document_lower:
+        section_policy = (
+            "This is a facts-only General Summary. Scanner evidence-state observations and strategic "
+            "inferences are not permitted in its reader-facing prose."
+        )
+    elif "detailed forensic report" in document_lower:
+        section_policy = (
+            "This report may state cautious evidence limitations and clearly marked analytical implications. "
+            "It must not convert a proof gap into proof that a capability is absent."
+        )
+    else:
+        section_policy = (
+            "AI Diagnosis and Evidence-Based Risks may state clearly scoped evidence-state observations. "
+            "Strategic Synthesis, WHY/WHAT and Pitch may use cautious proof-gap premises from the ABS manifest. "
+            "These observations must describe what the promoted evidence does not currently confirm, never "
+            "assert that the company capability itself is absent."
+        )
+
     stage1_prompt = f"""You are an uncompromising Data Auditor. Evaluate the faithfulness and factual accuracy of this {document_label} section by section.
 
 COMPANY: {company_name}
@@ -1135,7 +1175,9 @@ INSTRUCTIONS:
    - STRATEGIC INFERENCE: a new analytical conclusion connecting one or more supported company premises to supported macro context, expressed as a pressure, exposure, implication, opportunity, risk, or question.
 3. For EXTERNAL COMPANY FACTS, cross-reference strictly against stored evidence. Use only verified, generation-eligible evidence as authoritative. Do not accept display-only, unsupported, wrong-entity, or weak evidence.
 4. For STRUCTURED FINANCIAL PAYLOAD FACTS, verify against financial_payload in the SCAN PAYLOAD above. These facts may be valid Scanner financial-module facts even when they are not repeated in STORED EVIDENCE SOURCES. Flag them only if the value/detail is absent from or contradicts financial_payload.
-5. INTERNAL SCANNER OBSERVATIONS and comparisons between previous scans are prohibited in company-facing analysis. Identify them as Prohibited Scanner Observation so correction removes them; never use them as company evidence.
+5. Apply this section policy: {section_policy}
+   Scanner process telemetry and comparisons between previous scans remain prohibited. Do not classify a
+   properly scoped ABS-backed proof-gap statement as prohibited merely because it describes evidence state.
 6. If stored evidence is insufficient for an external company fact, use cautious external verification through your own provider tools/knowledge, but do not invent corrections.
 7. A company website is self-reported. It cannot by itself refute analytical observations about internal operating reality unless it contains concrete, specific operational metrics.
 8. Validate MACRO FORESIGHT CONTEXT against VERIFIED MACRO FORESIGHT CONTEXT SOURCES. The source does not need to mention the company. Never reject macro context merely because it is absent from the company scan payload.
@@ -1265,7 +1307,10 @@ If false claims found: {{"false_claims": [{{"section": "section heading", "claim
         try:
             print(f"   🔄 [Fact-Check S1] Trying {model_name}...")
             start = time.time()
-            call_timeout = min(45, max(10, remaining_seconds() - 10))
+            # A final decision-only recheck must receive its complete allocation;
+            # ordinary checks retain correction headroom.
+            reserve_for_correction = 2 if verification_only else 10
+            call_timeout = min(45, max(10, remaining_seconds() - reserve_for_correction))
             if model_name.startswith("gpt-"):
                 text = _call_openai_text(stage1_prompt, model=model_name, max_output_tokens=6000, timeout=call_timeout)
             else:
@@ -1306,17 +1351,34 @@ If false claims found: {{"false_claims": [{{"section": "section heading", "claim
         fc for fc in stage1_false_claims
         if str(fc.get("error_type") or "").strip().lower() == "premise reference mismatch"
     ]
-    correctable_claims = [
-        fc for fc in stage1_false_claims
+    classified_claims = [
+        (fc, *_classify_fact_check_issue(fc, scan_payload))
+        for fc in stage1_false_claims
         if fc not in handoff_failures and fc not in premise_mismatches
     ]
+    correctable_claims = [fc for fc, _issue_type, is_blocking in classified_claims if is_blocking]
+    audit_only_claims = [fc for fc, _issue_type, is_blocking in classified_claims if not is_blocking]
     if not correctable_claims:
         return {
-            "false_claims": handoff_failures + premise_mismatches,
+            "false_claims": audit_only_claims + handoff_failures + premise_mismatches,
             "corrected_summary": "",
             "corrected_pitch": "",
             "corrected_sections": {},
             "model": stage1_model_name,
+            "time_ms": stage1_time_ms,
+            "evidence_handoff_failure": bool(handoff_failures),
+        }
+
+    # Stage 1 already supplies bounded, evidence-aware replacements in the
+    # common case. Let the caller apply those exact sentence corrections across
+    # every field path instead of spending the stage on a whole-document rewrite.
+    if verification_only or all(str(fc.get("correction") or "").strip() for fc in correctable_claims):
+        return {
+            "false_claims": correctable_claims + audit_only_claims + handoff_failures + premise_mismatches,
+            "corrected_summary": "",
+            "corrected_pitch": "",
+            "corrected_sections": {},
+            "model": f"{stage1_model_name}+direct-sentence-actions",
             "time_ms": stage1_time_ms,
             "evidence_handoff_failure": bool(handoff_failures),
         }
@@ -1387,7 +1449,7 @@ Rules:
             print(f"   ❌ [Fact-Check S2] {model_name} failed: {e}")
 
     return {
-        "false_claims": correctable_claims + handoff_failures + premise_mismatches,
+        "false_claims": correctable_claims + audit_only_claims + handoff_failures + premise_mismatches,
         "corrected_summary": corrected_summary,
         "corrected_pitch": corrected_pitch,
         "corrected_sections": corrected_sections,
@@ -1395,7 +1457,7 @@ Rules:
         "time_ms": stage1_time_ms + elapsed2,
     }
 
-def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text=None, scan_payload=None, analysis_sections=None, document_label="AI Diagnosis", foresight_links=None, evidence_manifest=None, claim_graph=None, time_budget_seconds=None):
+def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text=None, scan_payload=None, analysis_sections=None, document_label="AI Diagnosis", foresight_links=None, evidence_manifest=None, claim_graph=None, time_budget_seconds=None, verification_only=False):
     """
     AI-powered fact-check — two-stage pipeline:
       Stage 1: GPT verifier → Claude Sonnet — detects false claims.
@@ -1453,6 +1515,7 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
         evidence_manifest=evidence_manifest,
         claim_graph=claim_graph,
         time_budget_seconds=time_budget_seconds,
+        verification_only=verification_only,
     )
 
     all_claims = []

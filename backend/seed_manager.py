@@ -1245,7 +1245,9 @@ re-introduce any of the false claims listed above."""
                         print(f"   [{company_name}] ✅ [General Summary] {wc} words, model={gs_model} ({int((time.time()-gs_start)*1000)}ms)")
 
                         # Fact-check General Summary against its own input payload
-                        gs_check = fact_check_general_summary(gs_text, full_data, company_name)
+                        gs_check = fact_check_general_summary(
+                            gs_text, full_data, company_name, generator_model=gs_model
+                        )
                         if gs_check.get("corrected_summary"):
                             gs_text = gs_check["corrected_summary"]
                             gs_model = gs_check["corrected_model"] or gs_model

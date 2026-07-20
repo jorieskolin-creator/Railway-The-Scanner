@@ -177,3 +177,32 @@ def test_general_summary_strict_repair_is_rechecked_and_verified(monkeypatch):
     assert "does not establish" in result["corrected_summary"]
     assert len(result["repaired_claim_ids"]) == 1
     assert all(call.get("json_schema") for call in calls)
+
+
+def test_sonnet_generated_summary_uses_gpt_verifier(monkeypatch):
+    monkeypatch.setattr(
+        general_summary,
+        "_build_input_payload",
+        lambda *_args, **_kwargs: {"evidence_links": [], "financial_findings": []},
+    )
+    calls = []
+
+    def fake_openai(_prompt, **kwargs):
+        calls.append(kwargs.get("model"))
+        return json.dumps({"unsupported_claims": []})
+
+    def fail_sonnet(*_args, **_kwargs):
+        raise AssertionError("Sonnet must not verify its own generated summary")
+
+    monkeypatch.setattr(general_summary, "call_openai_text", fake_openai)
+    monkeypatch.setattr(general_summary, "call_anthropic_text", fail_sonnet)
+    result = general_summary.fact_check_general_summary(
+        "ExampleCo makes industrial products from its Finnish operations.",
+        {},
+        "ExampleCo",
+        time_budget_seconds=30,
+        generator_model=general_summary.CLAUDE_SONNET_MODEL,
+    )
+
+    assert result["verified"] is True
+    assert calls == [general_summary.GPT_VERIFIER_MODEL]

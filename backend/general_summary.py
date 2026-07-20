@@ -594,7 +594,9 @@ def generate_general_summary(full_data: dict, company_name: str, time_budget_sec
     full_data = _sanitize_general_summary_input(full_data or {}, f"{company_name}.general_summary_factcheck_input")
     payload = _build_input_payload(full_data, company_name)
     prompt = _build_prompt(payload, company_name)
-    deadline = time.time() + max(12, int(time_budget_seconds or 90))
+    # Generation is one bounded provider chain. The caller owns a larger stage
+    # allocation and separately protects independent verification time.
+    deadline = time.time() + min(60, max(12, int(time_budget_seconds or 60)))
 
     def remaining() -> int:
         return max(0, int(deadline - time.time()))
@@ -604,7 +606,7 @@ def generate_general_summary(full_data: dict, company_name: str, time_budget_sec
         PRIMARY_MODEL = GPT_REASONING_MODEL
         print(f"   [General Summary] Trying primary {PRIMARY_MODEL}")
         t0 = time.time()
-        text = _strip_links(_call_openai_summary(prompt, model=PRIMARY_MODEL, timeout=min(35, max(10, remaining()))))
+        text = _strip_links(_call_openai_summary(prompt, model=PRIMARY_MODEL, timeout=min(40, max(10, remaining()))))
         wc = _word_count(text)
         elapsed = int((time.time() - t0) * 1000)
         print(f"   [General Summary] {PRIMARY_MODEL}: {wc} words ({elapsed}ms)")
@@ -779,7 +781,7 @@ def _apply_general_summary_replacements(summary_text: str, replacements: list[di
     return corrected.strip(), list(dict.fromkeys(applied))
 
 
-def fact_check_general_summary(summary_text: str, full_data: dict, company_name: str, time_budget_seconds: int | None = None) -> dict:
+def fact_check_general_summary(summary_text: str, full_data: dict, company_name: str, time_budget_seconds: int | None = None, generator_model: str | None = None) -> dict:
     """Verify, locally repair, and recheck the General Summary."""
     if not summary_text:
         return {"verified": True, "false_claims": [], "corrected_summary": "",
@@ -801,9 +803,16 @@ def fact_check_general_summary(summary_text: str, full_data: dict, company_name:
                 "repaired_claim_ids": [], "unresolved_claims": [],
                 "initial_verification_status": "unavailable", "final_verification_status": "unavailable"}
 
+    generated_by_anthropic = str(generator_model or "").lower().startswith("claude")
+    verifier_chain = (
+        ((GPT_VERIFIER_MODEL, "openai"), (CLAUDE_SONNET_MODEL, "anthropic"))
+        if generated_by_anthropic
+        else ((CLAUDE_SONNET_MODEL, "anthropic"), (GPT_VERIFIER_MODEL, "openai"))
+    )
+
     def detect(text: str) -> tuple[list[dict] | None, str]:
         prompt = _build_fact_check_prompt(text, payload, company_name)
-        for model_id, provider in ((CLAUDE_SONNET_MODEL, "anthropic"), (GPT_VERIFIER_MODEL, "openai")):
+        for model_id, provider in verifier_chain:
             if remaining() < 8:
                 break
             try:
@@ -871,7 +880,7 @@ UNSUPPORTED CLAIMS:
 {json.dumps(false_claims, ensure_ascii=False)}
 """
     if remaining() >= 10:
-        for model_id, provider in ((CLAUDE_SONNET_MODEL, "anthropic"), (GPT_VERIFIER_MODEL, "openai")):
+        for model_id, provider in verifier_chain:
             if remaining() < 8:
                 break
             try:

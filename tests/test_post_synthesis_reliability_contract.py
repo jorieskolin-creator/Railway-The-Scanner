@@ -25,12 +25,24 @@ def _activation_schemas() -> dict:
     return namespace
 
 
-def test_anthropic_activation_schema_uses_supported_array_minimum():
+def test_anthropic_activation_schema_avoids_unsupported_array_limits():
     schemas = _activation_schemas()
     pair_array = schemas["_ACTIVATION_OUTPUT_SCHEMA"]["properties"]["activation_pairs"]
 
-    assert pair_array["minItems"] == 1
-    assert pair_array["maxItems"] == 3
+    assert "minItems" not in pair_array
+    assert "maxItems" not in pair_array
+
+    def visit(value):
+        if isinstance(value, dict):
+            assert "minItems" not in value
+            assert "maxItems" not in value
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(schemas["_ACTIVATION_OUTPUT_SCHEMA"])
 
 
 def test_diagnosis_sonnet_fallback_is_not_conditioned_on_gpt_availability():
@@ -44,8 +56,17 @@ def test_detailed_report_requires_final_recheck_after_repair():
     source = MAIN.read_text(encoding="utf-8")
 
     assert "Detailed Forensic Report (final repaired text)" in source
+    assert "verification_only=True" in source
     assert '"verified_after_removals"' in source
     assert '"generated_with_removals"' not in source
+
+
+def test_synthesis_only_activation_has_distinct_failure_status():
+    source = MAIN.read_text(encoding="utf-8")
+
+    assert '"synthesis_complete_activation_failed"' in source
+    assert '2 <= len(activation_pairs) <= 3' in source
+    assert 'pitch != "Pitch Unavailable"' in source
 
 
 def test_reader_does_not_render_unavailable_placeholders_as_analysis():
