@@ -11,6 +11,8 @@ Returns a hallucination risk level: "low", "medium", "high"
 and a list of specific flags explaining what was detected.
 """
 
+from __future__ import annotations
+
 import re
 import json
 import os
@@ -45,7 +47,14 @@ def _get_openai_text(response) -> str:
     return "\n".join(parts).strip()
 
 
-def _call_openai_text(prompt: str, model: str = GPT_REASONING_MODEL, max_output_tokens: int = 10000, timeout: int = 90) -> str:
+def _call_openai_text(
+    prompt: str,
+    model: str = GPT_REASONING_MODEL,
+    max_output_tokens: int = 10000,
+    timeout: int = 90,
+    json_schema: dict | None = None,
+    json_schema_name: str = "scanner_verifier",
+) -> str:
     verifier_route = model == GPT_VERIFIER_MODEL
     return call_openai_text(
         prompt,
@@ -55,8 +64,46 @@ def _call_openai_text(prompt: str, model: str = GPT_REASONING_MODEL, max_output_
         max_retries=0,
         reasoning_effort="low" if verifier_route else "medium",
         text_verbosity="low" if verifier_route else "medium",
+        json_schema=json_schema,
+        json_schema_name=json_schema_name,
         log_label="Reality Verifier" if verifier_route else "Scanner Reasoning",
     )
+
+
+_FACT_CHECK_RESULT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary_accurate": {"type": "boolean"},
+        "false_claims": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "section": {"type": "string"},
+                    "claim": {"type": "string"},
+                    "claim_class": {"type": "string"},
+                    "error_type": {"type": "string"},
+                    "support_level": {"type": "string"},
+                    "missing_or_contradicted_premise": {"type": "string"},
+                    "reasoning": {"type": "string"},
+                    "correction": {"type": "string"},
+                    "wrong_value": {"type": "string"},
+                    "correct_value": {"type": "string"},
+                    "source_indices": {"type": "array", "items": {"type": "integer"}},
+                    "source_ids": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": [
+                    "section", "claim", "claim_class", "error_type", "support_level",
+                    "missing_or_contradicted_premise", "reasoning", "correction",
+                    "wrong_value", "correct_value", "source_indices", "source_ids",
+                ],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["summary_accurate", "false_claims"],
+    "additionalProperties": False,
+}
 
 try:
     from source_quality import (
@@ -262,6 +309,28 @@ def _classify_fact_check_issue(fc: dict, scan_payload: dict | None) -> tuple[str
     ):
         return "wording_precision_note", False
 
+    # A verifier may mistakenly label a sentence containing a concrete company
+    # event or present capability as strategic inference. Material facts remain
+    # blocking regardless of that model-provided class.
+    concrete_company_fact = bool(
+        wrong_value
+        or correct_value
+        or any(marker in combined for marker in (
+            "wrong entity", "wrong date", "wrong value", "fabricated event",
+            "did not happen", "contradicts the source", "contradicts the evidence",
+        ))
+        or re.search(
+            r"\b(?:has|have|had)\s+(?:deployed|implemented|signed|secured|launched|"
+            r"acquired|selected|adopted|appointed|opened|closed)\b"
+            r"|\bcurrently\s+(?:uses|operates|deploys|employs)\b"
+            r"|\breported\s+(?:revenue|profit|loss|margin|growth)\s+of\b",
+            claim_text,
+            re.IGNORECASE,
+        )
+    )
+    if support_level == "unsupported" and concrete_company_fact:
+        return "blocking_false_claim", True
+
     if re.search(
         r'\b(?:evidence\s+|proof\s+)?gap\s+(?:is|serves\s+as|acts\s+as)\s+proof\s+that\b'
         r'|\b(?:lack|absence)\s+of\s+(?:public\s+|promoted\s+|verified\s+)?evidence\s+'
@@ -269,26 +338,34 @@ def _classify_fact_check_issue(fc: dict, scan_payload: dict | None) -> tuple[str
         combined,
         re.IGNORECASE,
     ):
-        return "unsafe_inference_wording", True
+        return "wording_calibration", False
 
-    # Unsupported causality is material even when the surrounding company and
-    # market facts are individually true. A narrower supported replacement must
-    # be applied rather than downgrading the issue to a citation note.
+    # Unsupported causal or comparative interpretations must be neutralized,
+    # but they are not the same as a false company fact. Keep them out of the
+    # blocking/removal path and require a narrower reader-facing replacement.
     causal_markers = (
         "driven by", "caused by", "because of", "as a result of", "resulting from",
         "the driver", "primary driver", "main driver", "attributable to",
     )
+    calibration_markers = causal_markers + (
+        "overstates", "overstated", "too strong", "stronger than", "not established",
+        "not supported", "not evidenced", "comparative claim", "concentrated",
+        "concentration", "financing mechanism", "scope is broader", "scope mismatch",
+    )
+    if error_type in {"overstrong interpretation", "inference calibration"}:
+        return "wording_calibration", False
     if (
-        support_level == "unsupported"
+        claim_class in {"strategic_inference", "macro_foresight_context"}
+        and support_level in {"partial", "context_only", "unsupported"}
         and (
-            any(marker in combined for marker in causal_markers)
+            any(marker in combined for marker in calibration_markers)
             or (
                 "causal" in combined
                 and any(marker in combined for marker in ("unsupported", "not supported", "not established"))
             )
         )
     ):
-        return "unsupported_causal_attribution", True
+        return "wording_calibration", False
 
     # A source supporting a narrower claim is an audit/scope note unless the
     # generated statement has a wrong value/entity/date or material contradiction.
@@ -298,13 +375,21 @@ def _classify_fact_check_issue(fc: dict, scan_payload: dict | None) -> tuple[str
     )):
         if wrong_value or correct_value or "wrong entity" in combined:
             return "blocking_false_claim", True
-        return "citation_scope_note", False
+        return "wording_calibration", False
 
     if claim_class in {"macro_foresight_context", "strategic_inference"}:
         if support_level in {"exact", "partial", "context_only"}:
             return "inference_scope_note", False
         if "absent from the payload" in combined or "not present in the scan payload" in combined:
             return "inference_scope_note", False
+        # Unsupported analytical language should be narrowed to what the
+        # supported premises permit. It becomes blocking only when it embeds a
+        # wrong company fact, value, date, entity, or present-tense capability.
+        if not any(marker in combined for marker in (
+            "wrong entity", "wrong date", "wrong value", "contradicts", "fabricated event",
+            "did not happen", "has deployed", "currently uses", "already implemented",
+        )):
+            return "wording_calibration", False
 
     # Diagnostic statements about limited evidence/proof gaps are synthesis
     # notes, not external facts, unless they smuggle in a concrete unsupported
@@ -1203,10 +1288,14 @@ INSTRUCTIONS:
 13. Use "Prohibited Scanner Observation" for scanner-process or cross-scan performance statements. Use Fabrication/Contradiction/Misattribution/Organizational Fabrication for external company facts. For macro context or strategic inference, identify the missing or contradicted premise rather than saying only that the conclusion is absent from the payload.
 14. The evidence manifest above is the exact source bibliography supplied to generation. ABS-* identifiers belong to the separate Scanner Premise Manifest and must never be treated as missing source evidence. If a non-ABS source ID is absent, classify it as Evidence Handoff Failure. If an ABS reference cannot be resolved, classify only the reference as Premise Reference Mismatch and continue judging the claim from its available premises.
 15. Return each materially unsupported claim once. If a sentence combines supported and unsupported clauses, isolate the unsupported span and provide a correction that preserves the supported clause. Do not invalidate an entire sentence merely because one separable clause is unsupported.
+16. Distinguish false facts from overstrong interpretation:
+   - Use Fabrication, Contradiction, Misattribution, or Organizational Fabrication only when a company fact, entity, date, value, event, present capability, or cited source relation is genuinely unsupported or wrong.
+   - Use Overstrong Interpretation when the underlying facts are supported but the prose makes an unproved causal, comparative, concentration, financing, certainty, or scope claim.
+   - Overstrong Interpretation always requires a complete neutralized correction preserving the supported analytical point. It is a wording-calibration action, not grounds to reject the report or trigger full reanalysis.
 
 OUTPUT FORMAT — valid JSON only:
 If accurate: {{"false_claims": [], "summary_accurate": true}}
-If false claims found: {{"false_claims": [{{"section": "section heading", "claim": "Exact quote or close paraphrase", "claim_class": "external_company_fact OR internal_scanner_observation OR structured_financial_payload_fact OR macro_foresight_context OR strategic_inference", "error_type": "Fabrication OR Contradiction OR Misattribution OR Organizational Fabrication OR Prohibited Scanner Observation OR Evidence Handoff Failure OR Premise Reference Mismatch", "support_level": "exact OR partial OR context_only OR unsupported", "missing_or_contradicted_premise": "Specific premise or empty string", "reasoning": "Brief reason", "correction": "Complete ordinary reader-facing replacement sentence or clause, or empty string to remove it. Never return an editorial command such as Remove, Omit, Qualify, Rewrite, Replace, or Do not use", "wrong_value": "", "correct_value": "", "source_indices": [1], "source_ids": ["EVD-...", "FOR-...", "ABS-..."]}}], "summary_accurate": false}}
+If issues are found: {{"false_claims": [{{"section": "section heading", "claim": "Exact quote or close paraphrase", "claim_class": "external_company_fact OR internal_scanner_observation OR structured_financial_payload_fact OR macro_foresight_context OR strategic_inference", "error_type": "Fabrication OR Contradiction OR Misattribution OR Organizational Fabrication OR Overstrong Interpretation OR Prohibited Scanner Observation OR Evidence Handoff Failure OR Premise Reference Mismatch", "support_level": "exact OR partial OR context_only OR unsupported", "missing_or_contradicted_premise": "Specific premise or empty string", "reasoning": "Brief reason", "correction": "Complete ordinary reader-facing replacement sentence or clause, or empty string to remove it. Never return an editorial command such as Remove, Omit, Qualify, Rewrite, Replace, or Do not use", "wrong_value": "", "correct_value": "", "source_indices": [1], "source_ids": ["EVD-...", "FOR-...", "ABS-..."]}}], "summary_accurate": false}}
 """
 
     stage1_false_claims = None
@@ -1228,6 +1317,7 @@ If false claims found: {{"false_claims": [{{"section": "section heading", "claim
                     continue
                 claim_class = (fc.get("claim_class") or "").strip().lower()
                 support_level = (fc.get("support_level") or "unsupported").strip().lower()
+                error_type_lower = str(fc.get("error_type") or "").strip().lower()
                 missing_premise = (fc.get("missing_or_contradicted_premise") or "").strip()
                 reasoning_lower = (fc.get("reasoning") or "").lower()
                 # A supported inference is analysis, not a false factual claim. Filter it
@@ -1236,6 +1326,7 @@ If false claims found: {{"false_claims": [{{"section": "section heading", "claim
                     claim_class in {"macro_foresight_context", "strategic_inference"}
                     and support_level in {"exact", "partial", "context_only"}
                     and not missing_premise
+                    and error_type_lower not in {"overstrong interpretation", "inference calibration"}
                 ):
                     continue
                 if (
@@ -1327,7 +1418,8 @@ If false claims found: {{"false_claims": [{{"section": "section heading", "claim
         return [deduped[key] for key in order]
 
     stage1_chain = (GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL)
-    for model_name in stage1_chain:
+    strict_fact_check_output = "detailed forensic report" in document_lower
+    for model_index, model_name in enumerate(stage1_chain):
         if remaining_seconds() < 12:
             break
         try:
@@ -1336,16 +1428,31 @@ If false claims found: {{"false_claims": [{{"section": "section heading", "claim
             # A final decision-only recheck must receive its complete allocation;
             # ordinary checks retain correction headroom.
             reserve_for_correction = 2 if verification_only else 10
-            call_timeout = min(45, max(10, remaining_seconds() - reserve_for_correction))
+            providers_after = len(stage1_chain) - model_index - 1
+            reserve_for_fallback = 15 if providers_after else 0
+            call_timeout = min(
+                45,
+                max(10, remaining_seconds() - reserve_for_correction - reserve_for_fallback),
+            )
             if model_name.startswith("gpt-"):
-                text = _call_openai_text(stage1_prompt, model=model_name, max_output_tokens=6000, timeout=call_timeout)
+                text = _call_openai_text(
+                    stage1_prompt,
+                    model=model_name,
+                    max_output_tokens=6000,
+                    timeout=call_timeout,
+                    json_schema=_FACT_CHECK_RESULT_SCHEMA if strict_fact_check_output else None,
+                    json_schema_name="scanner_detailed_report_fact_check",
+                )
             else:
                 text = call_anthropic_text(
                     stage1_prompt,
                     model=model_name,
                     max_tokens=8000,
                     timeout=call_timeout,
+                    max_retries=0,
                     reasoning_effort="low",
+                    json_schema=_FACT_CHECK_RESULT_SCHEMA if strict_fact_check_output else None,
+                    json_schema_name="scanner_detailed_report_fact_check_fallback",
                     log_label="Reality Verifier Fallback",
                 )
             elapsed = int((time.time() - start) * 1000)
@@ -1515,6 +1622,8 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
             "false_claims_detailed": [],
             "audit_notes": [],
             "audit_notes_detailed": [],
+            "wording_adjustments": [],
+            "wording_adjustments_detailed": [],
             "evidence_handoff_failures": [],
             "premise_reference_failures": [],
             "corrected_claim_ids": [],
@@ -1548,6 +1657,8 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
     all_claims_detailed = []
     audit_notes = []
     audit_notes_detailed = []
+    wording_adjustments = []
+    wording_adjustments_detailed = []
     handoff_failures = []
     premise_reference_failures = []
 
@@ -1768,6 +1879,24 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
                 is_blocking = True
 
             if not is_blocking:
+                if issue_type == "wording_calibration":
+                    wording_adjustments.append(claim_text)
+                    wording_adjustments_detailed.append({
+                        "type": "wording_calibration",
+                        "claim_id": claim_id,
+                        "issue_type": issue_type,
+                        "claim": claim_text,
+                        "error_type": error_type,
+                        "claim_class": claim_class,
+                        "support_level": support_level,
+                        "missing_or_contradicted_premise": missing_premise,
+                        "reasoning": reasoning,
+                        "correction": correction,
+                        "source_urls": source_urls,
+                        "source_indices": source_indices,
+                        "source_ids": (fc.get("source_ids") or []) if isinstance(fc, dict) else [],
+                        "field_paths": field_paths,
+                    })
                 audit_notes.append(_format_audit_note(issue_type, claim_text, reasoning))
                 audit_notes_detailed.append({
                     "type": "audit_note",
@@ -1832,6 +1961,8 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
         verification_status = "failed_handoff"
     elif all_claims:
         verification_status = "failed"
+    elif wording_adjustments:
+        verification_status = "wording_calibration_required"
     elif audit_notes:
         verification_status = "verified_with_audit_notes"
     else:
@@ -1847,6 +1978,8 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
         "false_claims_detailed": all_claims_detailed[:10],
         "audit_notes": audit_notes[:20],
         "audit_notes_detailed": audit_notes_detailed[:20],
+        "wording_adjustments": wording_adjustments[:20],
+        "wording_adjustments_detailed": wording_adjustments_detailed[:20],
         "evidence_handoff_failures": handoff_failures[:10],
         "premise_reference_failures": premise_reference_failures[:10],
         "corrected_claim_ids": list(dict.fromkeys(corrected_claim_ids))[:20],
@@ -1860,6 +1993,236 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
         "fact_check_model": result["model"],
         "fact_check_time_ms": total_ms,
     }
+
+
+def _fact_check_terms(value: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-z0-9][a-z0-9_-]{3,}", str(value or "").lower())
+        if token not in {
+            "that", "this", "with", "from", "have", "into", "their", "company",
+            "report", "evidence", "section", "would", "could", "should",
+        }
+    }
+
+
+def _compact_fact_check_records(records: list, section_text: str, limit: int) -> list:
+    """Select stable, relevant source/premise records for one report batch."""
+    section_terms = _fact_check_terms(section_text)
+    ranked = []
+    for index, item in enumerate(records or []):
+        if not isinstance(item, dict):
+            continue
+        searchable = " ".join(str(item.get(key) or "") for key in (
+            "evidence_id", "source_id", "title", "source_title", "claim", "finding",
+            "snippet", "source_quote", "semantic_snippet", "theme", "dimension",
+            "description", "summary", "safe_wording",
+        ))
+        item_terms = _fact_check_terms(searchable)
+        overlap = len(section_terms & item_terms)
+        explicit_id = any(
+            str(item.get(key) or "") and str(item.get(key)) in section_text
+            for key in ("evidence_id", "source_id", "signal_id", "premise_id")
+        )
+        score = overlap + (20 if explicit_id else 0)
+        ranked.append((score, -index, item))
+    ranked.sort(key=lambda row: (row[0], row[1]), reverse=True)
+    positive = [item for score, _index, item in ranked if score > 0]
+    if len(positive) < min(4, limit):
+        selected_ids = {id(item) for item in positive}
+        positive.extend(
+            item for _score, _index, item in ranked
+            if id(item) not in selected_ids
+        )
+    return positive[:limit]
+
+
+def _split_fact_check_sections(report_text: str) -> list[dict]:
+    matches = list(re.finditer(r"(?m)^##\s+(.+?)\s*$", str(report_text or "")))
+    if not matches:
+        return [{"heading": "Detailed Report", "text": str(report_text or "").strip()}]
+    sections = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(report_text)
+        sections.append({
+            "heading": match.group(1).strip(),
+            "text": report_text[match.start():end].strip(),
+        })
+    return sections
+
+
+def _compact_fact_check_payload(scan_payload: dict | None, section_text: str) -> dict:
+    payload = dict(scan_payload or {})
+    compact = {
+        key: payload.get(key)
+        for key in (
+            "companyName", "intent_score", "reality_score", "reality_gap", "confidence_score",
+            "archetype", "evidence_counts", "dimension_evidence_counts", "financial_payload",
+            "evidence_absence_contract", "evidence_graph_version", "temporal_contract",
+            "prohibited_reasoning",
+        )
+        if key in payload
+    }
+    compact["generation_premise_manifest"] = _compact_fact_check_records(
+        payload.get("generation_premise_manifest") or [], section_text, 8
+    )
+    compact["evidence_absence_signals"] = _compact_fact_check_records(
+        payload.get("evidence_absence_signals") or [], section_text, 8
+    )
+    compact["evidence_based_risks"] = _compact_fact_check_records(
+        payload.get("evidence_based_risks") or [], section_text, 6
+    )
+    compact["sample_reality_findings"] = _compact_fact_check_records(
+        payload.get("sample_reality_findings") or [], section_text, 12
+    )
+    foresight = dict(payload.get("foresight_context") or {})
+    foresight["forces"] = _compact_fact_check_records(
+        foresight.get("forces") or [], section_text, 6
+    )
+    compact["foresight_context"] = foresight
+    return compact
+
+
+def ai_fact_check_detailed_report(
+    report_text: str,
+    evidence_links: list,
+    company_name: str,
+    *,
+    scan_payload: dict | None = None,
+    foresight_links: list | None = None,
+    evidence_manifest: list | None = None,
+    claim_graph: list | None = None,
+    time_budget_seconds: int = 85,
+    only_section_names: list[str] | None = None,
+) -> dict:
+    """Verify a Detailed Report in compact, independently recoverable batches."""
+    started = time.time()
+    deadline = started + max(30, int(time_budget_seconds or 85))
+    sections = _split_fact_check_sections(report_text)
+    selected_names = {str(name).strip().lower() for name in (only_section_names or []) if str(name).strip()}
+    if selected_names:
+        sections = [item for item in sections if item["heading"].lower() in selected_names]
+    if not sections:
+        sections = _split_fact_check_sections(report_text)
+
+    batches = [sections[index:index + 3] for index in range(0, len(sections), 3)]
+    aggregate = {
+        "false_claims": [],
+        "false_claims_detailed": [],
+        "wording_adjustments": [],
+        "wording_adjustments_detailed": [],
+        "audit_notes": [],
+        "audit_notes_detailed": [],
+        "evidence_handoff_failures": [],
+        "premise_reference_failures": [],
+    }
+    batch_results = []
+    unavailable_sections = []
+    models = []
+
+    for batch_index, batch in enumerate(batches):
+        remaining = max(0, int(deadline - time.time()))
+        batches_left = len(batches) - batch_index
+        if remaining < 20:
+            unavailable_sections.extend(item["heading"] for item in batch)
+            batch_results.append({
+                "sections": [item["heading"] for item in batch],
+                "status": "unavailable_budget",
+                "model": "not_attempted",
+            })
+            continue
+        batch_budget = min(45, max(25, remaining // max(1, batches_left)))
+        batch_text = "\n\n".join(item["text"] for item in batch)
+        compact_evidence = _compact_fact_check_records(evidence_links or [], batch_text, 14)
+        compact_foresight = _compact_fact_check_records(foresight_links or [], batch_text, 6)
+        selected_source_ids = {
+            str(item.get("evidence_id") or item.get("source_id") or "").strip()
+            for item in compact_evidence + compact_foresight
+            if isinstance(item, dict)
+        }
+        compact_manifest = [
+            item for item in (evidence_manifest or [])
+            if isinstance(item, dict)
+            and str(item.get("evidence_id") or item.get("source_id") or "").strip() in selected_source_ids
+        ][:20]
+        compact_claim_graph = _compact_fact_check_records(claim_graph or [], batch_text, 14)
+        compact_payload = _compact_fact_check_payload(scan_payload, batch_text)
+        estimated_chars = len(batch_text) + sum(
+            len(json.dumps(item, ensure_ascii=False))
+            for item in compact_evidence + compact_foresight + compact_manifest + compact_claim_graph
+        ) + len(json.dumps(compact_payload, ensure_ascii=False))
+        headings = [item["heading"] for item in batch]
+        print(
+            "   🔎 [Detailed Report Fact-Check] "
+            f"batch={batch_index + 1}/{len(batches)} sections={headings} "
+            f"budget={batch_budget}s approx_chars={estimated_chars}"
+        )
+        result = ai_fact_check_summary(
+            summary_text=batch_text,
+            evidence_links=compact_evidence,
+            company_name=company_name,
+            scan_payload=compact_payload,
+            document_label=f"Detailed Forensic Report sections: {', '.join(headings)}",
+            foresight_links=compact_foresight,
+            evidence_manifest=compact_manifest,
+            claim_graph=compact_claim_graph,
+            time_budget_seconds=batch_budget,
+            verification_only=True,
+        )
+        model = str(result.get("fact_check_model") or "")
+        if model:
+            models.append(model)
+        unavailable = bool(result.get("fact_check_skipped"))
+        if unavailable:
+            unavailable_sections.extend(headings)
+        batch_results.append({
+            "sections": headings,
+            "status": result.get("verification_status", "unavailable"),
+            "model": model or "all_models_failed",
+            "blocking_claim_count": len(result.get("false_claims") or []),
+            "wording_adjustment_count": len(result.get("wording_adjustments") or []),
+        })
+        for key in aggregate:
+            aggregate[key].extend(result.get(key) or [])
+
+    def _dedupe(items: list, key_name: str = "claim") -> list:
+        output = []
+        seen = set()
+        for item in items:
+            value = item.get(key_name) if isinstance(item, dict) else item
+            key = re.sub(r"\s+", " ", str(value or "")).strip().lower().rstrip(".?!")
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            output.append(item)
+        return output
+
+    for key in aggregate:
+        aggregate[key] = _dedupe(aggregate[key])
+    unavailable_sections = list(dict.fromkeys(unavailable_sections))
+    blocking_count = len(aggregate["false_claims"])
+    calibration_count = len(aggregate["wording_adjustments"])
+    if unavailable_sections:
+        status = "partially_unavailable" if len(unavailable_sections) < len(sections) else "unavailable"
+    elif blocking_count:
+        status = "changes_required"
+    elif calibration_count:
+        status = "wording_calibration_required"
+    elif aggregate["audit_notes"]:
+        status = "verified_with_audit_notes"
+    else:
+        status = "verified"
+    aggregate.update({
+        "verified": status in {"verified", "verified_with_audit_notes"},
+        "verification_status": status,
+        "fact_check_skipped": status == "unavailable",
+        "verification_partial": status == "partially_unavailable",
+        "unavailable_sections": unavailable_sections,
+        "batch_results": batch_results,
+        "fact_check_model": "+".join(dict.fromkeys(models)) or "all_models_failed",
+        "fact_check_time_ms": int((time.time() - started) * 1000),
+    })
+    return aggregate
 
 
 # --- SUMMARY CLEANING (Layer 3) — Admin Recheck Only ---

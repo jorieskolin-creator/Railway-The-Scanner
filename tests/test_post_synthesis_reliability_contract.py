@@ -98,10 +98,9 @@ def test_diagnosis_sonnet_fallback_is_not_conditioned_on_gpt_availability():
 def test_detailed_report_requires_final_recheck_after_repair():
     source = MAIN.read_text(encoding="utf-8")
 
-    assert "Detailed Forensic Report (final repaired text)" in source
-    assert "verification_only=True" in source
-    assert '"verified_after_targeted_rewrite"' in source
-    assert '"verified_condensed_after_removals"' in source
+    assert "ai_fact_check_detailed_report(" in source
+    assert "only_section_names=recheck_sections" in source
+    assert "detailed_report_publication_status(" in source
     assert '"generated_with_removals"' not in source
 
 
@@ -151,6 +150,7 @@ def test_internal_pitch_language_remains_blocking():
 
 def test_detailed_report_has_damage_aware_single_recovery_and_specific_statuses():
     source = MAIN.read_text(encoding="utf-8")
+    report_source = (ROOT / "backend" / "detailed_report.py").read_text(encoding="utf-8")
 
     assert "for repair_cycle in range(1, 4)" not in source
     assert "_extend_dr_recovery_deadline(90)" in source
@@ -158,7 +158,7 @@ def test_detailed_report_has_damage_aware_single_recovery_and_specific_statuses(
     assert "regenerate_detailed_report_after_claim_actions(" in source
     assert '"withheld_material_claims"' in source
     assert '"internal_draft_verification_pending"' in source
-    assert '"regenerated_verified"' in source
+    assert '"regenerated_verified"' in report_source
     assert '"repair_cycles": verification_history' in source
 
 

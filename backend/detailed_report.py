@@ -44,6 +44,38 @@ _COMPACT_WORD_MIN = 500
 _COMPACT_WORD_MAX = 750
 _REPAIR_REGEN_THRESHOLD = 0.20
 
+
+def detailed_report_publication_status(
+    quality: dict,
+    verification: dict,
+    recovery: dict | None = None,
+) -> str:
+    """Return a publication status that cannot overstate verification."""
+    recovery = recovery or {}
+    if not (quality or {}).get("complete"):
+        return "incomplete"
+    if (verification or {}).get("unresolved_blocking_claims"):
+        return "withheld_material_claims"
+    if not (verification or {}).get("verified"):
+        return "internal_draft_verification_pending"
+    recovery_mode = str(recovery.get("repair_mode") or "none")
+    recovery_status = str(recovery.get("recovery_status") or "not_needed")
+    had_actions = bool(
+        (verification or {}).get("deterministic_removals")
+        or (verification or {}).get("deterministic_replacements")
+        or (verification or {}).get("wording_calibrations_applied")
+        or (verification or {}).get("model_correction_applied")
+    )
+    if recovery_mode == "full_regeneration" and recovery_status == "succeeded":
+        return "regenerated_verified"
+    if recovery_mode == "targeted_paragraph_repair" and recovery_status == "succeeded":
+        return "verified_after_targeted_rewrite"
+    if (quality or {}).get("condensed") and had_actions:
+        return "verified_condensed_after_removals"
+    if had_actions:
+        return "verified_after_targeted_rewrite"
+    return "generated_verified"
+
 _TARGETED_REPAIR_SCHEMA = {
     "type": "object",
     "properties": {

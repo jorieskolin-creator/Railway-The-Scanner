@@ -296,7 +296,7 @@ def test_unsafe_proof_gap_wording_is_rewritten_locally():
     ) in cleaned
 
 
-def test_unsafe_proof_gap_wording_is_blocking_until_rewritten():
+def test_unsafe_proof_gap_wording_requires_non_blocking_calibration():
     issue_type, blocking = reality_check._classify_fact_check_issue({
         "claim": (
             "The gap is proof that global digital and AI signals translate "
@@ -308,8 +308,8 @@ def test_unsafe_proof_gap_wording_is_blocking_until_rewritten():
         "reasoning": "The sentence overstates a proof gap as proof of company action.",
     }, scan_payload={})
 
-    assert issue_type == "unsafe_inference_wording"
-    assert blocking is True
+    assert issue_type == "wording_calibration"
+    assert blocking is False
 
 
 def test_generation_time_absence_manifest_remains_resolvable():
@@ -326,7 +326,7 @@ def test_generation_time_absence_manifest_remains_resolvable():
     assert [item["premise_id"] for item in premises] == ["ABS-GENERATION"]
 
 
-def test_unsupported_causal_attribution_is_blocking():
+def test_unsupported_causal_attribution_is_wording_calibration():
     issue_type, blocking = reality_check._classify_fact_check_issue({
         "claim": "Profitability was driven by military demand.",
         "claim_class": "strategic_inference",
@@ -336,5 +336,108 @@ def test_unsupported_causal_attribution_is_blocking():
         "correction": "The available evidence records profitability and military demand separately.",
     }, scan_payload={})
 
-    assert issue_type == "unsupported_causal_attribution"
+    assert issue_type == "wording_calibration"
+    assert blocking is False
+
+
+def test_unsupported_present_company_capability_remains_blocking():
+    issue_type, blocking = reality_check._classify_fact_check_issue({
+        "claim": "The company has deployed enterprise AI across its factories.",
+        "claim_class": "external_company_fact",
+        "error_type": "Fabrication",
+        "support_level": "unsupported",
+        "reasoning": "No eligible source supports a current deployment.",
+        "correction": "The promoted evidence does not currently verify an enterprise AI deployment.",
+    }, scan_payload={})
+
+    assert issue_type == "blocking_false_claim"
     assert blocking is True
+
+
+def test_concrete_false_event_blocks_even_if_model_calls_it_inference():
+    issue_type, blocking = reality_check._classify_fact_check_issue({
+        "claim": "The company has signed a 2026 acquisition agreement.",
+        "claim_class": "strategic_inference",
+        "error_type": "Misattribution",
+        "support_level": "unsupported",
+        "reasoning": "The cited sources do not contain that agreement and the event did not happen.",
+        "correction": "",
+    }, scan_payload={})
+
+    assert issue_type == "blocking_false_claim"
+    assert blocking is True
+
+
+def test_detailed_report_fact_check_preserves_successful_batches(monkeypatch):
+    calls = []
+
+    def fake_check(*_args, **kwargs):
+        text = kwargs["summary_text"]
+        calls.append(text)
+        if "## Verdict" in text:
+            return {
+                "verified": False,
+                "verification_status": "unavailable",
+                "fact_check_skipped": True,
+                "fact_check_model": "all_models_failed",
+            }
+        return {
+            "verified": True,
+            "verification_status": "verified",
+            "fact_check_skipped": False,
+            "fact_check_model": "gpt-5.4",
+        }
+
+    monkeypatch.setattr(reality_check, "ai_fact_check_summary", fake_check)
+    report = "\n\n".join(
+        f"## {heading}\n\nSupported {heading.lower()} analysis."
+        for heading in ("Key Findings", "Operating Model", "Strategy", "AI Readiness", "Verdict")
+    )
+
+    result = reality_check.ai_fact_check_detailed_report(
+        report,
+        [],
+        "Example Oy",
+        time_budget_seconds=85,
+    )
+
+    assert len(calls) == 2
+    assert result["verification_status"] == "partially_unavailable"
+    assert result["verification_partial"] is True
+    assert result["verified"] is False
+    assert result["batch_results"][0]["status"] == "verified"
+    assert result["unavailable_sections"] == ["AI Readiness", "Verdict"]
+
+
+def test_detailed_report_fact_check_keeps_calibration_out_of_false_claims(monkeypatch):
+    calibration = {
+        "claim": "Growth was driven by one customer segment.",
+        "issue_type": "wording_calibration",
+        "correction": "Growth coincided with reported demand in that customer segment.",
+    }
+
+    monkeypatch.setattr(
+        reality_check,
+        "ai_fact_check_summary",
+        lambda *_args, **_kwargs: {
+            "verified": False,
+            "verification_status": "wording_calibration_required",
+            "fact_check_skipped": False,
+            "fact_check_model": "gpt-5.4",
+            "false_claims": [],
+            "false_claims_detailed": [],
+            "wording_adjustments": [calibration["claim"]],
+            "wording_adjustments_detailed": [calibration],
+        },
+    )
+
+    result = reality_check.ai_fact_check_detailed_report(
+        "## Key Findings\n\nGrowth was driven by one customer segment.",
+        [],
+        "Example Oy",
+        time_budget_seconds=45,
+    )
+
+    assert result["verification_status"] == "wording_calibration_required"
+    assert result["false_claims"] == []
+    assert result["wording_adjustments"] == [calibration["claim"]]

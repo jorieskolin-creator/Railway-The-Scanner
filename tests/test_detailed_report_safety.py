@@ -193,3 +193,33 @@ def test_detailed_report_language_qa_removes_adjacent_duplicate_words():
     )
 
     assert polished == "The manufacturer expanded its supported portfolio."
+
+
+def test_unavailable_verifier_cannot_publish_as_generated_verified():
+    status = detailed_report.detailed_report_publication_status(
+        {"complete": True},
+        {"verified": False, "verification_status": "unavailable"},
+    )
+
+    assert status == "internal_draft_verification_pending"
+
+
+def test_clean_verified_report_publishes_as_generated_verified():
+    status = detailed_report.detailed_report_publication_status(
+        {"complete": True},
+        {"verified": True, "verification_status": "verified"},
+    )
+
+    assert status == "generated_verified"
+
+
+def test_unresolved_material_claims_are_withheld():
+    status = detailed_report.detailed_report_publication_status(
+        {"complete": True},
+        {
+            "verified": False,
+            "unresolved_blocking_claims": ["Unsupported current deployment claim."],
+        },
+    )
+
+    assert status == "withheld_material_claims"
