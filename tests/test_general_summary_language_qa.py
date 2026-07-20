@@ -33,3 +33,28 @@ def test_duplicate_verifier_claim_prefers_actionable_replacement():
 
     assert len(deduped) == 1
     assert deduped[0]["replacement"] == "A narrower fact."
+
+
+def test_general_summary_policy_uses_sonnet_primary_and_gpt_fallback():
+    policy = general_summary.policy_for("general_summary")
+
+    assert policy["primary"] == general_summary.CLAUDE_SONNET_MODEL
+    assert policy["fallback"] == general_summary.GPT_REASONING_MODEL
+    assert policy["independent_review"] == general_summary.GPT_VERIFIER_MODEL
+
+
+def test_general_summary_generation_uses_sonnet_before_openai(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(general_summary, "_build_input_payload", lambda *_args: {})
+    monkeypatch.setattr(general_summary, "_build_prompt", lambda *_args: "prompt")
+    monkeypatch.setattr(general_summary, "call_anthropic_text", lambda *_args, **_kwargs: "A factual summary.")
+
+    def fail_openai(*_args, **_kwargs):
+        raise AssertionError("OpenAI fallback must not run when Sonnet succeeds")
+
+    monkeypatch.setattr(general_summary, "_call_openai_summary", fail_openai)
+
+    text, model = general_summary.generate_general_summary({}, "Test Company", time_budget_seconds=40)
+
+    assert text == "A factual summary."
+    assert model == general_summary.CLAUDE_SONNET_MODEL

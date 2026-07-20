@@ -181,7 +181,7 @@ def sanitize_inference_wording(value):
         ),
         (
             r'\bno source verifying\s+([^.;\n]+)',
-            r'not enough source support to confirm \1',
+            r'the available source set does not yet provide enough support to confirm \1',
         ),
         (
             r'\bdoes not verify broader\s+([^.;\n]+)',
@@ -1044,6 +1044,21 @@ def _fact_check_claim_id(section, claim):
     return "FC-" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12].upper()
 
 
+_EDITORIAL_CORRECTION_RE = re.compile(
+    r"^(?:remove|omit|delete|qualify|rewrite|replace|exclude|do\s+not\s+(?:use|say|include)|"
+    r"mark\s+as|treat\s+as)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _reader_facing_fact_check_correction(value) -> str:
+    """Reject verifier instructions that are not publishable company prose."""
+    correction = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not correction or _EDITORIAL_CORRECTION_RE.search(correction):
+        return ""
+    return correction
+
+
 def _fact_check_field_paths(claim, summary_text, pitch_text, analysis_sections):
     """Locate exact reader-facing occurrences without trusting model labels."""
     needle = re.sub(r"\s+", " ", str(claim or "")).strip().lower()
@@ -1191,7 +1206,7 @@ INSTRUCTIONS:
 
 OUTPUT FORMAT — valid JSON only:
 If accurate: {{"false_claims": [], "summary_accurate": true}}
-If false claims found: {{"false_claims": [{{"section": "section heading", "claim": "Exact quote or close paraphrase", "claim_class": "external_company_fact OR internal_scanner_observation OR structured_financial_payload_fact OR macro_foresight_context OR strategic_inference", "error_type": "Fabrication OR Contradiction OR Misattribution OR Organizational Fabrication OR Prohibited Scanner Observation OR Evidence Handoff Failure OR Premise Reference Mismatch", "support_level": "exact OR partial OR context_only OR unsupported", "missing_or_contradicted_premise": "Specific premise or empty string", "reasoning": "Brief reason", "correction": "Verified replacement or empty string", "wrong_value": "", "correct_value": "", "source_indices": [1], "source_ids": ["EVD-...", "FOR-...", "ABS-..."]}}], "summary_accurate": false}}
+If false claims found: {{"false_claims": [{{"section": "section heading", "claim": "Exact quote or close paraphrase", "claim_class": "external_company_fact OR internal_scanner_observation OR structured_financial_payload_fact OR macro_foresight_context OR strategic_inference", "error_type": "Fabrication OR Contradiction OR Misattribution OR Organizational Fabrication OR Prohibited Scanner Observation OR Evidence Handoff Failure OR Premise Reference Mismatch", "support_level": "exact OR partial OR context_only OR unsupported", "missing_or_contradicted_premise": "Specific premise or empty string", "reasoning": "Brief reason", "correction": "Complete ordinary reader-facing replacement sentence or clause, or empty string to remove it. Never return an editorial command such as Remove, Omit, Qualify, Rewrite, Replace, or Do not use", "wrong_value": "", "correct_value": "", "source_indices": [1], "source_ids": ["EVD-...", "FOR-...", "ABS-..."]}}], "summary_accurate": false}}
 """
 
     stage1_false_claims = None
@@ -1287,7 +1302,7 @@ If false claims found: {{"false_claims": [{{"section": "section heading", "claim
                     "support_level": support_level,
                     "missing_or_contradicted_premise": missing_premise,
                     "reasoning": fc.get("reasoning") or "",
-                    "correction": fc.get("correction") or "",
+                    "correction": _reader_facing_fact_check_correction(fc.get("correction")),
                     "wrong_value": fc.get("wrong_value") or "",
                     "correct_value": fc.get("correct_value") or "",
                     "source_indices": indices,

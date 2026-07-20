@@ -155,10 +155,11 @@ MODEL_POLICIES: dict[str, dict[str, Any]] = {
         "max_batch_chars": 20000,
     },
     "general_summary": {
-        "primary": GPT_REASONING_MODEL,
+        "primary": CLAUDE_SONNET_MODEL,
+        "fallback": GPT_REASONING_MODEL,
         "effort": "medium",
         "verbosity": "medium",
-        "independent_review": CLAUDE_SONNET_MODEL,
+        "independent_review": GPT_VERIFIER_MODEL,
     },
     "detailed_report": {
         "standard": CLAUDE_SONNET_MODEL,

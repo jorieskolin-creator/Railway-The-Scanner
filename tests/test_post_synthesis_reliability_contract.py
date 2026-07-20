@@ -43,6 +43,31 @@ def _pitch_contract_functions() -> dict:
     return namespace
 
 
+def _claim_correction_functions() -> dict:
+    tree = ast.parse(MAIN.read_text(encoding="utf-8"))
+    wanted_functions = {
+        "_publishable_fact_check_correction",
+        "_remove_sentence_containing_claim",
+        "_final_public_language_qa",
+        "_replace_flagged_claim",
+    }
+    wanted_assignments = {
+        "_EDITORIAL_CORRECTION_RE",
+        "_EDITORIAL_CORRECTION_FRAGMENT_RE",
+    }
+    namespace = {"re": re}
+    nodes = []
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            names = {target.id for target in node.targets if isinstance(target, ast.Name)}
+            if names.intersection(wanted_assignments):
+                nodes.append(node)
+        elif isinstance(node, ast.FunctionDef) and node.name in wanted_functions:
+            nodes.append(node)
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(MAIN), "exec"), namespace, namespace)
+    return namespace
+
+
 def test_anthropic_activation_schema_avoids_unsupported_array_limits():
     schemas = _activation_schemas()
     pair_array = schemas["_ACTIVATION_OUTPUT_SCHEMA"]["properties"]["activation_pairs"]
@@ -160,3 +185,51 @@ def test_general_summary_badge_matches_final_verification_state():
     assert "unverified wording remains" in source
     assert "verification unavailable" in source
     assert "unverified claims removed" not in source
+
+
+def test_editorial_verifier_command_is_removed_instead_of_published():
+    namespace = _claim_correction_functions()
+    original = (
+        "The company has a record order backlog. "
+        "It is pursuing active capacity expansion. "
+        "Its product portfolio is modular."
+    )
+
+    corrected = namespace["_replace_flagged_claim"](
+        original,
+        "active capacity expansion",
+        "Remove or qualify as unverified; the evidence does not establish this initiative.",
+    )
+
+    assert "Remove or qualify" not in corrected
+    assert "active capacity expansion" not in corrected
+    assert "record order backlog" in corrected
+    assert "product portfolio is modular" in corrected
+
+
+def test_final_public_language_qa_preserves_paragraphs():
+    namespace = _claim_correction_functions()
+    text = (
+        "First analytical paragraph remains complete.\n\n"
+        "Remove or qualify as unverified; this is an editorial instruction.\n\n"
+        "Third analytical paragraph remains complete."
+    )
+
+    cleaned = namespace["_final_public_language_qa"](text)
+
+    assert "Remove or qualify" not in cleaned
+    assert cleaned.count("\n\n") == 1
+    assert cleaned.startswith("First analytical paragraph")
+    assert cleaned.endswith("Third analytical paragraph remains complete.")
+
+    synthesis = "\n\n".join(f"Paragraph {index} remains complete." for index in range(1, 6))
+    assert namespace["_final_public_language_qa"](synthesis).count("\n\n") == 4
+    assert namespace["_final_public_language_qa"]("Remove delivery bottlenecks safely.") == "Remove delivery bottlenecks safely."
+
+
+def test_company_summary_always_renders_excluded_claims_section():
+    source = COMPANY_SUMMARY.read_text(encoding="utf-8")
+
+    assert "Claims Excluded From Analysis" in source
+    assert "N/A - no excluded claims." in source
+    assert "Blocking Issues" not in source

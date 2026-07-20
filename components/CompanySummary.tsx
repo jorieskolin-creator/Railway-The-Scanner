@@ -848,14 +848,16 @@ const isForesightContext = (link) => {
             + renderMetric('Confidence', formatScore(exportData.confidence_score ?? exportData.scan_quality?.confidence_score ?? exportData.evidence_sufficiency?.score, '%'), 'evidence confidence')
             + renderMetric('Credibility Mix', 'H' + credibility.high + ' M' + credibility.medium + ' L' + credibility.low + ' U' + credibility.unknown, 'high/medium/low/unknown')
             + renderMetric('Contradictions', contradictionWarnings.length || 'None', 'stored warnings')
-            + renderMetric('Blocking Issues', blockingWarnings.length || 'None', 'material false claims')
+            + renderMetric('Claims Excluded From Analysis', blockingWarnings.length || 'None', 'governed claim exclusions')
             + renderMetric('Audit Notes', hallucinationWarnings.length || 'None', 'inference and methodology checks')
             + renderMetric('Quality Notes', qualityNotes.length || 'None', 'format/style checks')
             + '</div>'
             + (isLowEvidenceMode ? '<div class="callout amber"><h3>' + escapeHTML(lowEvidenceLabel || 'Low promoted evidence') + '</h3><p>Promoted source-register evidence is limited. The report may still use verified structured financial findings and internal scanner observations, but precise external company claims require source-backed support.</p></div>' : '')
             + (contradictionWarnings.length ? '<div class="callout amber"><h3>Contradiction Warnings</h3>' + renderList(contradictionWarnings) + '</div>' : '<p class="muted">No contradiction warnings detected.</p>')
             + (wrongEntityWarnings.length ? '<div class="callout"><h3>Wrong-Entity Warnings</h3>' + renderList(wrongEntityWarnings) + '</div>' : '<p class="muted">No wrong-entity evidence detected.</p>')
-            + (blockingWarnings.length ? '<div class="callout rose"><h3>Blocking Issues</h3>' + renderList(blockingWarnings) + '</div>' : '<p class="muted">No blocking false claims detected.</p>')
+            + '<div class="callout rose"><h3>Claims Excluded From Analysis</h3>'
+            + (blockingWarnings.length ? renderList(blockingWarnings) : '<p>N/A - no excluded claims.</p>')
+            + '</div>'
             + (hallucinationWarnings.filter(function(note) { return !isVerboseAuditNote(note); }).length ? '<div class="callout"><h3>Inference / Methodology Audit Notes</h3>' + renderList(hallucinationWarnings.filter(function(note) { return !isVerboseAuditNote(note); })) + '</div>' : '<p class="muted">Inference and methodology audit details are retained in the raw payload.</p>')
             + (qualityNotes.length ? '<div class="callout cyan"><h3>Quality Notes</h3>' + renderList(qualityNotes) + '</div>' : '<p class="muted">No format or style notes detected.</p>');
         var sourceTable = evidencePool.length ? '<div class="table-wrap source-register-wrap"><table class="source-register"><thead><tr><th>Ref</th><th>Stable ID</th><th>Source</th><th>Type</th><th>URL</th><th>Verification</th><th>Entity / Scope</th><th>Source Context</th><th>Claim Support</th><th>Exact Passage</th><th>Claim IDs</th></tr></thead><tbody>'
@@ -1330,7 +1332,7 @@ const isForesightContext = (link) => {
             renderMetric('Unknown Entity', unknownEntitySources, 'not promoted'),
             renderMetric('Company Evidence', companyEvidencePool.length, 'Company-specific sources'),
             renderMetric('Foresight Context', foresightContextEligible + '/' + foresightEvidencePool.length, 'Eligible macro context'),
-            renderMetric('Blocking Issues', blockingIssueCount, 'Material false claims'),
+            renderMetric('Claims Excluded From Analysis', blockingIssueCount, 'Governed claim exclusions'),
             renderMetric('Audit Notes', auditNoteCount, 'Inference and methodology checks'),
             renderMetric('Washing Flag', exportData.washing_flag ? 'Yes' : 'No', exportData.washing_type || 'Narrative vs evidence'),
             renderMetric('Carried Forward', carriedForward ? 'Yes' : 'No', 'Previous-scan evidence')
@@ -1943,7 +1945,7 @@ const isForesightContext = (link) => {
                 <div className={`p-4 rounded-xl border ${blockingFlags.length > 0 ? 'bg-rose-500/10 border-rose-500/30' : 'bg-black/20 border-white/5'}`}>
                     <div className="flex items-center gap-2 mb-2">
                         <AlertOctagon size={14} className={blockingFlags.length > 0 ? 'text-rose-400' : 'text-slate-500'} />
-                        <span className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Blocking Issues</span>
+                        <span className="text-[10px] leading-tight text-slate-400 uppercase tracking-wider font-bold">Claims Excluded From Analysis</span>
                     </div>
                     {blockingFlags.length > 0 ? (
                         <div className="space-y-1.5">
@@ -1952,7 +1954,7 @@ const isForesightContext = (link) => {
                             ))}
                         </div>
                     ) : (
-                        <p className="text-xs text-slate-500">No blocking false claims reported.</p>
+                        <p className="text-xs text-slate-500">N/A - no excluded claims.</p>
                     )}
                 </div>
                 <div className={`p-4 rounded-xl border ${hallucinationFlags.length > 0 ? 'bg-amber-500/10 border-amber-500/30' : 'bg-black/20 border-white/5'}`}>

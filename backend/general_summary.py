@@ -601,66 +601,72 @@ def generate_general_summary(full_data: dict, company_name: str, time_budget_sec
     def remaining() -> int:
         return max(0, int(deadline - time.time()))
 
-    # Primary: GPT frontier model (evidence-bound prose from already-built structured payload)
+    policy = policy_for("general_summary")
+    primary_model = str(policy.get("primary") or CLAUDE_SONNET_MODEL)
+    fallback_model = str(policy.get("fallback") or GPT_REASONING_MODEL)
+
+    # Primary: Sonnet is consistently faster and more reliable for this bounded,
+    # factual narrative. Independent verification remains an OpenAI task.
     try:
-        PRIMARY_MODEL = GPT_REASONING_MODEL
-        print(f"   [General Summary] Trying primary {PRIMARY_MODEL}")
+        anthropic_key = _clean_env_var(os.environ.get("ANTHROPIC_API_KEY", ""))
+        if not anthropic_key:
+            raise RuntimeError("No ANTHROPIC_API_KEY")
+        print(f"   [General Summary] Trying primary {primary_model}")
         t0 = time.time()
-        text = _strip_links(_call_openai_summary(prompt, model=PRIMARY_MODEL, timeout=min(40, max(10, remaining()))))
+        text = _strip_links(call_anthropic_text(
+            prompt,
+            model=primary_model,
+            max_tokens=4000,
+            timeout=min(30, max(10, remaining())),
+            max_retries=0,
+            reasoning_effort=str(policy.get("effort") or "medium"),
+            log_label="General Summary Primary",
+        ))
         wc = _word_count(text)
         elapsed = int((time.time() - t0) * 1000)
-        print(f"   [General Summary] {PRIMARY_MODEL}: {wc} words ({elapsed}ms)")
+        print(f"   [General Summary] {primary_model}: {wc} words ({elapsed}ms)")
         if text:
             process_phrases = _internal_process_phrases(text)
             if process_phrases:
                 print(
-                    f"   ⚠️ [General Summary] {PRIMARY_MODEL} exposed internal process language "
+                    f"   ⚠️ [General Summary] {primary_model} exposed internal process language "
                     f"({', '.join(process_phrases[:4])}) — trying independent backup"
                 )
                 text = ""
         if text:
             if not (_WORD_MIN <= wc <= _WORD_MAX):
-                print(f"   [General Summary] {PRIMARY_MODEL} word count outside [{_WORD_MIN}-{_WORD_MAX}] — using non-empty result")
-            return text, PRIMARY_MODEL
+                print(f"   [General Summary] {primary_model} word count outside [{_WORD_MIN}-{_WORD_MAX}] — using non-empty result")
+            return text, primary_model
     except Exception as e:
-        print(f"   ❌ [General Summary] {GPT_REASONING_MODEL} primary failed: {e}")
+        print(f"   ❌ [General Summary] {primary_model} primary failed: {e}")
 
-    # Backup 1: Sonnet independent provider
+    # Backup: GPT frontier model. When used, Sonnet becomes the independent
+    # verifier through fact_check_general_summary's provider-selection rule.
     try:
         if remaining() < 10:
             return "", ""
-        import anthropic
-        anthropic_key = _clean_env_var(os.environ.get("ANTHROPIC_API_KEY", ""))
-        if not anthropic_key:
-            print("   ⚠️ [General Summary] No ANTHROPIC_API_KEY — skipping Sonnet backup")
-        else:
-            SONNET_MODEL = CLAUDE_SONNET_MODEL
-            print(f"   [General Summary] {GPT_REASONING_MODEL} unavailable — trying {SONNET_MODEL}")
-            t0 = time.time()
-            text = _strip_links(call_anthropic_text(
-                prompt,
-                model=SONNET_MODEL,
-                max_tokens=4000,
-                timeout=min(20, max(8, remaining())),
-                max_retries=0,
-                reasoning_effort="medium",
-                log_label="General Summary Fallback",
-            ))
-            wc = _word_count(text)
-            elapsed = int((time.time() - t0) * 1000)
-            print(f"   [General Summary] {SONNET_MODEL} backup: {wc} words ({elapsed}ms)")
-            if text:
-                process_phrases = _internal_process_phrases(text)
-                if process_phrases:
-                    print(
-                        "   ⚠️ [General Summary] Sonnet exposed internal process language "
-                        f"({', '.join(process_phrases[:4])}) — rejecting summary"
-                    )
-                    text = ""
-            if text:
-                return text, SONNET_MODEL
+        print(f"   [General Summary] {primary_model} unavailable — trying {fallback_model}")
+        t0 = time.time()
+        text = _strip_links(_call_openai_summary(
+            prompt,
+            model=fallback_model,
+            timeout=min(30, max(8, remaining())),
+        ))
+        wc = _word_count(text)
+        elapsed = int((time.time() - t0) * 1000)
+        print(f"   [General Summary] {fallback_model} backup: {wc} words ({elapsed}ms)")
+        if text:
+            process_phrases = _internal_process_phrases(text)
+            if process_phrases:
+                print(
+                    f"   ⚠️ [General Summary] {fallback_model} exposed internal process language "
+                    f"({', '.join(process_phrases[:4])}) — rejecting summary"
+                )
+                text = ""
+        if text:
+            return text, fallback_model
     except Exception as e:
-        print(f"   ❌ [General Summary] Sonnet backup failed: {e}")
+        print(f"   ❌ [General Summary] {fallback_model} backup failed: {e}")
 
     return "", ""
 

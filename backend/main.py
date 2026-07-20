@@ -592,15 +592,93 @@ def _normalize_activation_payload(payload: dict, prior: dict | None = None) -> d
     }
 
 
+_EDITORIAL_CORRECTION_RE = re.compile(
+    r"^(?:remove|omit|delete|qualify|rewrite|replace|exclude|do\s+not\s+(?:use|say|include)|"
+    r"mark\s+as|treat\s+as)\b",
+    flags=re.IGNORECASE,
+)
+_EDITORIAL_CORRECTION_FRAGMENT_RE = re.compile(
+    r"\b(?:remove\s+or\s+qualify\s+as\s+unverified|remove\s+this\s+claim|"
+    r"omit\s+this\s+claim|do\s+not\s+use\s+this\s+claim|replace\s+this\s+claim)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _publishable_fact_check_correction(correction: str) -> str:
+    """Return only ordinary reader-facing prose, never verifier commands."""
+    cleaned = re.sub(r"\s+", " ", str(correction or "")).strip()
+    if not cleaned or _EDITORIAL_CORRECTION_RE.search(cleaned):
+        return ""
+    return cleaned
+
+
+def _remove_sentence_containing_claim(text: str, claim: str) -> tuple[str, bool]:
+    """Remove the complete sentence when no safe replacement prose is available."""
+    needle = re.sub(r"\s+", " ", str(claim or "")).strip().lower()
+    if not text or not needle:
+        return text, False
+    paragraphs = re.split(r"(\n\s*\n+)", text)
+    removed = False
+    for index in range(0, len(paragraphs), 2):
+        sentences = re.split(r"(?<=[.!?])\s+(?=[A-ZÅÄÖ0-9])", paragraphs[index].strip())
+        kept = []
+        for sentence in sentences:
+            normalized = re.sub(r"\s+", " ", sentence).strip().lower()
+            if needle in normalized:
+                removed = True
+                continue
+            if sentence.strip():
+                kept.append(sentence.strip())
+        paragraphs[index] = " ".join(kept)
+    cleaned = "".join(paragraphs)
+    cleaned = re.sub(r"\n\s*\n(?:\s*\n)+", "\n\n", cleaned)
+    return cleaned.strip(), removed
+
+
+def _final_public_language_qa(value):
+    """Repair deterministic language seams after all claim transformations."""
+    if isinstance(value, list):
+        cleaned = [_final_public_language_qa(item) for item in value]
+        return [item for item in cleaned if item not in (None, "", [], {})]
+    if isinstance(value, dict):
+        return {key: _final_public_language_qa(item) for key, item in value.items()}
+    if not isinstance(value, str):
+        return value
+
+    paragraphs = re.split(r"(\n\s*\n+)", value)
+    for index in range(0, len(paragraphs), 2):
+        sentences = re.split(r"(?<=[.!?])\s+(?=[A-ZÅÄÖ0-9])", paragraphs[index].strip())
+        sentences = [
+            sentence for sentence in sentences
+            if not _EDITORIAL_CORRECTION_FRAGMENT_RE.search(sentence)
+        ]
+        paragraphs[index] = " ".join(sentence.strip() for sentence in sentences if sentence.strip())
+    text = "".join(paragraphs)
+    text = re.sub(r"\bwhether\s+(?:if|because)\b", "whether", text, flags=re.IGNORECASE)
+    text = re.sub(r"\.\s*,", ",", text)
+    text = re.sub(r",\s*\.", ".", text)
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    text = re.sub(r"([.!?])\s*\1+", r"\1", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 def _replace_flagged_claim(value, claim: str, correction: str):
     """Apply one verified correction without changing unrelated structure."""
     if isinstance(value, str):
         claim = re.sub(r"\s+", " ", str(claim or "")).strip()
         if not claim:
             return value
-        replacement = str(correction or "").strip()
+        replacement = _publishable_fact_check_correction(correction)
         pattern = re.escape(claim).replace(r"\ ", r"\s+")
-        updated, count = re.subn(pattern, replacement, value, count=0, flags=re.IGNORECASE)
+        if replacement:
+            updated, count = re.subn(pattern, replacement, value, count=0, flags=re.IGNORECASE)
+        else:
+            updated, removed = _remove_sentence_containing_claim(value, claim)
+            count = int(removed)
+            if not removed:
+                updated, count = re.subn(pattern, "", value, count=0, flags=re.IGNORECASE)
         if not count:
             return value
         updated = re.sub(r"\s+([,.;:!?])", r"\1", updated)
@@ -720,6 +798,8 @@ def _apply_fact_check_corrections(data: dict, fact_check: dict) -> list[str]:
     data["why_proposals"] = activation_norm["why_proposals"]
     data["what_proposals"] = activation_norm["what_proposals"]
     data["what_progress_proposals"] = activation_norm["what_progress_proposals"]
+    for key in public_keys:
+        data[key] = _final_public_language_qa(data.get(key))
     return list(dict.fromkeys(item for item in applied_ids if item))
 
 
@@ -7586,7 +7666,8 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
             full_data["general_summary_generation"] = {
                 "model": gs_generation_model,
                 "fallback_used": bool(
-                    gs_generation_model and GPT_REASONING_MODEL not in str(gs_generation_model)
+                    gs_generation_model
+                    and gs_generation_model != str(policy_for("general_summary").get("primary") or CLAUDE_SONNET_MODEL)
                 ),
                 "generation_time_ms": gs_ms,
             }
