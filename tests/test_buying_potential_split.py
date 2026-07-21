@@ -299,7 +299,7 @@ def test_failed_gate_repair_batch_is_removed_without_sol_reanalysis(monkeypatch)
             {
                 "hypothesis_id": f"HYP-{index:02d}",
                 "linked_signal_ids": [f"SIG-{index:02d}"],
-                "buying_hypothesis": f"Unsupported buying claim {index} proves immediate demand.",
+                "opening_angle": f"Unsupported opening claim {index} proves immediate demand.",
                 "gate": "allowed_as_hypothesis",
             }
             for index in range(6)
@@ -433,6 +433,148 @@ def test_buying_potential_renderer_uses_new_section_order_and_nested_play_angles
     assert html.index("Pressure & Demand Hypothesis Signals") < html.index("Why This May Matter Now")
     assert html.index("Buying Committee & Influence Map") < html.index("Possible Conversation Directions")
     assert html.index("Recommended Sales Plays") < html.index("Evidence & Sales Guardrails")
+
+
+def test_recommended_sales_play_card_renders_only_simplified_reader_fields(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    play = {
+        "play_name": "Capacity proof discovery play",
+        "linked_signal_ids": ["SIG-01"],
+        "activation_pair_index": 1,
+        "play_type": "current_status",
+        "service_or_offer": "Service One",
+        "response_directions": {
+            "vivicta_potential_contribution": "Vivicta may help frame the outcome after discovery confirms the need.",
+            "evolving_modernization_directions": ["Delivery & Capacity Planning: validate the capacity constraint."],
+            "other_capabilities_may_be_required": ["Industrial engineering capability"],
+        },
+        "first_meeting_objective": "Establish whether the pressure has an owner and business consequence.",
+        "opening_angle": "Where is delivery pressure most visible today?",
+        "executive_angle": "The executive question is whether growth can be converted into repeatable delivery.",
+        "technical_angle": "The technical question is whether process and data baselines support that delivery.",
+        "discovery_questions": ["Which outcome would show that the constraint is easing?"],
+        "proof_point": "An owner and observable success condition are agreed.",
+        "safe_customer_wording": "It may be useful to explore whether delivery capacity is becoming a strategic constraint.",
+        "readiness_band": "Validate now",
+        "priority_band": "High",
+        "evidence_coverage": "Internal governance detail",
+        "confidence_boundary": "Internal boundary",
+        "primary_buyer": "COO",
+        "trigger": "Internal trigger",
+        "account_thesis": "Internal thesis",
+        "buying_hypothesis": "Internal buying hypothesis",
+        "trigger_to_offer_bridge": "Internal bridge",
+        "qualification_upgrade_criteria": ["Internal criterion"],
+        "do_not_say": ["Internal prohibition"],
+        "play_classification": "qualified_discovery_play",
+    }
+    html = bp.render_buying_potential_html({
+        "companyName": "TestCo",
+        "generated_at": "2026-07-21T00:00:00",
+        "account_snapshot": {},
+        "buying_potential_thesis": {},
+        "sales_spine": {},
+        "recommended_sales_plays": [play],
+        "evidence_confidence": {},
+        "source_counts": {},
+    })
+
+    for label in (
+        "Potential Offer Area", "Vivicta Potential Contribution", "Modernization Lens",
+        "Other Capabilities To Check", "First Meeting Objective", "Opening Angle",
+        "Executive Angle", "Technical Angle", "Discovery Questions", "Proof Point",
+        "Safe Customer-Facing Wording",
+    ):
+        assert label in html
+    for hidden_label in (
+        "Discovery readiness:", "Priority:", "Evidence coverage:", "Confidence boundary:",
+        "Primary buyer:", "Trigger-to-offer bridge:", "Why This Might Matter",
+        "Questions By Buyer Role", "Qualification Upgrade Criteria", "Activation pair 1",
+    ):
+        assert hidden_label not in html
+    assert html.index("Proof Point") < html.index("Safe Customer-Facing Wording")
+    assert play["readiness_band"] == "Validate now"
+
+
+def test_sales_play_uses_only_exact_service_and_explicit_modernization_tactic(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    signal = {
+        "id": "SIG-01",
+        "hypothesis_id": "HYP-01",
+        "activation_pair_index": 1,
+        "theme": "Delivery capacity planning",
+        "why": "Growth may create delivery capacity and planning pressure.",
+        "what_to_do": "Establish an observable delivery-capacity position.",
+        "what_progress_shows": "Capacity constraints and owners are explicitly evidenced.",
+        "buyer_roles": ["COO / Operations Lead"],
+        "gate": "allowed_as_hypothesis",
+    }
+    services = [{"service_id": "SVC-01", "name": "Capacity Advisory"}]
+    tactics = [{
+        "tactic_id": "TAC-01",
+        "concept": "Delivery & Capacity Planning",
+        "lens": "Delivery & Capacity Planning: validate where capacity constrains delivery.",
+    }]
+    analysis = {
+        "account_signal_id": "SIG-01",
+        "hypothesis_id": "HYP-01",
+        "service_id": "SVC-01",
+        "service_or_offer": "Capacity Advisory",
+        "service_fit_rationale": "The service is relevant only if the delivery-capacity pressure is confirmed.",
+        "modernization_tactic_ids": ["TAC-01", "TAC-NOT-ELIGIBLE"],
+        "vivicta_potential_contribution": "Vivicta may help define the target delivery-capacity outcome.",
+        "other_capabilities_to_check": ["Industrial engineering", "Industrial engineering"],
+        "first_meeting_objective": "Validate owner, timing, and consequence.",
+        "opening_angle": "Where is capacity pressure becoming visible?",
+        "executive_angle": "Could capacity constrain strategic growth commitments?",
+        "technical_angle": "Which process and data baselines show current capacity?",
+        "discovery_questions": ["Who owns the constraint?", "Who owns the constraint?", "How is progress observed?"],
+        "proof_point": "A named owner and observable target are agreed.",
+        "safe_customer_wording": "It may be useful to explore whether capacity is becoming a constraint.",
+    }
+
+    play = bp._sales_play_from_signal(signal, {"account_thesis": "Internal thesis"}, analysis, services, tactics)
+
+    assert play["service_id"] == "SVC-01"
+    assert play["service_or_offer"] == "Capacity Advisory"
+    assert [item["tactic_id"] for item in play["response_directions"]["modernization_lenses"]] == ["TAC-01"]
+    assert play["response_directions"]["other_capabilities_may_be_required"] == ["Industrial engineering"]
+    assert len(play["discovery_questions"]) == 2
+    assert len({play["opening_angle"], play["executive_angle"], play["technical_angle"]}) == 3
+
+
+def test_gate_and_language_qa_scope_sales_plays_to_reader_facing_fields(monkeypatch):
+    bp = load_buying_potential(monkeypatch)
+    report = {
+        "recommended_sales_plays": [{
+            "linked_signal_ids": ["SIG-01"],
+            "buying_hypothesis": "Internal wording should not enter the reader-facing Gate packet.",
+            "opening_angle": "Could we explore whether this pressure is becoming relevant?",
+            "executive_angle": "The executive question is whether this pressure changes strategic priorities.",
+            "technical_angle": "The technical question is where the pressure is visible in current operations.",
+            "first_meeting_objective": "Validate whether the pressure has an owner and consequence.",
+            "proof_point": "An owner and observable validation outcome are agreed.",
+            "safe_customer_wording": "It may be useful to explore whether this pressure matters.",
+            "discovery_questions": ["Where would this pressure become visible first?"],
+            "response_directions": {
+                "vivicta_potential_contribution": "Vivicta may help frame the target outcome after validation.",
+                "evolving_modernization_directions": [],
+                "other_capabilities_may_be_required": [],
+            },
+        }],
+    }
+    packet = bp._build_gate_review_packet(report, {"account_signal_map": [{"id": "SIG-01"}]})
+    claim_paths = {item["path"] for item in packet["claims"]}
+
+    assert "recommended_sales_plays[0].opening_angle" in claim_paths
+    assert "recommended_sales_plays[0].safe_customer_wording" in claim_paths
+    assert "recommended_sales_plays[0].buying_hypothesis" not in claim_paths
+
+    report["recommended_sales_plays"][0]["buying_hypothesis"] = "This hidden internal metadata stops with"
+    report["recommended_sales_plays"][0]["opening_angle"] = "This reader-facing opening stops with"
+    language_paths = {item["path"] for item in bp._language_public_items(report)}
+    assert "recommended_sales_plays[0].opening_angle" in language_paths
+    assert "recommended_sales_plays[0].buying_hypothesis" not in language_paths
 
 
 def test_buying_potential_footer_points_to_scanner_instead_of_rendering_evidence_register(monkeypatch):

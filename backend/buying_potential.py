@@ -350,6 +350,7 @@ def _normalize_modernization_tactic(item: Any) -> dict | None:
     if not concept or not mechanism:
         return None
     return {
+        "tactic_id": _clip(item.get("tactic_id") or item.get("id") or concept, 160),
         "category": category,
         "concept": concept,
         "problem_pattern": problem,
@@ -1766,10 +1767,6 @@ def _response_directions_from_play(play: dict, need: dict) -> dict:
         700,
     )
     directions: list[str] = []
-    other_capabilities = [
-        "Customer-owned operating ownership and change capacity",
-        "Specialist domain expertise where the need touches industrial engineering, PLM, MES/MOM, OT, regulation, or sector-specific quality assurance",
-    ]
     return {
         "potential_need": potential_need,
         "evolving_modernization_directions": directions,
@@ -1777,7 +1774,7 @@ def _response_directions_from_play(play: dict, need: dict) -> dict:
             f"{service} may be relevant if the account signal and need hypothesis are confirmed in discovery.",
             360,
         ),
-        "other_capabilities_may_be_required": other_capabilities,
+        "other_capabilities_may_be_required": [],
     }
 
 
@@ -2287,6 +2284,7 @@ def _build_input_payload(
         services.append(service)
     modernization_tactics = [
         {
+            "tactic_id": tactic.get("tactic_id"),
             "category": tactic.get("category"),
             "concept": tactic.get("concept"),
             "problem_pattern": tactic.get("problem_pattern"),
@@ -2659,7 +2657,7 @@ def _section_payload(section: str, payload: dict) -> dict:
     return compact
 
 
-def _sales_play_service_candidates(signal: dict, payload: dict, limit: int = 6) -> list[dict]:
+def _sales_play_service_candidates(signal: dict, payload: dict, limit: int = 4) -> list[dict]:
     services_by_name: dict[str, dict] = {}
     for service in _list(payload.get("services")):
         if not isinstance(service, dict):
@@ -2696,12 +2694,80 @@ def _sales_play_service_candidates(signal: dict, payload: dict, limit: int = 6) 
     return candidates
 
 
-def _sales_play_analysis_prompt(signal: dict, payload: dict) -> str:
+def _sales_play_modernization_candidates(signal: dict, payload: dict, limit: int = 3) -> list[dict]:
+    """Return only tactics with an explicit deterministic bridge to this HYP/SIG."""
+    compact = _compact_signal(signal)
+    need = _dict(compact.get("need_hypothesis"))
+    bridge_text = " ".join(
+        _clip(value, 700)
+        for value in (
+            compact.get("theme"),
+            compact.get("why"),
+            compact.get("what_to_do"),
+            compact.get("what_progress_shows"),
+            compact.get("external_pressure"),
+            need.get("current_condition"),
+            need.get("future_pressure"),
+            need.get("structural_exposure"),
+            need.get("combined_activation_hypothesis"),
+        )
+        if value
+    )
+    matches = _match_modernization_tactics(
+        bridge_text,
+        [item for item in _list(payload.get("modernization_tactics")) if isinstance(item, dict)],
+        limit=limit,
+    )
+    return [
+        {
+            "tactic_id": match.get("tactic_id"),
+            "concept": match.get("concept"),
+            "category": match.get("category"),
+            "lens": match.get("lens"),
+            "match_terms": _list(match.get("match_terms"))[:8],
+            "signal_id": signal.get("id"),
+        }
+        for match in matches
+        if match.get("tactic_id") and match.get("lens")
+    ]
+
+
+def _sales_play_analysis_prompt(
+    signal: dict,
+    payload: dict,
+    service_candidates: list[dict] | None = None,
+    modernization_candidates: list[dict] | None = None,
+) -> str:
+    hypothesis_contract = next(
+        (
+            item for item in _list(payload.get("hypothesis_registry"))
+            if isinstance(item, dict) and str(item.get("activation_signal_id") or "") == str(signal.get("id") or "")
+        ),
+        {},
+    )
     compact = {
         "company": _dict(payload.get("company")),
         "signal": _compact_signal(signal),
-        "service_candidates": _sales_play_service_candidates(signal, payload),
-        "account_thesis": _clip(_dict(payload.get("scanner_outputs")).get("strategic_synthesis"), 900),
+        "service_candidates": _list(service_candidates) or _sales_play_service_candidates(signal, payload),
+        "modernization_tactic_candidates": (
+            _list(modernization_candidates)
+            if modernization_candidates is not None
+            else _sales_play_modernization_candidates(signal, payload)
+        ),
+        "hypothesis_contract": {
+            "hypothesis_id": hypothesis_contract.get("hypothesis_id"),
+            "activation_signal_id": hypothesis_contract.get("activation_signal_id"),
+            "current_condition": _clip(hypothesis_contract.get("current_condition"), 520),
+            "external_pressure": _clip(hypothesis_contract.get("external_pressure"), 520),
+            "causal_bridge": _clip(hypothesis_contract.get("causal_bridge"), 700),
+            "likely_business_consequence": _clip(hypothesis_contract.get("likely_business_consequence"), 520),
+            "pressure_horizon": _clip(hypothesis_contract.get("pressure_horizon"), 120),
+            "sales_validation_window": _clip(hypothesis_contract.get("sales_validation_window"), 220),
+            "timing_basis": _clip(hypothesis_contract.get("timing_basis"), 360),
+            "maximum_permitted_gate": hypothesis_contract.get("maximum_permitted_gate"),
+            "wording_boundary": _clip(hypothesis_contract.get("wording_boundary"), 320),
+            "prohibited_claims": _list(hypothesis_contract.get("prohibited_claims"))[:6],
+        },
     }
     return f"""
 Create the analytical fields for exactly one Buying Insight sales play.
@@ -2711,8 +2777,16 @@ Rules:
 - Preserve account_signal_id exactly as {signal.get('id')}.
 - Use only the supplied signal and candidate services. Do not browse or invent facts, services, projects, owners, budgets, or timing.
 - Choose one exact candidate service ID and name only when the signal-to-service bridge is commercially coherent. Otherwise return empty service_id and service_or_offer.
+- Select modernization_tactic_ids only from modernization_tactic_candidates and only when the candidate adds a useful lens to this exact HYP/SIG. An empty list is preferred to a generic match.
 - Keep service_fit_rationale concise and explain the causal bridge, not keyword overlap.
-- Keep the customer wording hypothesis-led and suitable for discovery.
+- Potential contribution and all conversation wording must stay within the supplied wording boundary and prohibited-claim contract.
+- Opening angle is a natural, non-assumptive way to begin the conversation.
+- Executive angle addresses strategic choice, commercial consequence, and ability to act.
+- Technical angle asks about the relevant operating, process, data, integration, governance, or architecture baseline without prescribing methods or implementation scope.
+- The three angles must be meaningfully distinct, complete sentences.
+- Proof point is an observable validation outcome, not evidence that the need, project, or capability already exists.
+- Return 3-5 concise, non-duplicative discovery questions.
+- Other capabilities are capability areas to check, not invented suppliers or pre-scoped solutions.
 - Do not repeat the account thesis, full WHY/WHAT, scores, gates, evidence, or standard report metadata; Scanner assembles those deterministically.
 
 Required JSON schema:
@@ -2851,13 +2925,16 @@ BUYING_SALES_PLAY_ANALYSIS_SCHEMA = """
   "service_id": "Exact candidate service ID or empty string",
   "service_or_offer": "Exact candidate service name or empty string",
   "service_fit_rationale": "...",
-  "primary_buyer": "...",
-  "secondary_buyers": [],
+  "modernization_tactic_ids": [],
+  "vivicta_potential_contribution": "...",
+  "other_capabilities_to_check": [],
   "first_meeting_objective": "...",
-  "safe_customer_wording": "...",
-  "discovery_questions_by_role": [{"role": "...", "questions": ["..."]}],
-  "disqualifiers": [],
-  "do_not_say": []
+  "opening_angle": "...",
+  "executive_angle": "...",
+  "technical_angle": "...",
+  "discovery_questions": ["..."],
+  "proof_point": "...",
+  "safe_customer_wording": "..."
 }
 """.strip()
 
@@ -2914,16 +2991,16 @@ _BUYING_SALES_PLAY_JSON_SCHEMA = _strict_object({
     "service_id": _STRING,
     "service_or_offer": _STRING,
     "service_fit_rationale": _STRING,
-    "primary_buyer": _STRING,
-    "secondary_buyers": _STRING_LIST,
+    "modernization_tactic_ids": _STRING_LIST,
+    "vivicta_potential_contribution": _STRING,
+    "other_capabilities_to_check": _STRING_LIST,
     "first_meeting_objective": _STRING,
+    "opening_angle": _STRING,
+    "executive_angle": _STRING,
+    "technical_angle": _STRING,
+    "discovery_questions": _STRING_LIST,
+    "proof_point": _STRING,
     "safe_customer_wording": _STRING,
-    "discovery_questions_by_role": {
-        "type": "array",
-        "items": _strict_object({"role": _STRING, "questions": _STRING_LIST}),
-    },
-    "disqualifiers": _STRING_LIST,
-    "do_not_say": _STRING_LIST,
 })
 
 BUYING_SECTION_JSON_SCHEMAS = {
@@ -3099,22 +3176,14 @@ BUYING_SECTION_INSTRUCTIONS = {
         "recommend a service from Service KB pain triggers alone."
     ),
     "sales_plays": (
-        "Create Recommended Growth Plays. Each play must map to one scanner_activation_pair SIG id when available, "
-        "preserve activation_pair_index, and classify play_type as current_status, foresight_driven, or proactive_opportunity. "
-        "Each play must include a need_hypothesis with future_pressure, current_condition, structural_exposure, "
-        "likely_business_consequence, why_now_or_soon, what_to_propose, discovery_question, disqualifier, "
-        "company_context, market_context, combined_activation_hypothesis, falsifier, and context_type "
-        "(company_only, market_watch, or combined_activation). WHY is why the customer challenge matters; "
-        "WHAT_TO_DO is the customer outcome or deliverable state to validate next, not the consulting method used to create it; "
-        "WHAT_PROGRESS_SHOWS is the observable proof of progress. "
-        "Each play must also name account thesis, buying hypothesis, trigger-to-offer bridge, primary/secondary buyers, "
-        "first meeting objective, discovery questions by buyer role, qualification upgrade criteria, disqualifiers, "
-        "safe customer-facing wording, do_not_say notes, readiness_band, evidence_coverage, confidence_boundary, "
-        "priority_band, and response_directions. Keep play_score/hypothesis_strength only as internal compatibility fields. "
-        "Use modernization_tactics as an Evolving Modernization support layer only after an account SIG exists: map 1-3 "
-        "relevant tactics into response_directions.evolving_modernization_directions, but never use a tactic as the reason "
-        "for the play and never expose internal TAC codes. "
-        "Do not create a separate conversation-angles section or a delivery plan."
+        "Create exactly one concise Recommended Sales Play per active scanner_activation_pair SIG. Generate only the "
+        "reader-facing analytical fields: exact potential offer area, Vivicta potential contribution, an explicitly bridged "
+        "modernization tactic when eligible, other capabilities to check, first-meeting objective, distinct opening/executive/"
+        "technical angles, 3-5 discovery questions, observable proof point, and safe customer-facing wording. Do not repeat "
+        "the hypothesis, pressure, scores, gates, buyers, qualification criteria, falsifiers, IDs, or do-not-say notes; Scanner "
+        "assembles and stores those controls deterministically. A modernization tactic may refine a response only after the "
+        "same SIG establishes the need, and Proof Point must describe what discovery could validate rather than assert that "
+        "the need already exists. Do not prescribe consulting methods, implementation scope, staffing, pricing, or schedule."
     ),
     "pressure_evidence": (
         "Create Commercial Pressure Signals from required_sales_spine first. Produce one complete pressure signal "
@@ -3593,8 +3662,8 @@ def _build_gate_review_packet(report: dict, payload: dict) -> dict:
         "why_now": ("trigger", "why_it_matters_now", "safe_discovery_question"),
         "pain_to_solution_map": ("interpreted_pressure", "why_this_service", "safe_wording"),
         "recommended_sales_plays": (
-            "buying_hypothesis", "trigger_to_offer_bridge", "safe_customer_wording",
-            "first_meeting_objective", "proof_point",
+            "first_meeting_objective", "opening_angle", "executive_angle", "technical_angle",
+            "proof_point", "safe_customer_wording",
         ),
     }
     for section, fields in section_fields.items():
@@ -3602,9 +3671,26 @@ def _build_gate_review_packet(report: dict, payload: dict) -> dict:
             parent = _dict(item)
             for field in fields:
                 add(f"{section}[{index}].{field}", parent.get(field), parent)
-            need = _dict(parent.get("need_hypothesis"))
-            for field in ("current_condition", "future_pressure", "combined_activation_hypothesis"):
-                add(f"{section}[{index}].need_hypothesis.{field}", need.get(field), {**parent, **need})
+            if section == "recommended_sales_plays":
+                response = _dict(parent.get("response_directions"))
+                add(
+                    f"{section}[{index}].response_directions.vivicta_potential_contribution",
+                    response.get("vivicta_potential_contribution"),
+                    parent,
+                )
+                for list_field in ("evolving_modernization_directions", "other_capabilities_may_be_required"):
+                    for item_index, value in enumerate(_list(response.get(list_field))[:4]):
+                        add(
+                            f"{section}[{index}].response_directions.{list_field}[{item_index}]",
+                            value,
+                            parent,
+                        )
+                for question_index, value in enumerate(_list(parent.get("discovery_questions"))[:5]):
+                    add(f"{section}[{index}].discovery_questions[{question_index}]", value, parent)
+            else:
+                need = _dict(parent.get("need_hypothesis"))
+                for field in ("current_condition", "future_pressure", "combined_activation_hypothesis"):
+                    add(f"{section}[{index}].need_hypothesis.{field}", need.get(field), {**parent, **need})
 
     cited_ids = {
         evidence_id
@@ -4291,7 +4377,8 @@ def _apply_gate_field_actions(report: dict, actions: Any) -> tuple[list[dict], l
         "why_this_service", "need_hypothesis",
         "current_condition", "future_pressure", "market_context", "company_context",
         "combined_activation_hypothesis", "likely_business_consequence", "what_to_propose",
-        "top_buying_hypotheses", "hypothesis",
+        "top_buying_hypotheses", "hypothesis", "vivicta_potential_contribution",
+        "evolving_modernization_directions", "other_capabilities_may_be_required", "discovery_questions",
     }
     applied: list[dict] = []
     rejected: list[dict] = []
@@ -4506,7 +4593,7 @@ _LANGUAGE_PROSE_FIELDS = {
     "technical_angle", "relevance_rationale", "current_condition", "future_pressure",
     "market_context", "company_context", "combined_activation_hypothesis",
     "likely_business_consequence", "what_to_propose", "what_to_do", "what_progress_shows",
-    "validation_question", "falsifier", "service_fit_rationale",
+    "validation_question", "falsifier", "service_fit_rationale", "vivicta_potential_contribution",
 }
 
 _LANGUAGE_TITLE_FIELDS = {
@@ -4515,7 +4602,22 @@ _LANGUAGE_TITLE_FIELDS = {
 
 _LANGUAGE_LIST_FIELDS = {
     "paragraphs", "top_buying_hypotheses", "discovery_questions", "qualification_upgrade_criteria",
+    "evolving_modernization_directions", "other_capabilities_may_be_required",
 }
+
+_SALES_PLAY_READER_FIELDS = {
+    "play_name", "service_or_offer", "vivicta_potential_contribution",
+    "evolving_modernization_directions", "other_capabilities_may_be_required",
+    "first_meeting_objective", "opening_angle", "executive_angle", "technical_angle",
+    "discovery_questions", "proof_point", "safe_customer_wording",
+}
+
+
+def _reader_facing_sales_play_path(path: str) -> bool:
+    if not str(path or "").startswith("recommended_sales_plays["):
+        return True
+    names = [name for name, _index in _public_path_tokens(path) if name]
+    return bool(set(names[1:]) & _SALES_PLAY_READER_FIELDS)
 
 
 def _public_path_tokens(path: str) -> list[tuple[str, str]]:
@@ -4598,6 +4700,8 @@ def _language_public_items(report: dict) -> list[dict]:
                 visit(child, f"{path}[{index}]", parent_field)
             return
         if not isinstance(value, str):
+            return
+        if not _reader_facing_sales_play_path(path):
             return
         field = next((name for name, _index in reversed(_public_path_tokens(path)) if name), parent_field)
         if field not in _LANGUAGE_PROSE_FIELDS and field not in _LANGUAGE_TITLE_FIELDS and parent_field not in _LANGUAGE_LIST_FIELDS:
@@ -5889,16 +5993,45 @@ def _previous_section_item(previous_report: dict, section: str, signal_id: str) 
     return None
 
 
+def _complete_sales_play_angles(analysis: dict, signal: dict, safe_wording: str) -> tuple[str, str, str]:
+    theme = _clip(signal.get("theme") or signal.get("account_movement") or "this emerging pressure", 180)
+    defaults = (
+        _clip(f"Could we explore whether {theme} is becoming relevant and where it would become visible first?", 420),
+        _clip(
+            "The executive discussion should test whether this pressure could affect strategic priorities, commercial outcomes, or the ability to act.",
+            420,
+        ),
+        _clip(
+            "The technical discussion should establish the relevant process, data, integration, governance, and architecture baseline before any response is designed.",
+            420,
+        ),
+    )
+    values = [
+        _clip(analysis.get("opening_angle") or safe_wording or defaults[0], 420),
+        _clip(analysis.get("executive_angle") or defaults[1], 420),
+        _clip(analysis.get("technical_angle") or defaults[2], 420),
+    ]
+    seen: set[str] = set()
+    for index, value in enumerate(values):
+        key = re.sub(r"\W+", " ", value.lower()).strip()
+        if not value or key in seen:
+            value = defaults[index]
+            key = re.sub(r"\W+", " ", value.lower()).strip()
+        seen.add(key)
+        values[index] = value
+    return values[0], values[1], values[2]
+
+
 def _sales_play_from_signal(
     signal: dict,
     sales_spine: dict,
     analysis: dict | None = None,
     service_candidates: list[dict] | None = None,
+    modernization_candidates: list[dict] | None = None,
 ) -> dict:
     signal_id = str(signal.get("id") or "")
     play_type = _normalize_play_type(signal.get("sales_play_type") or signal.get("theme_type"))
     need = signal.get("need_hypothesis") if isinstance(signal.get("need_hypothesis"), dict) else _need_hypothesis_from_signal(signal)
-    service_hints = [hint for hint in _list(signal.get("service_fit_hints")) if isinstance(hint, dict)]
     analysis = _dict(analysis)
     analysis_provided = bool(analysis)
     candidate_names = {
@@ -5929,40 +6062,21 @@ def _sales_play_from_signal(
             None,
         )
         selected_service_id = str(_dict(selected_candidate).get("service_id") or "")
-    if not service_name and not candidate_names and len(service_hints) == 1:
-        service_name = str(service_hints[0].get("service") or "").strip()
-        selected_service_id = str(service_hints[0].get("service_id") or "")
+    # A service hint is not enough on its own: visible offers must resolve to an exact KB candidate.
     service_name = service_name or "Discovery validation - offer to be selected after qualification"
     readiness = "Validate now" if play_type == "current_status" and _has_current_timing_basis(signal) else "Validate when trigger appears"
     gate = _normalize_gate(signal.get("gate"), "allowed_as_discovery_question")
     coverage = "Recovered from required Scanner activation spine; validate owner, timing, and business consequence before use."
     buyer_roles = [str(role) for role in _list(signal.get("buyer_roles")) if str(role).strip()]
-    primary_buyer = str(analysis.get("primary_buyer") or "").strip()
-    if primary_buyer not in buyer_roles:
-        primary_buyer = buyer_roles[0] if buyer_roles else "Role to validate"
-    secondary_buyers = [
-        str(role) for role in _list(analysis.get("secondary_buyers"))
-        if str(role) in buyer_roles and str(role) != primary_buyer
-    ][:3]
-    if not secondary_buyers:
-        secondary_buyers = [role for role in buyer_roles if role != primary_buyer][:3]
-    role_questions = [
-        {
-            "role": str(item.get("role") or primary_buyer),
-            "questions": [_clip(question, 320) for question in _list(item.get("questions"))[:3] if _clip(question, 320)],
-        }
-        for item in _list(analysis.get("discovery_questions_by_role"))
-        if isinstance(item, dict) and _list(item.get("questions"))
-    ][:4]
+    primary_buyer = buyer_roles[0] if buyer_roles else "Role to validate"
+    secondary_buyers = [role for role in buyer_roles if role != primary_buyer][:3]
     default_question = need.get("discovery_question") or "Where would this pressure become visible if it starts to matter?"
-    if not role_questions:
-        role_questions = [{"role": primary_buyer, "questions": [default_question]}]
     discovery_questions = list(dict.fromkeys(
-        question
-        for item in role_questions
-        for question in _list(item.get("questions"))
-        if question
-    ))[:5]
+        _clip(question, 320)
+        for question in _list(analysis.get("discovery_questions"))
+        if _clip(question, 320)
+    ))[:5] or [default_question]
+    role_questions = [{"role": primary_buyer, "questions": discovery_questions[:3]}]
     safe_customer_wording = _clip(
         analysis.get("safe_customer_wording")
         or "This may be worth exploring as a forward-looking topic if it connects to a current priority or upcoming pressure.",
@@ -5973,7 +6087,33 @@ def _sales_play_from_signal(
         or "Validate whether the signal has a real owner, timing window, and business consequence before selecting an offer.",
         420,
     )
+    opening_angle, executive_angle, technical_angle = _complete_sales_play_angles(
+        analysis,
+        signal,
+        safe_customer_wording,
+    )
     service_fit_rationale = _clip(analysis.get("service_fit_rationale"), 420)
+    eligible_tactics = {
+        str(item.get("tactic_id") or ""): item
+        for item in _list(modernization_candidates)
+        if isinstance(item, dict) and item.get("tactic_id")
+    }
+    selected_tactics = [
+        eligible_tactics[tactic_id]
+        for tactic_id in dict.fromkeys(str(item) for item in _list(analysis.get("modernization_tactic_ids")) if item)
+        if tactic_id in eligible_tactics
+    ][:2]
+    other_capabilities = _dedupe_text_items(
+        analysis.get("other_capabilities_to_check"),
+        limit=4,
+        clip_limit=260,
+    )
+    proof_point = _clip(
+        analysis.get("proof_point")
+        or signal.get("what_progress_shows")
+        or "A clear owner, validated pressure, and observable success condition are agreed before an offer is advanced.",
+        360,
+    )
     play = {
         "play_name": _normalize_discovery_play_title(signal.get("theme"), "Activation theme"),
         "linked_signal_ids": [signal_id],
@@ -5999,13 +6139,13 @@ def _sales_play_from_signal(
         "why_relevant": _clip(signal.get("commercial_pressure") or signal.get("why"), 420),
         "target_stakeholder": primary_buyer,
         "first_meeting_objective": first_meeting_objective,
-        "opening_angle": safe_customer_wording,
-        "executive_angle": safe_customer_wording,
-        "technical_angle": "Validate the current process, data, integration, governance, or operating baseline before recommending technology.",
+        "opening_angle": opening_angle,
+        "executive_angle": executive_angle,
+        "technical_angle": technical_angle,
         "safe_customer_wording": safe_customer_wording,
-        "discovery_questions": discovery_questions or [default_question],
+        "discovery_questions": discovery_questions,
         "discovery_questions_by_role": role_questions,
-        "proof_point": _clip(signal.get("what_progress_shows") or "Generated from Scanner WHY/WHAT activation logic; validate before customer-facing use.", 360),
+        "proof_point": proof_point,
         "do_not_say": list(dict.fromkeys(
             [str(item) for item in _list(analysis.get("do_not_say")) if str(item).strip()]
             + ["Do not present this as a confirmed project, budget, or buying intent."]
@@ -6028,11 +6168,21 @@ def _sales_play_from_signal(
             + [str(item) for item in _list(signal.get("disqualifiers")) if str(item).strip()]
         ))[:5],
     }
-    if service_fit_rationale and service_name != "Discovery validation - offer to be selected after qualification":
+    if selected_candidate and service_fit_rationale:
         play["response_directions"]["vivicta_potential_contribution"] = _clip(
-            f"{service_name} may be relevant if discovery confirms this bridge: {service_fit_rationale}",
+            analysis.get("vivicta_potential_contribution")
+            or f"{service_name} may be relevant if discovery confirms this bridge: {service_fit_rationale}",
             420,
         )
+    elif not selected_candidate:
+        play["response_directions"]["vivicta_potential_contribution"] = (
+            "N/A - select a Vivicta contribution only after an exact Service KB fit is grounded in this account signal."
+        )
+    play["response_directions"]["modernization_lenses"] = selected_tactics
+    play["response_directions"]["evolving_modernization_directions"] = [
+        str(item.get("lens")) for item in selected_tactics if item.get("lens")
+    ]
+    play["response_directions"]["other_capabilities_may_be_required"] = other_capabilities
     return play
 
 
@@ -6269,7 +6419,14 @@ def _recover_required_spine_sections(report: dict, payload: dict, model_mode: st
                                 item = previous
                                 path = "previous_report"
             else:
-                item = _sales_play_from_signal(signal, sales_spine)
+                service_candidates = _sales_play_service_candidates(signal, payload)
+                modernization_candidates = _sales_play_modernization_candidates(signal, payload)
+                item = _sales_play_from_signal(
+                    signal,
+                    sales_spine,
+                    service_candidates=service_candidates,
+                    modernization_candidates=modernization_candidates,
+                )
                 path = "current_structure"
             if item:
                 items.append(item)
@@ -6345,7 +6502,6 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
     service_names = _known_service_names(payload)
     scanner_outputs = _dict(payload.get("scanner_outputs"))
     self_scan_context = _dict(payload.get("self_scan_context"))
-    modernization_tactics = [item for item in _list(payload.get("modernization_tactics")) if isinstance(item, dict)]
     previous_report = _previous_buying_report(payload.get("previous_buying_insight"))
     render_quality_notes: list[str] = []
 
@@ -6528,7 +6684,11 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
             item.setdefault("missing_evidence", "Needs a clearer account-specific signal and service-fit bridge before customer-facing use.")
             weak_notes.append(f"Opportunity-to-offer fit downgraded: {item.get('service') or 'unnamed service'} lacks {'signal reference' if not has_signal else 'Service KB match'}.")
     for play in report.get("recommended_sales_plays", []):
-        play["discovery_questions"] = [str(item) for item in _list(play.get("discovery_questions"))[:5]]
+        play["discovery_questions"] = _dedupe_text_items(
+            play.get("discovery_questions"),
+            limit=5,
+            clip_limit=320,
+        )
         play["do_not_say"] = [str(item) for item in _list(play.get("do_not_say"))[:5]]
         play["evidence_basis"] = [str(item) for item in _list(play.get("evidence_basis"))[:6]]
         play["linked_signal_ids"] = [str(item) for item in _list(play.get("linked_signal_ids"))[:6]]
@@ -6580,6 +6740,14 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         }
         if activation_signal:
             fallback_signal = {**fallback_signal, **activation_signal}
+        opening_angle, executive_angle, technical_angle = _complete_sales_play_angles(
+            play,
+            activation_signal or fallback_signal,
+            _clip(play.get("safe_customer_wording"), 420),
+        )
+        play["opening_angle"] = opening_angle
+        play["executive_angle"] = executive_angle
+        play["technical_angle"] = technical_angle
         if hypothesis_record:
             fallback_signal["external_pressure"] = hypothesis_record.get("external_pressure")
             fallback_signal["business_consequence"] = hypothesis_record.get("likely_business_consequence")
@@ -6671,32 +6839,30 @@ def _post_process_report(report: dict, payload: dict, gate_review: dict | None =
         response_directions["other_capabilities_may_be_required"] = [
             str(item) for item in (_list(response_directions.get("other_capabilities_may_be_required")) or default_response["other_capabilities_may_be_required"])[:6]
         ]
-        play_match_text = " ".join(
-            _clip(play.get(key), 700)
-            for key in (
-                "buying_hypothesis",
-                "trigger_to_offer_bridge",
-                "business_hypothesis",
-                "why_relevant",
+        eligible_tactics = {
+            str(item.get("tactic_id") or ""): item
+            for item in (
+                _sales_play_modernization_candidates(activation_signal, payload)
+                if activation_signal and has_signal
+                else []
             )
-            if play.get(key)
-        )
-        play_match_text += " " + " ".join(
-            _clip(play["need_hypothesis"].get(key), 700)
-            for key in (
-                "future_pressure",
-                "current_condition",
-                "structural_exposure",
-                "what_to_propose",
-            )
-            if play["need_hypothesis"].get(key)
-        )
-        tactic_matches = _match_modernization_tactics(play_match_text, modernization_tactics, limit=3) if has_signal else []
+            if item.get("tactic_id")
+        }
+        selected_tactic_ids = [
+            str(item.get("tactic_id") or "")
+            for item in _list(response_directions.get("modernization_lenses"))
+            if isinstance(item, dict) and item.get("tactic_id")
+        ]
+        tactic_matches = [
+            eligible_tactics[tactic_id]
+            for tactic_id in dict.fromkeys(selected_tactic_ids)
+            if tactic_id in eligible_tactics
+        ][:2]
         if tactic_matches:
             response_directions["modernization_lenses"] = tactic_matches
             response_directions["evolving_modernization_directions"] = [
-                match.get("lens") for match in tactic_matches if match.get("lens")
-            ][:3]
+                str(match.get("lens")) for match in tactic_matches if match.get("lens")
+            ]
         else:
             response_directions.pop("modernization_lenses", None)
             response_directions["evolving_modernization_directions"] = []
@@ -7506,6 +7672,7 @@ def _generate_sales_plays_by_signal(
     for index, signal in enumerate(signals[:3], start=1):
         signal_id = str(signal.get("id") or f"SIG-{index:02d}")
         candidates = _sales_play_service_candidates(signal, payload)
+        modernization_candidates = _sales_play_modernization_candidates(signal, payload)
         analysis: dict = {}
         model_used = "deterministic_signal_assembly"
         status = "deterministic_fallback"
@@ -7515,7 +7682,7 @@ def _generate_sales_plays_by_signal(
         try:
             model_chain = buying_generation_chain(model_mode)
             raw, model_used = call_json_model_chain(
-                _sales_play_analysis_prompt(signal, payload),
+                _sales_play_analysis_prompt(signal, payload, candidates, modernization_candidates),
                 model_chain,
                 max_tokens=_section_token_limit("sales_plays"),
                 timeout=100,
@@ -7534,7 +7701,13 @@ def _generate_sales_plays_by_signal(
         except Exception as exc:
             error = str(exc)[:220]
             print(f"   ⚠️ [Buying Potential] Primary sales play {signal_id} used deterministic assembly: {error}")
-        plays.append(_sales_play_from_signal(signal, sales_spine, analysis, candidates))
+        plays.append(_sales_play_from_signal(
+            signal,
+            sales_spine,
+            analysis,
+            candidates,
+            modernization_candidates,
+        ))
         signal_results.append({
             "signal_id": signal_id,
             "model": model_used,
@@ -8059,67 +8232,31 @@ def render_buying_potential_html(report: dict) -> str:
         </article>"""
 
     def play_card(item):
-        need = _dict(item.get("need_hypothesis"))
         response = _dict(item.get("response_directions"))
         questions = "".join(f"<li>{_esc(q)}</li>" for q in _list(item.get("discovery_questions"))[:5])
-        role_questions = "".join(
-            f"<li><b>{_esc(_dict(row).get('role'))}:</b> {_esc('; '.join(_list(_dict(row).get('questions'))[:3]))}</li>"
-            for row in _list(item.get("discovery_questions_by_role"))[:4]
-            if isinstance(row, dict)
+        modernization = "".join(
+            f"<li>{_esc(q)}</li>" for q in _list(response.get("evolving_modernization_directions"))[:2]
         )
-        do_not_say = "".join(f"<li>{_esc(q)}</li>" for q in _list(item.get("do_not_say"))[:5])
-        upgrades = "".join(f"<li>{_esc(q)}</li>" for q in _list(item.get("qualification_upgrade_criteria"))[:5])
-        modernization = "".join(f"<li>{_esc(q)}</li>" for q in _list(response.get("evolving_modernization_directions"))[:5])
-        other_capabilities = "".join(f"<li>{_esc(q)}</li>" for q in _list(response.get("other_capabilities_may_be_required"))[:6])
-        do_not_say_html = f"<h3>Do Not Say</h3><ul>{do_not_say}</ul>" if do_not_say else ""
+        other_capabilities = "".join(
+            f"<li>{_esc(q)}</li>" for q in _list(response.get("other_capabilities_may_be_required"))[:4]
+        )
         return f"""
-        <article class="card">
-          <div class="card-top"><strong>{_esc(item.get('play_name') or item.get('service_or_offer'))}</strong><span class="risk">Risk: {_esc(item.get('overclaim_risk'))}</span></div>
-          <div class="theme-row"><span class="pill tiny service">{_esc(PLAY_TYPE_LABELS.get(_normalize_play_type(item.get('play_type')), item.get('play_type')))}</span><span class="pill tiny">{_esc(CONTEXT_TYPE_LABELS.get(_normalize_context_type(need.get('context_type'), item.get('play_type')), 'Need hypothesis'))}</span><span class="pill tiny">Activation pair {_esc(item.get('activation_pair_index') or 'n/a')}</span></div>
-          <p><b>Potential offer area:</b> {_esc(item.get('service_or_offer'))}</p>
-          <p><b>Discovery readiness:</b> {_esc(item.get('readiness_band'))}</p>
-          <p><b>Priority:</b> {_esc(item.get('priority_band'))}</p>
-          <p><b>Evidence coverage:</b> {_esc(item.get('evidence_coverage'))}</p>
-          <p><b>Confidence boundary:</b> {_esc(item.get('confidence_boundary'))}</p>
-          <p><b>Primary buyer:</b> {_esc(item.get('primary_buyer') or item.get('target_stakeholder'))}</p>
-          <p><b>Trigger:</b> {_esc(item.get('trigger'))}</p>
-          <p><b>Account thesis:</b> {_esc(item.get('account_thesis'))}</p>
-          <p><b>Buying hypothesis:</b> {_esc(item.get('buying_hypothesis'))}</p>
-          <p><b>Trigger-to-offer bridge:</b> {_esc(item.get('trigger_to_offer_bridge'))}</p>
-          <p><b>Business hypothesis:</b> {_esc(item.get('business_hypothesis') or item.get('why_relevant'))}</p>
-          <h3>Why This Might Matter</h3>
-          <p><b>Account signal:</b> {_esc(need.get('company_context'))}</p>
-          <p><b>Market pressure:</b> {_esc(need.get('market_context'))}</p>
-          <p><b>Where need may emerge:</b> {_esc(need.get('combined_activation_hypothesis'))}</p>
-          <p><b>Future pressure:</b> {_esc(need.get('future_pressure'))}</p>
-          <p><b>Current condition:</b> {_esc(need.get('current_condition'))}</p>
-          <p><b>Structural exposure:</b> {_esc(need.get('structural_exposure'))}</p>
-          <p><b>Likely consequence:</b> {_esc(need.get('likely_business_consequence'))}</p>
-          <p><b>Why now or soon:</b> {_esc(need.get('why_now_or_soon'))}</p>
-          <p><b>What to validate or explore:</b> {_esc(need.get('what_to_propose'))}</p>
-          <p><b>What progress would show:</b> {_esc(need.get('what_progress_shows'))}</p>
-          <p><b>Falsifier:</b> {_esc(need.get('falsifier'))}</p>
-          <h3>Possible Conversation Direction</h3>
-          <p><b>Potential need:</b> {_esc(response.get('potential_need'))}</p>
-          <p><b>Vivicta potential contribution:</b> {_esc(response.get('vivicta_potential_contribution'))}</p>
+        <article class="card sales-play-card">
+          <div class="card-top"><strong>{_esc(item.get('play_name') or item.get('service_or_offer'))}</strong></div>
+          <p><b>Potential Offer Area:</b> {_esc(item.get('service_or_offer'))}</p>
+          <p><b>Vivicta Potential Contribution:</b> {_esc(response.get('vivicta_potential_contribution'))}</p>
           <h3>Modernization Lens</h3>
-          <ul>{modernization or '<li>No response directions generated.</li>'}</ul>
+          <ul>{modernization or '<li>N/A - no sufficiently grounded modernization lens.</li>'}</ul>
           <h3>Other Capabilities To Check</h3>
-          <ul>{other_capabilities or '<li>No adjacent capability notes generated.</li>'}</ul>
-          <p><b>First meeting objective:</b> {_esc(item.get('first_meeting_objective'))}</p>
-          <p><b>Opening angle:</b> {_esc(item.get('opening_angle'))}</p>
-          <p><b>Executive angle:</b> {_esc(item.get('executive_angle'))}</p>
-          <p><b>Technical angle:</b> {_esc(item.get('technical_angle'))}</p>
-          <p><b>Safe customer-facing wording:</b> {_esc(item.get('safe_customer_wording'))}</p>
-          <p><b>Proof point:</b> {_esc(item.get('proof_point'))}</p>
+          <ul>{other_capabilities or '<li>N/A - no adjacent capabilities identified for validation.</li>'}</ul>
+          <p><b>First Meeting Objective:</b> {_esc(item.get('first_meeting_objective'))}</p>
+          <p><b>Opening Angle:</b> {_esc(item.get('opening_angle'))}</p>
+          <p><b>Executive Angle:</b> {_esc(item.get('executive_angle'))}</p>
+          <p><b>Technical Angle:</b> {_esc(item.get('technical_angle'))}</p>
           <h3>Discovery Questions</h3>
-          <ul>{questions or '<li>No questions generated.</li>'}</ul>
-          <h3>Questions By Buyer Role</h3>
-          <ul>{role_questions or '<li>No role-specific questions generated.</li>'}</ul>
-          <h3>Qualification Upgrade Criteria</h3>
-          <ul>{upgrades or '<li>No upgrade criteria generated.</li>'}</ul>
-          {do_not_say_html}
-          <small>Signals: {_esc(', '.join(item.get('linked_signal_ids') or item.get('evidence_basis') or []))} · Classification: {_esc(item.get('play_classification'))} · Internal score retained in JSON only</small>
+          <ul>{questions or '<li>N/A - no grounded discovery questions available.</li>'}</ul>
+          <p><b>Proof Point:</b> {_esc(item.get('proof_point'))}</p>
+          <div class="safe-wording"><strong>Safe Customer-Facing Wording</strong><p>{_esc(item.get('safe_customer_wording'))}</p></div>
         </article>"""
 
     def hypothesis_items(context_type, limit=6):
@@ -8222,6 +8359,10 @@ def render_buying_potential_html(report: dict) -> str:
     ul {{ margin:8px 0 0 18px; padding:0; }} li {{ margin:5px 0; }} .warning {{ border-color:rgba(250,204,21,.4); background:rgba(250,204,21,.08); }} .danger {{ border-color:rgba(251,113,133,.4); background:rgba(251,113,133,.08); }}
     .role-line {{ color:var(--green); font:800 12px ui-monospace,monospace; text-transform:uppercase; letter-spacing:.12em; margin:-2px 0 12px; }} .theme-row {{ display:flex; flex-wrap:wrap; gap:4px; margin:8px 0; }}
     .simple-list-block {{ margin-top:18px; border-top:1px solid rgba(142,160,187,.18); padding-top:18px; }}
+    .sales-play-card h3 {{ margin-top:18px; }}
+    .safe-wording {{ margin-top:20px; border-left:3px solid var(--cyan); border-radius:8px; padding:13px 15px; background:rgba(103,232,249,.08); }}
+    .safe-wording strong {{ display:block; color:var(--cyan); font:800 11px ui-monospace,monospace; letter-spacing:.12em; text-transform:uppercase; }}
+    .safe-wording p {{ margin:8px 0 0; }}
     @media (max-width:820px) {{ main {{ padding:24px 14px 48px; }} .grid,.grid-3,.status-scale {{ grid-template-columns:1fr; }} .card-top,.status-head,.source-basis {{ flex-direction:column; align-items:flex-start; }} }}
   </style>
 </head>
