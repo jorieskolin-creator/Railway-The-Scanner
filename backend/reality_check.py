@@ -1172,7 +1172,22 @@ def _fact_check_field_paths(claim, summary_text, pitch_text, analysis_sections):
     return matches
 
 
-def _provider_fact_check(summary_text, company_name, evidence_links=None, foresight_links=None, pitch_text=None, scan_payload=None, analysis_sections=None, document_label="AI Diagnosis", evidence_manifest=None, claim_graph=None, time_budget_seconds=None, verification_only=False):
+def _provider_fact_check(
+    summary_text,
+    company_name,
+    evidence_links=None,
+    foresight_links=None,
+    pitch_text=None,
+    scan_payload=None,
+    analysis_sections=None,
+    document_label="AI Diagnosis",
+    evidence_manifest=None,
+    claim_graph=None,
+    time_budget_seconds=None,
+    verification_only=False,
+    provider_chain=None,
+    provider_timeout_seconds=None,
+):
     """Two-stage GPT/Claude fact-check pipeline."""
     verified_links = _build_fact_check_source_pack(evidence_links, foresight_links, evidence_manifest=evidence_manifest)
     deadline = time.time() + max(15, int(time_budget_seconds or 120))
@@ -1417,7 +1432,7 @@ If issues are found: {{"false_claims": [{{"section": "section heading", "claim":
                 deduped[key] = item
         return [deduped[key] for key in order]
 
-    stage1_chain = (GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL)
+    stage1_chain = tuple(provider_chain or (GPT_VERIFIER_MODEL, CLAUDE_SONNET_MODEL))
     strict_fact_check_output = "detailed forensic report" in document_lower
     for model_index, model_name in enumerate(stage1_chain):
         if remaining_seconds() < 12:
@@ -1430,8 +1445,9 @@ If issues are found: {{"false_claims": [{{"section": "section heading", "claim":
             reserve_for_correction = 2 if verification_only else 10
             providers_after = len(stage1_chain) - model_index - 1
             reserve_for_fallback = 15 if providers_after else 0
+            provider_timeout = max(10, int(provider_timeout_seconds or 45))
             call_timeout = min(
-                45,
+                provider_timeout,
                 max(10, remaining_seconds() - reserve_for_correction - reserve_for_fallback),
             )
             if model_name.startswith("gpt-"):
@@ -1590,7 +1606,22 @@ Rules:
         "time_ms": stage1_time_ms + elapsed2,
     }
 
-def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text=None, scan_payload=None, analysis_sections=None, document_label="AI Diagnosis", foresight_links=None, evidence_manifest=None, claim_graph=None, time_budget_seconds=None, verification_only=False):
+def ai_fact_check_summary(
+    summary_text,
+    evidence_links,
+    company_name,
+    pitch_text=None,
+    scan_payload=None,
+    analysis_sections=None,
+    document_label="AI Diagnosis",
+    foresight_links=None,
+    evidence_manifest=None,
+    claim_graph=None,
+    time_budget_seconds=None,
+    verification_only=False,
+    provider_chain=None,
+    provider_timeout_seconds=None,
+):
     """
     AI-powered fact-check — two-stage pipeline:
       Stage 1: GPT verifier → Claude Sonnet — detects false claims.
@@ -1651,6 +1682,8 @@ def ai_fact_check_summary(summary_text, evidence_links, company_name, pitch_text
         claim_graph=claim_graph,
         time_budget_seconds=time_budget_seconds,
         verification_only=verification_only,
+        provider_chain=provider_chain,
+        provider_timeout_seconds=provider_timeout_seconds,
     )
 
     all_claims = []
@@ -2051,6 +2084,105 @@ def _split_fact_check_sections(report_text: str) -> list[dict]:
     return sections
 
 
+def _fact_check_candidate_claim_count(text: str) -> int:
+    """Estimate verification work from complete sentence-like claim units."""
+    prose = re.sub(r"(?m)^##\s+.+$", " ", str(text or ""))
+    units = re.split(r"(?<=[.!?])\s+|\n+", prose)
+    candidates = [
+        unit for unit in units
+        if len(re.findall(r"\b[\w€%.-]+\b", unit)) >= 6
+    ]
+    return max(1, len(candidates))
+
+
+def _plan_detailed_fact_check_batches(sections: list[dict]) -> list[list[dict]]:
+    """Keep contiguous sections together without hiding dense claim packets."""
+    batches = []
+    current = []
+    for section in sections:
+        proposed = current + [section]
+        proposed_text = "\n\n".join(item["text"] for item in proposed)
+        proposed_words = len(proposed_text.split())
+        proposed_claims = _fact_check_candidate_claim_count(proposed_text)
+        if current and (
+            len(proposed) > 3
+            or proposed_words > 520
+            or proposed_claims > 22
+        ):
+            batches.append(current)
+            current = [section]
+        else:
+            current = proposed
+    if current:
+        batches.append(current)
+    return batches
+
+
+def _detailed_fact_check_load(text: str, estimated_input_tokens: int) -> dict:
+    claim_count = _fact_check_candidate_claim_count(text)
+    word_count = len(str(text or "").split())
+    input_tokens = max(1, int(estimated_input_tokens or 0))
+    primary_seconds = round(
+        24
+        + min(18, claim_count * 0.9)
+        + min(12, (input_tokens / 1000) * 1.2)
+    )
+    fallback_seconds = round(
+        20
+        + min(14, claim_count * 0.7)
+        + min(11, input_tokens / 1000)
+    )
+    return {
+        "candidate_claim_count": claim_count,
+        "word_count": word_count,
+        "estimated_input_tokens": input_tokens,
+        "primary_seconds": max(35, min(55, primary_seconds)),
+        "fallback_seconds": max(30, min(45, fallback_seconds)),
+    }
+
+
+def detailed_report_fact_check_budget(
+    report_text: str,
+    only_section_names: list[str] | None = None,
+    *,
+    minimum_seconds: int = 90,
+    maximum_seconds: int = 150,
+) -> dict:
+    """Return a bounded budget that covers all primary batches and one fallback."""
+    sections = _split_fact_check_sections(report_text)
+    selected_names = {
+        str(name).strip().lower()
+        for name in (only_section_names or [])
+        if str(name).strip()
+    }
+    if selected_names:
+        selected_sections = [
+            item for item in sections
+            if item["heading"].lower() in selected_names
+        ]
+        if selected_sections:
+            sections = selected_sections
+    batches = _plan_detailed_fact_check_batches(sections)
+    loads = []
+    for batch in batches:
+        batch_text = "\n\n".join(item["text"] for item in batch)
+        # Evidence records are selected later. Reserve a conservative compact
+        # packet allowance so the budget does not depend on prose length alone.
+        estimated_tokens = max(7000, (len(batch_text) // 4) + 7000)
+        loads.append(_detailed_fact_check_load(batch_text, estimated_tokens))
+    recommended = sum(item["primary_seconds"] for item in loads)
+    if loads:
+        recommended += max(item["fallback_seconds"] for item in loads)
+    minimum = max(30, int(minimum_seconds or 30))
+    maximum = max(minimum, int(maximum_seconds or minimum))
+    return {
+        "recommended_seconds": max(minimum, min(maximum, recommended)),
+        "batch_count": len(batches),
+        "candidate_claim_count": sum(item["candidate_claim_count"] for item in loads),
+        "word_count": sum(item["word_count"] for item in loads),
+    }
+
+
 def _compact_fact_check_payload(scan_payload: dict | None, section_text: str) -> dict:
     payload = dict(scan_payload or {})
     compact = {
@@ -2105,7 +2237,14 @@ def ai_fact_check_detailed_report(
     if not sections:
         sections = _split_fact_check_sections(report_text)
 
-    batches = [sections[index:index + 3] for index in range(0, len(sections), 3)]
+    batches = _plan_detailed_fact_check_batches(sections)
+    planned_loads = []
+    for batch in batches:
+        batch_text = "\n\n".join(item["text"] for item in batch)
+        planned_loads.append(_detailed_fact_check_load(
+            batch_text,
+            max(7000, (len(batch_text) // 4) + 7000),
+        ))
     aggregate = {
         "false_claims": [],
         "false_claims_detailed": [],
@@ -2122,8 +2261,10 @@ def ai_fact_check_detailed_report(
 
     for batch_index, batch in enumerate(batches):
         remaining = max(0, int(deadline - time.time()))
-        batches_left = len(batches) - batch_index
-        if remaining < 20:
+        future_primary_floor = sum(
+            item["primary_seconds"] for item in planned_loads[batch_index + 1:]
+        )
+        if remaining < 25:
             unavailable_sections.extend(item["heading"] for item in batch)
             batch_results.append({
                 "sections": [item["heading"] for item in batch],
@@ -2131,7 +2272,6 @@ def ai_fact_check_detailed_report(
                 "model": "not_attempted",
             })
             continue
-        batch_budget = min(45, max(25, remaining // max(1, batches_left)))
         batch_text = "\n\n".join(item["text"] for item in batch)
         compact_evidence = _compact_fact_check_records(evidence_links or [], batch_text, 14)
         compact_foresight = _compact_fact_check_records(foresight_links or [], batch_text, 6)
@@ -2151,26 +2291,78 @@ def ai_fact_check_detailed_report(
             len(json.dumps(item, ensure_ascii=False))
             for item in compact_evidence + compact_foresight + compact_manifest + compact_claim_graph
         ) + len(json.dumps(compact_payload, ensure_ascii=False))
+        # Include the stable verifier instructions and JSON schema, which are
+        # not represented in the compact evidence character count above.
+        estimated_input_tokens = max(1, ((estimated_chars + 3) // 4) + 3000)
+        load = _detailed_fact_check_load(batch_text, estimated_input_tokens)
+        primary_capacity = max(0, remaining - future_primary_floor)
+        primary_allocation = min(load["primary_seconds"], primary_capacity)
         headings = [item["heading"] for item in batch]
+        if primary_allocation < 25:
+            unavailable_sections.extend(headings)
+            batch_results.append({
+                "sections": headings,
+                "status": "unavailable_budget",
+                "model": "not_attempted",
+                **load,
+                "evidence_record_count": len(compact_evidence) + len(compact_foresight),
+                "allocated_seconds": 0,
+                "attempts": [],
+            })
+            continue
         print(
             "   🔎 [Detailed Report Fact-Check] "
             f"batch={batch_index + 1}/{len(batches)} sections={headings} "
-            f"budget={batch_budget}s approx_chars={estimated_chars}"
+            f"claims={load['candidate_claim_count']} words={load['word_count']} "
+            f"tokens≈{estimated_input_tokens} evidence={len(compact_evidence) + len(compact_foresight)} "
+            f"primary={primary_allocation}s fallback_target={load['fallback_seconds']}s"
         )
-        result = ai_fact_check_summary(
-            summary_text=batch_text,
-            evidence_links=compact_evidence,
-            company_name=company_name,
-            scan_payload=compact_payload,
-            document_label=f"Detailed Forensic Report sections: {', '.join(headings)}",
-            foresight_links=compact_foresight,
-            evidence_manifest=compact_manifest,
-            claim_graph=compact_claim_graph,
-            time_budget_seconds=batch_budget,
-            verification_only=True,
-        )
+        attempts = []
+
+        def run_provider(provider: str, allocation: int) -> dict:
+            attempt_started = time.time()
+            provider_result = ai_fact_check_summary(
+                summary_text=batch_text,
+                evidence_links=compact_evidence,
+                company_name=company_name,
+                scan_payload=compact_payload,
+                document_label=f"Detailed Forensic Report sections: {', '.join(headings)}",
+                foresight_links=compact_foresight,
+                evidence_manifest=compact_manifest,
+                claim_graph=compact_claim_graph,
+                time_budget_seconds=allocation,
+                verification_only=True,
+                provider_chain=(provider,),
+                provider_timeout_seconds=max(10, allocation - 2),
+            )
+            attempts.append({
+                "provider": provider,
+                "allocated_seconds": allocation,
+                "elapsed_ms": int((time.time() - attempt_started) * 1000),
+                "status": provider_result.get("verification_status", "unavailable"),
+                "parse_or_provider_failed": bool(provider_result.get("fact_check_skipped")),
+            })
+            return provider_result
+
+        result = run_provider(GPT_VERIFIER_MODEL, primary_allocation)
+        if result.get("fact_check_skipped"):
+            remaining_after_primary = max(0, int(deadline - time.time()))
+            fallback_capacity = max(0, remaining_after_primary - future_primary_floor)
+            fallback_allocation = min(load["fallback_seconds"], fallback_capacity)
+            if fallback_allocation >= 25:
+                print(
+                    "   ↪️ [Detailed Report Fact-Check] "
+                    f"retrying failed batch with {CLAUDE_SONNET_MODEL} "
+                    f"({fallback_allocation}s independent allocation)"
+                )
+                result = run_provider(CLAUDE_SONNET_MODEL, fallback_allocation)
+            else:
+                print(
+                    "   ⚠️ [Detailed Report Fact-Check] "
+                    f"failed batch has no viable Sonnet slot; available={fallback_capacity}s"
+                )
         model = str(result.get("fact_check_model") or "")
-        if model:
+        if model and model != "all_models_failed":
             models.append(model)
         unavailable = bool(result.get("fact_check_skipped"))
         if unavailable:
@@ -2181,6 +2373,11 @@ def ai_fact_check_detailed_report(
             "model": model or "all_models_failed",
             "blocking_claim_count": len(result.get("false_claims") or []),
             "wording_adjustment_count": len(result.get("wording_adjustments") or []),
+            **load,
+            "evidence_record_count": len(compact_evidence) + len(compact_foresight),
+            "allocated_seconds": sum(item["allocated_seconds"] for item in attempts),
+            "elapsed_ms": sum(item["elapsed_ms"] for item in attempts),
+            "attempts": attempts,
         })
         for key in aggregate:
             aggregate[key].extend(result.get(key) or [])

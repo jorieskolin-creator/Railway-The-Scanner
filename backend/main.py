@@ -38,6 +38,7 @@ from reality_check import (
     validate_pitch,
     ai_fact_check_summary,
     ai_fact_check_detailed_report,
+    detailed_report_fact_check_budget,
     clean_summary,
     purge_false_evidence,
     _call_openai_text,
@@ -7912,7 +7913,11 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                 # time. Keep a final-save floor, but do not squeeze a 900-word
                 # report into one oversized 30-second request.
                 available_global_verifier_time = max(0, int(_scan_remaining()) - 20)
-                conditional_verifier_budget = min(90, available_global_verifier_time)
+                verifier_load = detailed_report_fact_check_budget(dr_text)
+                conditional_verifier_budget = min(
+                    verifier_load["recommended_seconds"],
+                    available_global_verifier_time,
+                )
                 if conditional_verifier_budget >= 70:
                     required_stage_time = conditional_verifier_budget + 20
                     if required_stage_time > _dr_fc_remaining:
@@ -7924,8 +7929,10 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                     max(20, int(_dr_stage_remaining()) - 20),
                 )
                 print(
-                    "   🔍 [Detailed Report Fact-Check] Compact section verification "
-                    f"({dr_fc_budget}s conditional budget)..."
+                    "   🔍 [Detailed Report Fact-Check] Load-adaptive section verification "
+                    f"({dr_fc_budget}s budget, batches={verifier_load['batch_count']}, "
+                    f"candidate_claims={verifier_load['candidate_claim_count']}, "
+                    f"report_words={verifier_load['word_count']})..."
                 )
                 dr_check = ai_fact_check_detailed_report(
                     report_text=dr_text,
@@ -8150,27 +8157,59 @@ is absent. Keep hypotheses modal. Return only the pitch schema.
                 if needs_final_check and not final_unresolved:
                     if _dr_stage_remaining() >= 20:
                         full_data["detailed_report"] = dr_text
-                        recheck_budget = min(35, _dr_stage_remaining())
-                        print(
-                            "   🔁 [Detailed Report Fact-Check] Final decision-only recheck "
-                            f"({recheck_budget}s)..."
-                        )
                         recheck_sections = (
                             []
                             if recovery_mode == "full_regeneration"
                             else recovery_impact.get("affected_sections") or []
                         )
-                        final_check = ai_fact_check_detailed_report(
-                            report_text=dr_text,
-                            evidence_links=managed_evidence_links,
-                            company_name=companyName,
-                            scan_payload=_build_fact_check_scan_payload(full_data),
-                            foresight_links=full_data.get("foresight_links", []),
-                            evidence_manifest=full_data.get("evidence_manifest", []),
-                            claim_graph=full_data.get("claim_graph", []),
-                            time_budget_seconds=recheck_budget,
+                        recheck_load = detailed_report_fact_check_budget(
+                            dr_text,
                             only_section_names=recheck_sections,
+                            minimum_seconds=60 if not recheck_sections else 45,
+                            maximum_seconds=120 if not recheck_sections else 90,
                         )
+                        available_recheck_time = max(0, int(_scan_remaining()) - 20)
+                        target_recheck_budget = min(
+                            recheck_load["recommended_seconds"],
+                            available_recheck_time,
+                        )
+                        if target_recheck_budget > _dr_stage_remaining():
+                            _extend_dr_recovery_deadline(
+                                target_recheck_budget - int(_dr_stage_remaining())
+                            )
+                        recheck_budget = min(
+                            target_recheck_budget,
+                            max(0, int(_dr_stage_remaining())),
+                        )
+                        print(
+                            "   🔁 [Detailed Report Fact-Check] Load-adaptive final recheck "
+                            f"({recheck_budget}s, batches={recheck_load['batch_count']}, "
+                            f"candidate_claims={recheck_load['candidate_claim_count']})..."
+                        )
+                        if recheck_budget < 25:
+                            final_check = {
+                                "verified": False,
+                                "verification_status": "unavailable",
+                                "fact_check_skipped": True,
+                                "verification_partial": False,
+                                "false_claims": [],
+                                "false_claims_detailed": [],
+                                "wording_adjustments": [],
+                                "wording_adjustments_detailed": [],
+                                "fact_check_model": "skipped_budget",
+                            }
+                        else:
+                            final_check = ai_fact_check_detailed_report(
+                                report_text=dr_text,
+                                evidence_links=managed_evidence_links,
+                                company_name=companyName,
+                                scan_payload=_build_fact_check_scan_payload(full_data),
+                                foresight_links=full_data.get("foresight_links", []),
+                                evidence_manifest=full_data.get("evidence_manifest", []),
+                                claim_graph=full_data.get("claim_graph", []),
+                                time_budget_seconds=recheck_budget,
+                                only_section_names=recheck_sections,
+                            )
                         final_recheck_status = final_check.get("verification_status", "unavailable")
                         final_blocking = _ensure_detailed_claim_ids(
                             _dedupe_claims(final_check.get("false_claims_detailed") or [])

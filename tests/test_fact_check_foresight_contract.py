@@ -401,7 +401,7 @@ def test_detailed_report_fact_check_preserves_successful_batches(monkeypatch):
         time_budget_seconds=85,
     )
 
-    assert len(calls) == 2
+    assert len(calls) == 3
     assert result["verification_status"] == "partially_unavailable"
     assert result["verification_partial"] is True
     assert result["verified"] is False
@@ -441,3 +441,82 @@ def test_detailed_report_fact_check_keeps_calibration_out_of_false_claims(monkey
     assert result["verification_status"] == "wording_calibration_required"
     assert result["false_claims"] == []
     assert result["wording_adjustments"] == [calibration["claim"]]
+
+
+def test_detailed_report_fact_check_gives_fallback_independent_time(monkeypatch):
+    attempts = []
+
+    def fake_check(*_args, **kwargs):
+        attempts.append({
+            "provider_chain": kwargs.get("provider_chain"),
+            "time_budget_seconds": kwargs.get("time_budget_seconds"),
+            "provider_timeout_seconds": kwargs.get("provider_timeout_seconds"),
+        })
+        provider = (kwargs.get("provider_chain") or ("",))[0]
+        if provider == reality_check.GPT_VERIFIER_MODEL:
+            return {
+                "verified": False,
+                "verification_status": "unavailable",
+                "fact_check_skipped": True,
+                "fact_check_model": "all_models_failed",
+            }
+        return {
+            "verified": True,
+            "verification_status": "verified",
+            "fact_check_skipped": False,
+            "fact_check_model": reality_check.CLAUDE_SONNET_MODEL,
+        }
+
+    monkeypatch.setattr(reality_check, "ai_fact_check_summary", fake_check)
+    result = reality_check.ai_fact_check_detailed_report(
+        "## Key Findings\n\nThe company reported revenue growth and a new agreement.",
+        [],
+        "Example Oy",
+        time_budget_seconds=85,
+    )
+
+    assert result["verified"] is True
+    assert len(attempts) == 2
+    assert attempts[0]["provider_chain"] == (reality_check.GPT_VERIFIER_MODEL,)
+    assert attempts[1]["provider_chain"] == (reality_check.CLAUDE_SONNET_MODEL,)
+    assert attempts[0]["time_budget_seconds"] >= 35
+    assert attempts[1]["time_budget_seconds"] >= 30
+    assert result["batch_results"][0]["attempts"][1]["allocated_seconds"] >= 30
+
+
+def test_detailed_report_fact_check_budget_scales_with_claim_load():
+    short_report = "## Key Findings\n\nThe company reported growth."
+    long_report = "\n\n".join(
+        f"## Section {section}\n\n" + " ".join(
+            f"The company reported event {index} in 2025, and the report connects it to operational capacity."
+            for index in range(12)
+        )
+        for section in range(1, 6)
+    )
+
+    short_budget = reality_check.detailed_report_fact_check_budget(short_report)
+    long_budget = reality_check.detailed_report_fact_check_budget(long_report)
+
+    assert short_budget["recommended_seconds"] == 90
+    assert long_budget["recommended_seconds"] > short_budget["recommended_seconds"]
+    assert long_budget["recommended_seconds"] <= 150
+    assert long_budget["batch_count"] > short_budget["batch_count"]
+    assert long_budget["candidate_claim_count"] > short_budget["candidate_claim_count"]
+
+
+def test_dense_detailed_report_sections_are_not_forced_into_three_section_batches():
+    sections = [
+        {
+            "heading": f"Section {index}",
+            "text": f"## Section {index}\n\n" + " ".join(
+                f"Supported analytical claim {claim} has a documented premise and a bounded implication."
+                for claim in range(12)
+            ),
+        }
+        for index in range(1, 5)
+    ]
+
+    batches = reality_check._plan_detailed_fact_check_batches(sections)
+
+    assert len(batches) >= 2
+    assert all(len(batch) <= 2 for batch in batches)
